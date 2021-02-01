@@ -1,0 +1,7 @@
+﻿apiRules:
+- exclude:
+    hasAttribute:
+    uid: Typhon.Engine.ExcludeDocFxAttribute
+attributeRules:
+- exclude:
+    uid: Typhon.Engine.ExcludeDocFxAttribute
