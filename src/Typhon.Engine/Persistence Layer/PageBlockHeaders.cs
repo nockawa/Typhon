@@ -15,6 +15,27 @@ namespace Typhon.Engine
         public ulong DatabaseFilesChunkSize;
         public fixed byte DatabaseName[64];
         public int OccupancyMapSPI;
+
+        public string HeaderSignatureString
+        {
+            get
+            {
+                fixed (byte* s = HeaderSignature)
+                {
+                    return VirtualDiskManager.LoadString(s);
+                }
+            }
+        }
+        public string DatabaseNameString
+        {
+            get
+            {
+                fixed (byte* s = DatabaseName)
+                {
+                    return VirtualDiskManager.LoadString(s);
+                }
+            }
+        }
     }
 
     [Flags]

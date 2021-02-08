@@ -33,12 +33,18 @@ namespace Typhon.Engine
             set => _databaseFileName = value;
         }
         public ulong DatabaseCacheSize { get; set; }
+        public int WriteCacheSize { get; set; }
+        public float WriteThreadRatio { get; set; }
+        public bool RecreateDatabase { get; set; }
         public bool DeleteDatabaseOnDispose { get; set; }
 
         public string DatabaseAbsoluteDirectory
         {
             get => Path.GetFullPath(DatabaseDirectory);
         }
+
+        internal bool OverrideDatabaseCacheMinSize { get; set; }
+
         public bool IsValid => Validate(true, out _);
         internal bool Validate(bool silent, out string validation)
         {
@@ -81,19 +87,32 @@ namespace Typhon.Engine
                 success = false;
             }
 
-            // DatabaseVirtualSize
+            // DatabaseCacheSize
             var dcs = DatabaseCacheSize;
             if ((dcs & (VirtualDiskManager.PageSize - 1)) != 0UL)
             {
                 sb.AppendLine($"Database Cache Size must be a multiple of the Page Size ('{VirtualDiskManager.PageSize}').");
                 success = false;
             }
-            if (dcs < VirtualDiskManager.MinimumCacheSize)
+            if (dcs < VirtualDiskManager.MinimumCacheSize && OverrideDatabaseCacheMinSize==false)
             {
                 sb.AppendLine($"Database Cache Size must be at least '{VirtualDiskManager.MinimumCacheSize/(1024*1024)}'MiB.");
                 success = false;
             }
 
+            if (dcs > 0x100000000)
+            {
+                sb.AppendLine($"Database Cache Size is bigger than the current limit of 4GiB");
+                success = false;
+            }
+
+            // WriteCacheSize
+            var wcs = WriteCacheSize;
+            if ((wcs & (VirtualDiskManager.WriteCachePageSize-1)) != 0)
+            {
+                sb.AppendLine($"Database Write Cache Size must be a multiple 1Mib (1024*1024) but is ('{dcs}').");
+                success = false;
+            }
 
             // Throw exception if necessary and required
             if (success == false && silent == false)
@@ -118,6 +137,8 @@ namespace Typhon.Engine
             configuration.DatabaseName = "Database";
             configuration.DatabaseDirectory = Directory.GetCurrentDirectory();
             configuration.DatabaseCacheSize = VirtualDiskManager.MinimumCacheSize;
+            configuration.WriteCacheSize = 128 * VirtualDiskManager.WriteCachePageSize;
+            configuration.WriteThreadRatio = 0.5f;
         }
     }
 }

@@ -39,8 +39,8 @@ namespace Typhon.Engine
 
     public class TimeManager
     {
-        private uint _executionFrame;
-        public uint ExecutionFrame { get => _executionFrame; }
+        private int _executionFrame;
+        public int ExecutionFrame { get => _executionFrame; }
 
         public TimeManager()
         {
