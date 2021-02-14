@@ -21,26 +21,32 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "doc", "doc", "{CE583F29-929
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "docs", "doc\docs.csproj", "{12728B03-2C8C-4968-A67B-DC4A59544E3B}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Typhon.Engine.Tests", "test\Typhon.Engine.Tests\Typhon.Engine.Tests.csproj", "{B76CFDEF-5599-4A6A-A2D1-1AA392EF2A19}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Typhon.Engine.Tests", "test\Typhon.Engine.Tests\Typhon.Engine.Tests.csproj", "{B76CFDEF-5599-4A6A-A2D1-1AA392EF2A19}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
 		Release|Any CPU = Release|Any CPU
+		VerboseLogging|Any CPU = VerboseLogging|Any CPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{B85343C9-0201-4698-A475-3A94433D212A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{B85343C9-0201-4698-A475-3A94433D212A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B85343C9-0201-4698-A475-3A94433D212A}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B85343C9-0201-4698-A475-3A94433D212A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B85343C9-0201-4698-A475-3A94433D212A}.VerboseLogging|Any CPU.ActiveCfg = VerboseLogging|Any CPU
+		{B85343C9-0201-4698-A475-3A94433D212A}.VerboseLogging|Any CPU.Build.0 = VerboseLogging|Any CPU
 		{12728B03-2C8C-4968-A67B-DC4A59544E3B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{12728B03-2C8C-4968-A67B-DC4A59544E3B}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{12728B03-2C8C-4968-A67B-DC4A59544E3B}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{12728B03-2C8C-4968-A67B-DC4A59544E3B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{12728B03-2C8C-4968-A67B-DC4A59544E3B}.VerboseLogging|Any CPU.ActiveCfg = Release|Any CPU
 		{B76CFDEF-5599-4A6A-A2D1-1AA392EF2A19}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{B76CFDEF-5599-4A6A-A2D1-1AA392EF2A19}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B76CFDEF-5599-4A6A-A2D1-1AA392EF2A19}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B76CFDEF-5599-4A6A-A2D1-1AA392EF2A19}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B76CFDEF-5599-4A6A-A2D1-1AA392EF2A19}.VerboseLogging|Any CPU.ActiveCfg = VerboseLogging|Any CPU
+		{B76CFDEF-5599-4A6A-A2D1-1AA392EF2A19}.VerboseLogging|Any CPU.Build.0 = VerboseLogging|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

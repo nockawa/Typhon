@@ -1,11 +1,13 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using NUnit.Framework;
+using Serilog;
+using Serilog.Events;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -27,24 +29,54 @@ namespace Typhon.Engine.Tests.Persistence_Layer
             var o = TestContext.CurrentContext.Test.Properties.ContainsKey("CacheSize");
             var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("CacheSize") : (int)VirtualDiskManager.MinimumCacheSize;
 
+            Log.Logger = new LoggerConfiguration()
+                .MinimumLevel.Verbose()
+                .Enrich.FromLogContext()
+                .Enrich.WithThreadId()
+                .Enrich.WithCurrentFrame()
+                .WriteTo.Seq("http://localhost:5341", compact: true)
+                .CreateLogger();
+
             var serviceCollection = new ServiceCollection();
             _serviceCollection = serviceCollection;
-            _serviceCollection.AddTyphon(builder =>
-            {
-                builder.ConfigureDatabase(dc =>
+            _serviceCollection
+                .AddTyphon(builder =>
                 {
-                    dc.DatabaseName = CurrentDatabaseName;
-                    dc.RecreateDatabase = true;
-                    dc.DeleteDatabaseOnDispose = true;
-                    dc.DatabaseCacheSize = (ulong)dcs;
+                    builder.ConfigureDatabase(dc =>
+                    {
+                        dc.DatabaseName = CurrentDatabaseName;
+                        dc.RecreateDatabase = true;
+                        dc.DeleteDatabaseOnDispose = true;
+                        dc.DatabaseCacheSize = (ulong)dcs;
+                    });
+                })
+                
+                .AddLogging(builder =>
+                {
+                    builder.AddSerilog(dispose: true);
+                    builder.AddSimpleConsole(options =>
+                    {
+                        options.SingleLine = true;
+                        options.IncludeScopes = true;
+                        options.TimestampFormat = "mm:ss.fff ";
+                    });
                 });
-            });
 
             _serviceProvider = _serviceCollection.BuildServiceProvider();
 
             _vdm = _serviceProvider.GetRequiredService<VirtualDiskManager>();
             _tm = _serviceProvider.GetRequiredService<TimeManager>();
             _configuration = _serviceProvider.GetRequiredService<IConfiguration<DatabaseConfiguration>>().Value;
+        }
+
+        [TearDown]
+        public void TearDown()
+        {
+            Thread.Sleep(500);
+            _vdm?.Dispose();
+            _vdm = null;
+
+            Log.CloseAndFlush();
         }
 
         private List<int> GenerateRandomAccess(int min, int max, int count=0)
@@ -204,7 +236,7 @@ namespace Typhon.Engine.Tests.Persistence_Layer
         unsafe public void ReliabilityTest()
         {
             var cacheFactor = 4;   // This is nasty...we are going to have a lot of cache miss...
-            var frameCount = 20;
+            var frameCount = 2000;
             var opsPerFrame = 1000;
             var readWriteRatio = 0.75f;
 
@@ -289,10 +321,14 @@ namespace Typhon.Engine.Tests.Persistence_Layer
                 Assert.That(*dest, Is.EqualTo(i), () => $"Bad DiskPageId {i}");
             }
 
+            var log = Log.Logger;
+
             // Simulate accesses
             for (int curF = 0; curF < frameCount; curF++)
             {
-                Console.WriteLine($"\r\n************** Simulating Frame {curF} ************** \r\n");
+                var curFrame = _tm.ExecutionFrame;
+
+                Console.WriteLine($"\r\n************** Simulating Frame {curFrame} ************** \r\n");
                 var frameInfo = frames[curF];
                 Parallel.ForEach(frameInfo, info =>
                 {
@@ -303,7 +339,9 @@ namespace Typhon.Engine.Tests.Persistence_Layer
 
                         using var a = _vdm.RequestPageReadOnly(info.PageId);
                         int actual = *(int*)a.Page;
-                        Assert.That(actual, Is.EqualTo(info.ExpectedValue), $"Frame {curF}, Page {info.PageId} should be {info.ExpectedValue} but is {actual}");
+
+                        Log.Debug("Check Page {PageId} has Value {ExpectedValue} and has {value}", info.PageId, info.ExpectedValue, actual);
+                        Assert.That(actual, Is.EqualTo(info.ExpectedValue), $"Frame {curFrame}, Page {info.PageId} should be {info.ExpectedValue} but is {actual}");
                     }
                     else
                     {
@@ -312,20 +350,13 @@ namespace Typhon.Engine.Tests.Persistence_Layer
                         using var a = _vdm.RequestPageReadWrite(info.PageId);
                         var pa = (int*)a.Page;
                         ++*pa;
+                        Log.Debug("Bump Page {PageId} to {value}", info.PageId, *pa);
                     }
                 });
 
                 _vdm.FlushToDiskAsync(true, out _).Wait();
+                _tm.BumpFrame();
             }
         }
-
-
-        [TearDown]
-        public void TearDown()
-        {
-            _vdm?.Dispose();
-            _vdm = null;
-        }
-
     }
 }

@@ -1,4 +1,8 @@
-﻿using System;
+﻿using Microsoft.Extensions.Logging;
+using Serilog;
+using Serilog.Context;
+using Serilog.Events;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -17,12 +21,14 @@ namespace Typhon.Engine
 
         private readonly VirtualDiskManager _owner;
         private readonly int _memPageId;
+        private readonly uint _pageId;
         private VirtualDiskManager.PageInfo* _pi;
 
         internal ReadOnlyPageAccessor(VirtualDiskManager owner, int memPageId, VirtualDiskManager.PageInfo* pi, byte* page)
         {
             _owner = owner;
             _memPageId = memPageId;
+            _pageId = pi->PageId;
             _pi = pi;
             ++_pi->HitCounter;
             Page = page;
@@ -37,7 +43,7 @@ namespace Typhon.Engine
 
             if (Interlocked.Decrement(ref _pi->ConcurrentUseCounter) == 0)
             {
-                _owner.TransitionPageTo(_pi, _memPageId, VirtualDiskManager.PagesAccessMode.Idle, VirtualDiskManager.PagesAccessMode.Read);
+                _owner.TransitionPageTo(_pageId, _pi, _memPageId, VirtualDiskManager.PagesAccessMode.Idle, VirtualDiskManager.PagesAccessMode.Read);
             }
 
             _pi = null;
@@ -50,12 +56,14 @@ namespace Typhon.Engine
 
         private readonly VirtualDiskManager _owner;
         private readonly int _memPageId;
+        private readonly uint _pageId;
         private VirtualDiskManager.PageInfo* _pi;
 
         internal ReadWritePageAccessor(VirtualDiskManager owner, int memPageId, VirtualDiskManager.PageInfo* pi, byte* page)
         {
             _owner = owner;
             _memPageId = memPageId;
+            _pageId = pi->PageId;
             _pi = pi;
             ++_pi->HitCounter;
             Page = page;
@@ -67,7 +75,7 @@ namespace Typhon.Engine
             {
                 return;
             }
-            _owner.TransitionPageTo(_pi, _memPageId, VirtualDiskManager.PagesAccessMode.Idle, VirtualDiskManager.PagesAccessMode.Write);
+            _owner.TransitionPageTo(_pageId, _pi, _memPageId, VirtualDiskManager.PagesAccessMode.Idle, VirtualDiskManager.PagesAccessMode.Write);
 
             _pi = null;
         }
@@ -75,6 +83,7 @@ namespace Typhon.Engine
 
     public class VirtualDiskManager : IDisposable
     {
+        private readonly ILogger<VirtualDiskManager> _logger;
         internal const long PageSize = 8192;
         internal const int PageSizePow2 = 13; // 2^( PageSizePow2 = PageSize
         internal const int DatabaseFormatRevision = 1;
@@ -131,6 +140,7 @@ namespace Typhon.Engine
             public int MemPageReallocationCount;
             public int WaitForIOCount;
         }
+
         private DebugInfo _debugInfo;
         internal ref DebugInfo GetDebugInfo()
         {
@@ -150,7 +160,7 @@ namespace Typhon.Engine
 
         internal struct PageInfo
         {
-            public uint PageId;                // ID of the Disk Page this memory page stores data
+            volatile public uint PageId;       // ID of the Disk Page this memory page stores data
             public int PreviousUsedFrame;      // ID of the Frame where the page has its MRU info stored in
             public int IndexInCandidatesMap;
             public int HitCounter;             // Every time this page is accessed in read or write this counter is incremented, used for MRU
@@ -158,12 +168,105 @@ namespace Typhon.Engine
             public int ConcurrentUseCounter;   // Concurrent use counter
         }
 
-        unsafe public VirtualDiskManager(IConfiguration<DatabaseConfiguration> dc, TimeManager timeManager)
+        #region Logging helpers
+        [Conditional("VERBOSELOGGING")]
+        private void LogRequestPage(uint pageId, bool readWrite) => _logger.LogDebug(10, "Request Disk Page {PageId}, {IsReadWrite}", pageId, readWrite);
+        [Conditional("VERBOSELOGGING")]
+        private void LogMemPageCacheHit() => _logger.LogDebug(11, "MemPage Cache Hit");
+        [Conditional("VERBOSELOGGING")]
+        private void LogMemPageCacheMiss() => _logger.LogDebug(12, "MemPage Cache Miss");
+        [Conditional("VERBOSELOGGING")]
+        private void LogRequestPageFound() => _logger.LogDebug(13, "Request Page Found");
+        [Conditional("VERBOSELOGGING")]
+        private void LogRequestPageRace() => _logger.LogDebug(14, "Request Page Race Condition (reallocation)");
+
+        [Conditional("VERBOSELOGGING")]
+        private void LogAllocatePageEnter() => _logger.LogDebug(20, "Allocate Page Enter");
+        [Conditional("VERBOSELOGGING")]
+        private void LogAllocatePageRace() => _logger.LogDebug(21, "Allocate Page Race Condition");
+        [Conditional("VERBOSELOGGING")]
+        private void LogAllocatePageSequential() => _logger.LogDebug(22, "Allocate Page Sequential");
+        [Conditional("VERBOSELOGGING")]
+        private void LogAllocatePageMRURace() => _logger.LogDebug(23, "Allocate Page MRU Race");
+        [Conditional("VERBOSELOGGING")]
+        private void LogAllocatePageFound(int memPageId) => _logger.LogDebug(24, "Allocate Page Found {MemPageId}", memPageId);
+        [Conditional("VERBOSELOGGING")]
+        private void LogAllocatePageLoad() => _logger.LogDebug(25, "Allocate Page Load From Disk");
+
+        [Conditional("VERBOSELOGGING")]
+        private void LogFlushToDiskStart() => _logger.LogDebug(30, "Flush To Disk Start");
+        [Conditional("VERBOSELOGGING")]
+        private void LogFlushToDiskConcurrentFlush() => _logger.LogDebug(31, "Flush To Disk exiting due to concurrent Flush");
+        [Conditional("VERBOSELOGGING")]
+        private void LogFlushToDiskEnd() => _logger.LogDebug(32, "Flush To Disk End");
+        [Conditional("VERBOSELOGGING")]
+        private void LogFlushToDiskWaitPrevious() => _logger.LogDebug(33, "Wait Previous Flush To Complete");
+        [Conditional("VERBOSELOGGING")]
+        private void LogFlushToDiskWritePage(SegmentInfo segment, List<int> fragList, bool isFrag)
+        {
+            if (isFrag)
+            {
+                _logger.LogDebug(34, "Write fragmented segment StartDiskPage: {StartDiskPageId}, PageCount: {PageCount}, MemPages: {MemPageIdList}",
+                    segment.StartPageId, segment.PageCount, fragList.GetRange(segment.StartMemPageId, segment.PageCount));
+            }
+            else
+            {
+                _logger.LogDebug(34, "Write contiguous segment StartDiskPage: {StartDiskPageId}, PageCount: {PageCount}, FirstMemPage: {StartMemPageId}",
+                    segment.StartPageId, segment.PageCount, segment.StartMemPageId);
+            }
+
+        }
+        [Conditional("VERBOSELOGGING")]
+        private void LogFlushToDiskPages(SortedDictionary<uint, int> pagesToWrite, bool mruUpdated, List<int> accessedPages)
+        {
+            _logger.LogDebug(35, "Flush pages {DiskPageList}", pagesToWrite);
+            if (mruUpdated)
+            {
+                _logger.LogDebug(35, "Update Disk Pages MRU for Mem Pages {DiskPageList}", accessedPages);
+            }
+        }
+
+        // TransitionPageTo
+        [Conditional("VERBOSELOGGING")]
+        private void LogTransitionSuccessful(PagesAccessMode prevMode, PagesAccessMode newMode) => 
+            _logger.LogDebug(40, "Transition completed from {PrevMode} to {NewMode}", prevMode, newMode);
+
+        [Conditional("VERBOSELOGGING")]
+        private void LogTransitionSuccessfulWithSpin(PagesAccessMode from, PagesAccessMode to, int spin) => 
+            _logger.LogDebug(40, "Transition completed from {PrevMode} to {NewMode} with {SpinCount} spin count", @from, to, spin);
+
+        [Conditional("VERBOSELOGGING")]
+        private void LogTransitionWaitIO(PagesAccessMode current) => 
+            _logger.LogDebug(41, "Transition wait for IO {CurrentMode} to complete", current);
+
+        [Conditional("VERBOSELOGGING")]
+        private void LogTransitionFailedPageRelocating(PagesAccessMode from, PagesAccessMode to) => 
+            _logger.LogDebug(42, "Transition failed from {PrevMode} to {NewMode}, concurrent relocation", @from, to);
+
+        #endregion
+
+        [DebuggerDisplay("Start Page = {" + nameof(StartPageId) + ("}, Count = {" + nameof(PageCount) + "}"))]
+        private struct SegmentInfo
+        {
+            public void Init(uint startPageId, int startMemPageId, int pageCount)
+            {
+                StartPageId = startPageId;
+                StartMemPageId = startMemPageId;
+                PageCount = pageCount;
+            }
+            public uint StartPageId;
+            public int PageCount;
+            public int StartMemPageId;
+            public int WritePageIndex;
+        }
+
+        unsafe public VirtualDiskManager(IConfiguration<DatabaseConfiguration> dc, TimeManager timeManager, ILogger<VirtualDiskManager> logger)
         {
             try
             {
                 _configuration = dc.Value;
                 _timeManager = timeManager;
+                _logger = logger;
 
                 // Create the cache of the page, pin it and keeps its address
                 var cacheSize = _configuration.DatabaseCacheSize;
@@ -224,10 +327,11 @@ namespace Typhon.Engine
                 {
                     LoadDatabaseFile();
                 }
-
+                _logger.LogInformation("Virtual Disk Manager service initialized successfully");
             }
             catch (Exception e)
             {
+                _logger.LogError(e, "Virtual Disk Manager service initialization failed");
                 Dispose();
                 throw new Exception("Virtual Disk Manager initialization error, check inner exception.", e);
             }
@@ -236,6 +340,7 @@ namespace Typhon.Engine
         // Only for debug/unit test purpose. Should be no operating pending or activity on other threads regarging this service
         unsafe internal void ResetDiskManager()
         {
+            _logger.LogInformation("Service reset");
             Array.Clear(_memPages, 0, _memPages.Length);
             Array.Clear(_memPagesInfo, 0, _memPagesInfo.Length);
             _debugInfo = default;
@@ -310,19 +415,45 @@ namespace Typhon.Engine
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        unsafe internal bool TransitionPageTo(PageInfo* pi, int memPageId, PagesAccessMode newMode, PagesAccessMode currentMode)
+        unsafe internal bool TransitionPageTo(uint pageId, PageInfo* pi, int memPageId, PagesAccessMode newMode, PagesAccessMode currentMode)
         {
+#if VERBOSELOGGING
+            using var logId = LogContext.PushProperty("PageId", pi->PageId);
+            using var logMemPageId = LogContext.PushProperty("MemPageId", memPageId);
+#endif
+            if ((newMode!=PagesAccessMode.Reallocating) && pi->PageId != pageId)
+            {
+                return false;
+            }
+
             var prevMode = (PagesAccessMode)Interlocked.CompareExchange(ref pi->AccessMode, (int)newMode, (int)currentMode);
 
             // Any transition from Idle are valid, exit
             if (prevMode == currentMode)
             {
+                if ((newMode!=PagesAccessMode.Reallocating) && pi->PageId != pageId)
+                {
+                    return false;
+                }
+                LogTransitionSuccessful(currentMode, newMode);
                 return true;
+            }
+
+            if (prevMode == PagesAccessMode.Reallocating)
+            {
+                LogTransitionFailedPageRelocating(currentMode, newMode);
+                return false;
             }
 
             // If we requested Read and were in read already, exit as concurrent read are possible
             if (prevMode == PagesAccessMode.Read && newMode == PagesAccessMode.Read)
             {
+                // From there we don't know for sure the MemPage is still allocated to the DiskPage we want, we have to make the check
+                if (pi->PageId != pageId)
+                {
+                    LogTransitionFailedPageRelocating(currentMode, newMode);
+                    return false;
+                }
                 return true;
             }
 
@@ -333,8 +464,7 @@ namespace Typhon.Engine
                 if (ioTask!= null && ioTask.IsCompleted == false)
                 {
                     ++_debugInfo.WaitForIOCount;
-
-                    Console.Write(".");
+                    LogTransitionWaitIO(prevMode);
 
                     // Fetch the task's result to wait for its completion
                     ioTask.Wait();
@@ -344,20 +474,31 @@ namespace Typhon.Engine
 
                 // Attempt to switch from the IOP mode to the new one, we may be beat by another thread...
                 var lastMode = (PagesAccessMode)Interlocked.CompareExchange(ref pi->AccessMode, (int)newMode, (int)prevMode);
-
-                var offset = memPageId >> 5;
-                var mask = ~(uint)(1 << (memPageId & 0x1F));
-                Interlocked.And(ref _dirtyMemPageMap[offset], mask);
                 
                 // Another thread beat us and switch to reallocation? Exit with false to notify the transition failed
                 if (lastMode == PagesAccessMode.Reallocating)
                 {
+                    LogTransitionFailedPageRelocating(currentMode, newMode);
                     return false;
                 }
 
                 // We successfully transitioned?
                 if (lastMode == prevMode)
                 {
+                    if ((newMode!=PagesAccessMode.Reallocating) && pi->PageId != pageId)
+                    {
+                        return false;
+                    }
+                    LogTransitionSuccessful(currentMode, newMode);
+
+                    var offset = memPageId >> 5;
+                    var mask = ~(uint)(1 << (memPageId & 0x1F));
+
+                    if (prevMode == PagesAccessMode.Saving)
+                    {
+                        Interlocked.And(ref _dirtyMemPageMap[offset], mask);
+                    }
+
                     return true;
                 }
 
@@ -368,26 +509,41 @@ namespace Typhon.Engine
             // We don't wait when switching to reallocation (if we got beat by another thread)
             if (newMode == PagesAccessMode.Reallocating)
             {
+                LogTransitionFailedPageRelocating(currentMode, newMode);
                 return false;
             }
 
             ++_debugInfo.PageTransitionModeRaceCondition;
 
+            var spinCounter = 0;
             var sw = new SpinWait();
             while (true)
             {
                 sw.SpinOnce();
+                ++spinCounter;
+
+                // It is possible that we miss a reallocation phase, so let's check if ownership changed
+                if (pi->PageId != pageId)
+                {
+                    return false;
+                }
 
                 // Note: we rely on CompareExchange instead of a lock, so it means if the contention is greater than 2 it won't be a "first arrived,
                 //  first served" basis, but a random choice instead. I don't think it's that bad because the contention really should be low...
                 prevMode = (PagesAccessMode)Interlocked.CompareExchange(ref pi->AccessMode, (int)newMode, (int)currentMode);
                 if (prevMode == currentMode)
                 {
+                    if (pi->PageId != pageId)
+                    {
+                        return false;
+                    }
+                    LogTransitionSuccessfulWithSpin(currentMode, newMode, spinCounter);
                     return true;
                 }
 
                 if (prevMode == PagesAccessMode.Reallocating)
                 {
+                    LogTransitionFailedPageRelocating(currentMode, newMode);
                     return false;
                 }
             } 
@@ -395,10 +551,16 @@ namespace Typhon.Engine
 
         unsafe private int RequestPage(uint pageId, bool readWrite)
         {
+#if VERBOSELOGGING
+            using var logId = LogContext.PushProperty("PageId", pageId);
+            using var logRW = LogContext.PushProperty("IsReadWrite", readWrite);
+            LogRequestPage(pageId, readWrite);
+#endif
             // Get the memory page from the cache, if it fails we allocate a new one
             if (_memPageIdByPageId.TryGetValue(pageId, out var memPageId) == false)
             {
                 ++_debugInfo.MemPageCacheMiss;
+                LogMemPageCacheMiss();
 
                 // Page is not cached, we assign an available Memory Page to it
                 memPageId = AllocateMemoryPage(pageId);
@@ -406,13 +568,20 @@ namespace Typhon.Engine
             else
             {
                 ++_debugInfo.MemPageCacheHit;
+                LogMemPageCacheHit();
             }
+
+#if VERBOSELOGGING
+            using var logMemPageId = LogContext.PushProperty("MemPageId", memPageId);
+#endif
 
             var pi = &_memPageInfosAddr[memPageId];
 
             // This is potentially a blocking operation, waiting for other threads to finish their operation on the page
-            if (TransitionPageTo(pi, memPageId, readWrite ? PagesAccessMode.Write : PagesAccessMode.Read, PagesAccessMode.Idle) == false)
+            if (TransitionPageTo(pageId, pi, memPageId, readWrite ? PagesAccessMode.Write : PagesAccessMode.Read, PagesAccessMode.Idle) == false)
             {
+                LogRequestPageRace();
+
                 // We ended up here if we couldn't transition to the state we wanted, which is only possible if the page is
                 //  being reallocated. What we do is doing another call to RequestPage for this time to fetch a new MemPage
 
@@ -421,7 +590,7 @@ namespace Typhon.Engine
                 //  counter reaches zero we throw...
                 return RequestPage(pageId, readWrite);
             }
-
+            
             // Read-only mode allow for concurrent read-only accesses, we need to maintain how many concurrent reads
             //  there are to properly switch back to Idle mode
             if (readWrite == false)
@@ -436,10 +605,12 @@ namespace Typhon.Engine
             Interlocked.Or(ref _accessedMemPageMap[offset], mask);
             if (readWrite)
             {
-//                Console.WriteLine($"Dirty Disk Page: {pageId}, Mem {memPageId}");
                 Interlocked.Or(ref _dirtyMemPageMap[offset], mask);
             }
 
+            Debug.Assert(pageId == _memPageInfosAddr[memPageId].PageId);
+
+            LogRequestPageFound();
             return memPageId;
         }
 
@@ -451,13 +622,16 @@ namespace Typhon.Engine
             return (_dirtyMemPageMap[offset] & mask) != 0;
         }
 
+        private static int allocCounter = 0;
+
         unsafe private int AllocateMemoryPage(uint pageId)
         {
+            LogAllocatePageEnter();
+
             bool found = false;
             PageInfo* pi = null;
             int memPageId = 0;
 
-            //Console.Write($"A: {pageId} ");
             // The lock is pretty wide, could be optimized if the right amount of work was spent...
             lock (_MRU)
             {
@@ -466,6 +640,9 @@ namespace Typhon.Engine
                 if (_memPageIdByPageId.TryGetValue(pageId, out memPageId))
                 {
                     ++_debugInfo.PageReallocationRaceConditionCount;
+                    LogAllocatePageRace();
+
+                    Debug.Assert(pageId == _memPageInfosAddr[memPageId].PageId);
                     return memPageId;
                 }
 
@@ -474,8 +651,10 @@ namespace Typhon.Engine
                 {
                     var cMemPageId = prevMemPageId + 1;
                     var cPI = &_memPageInfosAddr[cMemPageId];
-                    if ((cPI->IndexInCandidatesMap!=-1) && TransitionPageTo(cPI, cMemPageId, PagesAccessMode.Reallocating, PagesAccessMode.Idle))
+                    if ((cPI->IndexInCandidatesMap!=-1) && TransitionPageTo(pageId, cPI, cMemPageId, PagesAccessMode.Reallocating, PagesAccessMode.Idle))
                     {
+                        LogAllocatePageSequential();
+
                         // We need to remove the page from the _memPageIdByPageId before we reassign it
                         if (_memPageIdByPageId.TryRemove(cPI->PageId, out var tpsId))
                         {
@@ -523,7 +702,7 @@ namespace Typhon.Engine
                             }
                             pi = &_memPageInfosAddr[memPageId];
 
-                            if ((IsMemPageDirty(memPageId) == false) && (pi->IndexInCandidatesMap!=-1) && TransitionPageTo(pi, memPageId, PagesAccessMode.Reallocating, PagesAccessMode.Idle))
+                            if ((IsMemPageDirty(memPageId) == false) && (pi->IndexInCandidatesMap!=-1) && TransitionPageTo(pageId, pi, memPageId, PagesAccessMode.Reallocating, PagesAccessMode.Idle))
                             {
                                 // We need to remove the page from the _memPageIdByPageId before we reassign it
                                 if (_memPageIdByPageId.TryRemove(pi->PageId, out var tpsId))
@@ -549,6 +728,7 @@ namespace Typhon.Engine
                             }
 
                             ++_debugInfo.PageReallocationMRURaceConditionCount;
+                            LogAllocatePageMRURace();
                         }
 
                         if (found)
@@ -557,29 +737,31 @@ namespace Typhon.Engine
                         }
                     }
                 }
+
+                if (found)
+                {
+                    //Assign the memory page to the requested disk page while we are under the MRU lock to prevent another thread to jump on this MemPage too soon
+                    pi->PageId = pageId;
+                    pi->HitCounter = 0;
+                    pi->ConcurrentUseCounter = 0;
+                    pi->PreviousUsedFrame = -1;
+                    pi->IndexInCandidatesMap = -1;
+
+                }
             }
 
             if (found)
             {
                 ++_debugInfo.MemPageReallocationCount;
+                LogAllocatePageFound(memPageId);
 
-                Console.Write($"[{Thread.CurrentThread.ManagedThreadId}]-A({pageId},{memPageId}|{pi->PageId}) ");
-
-                //Assign the memory page to the requested disk page
-//                Console.WriteLine($"Alloc {pageId}:{memPageId}");
-                pi->PageId = pageId;
-                pi->HitCounter = 0;
-                pi->AccessMode = (int)PagesAccessMode.Idle;
-                pi->ConcurrentUseCounter = 0;
-                pi->PreviousUsedFrame = -1;
-                pi->IndexInCandidatesMap = -1;
+                var pageOffset = pageId*PageSize;
+                var loadPage = (pageOffset+PageSize) <= _fileSize;
 
                 // Load the page from disk, if it's stored there already. (won't be the case for new pages)
-                var pageOffset = pageId*PageSize;
-                if ((pageOffset+PageSize) <= _fileSize)
+                if (loadPage)
                 {
-                    // Don't need to call TransitionPageTo() because we are the only user right now
-                    pi->AccessMode = (int)PagesAccessMode.Loading;
+                    LogAllocatePageLoad();
 
                     ++_debugInfo.ReadFromDiskCount;
 
@@ -591,46 +773,50 @@ namespace Typhon.Engine
                     }
                 }
 
+                if (TransitionPageTo(pageId, pi, memPageId, loadPage ? PagesAccessMode.Loading : PagesAccessMode.Idle, PagesAccessMode.Reallocating) == false)
+                {
+                    return AllocateMemoryPage(pageId);
+                }
+
+                //Debug.Assert(pageId == _memPageInfosAddr[memPageId].PageId);
+
                 return memPageId;
             }
 
-            //Console.WriteLine($"FlushToDisk to make room, Attempt: {++count}, Thread: {Thread.CurrentThread.ManagedThreadId}");
+#if VERBOSELOGGING
+            var logFlushCounter = 1;
+#endif
             FlushToDiskAsync(true, out var newEntriesCount).Wait();
             
             // The previous flush didn't make room? Let's wait one does
             if (newEntriesCount == 0)
             {
                 var sw = new SpinWait();
-                while (newEntriesCount == 0)
+                while (newEntriesCount == 0 && sw.NextSpinWillYield==false)
                 {
+#if VERBOSELOGGING
+                    ++logFlushCounter;
+#endif
                     FlushToDiskAsync(true, out newEntriesCount).Wait();
                     sw.SpinOnce();
                 }
             }
-
+#if VERBOSELOGGING
+            using var logFlush = LogContext.PushProperty("FlushWaitCounter", logFlushCounter);
+#endif
+            allocCounter++;
+            if (allocCounter >= 100)
+            {
+                int pipo = 0;
+            }
             return AllocateMemoryPage(pageId);
         }
-
-        [DebuggerDisplay("Start Page = {" + nameof(StartPageId) + ("}, Count = {" + nameof(PageCount) + "}"))]
-        private struct SegmentInfo
-        {
-            public void Init(uint startPageId, int startMemPageId, int pageCount)
-            {
-                StartPageId = startPageId;
-                StartMemPageId = startMemPageId;
-                PageCount = pageCount;
-            }
-            public uint StartPageId;
-            public int PageCount;
-            public int StartMemPageId;
-            public int WritePageIndex;
-        }
-
-        private int _flushCounter;
 
         unsafe internal Task FlushToDiskAsync(bool updateMRU, out int mruEntriesAddedCount)
         {
             var flushRevision = _flushRevision;
+
+            LogFlushToDiskStart();
 
             // We lock the file because we need to prevent concurrent reads/writes.
             lock (_file)
@@ -638,15 +824,23 @@ namespace Typhon.Engine
                 // If another thread complete a flush when we were waiting for the lock, just return the task resulting from it
                 if (flushRevision < _flushRevision)
                 {
+                    LogFlushToDiskConcurrentFlush();
+
                     mruEntriesAddedCount = _lastMRUEntriesAddedCount;
                     return _lastFlushTask ?? Task.CompletedTask;
                 }
 
+#if VERBOSELOGGING
+                using var logFlushRevision = LogContext.PushProperty("FlushRevision", _flushRevision);
+#endif
+
                 // Unlikely, but we don't want to fill the WriteBuffer that are maybe still being used by
                 //  the WriteAsync of the previous flush
-                _lastFlushTask?.Wait();
-
-//                Console.WriteLine($"\r\n*********************** Flush processing {_flushCounter} *********************** ");
+                if (_lastFlushTask!=null && _lastFlushTask.IsCompleted == false)
+                {
+                    LogFlushToDiskWaitPrevious();
+                    _lastFlushTask.Wait();
+                }
 
                 // Parse the Dirty Map, detect the pages to write, add them into a sorted dictionary
                 var mapLength = _dirtyMemPageMap.Length;
@@ -685,6 +879,8 @@ namespace Typhon.Engine
                     }
                 }
 
+                LogFlushToDiskPages(pagesToWrite, updateMRU, accessPages);
+
                 mruEntriesAddedCount = updateMRU ? accessPages.Count : 0;
                 _lastMRUEntriesAddedCount = mruEntriesAddedCount;
 
@@ -707,6 +903,8 @@ namespace Typhon.Engine
 
                 void IssueWrite(SegmentInfo segment, bool isFrag)
                 {
+                    LogFlushToDiskWritePage(segment, fragMemPageIdList, isFrag);
+
                     var pageSize = (int)PageSize;
                     var writePageAddr = _writeCacheAddr + (segment.WritePageIndex * WriteCachePageSize);
 
@@ -715,14 +913,13 @@ namespace Typhon.Engine
                     {
                         var memPageId = isFrag ? fragMemPageIdArray[segment.StartMemPageId+i] : (segment.StartMemPageId + i);
                         var pi = &_memPageInfosAddr[memPageId];
+                        var pageId = pi->PageId;
 
                         if (isFrag)
                         {
                             Buffer.MemoryCopy(_memPagesAddr + (memPageId * PageSize), writePageAddr + (i*pageSize), pageSize, pageSize);
                         }
-                        
-                        Console.Write($"[{Thread.CurrentThread.ManagedThreadId}]-S({pi->PageId},{memPageId}) ");
-                        TransitionPageTo(pi, memPageId, PagesAccessMode.Saving, PagesAccessMode.Idle);
+                        TransitionPageTo(pageId, pi, memPageId, PagesAccessMode.Saving, PagesAccessMode.Idle);
                     }
 
                     byte[] src = null;
@@ -771,13 +968,6 @@ namespace Typhon.Engine
                 SegmentInfo curSegment = default;
                 var prevMemPageId = -2;
                 var prevPageId = ulong.MaxValue - 1;
-
-                //Console.Write($"Map: ");
-                //foreach (var kvp in pagesToWrite)
-                //{
-                //    Console.Write($"{kvp.Key}:{kvp.Value} ");
-                //}
-                //Console.WriteLine("\r\n");
 
                 foreach (var kvp in pagesToWrite)
                 {
@@ -857,7 +1047,6 @@ namespace Typhon.Engine
                 // Issue the Write Ops for contiguous segments in-thread
                 foreach (var si in contiguousSegments)
                 {
-                    //Console.WriteLine($"ContSeg, DiskPage:{si.StartPageId}, Count:{si.PageCount}, StartMemPage: {si.StartMemPageId}");
                     IssueWrite(si, false);
                 }
 
@@ -869,12 +1058,6 @@ namespace Typhon.Engine
 
                 foreach (SegmentInfo si in fragSegments)
                 {
-                    //Console.Write($"FragSeg, DiskPage:{si.StartPageId}, Count:{si.PageCount} ");
-                    //for (int i = 0; i < si.PageCount; i++)
-                    //{
-                    //    Console.Write($"MP:{fragMemPageIdArray[si.StartMemPageId+i]} ");
-                    //}
-                    //Console.WriteLine("");
                     IssueWrite(si, true);
                 }
 
@@ -913,7 +1096,7 @@ namespace Typhon.Engine
                             var pi = &_memPageInfosAddr[memPageId];
 
                             // If PreviousUsedFrame is used, we have to remove the reference of the MemPage in the MRU for that frame
-                            if (pi->PreviousUsedFrame != -1)
+                            if ((pi->PreviousUsedFrame != -1) && (pi->IndexInCandidatesMap != -1))
                             {
                                 // Let's cache the Candidate list for the "current" frame we're processing
                                 if (candidatesFrame != pi->PreviousUsedFrame)
@@ -922,7 +1105,7 @@ namespace Typhon.Engine
                                     candidatesFrame = pi->PreviousUsedFrame;
                                 }
 
-                                Debug.Assert(pi->IndexInCandidatesMap==-1 ||candidates[pi->IndexInCandidatesMap] == memPageId, $"MRU Candidates list integrity failure, Frame {candidatesFrame}, Index: {pi->IndexInCandidatesMap}, MemPageId {memPageId}.");
+                                //Debug.Assert(pi->IndexInCandidatesMap==-1 ||candidates[pi->IndexInCandidatesMap] == memPageId, $"MRU Candidates list integrity failure, Frame {candidatesFrame}, Index: {pi->IndexInCandidatesMap}, MemPageId {memPageId}.");
 
                                 // Remove the page, we don't call RemoveAt because the PageInfo stores index into this list, we can't alter the indices
                                 candidates[pi->IndexInCandidatesMap] = -1;
@@ -941,8 +1124,9 @@ namespace Typhon.Engine
                 Interlocked.Increment(ref _flushRevision);
 
                 _lastFlushTask = Task.WhenAll(issuedIOP.ToArray());
+                _lastFlushTask.Wait();
 
-//                Console.WriteLine($"*********************** Flush exiting {_flushCounter++} *********************** ");
+                LogFlushToDiskEnd();
                 return _lastFlushTask;
             }
         }
@@ -991,6 +1175,8 @@ namespace Typhon.Engine
                 return;
             }
 
+            _logger.LogInformation("Service disposing");
+
             FlushToDiskAsync(false, out _).Wait();
 
             _file.Dispose();
@@ -1013,6 +1199,7 @@ namespace Typhon.Engine
             _writeCache = null;
 
             _isDisposed = true;
+            _logger.LogInformation("Service disposed");
         }
 
         private string BuildDatabaseFileName() => $"{_configuration.DatabaseName}.bin";

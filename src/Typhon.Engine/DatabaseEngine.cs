@@ -1,4 +1,8 @@
-﻿using System.Runtime.CompilerServices;
+﻿using Serilog;
+using Serilog.Configuration;
+using Serilog.Core;
+using Serilog.Events;
+using System.Runtime.CompilerServices;
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -39,19 +43,36 @@ namespace Typhon.Engine
 
     public class TimeManager
     {
-        private int _executionFrame;
-        public int ExecutionFrame { get => _executionFrame; }
+        public static TimeManager Singleton { get; internal set; }
+
+        public int ExecutionFrame { get; private set; }
 
         public TimeManager()
         {
-            _executionFrame = 1;
+            Singleton = this;
+            ExecutionFrame = 1;
         }
 
-        internal void BumpFrame()
-        {
-            ++_executionFrame;
-        }
+        internal void BumpFrame() => ++ExecutionFrame;
     }
+
+    public static class LogExtensions
+    {
+        public static LoggerConfiguration WithCurrentFrame(this LoggerEnrichmentConfiguration enrichmentConfiguration) =>
+            enrichmentConfiguration != null ? enrichmentConfiguration.With<CurrentFrameEnricher>() : throw new ArgumentNullException(nameof (enrichmentConfiguration));
+    }
+
+    public class CurrentFrameEnricher : ILogEventEnricher
+    {
+        /// <summary>The property name added to enriched log events.</summary>
+        public const string ThreadIdPropertyName = "ThreadId";
+
+        /// <summary>Enrich the log event.</summary>
+        /// <param name="logEvent">The log event to enrich.</param>
+        /// <param name="propertyFactory">Factory for creating new properties to add to the event.</param>
+        public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory) => logEvent.AddPropertyIfAbsent(new LogEventProperty("CurrentFrame", (LogEventPropertyValue) new ScalarValue((object) TimeManager.Singleton.ExecutionFrame)));
+    }
+
 
     public enum FieldType
     {
