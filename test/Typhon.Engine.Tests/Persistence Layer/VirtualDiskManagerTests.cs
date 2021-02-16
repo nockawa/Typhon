@@ -181,14 +181,14 @@ namespace Typhon.Engine.Tests.Persistence_Layer
             // Frame 2
             _tm.BumpFrame();
             _vdm.GetPageInfoOf(11, out var pi2);
-            var flushFrame = pi2->PreviousUsedFrame;
+            var flushFrame = pi2.PreviousUsedFrame;
 
             {
                 using var p2 = _vdm.RequestPageReadOnly(11);
             }
 
             _vdm.FlushToDiskAsync(true, out _).Wait();
-            Assert.That(pi2->PreviousUsedFrame, Is.EqualTo(flushFrame+1));
+            Assert.That(pi2.PreviousUsedFrame, Is.EqualTo(flushFrame+1));
 
             // Frame 3
             _tm.BumpFrame();
@@ -232,12 +232,12 @@ namespace Typhon.Engine.Tests.Persistence_Layer
         }
 
         [Test]
-        [Property("CacheSize", 8*8*1024)]
+        [Property("CacheSize", 8*1024*1024)]
         unsafe public void ReliabilityTest()
         {
             var cacheFactor = 4;   // This is nasty...we are going to have a lot of cache miss...
-            var frameCount = 2000;
-            var opsPerFrame = 1000;
+            var frameCount = 10;
+            var opsPerFrame = 10000;
             var readWriteRatio = 0.75f;
 
             // Size configured in the Property attribute above, right now it's 8 pages cached, which is vicious because
@@ -258,21 +258,22 @@ namespace Typhon.Engine.Tests.Persistence_Layer
                 values.Add((uint)i+1, i+1);
             }
 
+            int trueOpsCount = Math.Min(opsPerFrame, pagesCount);
             for (int i = 0; i < frameCount; i++)
             {
                 var ops = new List<OPInfo>(opsPerFrame);
-                int opsCount = Math.Min(opsPerFrame, pagesCount);
+                int opsCount = trueOpsCount;
                 var ioPages = GenerateRandomAccess(1, pagesCount, opsCount);
                 for (int j = 0; j < opsCount; j++)
                 {
                     var ro = rand.Next(0, range) < readCut;
                     uint pageId = (uint)ioPages[j];
-                    var curValue = values[pageId];
-                    ops.Add(new OPInfo{ PageId = pageId, ReadOnly = ro, ExpectedValue = curValue});
                     if (ro == false)
                     {
                         ++values[pageId];
                     }
+                    var curValue = values[pageId];
+                    ops.Add(new OPInfo{ PageId = pageId, ReadOnly = ro, ExpectedValue = curValue});
                 }
                 frames.Add(ops);
             }
@@ -307,7 +308,7 @@ namespace Typhon.Engine.Tests.Persistence_Layer
             _vdm.FlushToDiskAsync(false, out _).Wait();
 
             var di = _vdm.GetDebugInfo();
-            Console.WriteLine($"Generated file in {sw.ElapsedMilliseconds}ms, Write counts: {di.WriteToDiskCount}, Total Pages {di.PagesWrittenCount}, Avg Pages Count per write: {di.PagesWrittenCount/(float)di.WriteToDiskCount}");
+            Console.WriteLine($"Generated file in {sw.ElapsedMilliseconds}ms, Write counts: {di.WriteToDiskCount}, Total Pages {di.PagesWrittenCount}, Avg Pages Count per write: {di.PagesWrittenCount/(float)di.WriteToDiskCount}, Generated a total of {frameCount*trueOpsCount} Pages operations");
 
             // Reset the Disk Manager to start checking from a brand new one
             _vdm.ResetDiskManager();
@@ -340,17 +341,17 @@ namespace Typhon.Engine.Tests.Persistence_Layer
                         using var a = _vdm.RequestPageReadOnly(info.PageId);
                         int actual = *(int*)a.Page;
 
-                        Log.Debug("Check Page {PageId} has Value {ExpectedValue} and has {value}", info.PageId, info.ExpectedValue, actual);
+                        Log.Fatal("Check Page {PageId} has Value {ExpectedValue} and has {value}", info.PageId, info.ExpectedValue, actual);
                         Assert.That(actual, Is.EqualTo(info.ExpectedValue), $"Frame {curFrame}, Page {info.PageId} should be {info.ExpectedValue} but is {actual}");
                     }
                     else
                     {
-                        Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId}] Page {info.PageId} bumped to {info.ExpectedValue+1}");
+                        Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId}] Page {info.PageId} bumped to {info.ExpectedValue}");
 
                         using var a = _vdm.RequestPageReadWrite(info.PageId);
                         var pa = (int*)a.Page;
                         ++*pa;
-                        Log.Debug("Bump Page {PageId} to {value}", info.PageId, *pa);
+                        Log.Fatal("Bump Page {PageId} to {value}, expected {ExpectedValue}", info.PageId, *pa, info.ExpectedValue);
                     }
                 });
 
