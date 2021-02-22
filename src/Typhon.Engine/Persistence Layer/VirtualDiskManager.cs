@@ -1,4 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
+using Serilog;
+using Serilog.Context;
 using System;
 using System.Collections;
 using System.Collections.Concurrent;
@@ -85,6 +87,7 @@ namespace Typhon.Engine
         internal const int WriteCachePageSize = 1024 * 1024;
         
         private readonly DatabaseConfiguration _configuration;
+        private readonly TimeManager _timeManager;
 
         private bool _isDisposed;
 
@@ -219,6 +222,7 @@ namespace Typhon.Engine
         }
 
         private DebugInfo _debugInfo;
+
         internal ref DebugInfo GetDebugInfo()
         {
             _debugInfo.FreeMemPageCount = _memPagesCount - _memPageIdByPageId.Count;
@@ -337,11 +341,13 @@ namespace Typhon.Engine
             public int WritePageIndex;
         }
 
-        unsafe public VirtualDiskManager(IConfiguration<DatabaseConfiguration> dc, ILogger<VirtualDiskManager> logger)
+        unsafe public VirtualDiskManager(IConfiguration<DatabaseConfiguration> dc, TimeManager timeManager, ILogger<VirtualDiskManager> logger)
         {
             try
             {
                 _configuration = dc.Value;
+                _timeManager = timeManager;
+
                 _logger = logger;
 
                 _flushLock = new object();
@@ -897,10 +903,7 @@ namespace Typhon.Engine
                     lock (_file)
                     {
 #if VERBOSELOGGING
-                        fixed (byte* addr = src)
-                        {
-                            Log.Logger.Information("Write Page StartPageId {PageId}, MemPageId {MemPageId}, Value {Value}", segment.StartPageId, segment.StartMemPageId, *(int*)(addr+srcOffset));
-                        }
+                        Log.Logger.Information("Write Page StartPageId {PageId}, MemPageId {MemPageId}", segment.StartPageId, segment.StartMemPageId);
 #endif
                         _file.Position = segment.StartPageId * PageSize;
                         task = _file.WriteAsync(src, srcOffset, segment.PageCount * (int)PageSize);
