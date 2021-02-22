@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 
 [assembly: InternalsVisibleTo("Typhon.Engine.Tests")]
+[assembly: InternalsVisibleTo("Typhon.Collections.Benchmark")]
 
 namespace Typhon.Engine
 {

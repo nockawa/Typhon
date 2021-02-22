@@ -2,11 +2,9 @@
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
 using Serilog;
-using Serilog.Events;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -151,56 +149,9 @@ namespace Typhon.Engine.Tests.Persistence_Layer
                 *a = 3;
             }
 
-            _vdm.FlushToDiskAsync(true, out _).Wait();
+            _vdm.FlushToDiskAsync(true).Wait();
 
             Assert.That(_vdm.GetDebugInfo().WriteToDiskCount, Is.EqualTo(writeCount+1));
-        }
-
-        [Test]
-        unsafe public void MRU()
-        {
-            var debug = _vdm.GetDebugInfo();
-
-            // Frame 1
-            {
-                using var p1 = _vdm.RequestPageReadWrite(10);
-                using var p2 = _vdm.RequestPageReadWrite(11);
-                using var p3 = _vdm.RequestPageReadWrite(12);
-                var a = (int*)p1.Page;
-                *a = 1;
-                
-                a = (int*)p2.Page;
-                *a = 2;
-                
-                a = (int*)p3.Page;
-                *a = 3;
-            }
-
-            _vdm.FlushToDiskAsync(true, out _).Wait();
-
-            // Frame 2
-            _tm.BumpFrame();
-            _vdm.GetPageInfoOf(11, out var pi2);
-            var flushFrame = pi2.PreviousUsedFrame;
-
-            {
-                using var p2 = _vdm.RequestPageReadOnly(11);
-            }
-
-            _vdm.FlushToDiskAsync(true, out _).Wait();
-            Assert.That(pi2.PreviousUsedFrame, Is.EqualTo(flushFrame+1));
-
-            // Frame 3
-            _tm.BumpFrame();
-
-            {
-                using var p1 = _vdm.RequestPageReadWrite(10);
-                using var p2 = _vdm.RequestPageReadWrite(11);
-            }
-            _vdm.FlushToDiskAsync(true, out _).Wait();
-            
-            _vdm.GetPageInfoOf(10, out var pi1);
-
         }
 
         [TestCase(16)]
@@ -235,15 +186,15 @@ namespace Typhon.Engine.Tests.Persistence_Layer
         [Property("CacheSize", 8*1024*1024)]
         unsafe public void ReliabilityTest()
         {
-            var cacheFactor = 4;   // This is nasty...we are going to have a lot of cache miss...
-            var frameCount = 10;
-            var opsPerFrame = 10000;
+            var cacheFactor = 4f;   // This is nasty...we are going to have a lot of cache miss...
+            var frameCount = 200;
+            var opsPerFrame = 1000;
             var readWriteRatio = 0.75f;
 
             // Size configured in the Property attribute above, right now it's 8 pages cached, which is vicious because
             //  my actual computer has more thread, which means multiple thread compete for the same memory page.
             var cacheSize = _configuration.DatabaseCacheSize;
-            var pagesCount = ((int)cacheSize* cacheFactor) / (int)VirtualDiskManager.PageSize;
+            var pagesCount = (int)(cacheSize* cacheFactor) / (int)VirtualDiskManager.PageSize;
 
             // Generate IO ops for all the frames
             var frames = new List<List<OPInfo>>(frameCount);
@@ -305,7 +256,7 @@ namespace Typhon.Engine.Tests.Persistence_Layer
                 });
             }
 
-            _vdm.FlushToDiskAsync(false, out _).Wait();
+            _vdm.FlushToDiskAsync(false).Wait();
 
             var di = _vdm.GetDebugInfo();
             Console.WriteLine($"Generated file in {sw.ElapsedMilliseconds}ms, Write counts: {di.WriteToDiskCount}, Total Pages {di.PagesWrittenCount}, Avg Pages Count per write: {di.PagesWrittenCount/(float)di.WriteToDiskCount}, Generated a total of {frameCount*trueOpsCount} Pages operations");
@@ -355,7 +306,7 @@ namespace Typhon.Engine.Tests.Persistence_Layer
                     }
                 });
 
-                _vdm.FlushToDiskAsync(true, out _).Wait();
+                _vdm.FlushToDiskAsync(true).Wait();
                 _tm.BumpFrame();
             }
         }
