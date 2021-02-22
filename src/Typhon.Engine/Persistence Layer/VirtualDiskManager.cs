@@ -123,8 +123,7 @@ namespace Typhon.Engine
 
         private readonly ConcurrentDictionary<uint, int> _memPageIdByPageId;
 
-        private readonly uint[] _accessedMemPageMap;    // The map store 1 bit for each cached pages, set to one if the page has been accessed in this frame
-        private readonly uint[] _dirtyMemPageMap;       // The map store 1 bit for each cached pages, set to ine if the page has been changed and should be written to disk
+        private readonly ConcurrentBitmapL3 _dirtyPages;
 
         internal class ConcurrentCollection<T> : IEnumerable<T> where T : class
         {
@@ -388,8 +387,7 @@ namespace Typhon.Engine
                 _backgroundLFUD = new ConcurrentCollection<PageInfo>(pageCount);
                 _keysToSort = new int[pageCount];
                 _valuesToSort = new int[pageCount];
-                _accessedMemPageMap = new uint[(pageCount + 31) / 32];
-                _dirtyMemPageMap    = new uint[(pageCount + 31) / 32];
+                _dirtyPages = new ConcurrentBitmapL3(pageCount);
                 
                 // Fill the MRU with all the pages as marked used for frame 0, init the PageInfo
                 for (int i = 0; i < pageCount; i++)
@@ -435,9 +433,8 @@ namespace Typhon.Engine
 
             _memPageIdByPageId.Clear();
 
-            Array.Clear(_accessedMemPageMap, 0, _accessedMemPageMap.Length);
-            Array.Clear(_dirtyMemPageMap, 0, _dirtyMemPageMap.Length);
             Array.Clear(_memPagesActivities, 0, _memPagesActivities.Length);
+            _dirtyPages.Reset();
 
             // Fill the MRU with all the pages as marked used for frame 0
             _mainLFUD.Clear();
@@ -612,13 +609,9 @@ namespace Typhon.Engine
                 }
 
                 // Mark the page as accessed in the access map
-                var offset = memPageId >> 5;
-                var index = (memPageId & 0x1F);
-                var mask = (uint)(1 << index);
-                Interlocked.Or(ref _accessedMemPageMap[offset], mask);
                 if (doesWrite)
                 {
-                    Interlocked.Or(ref _dirtyMemPageMap[offset], mask);
+                    _dirtyPages.Set(memPageId);
                 }
             }
             LogTransitionSuccessful(prevMode, pi.AccessMode);
@@ -674,20 +667,10 @@ namespace Typhon.Engine
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool IsMemPageDirty(int memPageId)
-        {
-            var offset = memPageId >> 5;
-            var mask = 1 << (memPageId & 0x1F);
-            return (_dirtyMemPageMap[offset] & mask) != 0;
-        }
+        private bool IsMemPageDirty(int memPageId) => _dirtyPages.IsSet(memPageId);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void ClearMemPageDirty(int memPageId)
-        {
-            var offset = memPageId >> 5;
-            var mask = (uint)~(1 << (memPageId & 0x1F));
-            Interlocked.And(ref _dirtyMemPageMap[offset], mask);
-        }
+        private void ClearMemPageDirty(int memPageId) => _dirtyPages.Clear(memPageId);
 
         private int AllocateMemoryPage(uint pageId, bool doesWrite)
         {
@@ -823,27 +806,14 @@ namespace Typhon.Engine
                 }
 
                 // Parse the Dirty Map, detect the pages to write, add them into a sorted dictionary
-                var mapLength = _dirtyMemPageMap.Length;
-                var curI = 0;
                 var pagesToWrite = new SortedDictionary<uint, int>();
                 var maxPage = 0UL;
 
-                for (int i = 0; i < mapLength && curI < _memPagesCount; i++)
+                foreach (var curI in _dirtyPages)
                 {
-                    uint dirtyMask = _dirtyMemPageMap[i];
-
-                    for (int j = 0; j < 32 && curI < _memPagesCount; j++)
-                    {
-                        var pi = _memPagesInfo[curI];
-                        if ((dirtyMask & 1) == 1)
-                        {
-                            pagesToWrite.Add(pi.PageId, curI);
-                            maxPage = Math.Max(maxPage, pi.PageId);
-                        }
-
-                        dirtyMask >>= 1;
-                        ++curI;
-                    }
+                    var pi = _memPagesInfo[curI];
+                    pagesToWrite.Add(pi.PageId, curI);
+                    maxPage = Math.Max(maxPage, pi.PageId);
                 }
 
                 LogFlushToDiskPages(pagesToWrite/*, updateMRU, accessPages*/);
@@ -1063,7 +1033,10 @@ namespace Typhon.Engine
             for (int i = 0; i < _memPagesCount; i++)
             {
                 ref var pa = ref pal[i];
-
+                if (pa.HitCount < 1f)
+                {
+                    continue;
+                }
                 var dT = (float)TimeSpan.FromTicks(now - (long)pa.LastRequestTime << 20).TotalSeconds;
                 var f = Math.Clamp((dT - t0) / (t1 - t0), 0, 1);
                 pa.HitCount *= 1f-(f * step);

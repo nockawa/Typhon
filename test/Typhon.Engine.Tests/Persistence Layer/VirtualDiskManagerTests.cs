@@ -187,7 +187,7 @@ namespace Typhon.Engine.Tests.Persistence_Layer
         unsafe public void ReliabilityTest()
         {
             var cacheFactor = 4f;   // This is nasty...we are going to have a lot of cache miss...
-            var frameCount = 200;
+            var frameCount = 50;
             var opsPerFrame = 1000;
             var readWriteRatio = 0.75f;
 

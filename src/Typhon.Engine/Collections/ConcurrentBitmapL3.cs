@@ -46,7 +46,7 @@ namespace Typhon.Engine
         public void Set(int index)
         {
             var offset = index >> 6;
-            var mask = 1 << (index & 0x3F);
+            var mask = 1L << (index & 0x3F);
             var prevValue = Interlocked.Or(ref _data[0].Span[offset], mask);
             if (prevValue != 0)
             {
@@ -55,7 +55,7 @@ namespace Typhon.Engine
 
             index = offset;
             offset = index >> 6;
-            mask = 1 << (index & 0x3F);
+            mask = 1L << (index & 0x3F);
             prevValue = Interlocked.Or(ref _data[1].Span[offset], mask);
             if (prevValue != 0)
             {
@@ -64,7 +64,7 @@ namespace Typhon.Engine
 
             index = offset;
             offset = index >> 6;
-            mask = 1 << (index & 0x3F);
+            mask = 1L << (index & 0x3F);
             Interlocked.Or(ref _data[2].Span[offset], mask);
         }
 
@@ -72,7 +72,7 @@ namespace Typhon.Engine
         public void Clear(int index)
         {
             var offset = index >> 6;
-            var mask = ~(1 << (index & 0x3F));
+            var mask = ~(1L << (index & 0x3F));
             var prevVal = Interlocked.And(ref _data[0].Span[offset], mask);
             if (prevVal == 0 || (prevVal&mask) != 0)
             {
@@ -81,7 +81,7 @@ namespace Typhon.Engine
 
             index = offset;
             offset = index >> 6;
-            mask = ~(1 << (index & 0x3F));
+            mask = ~(1L << (index & 0x3F));
             prevVal = Interlocked.And(ref _data[1].Span[offset], mask);
             if (prevVal == 0 || (prevVal&mask) != 0)
             {
@@ -90,7 +90,7 @@ namespace Typhon.Engine
 
             index = offset;
             offset = index >> 6;
-            mask = ~(1 << (index & 0x3F));
+            mask = ~(1L << (index & 0x3F));
             Interlocked.And(ref _data[1].Span[offset], mask);
         }
 
