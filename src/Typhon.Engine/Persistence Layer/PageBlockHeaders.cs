@@ -37,50 +37,41 @@ namespace Typhon.Engine
     [Flags]
     public enum PageBlockFlags : byte
     {
-        None = 0,
-        IsFree = 0x1,
-        IsLogicalSegment = 0x2,
+        None                 = 0x00,
+        IsFree               = 0x01,
+        IsLogicalSegment     = 0x02,
+        IsLogicalSegmentRoot = 0x04
     }
 
     public enum PageBlockType : byte
     {
         None = 0,
+        OccupancyMap,
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    internal struct PageBlockBaseHeader
+    public struct PageBaseHeader
     {
         /// <summary>
         /// Combination of one to many flags
         /// </summary>
-        public PageBlockFlags Flags;
+        public PageBlockFlags Flags;          // NOTE: keep this field as the first byte of the header because we perform direct access on it sometimes
         /// <summary>
         /// Block Type
         /// </summary>
         public PageBlockType Type;
         /// <summary>
-        /// 1 for single page block (8192 bytes), X for X x 8192 bytes to define a Combo Page Block (contiguous data on disk of X allocations)
-        /// </summary>
-        /// <remarks>
-        /// Page Block can be variable in size, always a multiple of 8KiB. The combo defines the number of single Page Block to allocate linearly.
-        /// The first Page Block has a 192 bytes header but the subsequent ones are plain raw data.
-        /// </remarks>
-        public short PageBlockComboSize;
-        /// <summary>
-        /// The Change Revision is incremented eEvery time the Page is written to disk.
-        /// </summary>
-        public int ChangeRevision;
-        /// <summary>
         /// Revision number specific to the Page Block Type, to support basic versioning.
         /// </summary>
         public short FormatRevision;
-
-        private short Padding0;
-
         /// <summary>
         /// If the Page Block is a Logical Segment, will store the index to the next block storing Map Data, 0 if there's none.
         /// </summary>
         public uint LogicalSegmentNextMapPBID;
+        /// <summary>
+        /// The Change Revision is incremented every time the Page is written to disk.
+        /// </summary>
+        public long ChangeRevision;
         /// <summary>
         /// If the Page Block is a Logical Segment, will store the index to the next block storing Raw Data, 0 if there's none.
         /// </summary>

@@ -9,7 +9,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Typhon.Engine.Tests.Persistence_Layer
+namespace Typhon.Engine.Tests
 {
     class VirtualDiskManagerTests
     {
@@ -65,6 +65,8 @@ namespace Typhon.Engine.Tests.Persistence_Layer
             _vdm = _serviceProvider.GetRequiredService<VirtualDiskManager>();
             _tm = _serviceProvider.GetRequiredService<TimeManager>();
             _configuration = _serviceProvider.GetRequiredService<IConfiguration<DatabaseConfiguration>>().Value;
+
+            _vdm.Initialize();
         }
 
         [TearDown]
@@ -194,7 +196,7 @@ namespace Typhon.Engine.Tests.Persistence_Layer
             // Size configured in the Property attribute above, right now it's 8 pages cached, which is vicious because
             //  my actual computer has more thread, which means multiple thread compete for the same memory page.
             var cacheSize = _configuration.DatabaseCacheSize;
-            var pagesCount = (int)(cacheSize* cacheFactor) / (int)VirtualDiskManager.PageSize;
+            var pagesCount = (int)(cacheSize* cacheFactor) / VirtualDiskManager.PageSize;
 
             // Generate IO ops for all the frames
             var frames = new List<List<OPInfo>>(frameCount);

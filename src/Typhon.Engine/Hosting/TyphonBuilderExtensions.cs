@@ -75,12 +75,12 @@ namespace Typhon.Engine
                 services.Add(context.CreateServiceDescriptor());
 
                 services.AddSingleton<IConfigurationProvider<DatabaseConfiguration>, DefaultDatabaseConfiguration>();
-                services.AddSingleton<VirtualDiskManager>();
-                services.AddSingleton<PersistentDataAccess>();
-                services.AddSingleton<TimeManager>();
                 services.TryAddSingleton(typeof(IConfiguration<>), typeof(ConfigurationHolder<>));
+                services.AddSingleton<VirtualDiskManager>();
+                services.AddSingleton<LogicalSegmentManager>();
+                services.AddSingleton<DiskPageAllocator>();
+                services.AddSingleton<TimeManager>();
                 services.TryAddSingleton<DatabaseEngine>();
-
             }
 
             configure?.Invoke(context.Builder);

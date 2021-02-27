@@ -1,4 +1,5 @@
-﻿using Serilog;
+﻿using Microsoft.Extensions.Logging;
+using Serilog;
 using Serilog.Configuration;
 using Serilog.Core;
 using Serilog.Events;
@@ -13,48 +14,65 @@ using System.Text.RegularExpressions;
 
 namespace Typhon.Engine
 {
-    public class DatabaseEngine : IDisposable
+    public interface IInitializable
     {
-        private readonly DatabaseConfiguration _configuration;
-        private readonly PersistentDataAccess _persistentDataAccess;
+        void Initialize();
+        bool IsInitialized { get; }
+        bool IsDisposed { get; }
+        int ReferenceCounter { get; }
+    }
 
-        private bool _isDisposed;
+    public class DatabaseEngine : IInitializable, IDisposable
+    {
+        private readonly DatabaseConfiguration     _dbc;
+        private readonly VirtualDiskManager        _vdm;
+        private readonly LogicalSegmentManager     _lsm;
+        private readonly DiskPageAllocator         _dpa;
+        private readonly ILogger<DatabaseEngine>   _log;
 
-        public DatabaseEngine(IConfiguration<DatabaseConfiguration> dc, PersistentDataAccess pda)
+        public DatabaseEngine(IConfiguration<DatabaseConfiguration> dbc, VirtualDiskManager vdm, LogicalSegmentManager lsm, DiskPageAllocator dpa, ILogger<DatabaseEngine> log)
         {
-            _configuration = dc.Value;
-            _persistentDataAccess = pda;
+            _vdm = vdm;
+            _lsm = lsm;
+            _dpa = dpa;
+            _log = log;
+            _dbc = dbc.Value;
 
             // Check the configuration
-            _configuration.Validate(false, out _);
-
-
+            _dbc.Validate(false, out _);
         }
+
+        public void Initialize()
+        {
+            ++ReferenceCounter;
+            if (IsInitialized)
+            {
+                return;
+            }
+            _vdm.Initialize();
+            _lsm.Initialize();
+            _dpa.Initialize();
+
+            IsInitialized = true;
+            return;
+        }
+        public bool IsInitialized { get; private set; }
+        public bool IsDisposed { get; private set; }
+        public int ReferenceCounter { get; private set; }
 
         public void Dispose()
         {
-            if (_isDisposed)
+            if (IsDisposed || --ReferenceCounter!=0)
             {
                 return;
             }
 
-            _isDisposed = true;
+            _dpa.Dispose();
+            _lsm.Dispose();
+            _vdm.Dispose();
+
+            IsDisposed = true;
         }
-    }
-
-    public class TimeManager
-    {
-        public static TimeManager Singleton { get; internal set; }
-
-        public int ExecutionFrame { get; private set; }
-
-        public TimeManager()
-        {
-            Singleton = this;
-            ExecutionFrame = 1;
-        }
-
-        internal void BumpFrame() => ++ExecutionFrame;
     }
 
     public static class LogExtensions

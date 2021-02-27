@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using System;
 using System.Collections.Generic;
+using Typhon.Engine;
 
 namespace Typhon.Engine.Tests
 {

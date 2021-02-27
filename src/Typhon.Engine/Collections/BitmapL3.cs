@@ -1,27 +1,28 @@
-﻿using System;
+﻿// unset
+
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
-using System.Threading;
 
 namespace Typhon.Engine
 {
-    public class ConcurrentBitmapL3 : IEnumerable<int>
+    public class BitmapL3 : IEnumerable<int>
     {
         private readonly Memory<long>[] _data;
         internal int LastEnumLoopCount;
 
-        public ConcurrentBitmapL3(int bitCount)
+        public BitmapL3(int bitCount)
         {
             _data = new Memory<long>[3];
             Capacity = bitCount;
 
             var length = Math.Max(1, (bitCount + 63) / 64);
             _data[0] = new long[length];
-
+            
             length = Math.Max(1, (length + 63) / 64);
             _data[1] = new long[length];
-
+            
             length = Math.Max(1, (length + 63) / 64);
             _data[2] = new long[length];
         }
@@ -38,7 +39,8 @@ namespace Typhon.Engine
         {
             var offset = index >> 6;
             var mask = 1L << (index & 0x3F);
-            var prevValue = Interlocked.Or(ref _data[0].Span[offset], mask);
+            var prevValue = _data[0].Span[offset];
+            _data[0].Span[offset] |= mask;
             if (prevValue != 0)
             {
                 return;
@@ -47,7 +49,8 @@ namespace Typhon.Engine
             index = offset;
             offset = index >> 6;
             mask = 1L << (index & 0x3F);
-            prevValue = Interlocked.Or(ref _data[1].Span[offset], mask);
+            prevValue = _data[1].Span[offset];
+            _data[1].Span[offset] |= mask;
             if (prevValue != 0)
             {
                 return;
@@ -56,7 +59,7 @@ namespace Typhon.Engine
             index = offset;
             offset = index >> 6;
             mask = 1L << (index & 0x3F);
-            Interlocked.Or(ref _data[2].Span[offset], mask);
+            _data[2].Span[offset] |= mask;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -64,8 +67,9 @@ namespace Typhon.Engine
         {
             var offset = index >> 6;
             var mask = ~(1L << (index & 0x3F));
-            var prevVal = Interlocked.And(ref _data[0].Span[offset], mask);
-            if (prevVal == 0 || (prevVal & mask) != 0)
+            var prevVal = _data[0].Span[offset];
+            _data[0].Span[offset] &= mask;
+            if (prevVal == 0 || (prevVal&mask) != 0)
             {
                 return;
             }
@@ -73,8 +77,9 @@ namespace Typhon.Engine
             index = offset;
             offset = index >> 6;
             mask = ~(1L << (index & 0x3F));
-            prevVal = Interlocked.And(ref _data[1].Span[offset], mask);
-            if (prevVal == 0 || (prevVal & mask) != 0)
+            prevVal = _data[1].Span[offset];
+            _data[1].Span[offset] &= mask;
+            if (prevVal == 0 || (prevVal&mask) != 0)
             {
                 return;
             }
@@ -82,7 +87,7 @@ namespace Typhon.Engine
             index = offset;
             offset = index >> 6;
             mask = ~(1L << (index & 0x3F));
-            Interlocked.And(ref _data[1].Span[offset], mask);
+            _data[1].Span[offset] &= mask;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -92,7 +97,7 @@ namespace Typhon.Engine
             var mask = 1L << (index & 0x3F);
             return (_data[0].Span[offset] & mask) != 0L;
         }
-        
+
         public void ForEach(Action<int> action)
         {
             using var e = GetEnumerator();
@@ -110,13 +115,13 @@ namespace Typhon.Engine
 
         public struct Enumerator : IEnumerator<int>
         {
-            private readonly ConcurrentBitmapL3 _owner;
+            private readonly BitmapL3 _owner;
 
             private int _c0;
             private long _v0;
             private int _loopCount;
 
-            public Enumerator(ConcurrentBitmapL3 owner)
+            public Enumerator(BitmapL3 owner)
             {
                 _owner = owner;
                 _c0 = -1;
@@ -145,7 +150,7 @@ namespace Typhon.Engine
                         // Check if we can skip the rest of the level 0
                         for (int i0 = c0 >> 6; i0 < ll0; i0 = c0 >> 6, lc++)
                         {
-                            v0 = o._data[0].Span[i0] >> (c0 & 0x3F);
+                            v0 = o._data[0].Span[i0] >> c0;
                             if (v0 != 0)
                             {
                                 break;
