@@ -224,7 +224,7 @@ namespace Typhon.Engine
                     _pageAccessor = _segment._manager.VDM.RequestPageReadOnly(_segment.Pages[_curPageIndex]);
                     _nextPageSwitch = LogicalSegment.GetMaxItemCount<T>(_curPageIndex == 0);
                     _index = 0;
-                    _item = _pageAccessor.Page;
+                    _item = _pageAccessor.PageAddress;
                 }
                 else
                 {
@@ -278,7 +278,7 @@ namespace Typhon.Engine
                     _pageAccessor = _segment._manager.VDM.RequestPageReadWrite(_segment.Pages[_curPageIndex]);
                     _nextPageSwitch = LogicalSegment.GetMaxItemCount<T>(_curPageIndex == 0);
                     _index = 0;
-                    _item = _pageAccessor.Page;
+                    _item = _pageAccessor.PageAddress;
                 }
                 else
                 {

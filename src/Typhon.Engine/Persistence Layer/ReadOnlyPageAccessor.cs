@@ -19,23 +19,23 @@ namespace Typhon.Engine
         /// Don't exceed the page's size when accessing it.
         /// DON'T WRITE into it, use <see cref="ReadWritePageAccessor"/> instead.
         /// </remarks>
-        public byte* Page { get; }
+        public byte* PageAddress { get; }
         /// <summary>
         /// Span of the whole data of the page.
         /// </summary>
-        public ReadOnlySpan<byte> WholePage => new(Page, VirtualDiskManager.PageSize);
+        public ReadOnlySpan<byte> WholePage => new(PageAddress, VirtualDiskManager.PageSize);
         /// <summary>
         /// Span of the header of the page, you should prefer <see cref="Header"/>.
         /// </summary>
-        public ReadOnlySpan<byte> PageHeader => new(Page, VirtualDiskManager.PageHeaderSize);
+        public ReadOnlySpan<byte> PageHeader => new(PageAddress, VirtualDiskManager.PageHeaderSize);
         /// <summary>
         /// Span of the page metadata, it's a 128 bytes zone inside the PageHeader, just right after the BaseHeader
         /// </summary>
-        public Span<byte> PageMetadata => new(Page + VirtualDiskManager.PageBaseHeaderSize, VirtualDiskManager.PageMetadataSize);
+        public Span<byte> PageMetadata => new(PageAddress + VirtualDiskManager.PageBaseHeaderSize, VirtualDiskManager.PageMetadataSize);
         /// <summary>
         /// Span of the page raw data, it's a 8000 bytes zone after the header.
         /// </summary>
-        public ReadOnlySpan<byte> PageRawData => new(Page + VirtualDiskManager.PageHeaderSize, VirtualDiskManager.PageRawDataSize);
+        public ReadOnlySpan<byte> PageRawData => new(PageAddress + VirtualDiskManager.PageHeaderSize, VirtualDiskManager.PageRawDataSize);
         /// <summary>
         /// Span of the Logical Segment's raw data. See Remarks.
         /// </summary>
@@ -48,9 +48,9 @@ namespace Typhon.Engine
         {
             get
             {
-                var root = (Page[0] & (byte)PageBlockFlags.IsLogicalSegmentRoot) != 0;
+                var root = (PageAddress[0] & (byte)PageBlockFlags.IsLogicalSegmentRoot) != 0;
                 var offset = root ? LogicalSegment.RootHeaderIndexSectionLength : 0;
-                return new(Page + VirtualDiskManager.PageHeaderSize + offset, VirtualDiskManager.PageRawDataSize - offset);
+                return new(PageAddress + VirtualDiskManager.PageHeaderSize + offset, VirtualDiskManager.PageRawDataSize - offset);
             }
         }
         /// <summary>
@@ -62,12 +62,12 @@ namespace Typhon.Engine
         private readonly uint _pageId;
         private VirtualDiskManager.PageInfo _pi;
 
-        internal ReadOnlyPageAccessor(VirtualDiskManager owner, VirtualDiskManager.PageInfo pi, byte* page)
+        internal ReadOnlyPageAccessor(VirtualDiskManager owner, VirtualDiskManager.PageInfo pi, byte* pageAddress)
         {
             _owner = owner;
             _pageId = pi.PageId;
             _pi = pi;
-            Page = page;
+            PageAddress = pageAddress;
         }
 
         public void Dispose()

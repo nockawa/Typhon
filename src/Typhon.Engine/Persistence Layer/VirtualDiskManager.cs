@@ -482,6 +482,33 @@ namespace Typhon.Engine
             return true;
         }
 
+        /// <summary>
+        /// Transition the page from its current mode to Access (either read or write)
+        /// </summary>
+        /// <param name="pageId">Disk Page Id</param>
+        /// <param name="pi">The corresponding PageInfo</param>
+        /// <param name="doesWrite"><c>true</c> if we are doing read/write, otherwise it's read-only</param>
+        /// <param name="reallocate"><c>true</c> if we are reallocating the MemPage</param>
+        /// <returns><c>true</c> is we successfully transitioned to access, <c>false</c> if we failed</returns>
+        /// <remarks>
+        /// This is...not easy... because this method takes care of the whole concurrency model of the Virtual Disk Manager
+        /// Basically, the behavior we want is:
+        ///  - If the page is Idle: it's simple, we transition to access, with exclusive Read-Only or Read/Write
+        ///  - If the page is Read-Only:
+        ///    - If we are requesting Read again from the same thread: it's a re-entrant request, we keep the exclusive Read and allow re-entrance.
+        ///    - If we are requesting Read again from another thread: we allow concurrent Read but release the exclusive access from the Thread.
+        ///    - If we are requesting Write from the same thread: we promote the access from Read-Only to Read/Write.
+        ///    - If we are requesting Write from another thread: we wait for the Read request(s) to be over.
+        ///  - If the page is Read/Write:
+        ///    - If we request Read-Only or Read/Write from the same thread: we allow re-entrance.
+        ///    - If we request Read-Only or Read/Write from another thread, we wait the current access to be over.
+        /// All in all, it's common sense. We are being permissive by allowing re-entrant Read-Only from/to Read/Write when it's the same thread, we
+        ///  assume the user knows what (s)he is doing.
+        /// Promotion from Read-Only to Read/Write can only be made from an exclusive read, it won't work in a two phases process where we would have
+        ///  at first multiple Read-Only accesses, then all Reads stop except a remaining one, we don't know which thread remains in Read-Only mode so
+        ///  we can't promote it to Read/Write if the situation would arise. If this would prove to be an issue we would have to store an array of threads
+        ///  instead of a single field.
+        /// </remarks>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool TransitionPageToAccess(uint pageId, PageInfo pi, bool doesWrite, bool reallocate)
         {
@@ -500,18 +527,49 @@ namespace Typhon.Engine
                     return false;
                 }
 
-                // Concurrent ReadOnly mode?
+                // Concurrent or Re-entrant ReadOnly mode?
                 if ((reallocate == false) && (pi.AccessMode == PagesAccessMode.Read) && (doesWrite == false))
                 {
+                    // Loose the exclusive access if we now have multiple threads doing read-only access
+                    var ct = Thread.CurrentThread.ManagedThreadId;
+                    pi.LockedByThreadId = (pi.LockedByThreadId==ct) ? ct : 0;
+
                     ++pi.ConcurrentUseCounter;
                     ++_memPagesActivities[memPageId].HitCount;
                     return true;
+                }
+
+                // Promotion from Read-Only to Read/Write?
+                if ((reallocate == false) && (pi.AccessMode == PagesAccessMode.Read) && (pi.ConcurrentUseCounter == 1) && doesWrite)
+                {
+                    // Delay the access to ManagedThreadId as it's not a very cheap call
+                    var ct = Thread.CurrentThread.ManagedThreadId;
+                    if (pi.LockedByThreadId == ct)
+                    {
+                        // We can promote
+                        ++pi.ConcurrentUseCounter;
+                        ++_memPagesActivities[memPageId].HitCount;
+                        pi.AccessMode = PagesAccessMode.Write;
+                        return true;
+                    }
                 }
 
                 // Check if we have to wait for IO operation to complete (must wait out of the lock)
                 if (pi.IOMode != PageIOMode.None && pi.IOCompletionTask != null && pi.IOCompletionTask.IsCompleted == false)
                 {
                     waitIO = pi.IOCompletionTask;
+                }
+
+                // Check for re-entrant Access
+                var currentThread = Thread.CurrentThread.ManagedThreadId;
+
+                // This thread currently owns read/write access on the page ?
+                if (currentThread == pi.LockedByThreadId)
+                {
+                    // We are loose, if we want a read-only access and the page is already in read/write, we assume the user knows
+                    //  what's (s)he's doing (good luck!).
+                    ++pi.ConcurrentUseCounter;
+                    return true;
                 }
             }
 
@@ -520,33 +578,18 @@ namespace Typhon.Engine
             // Wait IO to complete
             waitIO?.Wait();
 
-            // Check for re-entrant Access
-            var curThread = Thread.CurrentThread.ManagedThreadId;
-
-            // This thread currently own read/write access on the page ?
-            if (curThread == pi.LockedByThreadId)
-            {
-                // We are loose, if we want a read-only access and the page is already in read/write, we assume the user knows
-                //  what's (s)he's doing (good luck!).
-                ++pi.ConcurrentUseCounter;
-                return true;
-
-            }
-
             // Wait for exclusive access to the MemPage
             pi.SyncRoot.Wait();
 
+            // Check if the page has be reallocated between the time we acquire the exclusive access
             if ((prevPageId != pi.PageId) || (reallocate && IsMemPageDirty(memPageId)))
             {
                 pi.SyncRoot.Release();
                 return false;
             }
 
-            // Exclusive access is only when there's write
-            if (doesWrite)
-            {
-                pi.LockedByThreadId = curThread;
-            }
+            // Exclusive access has we are the only user right now
+            pi.LockedByThreadId = Thread.CurrentThread.ManagedThreadId;
 
             // Reset if needed
             if (waitIO != null)
@@ -1069,7 +1112,7 @@ namespace Typhon.Engine
 
             using (var pa = RequestPageReadWrite(0))
             {
-                var h = (RootFileHeader*)pa.Page;
+                var h = (RootFileHeader*)pa.PageAddress;
                 StoreString(HeaderSignature, h->HeaderSignature, 32);
                 h->DatabaseFormatRevision = DatabaseFormatRevision;
                 StoreString(c.DatabaseName, h->DatabaseName, 64);
@@ -1095,7 +1138,7 @@ namespace Typhon.Engine
 
             using (var pa = RequestPageReadOnly(0))
             {
-                var h = (RootFileHeader*)pa.Page;
+                var h = (RootFileHeader*)pa.PageAddress;
                 _log.LogInformation("Load Database '{DatabaseName}' from file '{FilePathName}'", h->DatabaseNameString, filePathName);
 
                 OnDatabaseLoading(h);

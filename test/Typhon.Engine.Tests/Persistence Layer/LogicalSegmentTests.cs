@@ -8,6 +8,7 @@ using Serilog.Events;
 using Serilog.Extensions.Logging;
 using System;
 using System.Numerics;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace Typhon.Engine.Tests
@@ -95,14 +96,37 @@ namespace Typhon.Engine.Tests
             _lsm.DeleteSegment(s3);
         }
 
-        [Test]
-        public void ChunkBasedSegmentTest()
+        [StructLayout(LayoutKind.Sequential)]
+        struct ChunkA
         {
-            var s0 = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, 8);
+            public int A;
+            public int B;
+            public int C;
+            public int D;
+        }
 
-            using var mo = s0.AllocateChunks(2000);
+        [Test]
+        unsafe public void ChunkBasedSegmentTest()
+        {
 
-            
+            var s0 = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(ChunkA));
+
+            using var mo = s0.AllocateChunks(2000, false);
+
+            using var ca = s0.GetChunkReadWriteRandomAccessor<ChunkA>(4);
+
+            ref var obj = ref ca.GetChunk(0);
+            obj.A = -1;
+            obj.B = -1;
+            obj.C = -1;
+            obj.D = -1;
+
+            obj = ca.GetChunk(1);
+            obj.A = 1;
+
+            obj = ca.GetChunk(500);
+            obj.A = 1;
+
         }
     }
 }

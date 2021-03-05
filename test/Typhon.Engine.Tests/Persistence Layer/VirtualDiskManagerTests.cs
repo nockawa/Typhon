@@ -124,7 +124,7 @@ namespace Typhon.Engine.Tests
             {
                 unsafe
                 {
-                    var h = (RootFileHeader*)pa.Page;
+                    var h = (RootFileHeader*)pa.PageAddress;
                     Assert.That(h->HeaderSignatureString, Is.EqualTo(VirtualDiskManager.HeaderSignature));
                     Assert.That(h->DatabaseNameString, Is.EqualTo(CurrentDatabaseName));
                 }
@@ -141,13 +141,13 @@ namespace Typhon.Engine.Tests
                 using var p1 = _vdm.RequestPageReadWrite(10);
                 using var p2 = _vdm.RequestPageReadWrite(11);
                 using var p3 = _vdm.RequestPageReadWrite(12);
-                var a = (int*)p1.Page;
+                var a = (int*)p1.PageAddress;
                 *a = 1;
                 
-                a = (int*)p2.Page;
+                a = (int*)p2.PageAddress;
                 *a = 2;
                 
-                a = (int*)p3.Page;
+                a = (int*)p3.PageAddress;
                 *a = 3;
             }
 
@@ -243,7 +243,7 @@ namespace Typhon.Engine.Tests
                 {
                     using var a = _vdm.RequestPageReadWrite((uint)i);
 
-                    var dest = (int*)a.Page;
+                    var dest = (int*)a.PageAddress;
                     *dest = i;
                 }
             }
@@ -253,7 +253,7 @@ namespace Typhon.Engine.Tests
                 {
                     using var a = _vdm.RequestPageReadWrite((uint)i);
 
-                    var dest = (int*)a.Page;
+                    var dest = (int*)a.PageAddress;
                     *dest = i;
                 });
             }
@@ -271,7 +271,7 @@ namespace Typhon.Engine.Tests
             {
                 using var a = _vdm.RequestPageReadOnly((uint)i);
 
-                var dest = (int*)a.Page;
+                var dest = (int*)a.PageAddress;
                 Assert.That(*dest, Is.EqualTo(i), () => $"Bad DiskPageId {i}");
             }
 
@@ -292,7 +292,7 @@ namespace Typhon.Engine.Tests
                         Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId}] Check Page {info.PageId} is {info.ExpectedValue}");
 
                         using var a = _vdm.RequestPageReadOnly(info.PageId);
-                        int actual = *(int*)a.Page;
+                        int actual = *(int*)a.PageAddress;
 
                         Log.Fatal("Check Page {PageId} has Value {ExpectedValue} and has {value}", info.PageId, info.ExpectedValue, actual);
                         Assert.That(actual, Is.EqualTo(info.ExpectedValue), $"Frame {curFrame}, Page {info.PageId} should be {info.ExpectedValue} but is {actual}");
@@ -302,7 +302,7 @@ namespace Typhon.Engine.Tests
                         Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId}] Page {info.PageId} bumped to {info.ExpectedValue}");
 
                         using var a = _vdm.RequestPageReadWrite(info.PageId);
-                        var pa = (int*)a.Page;
+                        var pa = (int*)a.PageAddress;
                         ++*pa;
                         Log.Fatal("Bump Page {PageId} to {value}, expected {ExpectedValue}", info.PageId, *pa, info.ExpectedValue);
                     }

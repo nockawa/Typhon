@@ -2,12 +2,241 @@
 
 using System;
 using System.Buffers;
+using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace Typhon.Engine
 {
+    public struct ChunkReadOnlyAccessor<T> : IDisposable where T : unmanaged
+    {
+        private ReadOnlyPageAccessor _accessor;
+        private readonly int _itemOffset;
+        private readonly int _stride;
+
+        public ChunkReadOnlyAccessor(ReadOnlyPageAccessor accessor, int itemOffset, int stride)
+        {
+            _accessor = accessor;
+            _itemOffset = itemOffset;
+            _stride = stride;
+        }
+
+        unsafe public ReadOnlySpan<T> Chunk
+        {
+            get => new Span<T>(_accessor.PageAddress + (_itemOffset * _stride), 1);
+        }
+
+        public void Dispose() => _accessor.Dispose();
+    }
+
+    public struct ChunkReadWriteAccessor<T> : IDisposable where T : unmanaged
+    {
+        private ReadWritePageAccessor _accessor;
+        private readonly int _itemOffset;
+        private readonly int _stride;
+
+        public ChunkReadWriteAccessor(ReadWritePageAccessor accessor, int itemOffset, int stride)
+        {
+            _accessor = accessor;
+            _itemOffset = itemOffset;
+            _stride = stride;
+        }
+
+        unsafe public Span<T> Chunk
+        {
+            get => new(_accessor.PageAddress + (_itemOffset * _stride), 1);
+        }
+
+        public void Dispose() => _accessor.Dispose();
+    }
+
+    public readonly struct ChunkReadOnlyRandomAccessor<T> : IDisposable where T : unmanaged
+    {
+        private readonly ChunkBasedSegment _owner;
+        private readonly int _cachedPagesCount;
+        private readonly IMemoryOwner<CachedPages> _cacheMemory;
+        private readonly Memory<CachedPages> _cache;
+        private readonly int _stride;
+
+        unsafe private struct CachedPages
+        {
+            public int HitCount;
+            public int PageIndex;
+            public ReadOnlyPageAccessor PageAccessor;
+            public byte* BaseAddress;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        unsafe public ref readonly T GetChunk(int index)
+        {
+            var (pi, off) = _owner.GetChunkLocation(index);
+
+            var lowHit = int.MaxValue;
+            var pageI = 0;
+
+            var caches = _cache.Span;
+            for (int i = 0; i < _cachedPagesCount; i++)
+            {
+                if (caches[i].PageIndex == pi)
+                {
+                    ++caches[i].HitCount;
+                    return ref Unsafe.AsRef<T>(caches[i].BaseAddress + (pi == 0 ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (off * _stride));
+                }
+
+                if (caches[i].HitCount < lowHit)
+                {
+                    lowHit = caches[i].HitCount;
+                    pageI = i;
+                }
+            }
+
+            ref var cache = ref caches[pageI];
+            cache.PageAccessor.Dispose();
+            cache.HitCount = 1;
+            cache.PageAccessor = _owner.GetPageReadOnly(pi);
+            cache.PageIndex = pi;
+            cache.BaseAddress = cache.PageAccessor.PageAddress + VirtualDiskManager.PageHeaderSize;
+            return ref Unsafe.AsRef<T>(cache.BaseAddress + (pi == 0 ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (off * _stride));
+        }
+
+        public ChunkReadOnlyRandomAccessor(ChunkBasedSegment owner, int cachedPagesCount)
+        {
+            _owner = owner;
+            _cachedPagesCount = cachedPagesCount;
+            _cacheMemory = MemoryPool<CachedPages>.Shared.Rent(cachedPagesCount);
+            _cache = _cacheMemory.Memory;
+            _stride = _owner.Stride;
+
+            for (int i = 0; i < _cachedPagesCount; i++)
+            {
+                _cacheMemory.Memory.Span[i].PageIndex = -1;
+            }
+        }
+
+        public void DisposePageAccessors()
+        {
+            var span = _cacheMemory.Memory.Span;
+            for (int i = 0; i < _cachedPagesCount; i++)
+            {
+                ref var cachedPage = ref span[i];
+                cachedPage.PageAccessor.Dispose();
+                cachedPage.PageIndex = -1;
+                cachedPage.HitCount = 0;
+            }
+        }
+
+        public void Dispose()
+        {
+            DisposePageAccessors();
+            _cacheMemory.Dispose();
+        }
+    }
+
+    public readonly struct ChunkReadWriteRandomAccessor<T> : IDisposable where T : unmanaged
+    {
+        private readonly ChunkBasedSegment _owner;
+        private readonly int _cachedPagesCount;
+        private readonly IMemoryOwner<CachedPages> _cacheMemory;
+        private readonly Memory<CachedPages> _cache;
+        private readonly int _stride;
+
+        unsafe private struct CachedPages
+        {
+            public int HitCount;
+            public int PageIndex;
+            public ReadOnlyPageAccessor PageAccessor;
+            public byte* BaseAddress;
+        }
+
+        /// <summary>
+        /// Access a Chunk from the segment, BEWARE, SEE REMARKS
+        /// </summary>
+        /// <param name="index">Index of the chunk to get</param>
+        /// <returns>The chunk object</returns>
+        /// <remarks>
+        /// BEWARE: This API is supposed to be as fast as possible, so there are things TO KNOW
+        ///  - We assume that <param name="index"></param> is pointing to an allocated chunk and is totally valid (not out of bound)
+        ///  - The returned object as to be used as a <c>ref var</c> otherwise you will work on a copy and any data changes won't be made on the actual chunk data, stored in the database
+        ///  - IMPORTANT: The chunk is stored on a page, which is loaded and cached by this class, you must NOT make another call to this method before you're done with accessing the returned object.
+        ///    The reason is simple, another call to <see cref="GetChunk"/> could Dispose the page where this chunk is and you would probably end up screwing with the database pages cache!!!
+        ///  AND DON'T FORGET TO CALL <see cref="Dispose"/> when you're done with this accessor, otherwise the underlying pages won't be disposed!
+        /// </remarks>
+        unsafe public ref T GetChunk(int index) => ref Unsafe.AsRef<T>(GetChunkAddress(index));
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        unsafe private byte* GetChunkAddress(int index)
+        {
+            var (pi, off) = _owner.GetChunkLocation(index);
+
+            var lowHit = int.MaxValue;
+            var pageI = 0;
+
+            var caches = _cache.Span;
+            for (int i = 0; i < _cachedPagesCount; i++)
+            {
+                if (caches[i].PageIndex == pi)
+                {
+                    ++caches[i].HitCount;
+                    return caches[i].BaseAddress + (pi == 0 ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (off * _stride);
+                }
+
+                if (caches[i].HitCount < lowHit)
+                {
+                    lowHit = caches[i].HitCount;
+                    pageI = i;
+                }
+            }
+
+            ref var cache = ref caches[pageI];
+            cache.PageAccessor.Dispose();
+            cache.HitCount = 1;
+            cache.PageIndex = pi;
+            cache.PageAccessor = _owner.GetPageReadOnly(pi);
+            cache.BaseAddress = cache.PageAccessor.PageAddress + VirtualDiskManager.PageHeaderSize;
+            return cache.BaseAddress + (pi == 0 ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (off * _stride);
+        }
+
+        unsafe internal void ClearChunk(int index)
+        {
+            var addr = GetChunkAddress(index);
+            new Span<long>(addr, _stride / 8).Clear();
+        }
+
+        public ChunkReadWriteRandomAccessor(ChunkBasedSegment owner, int cachedPagesCount)
+        {
+            _owner = owner;
+            _cachedPagesCount = cachedPagesCount;
+            _cacheMemory = MemoryPool<CachedPages>.Shared.Rent(cachedPagesCount);
+            _cache = _cacheMemory.Memory;
+            _stride = _owner.Stride;
+
+            for (int i = 0; i < _cachedPagesCount; i++)
+            {
+                _cacheMemory.Memory.Span[i].PageIndex = -1;
+            }
+        }
+
+        public void DisposePageAccessors()
+        {
+            var span = _cacheMemory.Memory.Span;
+            for (int i = 0; i < _cachedPagesCount; i++)
+            {
+                ref var cachedPage = ref span[i];
+                cachedPage.PageAccessor.Dispose();
+                cachedPage.PageIndex = -1;
+                cachedPage.HitCount = 0;
+            }
+        }
+
+        public void Dispose()
+        {
+            DisposePageAccessors();
+            _cacheMemory.Dispose();
+        }
+    }
+
     public class ChunkBasedSegment : LogicalSegment
     {
         private BitmapL3 _map;
@@ -32,11 +261,51 @@ namespace Typhon.Engine
             return true;
         }
 
-        public IMemoryOwner<int> AllocateChunks(int count)
+        private static readonly ThreadLocal<Memory<int>> SingleAlloc = new(() => new Memory<int>(new int[1]));
+
+        public void ReserveChunk(int index) => _map.SetL0(index);
+        public int AllocateChunk(bool clearContent)
+        {
+            var mem = SingleAlloc.Value;
+            _map.Allocate(mem, clearContent);
+            return mem.Span[0];
+        }
+
+        public IMemoryOwner<int> AllocateChunks(int count, bool clearContent)
         {
             var res = MemoryPool<int>.Shared.Rent(count);
-            _map.Allocate(res.Memory);
+            _map.Allocate(res.Memory, clearContent);
             return res;
+        }
+
+        public ChunkReadOnlyRandomAccessor<T> GetChunkReadOnlyRandomAccessor<T>(int cachedPagesCount=1) where T : unmanaged => new(this, cachedPagesCount);
+        public ChunkReadWriteRandomAccessor<T> GetChunkReadWriteRandomAccessor<T>(int cachedPagesCount=1) where T : unmanaged => new(this, cachedPagesCount);
+
+        public ChunkReadOnlyAccessor<T> GetChunkReadOnly<T>(int index) where T : unmanaged
+        {
+            var (pi, off) = _map.GetChunkLocation(index);
+            return new ChunkReadOnlyAccessor<T>(GetPageReadOnly(pi), off, Stride);
+        }
+
+        public ChunkReadWriteAccessor<T> GetChunkReadWrite<T>(int index) where T : unmanaged
+        {
+            var (pi, off) = _map.GetChunkLocation(index);
+            return new ChunkReadWriteAccessor<T>(GetPageReadWrite(pi), off, Stride);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        public (int pageIndex, int offset) GetChunkLocation(int index)
+        {
+            var fs = _map._rootChunkCount;
+            var ss = _map._otherChunkCount;
+
+            if (index < fs)
+            {
+                return (0, index);
+            }
+
+            var pi = Math.DivRem(index - fs, ss, out var off);
+            return (pi + 1, off);
         }
 
         public int Stride { get; }
@@ -47,8 +316,8 @@ namespace Typhon.Engine
         {
             private readonly ChunkBasedSegment _segment;
             private readonly int _stride;
-            private readonly int _rootChunkCount;
-            private readonly int _otherChunkCount;
+            internal readonly int _rootChunkCount;
+            internal readonly int _otherChunkCount;
 
             private readonly Memory<long> _l1All;
             private readonly Memory<long> _l2All;
@@ -367,13 +636,19 @@ namespace Typhon.Engine
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-            public bool Allocate(Memory<int> result)
+            public bool Allocate(Memory<int> result, bool clearContent)
             {
                 var length = result.Length;
                 var hasL1 = true;
                 var destI = 0;
 
                 var span = result.Span;
+
+                ChunkReadWriteRandomAccessor<long> chunkAccessor = default;
+                if (clearContent)
+                {
+                    chunkAccessor = _segment.GetChunkReadWriteRandomAccessor<long>(8);
+                }
 
                 // Allocate per bulk of 64 pages as long as we can
                 while (hasL1 && (length >= 64))
@@ -386,7 +661,12 @@ namespace Typhon.Engine
                         {
                             for (int j = 0; j < 64; j++)
                             {
-                                span[destI++] = (i << 6) + j;
+                                var chunkIndex = (i << 6) + j;
+                                if (clearContent)
+                                {
+                                    chunkAccessor.ClearChunk(chunkIndex);
+                                }
+                                span[destI++] = chunkIndex;
                             }
                             length -= 64;
                         }
@@ -403,6 +683,10 @@ namespace Typhon.Engine
                     {
                         if (SetL0(i))
                         {
+                            if (clearContent)
+                            {
+                                chunkAccessor.ClearChunk(i);
+                            }
                             span[destI++] = i;
                             --length;
                         }
