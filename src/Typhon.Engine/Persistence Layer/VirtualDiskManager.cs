@@ -401,7 +401,7 @@ namespace Typhon.Engine
                 pi.IOCompletionTask = null;
             }
 
-            return new ReadWritePageAccessor(this, pi, &_memPagesAddr[memPageId* (long)PageSize]);
+            return new ReadWritePageAccessor(this, pi, &_memPagesAddr[memPageId* (long)PageSize], PagesAccessMode.Idle);
         }
 
         public void DeleteDatabaseFile()
@@ -431,7 +431,7 @@ namespace Typhon.Engine
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal void TransitionPageFromAccessToIdle(uint pageId, PageInfo pi)
+        internal void TransitionPageFromAccessToIdle(PageInfo pi)
         {
 #if VERBOSELOGGING
             using var logId = LogContext.PushProperty("PageId", pi.PageId);
@@ -454,8 +454,67 @@ namespace Typhon.Engine
             pi.SyncRoot.Release();
         }
 
+        internal bool TryPromoteToExclusiveReadWrite(uint pageId, PageInfo pi, out PagesAccessMode previousMode)
+        {
+            lock (pi)
+            {
+                previousMode = pi.AccessMode;
+
+                // Check if the page was reallocated by the time we got the lock
+                if (pageId != pi.PageId)
+                {
+                    return false;
+                }
+
+                var ct = Thread.CurrentThread.ManagedThreadId;
+
+                // Check if the thread already own exclusive access
+                if (pi.LockedByThreadId != ct)
+                {
+                    return false;
+                }
+
+                var memPageId = pi.MemPageId;
+                ++_memPagesActivities[memPageId].HitCount;
+                ++pi.ConcurrentUseCounter;
+
+                // If the thread is already in write mode, there's nothing to do, the call succeeds.
+                if (pi.AccessMode == PagesAccessMode.Write)
+                {
+                    return true;
+                }
+
+                // Switch to write, set the page as dirty
+                pi.AccessMode = PagesAccessMode.Write;
+                _dirtyPages.Set(memPageId);
+
+                return true;
+            }
+        }
+
+        internal void DemoteExclusiveReadWrite(PageInfo pi, PagesAccessMode previousMode)
+        {
+            lock (pi)
+            {
+                --pi.ConcurrentUseCounter;
+                pi.AccessMode = previousMode;
+            }
+        }
+
+        /// <summary>
+        /// Non blocking transition to Exclusive Read/Write access. See remarks.
+        /// </summary>
+        /// <param name="pageId">Disk Page Id</param>
+        /// <param name="pi">Corresponding PageInfo</param>
+        /// <returns><c>true</c> is read/write access has been gained, a matching <see cref="TransitionPageFromAccessToIdle"/> must be made then the access is no longer required.</returns>
+        /// <remarks>
+        /// This method must be used to attempt gaining an exclusive read/write access on the page.
+        /// If the page is already in exclusive access by another thread the method will immediately return with <c>false</c>.
+        /// If the page is Idle or in exclusive access by the same thread, then the call will succeed and <c>true</c> will be returned.
+        /// If you already own for sure exclusive read-only access and wish to temporarily promote to read/write use the <see cref="TryPromoteToExclusiveReadWrite"/> and <see cref="DemoteExclusiveReadWrite"/> APIs instead.
+        /// </remarks>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal bool TryTransitionPageToAccess(uint pageId, PageInfo pi)
+        internal bool TryTransitionPageToExclusiveAccess(uint pageId, PageInfo pi)
         {
             if (pi.IOCompletionTask != null && pi.IOCompletionTask.IsCompleted == false)
             {
@@ -465,6 +524,18 @@ namespace Typhon.Engine
             var prevPageId = pi.PageId;
             if (pi.SyncRoot.Wait(0) == false)
             {
+                // Check if the thread already exclusively owns the page, and succeed if it's the case
+                var ct = Thread.CurrentThread.ManagedThreadId;
+                if (pi.LockedByThreadId == ct)
+                {
+                    lock (pi)
+                    {
+                        pi.AccessMode = PagesAccessMode.Write;
+                        ++pi.ConcurrentUseCounter;
+                    }
+                    return true;
+                }
+
                 // Couldn't get immediate ownership, return with false
                 return false;
             }
@@ -477,13 +548,17 @@ namespace Typhon.Engine
             }
 
             // Set to write to prevent concurrent reads
-            pi.AccessMode = PagesAccessMode.Write;
-            pi.ConcurrentUseCounter = 1;
+            lock (pi)
+            {
+                pi.LockedByThreadId = Thread.CurrentThread.ManagedThreadId;
+                pi.AccessMode = PagesAccessMode.Write;
+                pi.ConcurrentUseCounter = 1;
+            }
             return true;
         }
 
         /// <summary>
-        /// Transition the page from its current mode to Access (either read or write)
+        /// Transition the page from its current mode to Access (either read or write), blocking the call if needed.
         /// </summary>
         /// <param name="pageId">Disk Page Id</param>
         /// <param name="pi">The corresponding PageInfo</param>
@@ -493,7 +568,7 @@ namespace Typhon.Engine
         /// <remarks>
         /// This is...not easy... because this method takes care of the whole concurrency model of the Virtual Disk Manager
         /// Basically, the behavior we want is:
-        ///  - If the page is Idle: it's simple, we transition to access, with exclusive Read-Only or Read/Write
+        ///  - If the page is Idle: it's simple, we transition to access, with exclusive Read-Only or Read/Write by the requested thread.
         ///  - If the page is Read-Only:
         ///    - If we are requesting Read again from the same thread: it's a re-entrant request, we keep the exclusive Read and allow re-entrance.
         ///    - If we are requesting Read again from another thread: we allow concurrent Read but release the exclusive access from the Thread.
@@ -563,7 +638,7 @@ namespace Typhon.Engine
                 // Check for re-entrant Access
                 var currentThread = Thread.CurrentThread.ManagedThreadId;
 
-                // This thread currently owns read/write access on the page ?
+                // This thread currently owns exclusive access on the page ?
                 if (currentThread == pi.LockedByThreadId)
                 {
                     // We are loose, if we want a read-only access and the page is already in read/write, we assume the user knows
@@ -671,7 +746,7 @@ namespace Typhon.Engine
                     var pi = _memPagesInfo[curI];
 
                     // Try to get ownership on the page, skip it if we can't
-                    if (TryTransitionPageToAccess(pi.PageId, pi) == false)
+                    if (TryTransitionPageToExclusiveAccess(pi.PageId, pi) == false)
                     {
                         continue;
                     }
@@ -754,7 +829,9 @@ namespace Typhon.Engine
                         var pi = _memPagesInfo[memPageId];
                         pi.IOCompletionTask = task;
                         ClearMemPageDirty(memPageId);
-                        pi.SyncRoot.Release();                      // Release control
+
+                        // Release control on the page
+                        TransitionPageFromAccessToIdle(pi);
                     }
 
                     ++_debugInfo.WriteToDiskCount;
@@ -1021,6 +1098,21 @@ namespace Typhon.Engine
 
                     var pageOffset = pageId * (long)PageSize;
                     var loadPage = (pageOffset + PageSize) <= _fileSize;
+
+                    if (_dbc.PagesDebugPattern)
+                    {
+                        var pageAddr = _memPages.AsMemory(memPageId * PageSize).Span.Cast<byte, int>();
+                        int i;
+                        for (i = 0; i < VirtualDiskManager.PageHeaderSize>>2; i++)
+                        {
+                            pageAddr[i] = ((int)pageId << 16) | 0xFF00 | i;
+                        }
+
+                        for (int j = 0; j < VirtualDiskManager.PageRawDataSize>>2; j++, i++)
+                        {
+                            pageAddr[i] = ((int)pageId << 16) | j;
+                        }
+                    }
 
                     // Load the page from disk, if it's stored there already. (won't be the case for new pages)
                     if (loadPage)

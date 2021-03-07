@@ -7,10 +7,10 @@ using System.Diagnostics.CodeAnalysis;
 
 namespace Typhon.Engine.BPTree
 {
-    public abstract partial class BTree<TKey, TChunk, TStorage>
+    public abstract partial class BTree<TKey>
     {
         [DebuggerDisplay("ChunkId: {ChunkId}, IsValid: {IsValid}, IsLeaf: {IsLeaf}, Count: {Count}")]
-        [DebuggerTypeProxy(typeof(BTree<,,>.NodeWrapper.DebugView))]
+        [DebuggerTypeProxy(typeof(BTree<>.NodeWrapper.DebugView))]
         public readonly struct NodeWrapper : IEquatable<NodeWrapper>
         {
             private readonly BaseNodeStorage _storage;

@@ -1,6 +1,7 @@
 ﻿// unset
 
 using System;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace Typhon.Engine
@@ -53,6 +54,22 @@ namespace Typhon.Engine
                 return new(PageAddress + VirtualDiskManager.PageHeaderSize + offset, VirtualDiskManager.PageRawDataSize - offset);
             }
         }
+        internal byte* GetElementAddr(int index, int stride, bool isLogicalRoot) =>
+            PageAddress + VirtualDiskManager.PageHeaderSize + (isLogicalRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (index * stride);
+
+        internal ref readonly T GetElement<T>(int index, bool isLogicalRoot) where T : unmanaged =>
+            ref Unsafe.AsRef<T>(PageAddress + VirtualDiskManager.PageHeaderSize + (isLogicalRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (index * sizeof(T)));
+
+        public ReadWritePageAccessor TryPromoteToExclusiveReadWrite()
+        {
+            if (_owner.TryPromoteToExclusiveReadWrite(_pageId, _pi, out var previousMode) == false)
+            {
+                return default;
+            }
+
+            return new ReadWritePageAccessor(_owner, _pi, PageAddress, previousMode);
+        }
+
         /// <summary>
         /// The Disk Page Id the accessor is into
         /// </summary>
@@ -70,6 +87,8 @@ namespace Typhon.Engine
             PageAddress = pageAddress;
         }
 
+        public bool IsValid => _pi != null;
+
         public void Dispose()
         {
             if (_pi == null)
@@ -77,7 +96,7 @@ namespace Typhon.Engine
                 return;
             }
 
-            _owner.TransitionPageFromAccessToIdle(_pageId, _pi);
+            _owner.TransitionPageFromAccessToIdle(_pi);
 
             _pi = null;
         }

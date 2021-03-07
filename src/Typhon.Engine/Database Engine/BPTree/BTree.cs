@@ -236,10 +236,8 @@ namespace Typhon.Engine.BPTree
 
     #region BTree+ main class
 
-    public abstract partial class BTree<TKey, TChunk, TStorage> 
+    public abstract partial class BTree<TKey> 
         where TKey : unmanaged 
-        where  TChunk : unmanaged 
-        where TStorage :  BTree<TKey, TChunk, TStorage>.BaseNodeStorage, new()
     {
         [DebuggerDisplay("Key: {Key}, Value: {Value}")]
         public struct KeyValueItem
@@ -453,6 +451,7 @@ namespace Typhon.Engine.BPTree
         #region Private data
 
         protected abstract bool AllowMultiple { get; }
+        protected abstract BaseNodeStorage GetStorage();
         protected IComparer<TKey> Comparer;
 
         private readonly ChunkBasedSegment _segment;
@@ -476,7 +475,7 @@ namespace Typhon.Engine.BPTree
         {
             Comparer = Comparer<TKey>.Default;
             _segment = segment;
-            _storage = new TStorage();
+            _storage = GetStorage();
             _storage.Initialize(this, _segment);
             // We make sure the chunk 0 is reserved so we can consider any ChunkId == 0 as a "null pointer".
             // So any default constructed type declaring ChunkId fields can have this "null" by default.

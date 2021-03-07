@@ -48,6 +48,7 @@ namespace Typhon.Engine.Tests
                         dc.RecreateDatabase = true;
                         dc.DeleteDatabaseOnDispose = true;
                         dc.DatabaseCacheSize = (ulong)dcs;
+                        dc.PagesDebugPattern = true;
                     });
                 })
 
@@ -113,20 +114,52 @@ namespace Typhon.Engine.Tests
 
             using var mo = s0.AllocateChunks(2000, false);
 
-            using var ca = s0.GetChunkReadWriteRandomAccessor<ChunkA>(4);
+            using var ca = s0.GetChunkReadWriteRandomAccessor(4);
 
-            ref var obj = ref ca.GetChunk(0);
+            ref var obj = ref ca.GetChunk<ChunkA>(0);
             obj.A = -1;
             obj.B = -1;
             obj.C = -1;
             obj.D = -1;
 
-            obj = ca.GetChunk(1);
+            obj = ca.GetChunk<ChunkA>(1);
             obj.A = 1;
 
-            obj = ca.GetChunk(500);
+            obj = ca.GetChunk<ChunkA>(500);
             obj.A = 1;
 
+        }
+
+        [Test]
+        public void VariableSizedBufferSegmentTest()
+        {
+            const int itemCount = 1024*3;
+
+            var s = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, 64);
+
+            var vsb = new VariableSizedBufferSegment<long>(s);
+
+
+            var id0 = vsb.AllocateBuffer();
+
+            for (int i = 0; i < itemCount; i++)
+            {
+                vsb.AddElement(id0, 1234);
+            }
+
+            var loopCount = 0;
+            var ba = vsb.GetReadOnlyAccessor(id0);
+            do
+            {
+                var elements = ba.Elements;
+                var c = elements.Length;
+                for (int i = 0; i < c; i++)
+                {
+                    Assert.That(elements[i], Is.EqualTo(1234));
+                    ++loopCount;
+                }
+            } while (ba.NextChunk());
+            Assert.That(loopCount, Is.EqualTo(itemCount));
         }
     }
 }

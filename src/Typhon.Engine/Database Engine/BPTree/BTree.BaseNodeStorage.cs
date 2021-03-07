@@ -4,22 +4,17 @@ using System.Collections.Generic;
 
 namespace Typhon.Engine.BPTree
 {
-    public abstract partial class BTree<TKey, TChunk, TStorage>
+    public abstract partial class BTree<TKey>
     {
         public abstract class BaseNodeStorage
         {
-            protected internal BTree<TKey, TChunk, TStorage> Owner;
-            protected ChunkBasedSegment Segment;
+            protected internal BTree<TKey> Owner;
+            protected ChunkBasedSegmentAccessorPool SegmentAccessorPool;
 
-            protected ChunkReadWriteRandomAccessor<TChunk> ChunkRWA;
-            protected ChunkReadOnlyRandomAccessor<TChunk> ChunkROA;
-
-            internal void Initialize(BTree<TKey, TChunk, TStorage> owner, ChunkBasedSegment segment)
+            internal virtual void Initialize(BTree<TKey> owner, ChunkBasedSegment segment, ChunkBasedSegmentAccessorPool pool = null)
             {
                 Owner = owner;
-                Segment = segment;
-                ChunkRWA = Segment.GetChunkReadWriteRandomAccessor<TChunk>(4);
-                ChunkROA = Segment.GetChunkReadOnlyRandomAccessor<TChunk>(4);
+                SegmentAccessorPool = pool ?? new ChunkBasedSegmentAccessorPool(segment, 4, 4);
             }
 
             #region Chunk Properties Access
@@ -51,7 +46,15 @@ namespace Typhon.Engine.BPTree
             public abstract void AppendLast(NodeWrapper node, KeyValueItem item);
             public abstract NodeWrapper GetLastChild(NodeWrapper node);
             public abstract NodeWrapper GetFirstChild(NodeWrapper node);
-            public abstract NodeWrapper GetChild(NodeWrapper node, int index);
+            public virtual NodeWrapper GetChild(NodeWrapper node, int index)
+            {
+                if (node.IsLeaf) return default;
+                if (index < 0)
+                {
+                    return GetLeftNode(node);
+                }
+                return new NodeWrapper(this, GetItem(node, index, true).Value);
+            }
             public abstract void IncrementStart(NodeWrapper node);
             public abstract void DecrementStart(NodeWrapper node);
             public abstract bool IsRotated(NodeWrapper node);

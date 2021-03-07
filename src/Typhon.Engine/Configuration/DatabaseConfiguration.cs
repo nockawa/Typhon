@@ -37,6 +37,7 @@ namespace Typhon.Engine
         public float WriteThreadRatio { get; set; }
         public bool RecreateDatabase { get; set; }
         public bool DeleteDatabaseOnDispose { get; set; }
+        public bool PagesDebugPattern { get; set; }
 
         public string DatabaseAbsoluteDirectory
         {

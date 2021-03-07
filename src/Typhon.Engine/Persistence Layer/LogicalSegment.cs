@@ -86,10 +86,12 @@ namespace Typhon.Engine
                 if (i == 0)
                 {
                     var rd = page.PageRawData.Cast<byte, uint>();
-                    for (int j = 0; j < pageLength; j++)
+                    int j;
+                    for (j = 0; j < pageLength; j++)
                     {
                         rd[j] = pages[j];
                     }
+                    rd[j] = 0;              // Mark the end of the segment list
                 }
 
                 // Update link list of the pages that make the segment
@@ -101,7 +103,7 @@ namespace Typhon.Engine
             if (pages.Length > pageLength)
             {
                 var indexPageCount = (pages.Length - RootHeaderIndexSectionCount + VirtualDiskManager.PageSize - 1) / sizeof(int);
-
+                throw new NotImplementedException();
             }
 
             _pagesMemoryOwner = pagesMemOwner;

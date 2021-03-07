@@ -1,6 +1,7 @@
 ﻿// unset
 
 using System;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace Typhon.Engine
@@ -52,6 +53,13 @@ namespace Typhon.Engine
                 return new(PageAddress + VirtualDiskManager.PageHeaderSize + offset, VirtualDiskManager.PageRawDataSize - offset);
             }
         }
+
+        internal byte* GetElementAddr(int index, int stride, bool isLogicalRoot) =>
+            PageAddress + VirtualDiskManager.PageHeaderSize + (isLogicalRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (index * stride);
+
+        internal ref T GetElement<T>(int index, bool isLogicalRoot) where T : unmanaged =>
+            ref Unsafe.AsRef<T>(PageAddress + VirtualDiskManager.PageHeaderSize + (isLogicalRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (index * sizeof(T)));
+
         /// <summary>
         /// The Disk Page Id the accessor is into
         /// </summary>
@@ -60,14 +68,18 @@ namespace Typhon.Engine
         private readonly VirtualDiskManager _owner;
         private readonly uint _pageId;
         private VirtualDiskManager.PageInfo _pi;
+        private readonly VirtualDiskManager.PagesAccessMode _previousMode;
 
-        internal ReadWritePageAccessor(VirtualDiskManager owner, VirtualDiskManager.PageInfo pi, byte* pageAddress)
+        internal ReadWritePageAccessor(VirtualDiskManager owner, VirtualDiskManager.PageInfo pi, byte* pageAddress, VirtualDiskManager.PagesAccessMode previousMode)
         {
             _owner = owner;
             _pageId = pi.PageId;    // We want to store this locally i case the PageInfo gets reallocated, we should add some debug check btw...
             _pi = pi;
+            _previousMode = previousMode;
             PageAddress = pageAddress;
         }
+
+        public bool IsValid => _pi != null;
 
         public void Dispose()
         {
@@ -75,7 +87,15 @@ namespace Typhon.Engine
             {
                 return;
             }
-            _owner.TransitionPageFromAccessToIdle(_pageId, _pi);
+
+            if (_previousMode != VirtualDiskManager.PagesAccessMode.Idle)
+            {
+                _owner.DemoteExclusiveReadWrite(_pi, _previousMode);
+            }
+            else
+            {
+                _owner.TransitionPageFromAccessToIdle(_pi);
+            }
 
             _pi = null;
         }

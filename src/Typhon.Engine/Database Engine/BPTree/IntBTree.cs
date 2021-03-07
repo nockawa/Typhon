@@ -5,101 +5,138 @@ using System.Collections.Generic;
 
 namespace Typhon.Engine.BPTree
 {
-    public class IntSingleBTree : BTree<int, Index32Chunk, IntSingleBTree.IntSingleNodeStorage>
+    public class IntSingleBTree : IntBTree
     {
-        unsafe public class IntSingleNodeStorage : BaseNodeStorage
+        public IntSingleBTree(ChunkBasedSegment segment) : base(segment)
         {
+        }
+
+        protected override bool AllowMultiple => false;
+    }
+
+    public class IntMultipleBTree : IntBTree
+    {
+        public IntMultipleBTree(ChunkBasedSegment segment) : base(segment)
+        {
+        }
+
+        protected override bool AllowMultiple => true;
+        protected override BaseNodeStorage GetStorage() => new IntMultipleNodeStorage();
+
+         public class IntMultipleNodeStorage : IntNodeStorage
+        {
+            public override void AppendFirst(NodeWrapper node, KeyValueItem value)
+            {
+                
+            }
+
+            public override void AppendLast(NodeWrapper node, KeyValueItem item)
+            {
+                
+            }
+        }
+    }
+
+    public abstract class IntBTree : BTree<int>
+    {
+        unsafe public class IntNodeStorage : BaseNodeStorage
+        {
+            //internal override void Initialize(BTree<int> owner, ChunkBasedSegment segment, ChunkBasedSegmentAccessorPool pool=null)
+            //{
+            //    base.Initialize(owner, segment, pool);
+            //}
+
             #region Chunk Properties Access
 
             public override void InitializeNode(NodeWrapper node, NodeStates states)
             {
-                ref var chunk = ref ChunkRWA.GetChunk(node.ChunkId);
+                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index32Chunk>(node.ChunkId);
                 chunk.StateFlags = states;
             }
             public override int GetNodeCapacity() => Index32Chunk.Capacity;
 
             public override NodeWrapper GetLeftNode(NodeWrapper node)
             {
-                ref readonly var chunk = ref ChunkROA.GetChunk(node.ChunkId);
+                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index32Chunk>(node.ChunkId);
                 return new NodeWrapper(this, chunk.LeftValue);
             }
 
             public override void SetLeftNode(NodeWrapper node, int previousNodeId)
             {
-                ref var chunk = ref ChunkRWA.GetChunk(node.ChunkId);
+                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index32Chunk>(node.ChunkId);
                 chunk.LeftValue = previousNodeId;
             }
 
             public override NodeWrapper GetPreviousNode(NodeWrapper node)
             {
-                ref readonly var chunk = ref ChunkROA.GetChunk(node.ChunkId);
+                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index32Chunk>(node.ChunkId);
                 return new NodeWrapper(this, chunk.PrevChunk);
             }
 
             public override void SetPreviousNode(NodeWrapper node, int previousNodeId)
             {
-                ref var chunk = ref ChunkRWA.GetChunk(node.ChunkId);
+                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index32Chunk>(node.ChunkId);
                 chunk.PrevChunk = previousNodeId;
             }
 
             public override NodeWrapper GetNextNode(NodeWrapper node)
             {
-                ref readonly var chunk = ref ChunkROA.GetChunk(node.ChunkId);
+                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index32Chunk>(node.ChunkId);
                 return new NodeWrapper(this, chunk.NextChunk);
             }
 
             public override void SetNextNode(NodeWrapper node, int nextNodeId)
             {
-                ref var chunk = ref ChunkRWA.GetChunk(node.ChunkId);
+                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index32Chunk>(node.ChunkId);
                 chunk.NextChunk = nextNodeId;
             }
 
             public override KeyValueItem GetItem(NodeWrapper node, int index, bool adjust)
             {
-                ref readonly var chunk = ref ChunkROA.GetChunk(node.ChunkId);
+                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index32Chunk>(node.ChunkId);
                 var i = adjust ? Index32Chunk.Adjust(chunk.Start + index) : index;
                 return new KeyValueItem(chunk.Keys[i], chunk.Values[i]);
             }
 
             public override void SetItem(NodeWrapper node, int index, KeyValueItem value, bool adjust)
             {
-                ref var chunk = ref ChunkRWA.GetChunk(node.ChunkId);
+                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index32Chunk>(node.ChunkId);
                 Set(ref chunk, index, value, adjust);
             }
 
             public override int GetCount(NodeWrapper node)
             {
-                ref readonly var chunk = ref ChunkROA.GetChunk(node.ChunkId);
+                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index32Chunk>(node.ChunkId);
                 return chunk.Count;
             }
 
             public override void SetCount(NodeWrapper node, int value)
             {
-                ref var chunk = ref ChunkRWA.GetChunk(node.ChunkId);
+                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index32Chunk>(node.ChunkId);
                 chunk.Count = value;
             }
 
             public override int GetStart(NodeWrapper node)
             {
-                ref readonly var chunk = ref ChunkROA.GetChunk(node.ChunkId);
+                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index32Chunk>(node.ChunkId);
                 return chunk.Start;
             }
 
             public override void SetStart(NodeWrapper node, int value)
             {
-                ref var chunk = ref ChunkRWA.GetChunk(node.ChunkId);
+                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index32Chunk>(node.ChunkId);
                 chunk.Start = value;
             }
 
             public override int GetEnd(NodeWrapper node)
             {
-                ref var chunk = ref ChunkRWA.GetChunk(node.ChunkId);
+                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index32Chunk>(node.ChunkId);
                 return Index32Chunk.Adjust(chunk.Start + chunk.Count);
             }
 
             public override NodeStates GetNodeStates(NodeWrapper node)
             {
-                ref readonly var chunk = ref ChunkROA.GetChunk(node.ChunkId);
+                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index32Chunk>(node.ChunkId);
                 return chunk.StateFlags;
             }
             
@@ -109,7 +146,7 @@ namespace Typhon.Engine.BPTree
 
             public override void PushFirst(NodeWrapper node, KeyValueItem item)
             {
-                ref var chunk = ref ChunkRWA.GetChunk(node.ChunkId);
+                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index32Chunk>(node.ChunkId);
                 
                 DecrementStart(ref chunk);
 
@@ -122,7 +159,7 @@ namespace Typhon.Engine.BPTree
 
             public override void PushLast(NodeWrapper node, KeyValueItem item)
             {
-                ref var chunk = ref ChunkRWA.GetChunk(node.ChunkId);
+                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index32Chunk>(node.ChunkId);
                 var c = chunk.Count++;
                 Set(ref chunk, c, item, true);
             }
@@ -132,29 +169,19 @@ namespace Typhon.Engine.BPTree
             
             public override NodeWrapper GetFirstChild(NodeWrapper node)
             {
-                ref readonly var chunk = ref ChunkROA.GetChunk(node.ChunkId);
+                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index32Chunk>(node.ChunkId);
                 return new NodeWrapper(this, chunk.LeftValue);
-            }
-
-            public override NodeWrapper GetChild(NodeWrapper node, int index)
-            {
-                if (node.IsLeaf) return default;
-                if (index < 0)
-                {
-                    return GetLeftNode(node);
-                }
-                return new NodeWrapper(this, GetItem(node, index, true).Value);
             }
 
             public override bool IsRotated(NodeWrapper node)
             {
-                ref readonly var chunk = ref ChunkROA.GetChunk(node.ChunkId);
+                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index32Chunk>(node.ChunkId);
                 return (chunk.Start + chunk.Count) > Index32Chunk.Capacity;
             }
 
             public override int BinarySearch(NodeWrapper node, int key, IComparer<int> comparer)
             {
-                ref readonly var chunk = ref ChunkROA.GetChunk(node.ChunkId);
+                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index32Chunk>(node.ChunkId);
                 fixed (int* keys = chunk.Keys)
                 {
                     if (IsRotated(node))
@@ -180,7 +207,7 @@ namespace Typhon.Engine.BPTree
 
             public override void Insert(NodeWrapper node, int index, KeyValueItem item)
             {
-                ref var chunk = ref ChunkRWA.GetChunk(node.ChunkId);
+                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index32Chunk>(node.ChunkId);
                 var lsh = index; // length of left shift
                 var rsh = chunk.Count - index; // length of right shift
 
@@ -201,13 +228,13 @@ namespace Typhon.Engine.BPTree
 
             public override NodeWrapper SplitRight(NodeWrapper node, NodeStates states)
             {
-                ref var chunk = ref ChunkRWA.GetChunk(node.ChunkId);
+                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index32Chunk>(node.ChunkId);
                 return SplitRight(ref chunk, states);
             }
 
             public override KeyValueItem RemoveAt(NodeWrapper node, int index)
             {
-                ref var chunk = ref ChunkRWA.GetChunk(node.ChunkId);
+                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index32Chunk>(node.ChunkId);
                 var item = GetItem(node, index, true);
 
                 var lsh = chunk.Count - index - 1; // length of left shift
@@ -231,8 +258,8 @@ namespace Typhon.Engine.BPTree
 
             public override void MergeLeft(NodeWrapper left, NodeWrapper right)
             {
-                ref var leftChunk = ref ChunkRWA.GetChunk(left.ChunkId);
-                ref var rightChunk = ref ChunkRWA.GetChunk(right.ChunkId);
+                ref var leftChunk = ref SegmentAccessorPool.RW.GetChunk<Index32Chunk>(left.ChunkId);
+                ref var rightChunk = ref SegmentAccessorPool.RW.GetChunk<Index32Chunk>(right.ChunkId);
 
                 var lk = leftChunk.KeysAsSpan;
                 var lv = leftChunk.ValuesAsSpan;
@@ -252,7 +279,6 @@ namespace Typhon.Engine.BPTree
                     {
                         rk.Slice(right.Start, right.Count).CopyTo(lk.Slice(start, right.Count));
                         rv.Slice(right.Start, right.Count).CopyTo(lv.Slice(start, right.Count));
-                        //Array.Copy(right.array, right.Start, array, start, right.Count);
                     }
                     else
                     {
@@ -264,9 +290,6 @@ namespace Typhon.Engine.BPTree
 
                         rk.Slice(0, slLen).CopyTo(lk.Slice(start + srLen, slLen));
                         rv.Slice(0, slLen).CopyTo(lv.Slice(start + srLen, slLen));
-
-                        //Array.Copy(right.array, right.Start, array, start, srLen);
-                        //Array.Copy(right.array, 0, array, start + srLen, slLen);
                     }
                 }
                 else
@@ -279,7 +302,6 @@ namespace Typhon.Engine.BPTree
                         {
                             rk.Slice(right.Start, right.Count).CopyTo(lk.Slice(end, right.Count));
                             rv.Slice(right.Start, right.Count).CopyTo(lv.Slice(end, right.Count));
-                            //Array.Copy(right.array, right.Start, array, end, right.Count);
                         }
                         else
                         {
@@ -291,9 +313,6 @@ namespace Typhon.Engine.BPTree
 
                             rv.Slice(right.Start, length).CopyTo(lv.Slice(end, length));
                             rv.Slice(right.Start + length, remaining).CopyTo(lv.Slice(0, remaining));
-
-                            //Array.Copy(right.array, right.Start, array, end, length);
-                            //Array.Copy(right.array, right.Start + length, array, 0, remaining);
                         }
                     }
                     else
@@ -308,9 +327,6 @@ namespace Typhon.Engine.BPTree
 
                             rv.Slice(right.Start, srLen).CopyTo(lv.Slice(end, srLen));
                             rv.Slice(0, slLen).CopyTo(lv.Slice(end + srLen, slLen));
-
-                            //Array.Copy(right.array, right.Start, array, end, srLen);
-                            //Array.Copy(right.array, 0, array, end + srLen, slLen);
                         }
                         else
                         {
@@ -328,11 +344,6 @@ namespace Typhon.Engine.BPTree
                                 rv.Slice(0, secondCopySecondLength).CopyTo(lv.Slice(mergeEnd, secondCopyFirstLength));
                                 rk.Slice(secondCopyFirstLength, secondCopySecondLength).CopyTo(lk.Slice(0, secondCopySecondLength));
                                 rv.Slice(secondCopyFirstLength, secondCopySecondLength).CopyTo(lv.Slice(0, secondCopySecondLength));
-
-                                //Array.Copy(right.array, right.Start, array, end, srLen);
-
-                                //Array.Copy(right.array, 0, array, mergeEnd, secondCopyFirstLength);
-                                //Array.Copy(right.array, secondCopyFirstLength, array, 0, secondCopySecondLength);
                             }
                             else
                             {
@@ -347,11 +358,6 @@ namespace Typhon.Engine.BPTree
 
                                 rk.Slice(0, slLen).CopyTo(lk.Slice(firstCopySecondLength, slLen));
                                 rv.Slice(0, slLen).CopyTo(lv.Slice(firstCopySecondLength, slLen));
-
-                                //Array.Copy(right.array, right.Start, array, end, firstCopyFirstLength);
-                                //Array.Copy(right.array, firstCopySecondStart, array, 0, firstCopySecondLength);
-
-                                //Array.Copy(right.array, 0, array, firstCopySecondLength, slLen);
                             }
                         }
                     }
@@ -362,20 +368,20 @@ namespace Typhon.Engine.BPTree
 
             public override NodeWrapper GetLastChild(NodeWrapper node)
             {
-                ref readonly var chunk = ref ChunkROA.GetChunk(node.ChunkId);
+                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index32Chunk>(node.ChunkId);
                 var index = Index32Chunk.Adjust(chunk.Start + chunk.Count - 1);
                 return new NodeWrapper(this, chunk.Values[index]);
             }
 
             public override void IncrementStart(NodeWrapper node)
             {
-                ref var chunk = ref ChunkRWA.GetChunk(node.ChunkId);
+                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index32Chunk>(node.ChunkId);
                 IncrementStart(ref chunk);
             }
 
             public override void DecrementStart(NodeWrapper node)
             {
-                ref var chunk = ref ChunkRWA.GetChunk(node.ChunkId);
+                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index32Chunk>(node.ChunkId);
                 DecrementStart(ref chunk);
             }
 
@@ -383,12 +389,12 @@ namespace Typhon.Engine.BPTree
 
             #region Chunk Direct Access Wrappers
 
-            private NodeWrapper GetPreviousNode(ref Index32Chunk chunk) => new(this, chunk.PrevChunk);
-            private NodeWrapper GetNextNode(ref Index32Chunk chunk) => new(this, chunk.NextChunk);
-            private NodeWrapper GetLeftNode(ref Index32Chunk chunk) => new(this, chunk.LeftValue);
-            private void SetPreviousNode(ref Index32Chunk chunk, NodeWrapper value) => chunk.PrevChunk = value.ChunkId;
-            private void SetNextNode(ref Index32Chunk chunk, NodeWrapper value) => chunk.NextChunk = value.ChunkId;
-            private void SetLeftNode(ref Index32Chunk chunk, NodeWrapper value) => chunk.LeftValue = value.ChunkId;
+            //private NodeWrapper GetPreviousNode(ref Index32Chunk chunk) => new(this, chunk.PrevChunk);
+            //private NodeWrapper GetNextNode(ref Index32Chunk chunk) => new(this, chunk.NextChunk);
+            //private NodeWrapper GetLeftNode(ref Index32Chunk chunk) => new(this, chunk.LeftValue);
+            //private void SetPreviousNode(ref Index32Chunk chunk, NodeWrapper value) => chunk.PrevChunk = value.ChunkId;
+            //private void SetNextNode(ref Index32Chunk chunk, NodeWrapper value) => chunk.NextChunk = value.ChunkId;
+            //private void SetLeftNode(ref Index32Chunk chunk, NodeWrapper value) => chunk.LeftValue = value.ChunkId;
 
             private static void Set(ref Index32Chunk chunk, int index, KeyValueItem item, bool adjust)
             {
@@ -495,7 +501,7 @@ namespace Typhon.Engine.BPTree
             public NodeWrapper SplitRight(ref Index32Chunk left, NodeStates states)
             {
                 var rightNode = Owner.AllocNode(states);
-                ref var right = ref ChunkRWA.GetChunk(rightNode.ChunkId);
+                ref var right = ref SegmentAccessorPool.RW.GetChunk<Index32Chunk>(rightNode.ChunkId);
 
                 var lr = left.Count / 2; // length of right side
                 var lrc = 1 + ((left.Count - 1) / 2); // length of right (ceiling of Length/2)
@@ -537,14 +543,13 @@ namespace Typhon.Engine.BPTree
                 return rightNode;
             }
 
-
             #endregion
         }
 
-        public IntSingleBTree(ChunkBasedSegment segment) : base(segment)
+        protected override BaseNodeStorage GetStorage() => new IntNodeStorage();
+
+        protected IntBTree(ChunkBasedSegment segment) : base(segment)
         {
         }
-
-        protected override bool AllowMultiple => false;
     }
 }

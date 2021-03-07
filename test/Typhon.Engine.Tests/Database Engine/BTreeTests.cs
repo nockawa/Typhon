@@ -245,5 +245,33 @@ namespace Typhon.Engine.Tests.Database_Engine
 
             tree.CheckConsistency();
         }
+
+        [Test]
+        unsafe public void CheckMultipleTree()
+        {
+            var values = new int[] {
+                1, 2, 3, 10, 100, 20, 33, 5, 50, 70,
+                35, 9, 99, 101, 109, 103, 102, 40, 51, 200,
+                241, 148, 400, 123, 89, 77, 91, 142, 22, 88,
+                404, 6, 221, 301, 298, 87, 550, 403, 503, 531,
+                72, 81, 499, 98, 912
+            };
+
+            var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
+            var tree = new IntMultipleBTree(segment);
+
+            foreach (var v in values)
+            {
+                tree.Add(v, v);
+                tree.CheckConsistency();
+            }
+            foreach (var v in values)
+            {
+                tree.Add(v, v+1);
+                tree.CheckConsistency();
+            }
+
+            tree.CheckConsistency();
+        }
     }
 }
