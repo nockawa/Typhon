@@ -177,14 +177,14 @@ namespace Typhon.Engine.Tests
             var id0 = vsb.AllocateBuffer();
             var elIdList = new int[15];
 
-            // 15 is spread into 3 chunks: 5, 7, 3
+            // 15 is spread into 3 chunks: 4, 7, 4
             for (int i = 0; i < 15; i++)
             {
                 elIdList[i] = vsb.AddElement(id0, i);
             }
 
             // Delete all the elements of the second chunk
-            for (int i = 5; i < 12; i++)
+            for (int i = 4; i < 11; i++)
             {
                 Assert.That(vsb.DeleteElement(id0, elIdList[i], i), Is.True);
             }

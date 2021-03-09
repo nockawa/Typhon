@@ -2,12 +2,13 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 
 namespace Typhon.Engine.BPTree
 {
     public class IntSingleBTree : IntBTree
     {
-        public IntSingleBTree(ChunkBasedSegment segment) : base(segment)
+        public IntSingleBTree(ChunkBasedSegment segment, ChunkBasedSegmentAccessorPool pool) : base(segment, pool)
         {
         }
 
@@ -16,24 +17,31 @@ namespace Typhon.Engine.BPTree
 
     public class IntMultipleBTree : IntBTree
     {
-        public IntMultipleBTree(ChunkBasedSegment segment) : base(segment)
+        public IntMultipleBTree(ChunkBasedSegment segment, ChunkBasedSegmentAccessorPool pool) : base(segment, pool)
         {
         }
 
         protected override bool AllowMultiple => true;
         protected override BaseNodeStorage GetStorage() => new IntMultipleNodeStorage();
 
-         public class IntMultipleNodeStorage : IntNodeStorage
+        public class IntMultipleNodeStorage : IntNodeStorage
         {
-            public override void AppendFirst(NodeWrapper node, KeyValueItem value)
+            private VariableSizedBufferSegment<int> _valueStore;
+
+            internal override void Initialize(BTree<int> owner, ChunkBasedSegment segment, ChunkBasedSegmentAccessorPool pool)
             {
-                
+                base.Initialize(owner, segment, pool);
+                _valueStore = new VariableSizedBufferSegment<int>(segment, pool);
+
             }
 
-            public override void AppendLast(NodeWrapper node, KeyValueItem item)
-            {
-                
-            }
+            public override int Append(int bufferId, int value) => _valueStore.AddElement(bufferId, value);
+            public override VariableSizedBufferReadOnlyAccessor<int> GetBufferReadOnlyAccessor(int bufferId) => _valueStore.GetReadOnlyAccessor(bufferId);
+
+            public override int CreateBuffer() => _valueStore.AllocateBuffer();
+
+            public override int RemoveFromBuffer(int bufferId, int elementId, int value) => _valueStore.DeleteElement(bufferId, elementId, value);
+            public override void DeleteBuffer(int bufferId) => _valueStore.DeleteBuffer(bufferId);
         }
     }
 
@@ -41,10 +49,11 @@ namespace Typhon.Engine.BPTree
     {
         unsafe public class IntNodeStorage : BaseNodeStorage
         {
-            //internal override void Initialize(BTree<int> owner, ChunkBasedSegment segment, ChunkBasedSegmentAccessorPool pool=null)
-            //{
-            //    base.Initialize(owner, segment, pool);
-            //}
+            internal override void Initialize(BTree<int> owner, ChunkBasedSegment segment, ChunkBasedSegmentAccessorPool pool)
+            {
+                base.Initialize(owner, segment, pool);
+                Debug.Assert(segment.Stride == sizeof(Index32Chunk));
+            }
 
             #region Chunk Properties Access
 
@@ -164,9 +173,35 @@ namespace Typhon.Engine.BPTree
                 Set(ref chunk, c, item, true);
             }
 
-            public override void AppendFirst(NodeWrapper node, KeyValueItem value) => throw new Exception("Should be called as key replace is not supported and multi-value neither");
-            public override void AppendLast(NodeWrapper node, KeyValueItem item) => throw new Exception("Should be called as key replace is not supported and multi-value neither");
-            
+            public override int Append(int bufferId, int value) => throw new Exception("Shouldn't be called as key replace is not supported and multi-value neither");
+
+            public override void Insert(NodeWrapper node, int index, KeyValueItem item)
+            {
+                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index32Chunk>(node.ChunkId);
+                var lsh = index; // length of left shift
+                var rsh = chunk.Count - index; // length of right shift
+
+                if (lsh < rsh) // choose least shifts required
+                {
+                    LeftShift(ref chunk, chunk.Start, lsh); // move Start to Start-1
+                    Set(ref chunk, index - 1, item, true);
+                    DecrementStart(ref chunk);
+                }
+                else
+                {
+                    RightShift(ref chunk, Index32Chunk.Adjust(chunk.Start + index), rsh); // move End to End+1
+                    Set(ref chunk, index, item, true);
+                }
+
+                chunk.Count++;
+            }
+
+            public override int CreateBuffer() => default;
+
+            public override VariableSizedBufferReadOnlyAccessor<int> GetBufferReadOnlyAccessor(int bufferId) => default;
+            public override int RemoveFromBuffer(int bufferId, int elementId, int value) => default;
+            public override void DeleteBuffer(int bufferId) { }
+
             public override NodeWrapper GetFirstChild(NodeWrapper node)
             {
                 ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index32Chunk>(node.ChunkId);
@@ -203,27 +238,6 @@ namespace Typhon.Engine.BPTree
                         return find - chunk.Start * find.Sign();
                     }
                 }
-            }
-
-            public override void Insert(NodeWrapper node, int index, KeyValueItem item)
-            {
-                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index32Chunk>(node.ChunkId);
-                var lsh = index; // length of left shift
-                var rsh = chunk.Count - index; // length of right shift
-
-                if (lsh < rsh) // choose least shifts required
-                {
-                    LeftShift(ref chunk, chunk.Start, lsh); // move Start to Start-1
-                    Set(ref chunk, index - 1, item, true);
-                    DecrementStart(ref chunk);
-                }
-                else
-                {
-                    RightShift(ref chunk, Index32Chunk.Adjust(chunk.Start + index), rsh); // move End to End+1
-                    Set(ref chunk, index, item, true);
-                }
-
-                chunk.Count++;
             }
 
             public override NodeWrapper SplitRight(NodeWrapper node, NodeStates states)
@@ -548,7 +562,7 @@ namespace Typhon.Engine.BPTree
 
         protected override BaseNodeStorage GetStorage() => new IntNodeStorage();
 
-        protected IntBTree(ChunkBasedSegment segment) : base(segment)
+        protected IntBTree(ChunkBasedSegment segment, ChunkBasedSegmentAccessorPool pool) : base(segment, pool)
         {
         }
     }

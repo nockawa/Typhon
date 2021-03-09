@@ -271,9 +271,12 @@ namespace Typhon.Engine.BPTree
                 _keyComparer = comparer ?? Comparer<TKey>.Default;
                 Key = key;
                 Added = false;
+                ElementId = default;
             }
             public readonly TKey Key;
             public bool Added { get; private set; }
+
+            public int ElementId;
 
             private readonly int _value;
             private readonly IComparer<TKey> _keyComparer;
@@ -464,28 +467,29 @@ namespace Typhon.Engine.BPTree
         private NodeWrapper ReverseLinkList;
         public int Height;
 
-        public KeyValueItem First => LinkList.First;
-        public KeyValueItem Last => ReverseLinkList.Last;
+        protected KeyValueItem First => LinkList.First;
+        protected KeyValueItem Last => ReverseLinkList.Last;
 
         #endregion
 
         #region Public API
 
-        protected BTree(ChunkBasedSegment segment)
+        protected BTree(ChunkBasedSegment segment, ChunkBasedSegmentAccessorPool pool)
         {
             Comparer = Comparer<TKey>.Default;
             _segment = segment;
             _storage = GetStorage();
-            _storage.Initialize(this, _segment);
+            _storage.Initialize(this, _segment, pool);
             // We make sure the chunk 0 is reserved so we can consider any ChunkId == 0 as a "null pointer".
             // So any default constructed type declaring ChunkId fields can have this "null" by default.
             _segment.ReserveChunk(0);
         }
 
-        public void Add(TKey key, int value)
+        public int Add(TKey key, int value)
         {
             var args = new InsertArguments(key, value, Comparer);
-            AddOrUpdateCore(args);
+            AddOrUpdateCore(ref args);
+            return args.ElementId;
         }
 
         public bool Remove(TKey key, out int value)
@@ -566,6 +570,39 @@ namespace Typhon.Engine.BPTree
             return index >= 0;
         }
 
+        public bool RemoveValue(TKey key, int elementId, int value)
+        {
+            if (TryGet(key, out var bufferId) == false)
+            {
+                return false;
+            }
+            var res = _storage.RemoveFromBuffer(bufferId, elementId, value);
+            if (res == -1) return false;
+
+            // Remove the key if we no longer have values stored there
+            if (res == 0)
+            {
+                var args = new RemoveArguments(key, Comparer);
+                RemoveCore(ref args);
+
+                if (args.Removed)
+                {
+                    _storage.DeleteBuffer(args.Value);
+                }
+            }
+
+            return true;
+        }
+
+        public VariableSizedBufferReadOnlyAccessor<int> TryGetMultiple(TKey key)
+        {
+            if (TryGet(key, out var bufferId) == false)
+            {
+                return default;
+            }
+            return _storage.GetBufferReadOnlyAccessor(bufferId);
+        }
+
         #endregion
 
         #region Private API
@@ -633,7 +670,7 @@ namespace Typhon.Engine.BPTree
         }
 
 
-        private void AddOrUpdateCore(InsertArguments args)
+        private void AddOrUpdateCore(ref InsertArguments args)
         {
             if (Count == 0)
             {
@@ -643,11 +680,19 @@ namespace Typhon.Engine.BPTree
                 Height++;
             }
 
+            int CreateBufferAndAddValue(ref InsertArguments iargs)
+            {
+                var bufferId = _storage.CreateBuffer();
+                iargs.ElementId =_storage.Append(bufferId, iargs.GetValue());
+                return bufferId;
+            }
+
             // append optimization: if item key is in order, this may add item in O(1) operation.
             int order = Count == 0 ? 1 : args.Compare(args.Key, Last.Key);
             if (order > 0 && !ReverseLinkList.IsFull)
             {
-                ReverseLinkList.PushLast(new KeyValueItem(args.Key, args.GetValue()));
+                var value = AllowMultiple ? CreateBufferAndAddValue(ref args) : args.GetValue();
+                ReverseLinkList.PushLast(new KeyValueItem(args.Key, value));
                 Count++;
                 return;
             }
@@ -658,7 +703,7 @@ namespace Typhon.Engine.BPTree
                 //ReverseLinkList.Last = item;
                 if (AllowMultiple)
                 {
-                    ReverseLinkList.AppendLast(new KeyValueItem(args.Key, args.GetValue()));
+                    args.ElementId = _storage.Append(Last.Value, args.GetValue());
                 }
                 return;
             }
@@ -667,7 +712,8 @@ namespace Typhon.Engine.BPTree
             order = args.Compare(args.Key, First.Key);
             if (order < 0 && !LinkList.IsFull)
             {
-                LinkList.PushFirst(new KeyValueItem(args.Key, args.GetValue()));
+                var value = AllowMultiple ? CreateBufferAndAddValue(ref args) : args.GetValue();
+                LinkList.PushFirst(new KeyValueItem(args.Key, value));
                 Count++;
                 return;
             }
@@ -678,7 +724,7 @@ namespace Typhon.Engine.BPTree
                 //LinkList.Items.First = item;
                 if (AllowMultiple)
                 {
-                    LinkList.AppendFirst(new KeyValueItem(args.Key, args.GetValue()));
+                    args.ElementId = _storage.Append(First.Value, args.GetValue());
                 }
                 return;
             }

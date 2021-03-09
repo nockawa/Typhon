@@ -86,8 +86,6 @@ namespace Typhon.Engine.BPTree
             public void PushFirst(KeyValueItem item) => _storage.PushFirst(this, item);
             public void PushLast(KeyValueItem item) => _storage.PushLast(this, item);
             public void MergeLeft(NodeWrapper right) => _storage.MergeLeft(this, right);
-            public void AppendFirst(KeyValueItem value) => _storage.AppendFirst(this, value);
-            public void AppendLast(KeyValueItem value) => _storage.AppendLast(this, value);
 
             public NodeWrapper GetChild(int index) => _storage.GetChild(this, index);
 
@@ -131,7 +129,14 @@ namespace Typhon.Engine.BPTree
 
                     Debug.Assert(index >= 0 && index <= Count);
 
-                    var item = new KeyValueItem(args.Key, args.GetValue()); // item to add
+                    int value = args.GetValue();
+                    if (_storage.Owner.AllowMultiple)
+                    {
+                        var bufferId = _storage.CreateBuffer();
+                        args.ElementId = _storage.Append(bufferId, value);
+                        value = bufferId;
+                    }
+                    var item = new KeyValueItem(args.Key, value); // item to add
 
                     if (!IsFull) // if there is space, add and return.
                     {
@@ -210,9 +215,8 @@ namespace Typhon.Engine.BPTree
                 }
                 else
                 {
-                    // TODO Update value of existing key, so it seems
-
-                    //var item = GetItem(index); // old item
+                    var curItem = GetItem(index);
+                    args.ElementId = _storage.Append(curItem.Value, args.GetValue());
                     //KeyValueItem.ChangeValue(ref item, args.GetUpdateValue(item.Value)); // update item value
                     //Items[index] = item; // set new item
                 }

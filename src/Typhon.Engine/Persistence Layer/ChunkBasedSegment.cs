@@ -40,7 +40,7 @@ namespace Typhon.Engine
             {
                 if (caches[i].SegmentIndex == si)
                 {
-                    Interlocked.Decrement(ref caches[i].PinCounter);
+                    --caches[i].PinCounter;
                     return;
                 }
             }
@@ -109,7 +109,7 @@ namespace Typhon.Engine
                 {
                     if (pin)
                     {
-                        Interlocked.Increment(ref caches[i].PinCounter);
+                        ++caches[i].PinCounter;
                     }
                     ++caches[i].HitCount;
                     return caches[i].BaseAddress + (si == 0 ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (off * _stride);
@@ -125,14 +125,14 @@ namespace Typhon.Engine
             // Everything is pinned, that's bad...
             if (pageI == -1)
             {
-                throw new NotImplementedException();
+                throw new NotImplementedException("No more available pages slot, all are occupied by pinned pages");
             }
 
             ref var cache = ref caches[pageI];
             cache.PageAccessor.Dispose();
             cache.HitCount = 1;
             cache.SegmentIndex = si;
-            cache.PinCounter = 0;
+            cache.PinCounter = pin ? 1 : 0;
             cache.PromoteCounter = 0;
             cache.PageAccessor = _owner.GetPageReadOnly(si);
             cache.BaseAddress = cache.PageAccessor.PageAddress + VirtualDiskManager.PageHeaderSize;
@@ -213,7 +213,7 @@ namespace Typhon.Engine
             {
                 if (caches[i].SegmentIndex == si)
                 {
-                    Interlocked.Decrement(ref caches[i].PinCounter);
+                    --caches[i].PinCounter;
                     return;
                 }
             }
@@ -234,7 +234,7 @@ namespace Typhon.Engine
                 {
                     if (pin)
                     {
-                        Interlocked.Increment(ref caches[i].PinCounter);
+                        ++caches[i].PinCounter;
                     }
                     ++caches[i].HitCount;
                     return caches[i].BaseAddress + (si == 0 ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (off * _stride);
@@ -250,14 +250,14 @@ namespace Typhon.Engine
             // Everything is pinned, that's bad...
             if (pageI == -1)
             {
-                throw new NotImplementedException();
+                throw new NotImplementedException("No more available pages slot, all are occupied by pinned pages");
             }
 
             ref var cache = ref caches[pageI];
             cache.PageAccessor.Dispose();
             cache.HitCount = 1;
             cache.SegmentIndex = si;
-            cache.PinCounter = 0;
+            cache.PinCounter = pin ? 1 : 0;
             cache.PageAccessor = _owner.GetPageReadWrite(si);
             cache.BaseAddress = cache.PageAccessor.PageAddress + VirtualDiskManager.PageHeaderSize;
             return cache.BaseAddress + (si == 0 ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (off * _stride);
@@ -366,6 +366,8 @@ namespace Typhon.Engine
             return res;
         }
 
+        public void FreeChunk(int chunkId) => _map.ClearL0(chunkId);
+
         public ChunkReadOnlyRandomAccessor GetChunkReadOnlyRandomAccessor(int cachedPagesCount=1) => new(this, cachedPagesCount);
         public ChunkReadWriteRandomAccessor GetChunkReadWriteRandomAccessor(int cachedPagesCount=1) => new(this, cachedPagesCount);
 
@@ -389,6 +391,10 @@ namespace Typhon.Engine
         public int ChunkCountRootPage { get; }
         public int ChunkCountPerPage { get; }
 
+        public int ChunkCapacity => _map.Capacity;
+        public int AllocatedChunkCount => _map.Allocated;
+        public int FreeChunkCount => ChunkCapacity - AllocatedChunkCount;
+
         public class BitmapL3
         {
             private readonly ChunkBasedSegment _segment;
@@ -408,6 +414,7 @@ namespace Typhon.Engine
                 _otherChunkCount = segment.ChunkCountPerPage;
 
                 Capacity = GetChunkCount(pageCount);
+                Allocated = 0;
 
                 var length = Math.Max(1, (Capacity + 4095) / 4096);
                 _l1All = new long[length];
@@ -482,6 +489,7 @@ namespace Typhon.Engine
                     _l1Any.Span[l1Offset] |= l1Mask;
                 }
 
+                ++Allocated;
                 return true;
             }
 
@@ -526,6 +534,7 @@ namespace Typhon.Engine
                     _l1Any.Span[l1Offset] |= l1Mask;
                 }
 
+                Allocated += 64;
                 return true;
             }
 
@@ -563,6 +572,8 @@ namespace Typhon.Engine
 
                     _l1Any.Span[l1Offset] &= l1Mask;
                 }
+
+                --Allocated;
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
@@ -770,6 +781,7 @@ namespace Typhon.Engine
                     }
                 }
 
+                // Couldn't satisfy the call, rollback
                 if (length > 0)
                 {
                     for (int i = 0; i < destI; i++)
@@ -793,7 +805,7 @@ namespace Typhon.Engine
             }
 
             public int Capacity { get; }
+            public int Allocated { get; private set; }
         }
-
     }
 }

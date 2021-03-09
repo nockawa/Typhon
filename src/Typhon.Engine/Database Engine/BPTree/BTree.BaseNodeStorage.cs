@@ -11,7 +11,7 @@ namespace Typhon.Engine.BPTree
             protected internal BTree<TKey> Owner;
             protected ChunkBasedSegmentAccessorPool SegmentAccessorPool;
 
-            internal virtual void Initialize(BTree<TKey> owner, ChunkBasedSegment segment, ChunkBasedSegmentAccessorPool pool = null)
+            internal virtual void Initialize(BTree<TKey> owner, ChunkBasedSegment segment, ChunkBasedSegmentAccessorPool pool)
             {
                 Owner = owner;
                 SegmentAccessorPool = pool ?? new ChunkBasedSegmentAccessorPool(segment, 4, 4);
@@ -42,8 +42,12 @@ namespace Typhon.Engine.BPTree
 
             public abstract void PushFirst(NodeWrapper node, KeyValueItem item);
             public abstract void PushLast(NodeWrapper node, KeyValueItem item);
-            public abstract void AppendFirst(NodeWrapper node, KeyValueItem value);
-            public abstract void AppendLast(NodeWrapper node, KeyValueItem item);
+            public abstract int Append(int bufferId, int value);
+            public abstract void Insert(NodeWrapper node, int index, KeyValueItem item);
+            public abstract int CreateBuffer();
+            public abstract VariableSizedBufferReadOnlyAccessor<int> GetBufferReadOnlyAccessor(int bufferId);
+            public abstract int RemoveFromBuffer(int bufferId, int elementId, int value);
+            public abstract void DeleteBuffer(int bufferId);
             public abstract NodeWrapper GetLastChild(NodeWrapper node);
             public abstract NodeWrapper GetFirstChild(NodeWrapper node);
             public virtual NodeWrapper GetChild(NodeWrapper node, int index)
@@ -59,7 +63,6 @@ namespace Typhon.Engine.BPTree
             public abstract void DecrementStart(NodeWrapper node);
             public abstract bool IsRotated(NodeWrapper node);
             public abstract int BinarySearch(NodeWrapper node, TKey key, IComparer<TKey> comparer);
-            public abstract void Insert(NodeWrapper node, int index, KeyValueItem item);
 
             #endregion
 
