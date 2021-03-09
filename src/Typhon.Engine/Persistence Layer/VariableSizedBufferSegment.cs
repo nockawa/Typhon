@@ -1,6 +1,7 @@
 ﻿// unset
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -50,10 +51,9 @@ namespace Typhon.Engine
             var segment = Segment;
             var chunkId = segment.AllocateChunk(false);
             ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(SegmentAccessorPool.RW.GetChunkAddress(chunkId));
-            rh.Control = 0;
-            rh.ReadReferenceCounter = 0;
-            rh.FirstFreeChunkId = chunkId;
-            rh.FirstStoredChunkId = 0;
+            rh.Lock.Reset();
+            rh.FirstFreeChunkId = 0;
+            rh.FirstStoredChunkId = chunkId;
             rh.Header.NextChunkId = 0;
             rh.Header.ElementCount = 0;
             return chunkId;
@@ -65,59 +65,56 @@ namespace Typhon.Engine
             ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(SegmentAccessorPool.RW.GetChunkAddress(bufferId, true));
             try
             {
+                // Lock the whole buffer as we are going to update it
                 LockBuffer(ref rh);
-                int curFreeChunkId = rh.FirstFreeChunkId;
 
-                var curFreeChunkAddr = SegmentAccessorPool.RW.GetChunkAddress(curFreeChunkId);
-                ref var curFreeChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(curFreeChunkAddr);
+                // Get the first chunk containing free space
+                int curChunkId = rh.FirstStoredChunkId;
+
+                var curChunkAddr = SegmentAccessorPool.RW.GetChunkAddress(curChunkId);
+                ref var curChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(curChunkAddr);
                 
-                var isRoot = bufferId == curFreeChunkId;
+                var isRoot = bufferId == curChunkId;
                 var chunkCapacity = isRoot ? ElementCountRootChunk : ElementCountPerChunk;
 
-                if (curFreeChunkHeader.ElementCount == chunkCapacity)
+                // If we reached capacity, get a new chunk
+                if (curChunkHeader.ElementCount == chunkCapacity)
                 {
+                    var nextChunkId = curChunkId;
 
+                    // Take a free chunk or allocate a new one
+                    var hasFreeChunk = rh.FirstFreeChunkId != 0;
+                    curChunkId = hasFreeChunk ? rh.FirstFreeChunkId : Segment.AllocateChunk(false);
+
+                    // Fetch the new chunk
+                    curChunkAddr = SegmentAccessorPool.RW.GetChunkAddress(curChunkId);
+                    curChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(curChunkAddr);
+
+                    // If we've allocated a new chunk, initialize it
+                    if (hasFreeChunk == false)
+                    {
+                        curChunkHeader.ElementCount = 0;
+                        curChunkHeader.NextChunkId = 0;
+                    }
+
+                    // Update the link to the first free chunk with the next of the one we're taking
+                    rh.FirstFreeChunkId = curChunkHeader.NextChunkId;
+
+                    // Link our new free chunk to the previous (full) one
+                    curChunkHeader.NextChunkId = nextChunkId;
+
+                    // Update the first stored chunk to the new one
+                    rh.FirstStoredChunkId = curChunkId;
+
+                    // Update root and capacity as we switched to a new chunk
+                    isRoot = bufferId == curChunkId;
                 }
 
+                // Add our element to the chunk
+                var baseElementAddr = (T*)(curChunkAddr + (isRoot ? sizeof(VariableSizedBufferRootHeader) : sizeof(VariableSizedBufferChunkHeader)));
+                baseElementAddr[curChunkHeader.ElementCount++] = value;
 
-                var baseElementAddr = (T*)(curFreeChunkAddr + (isRoot ? sizeof(VariableSizedBufferRootHeader) : sizeof(VariableSizedBufferChunkHeader)));
-                baseElementAddr[curFreeChunkHeader.ElementCount++] = value;
-
-/*
-                // If we are filling the chunk for the first time, link it to the stored chunk linked list
-                if (curFreeChunkHeader.ElementCount == 1)
-                {
-                    curFreeChunkHeader.PrevChunkId = 0;
-                    curFreeChunkHeader.NextChunkId = rh.FirstStoredChunkId;
-                    rh.FirstStoredChunkId = curFreeChunkId;
-                    if (rh.FirstStoredChunkId != 0)
-                    {
-
-                    }
-                }
-
-                // The chunk is full?
-                if (curFreeChunkHeader.ElementCount == chunkCapacity)
-                {
-                    // Allocate a new chunk if needed
-                    if (curFreeChunkHeader.NextChunkId == 0)
-                    {
-                        var newChunkId = Segment.AllocateChunk(false);
-                        curFreeChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(SegmentAccessorPool.RW.GetChunkAddress(newChunkId));
-                        curFreeChunkHeader.ElementCount = 0;
-                        curFreeChunkHeader.NextChunkId = 0;
-                        curFreeChunkHeader.PrevChunkId = 0;
-
-                        rh.FirstFreeChunkId = newChunkId;
-                    }
-                    else
-                    {
-                        // Make the next free chunk the new first
-                        rh.FirstFreeChunkId = curFreeChunkHeader.NextChunkId;
-                    }
-                } 
-*/
-                return curFreeChunkId;
+                return curChunkId;
             }
             finally
             {
@@ -126,30 +123,61 @@ namespace Typhon.Engine
             }
         }
 
-        public VariableSizedBufferReadOnlyAccessor<T> GetReadOnlyAccessor(int bufferId) => new(this, bufferId);
-
-        private void LockBuffer(ref VariableSizedBufferRootHeader rh)
+        unsafe public bool DeleteElement(int bufferId, int elementId, T element)
         {
-            var threadId = Thread.CurrentThread.ManagedThreadId;
-            if (Interlocked.CompareExchange(ref rh.Control, threadId, 0) != 0)
+            // Fetch the chunk, pin it to prevent its page to be discarded by subsequent chunk accesses
+            ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(SegmentAccessorPool.RW.GetChunkAddress(bufferId, true));
+            try
             {
-                var sw = new SpinWait();
-                while (Interlocked.CompareExchange(ref rh.Control, threadId, 0) != 0)
+                // Lock the whole buffer as we are going to update it
+                LockBuffer(ref rh);
+
+                // Fetch the chunk storing the element
+                var elementChunk = SegmentAccessorPool.RW.GetChunkAddress(elementId);
+                ref var elementChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(elementChunk);
+                var isRoot = bufferId == elementId;
+                var baseElementAddr = (T*)(elementChunk + (isRoot ? sizeof(VariableSizedBufferRootHeader) : sizeof(VariableSizedBufferChunkHeader)));
+
+                // Look for our element
+                var count = elementChunkHeader.ElementCount;
+                int i;
+                for (i = 0; i < count; i++)
                 {
-                    sw.SpinOnce();
+                    if (EqualityComparer<T>.Default.Equals(baseElementAddr[i], element))
+                    {
+                        break;
+                    }
                 }
+
+                if (i == count) return false;
+
+                // Replace this slot by the last element to keep an un-fragmented collection
+                baseElementAddr[i] = baseElementAddr[count - 1];
+#if DEBUG
+                baseElementAddr[count - 1] = default(T);
+#endif
+                --elementChunkHeader.ElementCount;
+
+                return true;
+            }
+            finally
+            {
+                ReleaseLockOnBuffer(ref rh);
             }
         }
 
-        private void ReleaseLockOnBuffer(ref VariableSizedBufferRootHeader header) => header.Control = 0;
+        public VariableSizedBufferReadOnlyAccessor<T> GetReadOnlyAccessor(int bufferId) => new(this, bufferId);
+
+        private void LockBuffer(ref VariableSizedBufferRootHeader rh) => rh.Lock.EnterWrite();
+
+        private void ReleaseLockOnBuffer(ref VariableSizedBufferRootHeader header) => header.Lock.ExitWrite();
     }
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct VariableSizedBufferRootHeader
     {
         public VariableSizedBufferChunkHeader Header;   // Must be first member
-        public volatile int Control;
-        public volatile int ReadReferenceCounter;
+        public ReaderWriterSpinLock Lock;
         public int FirstFreeChunkId;
         public int FirstStoredChunkId;
     }
@@ -164,12 +192,16 @@ namespace Typhon.Engine
     public struct VariableSizedBufferReadOnlyAccessor<T> : IDisposable where T : unmanaged
     {
         private readonly ChunkBasedSegment _segment;
-        private int _rootChunkId;
         private readonly int _stride;
-        
-        private ReadOnlyPageAccessor _pageAccessor;
 
-        private unsafe byte* _headerAddr;
+        private int _rootChunkId;
+        private readonly unsafe byte* _rootChunkAddr;
+
+        private readonly ChunkReadOnlyRandomAccessor _accessor;
+
+        private int _curChunkId;
+        private unsafe byte* _curChunkAddr;
+
         private unsafe byte* _elementAddr;
         private int _elementCount;
 
@@ -180,62 +212,113 @@ namespace Typhon.Engine
         {
             _segment = owner.Segment;
             _rootChunkId = rootChunkId;
-            var (segmentIndex, offset) = _segment.GetChunkLocation(_rootChunkId);
-            _pageAccessor = _segment.GetPageReadOnly(segmentIndex);
             _stride = _segment.Stride;
+
+            _accessor = new ChunkReadOnlyRandomAccessor(_segment, 8);
 
             // The page accessor is Read-Only but we modify the content of the chunk!!!
             // It's ok because we modify concurrency synchronization variables only, we don't want changes to be detected because of this and we want to ensure multiple
             //  concurrent read accesses.
-            var chunkAddr = _pageAccessor.GetElementAddr(offset, _stride, segmentIndex == 0);
-            ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(chunkAddr);
+            _rootChunkAddr = _accessor.GetChunkAddress(_rootChunkId, true);
+            ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(_rootChunkAddr);
 
-            // Extend lifetime on read usage by incrementing the reference counter
-            Interlocked.Increment(ref rh.ReadReferenceCounter);
-            // Make sure there's no ongoing write
-            if (rh.Control != 0)
-            {
-                var sw = new SpinWait();
-                while (rh.Control != 0)
-                {
-                    sw.SpinOnce();
-                }
-            }
+            // Enter read mode
+            rh.Lock.EnterRead();
 
             // Switch to the first chunk that contains stored data
-            var firstChunkId = rh.FirstStoredChunkId;
-            (segmentIndex, offset) = _segment.GetChunkLocation(firstChunkId);
-            if (_pageAccessor.PageId != _segment.Pages[segmentIndex])
-            {
-                if (_pageAccessor.IsValid) _pageAccessor.Dispose();
-                _pageAccessor = _segment.GetPageReadOnly(segmentIndex);
-            }
+            _curChunkId = rh.FirstStoredChunkId;
+            _curChunkAddr = _accessor.GetChunkAddress(_curChunkId, true);
 
-            _headerAddr = _pageAccessor.GetElementAddr(offset, _stride, segmentIndex == 0);
-            ref var h = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(_headerAddr);
-            _elementAddr = _headerAddr + (firstChunkId==rootChunkId ? sizeof(VariableSizedBufferRootHeader) : sizeof(VariableSizedBufferChunkHeader));
-            _elementCount = h.ElementCount;
+            _elementAddr = _curChunkAddr + (_curChunkId==rootChunkId ? sizeof(VariableSizedBufferRootHeader) : sizeof(VariableSizedBufferChunkHeader));
+            _elementCount = ((VariableSizedBufferChunkHeader*)_curChunkAddr)->ElementCount;
         }
 
         unsafe public bool NextChunk()
         {
-            ref var h = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(_headerAddr);
-            var nextChunkId = h.NextChunkId;
+            // Read next chunk from the current header
+            var nextChunkId = ((VariableSizedBufferChunkHeader*)_curChunkAddr)->NextChunkId;
+            
+            // Quit if there's no more
             if (nextChunkId == 0)
             {
                 return false;
             }
 
-            var (segmentIndex, offset) = _segment.GetChunkLocation(nextChunkId);
-            if (_pageAccessor.PageId != _segment.Pages[segmentIndex])
+            // Fetch the new chunk
+            var nextChunkAddr = _accessor.GetChunkAddress(nextChunkId, true);
+            var nextChunkElementCount = ((VariableSizedBufferChunkHeader*)nextChunkAddr)->ElementCount;
+
+            // Check if the chunk is empty, then try to remove it from the storage list
+            if (nextChunkElementCount == 0)
             {
-                if (_pageAccessor.IsValid) _pageAccessor.Dispose();
-                _pageAccessor = _segment.GetPageReadOnly(segmentIndex);
+                ref var rootChunk = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(_rootChunkAddr);
+
+                // Try to promote the Buffer from read to read/write because we need to make changes
+                if (rootChunk.Lock.TryPromoteToWrite())
+                {
+                    // Try to promote the root chunk to read/write access
+                    if (_accessor.TryPromoteChunk(_rootChunkId))
+                    {
+                        // Setup our forward link list info
+                        var prevChunkId = _curChunkId;
+                        var curChunkId = nextChunkId;
+                        var prevChunk = (VariableSizedBufferChunkHeader*)_accessor.GetChunkAddress(prevChunkId);
+                        var curChunk = (VariableSizedBufferChunkHeader*)_accessor.GetChunkAddress(curChunkId, true);
+
+                        // We jump other empty chunk as long as there are some
+                        while ((curChunk != null) && (curChunk->ElementCount == 0))
+                        {
+                            // To collect an empty chunk we need to promote both the previous and current chunks.
+                            // We can't make modification otherwise
+                            // BEWARE: Each successful Promotion need its corresponding demotion call!
+                            if (_accessor.TryPromoteChunk(prevChunkId))
+                            {
+                                if (_accessor.TryPromoteChunk(curChunkId))
+                                {
+                                    // Fix the storage link-list by removing the empty chunk
+                                    prevChunk->NextChunkId = curChunk->NextChunkId;
+
+                                    // Link the empty chunk to the rest of the free link-list
+                                    curChunk->NextChunkId = rootChunk.FirstFreeChunkId;
+
+                                    // First empty chunk is pointing to the one we just pop
+                                    rootChunk.FirstFreeChunkId = curChunkId;
+
+                                    _accessor.DemoteChunk(curChunkId);
+                                }
+                                _accessor.DemoteChunk(prevChunkId);
+                            }
+
+                            // Cur Chunk is the empty one, we don't need it as we're stepping over, so release the pin
+                            _accessor.UnpinChunk(curChunkId);
+
+                            // Update the new current chunk to be the next in line
+                            curChunkId = prevChunk->NextChunkId;
+                            curChunk = (curChunkId != 0) ? (VariableSizedBufferChunkHeader*)_accessor.GetChunkAddress(curChunkId, true) : null;
+                        }
+
+                        // Update members needed for the end of the method
+                        nextChunkId = curChunkId;
+                        nextChunkAddr = (byte*)curChunk;
+
+                        // Release pin and lock
+                        // NOTE TODO : I'm not sure UnpinChunk is call appropriately for all corresponding pin ones...
+                        _accessor.UnpinChunk(curChunkId);
+                        _accessor.DemoteChunk(_rootChunkId);
+                    }
+                    rootChunk.Lock.DemoteWriteAccess();
+                }
             }
 
-            _headerAddr = _pageAccessor.GetElementAddr(offset, _stride, segmentIndex == 0);
-            _elementAddr = _headerAddr + (nextChunkId == _rootChunkId ? sizeof(VariableSizedBufferRootHeader) : sizeof(VariableSizedBufferChunkHeader));
-            _elementCount = ((VariableSizedBufferChunkHeader*)_headerAddr)->ElementCount;
+            if (nextChunkAddr == null)
+            {
+                return false;
+            }
+
+            _curChunkId = nextChunkId;
+            _curChunkAddr = nextChunkAddr;
+            _elementAddr = _curChunkAddr + (_curChunkId == _rootChunkId ? sizeof(VariableSizedBufferRootHeader) : sizeof(VariableSizedBufferChunkHeader));
+            _elementCount = ((VariableSizedBufferChunkHeader*)_curChunkAddr)->ElementCount;
 
             return true;
         }
@@ -244,14 +327,11 @@ namespace Typhon.Engine
         {
             if (IsValid == false) return;
 
-            _pageAccessor.Dispose();
+            ref var h = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(_rootChunkAddr);
+            h.Lock.ExitRead();
 
-            var (segmentIndex, offset) = _segment.GetChunkLocation(_rootChunkId);
-            using var accessor = _segment.GetPageReadWrite(segmentIndex);
-            ref var h = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(accessor.GetElementAddr(offset, _segment.Stride, segmentIndex == 0));
-
-            // Decrement Read reference counter to release usage
-            Interlocked.Decrement(ref h.ReadReferenceCounter);
+            _accessor.UnpinChunk(_rootChunkId);
+            _accessor.Dispose();
             _rootChunkId = 0;
         }
     }

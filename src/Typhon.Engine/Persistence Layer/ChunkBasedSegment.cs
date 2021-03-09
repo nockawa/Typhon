@@ -21,42 +21,122 @@ namespace Typhon.Engine
         unsafe private struct CachedPages
         {
             public int HitCount;
-            public int PageIndex;
+            public int SegmentIndex;
+            public int PinCounter;
+            public int PromoteCounter;
             public ReadOnlyPageAccessor PageAccessor;
+            public ReadWritePageAccessor PromotedPageAccessor;
             public byte* BaseAddress;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        unsafe public ref readonly T GetChunk<T>(int index) where T : unmanaged
-        {
-            var (si, off) = _owner.GetChunkLocation(index);
+        unsafe public ref readonly T GetChunk<T>(int index) where T : unmanaged => ref Unsafe.AsRef<T>(GetChunkAddress(index));
 
-            var lowHit = int.MaxValue;
-            var pageI = 0;
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        internal void UnpinChunk(int index)
+        {
+            var (si, _) = _owner.GetChunkLocation(index);
+            var caches = _cache.Span;
+            for (int i = 0; i < _cachedPagesCount; i++)
+            {
+                if (caches[i].SegmentIndex == si)
+                {
+                    Interlocked.Decrement(ref caches[i].PinCounter);
+                    return;
+                }
+            }
+        }
+
+        internal bool TryPromoteChunk(int index)
+        {
+            var (si, _) = _owner.GetChunkLocation(index);
 
             var caches = _cache.Span;
             for (int i = 0; i < _cachedPagesCount; i++)
             {
-                if (caches[i].PageIndex == si)
+                if (caches[i].SegmentIndex == si)
                 {
+                    ref var page = ref caches[i];
+                    if (page.PromoteCounter > 0)
+                    {
+                        ++page.PromoteCounter;
+                        return true;
+                    }
+
+                    page.PromotedPageAccessor = page.PageAccessor.TryPromoteToExclusiveReadWrite();
+                    if (page.PromotedPageAccessor.IsValid)
+                    {
+                        page.PromoteCounter = 1;
+                        return true;
+                    }
+                    return false;
+                }
+            }
+            return false;
+        }
+
+        internal void DemoteChunk(int index)
+        {
+            var (si, _) = _owner.GetChunkLocation(index);
+
+            var caches = _cache.Span;
+            for (int i = 0; i < _cachedPagesCount; i++)
+            {
+                if (caches[i].SegmentIndex == si)
+                {
+                    ref var page = ref caches[i];
+                    if (--page.PromoteCounter == 0)
+                    {
+                        page.PromotedPageAccessor.Dispose();
+                        page.PromotedPageAccessor = default;
+                    }
+                    return;
+                }
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        unsafe internal byte* GetChunkAddress(int index, bool pin = false)
+        {
+            var (si, off) = _owner.GetChunkLocation(index);
+
+            var lowHit = int.MaxValue;
+            var pageI = -1;
+
+            var caches = _cache.Span;
+            for (int i = 0; i < _cachedPagesCount; i++)
+            {
+                if (caches[i].SegmentIndex == si)
+                {
+                    if (pin)
+                    {
+                        Interlocked.Increment(ref caches[i].PinCounter);
+                    }
                     ++caches[i].HitCount;
-                    return ref Unsafe.AsRef<T>(caches[i].BaseAddress + (si == 0 ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (off * _stride));
+                    return caches[i].BaseAddress + (si == 0 ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (off * _stride);
                 }
 
-                if (caches[i].HitCount < lowHit)
+                if ((caches[i].PinCounter == 0) && (caches[i].PromoteCounter == 0) && (caches[i].HitCount < lowHit))
                 {
                     lowHit = caches[i].HitCount;
                     pageI = i;
                 }
             }
 
+            // Everything is pinned, that's bad...
+            if (pageI == -1)
+            {
+                throw new NotImplementedException();
+            }
+
             ref var cache = ref caches[pageI];
             cache.PageAccessor.Dispose();
             cache.HitCount = 1;
+            cache.SegmentIndex = si;
+            cache.PinCounter = 0;
+            cache.PromoteCounter = 0;
             cache.PageAccessor = _owner.GetPageReadOnly(si);
-            cache.PageIndex = si;
             cache.BaseAddress = cache.PageAccessor.PageAddress + VirtualDiskManager.PageHeaderSize;
-            return ref Unsafe.AsRef<T>(cache.BaseAddress + (si == 0 ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (off * _stride));
+            return cache.BaseAddress + (si == 0 ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (off * _stride);
         }
 
         public ChunkReadOnlyRandomAccessor(ChunkBasedSegment owner, int cachedPagesCount)
@@ -69,7 +149,7 @@ namespace Typhon.Engine
 
             for (int i = 0; i < _cachedPagesCount; i++)
             {
-                _cacheMemory.Memory.Span[i].PageIndex = -1;
+                _cacheMemory.Memory.Span[i].SegmentIndex = -1;
             }
         }
 
@@ -80,7 +160,7 @@ namespace Typhon.Engine
             {
                 ref var cachedPage = ref span[i];
                 cachedPage.PageAccessor.Dispose();
-                cachedPage.PageIndex = -1;
+                cachedPage.SegmentIndex = -1;
                 cachedPage.HitCount = 0;
             }
         }
@@ -103,9 +183,9 @@ namespace Typhon.Engine
         unsafe private struct CachedPages
         {
             public int HitCount;
-            public int PageIndex;
+            public int SegmentIndex;
             public int PinCounter;
-            public ReadOnlyPageAccessor PageAccessor;
+            public ReadWritePageAccessor PageAccessor;
             public byte* BaseAddress;
         }
 
@@ -131,7 +211,7 @@ namespace Typhon.Engine
             var caches = _cache.Span;
             for (int i = 0; i < _cachedPagesCount; i++)
             {
-                if (caches[i].PageIndex == si)
+                if (caches[i].SegmentIndex == si)
                 {
                     Interlocked.Decrement(ref caches[i].PinCounter);
                     return;
@@ -150,7 +230,7 @@ namespace Typhon.Engine
             var caches = _cache.Span;
             for (int i = 0; i < _cachedPagesCount; i++)
             {
-                if (caches[i].PageIndex == si)
+                if (caches[i].SegmentIndex == si)
                 {
                     if (pin)
                     {
@@ -176,9 +256,9 @@ namespace Typhon.Engine
             ref var cache = ref caches[pageI];
             cache.PageAccessor.Dispose();
             cache.HitCount = 1;
-            cache.PageIndex = si;
+            cache.SegmentIndex = si;
             cache.PinCounter = 0;
-            cache.PageAccessor = _owner.GetPageReadOnly(si);
+            cache.PageAccessor = _owner.GetPageReadWrite(si);
             cache.BaseAddress = cache.PageAccessor.PageAddress + VirtualDiskManager.PageHeaderSize;
             return cache.BaseAddress + (si == 0 ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (off * _stride);
         }
@@ -199,7 +279,7 @@ namespace Typhon.Engine
 
             for (int i = 0; i < _cachedPagesCount; i++)
             {
-                _cacheMemory.Memory.Span[i].PageIndex = -1;
+                _cacheMemory.Memory.Span[i].SegmentIndex = -1;
             }
         }
 
@@ -210,7 +290,7 @@ namespace Typhon.Engine
             {
                 ref var cachedPage = ref span[i];
                 cachedPage.PageAccessor.Dispose();
-                cachedPage.PageIndex = -1;
+                cachedPage.SegmentIndex = -1;
                 cachedPage.HitCount = 0;
             }
         }

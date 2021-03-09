@@ -7,9 +7,11 @@ using Serilog;
 using Serilog.Events;
 using Serilog.Extensions.Logging;
 using System;
+using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Typhon.Engine.Tests
 {
@@ -133,7 +135,7 @@ namespace Typhon.Engine.Tests
         [Test]
         public void VariableSizedBufferSegmentTest()
         {
-            const int itemCount = 1024*3;
+            const int itemCount = 1024;
 
             var s = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, 64);
 
@@ -160,6 +162,109 @@ namespace Typhon.Engine.Tests
                 }
             } while (ba.NextChunk());
             Assert.That(loopCount, Is.EqualTo(itemCount));
+        }
+
+
+        [Test]
+        public void VariableSizedBufferSegmentDeleteTest()
+        {
+
+            var s = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, 64);
+
+            var vsb = new VariableSizedBufferSegment<long>(s);
+
+
+            var id0 = vsb.AllocateBuffer();
+            var elIdList = new int[15];
+
+            // 15 is spread into 3 chunks: 5, 7, 3
+            for (int i = 0; i < 15; i++)
+            {
+                elIdList[i] = vsb.AddElement(id0, i);
+            }
+
+            // Delete all the elements of the second chunk
+            for (int i = 5; i < 12; i++)
+            {
+                Assert.That(vsb.DeleteElement(id0, elIdList[i], i), Is.True);
+            }
+
+            // Trigger an enumeration that will remove the second chunk from the stored list and put it in the free list
+            {
+                int count = 0;
+                int hops = 0;
+                using var ba = vsb.GetReadOnlyAccessor(id0);
+                do
+                {
+                    count += ba.Elements.Length;
+                    ++hops;
+                } while (ba.NextChunk());
+
+                Assert.That(count, Is.EqualTo(8));
+                Assert.That(hops, Is.EqualTo(2));
+            }
+        }
+
+        public class LockStore
+        {
+            public int A;
+            public int B;
+            public int R;
+        }
+
+        [Test]
+        public void LockTest()
+        {
+            const int iterationCount = 10_000;
+
+            var s = new LockStore();
+
+            var taskList = new List<Task>();
+            var rwsl = new ReaderWriterSpinLock();
+            var r = new Random(DateTime.UtcNow.Millisecond);
+
+            for (int i = 0; i < 32; i++)
+            {
+                var t = Task.Run(() =>
+                {
+                    Thread.CurrentThread.Name = $"UnitTest_{Thread.CurrentThread.ManagedThreadId}";
+
+                    for (int j = 0; j < iterationCount; j++)
+                    {
+                        var write = r.Next(0, 100) < 25;
+
+                        // Write use case
+                        if (write)
+                        {
+                            rwsl.EnterWrite();
+
+                            s.A = r.Next(0, 100000);
+                            s.B = r.Next(0, 100000);
+                            s.R = s.A + s.B;
+
+                            rwsl.ExitWrite();
+                        }
+
+                        // Read use case
+                        else
+                        {
+
+                            rwsl.EnterRead();
+
+                            Assert.That(s.R, Is.EqualTo(s.A + s.B));
+
+                            rwsl.ExitRead();
+                            
+                        }
+                    }
+                });
+
+                taskList.Add(t);
+            }
+
+            Task.WaitAll(taskList.ToArray());
+
+            Assert.That(rwsl.ConcurrentUsedCounter, Is.EqualTo(0));
         }
     }
 }
