@@ -12,7 +12,7 @@
       "dest": "api",
       "filter": "filterConfig.yml",
       "disableGitFeatures": false,
-      "disableDefaultFilter": false
+      "disableDefaultFilter": true
     }
   ],
   "build": {
@@ -57,7 +57,8 @@
     "globalMetadataFiles": [],
     "fileMetadataFiles": [],
     "template": [
-      "default"
+      "default",
+      "lbatemplate"
     ],
     "postProcessors": [],
     "markdownEngineName": "markdig",

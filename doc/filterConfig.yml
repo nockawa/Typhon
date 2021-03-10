@@ -1,7 +1,11 @@
 ﻿apiRules:
+- include:
+    type: Type
+- include:
+    type: Method
+- include:
+    type: Event
+- include:
+    type: Property
 - exclude:
-    hasAttribute:
-    uid: Typhon.Engine.ExcludeDocFxAttribute
-attributeRules:
-- exclude:
-    uid: Typhon.Engine.ExcludeDocFxAttribute
+    type: Field
