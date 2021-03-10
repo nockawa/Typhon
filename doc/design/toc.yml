@@ -4,3 +4,6 @@
 - name: Overview
   href: overview.md
 
+- name: Technical Reference
+  href: techref/toc.yml
+  topicHref: techref/intro.md
