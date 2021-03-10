@@ -5,6 +5,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System;
+using System.Buffers;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Typhon.Engine;
 
 namespace Typhon.Collections.Benchmark
@@ -91,4 +94,5 @@ namespace Typhon.Collections.Benchmark
             return v;
         }
     }
+
 }

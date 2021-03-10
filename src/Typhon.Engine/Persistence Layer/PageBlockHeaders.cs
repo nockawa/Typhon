@@ -10,7 +10,11 @@ namespace Typhon.Engine
         public int DatabaseFormatRevision;
         public ulong DatabaseFilesChunkSize;
         public fixed byte DatabaseName[64];
-        public int OccupancyMapSPI;
+        public uint OccupancyMapSPI;
+        public uint SchemaFieldTableCSPI;
+        public uint SchemaFieldTableISPI;
+        public uint SchemaComponentTableCSPI;
+        public uint SchemaComponentTableISPI;
 
         public string HeaderSignatureString
         {
@@ -18,7 +22,7 @@ namespace Typhon.Engine
             {
                 fixed (byte* s = HeaderSignature)
                 {
-                    return VirtualDiskManager.LoadString(s);
+                    return StringExtensions.LoadString(s);
                 }
             }
         }
@@ -28,7 +32,7 @@ namespace Typhon.Engine
             {
                 fixed (byte* s = DatabaseName)
                 {
-                    return VirtualDiskManager.LoadString(s);
+                    return StringExtensions.LoadString(s);
                 }
             }
         }

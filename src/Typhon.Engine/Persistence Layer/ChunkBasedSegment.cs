@@ -302,9 +302,9 @@ namespace Typhon.Engine
         }
     }
 
-    public class ChunkBasedSegmentAccessorPool
+    public class ChunkBasedSegmentAccessorPool : IDisposable
     {
-        public ChunkBasedSegment Segment { get; }
+        public ChunkBasedSegment Segment { get; private set;  }
         public ChunkReadOnlyRandomAccessor RO { get; }
         public ChunkReadWriteRandomAccessor RW { get; }
 
@@ -313,6 +313,18 @@ namespace Typhon.Engine
             Segment = segment;
             RO = Segment.GetChunkReadOnlyRandomAccessor(roCachedCount);
             RW = Segment.GetChunkReadWriteRandomAccessor(rwCachedCount);
+        }
+
+        public void Dispose()
+        {
+            if (Segment == null)
+            {
+                return;
+            }
+
+            RO.Dispose();
+            RW.Dispose();
+            Segment = null;
         }
     }
 

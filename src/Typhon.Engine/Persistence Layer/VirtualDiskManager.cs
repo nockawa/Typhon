@@ -1205,9 +1205,9 @@ namespace Typhon.Engine
             using (var pa = RequestPageReadWrite(0))
             {
                 var h = (RootFileHeader*)pa.PageAddress;
-                StoreString(HeaderSignature, h->HeaderSignature, 32);
+                StringExtensions.StoreString(HeaderSignature, h->HeaderSignature, 32);
                 h->DatabaseFormatRevision = DatabaseFormatRevision;
-                StoreString(c.DatabaseName, h->DatabaseName, 64);
+                StringExtensions.StoreString(c.DatabaseName, h->DatabaseName, 64);
 
                 OnDatabaseCreating(h);
             }
@@ -1246,29 +1246,6 @@ namespace Typhon.Engine
 
         private string BuildDatabaseFileName() => $"{_dbc.DatabaseName}.bin";
         private string BuildDatabasePathFileName() => Path.Combine(_dbc.DatabaseAbsoluteDirectory, BuildDatabaseFileName());
-
-        #endregion
-
-        #region Helpers
-
-        internal unsafe static bool StoreString(string str, byte* dest, int destMaxSize)
-        {
-            var l = Encoding.UTF8.GetByteCount(str);
-            if (l + 1 > destMaxSize)
-            {
-                return false;
-            }
-
-            fixed (char* c = str)
-            {
-                Encoding.UTF8.GetBytes(c, str.Length, dest, destMaxSize);
-                dest[l] = 0;            // Null terminator
-            }
-
-            return true;
-        }
-
-        internal unsafe static string LoadString(byte* addr) => Marshal.PtrToStringUTF8((IntPtr)addr);
 
         #endregion
 
