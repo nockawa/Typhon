@@ -164,6 +164,60 @@ namespace Typhon.Engine.Tests
             Assert.That(loopCount, Is.EqualTo(itemCount));
         }
 
+        private const string Muse =
+            @"Home, It's becoming a killing field
+There's a cross hair locked on my heart
+With no recourse and there's no one behind the wheel
+Hell fire, You're wiping me out, killed by
+Drones, (killed by)
+Drones(killed by)
+You rule with lies and deceit
+And the world is on your side
+'Cause you've got the CIA, babe
+But all you've done is brutalise
+Drones!
+War, war just moved up a gear
+I don't think I can handle the truth
+I'm just a pawn
+And we're all expendable
+Incidentally
+Electronically erased
+By your
+Drones, (killed by)
+Drones(killed by)
+You kill by remote control
+The world is on your side
+You've got reapers and hawks babe
+Now I am radicalized
+Drones!
+You rule with lies and deceit
+And the world is on your side
+'Cause you've got the CIA, babe
+But all you've done is brutalise
+You kill by remote control
+The world is on your side
+You've got reapers and hawks babe
+Now I am radicalized
+Here come the drones!
+Here come the drones!
+Here come the drones!";
+
+        [Test]
+        public void StringTableTest()
+        {
+            var s = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, 64);
+
+            var st = new StringTableSegment(s);
+
+            var id = st.StoreString(Muse);
+
+            string ns = st.LoadString(id);
+
+            Assert.That(ns, Is.EqualTo(Muse));
+
+            st.DeleteString(id);
+        }
+
 
         [Test]
         public void VariableSizedBufferSegmentDeleteTest()
