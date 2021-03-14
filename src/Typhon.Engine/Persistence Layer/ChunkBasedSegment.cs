@@ -24,8 +24,8 @@ namespace Typhon.Engine
             public int SegmentIndex;
             public int PinCounter;
             public int PromoteCounter;
-            public ReadOnlyPageAccessor PageAccessor;
-            public ReadWritePageAccessor PromotedPageAccessor;
+            public PageReadOnlyAccessor PageAccessor;
+            public PageReadWriteAccessor PromotedPageAccessor;
             public byte* BaseAddress;
         }
 
@@ -185,7 +185,7 @@ namespace Typhon.Engine
             public int HitCount;
             public int SegmentIndex;
             public int PinCounter;
-            public ReadWritePageAccessor PageAccessor;
+            public PageReadWriteAccessor PageAccessor;
             public byte* BaseAddress;
         }
 
@@ -311,8 +311,8 @@ namespace Typhon.Engine
         public ChunkBasedSegmentAccessorPool(ChunkBasedSegment segment, int roCachedCount, int rwCachedCount)
         {
             Segment = segment;
-            RO = Segment.GetChunkReadOnlyRandomAccessor(roCachedCount);
-            RW = Segment.GetChunkReadWriteRandomAccessor(rwCachedCount);
+            RO = Segment.CreateChunkReadOnlyRandomAccessor(roCachedCount);
+            RW = Segment.CreateChunkReadWriteRandomAccessor(rwCachedCount);
         }
 
         public void Dispose()
@@ -380,8 +380,8 @@ namespace Typhon.Engine
 
         public void FreeChunk(int chunkId) => _map.ClearL0(chunkId);
 
-        public ChunkReadOnlyRandomAccessor GetChunkReadOnlyRandomAccessor(int cachedPagesCount=1) => new(this, cachedPagesCount);
-        public ChunkReadWriteRandomAccessor GetChunkReadWriteRandomAccessor(int cachedPagesCount=1) => new(this, cachedPagesCount);
+        public ChunkReadOnlyRandomAccessor CreateChunkReadOnlyRandomAccessor(int cachedPagesCount=1) => new(this, cachedPagesCount);
+        public ChunkReadWriteRandomAccessor CreateChunkReadWriteRandomAccessor(int cachedPagesCount=1) => new(this, cachedPagesCount);
 
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
@@ -616,7 +616,7 @@ namespace Typhon.Engine
 
                 var curPageId = -1;
                 var i0 = 0;
-                ReadOnlyPageAccessor curPage = default;
+                PageReadOnlyAccessor curPage = default;
 
                 while (c0 < capacity)
                 {
@@ -747,7 +747,7 @@ namespace Typhon.Engine
                 ChunkReadWriteRandomAccessor chunkAccessor = default;
                 if (clearContent)
                 {
-                    chunkAccessor = _segment.GetChunkReadWriteRandomAccessor(8);
+                    chunkAccessor = _segment.CreateChunkReadWriteRandomAccessor(8);
                 }
 
                 // Allocate per bulk of 64 pages as long as we can

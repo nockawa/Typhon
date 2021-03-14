@@ -97,7 +97,7 @@ namespace Typhon.Engine
 
         private readonly ConcurrentDictionary<uint, int> _memPageIdByPageId;
 
-        private readonly ConcurrentBitmapL3 _dirtyPages;
+        private readonly ConcurrentBitmapL3Any _dirtyPages;
 
         #endregion
 
@@ -230,7 +230,7 @@ namespace Typhon.Engine
                 _backgroundLFUD = new ConcurrentCollection<PageInfo>(pageCount);
                 _keysToSort = new int[pageCount];
                 _valuesToSort = new int[pageCount];
-                _dirtyPages = new ConcurrentBitmapL3(pageCount);
+                _dirtyPages = new ConcurrentBitmapL3Any(pageCount);
                 
                 // Fill the MRU with all the pages as marked used for frame 0, init the PageInfo
                 for (int i = 0; i < pageCount; i++)
@@ -375,7 +375,7 @@ namespace Typhon.Engine
 
         #region Public API
 
-        unsafe public ReadOnlyPageAccessor RequestPageReadOnly(uint pageId)
+        unsafe public PageReadOnlyAccessor RequestPageReadOnly(uint pageId)
         {
             var memPageId = RequestPage(pageId, false);
 
@@ -386,10 +386,10 @@ namespace Typhon.Engine
                 pi.IOMode = PageIOMode.None;
                 pi.IOCompletionTask = null;
             }
-            return new ReadOnlyPageAccessor(this, pi, &_memPagesAddr[memPageId* (long)PageSize]);
+            return new PageReadOnlyAccessor(this, pi, &_memPagesAddr[memPageId* (long)PageSize]);
         }
 
-        unsafe public ReadWritePageAccessor RequestPageReadWrite(uint pageId)
+        unsafe public PageReadWriteAccessor RequestPageReadWrite(uint pageId)
         {
             var memPageId = RequestPage(pageId, true);
             
@@ -401,7 +401,7 @@ namespace Typhon.Engine
                 pi.IOCompletionTask = null;
             }
 
-            return new ReadWritePageAccessor(this, pi, &_memPagesAddr[memPageId* (long)PageSize], PagesAccessMode.Idle);
+            return new PageReadWriteAccessor(this, pi, &_memPagesAddr[memPageId* (long)PageSize], PagesAccessMode.Idle);
         }
 
         public void DeleteDatabaseFile()

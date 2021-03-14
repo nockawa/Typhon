@@ -7,12 +7,12 @@ using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine
 {
-    public class BitmapL3 : IEnumerable<int>
+    public class BitmapL3Any : IEnumerable<int>
     {
         private readonly Memory<long>[] _data;
         internal int LastEnumLoopCount;
 
-        public BitmapL3(int bitCount)
+        public BitmapL3Any(int bitCount)
         {
             _data = new Memory<long>[3];
             Capacity = bitCount;
@@ -115,13 +115,13 @@ namespace Typhon.Engine
 
         public struct Enumerator : IEnumerator<int>
         {
-            private readonly BitmapL3 _owner;
+            private readonly BitmapL3Any _owner;
 
             private int _c0;
             private long _v0;
             private int _loopCount;
 
-            public Enumerator(BitmapL3 owner)
+            public Enumerator(BitmapL3Any owner)
             {
                 _owner = owner;
                 _c0 = -1;

@@ -280,7 +280,7 @@ namespace Typhon.Engine
 
                 var curPageId = -1;
                 var i0 = 0;
-                ReadOnlyPageAccessor curPage = default;
+                PageReadOnlyAccessor curPage = default;
 
                 while (c0 < capacity)
                 {

@@ -33,6 +33,7 @@ namespace Typhon.Engine
             _dbc = dbc.Value;
 
             _databaseDefinitions = new DatabaseDefinitions();
+            ConstructComponentStore();
 
             // Check the configuration
             _dbc.Validate(false, out _);

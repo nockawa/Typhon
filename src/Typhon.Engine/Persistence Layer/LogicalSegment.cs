@@ -13,6 +13,12 @@ namespace Typhon.Engine
 {
     public class LogicalSegment : IDisposable
     {
+        internal struct SerializationData
+        {
+            public uint RootPageId;
+        }
+        internal SerializationData SerializeSettings() => new() { RootPageId = RootPageId };
+
         internal const int RootHeaderIndexSectionCount = 512;
         internal const int RootHeaderIndexSectionLength = RootHeaderIndexSectionCount * 4;
 
@@ -24,8 +30,8 @@ namespace Typhon.Engine
 
         public int Length => _pages.Length;
         public ReadOnlySpan<uint> Pages => _pages.Span;
-        public ReadWritePageAccessor GetPageReadWrite(int segmentIndex) => _manager.VDM.RequestPageReadWrite(Pages[segmentIndex]);
-        public ReadOnlyPageAccessor GetPageReadOnly(int segmentIndex) => _manager.VDM.RequestPageReadOnly(Pages[segmentIndex]);
+        public PageReadWriteAccessor GetPageReadWrite(int segmentIndex) => _manager.VDM.RequestPageReadWrite(Pages[segmentIndex]);
+        public PageReadOnlyAccessor GetPageReadOnly(int segmentIndex) => _manager.VDM.RequestPageReadOnly(Pages[segmentIndex]);
 
         internal LogicalSegment(LogicalSegmentManager manager)
         {
@@ -200,7 +206,7 @@ namespace Typhon.Engine
             private int _index;
             private unsafe byte* _item;
             private int _nextPageSwitch;
-            private ReadOnlyPageAccessor _pageAccessor;
+            private PageReadOnlyAccessor _pageAccessor;
 
             unsafe public ReadOnlyEnumerator(LogicalSegment segment)
             {
@@ -255,7 +261,7 @@ namespace Typhon.Engine
             private int _index;
             private unsafe byte* _item;
             private int _nextPageSwitch;
-            private ReadWritePageAccessor _pageAccessor;
+            private PageReadWriteAccessor _pageAccessor;
 
             unsafe public ReadWriteEnumerator(LogicalSegment segment)
             {

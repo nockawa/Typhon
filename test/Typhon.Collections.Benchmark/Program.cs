@@ -2,12 +2,12 @@
 using BenchmarkDotNet.Running;
 using System;
 using System.Collections;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Typhon.Collections.Benchmark
 {
-
     class Program
     {
         static float SmoothStep(float t0, float t1, float x) => Math.Clamp((x - t0) / (t1 - t0), 0, 1);
@@ -19,7 +19,24 @@ namespace Typhon.Collections.Benchmark
             //o.BenchDecay();
 
 
-            var summary = BenchmarkRunner.Run<InterfaceBench>();
+            //var summary = BenchmarkRunner.Run<MemCopyBench>();
+
+            //var o = new MemCopyBench();
+            //o.GlobalSetup();
+
+            //for (int i = 0; i < 100; i++)
+            //{
+            //    var sw = new Stopwatch();
+            //    sw.Start();
+
+            //    o.SpanCopy();
+
+            //    sw.Stop();
+
+            //    Console.WriteLine($"Copy time: {sw.Elapsed}ms, Tick: {sw.ElapsedTicks}");
+            //}
+
+            //o.GlobalCleanup();
 
             //var o = new DirectAccessBench();
             //o.GlobalSetup();

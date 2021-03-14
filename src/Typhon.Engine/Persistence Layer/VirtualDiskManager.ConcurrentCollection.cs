@@ -12,14 +12,14 @@ namespace Typhon.Engine
         internal class ConcurrentCollection<T> : IEnumerable<T> where T : class
         {
             private readonly Memory<T> _data;
-            private readonly ConcurrentBitmapL3 _map;
+            private readonly ConcurrentBitmapL3Any _map;
             private readonly int _capacity;
             private int _count;
 
             public ConcurrentCollection(int capacity)
             {
                 _data = new T[capacity];
-                _map = new ConcurrentBitmapL3(capacity);
+                _map = new ConcurrentBitmapL3Any(capacity);
                 _capacity = capacity;
                 _count = 0;
             }
@@ -33,6 +33,7 @@ namespace Typhon.Engine
                 _count = 0;
             }
 
+            // Not thread-safe
             public int Add(T obj)
             {
                 var span = _data.Span;

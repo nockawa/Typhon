@@ -6,7 +6,7 @@ using System.Runtime.InteropServices;
 
 namespace Typhon.Engine
 {
-    unsafe public struct ReadWritePageAccessor : IDisposable
+    unsafe public struct PageReadWriteAccessor : IDisposable
     {
         /// <summary>
         /// Access to the header of the page. Use a <c>ref var</c> variable when writing into it.
@@ -70,7 +70,7 @@ namespace Typhon.Engine
         private VirtualDiskManager.PageInfo _pi;
         private readonly VirtualDiskManager.PagesAccessMode _previousMode;
 
-        internal ReadWritePageAccessor(VirtualDiskManager owner, VirtualDiskManager.PageInfo pi, byte* pageAddress, VirtualDiskManager.PagesAccessMode previousMode)
+        internal PageReadWriteAccessor(VirtualDiskManager owner, VirtualDiskManager.PageInfo pi, byte* pageAddress, VirtualDiskManager.PagesAccessMode previousMode)
         {
             _owner = owner;
             _pageId = pi.PageId;    // We want to store this locally i case the PageInfo gets reallocated, we should add some debug check btw...

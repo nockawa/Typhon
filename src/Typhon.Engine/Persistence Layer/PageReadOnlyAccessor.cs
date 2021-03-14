@@ -6,7 +6,7 @@ using System.Runtime.InteropServices;
 
 namespace Typhon.Engine
 {
-    unsafe public struct ReadOnlyPageAccessor : IDisposable
+    unsafe public struct PageReadOnlyAccessor : IDisposable
     {
         /// <summary>
         /// Access to the header of the page. Use a <c>ref var</c> variable when writing into it.
@@ -18,7 +18,7 @@ namespace Typhon.Engine
         /// <remarks>
         /// Prefer one of the properties that return a <see cref="ReadOnlySpan{T}"/>, it's safer, as fast.
         /// Don't exceed the page's size when accessing it.
-        /// DON'T WRITE into it, use <see cref="ReadWritePageAccessor"/> instead.
+        /// DON'T WRITE into it, use <see cref="PageReadWriteAccessor"/> instead.
         /// </remarks>
         public byte* PageAddress { get; }
         /// <summary>
@@ -60,14 +60,14 @@ namespace Typhon.Engine
         internal ref readonly T GetElement<T>(int index, bool isLogicalRoot) where T : unmanaged =>
             ref Unsafe.AsRef<T>(PageAddress + VirtualDiskManager.PageHeaderSize + (isLogicalRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (index * sizeof(T)));
 
-        public ReadWritePageAccessor TryPromoteToExclusiveReadWrite()
+        public PageReadWriteAccessor TryPromoteToExclusiveReadWrite()
         {
             if (_owner.TryPromoteToExclusiveReadWrite(_pageId, _pi, out var previousMode) == false)
             {
                 return default;
             }
 
-            return new ReadWritePageAccessor(_owner, _pi, PageAddress, previousMode);
+            return new PageReadWriteAccessor(_owner, _pi, PageAddress, previousMode);
         }
 
         /// <summary>
@@ -79,7 +79,7 @@ namespace Typhon.Engine
         private readonly uint _pageId;
         private VirtualDiskManager.PageInfo _pi;
 
-        internal ReadOnlyPageAccessor(VirtualDiskManager owner, VirtualDiskManager.PageInfo pi, byte* pageAddress)
+        internal PageReadOnlyAccessor(VirtualDiskManager owner, VirtualDiskManager.PageInfo pi, byte* pageAddress)
         {
             _owner = owner;
             _pageId = pi.PageId;

@@ -11,10 +11,8 @@ namespace Typhon.Engine
         public ulong DatabaseFilesChunkSize;
         public fixed byte DatabaseName[64];
         public uint OccupancyMapSPI;
-        public uint SchemaFieldTableCSPI;
-        public uint SchemaFieldTableISPI;
-        public uint SchemaComponentTableCSPI;
-        public uint SchemaComponentTableISPI;
+
+        public DatabaseEngine.SerializationData DatabaseEngine;
 
         public string HeaderSignatureString
         {

@@ -12,7 +12,7 @@ namespace Typhon.Engine.Tests
         public void EnumerationTest()
         {
             var bitCount = 64 * 64 * 64 * 2;
-            var c = new ConcurrentBitmapL3(bitCount);
+            var c = new ConcurrentBitmapL3Any(bitCount);
 
             var values = new List<int>(new []{0, 2, 64, 64*64*2});
             foreach (var v in values)

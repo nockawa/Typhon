@@ -6,12 +6,13 @@ using System.Threading;
 
 namespace Typhon.Engine
 {
-    public class ConcurrentBitmapL3 : IEnumerable<int>
+    public class ConcurrentBitmapL3Any : IEnumerable<int>
     {
+        private volatile int _control;
         private readonly Memory<long>[] _data;
         internal int LastEnumLoopCount;
 
-        public ConcurrentBitmapL3(int bitCount)
+        public ConcurrentBitmapL3Any(int bitCount)
         {
             _data = new Memory<long>[3];
             Capacity = bitCount;
@@ -33,15 +34,25 @@ namespace Typhon.Engine
             _data[2].Span.Clear();
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public void Set(int index)
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        public bool Set(int index)
         {
+            if (Interlocked.CompareExchange(ref _control, 1, 0) != 0)
+            {
+                var sw = new SpinWait();
+                while (Interlocked.CompareExchange(ref _control, 1, 0) != 0)
+                {
+                    sw.SpinOnce();
+                }
+            }
+
             var offset = index >> 6;
             var mask = 1L << (index & 0x3F);
             var prevValue = Interlocked.Or(ref _data[0].Span[offset], mask);
-            if (prevValue != 0)
+            if ((prevValue & mask) != 0)
             {
-                return;
+                _control = 0;
+                return false;
             }
 
             index = offset;
@@ -50,16 +61,20 @@ namespace Typhon.Engine
             prevValue = Interlocked.Or(ref _data[1].Span[offset], mask);
             if (prevValue != 0)
             {
-                return;
+                _control = 0;
+                return true;
             }
 
             index = offset;
             offset = index >> 6;
             mask = 1L << (index & 0x3F);
             Interlocked.Or(ref _data[2].Span[offset], mask);
+
+            _control = 0;
+            return true;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         public void Clear(int index)
         {
             var offset = index >> 6;
@@ -110,13 +125,13 @@ namespace Typhon.Engine
 
         public struct Enumerator : IEnumerator<int>
         {
-            private readonly ConcurrentBitmapL3 _owner;
+            private readonly ConcurrentBitmapL3Any _owner;
 
             private int _c0;
             private long _v0;
             private int _loopCount;
 
-            public Enumerator(ConcurrentBitmapL3 owner)
+            public Enumerator(ConcurrentBitmapL3Any owner)
             {
                 _owner = owner;
                 _c0 = -1;

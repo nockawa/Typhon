@@ -1,6 +1,8 @@
 ﻿// unset
 
 using System;
+using System.Buffers;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -173,5 +175,10 @@ namespace Typhon.Engine
 
         internal unsafe static string LoadString(byte* addr) => Marshal.PtrToStringUTF8((IntPtr)addr);
 
+    }
+
+    public static class MathHelpers{
+        public static bool IsPow2(int x) => (x & (x - 1)) == 0;
+        public static bool IsPow2(long x) => (x & (x - 1)) == 0;
     }
 }
