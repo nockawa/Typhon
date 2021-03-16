@@ -3,9 +3,7 @@
 using Microsoft.Extensions.Logging;
 using System;
 using System.Buffers;
-using System.Collections;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -61,7 +59,7 @@ namespace Typhon.Engine
 
             var mem = MemoryPool<uint>.Shared.Rent(1);
             mem.Memory.Span[0] = pageId;
-            if (segment.Create(type, mem, length) == false)
+            if (segment.Create(type, mem, length, true) == false)
             {
                 return null;
             }
@@ -86,7 +84,7 @@ namespace Typhon.Engine
                 Debug.Assert(true);
             }
 
-            if (segment.Create(type, pages, length) == false)
+            if (segment.Create(type, pages, length, false) == false)
             {
                 return null;
             }
@@ -111,7 +109,7 @@ namespace Typhon.Engine
                 Debug.Assert(true);
             }
 
-            if (segment.Create(type, pages, length) == false)
+            if (segment.Create(type, pages, length, false) == false)
             {
                 return null;
             }

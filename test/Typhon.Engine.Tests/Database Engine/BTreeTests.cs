@@ -265,19 +265,19 @@ namespace Typhon.Engine.Tests.Database_Engine
             {
                 using var a = tree.TryGetMultiple(1);
                 Assert.That(a.IsValid, Is.True);
-                Assert.That(a.Elements.Length, Is.EqualTo(3));
+                Assert.That(a.ReadOnlyElements.Length, Is.EqualTo(3));
             }
 
             {
                 using var a = tree.TryGetMultiple(2);
                 Assert.That(a.IsValid, Is.True);
-                Assert.That(a.Elements.Length, Is.EqualTo(3));
+                Assert.That(a.ReadOnlyElements.Length, Is.EqualTo(3));
             }
 
             {
                 using var a = tree.TryGetMultiple(3);
                 Assert.That(a.IsValid, Is.True);
-                Assert.That(a.Elements.Length, Is.EqualTo(2));
+                Assert.That(a.ReadOnlyElements.Length, Is.EqualTo(2));
             }
 
             tree.RemoveValue(1, eid0, 10);
@@ -293,7 +293,7 @@ namespace Typhon.Engine.Tests.Database_Engine
         }
 
         [Test]
-        unsafe public void CheckMultipleTreBigAmount()
+        unsafe public void CheckMultipleTreeBigAmount()
         {
             const int itemCount = 1000;
 
@@ -327,7 +327,7 @@ namespace Typhon.Engine.Tests.Database_Engine
                 Assert.That(a.IsValid, Is.True);
                 do
                 {
-                    c += a.Elements.Length;
+                    c += a.ReadOnlyElements.Length;
                 } while (a.NextChunk());
 
                 Assert.That(c, Is.EqualTo(i));
@@ -361,7 +361,7 @@ namespace Typhon.Engine.Tests.Database_Engine
                 //Assert.That(a.IsValid, Is.True);
                 do
                 {
-                    c += a.Elements.Length;
+                    c += a.ReadOnlyElements.Length;
                 } while (a.NextChunk());
 
                 //Assert.That(c, Is.EqualTo(i));

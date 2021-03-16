@@ -2,12 +2,8 @@
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Serilog;
 using System;
 using System.Buffers;
-using System.Collections;
-using System.Collections.Generic;
-using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -135,10 +131,11 @@ namespace Typhon.Engine
                 var l0Mask = 1L << (bitIndex & 0x3F);
 
                 var (pageIndex, pageOffset) = LogicalSegment.GetItemLocation<long>(l0Offset);
-                using var page = _segment.GetPageReadWrite(pageIndex);
+                using var page = _segment.GetPageExclusiveAccessor(pageIndex);
 
                 var data = page.LogicalSegmentData.Cast<byte, long>();
                 var prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
+                page.SetPageDirty();                                                        // TODO only if changed
                 if ((prevL0 & l0Mask) != 0)
                 {
                     // The bit was concurrently set by someone else
@@ -179,10 +176,11 @@ namespace Typhon.Engine
                 var l0Mask = -1L;
 
                 var (pageIndex, pageOffset) = LogicalSegment.GetItemLocation<long>(l0Offset);
-                using var page = _segment.GetPageReadWrite(pageIndex);
+                using var page = _segment.GetPageExclusiveAccessor(pageIndex);
 
                 var data = page.LogicalSegmentData.Cast<byte, long>();
                 var prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
+                page.SetPageDirty();                                                        // TODO only if changed
                 if (prevL0 != 0)
                 {
                     // Can't allocate the whole L1, some bits are set at L0
@@ -223,10 +221,11 @@ namespace Typhon.Engine
                 var l0Mask = ~(1L << (index & 0x3F));
 
                 var (pageIndex, pageOffset) = LogicalSegment.GetItemLocation<long>(l0Offset);
-                using var page = _segment.GetPageReadWrite(pageIndex);
+                using var page = _segment.GetPageExclusiveAccessor(pageIndex);
 
                 var data = page.LogicalSegmentData.Cast<byte, long>();
                 var prevL0 = Interlocked.And(ref data[pageOffset], l0Mask);
+                page.SetPageDirty();                                                        // TODO only if changed
                 if ((prevL0 == -1) && ((prevL0 & l0Mask) != -1))
                 {
                     var l1Offset = l0Offset >> 6;
@@ -259,9 +258,9 @@ namespace Typhon.Engine
                 var mask = 1L << (index & 0x3F);
 
                 var (pageIndex, pageOffset) = LogicalSegment.GetItemLocation<long>(offset);
-                using var page = _segment.GetPageReadOnly(pageIndex);
+                using var page = _segment.GetPageSharedAccessor(pageIndex);
 
-                var data = page.LogicalSegmentData.Cast<byte, long>();
+                var data = page.LogicalSegmentDataReadOnly.Cast<byte, long>();
                 return (data[pageOffset] & mask) != 0L;
             }
 
@@ -280,7 +279,7 @@ namespace Typhon.Engine
 
                 var curPageId = -1;
                 var i0 = 0;
-                PageReadOnlyAccessor curPage = default;
+                PageAccessor curPage = default;
 
                 while (c0 < capacity)
                 {
@@ -294,10 +293,10 @@ namespace Typhon.Engine
                             if (pageId != curPageId)
                             {
                                 curPage.Dispose();
-                                curPage = _segment.GetPageReadOnly(pageId);
+                                curPage = _segment.GetPageSharedAccessor(pageId);
                                 curPageId = pageId;
                             }
-                            var data = curPage.LogicalSegmentData.Cast<byte, long>();
+                            var data = curPage.LogicalSegmentDataReadOnly.Cast<byte, long>();
                             t0 = 1L << (c0 & 0x3F);
                             v0 = data[offset] | (t0 - 1);
 

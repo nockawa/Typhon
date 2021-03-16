@@ -2,9 +2,11 @@
 using BenchmarkDotNet.Running;
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Typhon.Collections.Benchmark
 {
@@ -17,6 +19,17 @@ namespace Typhon.Collections.Benchmark
             //var o = new ConcurrentBitmapBenchmark();
             //o.GlobalSetup();
             //o.BenchDecay();
+
+            var taskList = new List<Task>();
+            for (int i = 0; i < 1024; i++)
+            {
+                taskList.Add(Task.Run(() =>
+                {
+                    Console.WriteLine($"Thread Id {Thread.CurrentThread.ManagedThreadId}");
+                }));
+            }
+
+            Task.WaitAll(taskList.ToArray());
 
 
             //var summary = BenchmarkRunner.Run<MemCopyBench>();

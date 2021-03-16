@@ -17,14 +17,13 @@ namespace Typhon.Engine
 
         public int Stride { get; }
 
-        protected ChunkBasedSegmentAccessorPool SegmentAccessorPool;
-        protected internal ChunkBasedSegment Segment => SegmentAccessorPool.Segment;
+        protected ChunkRandomAccessor ChunkAccessor;
+        protected internal ChunkBasedSegment Segment => ChunkAccessor.Segment;
 
-        public StringTableSegment(ChunkBasedSegment segment, ChunkBasedSegmentAccessorPool segmentAccessorPool=null)
+        public StringTableSegment(ChunkBasedSegment segment, ChunkRandomAccessor accessor=null)
         {
-            SegmentAccessorPool = segmentAccessorPool ?? new ChunkBasedSegmentAccessorPool(segment, 4, 4);
+            ChunkAccessor = accessor ?? segment.CreateChunkRandomAccessor(4);
             Stride = Segment.Stride;
-
         }
 
         unsafe public int StoreString(string str)
@@ -37,14 +36,14 @@ namespace Typhon.Engine
             var chunkIds = chunks.Memory.Span.Slice(0, chunkCount);
             var rootChunkId = chunkIds[0];
 
-            Span<byte> ustring = stackalloc byte[byteCount];
-            Encoding.UTF8.GetBytes(str.AsSpan(), ustring);
+            Span<byte> utfString = stackalloc byte[byteCount];
+            Encoding.UTF8.GetBytes(str.AsSpan(), utfString);
 
             var sizeLeft = byteCount;
             var curOffset = 0;
             for (int i = 0; i < chunkCount; i++)
             {
-                var chunkAddr = SegmentAccessorPool.RW.GetChunkAddress(chunkIds[i]);
+                var chunkAddr = ChunkAccessor.GetChunkAddress(chunkIds[i], dirtyPage: true);
                 ref var h = ref Unsafe.AsRef<ChunkHeader>(chunkAddr);
 
                 var copySize = Math.Min(sizeLeft, blockSize);
@@ -52,7 +51,7 @@ namespace Typhon.Engine
                 h.NextChunkId = (i + 1 < chunkCount) ? chunkIds[i+1] : 0;
 
                 chunkAddr += sizeof(ChunkHeader);
-                ustring.Slice(curOffset, copySize).CopyTo(new Span<byte>(chunkAddr, copySize));
+                utfString.Slice(curOffset, copySize).CopyTo(new Span<byte>(chunkAddr, copySize));
 
                 sizeLeft -= copySize;
                 curOffset += copySize;
@@ -64,7 +63,7 @@ namespace Typhon.Engine
 
         unsafe public string LoadString(int stringId)
         {
-            var curChunkAddr = SegmentAccessorPool.RO.GetChunkAddress(stringId);
+            var curChunkAddr = ChunkAccessor.GetChunkAddress(stringId);
             ref var curChunk = ref Unsafe.AsRef<ChunkHeader>(curChunkAddr);
 
             Span<byte> ustr = stackalloc byte[curChunk.SizeLeft];
@@ -81,7 +80,7 @@ namespace Typhon.Engine
                 if (curChunk.NextChunkId == 0) break;
 
                 curOffset += copySize;
-                curChunkAddr = SegmentAccessorPool.RO.GetChunkAddress(curChunk.NextChunkId);
+                curChunkAddr = ChunkAccessor.GetChunkAddress(curChunk.NextChunkId);
                 curChunk = ref Unsafe.AsRef<ChunkHeader>(curChunkAddr);
             }
 
@@ -94,7 +93,7 @@ namespace Typhon.Engine
         unsafe public void DeleteString(int stringId)
         {
             var curChunkId = stringId;
-            var curChunkAddr = SegmentAccessorPool.RO.GetChunkAddress(stringId);
+            var curChunkAddr = ChunkAccessor.GetChunkAddress(stringId, dirtyPage: true);
             ref var curChunk = ref Unsafe.AsRef<ChunkHeader>(curChunkAddr);
 
             while (true)
@@ -105,7 +104,7 @@ namespace Typhon.Engine
                 if (curChunk.NextChunkId == 0) break;
 
                 curChunkId = nextChunkId;
-                curChunkAddr = SegmentAccessorPool.RO.GetChunkAddress(curChunkId);
+                curChunkAddr = ChunkAccessor.GetChunkAddress(curChunkId, dirtyPage: true);
                 curChunk = ref Unsafe.AsRef<ChunkHeader>(curChunkAddr);
             }
         }

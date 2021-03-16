@@ -68,9 +68,9 @@ namespace Typhon.Collections.Benchmark
             var length = _segment.Length;
             for (int i = 0; i < length; i++)
             {
-                using var page = _segment.GetPageReadOnly(i);
+                using var page = _segment.GetPageSharedAccessor(i);
 
-                var rd = page.LogicalSegmentData.Cast<byte, int>();
+                var rd = page.LogicalSegmentDataReadOnly.Cast<byte, int>();
                 var c = rd.Length;
                 for (int j = 0; j < c; j++)
                 {
@@ -78,19 +78,6 @@ namespace Typhon.Collections.Benchmark
                 }
             }
 
-            return v;
-        }
-
-        [Benchmark]
-        public int BenchmarkSegmentForEachElement()
-        {
-            var v = 0;
-
-            _segment.ForEachReadOnly((ref LogicalSegment.ReadOnlyEnumerator<int> e) =>
-            {
-                v |= e.Current;
-                return true;
-            });
             return v;
         }
     }

@@ -1,11 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
-using Serilog;
-using Serilog.Configuration;
 using System.Runtime.CompilerServices;
 using System;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
-using Typhon.Engine.BPTree;
 
 [assembly: InternalsVisibleTo("Typhon.Engine.Tests")]
 [assembly: InternalsVisibleTo("Typhon.Collections.Benchmark")]

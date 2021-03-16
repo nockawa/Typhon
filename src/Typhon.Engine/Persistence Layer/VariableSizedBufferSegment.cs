@@ -13,15 +13,15 @@ namespace Typhon.Engine
     /// <remarks>
     /// The segment stores multiple buffers containing a variable size of a uniform element type.
     /// The internal structure is simple:
-    ///  - The segment is based from <see cref="ChunkBasedSegment"/>, each chunk store a given number of elements (may be variable because we also use
+    ///  - The segment is based from <see cref="ChunkBasedSegment"/>, each chunk stores a given number of elements (may be variable because we also use
     ///    the chunk's data for internal data storage).
     ///  - Chunks are linked together to form a forward linked list allowing a sequential processing of the buffer (we maintain two linked-list, one for enumeration
-    ///    using the Accessor and the other one to locate fre chunks).
+    ///    using the Accessor and the other one to locate free chunks).
     ///  - Grow is fast as it's just allocating one more chunk and link it. Append is relatively fast as we know where to put the element using a linked-list or
     ///    chunks containing free entries.
     ///  - Elements can be removed, the chunk is then packed to store the occupied entries at first positions, elements are located by their ChunkId and then
     ///    a linear search into it.
-    ///  - Reading the whole buffer requires nested loop pattern using the <see cref="VariableSizedBufferReadOnlyAccessor{T}"/> accessor.
+    ///  - Reading the whole buffer requires nested loop pattern using the <see cref="VariableSizedBufferAccessor{T}"/> accessor.
     ///  - Empty chunks are being removed (if exclusive access can be made) during enumeration via the ReadOnlyAccessor.
     ///  - There is no API for Random access of an element inside a given buffer, it could be done but would be slow.
     /// </remarks>
@@ -31,16 +31,16 @@ namespace Typhon.Engine
         internal readonly int ElementCountRootChunk;
         internal readonly int ElementCountPerChunk;
 
-        protected ChunkBasedSegmentAccessorPool SegmentAccessorPool;
-        protected internal ChunkBasedSegment Segment => SegmentAccessorPool.Segment;
+        protected ChunkRandomAccessor ChunkAccessor;
+        protected internal ChunkBasedSegment Segment => ChunkAccessor.Segment;
 
-        unsafe public VariableSizedBufferSegment(ChunkBasedSegment segment, ChunkBasedSegmentAccessorPool segmentAccessorPool = null)
+        unsafe public VariableSizedBufferSegment(ChunkBasedSegment segment, ChunkRandomAccessor accessor = null)
         {
             ElementSize = sizeof(T);
             var stride = segment.Stride;
             ElementCountRootChunk = (stride - sizeof(VariableSizedBufferRootHeader)) / ElementSize;
             ElementCountPerChunk = (stride - sizeof(VariableSizedBufferChunkHeader)) / ElementSize;
-            SegmentAccessorPool = segmentAccessorPool ?? new ChunkBasedSegmentAccessorPool(segment, 4, 4);
+            ChunkAccessor = accessor ?? segment.CreateChunkRandomAccessor(4);
         }
 
         unsafe public int AllocateBuffer()
@@ -48,7 +48,7 @@ namespace Typhon.Engine
             // Allocate and initialize the first chunk of the Buffer
             var segment = Segment;
             var chunkId = segment.AllocateChunk(false);
-            ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(SegmentAccessorPool.RW.GetChunkAddress(chunkId));
+            ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(ChunkAccessor.GetChunkAddress(chunkId, dirtyPage: true));
             rh.Lock.Reset();
             rh.FirstFreeChunkId = 0;
             rh.FirstStoredChunkId = chunkId;
@@ -62,7 +62,7 @@ namespace Typhon.Engine
         unsafe public void DeleteBuffer(int bufferId)
         {
             // Fetch the root chunk, pin it to prevent its page to be discarded by subsequent chunk accesses
-            ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(SegmentAccessorPool.RW.GetChunkAddress(bufferId, true));
+            ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(ChunkAccessor.GetChunkAddress(bufferId, true, true));
             try
             {
                 // Lock the whole buffer as we are going to update it
@@ -73,7 +73,7 @@ namespace Typhon.Engine
 
                 while (curChunkId != 0)
                 {
-                    var curChunkAddr = SegmentAccessorPool.RW.GetChunkAddress(curChunkId);
+                    var curChunkAddr = ChunkAccessor.GetChunkAddress(curChunkId, dirtyPage: true);
                     ref var curChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(curChunkAddr);
 
                     var toDeleteChunkId = curChunkId;
@@ -89,14 +89,14 @@ namespace Typhon.Engine
             {
                 ReleaseLockOnBuffer(ref rh);
                 Segment.FreeChunk(bufferId);
-                SegmentAccessorPool.RW.UnpinChunk(bufferId);
+                ChunkAccessor.UnpinChunk(bufferId);
             }
         }
 
         unsafe public int AddElement(int bufferId, T value)
         {
             // Fetch the root chunk, pin it to prevent its page to be discarded by subsequent chunk accesses
-            ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(SegmentAccessorPool.RW.GetChunkAddress(bufferId, true));
+            ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(ChunkAccessor.GetChunkAddress(bufferId, true, true));
             try
             {
                 // Lock the whole buffer as we are going to update it
@@ -105,7 +105,7 @@ namespace Typhon.Engine
                 // Get the first chunk containing free space
                 int curChunkId = rh.FirstStoredChunkId;
 
-                var curChunkAddr = SegmentAccessorPool.RW.GetChunkAddress(curChunkId);
+                var curChunkAddr = ChunkAccessor.GetChunkAddress(curChunkId);
                 ref var curChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(curChunkAddr);
                 
                 var isRoot = bufferId == curChunkId;
@@ -129,7 +129,7 @@ namespace Typhon.Engine
                     }
 
                     // Fetch the new chunk
-                    curChunkAddr = SegmentAccessorPool.RW.GetChunkAddress(curChunkId);
+                    curChunkAddr = ChunkAccessor.GetChunkAddress(curChunkId, dirtyPage: true);
                     curChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(curChunkAddr);
 
                     // If we've allocated a new chunk, initialize it
@@ -162,21 +162,21 @@ namespace Typhon.Engine
             finally
             {
                 ReleaseLockOnBuffer(ref rh);
-                SegmentAccessorPool.RW.UnpinChunk(bufferId);
+                ChunkAccessor.UnpinChunk(bufferId);
             }
         }
 
         unsafe public int DeleteElement(int bufferId, int elementId, T element)
         {
             // Fetch the chunk, pin it to prevent its page to be discarded by subsequent chunk accesses
-            ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(SegmentAccessorPool.RW.GetChunkAddress(bufferId, true));
+            ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(ChunkAccessor.GetChunkAddress(bufferId, true, true));
             try
             {
                 // Lock the whole buffer as we are going to update it
                 LockBuffer(ref rh);
 
                 // Fetch the chunk storing the element
-                var elementChunk = SegmentAccessorPool.RW.GetChunkAddress(elementId);
+                var elementChunk = ChunkAccessor.GetChunkAddress(elementId, dirtyPage: true);
                 ref var elementChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(elementChunk);
                 var isRoot = bufferId == elementId;
                 var baseElementAddr = (T*)(elementChunk + (isRoot ? sizeof(VariableSizedBufferRootHeader) : sizeof(VariableSizedBufferChunkHeader)));
@@ -207,13 +207,13 @@ namespace Typhon.Engine
             finally
             {
                 ReleaseLockOnBuffer(ref rh);
-                SegmentAccessorPool.RW.UnpinChunk(bufferId);
+                ChunkAccessor.UnpinChunk(bufferId);
             }
         }
 
-        public VariableSizedBufferReadOnlyAccessor<T> GetReadOnlyAccessor(int bufferId) => new(this, bufferId);
+        public VariableSizedBufferAccessor<T> GetReadOnlyAccessor(int bufferId) => new(this, bufferId);
 
-        private void LockBuffer(ref VariableSizedBufferRootHeader rh) => rh.Lock.EnterWrite();
+        private void LockBuffer(ref VariableSizedBufferRootHeader rh) => rh.Lock.EnterExclusiveAccess();
 
         private void ReleaseLockOnBuffer(ref VariableSizedBufferRootHeader header) => header.Lock.ExitWrite();
     }
@@ -222,7 +222,7 @@ namespace Typhon.Engine
     internal struct VariableSizedBufferRootHeader
     {
         public VariableSizedBufferChunkHeader Header;   // Must be first member
-        public ReaderWriterSpinLock Lock;
+        public AccessControl Lock;
         public int FirstFreeChunkId;
         public int FirstStoredChunkId;
         public int TotalCount;
@@ -236,7 +236,7 @@ namespace Typhon.Engine
         public int ElementCount;
     }
 
-    public struct VariableSizedBufferReadOnlyAccessor<T> : IDisposable where T : unmanaged
+    public struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanaged
     {
         private readonly VariableSizedBufferSegment<T> _owner;
         private readonly ChunkBasedSegment _segment;
@@ -244,7 +244,7 @@ namespace Typhon.Engine
         private int _rootChunkId;
         private readonly unsafe byte* _rootChunkAddr;
 
-        private readonly ChunkReadOnlyRandomAccessor _accessor;
+        private readonly ChunkRandomAccessor _accessor;
 
         private int _curChunkId;
         private unsafe byte* _curChunkAddr;
@@ -253,15 +253,17 @@ namespace Typhon.Engine
         private int _elementCount;
 
         public bool IsValid => _rootChunkId != 0;
-        public unsafe ReadOnlySpan<T> Elements => new(_elementAddr, _elementCount);
+        public unsafe ReadOnlySpan<T> ReadOnlyElements => new(_elementAddr, _elementCount);
+        public unsafe Span<T> Elements => new(_elementAddr, _elementCount);
+        public void DirtyChunk() => _accessor.DirtyChunk(_curChunkId);
 
-        unsafe public VariableSizedBufferReadOnlyAccessor(VariableSizedBufferSegment<T> owner, int rootChunkId)
+        unsafe public VariableSizedBufferAccessor(VariableSizedBufferSegment<T> owner, int rootChunkId)
         {
             _owner = owner;
             _segment = owner.Segment;
             _rootChunkId = rootChunkId;
 
-            _accessor = new ChunkReadOnlyRandomAccessor(_segment, 8);
+            _accessor = new ChunkRandomAccessor(_segment, 8);
 
             // The page accessor is Read-Only but we modify the content of the chunk!!!
             // It's ok because we modify concurrency synchronization variables only, we don't want changes to be detected because of this and we want to ensure multiple
@@ -270,7 +272,7 @@ namespace Typhon.Engine
             ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(_rootChunkAddr);
 
             // Enter read mode
-            rh.Lock.EnterRead();
+            rh.Lock.EnterSharedAccess();
 
             // Switch to the first chunk that contains stored data
             _curChunkId = rh.FirstStoredChunkId;
@@ -304,7 +306,7 @@ namespace Typhon.Engine
                 ref var rootChunk = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(_rootChunkAddr);
 
                 // Try to promote the Buffer from read to read/write because we need to make changes
-                if (rootChunk.Lock.TryPromoteToWrite())
+                if (rootChunk.Lock.TryPromoteToExclusiveAccess())
                 {
                     // Try to promote the root chunk to read/write access
                     if (_accessor.TryPromoteChunk(_rootChunkId))
@@ -370,7 +372,7 @@ namespace Typhon.Engine
                         // Demote write access
                         _accessor.DemoteChunk(_rootChunkId);
                     }
-                    rootChunk.Lock.DemoteWriteAccess();
+                    rootChunk.Lock.DemoteFromExclusiveAccess();
                 }
             }
 
@@ -394,7 +396,7 @@ namespace Typhon.Engine
             if (IsValid == false) return;
 
             ref var h = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(_rootChunkAddr);
-            h.Lock.ExitRead();
+            h.Lock.ExitSharedAccess();
 
             _accessor.UnpinChunk(_rootChunkId);
             _accessor.Dispose();

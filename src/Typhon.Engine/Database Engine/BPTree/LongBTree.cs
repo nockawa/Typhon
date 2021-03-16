@@ -160,7 +160,7 @@ namespace Typhon.Engine.BPTree
     }
     public class LongSingleBTree : LongBTree
     {
-        public LongSingleBTree(ChunkBasedSegment segment, ChunkBasedSegmentAccessorPool pool) : base(segment, pool)
+        public LongSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
         {
         }
 
@@ -169,7 +169,7 @@ namespace Typhon.Engine.BPTree
 
     public class LongMultipleBTree : LongBTree
     {
-        public LongMultipleBTree(ChunkBasedSegment segment, ChunkBasedSegmentAccessorPool pool) : base(segment, pool)
+        public LongMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
         {
         }
 
@@ -180,15 +180,15 @@ namespace Typhon.Engine.BPTree
         {
             private VariableSizedBufferSegment<int> _valueStore;
 
-            internal override void Initialize(BTree<long> owner, ChunkBasedSegment segment, ChunkBasedSegmentAccessorPool pool)
+            internal override void Initialize(BTree<long> owner, ChunkBasedSegment segment, ChunkRandomAccessor accessor)
             {
-                base.Initialize(owner, segment, pool);
-                _valueStore = new VariableSizedBufferSegment<int>(segment, pool);
+                base.Initialize(owner, segment, accessor);
+                _valueStore = new VariableSizedBufferSegment<int>(segment, accessor);
 
             }
 
             public override int Append(int bufferId, int value) => _valueStore.AddElement(bufferId, value);
-            public override VariableSizedBufferReadOnlyAccessor<int> GetBufferReadOnlyAccessor(int bufferId) => _valueStore.GetReadOnlyAccessor(bufferId);
+            public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId) => _valueStore.GetReadOnlyAccessor(bufferId);
 
             public override int CreateBuffer() => _valueStore.AllocateBuffer();
 
@@ -201,9 +201,9 @@ namespace Typhon.Engine.BPTree
     {
         unsafe public class LongNodeStorage : BaseNodeStorage
         {
-            internal override void Initialize(BTree<long> owner, ChunkBasedSegment segment, ChunkBasedSegmentAccessorPool pool)
+            internal override void Initialize(BTree<long> owner, ChunkBasedSegment segment, ChunkRandomAccessor accessor)
             {
-                base.Initialize(owner, segment, pool);
+                base.Initialize(owner, segment, accessor);
                 Debug.Assert(segment.Stride == sizeof(Index64Chunk));
             }
 
@@ -211,93 +211,93 @@ namespace Typhon.Engine.BPTree
 
             public override void InitializeNode(NodeWrapper node, NodeStates states)
             {
-                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index64Chunk>(node.ChunkId);
+                ref var chunk = ref ChunkAccessor.GetChunk<Index64Chunk>(node.ChunkId, true);
                 chunk.StateFlags = states;
             }
             public override int GetNodeCapacity() => Index64Chunk.Capacity;
 
             public override NodeWrapper GetLeftNode(NodeWrapper node)
             {
-                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index64Chunk>(node.ChunkId);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
                 return new NodeWrapper(this, chunk.LeftValue);
             }
 
             public override void SetLeftNode(NodeWrapper node, int previousNodeId)
             {
-                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index64Chunk>(node.ChunkId);
+                ref var chunk = ref ChunkAccessor.GetChunk<Index64Chunk>(node.ChunkId, true);
                 chunk.LeftValue = previousNodeId;
             }
 
             public override NodeWrapper GetPreviousNode(NodeWrapper node)
             {
-                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index64Chunk>(node.ChunkId);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
                 return new NodeWrapper(this, chunk.PrevChunk);
             }
 
             public override void SetPreviousNode(NodeWrapper node, int previousNodeId)
             {
-                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index64Chunk>(node.ChunkId);
+                ref var chunk = ref ChunkAccessor.GetChunk<Index64Chunk>(node.ChunkId, true);
                 chunk.PrevChunk = previousNodeId;
             }
 
             public override NodeWrapper GetNextNode(NodeWrapper node)
             {
-                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index64Chunk>(node.ChunkId);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
                 return new NodeWrapper(this, chunk.NextChunk);
             }
 
             public override void SetNextNode(NodeWrapper node, int nextNodeId)
             {
-                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index64Chunk>(node.ChunkId);
+                ref var chunk = ref ChunkAccessor.GetChunk<Index64Chunk>(node.ChunkId, true);
                 chunk.NextChunk = nextNodeId;
             }
 
             public override KeyValueItem GetItem(NodeWrapper node, int index, bool adjust)
             {
-                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index64Chunk>(node.ChunkId);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
                 var i = adjust ? Index64Chunk.Adjust(chunk.Start + index) : index;
                 return new KeyValueItem(chunk.Keys[i], chunk.Values[i]);
             }
 
             public override void SetItem(NodeWrapper node, int index, KeyValueItem value, bool adjust)
             {
-                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index64Chunk>(node.ChunkId);
+                ref var chunk = ref ChunkAccessor.GetChunk<Index64Chunk>(node.ChunkId, true);
                 Set(ref chunk, index, value, adjust);
             }
 
             public override int GetCount(NodeWrapper node)
             {
-                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index64Chunk>(node.ChunkId);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
                 return chunk.Count;
             }
 
             public override void SetCount(NodeWrapper node, int value)
             {
-                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index64Chunk>(node.ChunkId);
+                ref var chunk = ref ChunkAccessor.GetChunk<Index64Chunk>(node.ChunkId, true);
                 chunk.Count = value;
             }
 
             public override int GetStart(NodeWrapper node)
             {
-                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index64Chunk>(node.ChunkId);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
                 return chunk.Start;
             }
 
             public override void SetStart(NodeWrapper node, int value)
             {
-                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index64Chunk>(node.ChunkId);
+                ref var chunk = ref ChunkAccessor.GetChunk<Index64Chunk>(node.ChunkId, true);
                 chunk.Start = value;
             }
 
             public override int GetEnd(NodeWrapper node)
             {
-                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index64Chunk>(node.ChunkId);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
                 return Index64Chunk.Adjust(chunk.Start + chunk.Count);
             }
 
             public override NodeStates GetNodeStates(NodeWrapper node)
             {
-                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index64Chunk>(node.ChunkId);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
                 return chunk.StateFlags;
             }
 
@@ -307,7 +307,7 @@ namespace Typhon.Engine.BPTree
 
             public override void PushFirst(NodeWrapper node, KeyValueItem item)
             {
-                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index64Chunk>(node.ChunkId);
+                ref var chunk = ref ChunkAccessor.GetChunk<Index64Chunk>(node.ChunkId, true);
 
                 DecrementStart(ref chunk);
 
@@ -320,7 +320,7 @@ namespace Typhon.Engine.BPTree
 
             public override void PushLast(NodeWrapper node, KeyValueItem item)
             {
-                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index64Chunk>(node.ChunkId);
+                ref var chunk = ref ChunkAccessor.GetChunk<Index64Chunk>(node.ChunkId, true);
                 var c = chunk.Count++;
                 Set(ref chunk, c, item, true);
             }
@@ -329,7 +329,7 @@ namespace Typhon.Engine.BPTree
 
             public override void Insert(NodeWrapper node, int index, KeyValueItem item)
             {
-                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index64Chunk>(node.ChunkId);
+                ref var chunk = ref ChunkAccessor.GetChunk<Index64Chunk>(node.ChunkId, true);
                 var lsh = index; // length of left shift
                 var rsh = chunk.Count - index; // length of right shift
 
@@ -350,25 +350,25 @@ namespace Typhon.Engine.BPTree
 
             public override int CreateBuffer() => default;
 
-            public override VariableSizedBufferReadOnlyAccessor<int> GetBufferReadOnlyAccessor(int bufferId) => default;
+            public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId) => default;
             public override int RemoveFromBuffer(int bufferId, int elementId, int value) => default;
             public override void DeleteBuffer(int bufferId) { }
 
             public override NodeWrapper GetFirstChild(NodeWrapper node)
             {
-                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index64Chunk>(node.ChunkId);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
                 return new NodeWrapper(this, chunk.LeftValue);
             }
 
             public override bool IsRotated(NodeWrapper node)
             {
-                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index64Chunk>(node.ChunkId);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
                 return (chunk.Start + chunk.Count) > Index64Chunk.Capacity;
             }
 
             public override int BinarySearch(NodeWrapper node, long key, IComparer<long> comparer)
             {
-                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index64Chunk>(node.ChunkId);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
                 fixed (long* keys = chunk.Keys)
                 {
                     if (IsRotated(node))
@@ -394,13 +394,13 @@ namespace Typhon.Engine.BPTree
 
             public override NodeWrapper SplitRight(NodeWrapper node, NodeStates states)
             {
-                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index64Chunk>(node.ChunkId);
+                ref var chunk = ref ChunkAccessor.GetChunk<Index64Chunk>(node.ChunkId, true);
                 return SplitRight(ref chunk, states);
             }
 
             public override KeyValueItem RemoveAt(NodeWrapper node, int index)
             {
-                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index64Chunk>(node.ChunkId);
+                ref var chunk = ref ChunkAccessor.GetChunk<Index64Chunk>(node.ChunkId, true);
                 var item = GetItem(node, index, true);
 
                 var lsh = chunk.Count - index - 1; // length of left shift
@@ -424,8 +424,8 @@ namespace Typhon.Engine.BPTree
 
             public override void MergeLeft(NodeWrapper left, NodeWrapper right)
             {
-                ref var leftChunk = ref SegmentAccessorPool.RW.GetChunk<Index64Chunk>(left.ChunkId);
-                ref var rightChunk = ref SegmentAccessorPool.RW.GetChunk<Index64Chunk>(right.ChunkId);
+                ref var leftChunk  = ref ChunkAccessor.GetChunk<Index64Chunk>(left.ChunkId, true);
+                ref var rightChunk = ref ChunkAccessor.GetChunk<Index64Chunk>(right.ChunkId, true);
 
                 var lk = leftChunk.KeysAsSpan;
                 var lv = leftChunk.ValuesAsSpan;
@@ -534,20 +534,20 @@ namespace Typhon.Engine.BPTree
 
             public override NodeWrapper GetLastChild(NodeWrapper node)
             {
-                ref readonly var chunk = ref SegmentAccessorPool.RO.GetChunk<Index64Chunk>(node.ChunkId);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
                 var index = Index64Chunk.Adjust(chunk.Start + chunk.Count - 1);
                 return new NodeWrapper(this, chunk.Values[index]);
             }
 
             public override void IncrementStart(NodeWrapper node)
             {
-                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index64Chunk>(node.ChunkId);
+                ref var chunk = ref ChunkAccessor.GetChunk<Index64Chunk>(node.ChunkId, true);
                 IncrementStart(ref chunk);
             }
 
             public override void DecrementStart(NodeWrapper node)
             {
-                ref var chunk = ref SegmentAccessorPool.RW.GetChunk<Index64Chunk>(node.ChunkId);
+                ref var chunk = ref ChunkAccessor.GetChunk<Index64Chunk>(node.ChunkId, true);
                 DecrementStart(ref chunk);
             }
 
@@ -590,7 +590,7 @@ namespace Typhon.Engine.BPTree
             {
                 if (length == 0) return;
                 if (length < 0 || length > Index64Chunk.Capacity) throw new ArgumentOutOfRangeException(nameof(length));
-                if (index < 0 || index >= Index64Chunk.Capacity) throw new ArgumentOutOfRangeException(nameof(length));
+                if (index < 0  || index >= Index64Chunk.Capacity) throw new ArgumentOutOfRangeException(nameof(length));
 
                 var k = chunk.KeysAsSpan;
                 var v = chunk.ValuesAsSpan;
@@ -630,7 +630,7 @@ namespace Typhon.Engine.BPTree
             {
                 if (length == 0) return;
                 if (length < 0 || length > Index64Chunk.Capacity) throw new ArgumentOutOfRangeException(nameof(length));
-                if (index < 0 || index >= Index64Chunk.Capacity) throw new ArgumentOutOfRangeException(nameof(length));
+                if (index < 0  || index >= Index64Chunk.Capacity) throw new ArgumentOutOfRangeException(nameof(length));
 
                 var k = chunk.KeysAsSpan;
                 var v = chunk.ValuesAsSpan;
@@ -660,7 +660,7 @@ namespace Typhon.Engine.BPTree
             public NodeWrapper SplitRight(ref Index64Chunk left, NodeStates states)
             {
                 var rightNode = Owner.AllocNode(states);
-                ref var right = ref SegmentAccessorPool.RW.GetChunk<Index64Chunk>(rightNode.ChunkId);
+                ref var right = ref ChunkAccessor.GetChunk<Index64Chunk>(rightNode.ChunkId, true);
 
                 var lr = left.Count / 2; // length of right side
                 var lrc = 1 + ((left.Count - 1) / 2); // length of right (ceiling of Length/2)
@@ -707,7 +707,7 @@ namespace Typhon.Engine.BPTree
 
         protected override BaseNodeStorage GetStorage() => new LongNodeStorage();
 
-        protected LongBTree(ChunkBasedSegment segment, ChunkBasedSegmentAccessorPool pool) : base(segment, pool)
+        protected LongBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
         {
         }
     }

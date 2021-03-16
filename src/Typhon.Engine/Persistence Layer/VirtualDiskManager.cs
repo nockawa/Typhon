@@ -1,6 +1,4 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using Serilog;
+﻿using Microsoft.Extensions.Logging;
 using Serilog.Context;
 using System;
 using System.Collections.Concurrent;
@@ -9,7 +7,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -129,13 +126,13 @@ namespace Typhon.Engine
         internal enum PagesAccessMode : byte
         {
             Idle         = 0,                 // The page is idle
-            Read         = 1,                 // The page is accessed in one/many concurrent read, the ConcurrentReadCounter will indicate how many concurrent read we have
-            Write        = 2,                 // The page is accessed in an exclusive read/write by a thread.
+            Shared       = 1,                 // The page is accessed in one/many concurrent threads, the ConcurrentReadCounter will indicate how many concurrent access we have
+            Exclusive    = 2,                 // The page is accessed exclusively by a thread.
         }
 
         internal enum PageIOMode : byte
         {
-            None = 0,
+            None       = 0,
             Loading    = 1,                // The page is being loaded from disk
             Saving     = 2,                // The page is being saved into disk
         }
@@ -375,7 +372,7 @@ namespace Typhon.Engine
 
         #region Public API
 
-        unsafe public PageReadOnlyAccessor RequestPageReadOnly(uint pageId)
+        unsafe public PageAccessor RequestPageShared(uint pageId)
         {
             var memPageId = RequestPage(pageId, false);
 
@@ -386,10 +383,10 @@ namespace Typhon.Engine
                 pi.IOMode = PageIOMode.None;
                 pi.IOCompletionTask = null;
             }
-            return new PageReadOnlyAccessor(this, pi, &_memPagesAddr[memPageId* (long)PageSize]);
+            return new PageAccessor(this, pi, &_memPagesAddr[memPageId* (long)PageSize]);
         }
 
-        unsafe public PageReadWriteAccessor RequestPageReadWrite(uint pageId)
+        unsafe public PageAccessor RequestPageExclusive(uint pageId)
         {
             var memPageId = RequestPage(pageId, true);
             
@@ -401,7 +398,7 @@ namespace Typhon.Engine
                 pi.IOCompletionTask = null;
             }
 
-            return new PageReadWriteAccessor(this, pi, &_memPagesAddr[memPageId* (long)PageSize], PagesAccessMode.Idle);
+            return new PageAccessor(this, pi, &_memPagesAddr[memPageId* (long)PageSize]);
         }
 
         public void DeleteDatabaseFile()
@@ -430,7 +427,10 @@ namespace Typhon.Engine
             return true;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        internal void SetPageDirty(PageInfo pi) => _dirtyPages.Set(pi.MemPageId);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         internal void TransitionPageFromAccessToIdle(PageInfo pi)
         {
 #if VERBOSELOGGING
@@ -440,7 +440,7 @@ namespace Typhon.Engine
             lock (pi)
             {
                 var pageState = pi.AccessMode;
-                Debug.Assert(pageState==PagesAccessMode.Read || pageState==PagesAccessMode.Write);
+                Debug.Assert(pageState==PagesAccessMode.Shared || pageState==PagesAccessMode.Exclusive);
 
                 if (--pi.ConcurrentUseCounter != 0)
                 {
@@ -454,7 +454,7 @@ namespace Typhon.Engine
             pi.SyncRoot.Release();
         }
 
-        internal bool TryPromoteToExclusiveReadWrite(uint pageId, PageInfo pi, out PagesAccessMode previousMode)
+        internal bool TryPromoteToExclusive(uint pageId, PageInfo pi, out PagesAccessMode previousMode)
         {
             lock (pi)
             {
@@ -479,20 +479,19 @@ namespace Typhon.Engine
                 ++pi.ConcurrentUseCounter;
 
                 // If the thread is already in write mode, there's nothing to do, the call succeeds.
-                if (pi.AccessMode == PagesAccessMode.Write)
+                if (pi.AccessMode == PagesAccessMode.Exclusive)
                 {
                     return true;
                 }
 
                 // Switch to write, set the page as dirty
-                pi.AccessMode = PagesAccessMode.Write;
-                _dirtyPages.Set(memPageId);
+                pi.AccessMode = PagesAccessMode.Exclusive;
 
                 return true;
             }
         }
 
-        internal void DemoteExclusiveReadWrite(PageInfo pi, PagesAccessMode previousMode)
+        internal void DemoteExclusive(PageInfo pi, PagesAccessMode previousMode)
         {
             lock (pi)
             {
@@ -502,18 +501,18 @@ namespace Typhon.Engine
         }
 
         /// <summary>
-        /// Non blocking transition to Exclusive Read/Write access. See remarks.
+        /// Non blocking transition to Exclusive access. See remarks.
         /// </summary>
         /// <param name="pageId">Disk Page Id</param>
         /// <param name="pi">Corresponding PageInfo</param>
-        /// <returns><c>true</c> is read/write access has been gained, a matching <see cref="TransitionPageFromAccessToIdle"/> must be made then the access is no longer required.</returns>
+        /// <returns><c>true</c> if Exclusive access has been gained, a matching <see cref="TransitionPageFromAccessToIdle"/> must be made when the access is no longer required.</returns>
         /// <remarks>
-        /// This method must be used to attempt gaining an exclusive read/write access on the page.
+        /// This method must be used to attempt gaining an Exclusive access on the page.
         /// If the page is already in exclusive access by another thread the method will immediately return with <c>false</c>.
         /// If the page is Idle or in exclusive access by the same thread, then the call will succeed and <c>true</c> will be returned.
-        /// If you already own for sure exclusive read-only access and wish to temporarily promote to read/write use the <see cref="TryPromoteToExclusiveReadWrite"/> and <see cref="DemoteExclusiveReadWrite"/> APIs instead.
+        /// If you already own for sure Shared Single access and wish to temporarily promote to Exclusive use the <see cref="TryPromoteToExclusive"/> and <see cref="DemoteExclusive"/> APIs instead.
         /// </remarks>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         internal bool TryTransitionPageToExclusiveAccess(uint pageId, PageInfo pi)
         {
             if (pi.IOCompletionTask != null && pi.IOCompletionTask.IsCompleted == false)
@@ -530,7 +529,7 @@ namespace Typhon.Engine
                 {
                     lock (pi)
                     {
-                        pi.AccessMode = PagesAccessMode.Write;
+                        pi.AccessMode = PagesAccessMode.Exclusive;
                         ++pi.ConcurrentUseCounter;
                     }
                     return true;
@@ -547,45 +546,45 @@ namespace Typhon.Engine
                 return false;
             }
 
-            // Set to write to prevent concurrent reads
+            // Set to exclusive to prevent shared access
             lock (pi)
             {
                 pi.LockedByThreadId = Thread.CurrentThread.ManagedThreadId;
-                pi.AccessMode = PagesAccessMode.Write;
+                pi.AccessMode = PagesAccessMode.Exclusive;
                 pi.ConcurrentUseCounter = 1;
             }
             return true;
         }
 
         /// <summary>
-        /// Transition the page from its current mode to Access (either read or write), blocking the call if needed.
+        /// Transition the page from its current mode to Access (either shared or exclusive), blocking the call if needed.
         /// </summary>
         /// <param name="pageId">Disk Page Id</param>
         /// <param name="pi">The corresponding PageInfo</param>
-        /// <param name="doesWrite"><c>true</c> if we are doing read/write, otherwise it's read-only</param>
+        /// <param name="exclusive"><c>true</c> if we are doing Exclusive access, otherwise it's Shared access</param>
         /// <param name="reallocate"><c>true</c> if we are reallocating the MemPage</param>
         /// <returns><c>true</c> is we successfully transitioned to access, <c>false</c> if we failed</returns>
         /// <remarks>
         /// This is...not easy... because this method takes care of the whole concurrency model of the Virtual Disk Manager
         /// Basically, the behavior we want is:
-        ///  - If the page is Idle: it's simple, we transition to access, with exclusive Read-Only or Read/Write by the requested thread.
-        ///  - If the page is Read-Only:
-        ///    - If we are requesting Read again from the same thread: it's a re-entrant request, we keep the exclusive Read and allow re-entrance.
-        ///    - If we are requesting Read again from another thread: we allow concurrent Read but release the exclusive access from the Thread.
-        ///    - If we are requesting Write from the same thread: we promote the access from Read-Only to Read/Write.
-        ///    - If we are requesting Write from another thread: we wait for the Read request(s) to be over.
-        ///  - If the page is Read/Write:
-        ///    - If we request Read-Only or Read/Write from the same thread: we allow re-entrance.
-        ///    - If we request Read-Only or Read/Write from another thread, we wait the current access to be over.
-        /// All in all, it's common sense. We are being permissive by allowing re-entrant Read-Only from/to Read/Write when it's the same thread, we
+        ///  - If the page is Idle: it's simple, we transition to access, with Shared (Single, we stored the Thread Id) or Exclusive by the requested thread.
+        ///  - If the page is Shared:
+        ///    - If we are requesting Shared again from the same thread: it's a re-entrant request, we keep the Shared Single and allow re-entrance.
+        ///    - If we are requesting Shared again from another thread: we allow concurrent Shared but release the Single access from the Thread (no thread own the access anymore).
+        ///    - If we are requesting Write from the same thread: we promote the access from Shared Single to Exclusive.
+        ///    - If we are requesting Write from another thread: we wait for the Share request(s) to be over.
+        ///  - If the page is Exclusive:
+        ///    - If we request Shared or Exclusive from the same thread: we allow re-entrance.
+        ///    - If we request Shared or Exclusive from another thread, we wait the current access to be over.
+        /// All in all, it's common sense. We are being permissive by allowing re-entrant Shared from/to Exclusive when it's the same thread, we
         ///  assume the user knows what (s)he is doing.
-        /// Promotion from Read-Only to Read/Write can only be made from an exclusive read, it won't work in a two phases process where we would have
-        ///  at first multiple Read-Only accesses, then all Reads stop except a remaining one, we don't know which thread remains in Read-Only mode so
-        ///  we can't promote it to Read/Write if the situation would arise. If this would prove to be an issue we would have to store an array of threads
+        /// Promotion from Shared to Exclusive can only be made from Shared Single, it won't work in a two phases process where we would have
+        ///  at first multiple Shared accesses, then all access stop except a remaining one, we don't know which thread remains in Shared mode so
+        ///  we can't promote it to Exclusive if the situation would arise. If this would prove to be an issue we would have to store an array of threads
         ///  instead of a single field.
         /// </remarks>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal bool TransitionPageToAccess(uint pageId, PageInfo pi, bool doesWrite, bool reallocate)
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        internal bool TransitionPageToAccess(uint pageId, PageInfo pi, bool exclusive, bool reallocate)
         {
             var memPageId = pi.MemPageId;
 #if VERBOSELOGGING
@@ -598,14 +597,14 @@ namespace Typhon.Engine
                 // Safeguard, now we are under lock, check the MemPage is still targeting the PageId we want
                 if ((reallocate == false) && (pageId != pi.PageId))
                 {
-                    LogTransitionFailed(doesWrite ? PagesAccessMode.Write : PagesAccessMode.Read);
+                    LogTransitionFailed(exclusive ? PagesAccessMode.Exclusive : PagesAccessMode.Shared);
                     return false;
                 }
 
-                // Concurrent or Re-entrant ReadOnly mode?
-                if ((reallocate == false) && (pi.AccessMode == PagesAccessMode.Read) && (doesWrite == false))
+                // Concurrent or Re-entrant Shared mode?
+                if ((reallocate == false) && (pi.AccessMode == PagesAccessMode.Shared) && (exclusive == false))
                 {
-                    // Loose the exclusive access if we now have multiple threads doing read-only access
+                    // Loose the exclusive access if we now have multiple threads doing Shared access
                     var ct = Thread.CurrentThread.ManagedThreadId;
                     pi.LockedByThreadId = (pi.LockedByThreadId==ct) ? ct : 0;
 
@@ -614,8 +613,8 @@ namespace Typhon.Engine
                     return true;
                 }
 
-                // Promotion from Read-Only to Read/Write?
-                if ((reallocate == false) && (pi.AccessMode == PagesAccessMode.Read) && (pi.ConcurrentUseCounter == 1) && doesWrite)
+                // Promotion from Shared to Exclusive?
+                if ((reallocate == false) && (pi.AccessMode == PagesAccessMode.Shared) && (pi.ConcurrentUseCounter == 1) && exclusive)
                 {
                     // Delay the access to ManagedThreadId as it's not a very cheap call
                     var ct = Thread.CurrentThread.ManagedThreadId;
@@ -624,7 +623,7 @@ namespace Typhon.Engine
                         // We can promote
                         ++pi.ConcurrentUseCounter;
                         ++_memPagesActivities[memPageId].HitCount;
-                        pi.AccessMode = PagesAccessMode.Write;
+                        pi.AccessMode = PagesAccessMode.Exclusive;
                         return true;
                     }
                 }
@@ -641,7 +640,7 @@ namespace Typhon.Engine
                 // This thread currently owns exclusive access on the page ?
                 if (currentThread == pi.LockedByThreadId)
                 {
-                    // We are loose, if we want a read-only access and the page is already in read/write, we assume the user knows
+                    // We are loose, if we want a Shared access and the page is already in Exclusive, we assume the user knows
                     //  what's (s)he's doing (good luck!).
                     ++pi.ConcurrentUseCounter;
                     return true;
@@ -677,7 +676,7 @@ namespace Typhon.Engine
             lock (pi)
             {
                 pi.IOCompletionTask = null;
-                pi.AccessMode = doesWrite ? PagesAccessMode.Write : PagesAccessMode.Read;
+                pi.AccessMode = exclusive ? PagesAccessMode.Exclusive : PagesAccessMode.Shared;
                 pi.ConcurrentUseCounter = 1;
                 ++_memPagesActivities[memPageId].HitCount;
                 // Tick is a 64bits value but we want to store in 32bits, so we shift 20bits to the right to have a precision of 100ms,
@@ -695,12 +694,6 @@ namespace Typhon.Engine
                     _memPagesActivities[memPageId].HitCount = 1;
 
                     _memPageIdByPageId.TryAdd(pageId, memPageId);
-                }
-
-                // Mark the page as accessed in the access map
-                if (doesWrite)
-                {
-                    _dirtyPages.Set(memPageId);
                 }
             }
             LogTransitionSuccessful(prevMode, pi.AccessMode);
@@ -972,12 +965,12 @@ namespace Typhon.Engine
 
         #region Private API
 
-        private int RequestPage(uint pageId, bool doesWrite)
+        private int RequestPage(uint pageId, bool exclusive)
         {
 #if VERBOSELOGGING
             using var logId = LogContext.PushProperty("PageId", pageId);
-            using var logRW = LogContext.PushProperty("IsReadWrite", doesWrite);
-            LogRequestPage(pageId, doesWrite);
+            using var logRW = LogContext.PushProperty("IsExclusive", exclusive);
+            LogRequestPage(pageId, exclusive);
 #endif
             // Get the memory page from the cache, if it fails we allocate a new one
             if (_memPageIdByPageId.TryGetValue(pageId, out var memPageId) == false)
@@ -986,7 +979,7 @@ namespace Typhon.Engine
                 LogMemPageCacheMiss();
 
                 // Page is not cached, we assign an available Memory Page to it
-                memPageId = AllocateMemoryPage(pageId, doesWrite);
+                memPageId = AllocateMemoryPage(pageId, exclusive);
             }
             else
             {
@@ -996,7 +989,7 @@ namespace Typhon.Engine
                 var pi = _memPagesInfo[memPageId];
 
                 // This is potentially a blocking operation, waiting for other threads to finish their operation on the page
-                if (TransitionPageToAccess(pageId, pi, doesWrite, false) == false)
+                if (TransitionPageToAccess(pageId, pi, exclusive, false) == false)
                 {
                     LogRequestPageRace();
 
@@ -1006,7 +999,7 @@ namespace Typhon.Engine
                     // Note: we may not be happy with this, this could lead to a stack overflow if the synchronization mechanism are
                     //  somehow buggy... Maybe a counter, SpinWait and retrying the _pageInfoIdByPageId would be more robust. If the
                     //  counter reaches zero we throw...
-                    return RequestPage(pageId, doesWrite);
+                    return RequestPage(pageId, exclusive);
                 }
             }
 
@@ -1019,10 +1012,10 @@ namespace Typhon.Engine
             return memPageId;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         private bool IsMemPageDirty(int memPageId) => _dirtyPages.IsSet(memPageId);
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         private void ClearMemPageDirty(int memPageId) => _dirtyPages.Clear(memPageId);
 
         private int AllocateMemoryPage(uint pageId, bool doesWrite)
@@ -1202,8 +1195,9 @@ namespace Typhon.Engine
             var c = _dbc;
             _log.LogInformation("Create Database '{DatabaseName}' in file '{FilePathName}'", c.DatabaseName, filePathName);
 
-            using (var pa = RequestPageReadWrite(0))
+            using (var pa = RequestPageExclusive(0))
             {
+                pa.SetPageDirty();
                 var h = (RootFileHeader*)pa.PageAddress;
                 StringExtensions.StoreString(HeaderSignature, h->HeaderSignature, 32);
                 h->DatabaseFormatRevision = DatabaseFormatRevision;
@@ -1228,7 +1222,7 @@ namespace Typhon.Engine
             _file = new FileStream(filePathName, FileMode.Open, FileAccess.ReadWrite, FileShare.None, 8192, FileOptions.Asynchronous|FileOptions.RandomAccess|FileOptions.WriteThrough);
             _fileSize = _file.Length;
 
-            using (var pa = RequestPageReadOnly(0))
+            using (var pa = RequestPageShared(0))
             {
                 var h = (RootFileHeader*)pa.PageAddress;
                 _log.LogInformation("Load Database '{DatabaseName}' from file '{FilePathName}'", h->DatabaseNameString, filePathName);
@@ -1251,7 +1245,7 @@ namespace Typhon.Engine
 
         #region Logging helpers
         [Conditional("VERBOSELOGGING")]
-        private void LogRequestPage(uint pageId, bool doesWrite) => _log.LogDebug(10, "Request Disk Page: {PageId}, Write: {IsReadWrite}", pageId, doesWrite);
+        private void LogRequestPage(uint pageId, bool doesWrite) => _log.LogDebug(10, "Request Disk Page: {PageId}, Write: {IsExclusive}", pageId, doesWrite);
         [Conditional("VERBOSELOGGING")]
         private void LogMemPageCacheHit() => _log.LogTrace(11, "MemPage Cache Hit");
         [Conditional("VERBOSELOGGING")]

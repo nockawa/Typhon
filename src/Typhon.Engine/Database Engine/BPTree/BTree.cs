@@ -3,11 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Threading;
-using YamlDotNet.Core.Tokens;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -315,12 +311,12 @@ namespace Typhon.Engine.BPTree
 
         #region Public API
 
-        protected BTree(ChunkBasedSegment segment, ChunkBasedSegmentAccessorPool pool)
+        protected BTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor)
         {
             Comparer = Comparer<TKey>.Default;
             _segment = segment;
             _storage = GetStorage();
-            _storage.Initialize(this, _segment, pool);
+            _storage.Initialize(this, _segment, accessor);
             // We make sure the chunk 0 is reserved so we can consider any ChunkId == 0 as a "null pointer".
             // So any default constructed type declaring ChunkId fields can have this "null" by default.
             _segment.ReserveChunk(0);
@@ -435,7 +431,7 @@ namespace Typhon.Engine.BPTree
             return true;
         }
 
-        public VariableSizedBufferReadOnlyAccessor<int> TryGetMultiple(TKey key)
+        public VariableSizedBufferAccessor<int> TryGetMultiple(TKey key)
         {
             if (TryGet(key, out var bufferId) == false)
             {

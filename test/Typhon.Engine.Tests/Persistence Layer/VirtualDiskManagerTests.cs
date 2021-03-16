@@ -112,7 +112,7 @@ namespace Typhon.Engine.Tests
             var debug = _vdm.GetDebugInfo();
             var cacheHit = debug.MemPageCacheHit;
 
-            using (_vdm.RequestPageReadOnly(0))
+            using (_vdm.RequestPageShared(0))
             {
                 debug = _vdm.GetDebugInfo();
                 Assert.That(debug.MemPageCacheHit, Is.GreaterThan(cacheHit));
@@ -120,7 +120,7 @@ namespace Typhon.Engine.Tests
 
             _vdm.ResetDiskManager();
 
-            using (var pa = _vdm.RequestPageReadOnly(0))
+            using (var pa = _vdm.RequestPageShared(0))
             {
                 unsafe
                 {
@@ -138,43 +138,25 @@ namespace Typhon.Engine.Tests
             var writeCount = debug.WriteToDiskCount;
 
             {
-                using var p1 = _vdm.RequestPageReadWrite(10);
-                using var p2 = _vdm.RequestPageReadWrite(11);
-                using var p3 = _vdm.RequestPageReadWrite(12);
+                using var p1 = _vdm.RequestPageExclusive(10);
+                using var p2 = _vdm.RequestPageExclusive(11);
+                using var p3 = _vdm.RequestPageExclusive(12);
                 var a = (int*)p1.PageAddress;
+                p1.SetPageDirty();
                 *a = 1;
                 
                 a = (int*)p2.PageAddress;
+                p2.SetPageDirty();
                 *a = 2;
                 
                 a = (int*)p3.PageAddress;
+                p3.SetPageDirty();
                 *a = 3;
             }
 
             _vdm.FlushToDiskAsync(true).Wait();
 
             Assert.That(_vdm.GetDebugInfo().WriteToDiskCount, Is.EqualTo(writeCount+1));
-        }
-
-        [TestCase(16)]
-        [TestCase(32)]
-        [TestCase(64)]
-        [TestCase(128)]
-        unsafe public void MemMoveTest(int sizeMb)
-        {
-            var size = sizeMb * 1024 * 1024;
-            var srcA = new byte[size];
-            var dstA = new byte[size];
-            var dst = new Memory<byte>(dstA);
-            var sw = new Stopwatch();
-
-            for (int i = 0; i < 10; i++)
-            {
-                sw.Start();
-                srcA.CopyTo(dst);
-                sw.Stop();
-                Console.WriteLine($"Copy time {sw.ElapsedMilliseconds}ms, {(size/sw.Elapsed.TotalSeconds)/(1024*1024)}MiB/sec");
-            }
         }
 
         struct OPInfo
@@ -241,7 +223,8 @@ namespace Typhon.Engine.Tests
             {
                 for (int i = 1; i < pagesCount; i++)
                 {
-                    using var a = _vdm.RequestPageReadWrite((uint)i);
+                    using var a = _vdm.RequestPageExclusive((uint)i);
+                    a.SetPageDirty();
 
                     var dest = (int*)a.PageAddress;
                     *dest = i;
@@ -251,7 +234,8 @@ namespace Typhon.Engine.Tests
             {
                 Parallel.ForEach(Enumerable.Range(1, pagesCount), i =>
                 {
-                    using var a = _vdm.RequestPageReadWrite((uint)i);
+                    using var a = _vdm.RequestPageExclusive((uint)i);
+                    a.SetPageDirty();
 
                     var dest = (int*)a.PageAddress;
                     *dest = i;
@@ -269,7 +253,7 @@ namespace Typhon.Engine.Tests
             // Check the initial page of each page
             for (int i = 1; i < pagesCount; i++)
             {
-                using var a = _vdm.RequestPageReadOnly((uint)i);
+                using var a = _vdm.RequestPageShared((uint)i);
 
                 var dest = (int*)a.PageAddress;
                 Assert.That(*dest, Is.EqualTo(i), () => $"Bad DiskPageId {i}");
@@ -291,7 +275,7 @@ namespace Typhon.Engine.Tests
                     {
                         Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId}] Check Page {info.PageId} is {info.ExpectedValue}");
 
-                        using var a = _vdm.RequestPageReadOnly(info.PageId);
+                        using var a = _vdm.RequestPageShared(info.PageId);
                         int actual = *(int*)a.PageAddress;
 
                         Log.Fatal("Check Page {PageId} has Value {ExpectedValue} and has {value}", info.PageId, info.ExpectedValue, actual);
@@ -301,7 +285,8 @@ namespace Typhon.Engine.Tests
                     {
                         Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId}] Page {info.PageId} bumped to {info.ExpectedValue}");
 
-                        using var a = _vdm.RequestPageReadWrite(info.PageId);
+                        using var a = _vdm.RequestPageExclusive(info.PageId);
+                        a.SetPageDirty();
                         var pa = (int*)a.PageAddress;
                         ++*pa;
                         Log.Fatal("Bump Page {PageId} to {value}, expected {ExpectedValue}", info.PageId, *pa, info.ExpectedValue);

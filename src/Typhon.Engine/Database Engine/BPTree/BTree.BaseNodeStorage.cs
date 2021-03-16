@@ -9,12 +9,12 @@ namespace Typhon.Engine.BPTree
         public abstract class BaseNodeStorage
         {
             protected internal BTree<TKey> Owner;
-            protected ChunkBasedSegmentAccessorPool SegmentAccessorPool;
+            protected ChunkRandomAccessor ChunkAccessor;
 
-            internal virtual void Initialize(BTree<TKey> owner, ChunkBasedSegment segment, ChunkBasedSegmentAccessorPool pool)
+            internal virtual void Initialize(BTree<TKey> owner, ChunkBasedSegment segment, ChunkRandomAccessor accessor)
             {
                 Owner = owner;
-                SegmentAccessorPool = pool ?? new ChunkBasedSegmentAccessorPool(segment, 4, 4);
+                ChunkAccessor = accessor ?? segment.CreateChunkRandomAccessor(4);
             }
 
             #region Chunk Properties Access
@@ -45,7 +45,7 @@ namespace Typhon.Engine.BPTree
             public abstract int Append(int bufferId, int value);
             public abstract void Insert(NodeWrapper node, int index, KeyValueItem item);
             public abstract int CreateBuffer();
-            public abstract VariableSizedBufferReadOnlyAccessor<int> GetBufferReadOnlyAccessor(int bufferId);
+            public abstract VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId);
             public abstract int RemoveFromBuffer(int bufferId, int elementId, int value);
             public abstract void DeleteBuffer(int bufferId);
             public abstract NodeWrapper GetLastChild(NodeWrapper node);

@@ -88,11 +88,11 @@ namespace Typhon.Engine.Tests
         public void CreateSegment()
         {
             var s0 = _lsm.AllocateSegment(PageBlockType.None, 10);
-            var s1 = _lsm.AllocateSegment(PageBlockType.None, 100);
+            var s1 = _lsm.AllocateSegment(PageBlockType.None, 50);
             _lsm.DeleteSegment(s0);
-            var s2 = _lsm.AllocateSegment(PageBlockType.None, 10010);
+            var s2 = _lsm.AllocateSegment(PageBlockType.None, 100);
 
-            var s3 = _lsm.AllocateSegment(PageBlockType.None, 1000);
+            var s3 = _lsm.AllocateSegment(PageBlockType.None, 100);
 
             _lsm.DeleteSegment(s2);
             _lsm.DeleteSegment(s1);
@@ -116,7 +116,7 @@ namespace Typhon.Engine.Tests
 
             using var mo = s0.AllocateChunks(2000, false);
 
-            using var ca = s0.CreateChunkReadWriteRandomAccessor(4);
+            using var ca = s0.CreateChunkRandomAccessor(4);
 
             ref var obj = ref ca.GetChunk<ChunkA>(0);
             obj.A = -1;
@@ -153,7 +153,7 @@ namespace Typhon.Engine.Tests
             var ba = vsb.GetReadOnlyAccessor(id0);
             do
             {
-                var elements = ba.Elements;
+                var elements = ba.ReadOnlyElements;
                 var c = elements.Length;
                 for (int i = 0; i < c; i++)
                 {
@@ -240,7 +240,7 @@ Here come the drones!";
             // Delete all the elements of the second chunk
             for (int i = 4; i < 11; i++)
             {
-                Assert.That(vsb.DeleteElement(id0, elIdList[i], i), Is.True);
+                Assert.That(vsb.DeleteElement(id0, elIdList[i], i), Is.Not.EqualTo(-1));
             }
 
             // Trigger an enumeration that will remove the second chunk from the stored list and put it in the free list
@@ -250,7 +250,7 @@ Here come the drones!";
                 using var ba = vsb.GetReadOnlyAccessor(id0);
                 do
                 {
-                    count += ba.Elements.Length;
+                    count += ba.ReadOnlyElements.Length;
                     ++hops;
                 } while (ba.NextChunk());
 
@@ -274,7 +274,7 @@ Here come the drones!";
             var s = new LockStore();
 
             var taskList = new List<Task>();
-            var rwsl = new ReaderWriterSpinLock();
+            var rwsl = new AccessControlSmall();
             var r = new Random(DateTime.UtcNow.Millisecond);
 
             for (int i = 0; i < 32; i++)
@@ -290,7 +290,7 @@ Here come the drones!";
                         // Write use case
                         if (write)
                         {
-                            rwsl.EnterWrite();
+                            rwsl.EnterExclusiveAccess();
 
                             s.A = r.Next(0, 100000);
                             s.B = r.Next(0, 100000);
@@ -303,11 +303,11 @@ Here come the drones!";
                         else
                         {
 
-                            rwsl.EnterRead();
+                            rwsl.EnterSharedAccess();
 
                             Assert.That(s.R, Is.EqualTo(s.A + s.B));
 
-                            rwsl.ExitRead();
+                            rwsl.ExitSharedAccess();
                             
                         }
                     }
@@ -318,7 +318,7 @@ Here come the drones!";
 
             Task.WaitAll(taskList.ToArray());
 
-            Assert.That(rwsl.ConcurrentUsedCounter, Is.EqualTo(0));
+            Assert.That(rwsl.SharedUsedCounter, Is.EqualTo(0));
         }
     }
 }

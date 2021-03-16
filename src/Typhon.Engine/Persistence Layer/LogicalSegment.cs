@@ -2,15 +2,23 @@
 
 using System;
 using System.Buffers;
-using System.Collections;
-using System.Collections.Generic;
-using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Threading;
 
 namespace Typhon.Engine
 {
+    /// <summary>
+    /// Expose a Logical segment of Pages
+    /// </summary>
+    /// <remarks>
+    /// Logical Segment is made of several Pages which IDs are stored in a dedicated private section of the logical segment.
+    /// The segment can easily be shrink/grown by removing/adding more pages. The first page of the Logical Segment is split in two parts
+    ///  - The Page Directory: 512 entries that reference the first 512 pages of the Logical Segment, overflown data is stored into
+    ///    subsequent dedicated pages.
+    ///  - The segment first raw data, which is 6000 bytes, instead of 8000 for all subsequent pages.
+    /// The segment also maintain a linked list in the Page Header to allow faster forward traversal.
+    /// There is some basic API that allow to store/enumerate fixed size elements, indexed into the logical segment.
+    /// </remarks>
     public class LogicalSegment : IDisposable
     {
         internal struct SerializationData
@@ -30,8 +38,8 @@ namespace Typhon.Engine
 
         public int Length => _pages.Length;
         public ReadOnlySpan<uint> Pages => _pages.Span;
-        public PageReadWriteAccessor GetPageReadWrite(int segmentIndex) => _manager.VDM.RequestPageReadWrite(Pages[segmentIndex]);
-        public PageReadOnlyAccessor GetPageReadOnly(int segmentIndex) => _manager.VDM.RequestPageReadOnly(Pages[segmentIndex]);
+        public PageAccessor GetPageExclusiveAccessor(int segmentIndex) => _manager.VDM.RequestPageExclusive(Pages[segmentIndex]);
+        public PageAccessor GetPageSharedAccessor(int segmentIndex) => _manager.VDM.RequestPageShared(Pages[segmentIndex]);
 
         internal LogicalSegment(LogicalSegmentManager manager)
         {
@@ -71,7 +79,7 @@ namespace Typhon.Engine
             return (pi + 1, off);
         }
 
-        internal virtual bool Create(PageBlockType type, IMemoryOwner<uint> pagesMemOwner, int length)
+        internal virtual bool Create(PageBlockType type, IMemoryOwner<uint> pagesMemOwner, int length, bool clear)
         {
             var vdm = _manager.VDM;
 
@@ -84,7 +92,13 @@ namespace Typhon.Engine
             for (var i = 0; i < pages.Length; i++)
             {
                 var pageIndex = pages[i];
-                using var page = vdm.RequestPageReadWrite(pageIndex);
+                using var page = vdm.RequestPageExclusive(pageIndex);
+                page.SetPageDirty();
+
+                if (clear)
+                {
+                    page.PageRawData.Clear();
+                }
 
                 page.InitHeader(PageClearMode.None, PageBlockFlags.IsLogicalSegment|(i==0 ? PageBlockFlags.IsLogicalSegmentRoot : PageBlockFlags.None), type, 1, 1);
 
@@ -127,7 +141,8 @@ namespace Typhon.Engine
         {
             for (int i = 0; i < Length; i++)
             {
-                using var p = GetPageReadWrite(0);
+                using var p = GetPageExclusiveAccessor(i);
+                p.SetPageDirty();
                 p.PageRawData.Clear();
             }
         }
@@ -136,172 +151,10 @@ namespace Typhon.Engine
         {
             for (int i = 0; i < Length; i++)
             {
-                using var p = GetPageReadWrite(0);
+                using var p = GetPageExclusiveAccessor(i);
+                p.SetPageDirty();
                 p.LogicalSegmentData.Fill(value);
             }
-        }
-
-        public delegate bool ReadOnlyAction<T>(ref ReadOnlyEnumerator<T> obj) where T : unmanaged;
-        public delegate bool ReadWriteAction<T>(ref ReadWriteEnumerator<T> obj) where T : unmanaged;
-
-        /// <summary>
-        /// Iterate through all elements of the logical segment for read-only access
-        /// </summary>
-        /// <typeparam name="T">The type of the element</typeparam>
-        /// <param name="action">The lambda to execute on each elements, the iteration will stop if the lambda returns <c>false</c></param>
-        /// <remarks>
-        /// This way to iterate is much slower than a 2 nested for-loop, use it only when performance are not critical
-        /// </remarks>
-        public void ForEachReadOnly<T>(ReadOnlyAction<T> action) where T : unmanaged
-        {
-            var e = new ReadOnlyEnumerator<T>(this);
-            try
-            {
-                while (e.MoveNext())
-                {
-                    if (action(ref e) == false)
-                    {
-                        break;
-                    }
-                }
-            }
-            finally
-            {
-                e.Dispose();
-            }
-        }
-
-        /// <summary>
-        /// Iterate through all elements of the logical segment for read-write access
-        /// </summary>
-        /// <typeparam name="T">The type of the element</typeparam>
-        /// <param name="action">The lambda to execute on each elements, the iteration will stop if the lambda returns <c>false</c></param>
-        /// <remarks>
-        /// This way to iterate is much slower than a 2 nested for-loop, use it only when performance are not critical
-        /// </remarks>
-        public void ForEachReadWrite<T>(ReadWriteAction<T> action) where T : unmanaged
-        {
-            var e = new ReadWriteEnumerator<T>(this);
-            try
-            {
-                while (e.MoveNext())
-                {
-                    if (action(ref e) == false)
-                    {
-                        break;
-                    }
-                }
-            }
-            finally
-            {
-                e.Dispose();
-            }
-        }
-
-        public struct ReadOnlyEnumerator<T> : IDisposable where T : unmanaged
-        {
-            private readonly LogicalSegment _segment;
-            private readonly int _elementSize;
-            private int _curPageIndex;
-            private int _index;
-            private unsafe byte* _item;
-            private int _nextPageSwitch;
-            private PageReadOnlyAccessor _pageAccessor;
-
-            unsafe public ReadOnlyEnumerator(LogicalSegment segment)
-            {
-                _segment = segment;
-                _curPageIndex = -1;
-                _pageAccessor = default;
-                _index = -1;
-                _item = null;
-                _nextPageSwitch = 0;
-                _elementSize = Marshal.SizeOf<T>();
-            }
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining|MethodImplOptions.AggressiveOptimization)]
-            unsafe internal bool MoveNext()
-            {
-                if (++_index >= _nextPageSwitch)
-                {
-                    if (++_curPageIndex >= _segment.Length)
-                    {
-                        return false;
-                    }
-                    _pageAccessor.Dispose();
-                    _pageAccessor = _segment._manager.VDM.RequestPageReadOnly(_segment.Pages[_curPageIndex]);
-                    _nextPageSwitch = LogicalSegment.GetMaxItemCount<T>(_curPageIndex == 0);
-                    _index = 0;
-                    _item = _pageAccessor.PageAddress;
-                }
-                else
-                {
-                    _item += _elementSize;
-                }
-
-                return true;
-            }
-
-            unsafe public Span<T> AsSpan => new(_item, _elementSize);
-
-            unsafe public T Current => Unsafe.AsRef<T>(_item);
-            unsafe public ref readonly T CurrentAsRef => ref Unsafe.AsRef<T>(_item);
-            public int CurrentIndex => _index;
-            public uint PageId => _pageAccessor.PageId;
-            public int CurrentPageCapacity => _nextPageSwitch;
-
-            public void Dispose() => _pageAccessor.Dispose();
-        }
-
-        public struct ReadWriteEnumerator<T> : IDisposable where T : unmanaged
-        {
-            private readonly LogicalSegment _segment;
-            private readonly int _elementSize;
-            private int _curPageIndex;
-            private int _index;
-            private unsafe byte* _item;
-            private int _nextPageSwitch;
-            private PageReadWriteAccessor _pageAccessor;
-
-            unsafe public ReadWriteEnumerator(LogicalSegment segment)
-            {
-                _segment = segment;
-                _curPageIndex = -1;
-                _pageAccessor = default;
-                _index = -1;
-                _item = null;
-                _nextPageSwitch = 0;
-                _elementSize = Marshal.SizeOf<T>();
-            }
-
-            unsafe public bool MoveNext()
-            {
-                if (++_index >= _nextPageSwitch)
-                {
-                    if (++_curPageIndex >= _segment.Length)
-                    {
-                        return false;
-                    }
-                    _pageAccessor.Dispose();
-                    _pageAccessor = _segment._manager.VDM.RequestPageReadWrite(_segment.Pages[_curPageIndex]);
-                    _nextPageSwitch = LogicalSegment.GetMaxItemCount<T>(_curPageIndex == 0);
-                    _index = 0;
-                    _item = _pageAccessor.PageAddress;
-                }
-                else
-                {
-                    _item += _elementSize;
-                }
-
-                return true;
-            }
-
-            unsafe public T Current => Unsafe.AsRef<T>(_item);
-            unsafe public ref T CurrentAsRef => ref Unsafe.AsRef<T>(_item);
-            public uint PageId => _pageAccessor.PageId;
-            public int CurrentPageCapacity => _nextPageSwitch;
-
-            public void Dispose() => _pageAccessor.Dispose();
         }
     }
 }

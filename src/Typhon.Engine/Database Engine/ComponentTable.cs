@@ -19,7 +19,7 @@ namespace Typhon.Engine
         
         private byte* _componentAddr;
         private int _rowVersionStorageChunkId;
-        private PageReadWriteAccessor _accessor;
+        private PageAccessor _accessor;
 
         public ComponentReadWriteAccessor(DatabaseEngine dbe)
         {
@@ -64,10 +64,10 @@ namespace Typhon.Engine
         private const int ComponentSegmentStartingSize = 4;
         private const int MainIndexSegmentStartingSize = 4;
 
-        private static readonly (int, int) IndexAccessPoolSize = (16, 16);
+        private static readonly int IndexAccessPoolSize = 16;
 
         private DatabaseEngine _dbe;
-        private ChunkBasedSegmentAccessorPool _mainIndexAccessPool;
+        private ChunkRandomAccessor _mainIndexAccessor;
 
         public ChunkBasedSegment ComponentSegment { get; private set; }
         public ChunkBasedSegment MainIndexSegment { get; private set; }
@@ -88,8 +88,8 @@ namespace Typhon.Engine
             ComponentSegment = lsm.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, _rowTotalSize);
             MainIndexSegment = lsm.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(Index64Chunk));
 
-            _mainIndexAccessPool = new ChunkBasedSegmentAccessorPool(MainIndexSegment, IndexAccessPoolSize.Item1, IndexAccessPoolSize.Item2);
-            _mainIndex = new LongSingleBTree(MainIndexSegment, _mainIndexAccessPool);
+            _mainIndexAccessor = MainIndexSegment.CreateChunkRandomAccessor(IndexAccessPoolSize);
+            _mainIndex = new LongSingleBTree(MainIndexSegment, _mainIndexAccessor);
 
             _tempRowsAllocator = new BlockAllocator(_rowTotalSize, 256);
         }
@@ -98,7 +98,7 @@ namespace Typhon.Engine
         {
             if (ComponentSegment == null) return;
 
-            _mainIndexAccessPool.Dispose();
+            _mainIndexAccessor.Dispose();
 
             MainIndexSegment.Dispose();
             ComponentSegment.Dispose();
@@ -120,7 +120,7 @@ namespace Typhon.Engine
                 MainIndexSegment = MainIndexSegment.SerializeSettings()
             };
 
-        internal unsafe byte* CreateComponent(ref PageReadWriteAccessor accessor, out int rowVersionStorageChunkId)
+        internal unsafe byte* CreateComponent(ref PageAccessor accessor, out int rowVersionStorageChunkId)
         {
             // Allocate the chunk that will store the component's row
             var componentChunkId = ComponentSegment.AllocateChunk(false);
@@ -158,7 +158,7 @@ namespace Typhon.Engine
         internal unsafe int AllocRowVersionStorage(int firstRowChunkId)
         {
             var chunkId = MainIndexSegment.AllocateChunk(false);
-            var chunkAddr = _mainIndexAccessPool.RW.GetChunkAddress(chunkId);
+            var chunkAddr = _mainIndexAccessor.GetChunkAddress(chunkId);
 
             // Initialize the header
             var header = ((RowVersionStorageHeader*)chunkAddr);
@@ -175,19 +175,19 @@ namespace Typhon.Engine
             return chunkId;
         }
 
-        internal unsafe byte* ReadComponent(long pk, ref PageReadWriteAccessor accessor)
+        internal unsafe byte* ReadComponent(long pk, ref PageAccessor accessor)
         {
             return null;
         }
 
-        private unsafe byte* FetchChunk(ref PageReadWriteAccessor accessor, int chunkId)
+        private unsafe byte* FetchChunk(ref PageAccessor accessor, int chunkId)
         {
             var (si, off) = ComponentSegment.GetChunkLocation(chunkId);
 
             if (accessor.IsValid == false || accessor.PageId != ComponentSegment.Pages[si])
             {
                 if (accessor.IsValid)   accessor.Dispose();
-                accessor = ComponentSegment.GetPageReadWrite(si);
+                accessor = ComponentSegment.GetPageExclusiveAccessor(si);
             }
             
             return accessor.GetElementAddr(off, ComponentSegment.Stride, si == 0);

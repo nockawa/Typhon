@@ -6,25 +6,26 @@ using System.Threading;
 namespace Typhon.Engine
 {
     /// <summary>
-    /// Synchronization type that allow multiple concurrent readers and one exclusive writer.
+    /// Synchronization type that allows multiple concurrent shared access or one exclusive.
     /// Doesn't allow re-entrant calls, burn CPU cycle on wait, using <see cref="SpinWait"/>
+    /// Costs 8 bytes of data.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
-    public struct ReaderWriterSpinLock
+    public struct AccessControl
     {
         public void Reset()
         {
             _lockedByThreadId = 0;
-            _concurrentUsedCounter = 0;
+            _sharedUsedCounter = 0;
         }
 
         private volatile int _lockedByThreadId;
-        private volatile int _concurrentUsedCounter;
+        private volatile int _sharedUsedCounter;
 
         public int LockedByThreadId => _lockedByThreadId;
-        public int ConcurrentUsedCounter => _concurrentUsedCounter;
+        public int SharedUsedCounter => _sharedUsedCounter;
 
-        public void EnterRead()
+        public void EnterSharedAccess()
         {
             // Currently exclusively locked, wait it's over
             if (_lockedByThreadId != 0)
@@ -36,41 +37,41 @@ namespace Typhon.Engine
                 }
             }
 
-            // Increment concurrent usage
-            Interlocked.Increment(ref _concurrentUsedCounter);
+            // Increment shared usage
+            Interlocked.Increment(ref _sharedUsedCounter);
 
-            // Double check on exclusive, in a loop because we need to restore the concurrent counter to prevent deadlock
+            // Double check on exclusive, in a loop because we need to restore the shared counter to prevent deadlock
             // So we loop until we meet the criteria
             while (_lockedByThreadId != 0)
             {
-                Interlocked.Decrement(ref _concurrentUsedCounter);
+                Interlocked.Decrement(ref _sharedUsedCounter);
                 var sw = new SpinWait();
                 while (_lockedByThreadId != 0)
                 {
                     sw.SpinOnce();
                 }
-                Interlocked.Increment(ref _concurrentUsedCounter);
+                Interlocked.Increment(ref _sharedUsedCounter);
             }
         }
 
-        public void ExitRead() => Interlocked.Decrement(ref _concurrentUsedCounter);
+        public void ExitSharedAccess() => Interlocked.Decrement(ref _sharedUsedCounter);
 
-        public void EnterWrite()
+        public void EnterExclusiveAccess()
         {
             var ct = Thread.CurrentThread.ManagedThreadId;
 
             // Fast path: exclusive lock works immediately
             if (Interlocked.CompareExchange(ref _lockedByThreadId, ct, 0) == 0)
             {
-                // No concurrent use: we're good to go
-                if (_concurrentUsedCounter == 0)
+                // No shared use: we're good to go
+                if (_sharedUsedCounter == 0)
                 {
                     return;
                 }
 
-                // Otherwise wait the concurrent use is over
+                // Otherwise wait the shared use is over
                 var sw = new SpinWait();
-                while (_concurrentUsedCounter != 0)
+                while (_sharedUsedCounter != 0)
                 {
                     sw.SpinOnce();
                 }
@@ -78,7 +79,7 @@ namespace Typhon.Engine
                 return;
             }
 
-            // Slow path: wait the current concurrent use if over
+            // Slow path: wait the shared concurrent use is over
             {
                 var sw = new SpinWait();
                 while (Interlocked.CompareExchange(ref _lockedByThreadId, ct, 0) != 0)
@@ -86,26 +87,26 @@ namespace Typhon.Engine
                     sw.SpinOnce();
                 }
 
-                // Exit if there's no concurrent access neither
-                if (_concurrentUsedCounter == 0)
+                // Exit if there's no shared access neither
+                if (_sharedUsedCounter == 0)
                 {
                     return;
                 }
 
-                // Otherwise wait the concurrent access to be over
-                while (_concurrentUsedCounter != 0)
+                // Otherwise wait the shared access to be over
+                while (_sharedUsedCounter != 0)
                 {
                     sw.SpinOnce();
                 }
             }
         }
 
-        public bool TryPromoteToWrite()
+        public bool TryPromoteToExclusiveAccess()
         {
             var ct = Thread.CurrentThread.ManagedThreadId;
 
-            // We can enter only if we are the only user (counter == 1)
-            if (_concurrentUsedCounter != 1)
+            // We can enter only if we are the only user (_sharedUsedCounter == 1)
+            if (_sharedUsedCounter != 1)
             {
                 return false;
             }
@@ -116,8 +117,8 @@ namespace Typhon.Engine
                 return false;
             }
 
-            // Double check now we're locked that we're still the only concurrent user
-            if (_concurrentUsedCounter != 1)
+            // Double check now we're locked that we're still the only shared user
+            if (_sharedUsedCounter != 1)
             {
                 // Another concurrent user came at the same time, remove exclusive access and quit with failure
                 _lockedByThreadId = 0;
@@ -127,7 +128,7 @@ namespace Typhon.Engine
             return true;
         }
 
-        public void DemoteWriteAccess() => _lockedByThreadId = 0;
+        public void DemoteFromExclusiveAccess() => _lockedByThreadId = 0;
 
         public void ExitWrite() => _lockedByThreadId = 0;
     }
