@@ -215,7 +215,7 @@ namespace Typhon.Engine
 
         private void LockBuffer(ref VariableSizedBufferRootHeader rh) => rh.Lock.EnterExclusiveAccess();
 
-        private void ReleaseLockOnBuffer(ref VariableSizedBufferRootHeader header) => header.Lock.ExitWrite();
+        private void ReleaseLockOnBuffer(ref VariableSizedBufferRootHeader header) => header.Lock.ExitExclusiveAccess();
     }
 
     [StructLayout(LayoutKind.Sequential)]

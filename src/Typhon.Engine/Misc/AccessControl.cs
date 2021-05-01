@@ -130,6 +130,6 @@ namespace Typhon.Engine
 
         public void DemoteFromExclusiveAccess() => _lockedByThreadId = 0;
 
-        public void ExitWrite() => _lockedByThreadId = 0;
+        public void ExitExclusiveAccess() => _lockedByThreadId = 0;
     }
 }

@@ -81,12 +81,12 @@ namespace Typhon.Engine
     {
         private ComponentTable _fieldsTable;
         private ComponentTable _componentsTable;
-        private ConcurrentDictionary<string, ComponentTable> _componentTableByTypeName;
+        private ConcurrentDictionary<Type, ComponentTable> _componentTableByType;
         private long _curPrimaryKey;
 
         private void ConstructComponentStore()
         {
-            _componentTableByTypeName = new ConcurrentDictionary<string, ComponentTable>();
+            _componentTableByType = new ConcurrentDictionary<Type, ComponentTable>();
             _curPrimaryKey = 0;
             
         }
@@ -95,24 +95,32 @@ namespace Typhon.Engine
 
         private unsafe void CreateComponentStore(RootFileHeader* rootFileHeader)
         {
-            _databaseDefinitions.CreateFromRowAccessor<FieldRow>();
-            _databaseDefinitions.CreateFromRowAccessor<ComponentRow>();
+            RegisterComponentFromRowAccessor<FieldRow>();
+            RegisterComponentFromRowAccessor<ComponentRow>();
 
-            _fieldsTable = new ComponentTable();
-            _fieldsTable.Create(this, _databaseDefinitions.GetComponent(FieldRow.SchemaName));
-
-            _componentsTable = new ComponentTable();
-            _componentsTable.Create(this, _databaseDefinitions.GetComponent(ComponentRow.SchemaName));
+            _fieldsTable = GetComponentTable<FieldRow>();
+            _componentsTable = GetComponentTable<ComponentRow>();
 
             rootFileHeader->DatabaseEngine = SerializeSettings();
+        }
+
+        public bool RegisterComponentFromRowAccessor<T>() where T : unmanaged
+        {
+            var dcd = _dbd.CreateFromRowAccessor<T>();
+            if (dcd == null) return false;
+
+            var componentTable = new ComponentTable();
+            componentTable.Create(this, _dbd.GetComponent(dcd.Name));
+            _componentTableByType.TryAdd(typeof(T), componentTable);
+
+            return true;
         }
 
         public ComponentTable GetComponentTable<T>() where T : unmanaged => GetComponentTable(typeof(T));
 
         public ComponentTable GetComponentTable(Type type)
         {
-            string rowAccessorTypeName = type.FullName;
-            if (_componentTableByTypeName.TryGetValue(rowAccessorTypeName, out var ct) == false)
+            if (_componentTableByType.TryGetValue(type, out var ct) == false)
             {
                 return null;
             }

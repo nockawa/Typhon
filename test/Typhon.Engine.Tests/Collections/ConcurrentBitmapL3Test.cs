@@ -1,10 +1,8 @@
-using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using System;
 using System.Collections.Generic;
-using Typhon.Engine;
 
-namespace Typhon.Engine.Tests
+namespace Typhon.Engine.Tests.Collections
 {
     public class ConcurrentBitmapL3Test
     {

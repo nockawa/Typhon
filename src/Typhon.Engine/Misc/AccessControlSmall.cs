@@ -24,6 +24,8 @@ namespace Typhon.Engine
 
         private volatile int _data;
 
+        public bool IsLockedByCurrentThread => Thread.CurrentThread.ManagedThreadId == LockedByThreadId;
+
         public int LockedByThreadId => _data >> ThreadIdShift;
         public int SharedUsedCounter => _data & SharedUsedCounterMask;
 
@@ -136,6 +138,6 @@ namespace Typhon.Engine
 
         public void DemoteFromExclusiveAccess() => Interlocked.And(ref _data, SharedUsedCounterMask);
 
-        public void ExitWrite() => Interlocked.And(ref _data, SharedUsedCounterMask);
+        public void ExitExclusiveAccess() => Interlocked.And(ref _data, SharedUsedCounterMask);
     }
 }

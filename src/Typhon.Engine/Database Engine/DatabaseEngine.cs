@@ -14,10 +14,29 @@ namespace Typhon.Engine
         private readonly LogicalSegmentManager     _lsm;
         private readonly DiskPageAllocator         _dpa;
         private readonly ILogger<DatabaseEngine>   _log;
-
-        private DatabaseDefinitions _databaseDefinitions;
+        private readonly DatabaseDefinitions       _dbd;
 
         public LogicalSegmentManager LSM => _lsm;
+        public DatabaseDefinitions DBD => _dbd;
+
+        /// <summary>
+        /// Create a transaction in order to make Queries and CRUD operation on the database
+        /// </summary>
+        /// <param name="exclusiveConcurrency">If <c>true</c> the write accesses on the Components will be exclusive: any updated, deleted Components
+        /// will be locked for the rest of the transaction, preventing other transactions in other threads to modify them as well.
+        /// If <c>false</c> the transaction is running in optimistic concurrency mode, allowing concurrent changes across transactions with possible
+        /// conflicts being resolved during commit time.
+        /// </param>
+        /// <returns>The transaction object</returns>
+        /// <remarks>
+        /// Typhon deals with accesses and changes through transaction only, even for query purpose. When the user creates a transaction, "now" (the
+        /// time when the transaction was created) is used as the reference point, every access will be based on the data that existed up to this point.
+        /// Every changes will be isolated from other transactions until the content is committed.
+        /// </remarks>
+        public Transaction NewTransaction(bool exclusiveConcurrency)
+        {
+            return new Transaction(this, exclusiveConcurrency);
+        }
 
         public DatabaseEngine(IConfiguration<DatabaseConfiguration> dbc, VirtualDiskManager vdm, LogicalSegmentManager lsm, DiskPageAllocator dpa, ILogger<DatabaseEngine> log)
         {
@@ -27,7 +46,7 @@ namespace Typhon.Engine
             _log = log;
             _dbc = dbc.Value;
 
-            _databaseDefinitions = new DatabaseDefinitions();
+            _dbd = new DatabaseDefinitions();
             ConstructComponentStore();
 
             // Check the configuration

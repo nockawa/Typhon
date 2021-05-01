@@ -18,7 +18,7 @@ namespace Typhon.Engine
             _objects = new Dictionary<string, DBObjectDefinition>();
         }
 
-        public IDBComponentDefinitionBuilder CreateComponentBuilder(string name) => new IdbComponentDefinitionBuilder(this, name);
+        public IDBComponentDefinitionBuilder CreateComponentBuilder(string name) => new DBComponentDefinitionBuilder(this, name);
 
         public interface IDBComponentDefinitionBuilder
         {
@@ -32,18 +32,18 @@ namespace Typhon.Engine
             IDbComponentFieldDefinitionBuilder IsArray(int length);
         }
 
-        class IdbComponentDefinitionBuilder : IDBComponentDefinitionBuilder
+        class DBComponentDefinitionBuilder : IDBComponentDefinitionBuilder
         {
             private readonly DatabaseDefinitions _owner;
             protected readonly DBComponentDefinition _component;
 
-            public IdbComponentDefinitionBuilder(DatabaseDefinitions owner, string name)
+            public DBComponentDefinitionBuilder(DatabaseDefinitions owner, string name)
             {
                 _owner = owner;
                 _component = new DBComponentDefinition(name);
             }
 
-            protected IdbComponentDefinitionBuilder(DatabaseDefinitions owner, DBComponentDefinition component)
+            protected DBComponentDefinitionBuilder(DatabaseDefinitions owner, DBComponentDefinition component)
             {
                 _owner = owner;
                 _component = component;
@@ -51,7 +51,7 @@ namespace Typhon.Engine
 
             public IDbComponentFieldDefinitionBuilder WithField(int fieldId, string name, FieldType type, int offset)
             {
-                return new IdbComponentFieldDefinitionBuilder(_owner, _component, fieldId, name, type, offset);
+                return new DBComponentFieldDefinitionBuilder(_owner, _component, fieldId, name, type, offset);
             }
 
             public void Build()
@@ -70,7 +70,7 @@ namespace Typhon.Engine
             _components.Add(component.Name, component);
         }
 
-        class IdbComponentFieldDefinitionBuilder : IdbComponentDefinitionBuilder, IDbComponentFieldDefinitionBuilder
+        class DBComponentFieldDefinitionBuilder : DBComponentDefinitionBuilder, IDbComponentFieldDefinitionBuilder
         {
             private DBComponentDefinition.Field _field;
 
@@ -86,7 +86,7 @@ namespace Typhon.Engine
                 return this;
             }
 
-            internal IdbComponentFieldDefinitionBuilder(DatabaseDefinitions owner, DBComponentDefinition component, int fieldId, string fieldName,
+            internal DBComponentFieldDefinitionBuilder(DatabaseDefinitions owner, DBComponentDefinition component, int fieldId, string fieldName,
                 FieldType fieldType, int offset) : base(owner, component)
             {
                 DBComponentDefinition.Field.CheckName(fieldName);
@@ -98,12 +98,14 @@ namespace Typhon.Engine
 
         public DBComponentDefinition GetComponent(string componentName) => _components.TryGetValue(componentName, out var res) == false ? null : res;
 
-        public void CreateFromRowAccessor<T>() where T : unmanaged
+        public DBComponentDefinition CreateFromRowAccessor<T>() where T : unmanaged
         {
             var t = typeof(T);
 
             var ca = t.GetCustomAttribute<ComponentAttribute>();
             var dbc = new DBComponentDefinition((ca != null) ? ca.Name : t.Name);
+
+            if (_components.TryGetValue(dbc.Name, out _)) return null;
 
             var members = t.GetFields();
             var fieldId = 0;
@@ -143,6 +145,7 @@ namespace Typhon.Engine
             dbc.Build();
 
             _components.Add(dbc.Name, dbc);
+            return dbc;
         }
     }
 }

@@ -296,7 +296,7 @@ Here come the drones!";
                             s.B = r.Next(0, 100000);
                             s.R = s.A + s.B;
 
-                            rwsl.ExitWrite();
+                            rwsl.ExitExclusiveAccess();
                         }
 
                         // Read use case
