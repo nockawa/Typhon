@@ -16,15 +16,11 @@ namespace Typhon.Engine.Tests.Database_Engine
     [StructLayout(LayoutKind.Sequential)]
     public struct CompA
     {
-        [Field(IsPrimaryKey = true)]
-        public int Id;
-
         public const string SchemaName = "Typhon.Schema.UnitTest.CompA";
-        public int A;
+        public long A;
 
-        public CompA(int a)
+        public CompA(long a)
         {
-            Id = default;
             A = a;
         }
     }
@@ -33,16 +29,12 @@ namespace Typhon.Engine.Tests.Database_Engine
     [StructLayout(LayoutKind.Sequential)]
     public struct CompB
     {
-        [Field(IsPrimaryKey = true)]
-        public int Id;
-
         public const string SchemaName = "Typhon.Schema.UnitTest.CompB";
         public int A;
         public float B;
 
         public CompB(int a, float b)
         {
-            Id = default;
             A = a;
             B = b;
         }
@@ -52,16 +44,33 @@ namespace Typhon.Engine.Tests.Database_Engine
     [StructLayout(LayoutKind.Sequential)]
     public struct CompC
     {
-        [Field(IsPrimaryKey = true)]
-        public int Id;
-
         public const string SchemaName = "Typhon.Schema.UnitTest.CompC";
         public String64 String;
 
         public CompC(string str)
         {
-            Id = default;
             String.AsString = str;
+        }
+    }
+
+    [Component(SchemaName)]
+    [StructLayout(LayoutKind.Sequential)]
+    public struct CompD
+    {
+        public const string SchemaName = "Typhon.Schema.UnitTest.CompD";
+
+        [Index(AllowMultiple = true)]
+        public float A;
+        [Index]
+        public int B;
+        [Index(AllowMultiple = true)]
+        public double C;
+
+        public CompD(float a, int b, double c)
+        {
+            A = a;
+            B = b;
+            C = c;
         }
     }
 
@@ -120,6 +129,7 @@ namespace Typhon.Engine.Tests.Database_Engine
             _dbe.RegisterComponentFromRowAccessor<CompA>();
             _dbe.RegisterComponentFromRowAccessor<CompB>();
             _dbe.RegisterComponentFromRowAccessor<CompC>();
+            _dbe.RegisterComponentFromRowAccessor<CompD>();
         }
 
         [TearDown]
@@ -606,6 +616,46 @@ namespace Typhon.Engine.Tests.Database_Engine
                 Assert.That(oa, Is.EqualTo(ra));
                 Assert.That(ob, Is.EqualTo(rb));
                 Assert.That(oc, Is.EqualTo(rc));
+            }
+        }
+
+        [Test]
+        public void IndexTest()
+        {
+            long e1;
+            var ca = new CompD(11.0f, 12, 13.0);
+
+            {
+                using var t = _dbe.NewTransaction(true);
+
+                var a = new CompD(1.0f, 2, 3.0);
+                e1 = t.CreateEntity(ref a);
+                Assert.That(e1, Is.Not.Zero);
+                Assert.That(t.GetComponentRevision<CompD>(e1), Is.EqualTo(1));
+
+                var res = t.Commit();
+                Assert.That(res, Is.True);
+                Assert.That(t.CommittedOperationCount, Is.EqualTo(1));
+            }
+
+            {
+                using var t = _dbe.NewTransaction(true);
+
+                t.UpdateEntity(e1, ref ca);
+                Assert.That(t.GetComponentRevision<CompD>(e1), Is.EqualTo(2));
+
+                var res = t.Commit();
+                Assert.That(res, Is.True);
+                Assert.That(t.CommittedOperationCount, Is.EqualTo(1));
+            }
+
+            {
+                using var t = _dbe.NewTransaction(true);
+                var a = new CompD();
+                t.ReadEntity(e1, out a);
+
+                Assert.That(t.GetComponentRevision<CompD>(e1), Is.EqualTo(2));
+                Assert.That(a, Is.EqualTo(ca));
             }
         }
 

@@ -127,12 +127,6 @@ namespace Typhon.Engine
 
                     var field = dbc.CreateField(fa?.FieldId ?? fieldId++, fieldName, fieldType, fieldOffset);
 
-                    // Primary key
-                    if (fa?.IsPrimaryKey == true)
-                    {
-                        field.IsPrimaryKey = true;
-                    }
-
                     // Index related data
                     if (ia != null)
                     {

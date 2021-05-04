@@ -740,7 +740,7 @@ namespace Typhon.Engine.BPTree
         }
     }
 
-    public class DoubleMultipleBTree : L64MultipleBTree<long>
+    public class DoubleMultipleBTree : L64MultipleBTree<double>
     {
         public DoubleMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
         {

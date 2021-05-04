@@ -24,9 +24,9 @@ namespace Typhon.Engine
         Float       = 6,
         Double      = 7,
         Char        = 8,
-        String      = 9,
-        String64    = 10,
-        String1024  = 11,
+        String64    = 9,
+        String1024  = 10,
+        String      = 11,
         Point2F     = 12,
         Point3F     = 13,
         Point4F     = 14,
@@ -46,6 +46,7 @@ namespace Typhon.Engine
 
         public IReadOnlyDictionary<string, Field> FieldsByName => _fieldsByName;
 
+        public int MaxFieldId { get; private set; }
         public Field this[int index] => _fieldsById[index];
 
         public int GetFieldId(string fieldName)
@@ -57,12 +58,11 @@ namespace Typhon.Engine
         public int RowSize { get; private set; }
 
         public int IndicesCount { get; private set; }
+        public int MultipleIndicesCount { get; private set; }
 
         [DebuggerDisplay("Id: {FieldId}, Name: {Name}, Type: {Type}, OffsetInRow: {OffsetInRow}")]
         public class Field
         {
-            private bool _isPrimaryKey;
-
             public Field(int fieldId, string name, FieldType type, int offsetInRow)
             {
                 FieldId = fieldId;
@@ -80,16 +80,6 @@ namespace Typhon.Engine
             public int OffsetInRow { get; }
 
             public bool IsStatic { get; set; }
-
-            public bool IsPrimaryKey
-            {
-                get => _isPrimaryKey;
-                set
-                {
-                    HasIndex = value;
-                    _isPrimaryKey = value;
-                }
-            }
 
             public bool HasIndex { get; set; }
             
@@ -122,6 +112,7 @@ namespace Typhon.Engine
             }
 
             public int SizeInRow => Type.SizeInRow() * (IsArray ? ArrayLength : 1);
+            public bool DoesFieldTypeSupportIndex() => (Type >= FieldType.Byte) && ((FieldType)((int)Type&0xFF) <= FieldType.String64);
         }
 
         internal DBComponentDefinition(string name)
@@ -145,9 +136,9 @@ namespace Typhon.Engine
         {
             var fields = _fieldsByName.Values;
             var max = fields.Where(f => f.IsStatic == false).Max(v => v.FieldId);
-            var hasPK = fields.Any(f => f.IsPrimaryKey);
 
-            _fieldsById = new Field[max+1];
+            MaxFieldId = max + 1;
+            _fieldsById = new Field[MaxFieldId];
 
             var ids = new HashSet<int>();
             var names = new HashSet<string>();
@@ -174,12 +165,20 @@ namespace Typhon.Engine
                 }
                 offsets.Add(field.OffsetInRow, field);
 
-                // By default, if not specified by the user, the primary key is set to the field of ID[0]
-                if (hasPK == false && field.FieldId == 0) field.IsPrimaryKey = true;
-
                 _fieldsById[field.FieldId] = field;
 
-                if (field.HasIndex) ++IndicesCount;
+                if (field.HasIndex)
+                {
+                    if (!field.DoesFieldTypeSupportIndex())
+                    {
+                        throw new Exception($"The field type {field.Type} does not support index for field {field.Name}.");
+                    }
+                    ++IndicesCount;
+                    if (field.IndexAllowMultiple)
+                    {
+                        ++MultipleIndicesCount;
+                    }
+                }
 
                 if (lastField == null || lastField.OffsetInRow < field.OffsetInRow)
                 {

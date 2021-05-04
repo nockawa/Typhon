@@ -329,6 +329,7 @@ namespace Typhon.Engine.BPTree
         {
             Comparer = Comparer<TKey>.Default;
             _segment = segment;
+            // ReSharper disable once VirtualMemberCallInConstructor
             _storage = GetStorage();
             _storage.Initialize(this, _segment, accessor);
             // We make sure the chunk 0 is reserved so we can consider any ChunkId == 0 as a "null pointer".

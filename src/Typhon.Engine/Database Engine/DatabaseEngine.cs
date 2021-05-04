@@ -1,23 +1,95 @@
 ﻿using Microsoft.Extensions.Logging;
 using System.Runtime.CompilerServices;
 using System;
+using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
+using System.Threading;
 
 [assembly: InternalsVisibleTo("Typhon.Engine.Tests")]
 [assembly: InternalsVisibleTo("Typhon.Collections.Benchmark")]
 
 namespace Typhon.Engine
 {
-    public partial class DatabaseEngine : IInitializable, IDisposable
+    [AttributeUsage(AttributeTargets.Struct)]
+    public sealed class ComponentAttribute : Attribute
+    {
+        public string Name { get; }
+
+        public ComponentAttribute(string name)
+        {
+            Name = name;
+        }
+    }
+
+    [AttributeUsage(AttributeTargets.Field)]
+    public sealed class FieldAttribute : Attribute
+    {
+        public int? FieldId { get; set; }
+        public string Name { get; set; }
+    }
+
+    [AttributeUsage(AttributeTargets.Field)]
+    public sealed class IndexAttribute : Attribute
+    {
+        public bool AllowMultiple { get; set; }
+    }
+
+    [Component(SchemaName)]
+    [StructLayout(LayoutKind.Sequential)]
+    public struct FieldRow
+    {
+        public const string SchemaName = "Typhon.Schema.Field";
+
+        public String64 Name;
+
+        [Index(AllowMultiple = true)]
+        public int ComponentFK;
+
+        public int FieldId;
+        public FieldType Type;
+        public uint IndexSPI;
+        public bool IsStatic;
+        public bool HasIndex;
+        public bool IndexAllowMultiple;
+        public int ArrayLength;
+        public bool IsArray => ArrayLength > 0;
+    }
+
+    [Component(SchemaName)]
+    [StructLayout(LayoutKind.Sequential)]
+    public struct ComponentRow
+    {
+        public const string SchemaName = "Typhon.Schema.Component";
+
+        public String64 Name;
+        public String64 POCOType;
+        public int RowSize;
+
+        public uint TableSPI;
+
+        public ComponentCollection<FieldRow> Fields;
+    }
+
+    public struct ComponentCollection<T> where T : unmanaged
+    {
+
+    }
+
+    public class DatabaseEngine : IInitializable, IDisposable
     {
         private readonly DatabaseConfiguration     _dbc;
         private readonly VirtualDiskManager        _vdm;
-        private readonly LogicalSegmentManager     _lsm;
         private readonly DiskPageAllocator         _dpa;
         private readonly ILogger<DatabaseEngine>   _log;
-        private readonly DatabaseDefinitions       _dbd;
 
-        public LogicalSegmentManager LSM => _lsm;
-        public DatabaseDefinitions DBD => _dbd;
+        private ComponentTable _fieldsTable;
+        private ComponentTable _componentsTable;
+        private ConcurrentDictionary<Type, ComponentTable> _componentTableByType;
+        private long _curPrimaryKey;
+
+        public LogicalSegmentManager LSM { get; }
+
+        public DatabaseDefinitions DBD { get; }
 
         /// <summary>
         /// Create a transaction in order to make Queries and CRUD operation on the database
@@ -33,20 +105,17 @@ namespace Typhon.Engine
         /// time when the transaction was created) is used as the reference point, every access will be based on the data that existed up to this point.
         /// Every changes will be isolated from other transactions until the content is committed.
         /// </remarks>
-        public Transaction NewTransaction(bool exclusiveConcurrency)
-        {
-            return new Transaction(this, exclusiveConcurrency);
-        }
+        public Transaction NewTransaction(bool exclusiveConcurrency) => new(this, exclusiveConcurrency);
 
         public DatabaseEngine(IConfiguration<DatabaseConfiguration> dbc, VirtualDiskManager vdm, LogicalSegmentManager lsm, DiskPageAllocator dpa, ILogger<DatabaseEngine> log)
         {
             _vdm = vdm;
-            _lsm = lsm;
+            LSM = lsm;
             _dpa = dpa;
             _log = log;
             _dbc = dbc.Value;
 
-            _dbd = new DatabaseDefinitions();
+            DBD = new DatabaseDefinitions();
             ConstructComponentStore();
 
             // Check the configuration
@@ -74,12 +143,12 @@ namespace Typhon.Engine
                 return;
             }
             _vdm.Initialize();
-            _lsm.Initialize();
+            LSM.Initialize();
             _dpa.Initialize();
 
             IsInitialized = true;
-            return;
         }
+
         public bool IsInitialized { get; private set; }
         public bool IsDisposed { get; private set; }
         public int ReferenceCounter { get; private set; }
@@ -92,10 +161,64 @@ namespace Typhon.Engine
             }
 
             _dpa.Dispose();
-            _lsm.Dispose();
+            LSM.Dispose();
             _vdm.Dispose();
 
             IsDisposed = true;
         }
+        private void ConstructComponentStore()
+        {
+            _componentTableByType = new ConcurrentDictionary<Type, ComponentTable>();
+            _curPrimaryKey = 0;
+        }
+
+        internal long GetNewPrimaryKey() => Interlocked.Increment(ref _curPrimaryKey);
+
+        private unsafe void CreateComponentStore(RootFileHeader* rootFileHeader)
+        {
+            RegisterComponentFromRowAccessor<FieldRow>();
+            RegisterComponentFromRowAccessor<ComponentRow>();
+
+            _fieldsTable = GetComponentTable<FieldRow>();
+            _componentsTable = GetComponentTable<ComponentRow>();
+
+            rootFileHeader->DatabaseEngine = SerializeSettings();
+        }
+
+        public bool RegisterComponentFromRowAccessor<T>() where T : unmanaged
+        {
+            var dcd = DBD.CreateFromRowAccessor<T>();
+            if (dcd == null) return false;
+
+            var componentTable = new ComponentTable();
+            componentTable.Create(this, DBD.GetComponent(dcd.Name));
+            _componentTableByType.TryAdd(typeof(T), componentTable);
+
+            return true;
+        }
+
+        public ComponentTable GetComponentTable<T>() where T : unmanaged => GetComponentTable(typeof(T));
+
+        public ComponentTable GetComponentTable(Type type)
+        {
+            if (_componentTableByType.TryGetValue(type, out var ct) == false)
+            {
+                return null;
+            }
+
+            return ct;
+        }
+        internal struct SerializationData
+        {
+            public ComponentTable.SerializationData FieldsTable;
+            public ComponentTable.SerializationData ComponentsTable;
+        }
+
+        internal SerializationData SerializeSettings() =>
+            new()
+            {
+                FieldsTable = _fieldsTable.SerializeSettings(),
+                ComponentsTable = _componentsTable.SerializeSettings()
+            };
     }
 }

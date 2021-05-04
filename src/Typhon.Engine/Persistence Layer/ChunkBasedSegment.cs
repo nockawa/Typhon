@@ -116,6 +116,12 @@ namespace Typhon.Engine
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        public unsafe Span<byte> GetChunkAsSpan(int index, bool pin = false, bool dirtyPage = false) => new(GetChunkAddress(index, pin, dirtyPage), _stride);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        public unsafe ReadOnlySpan<byte> GetChunkAsReadOnlySpan(int index, bool pin = false, bool dirtyPage = false) => new(GetChunkAddress(index, pin, dirtyPage), _stride);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         unsafe internal byte* GetChunkAddress(int index, bool pin = false, bool dirtyPage = false)
         {
             var (si, off) = _owner.GetChunkLocation(index);
