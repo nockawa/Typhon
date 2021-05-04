@@ -23,7 +23,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "docs", "doc\docs.csproj", "
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Typhon.Engine.Tests", "test\Typhon.Engine.Tests\Typhon.Engine.Tests.csproj", "{B76CFDEF-5599-4A6A-A2D1-1AA392EF2A19}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Typhon.Collections.Benchmark", "test\Typhon.Collections.Benchmark\Typhon.Collections.Benchmark.csproj", "{B5AA6546-E2A1-478F-A5EF-8DAF4CF6AF9A}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Typhon.Collections.Benchmark", "test\Typhon.Collections.Benchmark\Typhon.Collections.Benchmark.csproj", "{B5AA6546-E2A1-478F-A5EF-8DAF4CF6AF9A}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

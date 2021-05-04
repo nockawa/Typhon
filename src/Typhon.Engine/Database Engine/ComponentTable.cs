@@ -8,12 +8,6 @@ using Typhon.Engine.BPTree;
 
 namespace Typhon.Engine
 {
-    internal struct ComponentRowHeader
-    {
-        public long Revision;       // Incremented every time a row content is changed
-        public long Timestamp;      // Timestamp of the last change
-    }
-
     public unsafe class ComponentTable : IDisposable
     {
         private const int ComponentSegmentStartingSize = 4;
@@ -38,8 +32,15 @@ namespace Typhon.Engine
 
         private BTree<long> _mainIndex;
         private DBComponentDefinition _definition;
-        private int _rowOverhead => sizeof(ComponentRowHeader) + (_definition.IndicesCount * sizeof(int));
-        private int _rowTotalSize => _definition.RowSize + _rowOverhead;
+        internal int RowOverhead => _definition.IndicesCount * sizeof(int);
+        internal int RowTotalSize => _definition.RowSize + RowOverhead;
+
+        internal struct FieldInRowInfo
+        {
+            public int Offset;
+            public int Size;
+            public IBTree Index;
+        }
 
         public void Create(DatabaseEngine dbe, DBComponentDefinition definition)
         {
@@ -48,7 +49,7 @@ namespace Typhon.Engine
 
             var lsm = _dbe.LSM;
 
-            ComponentSegment    = lsm.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, _rowTotalSize);
+            ComponentSegment    = lsm.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, RowTotalSize);
             VersionTableSegment = lsm.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, RowVersionDataChunkSize);
             MainIndexSegment    = lsm.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(Index64Chunk));
 
@@ -105,6 +106,7 @@ namespace Typhon.Engine
         {
             public int NextChunkId;
             public AccessControlSmall Control;
+            public int Revision;
             public short FirstItemIndex;
             public short ItemCount;
             public int ChainLength;
@@ -124,6 +126,7 @@ namespace Typhon.Engine
             // Initialize the header
             var header = ((RowVersionStorageHeader*)chunkAddr);
             header->NextChunkId = 0;
+            header->Revision = 1;
             header->Control = default;
             header->FirstItemIndex = 0;
             header->ItemCount = 1;
@@ -150,6 +153,9 @@ namespace Typhon.Engine
 
             // Enter exclusive access for the RVS
             header->Control.EnterExclusiveAccess();
+
+            // Save the current revision, we'll need it to restore it in case of rollback
+            rowInfo.RowRevisionBeforeTransaction = header->Revision;
 
             // Check if we need to add one more chunk to the chain
             if (header->ChainLength * RowVersionCountPerChunk == header->ItemCount)
@@ -196,6 +202,7 @@ namespace Typhon.Engine
 
                 // Add our new entry
                 header->ItemCount++;
+                header->Revision++;
                 var curChunkElements = (RowVersionStorageElement*)(curChunkHeader + 1);
                 curChunkElements[indexInChunk].Tick = tick | RowVersionTransactionExclusiveFlag;
                 curChunkElements[indexInChunk].RowChunkId = rowChunkId;
@@ -216,7 +223,7 @@ namespace Typhon.Engine
             }
         }
 
-        internal bool GetComponentRowChunkIdFromIndex(long pk, long tick, out Transaction.ComponentInfo.RowInfo rowInfo)
+        internal bool GetComponentRowInfoFromIndex(long pk, long tick, out Transaction.ComponentInfo.RowInfo rowInfo)
         {
             if (!_mainIndex.TryGet(pk, out var rowVersionFirstChunkId))
             {
@@ -226,6 +233,9 @@ namespace Typhon.Engine
 
             var firstHeader = (RowVersionStorageHeader*)_versionTableAccessor.GetChunkAddress(rowVersionFirstChunkId, true);
             firstHeader->Control.EnterSharedAccess();       // Lock with shared to allow concurrent walk through the chain but wait on update
+
+            // Save the current revision, we'll need it to restore it in case of rollback
+            rowInfo.RowRevisionBeforeTransaction = firstHeader->Revision;
 
             // Walk through the chain to find the first Item as elements are stored in a circular buffer
             var itemLeftCount = firstHeader->ItemCount;
@@ -287,7 +297,8 @@ namespace Typhon.Engine
             return true;
         }
 
-        internal void CommitRow(long pk, long minTick, ref Transaction.ComponentInfo.RowInfo rowInfo, bool isRollback, bool isExclusive)
+        // Return true if the whole component is delete (all rows versions were delete/rollbacked)
+        internal bool CommitRow(long pk, long minTick, ref Transaction.ComponentInfo.RowInfo rowInfo, bool isRollback, bool isExclusive)
         {
             // Get the chunk of the header, pin it because we might access other chunk while walking the chain
             var firstChunkAddr = _versionTableAccessor.GetChunkAddress(rowInfo.RowVersionFirstChunkId, true);
@@ -377,12 +388,17 @@ namespace Typhon.Engine
                 }
                 curElements[rowInfo.RowVersionIndexInChunk].Tick = 0;
                 curElements[rowInfo.RowVersionIndexInChunk].RowChunkId = 0;
+                firstChunkHeader->Revision = rowInfo.RowRevisionBeforeTransaction;
+
+                dirtyFirstChunk = true;
             }
-            // Remove the Exclusive flag on the row that belongs to the transaction in make it available to all accesses
+            // Remove the Exclusive flag on the row that belongs to the transaction to make it available to all accesses
             else
             {
                 curElements[rowInfo.RowVersionIndexInChunk].Tick &= ~RowVersionTransactionExclusiveFlag;
             }
+
+            bool res = false;
 
             // Check if we can/have to delete the whole row version, either:
             //  - All the items are from a tick older than the required one
@@ -406,6 +422,8 @@ namespace Typhon.Engine
                     _versionTableAccessor.Segment.FreeChunk(curChunkId);
                     curChunkId = nextChunkIdx;
                 } while (curChunkId != 0);
+
+                res = true;
             }
 
             else if (dirtyFirstChunk) _versionTableAccessor.DirtyChunk(rowInfo.RowVersionFirstChunkId);
@@ -413,11 +431,14 @@ namespace Typhon.Engine
             // Cleanups
             firstChunkHeader->Control.ExitExclusiveAccess();
             _versionTableAccessor.UnpinChunk(rowInfo.RowVersionFirstChunkId);
+
+            return res;
         }
 
         internal void UpdateRow(ref Transaction.ComponentInfo.RowInfo rowInfo, long rowTick, bool isDelete, bool exclusiveRow)
         {
             var rowChunkHeader = (RowVersionStorageHeader*)_versionTableAccessor.GetChunkAddress(rowInfo.RowVersionChunkId, dirtyPage: true);
+            rowChunkHeader->Revision++;
             var elements = (RowVersionStorageElement*)(rowChunkHeader + 1);
             elements[rowInfo.RowVersionIndexInChunk].Tick = rowTick | (exclusiveRow ? RowVersionTransactionExclusiveFlag : 0);
             if (isDelete)

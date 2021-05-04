@@ -111,10 +111,41 @@ namespace Typhon.Engine
     }
 
     [DebuggerDisplay("String: {AsString}")]
-    public unsafe struct String64
+    public unsafe struct String64 : IComparable<String64>, IEquatable<String64>
     {
         private const int Size = 64;
         private fixed byte _data[Size];
+
+        /// <summary>
+        /// Construct a String64 instance from a memory area containing the string
+        /// </summary>
+        /// <param name="stringAddr">Address of the memory area containing the UTF8 string data</param>
+        /// <param name="length">Length of the <see cref="stringAddr"/> memory area</param>
+        public String64(byte* stringAddr, int length=64)
+        {
+            fixed (byte* a = _data)
+            {
+                new Span<byte>(stringAddr, length).CopyTo(new Span<byte>(a, 64));
+            }
+        }
+
+        public byte* GetStringContentAddr()
+        {
+            fixed (byte* a = _data)
+            {
+                return a;
+            }
+        }
+
+        public Span<byte> AsSpan()
+        {
+            fixed (byte* a = _data)
+            {
+                return new Span<byte>(a, 64);
+            }
+        }
+
+        public static implicit operator String64(string str) => new() {AsString = str};
 
         public string AsString
         {
@@ -149,6 +180,18 @@ namespace Typhon.Engine
                 }
             }
         }
+
+        public int CompareTo(String64 other) => AsSpan().SequenceCompareTo(other.AsSpan());
+
+        public bool Equals(String64 other) => other.AsSpan().SequenceEqual(AsSpan());
+
+        public override bool Equals(object obj) => obj is String64 other && Equals(other);
+
+        public override int GetHashCode() => (int)MurmurHash2.Hash(AsSpan());
+
+        public static bool operator ==(String64 left, String64 right) => left.Equals(right);
+
+        public static bool operator !=(String64 left, String64 right) => !left.Equals(right);
     }
 
     public static class StringExtensions

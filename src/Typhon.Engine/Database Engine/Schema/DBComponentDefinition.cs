@@ -11,28 +11,28 @@ namespace Typhon.Engine
 {
     public enum FieldType
     {
-        None = 0,
-        Boolean = 1,
-        Byte = 2,
-        Short = 3,
-        Int = 4,
-        Long = 5,
-        UByte = 256 + 2,
-        UShort = 256 + 3,
-        UInt = 256 + 4,
-        ULong = 256 + 5,
-        Float = 6,
-        Double = 7,
-        Char = 8,
-        String = 9,
-        String64 = 10,
-        String1024 = 11,
-        Point2F = 12,
-        Point3F = 13,
-        Point4F = 14,
-        Point2D = 512 + 12,
-        Point3D = 512 + 13,
-        Point4D = 512 + 14,
+        None        = 0,
+        Boolean     = 1,
+        Byte        = 2,
+        Short       = 3,
+        Int         = 4,
+        Long        = 5,
+        UByte       = 256 + 2,
+        UShort      = 256 + 3,
+        UInt        = 256 + 4,
+        ULong       = 256 + 5,
+        Float       = 6,
+        Double      = 7,
+        Char        = 8,
+        String      = 9,
+        String64    = 10,
+        String1024  = 11,
+        Point2F     = 12,
+        Point3F     = 13,
+        Point4F     = 14,
+        Point2D     = 512 + 12,
+        Point3D     = 512 + 13,
+        Point4D     = 512 + 14,
         QuaternionF = 15,
         QuaternionD = 512 + 15,
     }
@@ -47,6 +47,12 @@ namespace Typhon.Engine
         public IReadOnlyDictionary<string, Field> FieldsByName => _fieldsByName;
 
         public Field this[int index] => _fieldsById[index];
+
+        public int GetFieldId(string fieldName)
+        {
+            if (!_fieldsByName.TryGetValue(fieldName, out var field)) return -1;
+            return field.FieldId;
+        }
 
         public int RowSize { get; private set; }
 
@@ -88,6 +94,8 @@ namespace Typhon.Engine
             public bool HasIndex { get; set; }
             
             public bool IndexAllowMultiple { get; set; }
+
+            public bool IsIndexAuto { get; set; }
             
             public bool IsArray => ArrayLength > 0;
             
@@ -146,7 +154,7 @@ namespace Typhon.Engine
             var offsets = new Dictionary<int, Field>();
 
             Field lastField = null;
-            var indicesCount = 0;
+            IndicesCount = 0;
 
             foreach (var field in fields.Where(f => f.IsStatic == false))
             {
@@ -171,7 +179,7 @@ namespace Typhon.Engine
 
                 _fieldsById[field.FieldId] = field;
 
-                if (field.HasIndex) ++indicesCount;
+                if (field.HasIndex) ++IndicesCount;
 
                 if (lastField == null || lastField.OffsetInRow < field.OffsetInRow)
                 {

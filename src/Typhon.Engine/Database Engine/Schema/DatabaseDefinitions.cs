@@ -138,6 +138,7 @@ namespace Typhon.Engine
                     {
                         field.HasIndex = true;
                         field.IndexAllowMultiple = ia.AllowMultiple;
+                        field.IsIndexAuto = false;
                     }
                 }
             }

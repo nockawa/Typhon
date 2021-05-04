@@ -38,6 +38,7 @@ namespace Typhon.Engine
             {
                 public int ComponentChunkId;
                 public int RowVersionFirstChunkId;
+                public int RowRevisionBeforeTransaction;
                 public int RowVersionChunkId;
                 public int RowVersionIndexInChunk;
                 public OperationType Operations;
@@ -168,6 +169,7 @@ namespace Typhon.Engine
         private readonly long _transactionCreationTick;
 
         private int? _committedOperationCount;
+        private int _deletedComponentCount;
         public int CommittedOperationCount
         {
             get
@@ -179,7 +181,7 @@ namespace Typhon.Engine
                     {
                         count += componentInfo.RowInfoCache.Count;
                     }
-                    _committedOperationCount = count;
+                    _committedOperationCount = count + _deletedComponentCount;
                 }
                 return _committedOperationCount.Value;
             }
@@ -193,6 +195,7 @@ namespace Typhon.Engine
             _componentInfos = new Dictionary<Type, ComponentInfo>();
             _transactionCreationTick = DateTime.UtcNow.Ticks;
             _committedOperationCount = null;
+            _deletedComponentCount = 0;
             TransactionId = Interlocked.Increment(ref TransactionIdCounter);
             State = TransactionState.Created;
 
@@ -258,6 +261,21 @@ namespace Typhon.Engine
         public bool DeleteEntity<T, U, V>(long pk) where T : unmanaged where U : unmanaged where V : unmanaged
             => UpdateEntity(pk, new ComponentData(typeof(T), null), new ComponentData(typeof(U), null), new ComponentData(typeof(V), null));
 
+        public int GetComponentRevision<T>(long pk) where T : unmanaged
+        {
+            var info = GetComponentInfo(typeof(T));
+            if (!info.RowInfoCache.TryGetValue(pk, out var rowInfo))
+            {
+                if (!info.ComponentTable.GetRowVersionTableFirstChunkId(pk, out rowInfo.RowVersionFirstChunkId))
+                {
+                    return -1;
+                }
+            }
+
+            ref var h = ref info.VersionTableAccessor.GetChunk<ComponentTable.RowVersionStorageHeader>(rowInfo.RowVersionFirstChunkId);
+            return h.Revision;
+        }
+
         private ComponentInfo GetComponentInfo(Type componentType)
         {
             if (!_componentInfos.TryGetValue(componentType, out var info))
@@ -298,16 +316,18 @@ namespace Typhon.Engine
                 var rowChunkId = info.ComponentTable.CreateComponent(pk, rowTick, _isExclusive, out var rowVersionChunkId);
 
                 // We might want to access this row again in the Transaction to let's cache the pk/RowVersion
-                info.RowInfoCache.Add(pk, new ComponentInfo.RowInfo { ComponentChunkId = rowChunkId, RowVersionFirstChunkId = rowVersionChunkId, Operations = ComponentInfo.OperationType.Created, RowVersionChunkId = rowChunkId, RowVersionIndexInChunk = 0 });
-
-                // Setup the row header
-                var componentData = info.RowAccessor.GetChunkAddress(rowChunkId, dirtyPage: true);
-                var header = (ComponentRowHeader*)componentData;
-                header->Revision = 1;
-                header->Timestamp = rowTick;
+                info.RowInfoCache.Add(pk, new ComponentInfo.RowInfo
+                {
+                    ComponentChunkId       = rowChunkId, 
+                    RowVersionFirstChunkId = rowVersionChunkId, 
+                    Operations             = ComponentInfo.OperationType.Created, 
+                    RowVersionChunkId      = rowChunkId, 
+                    RowVersionIndexInChunk = 0
+                });
 
                 // Copy the row data
-                var rowData = componentData + sizeof(ComponentRowHeader);
+                var componentData = info.RowAccessor.GetChunkAddress(rowChunkId, dirtyPage: true);
+                var rowData = componentData + info.ComponentTable.RowOverhead;
                 int rowSize = info.ComponentTable.ComponentRowSize;
                 new Span<byte>(data[i].Data, rowSize).CopyTo(new Span<byte>(rowData, rowSize));
             }
@@ -327,7 +347,7 @@ namespace Typhon.Engine
                 if (!info.RowInfoCache.TryGetValue(pk, out var rowInfo))
                 {
                     // Couldn't find in the cache, get it from the index
-                    if (!info.ComponentTable.GetComponentRowChunkIdFromIndex(pk, _transactionCreationTick, out rowInfo))
+                    if (!info.ComponentTable.GetComponentRowInfoFromIndex(pk, _transactionCreationTick, out rowInfo))
                     {
                         // No row for this PK/Tick
                         ++notFoundCount;
@@ -342,13 +362,12 @@ namespace Typhon.Engine
                 {
                     int size = info.ComponentTable.ComponentRowSize;
                     var compAddr = info.RowAccessor.GetChunkAddress(rowInfo.ComponentChunkId);
-                    new Span<byte>(compAddr + sizeof(ComponentRowHeader), size).CopyTo(new Span<byte>(data[i].Data, size));
+                    new Span<byte>(compAddr + info.ComponentTable.RowOverhead, size).CopyTo(new Span<byte>(data[i].Data, size));
                 }
                 else
                 {
                     ++notFoundCount;
                 }
-
             }
 
             return notFoundCount == 0;
@@ -416,13 +435,9 @@ namespace Typhon.Engine
                 // Setup the row header
                 if (!isDelete)
                 {
-                    var componentData = info.RowAccessor.GetChunkAddress(rowInfo.ComponentChunkId, dirtyPage: true);
-                    var header = (ComponentRowHeader*)componentData;
-                    header->Revision = 1;
-                    header->Timestamp = _transactionCreationTick;
-
                     // Copy the row data
-                    var rowData = componentData + sizeof(ComponentRowHeader);
+                    var componentData = info.RowAccessor.GetChunkAddress(rowInfo.ComponentChunkId, dirtyPage: true);
+                    var rowData = componentData + info.ComponentTable.RowOverhead;
                     int rowSize = info.ComponentTable.ComponentRowSize;
                     new Span<byte>(data[i].Data, rowSize).CopyTo(new Span<byte>(rowData, rowSize));
                 }
@@ -442,9 +457,12 @@ namespace Typhon.Engine
             // Get the minimum tick of all transactions because we'll remove component row version that are older
             var minTick = Transactions.GetMinTick();
 
+            var deletedComponents = new List<long>();
             // Process every Component Type and their rows
             foreach (var componentInfo in _componentInfos.Values)
             {
+                deletedComponents.Clear();
+
                 foreach (var kvp in componentInfo.RowInfoCache)
                 {
                     var pk = kvp.Key;
@@ -453,7 +471,16 @@ namespace Typhon.Engine
                     // Nothing to commit if we only read the component
                     if (rowInfo.Operations == ComponentInfo.OperationType.Read) continue;
 
-                    componentInfo.ComponentTable.CommitRow(pk, minTick, ref rowInfo, true, _isExclusive);
+                    if (componentInfo.ComponentTable.CommitRow(pk, minTick, ref rowInfo, true, _isExclusive))
+                    {
+                        deletedComponents.Add(pk);
+                    }
+                }
+
+                foreach (var pk in deletedComponents)
+                {
+                    componentInfo.RowInfoCache.Remove(pk);
+                    _deletedComponentCount++;
                 }
             }
 

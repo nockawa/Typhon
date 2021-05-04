@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -43,14 +44,14 @@ namespace Typhon.Engine.BPTree
         public static int Sign(this int x) => (x >> 31) | 1;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        unsafe internal static int BinarySearch<T>(T* array, int index, int length, T value, IComparer<T> comparer) where T : unmanaged
+        unsafe internal static int BinarySearch<T>(T* array, int index, int length, T value, IComparer<T> comparer, int arrayStride) where T : unmanaged
         {
             int num1 = index;
             int num2 = index + length - 1;
             while (num1 <= num2)
             {
                 int index1 = num1 + (num2 - num1 >> 1);
-                int num3 = comparer.Compare(array[index1], value);
+                int num3 = comparer.Compare(*(T*)((byte*)array + (arrayStride*index1)), value);
                 if (num3 == 0)
                 {
                     return index1;
@@ -73,10 +74,23 @@ namespace Typhon.Engine.BPTree
 
     #region BTree+ main class
 
-    public abstract partial class BTree<TKey> 
+    public interface IBTree
+    {
+        bool AllowMultiple { get; }
+        int Count { get; }
+        unsafe int Add(void* keyAddr, int value);
+        unsafe bool Remove(void* keyAddr, out int value);
+        unsafe bool TryGet(void* keyAddr, out int value);
+        unsafe bool RemoveValue(void* keyAddr, int elementId, int value);
+        unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr);
+        void CheckConsistency();
+    }
+
+    public abstract partial class BTree<TKey> : IBTree
         where TKey : unmanaged 
     {
         [DebuggerDisplay("Key: {Key}, Value: {Value}")]
+        [StructLayout(LayoutKind.Sequential)]
         public struct KeyValueItem
         {
             public KeyValueItem(TKey key, int value)
@@ -290,7 +304,7 @@ namespace Typhon.Engine.BPTree
 
         #region Private data
 
-        protected abstract bool AllowMultiple { get; }
+        public abstract bool AllowMultiple { get; }
         protected abstract BaseNodeStorage GetStorage();
         protected IComparer<TKey> Comparer;
 
@@ -321,6 +335,12 @@ namespace Typhon.Engine.BPTree
             // So any default constructed type declaring ChunkId fields can have this "null" by default.
             _segment.ReserveChunk(0);
         }
+
+        public unsafe int Add(void* keyAddr, int value) => Add(Unsafe.AsRef<TKey>(keyAddr), value);
+        public unsafe bool Remove(void* keyAddr, out int value) => Remove(Unsafe.AsRef<TKey>(keyAddr), out value);
+        public unsafe bool TryGet(void* keyAddr, out int value) => TryGet(Unsafe.AsRef<TKey>(keyAddr), out value);
+        public unsafe bool RemoveValue(void* keyAddr, int elementId, int value) => RemoveValue(Unsafe.AsRef<TKey>(keyAddr), elementId, value);
+        public unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr) => TryGetMultiple(Unsafe.AsRef<TKey>(keyAddr));
 
         public int Add(TKey key, int value)
         {

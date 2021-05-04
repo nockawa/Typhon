@@ -6,6 +6,9 @@ using Serilog;
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
+using Typhon.Engine.BPTree;
 
 namespace Typhon.Engine.Tests.Database_Engine
 {
@@ -139,6 +142,7 @@ namespace Typhon.Engine.Tests.Database_Engine
                 var c = new CompC("Porcupine Tree");
                 var e1 = t.CreateEntity(ref a, ref b, ref c);
                 Assert.That(e1, Is.Not.Zero);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1));
 
                 var ca = new CompA();
                 var cb = new CompB();
@@ -205,8 +209,10 @@ namespace Typhon.Engine.Tests.Database_Engine
                 var c = new CompC("Porcupine Tree");
                 e1 = t.CreateEntity(ref a, ref b, ref c);
                 Assert.That(e1, Is.Not.Zero);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1));
 
                 t.UpdateEntity(e1, ref ca, ref cb, ref cc);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(2));
 
                 var res = t.Commit();
                 Assert.That(res, Is.True);
@@ -220,6 +226,7 @@ namespace Typhon.Engine.Tests.Database_Engine
                 var c = new CompC();
                 t.ReadEntity(e1, out a, out b, out c);
 
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(2));
                 Assert.That(a, Is.EqualTo(ca));
                 Assert.That(b, Is.EqualTo(cb));
                 Assert.That(c, Is.EqualTo(cc));
@@ -242,6 +249,7 @@ namespace Typhon.Engine.Tests.Database_Engine
                 var c = new CompC("Porcupine Tree");
                 e1 = t.CreateEntity(ref a, ref b, ref c);
                 Assert.That(e1, Is.Not.Zero);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1));
 
                 var res = t.Commit();
                 Assert.That(res, Is.True);
@@ -252,6 +260,7 @@ namespace Typhon.Engine.Tests.Database_Engine
                 using var t = _dbe.NewTransaction(true);
 
                 t.UpdateEntity(e1, ref ca, ref cb, ref cc);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(2));
 
                 var res = t.Commit();
                 Assert.That(res, Is.True);
@@ -265,6 +274,7 @@ namespace Typhon.Engine.Tests.Database_Engine
                 var c = new CompC();
                 t.ReadEntity(e1, out a, out b, out c);
 
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(2));
                 Assert.That(a, Is.EqualTo(ca));
                 Assert.That(b, Is.EqualTo(cb));
                 Assert.That(c, Is.EqualTo(cc));
@@ -284,8 +294,10 @@ namespace Typhon.Engine.Tests.Database_Engine
                 var c = new CompC("Porcupine Tree");
                 e1 = t.CreateEntity(ref a, ref b, ref c);
                 Assert.That(e1, Is.Not.Zero);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1));
 
                 t.DeleteEntity<CompA, CompB, CompC>(e1);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(2));
 
                 var res = t.Commit();
                 Assert.That(res, Is.True);
@@ -299,6 +311,7 @@ namespace Typhon.Engine.Tests.Database_Engine
                 var c = new CompC();
                 var res = t.ReadEntity(e1, out a, out b, out c);
 
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(-1));
                 Assert.That(res, Is.False);
             }
         }
@@ -316,6 +329,7 @@ namespace Typhon.Engine.Tests.Database_Engine
                 var c = new CompC("Porcupine Tree");
                 e1 = t.CreateEntity(ref a, ref b, ref c);
                 Assert.That(e1, Is.Not.Zero);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1));
 
                 var res = t.Commit();
                 Assert.That(res, Is.True);
@@ -325,6 +339,7 @@ namespace Typhon.Engine.Tests.Database_Engine
             {
                 using var t = _dbe.NewTransaction(true);
                 t.DeleteEntity<CompA, CompB, CompC>(e1);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(2));
 
                 var res = t.Commit();
                 Assert.That(res, Is.True);
@@ -338,6 +353,7 @@ namespace Typhon.Engine.Tests.Database_Engine
                 var c = new CompC();
                 var res = t.ReadEntity(e1, out a, out b, out c);
 
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(-1));
                 Assert.That(res, Is.False);
             }
         }
@@ -354,6 +370,7 @@ namespace Typhon.Engine.Tests.Database_Engine
                 var c = new CompC("Porcupine Tree");
                 e1 = t.CreateEntity(ref a, ref b, ref c);
                 Assert.That(e1, Is.Not.Zero);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1));
 
                 var ca = new CompA();
                 var cb = new CompB();
@@ -373,6 +390,7 @@ namespace Typhon.Engine.Tests.Database_Engine
 
                 var res = t.ReadEntity(e1, out CompA a, out CompB b, out CompC c);
                 Assert.That(res, Is.False);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(-1));
             }
         }
 
@@ -389,6 +407,7 @@ namespace Typhon.Engine.Tests.Database_Engine
 
                 e1 = t.CreateEntity(ref a, ref b, ref c);
                 Assert.That(e1, Is.Not.Zero);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1));
 
                 t.Commit();
             }
@@ -413,6 +432,7 @@ namespace Typhon.Engine.Tests.Database_Engine
 
                 var res = t.ReadEntity(e1, out CompA ba, out CompB bb, out CompC bc);
                 Assert.That(res, Is.True);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1));
                 Assert.That(ba, Is.EqualTo(a));
                 Assert.That(bb, Is.EqualTo(b));
                 Assert.That(bc, Is.EqualTo(c));
@@ -436,8 +456,10 @@ namespace Typhon.Engine.Tests.Database_Engine
 
                 e1 = t.CreateEntity(ref oa, ref ob, ref oc);
                 Assert.That(e1, Is.Not.Zero);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1));
 
                 t.UpdateEntity(e1, ref ba, ref bb, ref bc);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(2));
 
                 var res = t.Rollback();
                 Assert.That(res, Is.True);
@@ -452,6 +474,7 @@ namespace Typhon.Engine.Tests.Database_Engine
                 var res = t.ReadEntity(e1, out ra, out rb, out rc);
 
                 Assert.That(res, Is.False);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(-1));
             }
         }
 
@@ -471,7 +494,8 @@ namespace Typhon.Engine.Tests.Database_Engine
                 using var t = _dbe.NewTransaction(true);
 
                 e1 = t.CreateEntity(ref oa, ref ob, ref oc);
-                
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1));
+
                 var res = t.Commit();
                 Assert.That(res, Is.True);
                 Assert.That(e1, Is.Not.Zero);
@@ -482,6 +506,7 @@ namespace Typhon.Engine.Tests.Database_Engine
                 using var t = _dbe.NewTransaction(true);
 
                 t.UpdateEntity(e1, ref ba, ref bb, ref bc);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(2));
 
                 var res = t.Rollback();
                 Assert.That(res, Is.True);
@@ -495,6 +520,7 @@ namespace Typhon.Engine.Tests.Database_Engine
                 var rc = new CompC();
                 t.ReadEntity(e1, out ra, out rb, out rc);
 
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1));
                 Assert.That(oa, Is.EqualTo(ra));
                 Assert.That(ob, Is.EqualTo(rb));
                 Assert.That(oc, Is.EqualTo(rc));
@@ -514,10 +540,13 @@ namespace Typhon.Engine.Tests.Database_Engine
 
                 e1 = t.CreateEntity(ref oa, ref ob, ref oc);
                 Assert.That(e1, Is.Not.Zero);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1));
 
                 t.DeleteEntity<CompA, CompB, CompC>(e1);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(2));
 
                 var res = t.Rollback();
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(-1));
                 Assert.That(res, Is.True);
                 Assert.That(t.CommittedOperationCount, Is.EqualTo(3));
             }
@@ -530,6 +559,7 @@ namespace Typhon.Engine.Tests.Database_Engine
                 var res = t.ReadEntity(e1, out ra, out rb, out rc);
 
                 Assert.That(res, Is.False);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(-1));
             }
         }
 
@@ -545,6 +575,7 @@ namespace Typhon.Engine.Tests.Database_Engine
                 using var t = _dbe.NewTransaction(true);
 
                 e1 = t.CreateEntity(ref oa, ref ob, ref oc);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1));
 
                 var res = t.Commit();
                 Assert.That(res, Is.True);
@@ -556,10 +587,12 @@ namespace Typhon.Engine.Tests.Database_Engine
                 using var t = _dbe.NewTransaction(true);
 
                 t.DeleteEntity<CompA, CompB, CompC>(e1);
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(2));
 
                 var res = t.Rollback();
                 Assert.That(res, Is.True);
                 Assert.That(t.CommittedOperationCount, Is.EqualTo(3));
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1));
             }
 
             {
@@ -569,6 +602,7 @@ namespace Typhon.Engine.Tests.Database_Engine
                 var rc = new CompC();
                 t.ReadEntity(e1, out ra, out rb, out rc);
 
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1));
                 Assert.That(oa, Is.EqualTo(ra));
                 Assert.That(ob, Is.EqualTo(rb));
                 Assert.That(oc, Is.EqualTo(rc));
@@ -616,6 +650,105 @@ namespace Typhon.Engine.Tests.Database_Engine
             Assert.That(Transaction.Transactions.HeadNodeId, Is.EqualTo(-1));
             Assert.That(Transaction.Transactions.TailNodeId, Is.EqualTo(-1));
             Assert.That(Transaction.Transactions.GetMinTick(), Is.EqualTo(0));
+        }
+
+
+        public class ThreadWorkers
+        {
+            public class Context
+            {
+                public int Stage;
+                public int ThreadId;
+                public object UserContext;
+            }
+
+            private object _locker;
+            private Dictionary<int, Action<Context>[]> _stages;
+            private readonly int _stageCount;
+
+            public ThreadWorkers(int stageCount)
+            {
+                _locker = new object();
+                _stages = new Dictionary<int, Action<Context>[]>();
+                _stageCount = stageCount;
+            }
+
+            public void AddStage(int stageNumber, int threadIdStart, Action<Context> action, int threadCount=1)
+            {
+                for (int i = 0; i < threadCount; i++)
+                {
+                    if (_stages.TryGetValue(threadIdStart + i, out var stages) == false)
+                    {
+                        stages = new Action<Context>[_stageCount];
+                        _stages.Add(threadIdStart + i, stages);
+                    }
+                    stages[stageNumber] = action;
+                }
+            }
+
+            public void Run()
+            {
+                var contexts = new Dictionary<int, Context>();
+                var tasks = new List<Task>();
+                for (int i = 0; i < _stageCount; i++)
+                {
+                    var stage = i;
+                    Console.WriteLine($"[{DateTime.UtcNow}] Run Stage {i}");
+                    tasks.Clear();
+
+                    foreach (var kvp in _stages)
+                    {
+                        var threadId = kvp.Key;
+
+                        if (!contexts.TryGetValue(kvp.Key, out var c))
+                        {
+                            c = new Context();
+                            c.UserContext = null;
+                            contexts.Add(kvp.Key, c);
+                        }
+
+                        c.ThreadId = threadId;
+                        c.Stage = stage;
+
+                        var actions = kvp.Value;
+                        if (actions[i] != null)
+                        {
+                            tasks.Add(Task.Run(() => actions[stage](c)));
+                        }
+                    }
+
+                    Task.WaitAll(tasks.ToArray());
+                }
+            }
+        }
+
+        [Test]
+        public void MultiThreadTest()
+        {
+            var t = new ThreadWorkers(2);
+            t.AddStage(0, 0, (c) =>
+            {
+                Thread.Sleep(100);
+                Console.WriteLine($"Thread {c.ThreadId}, stage {c.Stage}");
+            });
+            t.AddStage(0, 1, (c) =>
+            {
+                Thread.Sleep(200);
+                Console.WriteLine($"Thread {c.ThreadId}, stage {c.Stage}");
+                Thread.Sleep(100);
+            });
+
+            t.AddStage(1, 0, (c) =>
+            {
+                Console.WriteLine($"Thread {c.ThreadId}, stage {c.Stage}");
+            });
+            t.AddStage(1, 1, (c) =>
+            {
+                Console.WriteLine($"Thread {c.ThreadId}, stage {c.Stage}");
+            });
+
+            t.Run();
+
         }
     }
 }

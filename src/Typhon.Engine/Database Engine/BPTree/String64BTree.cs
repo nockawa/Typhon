@@ -11,14 +11,14 @@ using System.Threading;
 namespace Typhon.Engine.BPTree
 {
 
-    [DebuggerTypeProxy(typeof(Index32Chunk.DebugView))]
+    [DebuggerTypeProxy(typeof(IndexString64Chunk.DebugView))]
     [DebuggerDisplay("Count: {Count}, Start: {Start}, Flags: {StateFlags}")]
     [StructLayout(LayoutKind.Sequential)]
-    unsafe public struct Index32Chunk
+    unsafe public struct IndexString64Chunk
     {
         // What we want here, is to keep this struct 64 bytes to align it with a cache line
 
-        public const int Capacity = 6;
+        public const int Capacity = 4;
 
         // Special beast... Ownership control (LSB, 1 bit), state flags (LSW 15bits), Position of the first Item, aka Start (8bits), stored Item Count (8bits)
         public int Control;
@@ -26,15 +26,16 @@ namespace Typhon.Engine.BPTree
         public int NextChunk;
         public int LeftValue;
         public fixed int Values[Capacity];
-        public fixed int Keys[Capacity];
+        public fixed byte Keys[64*Capacity];
 
-        public Span<int> KeysAsSpan
+        public Span<String64> KeysAsSpan
         {
             get
             {
-                fixed (int* k = Keys)
+                fixed (byte* k = Keys)
                 {
-                    return new Span<int>(k, Capacity);
+                    var strings = (String64*)k;
+                    return new Span<String64>(strings, Capacity);
                 }
             }
         }
@@ -47,6 +48,24 @@ namespace Typhon.Engine.BPTree
                 {
                     return new Span<int>(v, Capacity);
                 }
+            }
+        }
+
+        public void SetKey(int index, String64 str)
+        {
+            Debug.Assert(index < Capacity);
+            fixed (byte* k = Keys)
+            {
+                str.AsSpan().CopyTo(new Span<byte>(k+64*index, 64));
+            }
+        }
+
+        public readonly String64 GetKey(int index)
+        {
+            Debug.Assert(index < Capacity);
+            fixed (byte* k = Keys)
+            {
+                return (new String64(k + 64 * index, 64));
             }
         }
 
@@ -126,9 +145,9 @@ namespace Typhon.Engine.BPTree
         [DebuggerNonUserCode]
         private sealed class DebugView
         {
-            private readonly Index32Chunk _chunk;
+            private readonly IndexString64Chunk _chunk;
 
-            public DebugView(Index32Chunk chunk)
+            public DebugView(IndexString64Chunk chunk)
             {
                 _chunk = chunk;
             }
@@ -137,7 +156,7 @@ namespace Typhon.Engine.BPTree
             public int Next => _chunk.NextChunk;
             public int LeftValue => _chunk.LeftValue;
 
-            public ValueTuple<int, int>[] KeyValuePairs
+            public ValueTuple<String64, int>[] KeyValuePairs
             {
                 get
                 {
@@ -146,11 +165,11 @@ namespace Typhon.Engine.BPTree
 
                     var s = _chunk.Start;
                     var count = _chunk.Count;
-                    var res = new ValueTuple<int, int>[count];
+                    var res = new ValueTuple<String64, int>[count];
                     for (int i = 0; i < count; i++)
                     {
                         var ii = Adjust(s + i);
-                        res[i] = new ValueTuple<int, int>(k[ii], v[ii]);
+                        res[i] = new ValueTuple<String64, int>(k[ii], v[ii]);
                     }
 
                     return res;
@@ -159,161 +178,123 @@ namespace Typhon.Engine.BPTree
         }
     }
 
-    public class IntSingleBTree : IntBTree
+    public abstract class String64BTree : BTree<String64>
     {
-        public IntSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        unsafe public class String64NodeStorage : BaseNodeStorage
         {
-        }
-
-        protected override bool AllowMultiple => false;
-    }
-
-    public class IntMultipleBTree : IntBTree
-    {
-        public IntMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
-        {
-        }
-
-        protected override bool AllowMultiple => true;
-        protected override BaseNodeStorage GetStorage() => new IntMultipleNodeStorage();
-
-        public class IntMultipleNodeStorage : IntNodeStorage
-        {
-            private VariableSizedBufferSegment<int> _valueStore;
-
-            internal override void Initialize(BTree<int> owner, ChunkBasedSegment segment, ChunkRandomAccessor accessor)
+            internal override void Initialize(BTree<String64> owner, ChunkBasedSegment segment, ChunkRandomAccessor accessor)
             {
                 base.Initialize(owner, segment, accessor);
-                _valueStore = new VariableSizedBufferSegment<int>(segment, accessor);
-
-            }
-
-            public override int Append(int bufferId, int value) => _valueStore.AddElement(bufferId, value);
-            public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId) => _valueStore.GetReadOnlyAccessor(bufferId);
-
-            public override int CreateBuffer() => _valueStore.AllocateBuffer();
-
-            public override int RemoveFromBuffer(int bufferId, int elementId, int value) => _valueStore.DeleteElement(bufferId, elementId, value);
-            public override void DeleteBuffer(int bufferId) => _valueStore.DeleteBuffer(bufferId);
-        }
-    }
-
-    public abstract class IntBTree : BTree<int>
-    {
-        unsafe public class IntNodeStorage : BaseNodeStorage
-        {
-            internal override void Initialize(BTree<int> owner, ChunkBasedSegment segment, ChunkRandomAccessor accessor)
-            {
-                base.Initialize(owner, segment, accessor);
-                Debug.Assert(segment.Stride == sizeof(Index32Chunk));
+                Debug.Assert(segment.Stride == sizeof(IndexString64Chunk));
             }
 
             #region Chunk Properties Access
 
             public override void InitializeNode(NodeWrapper node, NodeStates states)
             {
-                ref var chunk = ref ChunkAccessor.GetChunk<Index32Chunk>(node.ChunkId, true);
+                ref var chunk = ref ChunkAccessor.GetChunk<IndexString64Chunk>(node.ChunkId, true);
                 chunk.StateFlags = states;
             }
-            public override int GetNodeCapacity() => Index32Chunk.Capacity;
+            public override int GetNodeCapacity() => IndexString64Chunk.Capacity;
 
             public override NodeWrapper GetLeftNode(NodeWrapper node)
             {
-                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<IndexString64Chunk>(node.ChunkId);
                 return new NodeWrapper(this, chunk.LeftValue);
             }
 
             public override void SetLeftNode(NodeWrapper node, int previousNodeId)
             {
-                ref var chunk = ref ChunkAccessor.GetChunk<Index32Chunk>(node.ChunkId, true);
+                ref var chunk = ref ChunkAccessor.GetChunk<IndexString64Chunk>(node.ChunkId, true);
                 chunk.LeftValue = previousNodeId;
             }
 
             public override NodeWrapper GetPreviousNode(NodeWrapper node)
             {
-                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<IndexString64Chunk>(node.ChunkId);
                 return new NodeWrapper(this, chunk.PrevChunk);
             }
 
             public override void SetPreviousNode(NodeWrapper node, int previousNodeId)
             {
-                ref var chunk = ref ChunkAccessor.GetChunk<Index32Chunk>(node.ChunkId, true);
+                ref var chunk = ref ChunkAccessor.GetChunk<IndexString64Chunk>(node.ChunkId, true);
                 chunk.PrevChunk = previousNodeId;
             }
 
             public override NodeWrapper GetNextNode(NodeWrapper node)
             {
-                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<IndexString64Chunk>(node.ChunkId);
                 return new NodeWrapper(this, chunk.NextChunk);
             }
 
             public override void SetNextNode(NodeWrapper node, int nextNodeId)
             {
-                ref var chunk = ref ChunkAccessor.GetChunk<Index32Chunk>(node.ChunkId, true);
+                ref var chunk = ref ChunkAccessor.GetChunk<IndexString64Chunk>(node.ChunkId, true);
                 chunk.NextChunk = nextNodeId;
             }
 
             public override KeyValueItem GetItem(NodeWrapper node, int index, bool adjust)
             {
-                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
-                var i = adjust ? Index32Chunk.Adjust(chunk.Start + index) : index;
-                return new KeyValueItem(chunk.Keys[i], chunk.Values[i]);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<IndexString64Chunk>(node.ChunkId);
+                var i = adjust ? IndexString64Chunk.Adjust(chunk.Start + index) : index;
+
+                return new KeyValueItem(chunk.GetKey(i), chunk.Values[i]);
             }
 
             public override void SetItem(NodeWrapper node, int index, KeyValueItem value, bool adjust)
             {
-                ref var chunk = ref ChunkAccessor.GetChunk<Index32Chunk>(node.ChunkId, true);
+                ref var chunk = ref ChunkAccessor.GetChunk<IndexString64Chunk>(node.ChunkId, true);
                 Set(ref chunk, index, value, adjust);
             }
 
             public override int GetCount(NodeWrapper node)
             {
-                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<IndexString64Chunk>(node.ChunkId);
                 return chunk.Count;
             }
 
             public override void SetCount(NodeWrapper node, int value)
             {
-                ref var chunk = ref ChunkAccessor.GetChunk<Index32Chunk>(node.ChunkId, true);
+                ref var chunk = ref ChunkAccessor.GetChunk<IndexString64Chunk>(node.ChunkId, true);
                 chunk.Count = value;
             }
 
             public override int GetStart(NodeWrapper node)
             {
-                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<IndexString64Chunk>(node.ChunkId);
                 return chunk.Start;
             }
 
             public override void SetStart(NodeWrapper node, int value)
             {
-                ref var chunk = ref ChunkAccessor.GetChunk<Index32Chunk>(node.ChunkId, true);
+                ref var chunk = ref ChunkAccessor.GetChunk<IndexString64Chunk>(node.ChunkId, true);
                 chunk.Start = value;
             }
 
             public override int GetEnd(NodeWrapper node)
             {
-                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
-                return Index32Chunk.Adjust(chunk.Start + chunk.Count);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<IndexString64Chunk>(node.ChunkId);
+                return IndexString64Chunk.Adjust(chunk.Start + chunk.Count);
             }
 
             public override NodeStates GetNodeStates(NodeWrapper node)
             {
-                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<IndexString64Chunk>(node.ChunkId);
                 return chunk.StateFlags;
             }
-            
+
             #endregion
 
             #region Chunk Operations
 
             public override void PushFirst(NodeWrapper node, KeyValueItem item)
             {
-                ref var chunk = ref ChunkAccessor.GetChunk<Index32Chunk>(node.ChunkId, true);
-                
+                ref var chunk = ref ChunkAccessor.GetChunk<IndexString64Chunk>(node.ChunkId, true);
+
                 DecrementStart(ref chunk);
 
                 var start = chunk.Start;
-                chunk.Keys[start] = item.Key;
+                chunk.SetKey(start, item.Key);
                 chunk.Values[start] = item.Value;
 
                 ++chunk.Count;
@@ -321,7 +302,7 @@ namespace Typhon.Engine.BPTree
 
             public override void PushLast(NodeWrapper node, KeyValueItem item)
             {
-                ref var chunk = ref ChunkAccessor.GetChunk<Index32Chunk>(node.ChunkId, true);
+                ref var chunk = ref ChunkAccessor.GetChunk<IndexString64Chunk>(node.ChunkId, true);
                 var c = chunk.Count++;
                 Set(ref chunk, c, item, true);
             }
@@ -330,7 +311,7 @@ namespace Typhon.Engine.BPTree
 
             public override void Insert(NodeWrapper node, int index, KeyValueItem item)
             {
-                ref var chunk = ref ChunkAccessor.GetChunk<Index32Chunk>(node.ChunkId, true);
+                ref var chunk = ref ChunkAccessor.GetChunk<IndexString64Chunk>(node.ChunkId, true);
                 var lsh = index; // length of left shift
                 var rsh = chunk.Count - index; // length of right shift
 
@@ -342,7 +323,7 @@ namespace Typhon.Engine.BPTree
                 }
                 else
                 {
-                    RightShift(ref chunk, Index32Chunk.Adjust(chunk.Start + index), rsh); // move End to End+1
+                    RightShift(ref chunk, IndexString64Chunk.Adjust(chunk.Start + index), rsh); // move End to End+1
                     Set(ref chunk, index, item, true);
                 }
 
@@ -357,37 +338,37 @@ namespace Typhon.Engine.BPTree
 
             public override NodeWrapper GetFirstChild(NodeWrapper node)
             {
-                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<IndexString64Chunk>(node.ChunkId);
                 return new NodeWrapper(this, chunk.LeftValue);
             }
 
             public override bool IsRotated(NodeWrapper node)
             {
-                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
-                return (chunk.Start + chunk.Count) > Index32Chunk.Capacity;
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<IndexString64Chunk>(node.ChunkId);
+                return (chunk.Start + chunk.Count) > IndexString64Chunk.Capacity;
             }
 
-            public override int BinarySearch(NodeWrapper node, int key, IComparer<int> comparer)
+            public override int BinarySearch(NodeWrapper node, String64 key, IComparer<String64> comparer)
             {
-                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
-                fixed (int* keys = chunk.Keys)
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<IndexString64Chunk>(node.ChunkId);
+                fixed (void* keys = chunk.Keys)
                 {
                     if (IsRotated(node))
                     {
-                        if (comparer.Compare(key, chunk.Keys[Index32Chunk.Capacity - 1]) <= 0) // search right side if item is smaller than last item in array.
+                        if (comparer.Compare(key, chunk.GetKey(IndexString64Chunk.Capacity - 1)) <= 0) // search right side if item is smaller than last item in array.
                         {
-                            var find = BTreeExtensions.BinarySearch(keys, chunk.Start, Index32Chunk.Capacity - chunk.Start, key, comparer);
+                            var find = BTreeExtensions.BinarySearch((String64*)keys, chunk.Start, IndexString64Chunk.Capacity - chunk.Start, key, comparer, 64);
                             return find - chunk.Start * find.Sign();
                         }
                         else // search left side
                         {
-                            var find = BTreeExtensions.BinarySearch(keys, 0, chunk.End, key, comparer);
-                            return find + (Index32Chunk.Capacity - chunk.Start) * find.Sign();
+                            var find = BTreeExtensions.BinarySearch((String64*)keys, 0, chunk.End, key, comparer, 64);
+                            return find + (IndexString64Chunk.Capacity - chunk.Start) * find.Sign();
                         }
                     }
                     else
                     {
-                        var find = BTreeExtensions.BinarySearch(keys, chunk.Start, chunk.Count, key, comparer);
+                        var find = BTreeExtensions.BinarySearch((String64*)keys, chunk.Start, chunk.Count, key, comparer, 64);
                         return find - chunk.Start * find.Sign();
                     }
                 }
@@ -395,13 +376,13 @@ namespace Typhon.Engine.BPTree
 
             public override NodeWrapper SplitRight(NodeWrapper node, NodeStates states)
             {
-                ref var chunk = ref ChunkAccessor.GetChunk<Index32Chunk>(node.ChunkId, true);
+                ref var chunk = ref ChunkAccessor.GetChunk<IndexString64Chunk>(node.ChunkId, true);
                 return SplitRight(ref chunk, states);
             }
 
             public override KeyValueItem RemoveAt(NodeWrapper node, int index)
             {
-                ref var chunk = ref ChunkAccessor.GetChunk<Index32Chunk>(node.ChunkId, true);
+                ref var chunk = ref ChunkAccessor.GetChunk<IndexString64Chunk>(node.ChunkId, true);
                 var item = GetItem(node, index, true);
 
                 var lsh = chunk.Count - index - 1; // length of left shift
@@ -415,7 +396,7 @@ namespace Typhon.Engine.BPTree
                 }
                 else
                 {
-                    LeftShift(ref chunk, Index32Chunk.Adjust(chunk.Start + index + 1), lsh); // move End to End-1
+                    LeftShift(ref chunk, IndexString64Chunk.Adjust(chunk.Start + index + 1), lsh); // move End to End-1
                     Set(ref chunk, chunk.Count - 1, default, true); // remove last item
                 }
 
@@ -425,22 +406,22 @@ namespace Typhon.Engine.BPTree
 
             public override void MergeLeft(NodeWrapper left, NodeWrapper right)
             {
-                ref var leftChunk = ref ChunkAccessor.GetChunk<Index32Chunk>(left.ChunkId, true);
-                ref var rightChunk = ref ChunkAccessor.GetChunk<Index32Chunk>(right.ChunkId, true);
+                ref var leftChunk = ref ChunkAccessor.GetChunk<IndexString64Chunk>(left.ChunkId, true);
+                ref var rightChunk = ref ChunkAccessor.GetChunk<IndexString64Chunk>(right.ChunkId, true);
 
                 var lk = leftChunk.KeysAsSpan;
                 var lv = leftChunk.ValuesAsSpan;
                 var rk = rightChunk.KeysAsSpan;
                 var rv = rightChunk.ValuesAsSpan;
 
-                if (leftChunk.Count + right.Count > Index32Chunk.Capacity)
+                if (leftChunk.Count + right.Count > IndexString64Chunk.Capacity)
                     throw new InvalidOperationException("can not merge, there is not enough capacity for this array.");
 
                 var end = leftChunk.Start + leftChunk.Count;
 
                 if (leftChunk.IsRotated)
                 {
-                    var start = end - Index32Chunk.Capacity;
+                    var start = end - IndexString64Chunk.Capacity;
 
                     if (!rightChunk.IsRotated)
                     {
@@ -461,7 +442,7 @@ namespace Typhon.Engine.BPTree
                 }
                 else
                 {
-                    bool copyIsOnePiece = end + right.Count <= Index32Chunk.Capacity;
+                    bool copyIsOnePiece = end + right.Count <= IndexString64Chunk.Capacity;
 
                     if (!rightChunk.IsRotated)
                     {
@@ -472,7 +453,7 @@ namespace Typhon.Engine.BPTree
                         }
                         else
                         {
-                            var length = Index32Chunk.Capacity - end;
+                            var length = IndexString64Chunk.Capacity - end;
                             var remaining = right.Count - length;
 
                             rk.Slice(right.Start, length).CopyTo(lk.Slice(end, length));
@@ -499,9 +480,9 @@ namespace Typhon.Engine.BPTree
                         {
                             var mergeEnd = end + srLen;
 
-                            if (mergeEnd <= Index32Chunk.Capacity)
+                            if (mergeEnd <= IndexString64Chunk.Capacity)
                             {
-                                var secondCopyFirstLength = Index32Chunk.Capacity - mergeEnd;
+                                var secondCopyFirstLength = IndexString64Chunk.Capacity - mergeEnd;
                                 var secondCopySecondLength = slLen - secondCopyFirstLength;
 
                                 rk.Slice(right.Start, srLen).CopyTo(lk.Slice(end, srLen));
@@ -514,7 +495,7 @@ namespace Typhon.Engine.BPTree
                             }
                             else
                             {
-                                var firstCopyFirstLength = Index32Chunk.Capacity - end;
+                                var firstCopyFirstLength = IndexString64Chunk.Capacity - end;
                                 var firstCopySecondLength = srLen - firstCopyFirstLength;
                                 var firstCopySecondStart = right.Start + firstCopyFirstLength;
 
@@ -535,20 +516,20 @@ namespace Typhon.Engine.BPTree
 
             public override NodeWrapper GetLastChild(NodeWrapper node)
             {
-                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
-                var index = Index32Chunk.Adjust(chunk.Start + chunk.Count - 1);
+                ref readonly var chunk = ref ChunkAccessor.GetChunkReadOnly<IndexString64Chunk>(node.ChunkId);
+                var index = IndexString64Chunk.Adjust(chunk.Start + chunk.Count - 1);
                 return new NodeWrapper(this, chunk.Values[index]);
             }
 
             public override void IncrementStart(NodeWrapper node)
             {
-                ref var chunk = ref ChunkAccessor.GetChunk<Index32Chunk>(node.ChunkId, true);
+                ref var chunk = ref ChunkAccessor.GetChunk<IndexString64Chunk>(node.ChunkId, true);
                 IncrementStart(ref chunk);
             }
 
             public override void DecrementStart(NodeWrapper node)
             {
-                ref var chunk = ref ChunkAccessor.GetChunk<Index32Chunk>(node.ChunkId, true);
+                ref var chunk = ref ChunkAccessor.GetChunk<IndexString64Chunk>(node.ChunkId, true);
                 DecrementStart(ref chunk);
             }
 
@@ -556,18 +537,18 @@ namespace Typhon.Engine.BPTree
 
             #region Chunk Direct Access Wrappers
 
-            private static void Set(ref Index32Chunk chunk, int index, KeyValueItem item, bool adjust)
+            private static void Set(ref IndexString64Chunk chunk, int index, KeyValueItem item, bool adjust)
             {
-                var i = adjust ? Index32Chunk.Adjust(chunk.Start + index) : index;
-                chunk.Keys[i] = item.Key;
+                var i = adjust ? IndexString64Chunk.Adjust(chunk.Start + index) : index;
+                chunk.SetKey(i, item.Key);
                 chunk.Values[i] = item.Value;
             }
 
-            private static void DecrementStart(ref Index32Chunk chunk)
+            private static void DecrementStart(ref IndexString64Chunk chunk)
             {
                 if (chunk.Start == 0)
                 {
-                    chunk.Start = Index32Chunk.Capacity - 1;
+                    chunk.Start = IndexString64Chunk.Capacity - 1;
                 }
                 else
                 {
@@ -575,9 +556,9 @@ namespace Typhon.Engine.BPTree
                 }
             }
 
-            private static void IncrementStart(ref Index32Chunk chunk)
+            private static void IncrementStart(ref IndexString64Chunk chunk)
             {
-                if (chunk.Start == (Index32Chunk.Capacity - 1))
+                if (chunk.Start == (IndexString64Chunk.Capacity - 1))
                 {
                     chunk.Start = 0;
                 }
@@ -587,38 +568,38 @@ namespace Typhon.Engine.BPTree
                 }
             }
 
-            private void LeftShift(ref Index32Chunk chunk, int index, int length)
+            private void LeftShift(ref IndexString64Chunk chunk, int index, int length)
             {
                 if (length == 0) return;
-                if (length < 0 || length > Index32Chunk.Capacity) throw new ArgumentOutOfRangeException(nameof(length));
-                if (index < 0  || index >= Index32Chunk.Capacity) throw new ArgumentOutOfRangeException(nameof(length));
+                if (length < 0 || length > IndexString64Chunk.Capacity) throw new ArgumentOutOfRangeException(nameof(length));
+                if (index < 0 || index >= IndexString64Chunk.Capacity) throw new ArgumentOutOfRangeException(nameof(length));
 
                 var k = chunk.KeysAsSpan;
                 var v = chunk.ValuesAsSpan;
 
                 if (index == 0)
                 {
-                    var first = k[0];
+                    var firstK = k[0];
                     k.Slice(1, length - 1).CopyTo(k);
-                    k[^1] = first;
-                    
-                    first = v[0];
+                    k[^1] = firstK;
+
+                    var firstV = v[0];
                     v.Slice(1, length - 1).CopyTo(v);
-                    v[^1] = first;
+                    v[^1] = firstV;
                 }
                 else if (index + length > k.Length)
                 {
                     var l = index + length - k.Length - 1;
                     var remaining = length - l - 1;
-                    var first = k[0];
+                    var firstK = k[0];
                     k.Slice(1, l).CopyTo(k.Slice(0, l));
                     k.Slice(index, remaining).CopyTo(k.Slice(index - 1, remaining));
-                    k[^1] = first;
-                    
-                    first = v[0];
+                    k[^1] = firstK;
+
+                    var firstV = v[0];
                     v.Slice(1, l).CopyTo(v.Slice(0, l));
                     v.Slice(index, remaining).CopyTo(v.Slice(index - 1, remaining));
-                    v[^1] = first;
+                    v[^1] = firstV;
                 }
                 else
                 {
@@ -627,29 +608,29 @@ namespace Typhon.Engine.BPTree
                 }
             }
 
-            private void RightShift(ref Index32Chunk chunk, int index, int length)
+            private void RightShift(ref IndexString64Chunk chunk, int index, int length)
             {
                 if (length == 0) return;
-                if (length < 0 || length > Index32Chunk.Capacity) throw new ArgumentOutOfRangeException(nameof(length));
-                if (index < 0  || index >= Index32Chunk.Capacity) throw new ArgumentOutOfRangeException(nameof(length));
+                if (length < 0 || length > IndexString64Chunk.Capacity) throw new ArgumentOutOfRangeException(nameof(length));
+                if (index < 0 || index >= IndexString64Chunk.Capacity) throw new ArgumentOutOfRangeException(nameof(length));
 
                 var k = chunk.KeysAsSpan;
                 var v = chunk.ValuesAsSpan;
 
-                var lastInd = Index32Chunk.Capacity - 1;
+                var lastInd = IndexString64Chunk.Capacity - 1;
                 if (index + length > lastInd) // if overflows, rotate.
                 {
-                    var last = k[lastInd];
+                    var lastK = k[lastInd];
                     var rl = lastInd - index;
                     var remaining = length - rl - 1;
                     k.Slice(index, rl).CopyTo(k.Slice(index + 1, rl));
                     k.Slice(0, remaining).CopyTo(k.Slice(1, remaining));
-                    k[0] = last;
-                    
-                    last = v[lastInd];
+                    k[0] = lastK;
+
+                    var lastV = v[lastInd];
                     v.Slice(index, rl).CopyTo(v.Slice(index + 1, rl));
                     v.Slice(0, remaining).CopyTo(v.Slice(1, remaining));
-                    v[0] = last;
+                    v[0] = lastV;
                 }
                 else
                 {
@@ -658,14 +639,14 @@ namespace Typhon.Engine.BPTree
                 }
             }
 
-            public NodeWrapper SplitRight(ref Index32Chunk left, NodeStates states)
+            public NodeWrapper SplitRight(ref IndexString64Chunk left, NodeStates states)
             {
                 var rightNode = Owner.AllocNode(states);
-                ref var right = ref ChunkAccessor.GetChunk<Index32Chunk>(rightNode.ChunkId, true);
+                ref var right = ref ChunkAccessor.GetChunk<IndexString64Chunk>(rightNode.ChunkId, true);
 
                 var lr = left.Count / 2; // length of right side
                 var lrc = 1 + ((left.Count - 1) / 2); // length of right (ceiling of Length/2)
-                var sr = Index32Chunk.Adjust(left.Start + lrc); // start of right side
+                var sr = IndexString64Chunk.Adjust(left.Start + lrc); // start of right side
 
                 right.Count = lr;
                 left.Count -= right.Count;
@@ -675,7 +656,7 @@ namespace Typhon.Engine.BPTree
                 var rk = right.KeysAsSpan;
                 var rv = right.ValuesAsSpan;
 
-                var capacity = Index32Chunk.Capacity;
+                var capacity = IndexString64Chunk.Capacity;
 
                 if (sr + lr <= capacity) // if right side is one piece
                 {
@@ -706,9 +687,46 @@ namespace Typhon.Engine.BPTree
             #endregion
         }
 
-        protected override BaseNodeStorage GetStorage() => new IntNodeStorage();
+        protected override BaseNodeStorage GetStorage() => new String64NodeStorage();
+        public override bool AllowMultiple => false;
+        protected String64BTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        {
+        }
+    }
 
-        protected IntBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+    public class String64MultipleBTree : String64BTree
+    {
+        public String64MultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        {
+        }
+
+        public override bool AllowMultiple => true;
+        protected override BaseNodeStorage GetStorage() => new String64MultipleNodeStorage();
+
+        public class String64MultipleNodeStorage : String64NodeStorage
+        {
+            private VariableSizedBufferSegment<int> _valueStore;
+
+            internal override void Initialize(BTree<String64> owner, ChunkBasedSegment segment, ChunkRandomAccessor accessor)
+            {
+                base.Initialize(owner, segment, accessor);
+                _valueStore = new VariableSizedBufferSegment<int>(segment, accessor);
+
+            }
+
+            public override int Append(int bufferId, int value) => _valueStore.AddElement(bufferId, value);
+            public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId) => _valueStore.GetReadOnlyAccessor(bufferId);
+
+            public override int CreateBuffer() => _valueStore.AllocateBuffer();
+
+            public override int RemoveFromBuffer(int bufferId, int elementId, int value) => _valueStore.DeleteElement(bufferId, elementId, value);
+            public override void DeleteBuffer(int bufferId) => _valueStore.DeleteBuffer(bufferId);
+        }
+    }
+
+    public class String64SingleBTree : String64BTree
+    {
+        public String64SingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
         {
         }
     }

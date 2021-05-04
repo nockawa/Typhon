@@ -108,6 +108,31 @@ namespace Typhon.Engine.Tests.Database_Engine
         }
 
         [Test]
+        unsafe public void ForwardFloatInsertionTest()
+        {
+            var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
+            var tree = new FloatSingleBTree(segment, null);
+
+            tree.Add(-0.10f, 10);
+            Assert.That(tree[-0.10f], Is.EqualTo(10));
+            tree.Add(0.15f, 15);
+            tree.Add(0.20f, 20);
+            Assert.That(tree[0.20f], Is.EqualTo(20));
+            tree.Add(0.50f, 50);
+            tree.Add(0.80f, 80);
+            Assert.That(tree[0.80f], Is.EqualTo(80));
+            tree.Add(-0.90f, 90);
+            Assert.That(tree[-0.90f], Is.EqualTo(90));
+
+            tree.Add(0.101f, 100);
+            Assert.That(tree[0.101f], Is.EqualTo(100));
+            tree.Add(0.121f, 120);
+            Assert.That(tree[0.121f], Is.EqualTo(120));
+            tree.Add(0.141f, 140);
+            Assert.That(tree[0.141f], Is.EqualTo(140));
+        }
+
+        [Test]
         unsafe public void ReverseInsertionTest()
         {
             var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
@@ -131,6 +156,35 @@ namespace Typhon.Engine.Tests.Database_Engine
 
             tree.Add(10, 10);
             Assert.That(tree[10], Is.EqualTo(10));
+
+
+            tree.CheckConsistency();
+        }
+
+        [Test]
+        unsafe public void ReverseString64InsertionTest()
+        {
+            var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(IndexString64Chunk));
+            var tree = new String64SingleBTree(segment, null);
+
+            tree.Add("140", 140);
+            Assert.That(tree["140"], Is.EqualTo(140));
+            tree.Add("120", 120);
+            Assert.That(tree["120"], Is.EqualTo(120));
+            tree.Add("100", 100);
+            Assert.That(tree["100"], Is.EqualTo(100));
+            tree.Add("90", 90);
+            Assert.That(tree["90"], Is.EqualTo(90));
+            tree.Add("80", 80);
+            Assert.That(tree["80"], Is.EqualTo(80));
+            tree.Add("50", 50);
+
+            tree.Add("20", 20);
+            Assert.That(tree["20"], Is.EqualTo(20));
+            tree.Add("15", 15);
+
+            tree.Add("10", 10);
+            Assert.That(tree["10"], Is.EqualTo(10));
 
 
             tree.CheckConsistency();
@@ -283,6 +337,97 @@ namespace Typhon.Engine.Tests.Database_Engine
             tree.RemoveValue(1, eid0, 10);
             tree.RemoveValue(1, eid7, 12);
             tree.RemoveValue(1, eid4, 11);
+
+            {
+                using var a = tree.TryGetMultiple(1);
+                Assert.That(a.IsValid, Is.False);
+            }
+
+            tree.CheckConsistency();
+        }
+        [Test]
+        unsafe public void CheckByteMultipleTree()
+        {
+
+            var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index16Chunk));
+            var tree = new ByteMultipleBTree(segment, null);
+
+            var eid0 = tree.Add(1, 10);
+            var eid1 = tree.Add(3, 30);
+            var eid2 = tree.Add(2, 20);
+            var eid3 = tree.Add(2, 21);
+            var eid4 = tree.Add(1, 11);
+            var eid5 = tree.Add(3, 31);
+            var eid6 = tree.Add(2, 22);
+            var eid7 = tree.Add(1, 12);
+
+            {
+                using var a = tree.TryGetMultiple(1);
+                Assert.That(a.IsValid, Is.True);
+                Assert.That(a.ReadOnlyElements.Length, Is.EqualTo(3));
+            }
+
+            {
+                using var a = tree.TryGetMultiple(2);
+                Assert.That(a.IsValid, Is.True);
+                Assert.That(a.ReadOnlyElements.Length, Is.EqualTo(3));
+            }
+
+            {
+                using var a = tree.TryGetMultiple(3);
+                Assert.That(a.IsValid, Is.True);
+                Assert.That(a.ReadOnlyElements.Length, Is.EqualTo(2));
+            }
+
+            tree.RemoveValue(1, eid0, 10);
+            tree.RemoveValue(1, eid7, 12);
+            tree.RemoveValue(1, eid4, 11);
+
+            {
+                using var a = tree.TryGetMultiple(1);
+                Assert.That(a.IsValid, Is.False);
+            }
+
+            tree.CheckConsistency();
+        }
+
+        [Test]
+        unsafe public void CheckFloatMultipleTree()
+        {
+
+            var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
+            var tree = new FloatMultipleBTree(segment, null);
+
+            var eid0 = tree.Add(1.1f, 10);
+            var eid1 = tree.Add(3.1f, 30);
+            var eid2 = tree.Add(2.1f, 20);
+            var eid3 = tree.Add(2.1f, 21);
+            var eid4 = tree.Add(1.1f, 11);
+            var eid5 = tree.Add(3.1f, 31);
+            var eid6 = tree.Add(2.1f, 22);
+            var eid7 = tree.Add(1.1f, 12);
+
+            {
+                using var a = tree.TryGetMultiple(1.1f);
+                Assert.That(a.IsValid, Is.True);
+                Assert.That(a.ReadOnlyElements.Length, Is.EqualTo(3));
+            }
+
+            {
+                using var a = tree.TryGetMultiple(2.1f);
+                Assert.That(a.IsValid, Is.True);
+                Assert.That(a.ReadOnlyElements.Length, Is.EqualTo(3));
+            }
+
+            {
+                using var a = tree.TryGetMultiple(3.1f);
+                Assert.That(a.IsValid, Is.True);
+                Assert.That(a.ReadOnlyElements.Length, Is.EqualTo(2));
+            }
+
+            tree.RemoveValue(1.1f, eid0, 10);
+            tree.RemoveValue(1.1f, eid7, 12);
+            tree.RemoveValue(1.1f, eid4, 11);
 
             {
                 using var a = tree.TryGetMultiple(1);
