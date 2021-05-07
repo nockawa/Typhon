@@ -86,9 +86,10 @@ namespace Typhon.Engine.BPTree
         void CheckConsistency();
     }
 
-    public abstract partial class BTree<TKey> : IBTree
-        where TKey : unmanaged 
+    public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged 
     {
+        const int ChunkRandomAccessorPagedCount = 8;
+
         [DebuggerDisplay("Key: {Key}, Value: {Value}")]
         [StructLayout(LayoutKind.Sequential)]
         public struct KeyValueItem
@@ -308,6 +309,7 @@ namespace Typhon.Engine.BPTree
         protected abstract BaseNodeStorage GetStorage();
         protected IComparer<TKey> Comparer;
 
+        private AccessControl _access;
         private readonly ChunkBasedSegment _segment;
         private readonly BaseNodeStorage _storage;
 
@@ -325,13 +327,13 @@ namespace Typhon.Engine.BPTree
 
         #region Public API
 
-        protected BTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor)
+        protected BTree(ChunkBasedSegment segment)
         {
             Comparer = Comparer<TKey>.Default;
             _segment = segment;
             // ReSharper disable once VirtualMemberCallInConstructor
             _storage = GetStorage();
-            _storage.Initialize(this, _segment, accessor);
+            _storage.Initialize(this, _segment);
             // We make sure the chunk 0 is reserved so we can consider any ChunkId == 0 as a "null pointer".
             // So any default constructed type declaring ChunkId fields can have this "null" by default.
             _segment.ReserveChunk(0);
@@ -346,16 +348,34 @@ namespace Typhon.Engine.BPTree
         public int Add(TKey key, int value)
         {
             var args = new InsertArguments(key, value, Comparer);
-            AddOrUpdateCore(ref args);
-            return args.ElementId;
+            _access.EnterExclusiveAccess();
+            try
+            {
+                AddOrUpdateCore(ref args);
+                return args.ElementId;
+            }
+            finally
+            {
+                _storage.CommitChanges();
+                _access.ExitExclusiveAccess();
+            }
         }
 
         public bool Remove(TKey key, out int value)
         {
             var args = new RemoveArguments(key, Comparer);
-            RemoveCore(ref args);
-            value = args.Value;
-            return args.Removed;
+            _access.EnterExclusiveAccess();
+            try
+            {
+                RemoveCore(ref args);
+                value = args.Value;
+                return args.Removed;
+            }
+            finally
+            {
+                _storage.CommitChanges();
+                _access.ExitExclusiveAccess();
+            }
         }
 
         public void CheckConsistency()
@@ -366,49 +386,57 @@ namespace Typhon.Engine.BPTree
                 return;
             }
 
-            Root.CheckConsistency(default, NodeWrapper.CheckConsistencyParent.Root, Comparer, Height);
-
-            // Check the linked link of leaves in forward
-            NodeWrapper prev = default;
-            var cur = LinkList;
-            TKey prevValue = default;
-
-            while (cur.IsValid)
+            _access.EnterSharedAccess();
+            try
             {
-                if (cur != LinkList)
+                Root.CheckConsistency(default, NodeWrapper.CheckConsistencyParent.Root, Comparer, Height);
+
+                // Check the linked link of leaves in forward
+                NodeWrapper prev = default;
+                var cur = LinkList;
+                TKey prevValue = default;
+
+                while (cur.IsValid)
                 {
-                    Trace.Assert(prev.Next == cur, " Prev.Next doesn't link to current");
-                    Trace.Assert(cur.Previous == prev, "Cur.Previous doesn't link to previous");
+                    if (cur != LinkList)
+                    {
+                        Trace.Assert(prev.Next == cur, " Prev.Next doesn't link to current");
+                        Trace.Assert(cur.Previous == prev, "Cur.Previous doesn't link to previous");
 
-                    Trace.Assert(Comparer.Compare(prevValue, cur.First.Key) < 0, $"Previous Node's first key '{prevValue}' should be less than current node's first key'{cur.First.Key}'.");
+                        Trace.Assert(Comparer.Compare(prevValue, cur.First.Key) < 0, $"Previous Node's first key '{prevValue}' should be less than current node's first key'{cur.First.Key}'.");
+                    }
+
+                    prevValue = cur.Last.Key;
+                    prev = cur;
+                    cur = cur.Next;
                 }
+                Trace.Assert(prev == ReverseLinkList, "Last Node of the forward chain doesn't match ReverseLinkList");
 
-                prevValue = cur.Last.Key;
-                prev = cur;
-                cur = cur.Next;
+                // Check the linked link of leaves in reverse
+                NodeWrapper next = default;
+                cur = ReverseLinkList;
+                TKey nextValue = default;
+
+                while (cur.IsValid)
+                {
+                    if (cur != ReverseLinkList)
+                    {
+                        Trace.Assert(next.Previous == cur, " Next.Previous doesn't link to current");
+                        Trace.Assert(cur.Next == next, "Cur.Next doesn't link to next");
+
+                        Trace.Assert(Comparer.Compare(nextValue, cur.Last.Key) > 0, $"Next Node's last key '{nextValue}' should be greater than current node's last key'{cur.Last.Key}'.");
+                    }
+
+                    nextValue = cur.First.Key;
+                    next = cur;
+                    cur = cur.Previous;
+                }
+                Trace.Assert(next == LinkList, "Last Node of the reverse chain doesn't match LinkedList");
             }
-            Trace.Assert(prev == ReverseLinkList, "Last Node of the forward chain doesn't match ReverseLinkList");
-
-            // Check the linked link of leaves in reverse
-            NodeWrapper next = default;
-            cur = ReverseLinkList;
-            TKey nextValue = default;
-
-            while (cur.IsValid)
+            finally
             {
-                if (cur != ReverseLinkList)
-                {
-                    Trace.Assert(next.Previous == cur, " Next.Previous doesn't link to current");
-                    Trace.Assert(cur.Next == next, "Cur.Next doesn't link to next");
-
-                    Trace.Assert(Comparer.Compare(nextValue, cur.Last.Key) > 0, $"Next Node's last key '{nextValue}' should be greater than current node's last key'{cur.Last.Key}'.");
-                }
-
-                nextValue = cur.First.Key;
-                next = cur;
-                cur = cur.Previous;
+                _access.ExitSharedAccess();
             }
-            Trace.Assert(next == LinkList, "Last Node of the reverse chain doesn't match LinkedList");
         }
 
         public int this[TKey key]
@@ -423,9 +451,17 @@ namespace Typhon.Engine.BPTree
         public bool TryGet(TKey key, out int value)
         {
             value = default;
-            var leaf = FindLeaf(key, out var index);
-            if (index >= 0) value = leaf.GetItem(index).Value;
-            return index >= 0;
+            _access.EnterSharedAccess();
+            try
+            {
+                var leaf = FindLeaf(key, out var index);
+                if (index >= 0) value = leaf.GetItem(index).Value;
+                return index >= 0;
+            }
+            finally
+            {
+                _access.ExitSharedAccess();
+            }
         }
 
         public bool RemoveValue(TKey key, int elementId, int value)
@@ -434,19 +470,28 @@ namespace Typhon.Engine.BPTree
             {
                 return false;
             }
-            var res = _storage.RemoveFromBuffer(bufferId, elementId, value);
-            if (res == -1) return false;
-
-            // Remove the key if we no longer have values stored there
-            if (res == 0)
+            _access.EnterExclusiveAccess();
+            try
             {
-                var args = new RemoveArguments(key, Comparer);
-                RemoveCore(ref args);
+                var res = _storage.RemoveFromBuffer(bufferId, elementId, value);
+                if (res == -1) return false;
 
-                if (args.Removed)
+                // Remove the key if we no longer have values stored there
+                if (res == 0)
                 {
-                    _storage.DeleteBuffer(args.Value);
+                    var args = new RemoveArguments(key, Comparer);
+                    RemoveCore(ref args);
+
+                    if (args.Removed)
+                    {
+                        _storage.DeleteBuffer(args.Value);
+                    }
                 }
+            }
+            finally
+            {
+                _storage.CommitChanges();
+                _access.ExitExclusiveAccess();
             }
 
             return true;
@@ -556,9 +601,6 @@ namespace Typhon.Engine.BPTree
             }
             else if (order == 0)
             {
-                //var item = ReverseLinkList.Last;
-                //KeyValueItem.ChangeValue(ref item, args.GetUpdateValue(item.Value));
-                //ReverseLinkList.Last = item;
                 if (AllowMultiple)
                 {
                     args.ElementId = _storage.Append(Last.Value, args.GetValue());
@@ -577,9 +619,6 @@ namespace Typhon.Engine.BPTree
             }
             else if (order == 0)
             {
-                //var item = LinkList.Items.First;
-                //KeyValueItem.ChangeValue(ref item, args.GetUpdateValue(item.Value));
-                //LinkList.Items.First = item;
                 if (AllowMultiple)
                 {
                     args.ElementId = _storage.Append(First.Value, args.GetValue());

@@ -163,9 +163,9 @@ namespace Typhon.Engine.BPTree
     {
         unsafe public class L64NodeStorage : BaseNodeStorage
         {
-            internal override void Initialize(BTree<TKey> owner, ChunkBasedSegment segment, ChunkRandomAccessor accessor)
+            internal override void Initialize(BTree<TKey> owner, ChunkBasedSegment segment)
             {
-                base.Initialize(owner, segment, accessor);
+                base.Initialize(owner, segment);
                 Debug.Assert(segment.Stride == sizeof(Index64Chunk));
             }
 
@@ -671,14 +671,14 @@ namespace Typhon.Engine.BPTree
 
         protected override BaseNodeStorage GetStorage() => new L64NodeStorage();
         public override bool AllowMultiple => false;
-        protected L64BTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        protected L64BTree(ChunkBasedSegment segment) : base(segment)
         {
         }
     }
 
     public class L64MultipleBTree<TKey> : L64BTree<TKey> where TKey : unmanaged
     {
-        public L64MultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        public L64MultipleBTree(ChunkBasedSegment segment) : base(segment)
         {
         }
 
@@ -689,10 +689,10 @@ namespace Typhon.Engine.BPTree
         {
             private VariableSizedBufferSegment<int> _valueStore;
 
-            internal override void Initialize(BTree<TKey> owner, ChunkBasedSegment segment, ChunkRandomAccessor accessor)
+            internal override void Initialize(BTree<TKey> owner, ChunkBasedSegment segment)
             {
-                base.Initialize(owner, segment, accessor);
-                _valueStore = new VariableSizedBufferSegment<int>(segment, accessor);
+                base.Initialize(owner, segment);
+                _valueStore = new VariableSizedBufferSegment<int>(segment, ChunkAccessor);
 
             }
 
@@ -708,41 +708,41 @@ namespace Typhon.Engine.BPTree
 
     public class LongSingleBTree : L64BTree<long>
     {
-        public LongSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        public LongSingleBTree(ChunkBasedSegment segment) : base(segment)
         {
         }
     }
 
     public class LongMultipleBTree : L64MultipleBTree<long>
     {
-        public LongMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        public LongMultipleBTree(ChunkBasedSegment segment) : base(segment)
         {
         }
     }
     public class ULongSingleBTree : L64BTree<long>
     {
-        public ULongSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        public ULongSingleBTree(ChunkBasedSegment segment) : base(segment)
         {
         }
     }
 
     public class ULongMultipleBTree : L64MultipleBTree<long>
     {
-        public ULongMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        public ULongMultipleBTree(ChunkBasedSegment segment) : base(segment)
         {
         }
     }
 
     public class DoubleSingleBTree : L64BTree<double>
     {
-        public DoubleSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        public DoubleSingleBTree(ChunkBasedSegment segment) : base(segment)
         {
         }
     }
 
     public class DoubleMultipleBTree : L64MultipleBTree<double>
     {
-        public DoubleMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        public DoubleMultipleBTree(ChunkBasedSegment segment) : base(segment)
         {
         }
     }

@@ -20,19 +20,24 @@ namespace Typhon.Collections.Benchmark
             //o.GlobalSetup();
             //o.BenchDecay();
 
-            var taskList = new List<Task>();
-            for (int i = 0; i < 1024; i++)
-            {
-                taskList.Add(Task.Run(() =>
-                {
-                    Console.WriteLine($"Thread Id {Thread.CurrentThread.ManagedThreadId}");
-                }));
-            }
+            //var taskList = new List<Task>();
+            //for (int i = 0; i < 1024; i++)
+            //{
+            //    taskList.Add(Task.Run(() =>
+            //    {
+            //        Console.WriteLine($"Thread Id {Thread.CurrentThread.ManagedThreadId}");
+            //    }));
+            //}
 
-            Task.WaitAll(taskList.ToArray());
+            //Task.WaitAll(taskList.ToArray());
 
 
-            //var summary = BenchmarkRunner.Run<MemCopyBench>();
+            //var summary = BenchmarkRunner.Run<ClassVersusType>();
+
+            var o = new ClassVersusType();
+            o.BenchmarkClass();
+            GC.Collect();
+            o.BenchmarkClasWithMemory();
 
             //var o = new MemCopyBench();
             //o.GlobalSetup();

@@ -253,7 +253,7 @@ namespace Typhon.Engine
         private int _elementCount;
 
         public bool IsValid => _rootChunkId != 0;
-        public unsafe ReadOnlySpan<T> ReadOnlyElements => new(_elementAddr, _elementCount);
+        public unsafe ReadOnlySpan<T> ReadOnlyElements => _elementAddr==null ? default : new(_elementAddr, _elementCount);
         public unsafe Span<T> Elements => new(_elementAddr, _elementCount);
         public void DirtyChunk() => _accessor.DirtyChunk(_curChunkId);
 
@@ -263,12 +263,9 @@ namespace Typhon.Engine
             _segment = owner.Segment;
             _rootChunkId = rootChunkId;
 
-            _accessor = new ChunkRandomAccessor(_segment, 8);
+            _accessor = ChunkRandomAccessor.GetFromPool(_segment, 8);
 
-            // The page accessor is Read-Only but we modify the content of the chunk!!!
-            // It's ok because we modify concurrency synchronization variables only, we don't want changes to be detected because of this and we want to ensure multiple
-            //  concurrent read accesses.
-            _rootChunkAddr = _accessor.GetChunkAddress(_rootChunkId, true);
+            _rootChunkAddr = _accessor.GetChunkAddress(_rootChunkId);
             ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(_rootChunkAddr);
 
             // Enter read mode
@@ -288,11 +285,16 @@ namespace Typhon.Engine
         {
             // Read next chunk from the current header
             var nextChunkId = ((VariableSizedBufferChunkHeader*)_curChunkAddr)->NextChunkId;
-            
+            var prevChunkId = _curChunkId;
+            var prevChunk = (VariableSizedBufferChunkHeader*)_curChunkAddr;
+
             // Quit if there's no more
             if (nextChunkId == 0)
             {
                 _accessor.UnpinChunk(_curChunkId);
+                _curChunkId = 0;
+                _curChunkAddr = null;
+                _elementAddr = null;
                 return false;
             }
 
@@ -312,9 +314,7 @@ namespace Typhon.Engine
                     if (_accessor.TryPromoteChunk(_rootChunkId))
                     {
                         // Setup our forward link list info
-                        var prevChunkId = _curChunkId;
                         var curChunkId  = nextChunkId;
-                        var prevChunk = (VariableSizedBufferChunkHeader*)_curChunkAddr;
                         var curChunk  = (VariableSizedBufferChunkHeader*)nextChunkAddr;
 
                         // We don't want to chain to the free-list all the empty chunks, would be a waste of space.
@@ -376,13 +376,16 @@ namespace Typhon.Engine
                 }
             }
 
+            _accessor.UnpinChunk(prevChunkId);
+            // Check if we reached the end of the VSB
             if (nextChunkAddr == null)
             {
-                _accessor.UnpinChunk(_curChunkId);
+                _curChunkId = 0;
+                _curChunkAddr = null;
+                _elementAddr = null;
                 return false;
             }
 
-            _accessor.UnpinChunk(_curChunkId);
             _curChunkId = nextChunkId;
             _curChunkAddr = nextChunkAddr;
             _elementAddr = _curChunkAddr + (_curChunkId == _rootChunkId ? sizeof(VariableSizedBufferRootHeader) : sizeof(VariableSizedBufferChunkHeader));
@@ -398,7 +401,10 @@ namespace Typhon.Engine
             ref var h = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(_rootChunkAddr);
             h.Lock.ExitSharedAccess();
 
-            _accessor.UnpinChunk(_rootChunkId);
+            if (_curChunkId != 0)
+            {
+                _accessor.UnpinChunk(_curChunkId);
+            }
             _accessor.Dispose();
             _rootChunkId = 0;
         }

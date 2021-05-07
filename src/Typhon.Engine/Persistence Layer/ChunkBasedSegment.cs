@@ -2,6 +2,7 @@
 
 using System;
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -17,18 +18,38 @@ namespace Typhon.Engine
     /// </remarks>
     public class ChunkRandomAccessor : IDisposable
     {
-        private readonly ChunkBasedSegment _owner;
-        private readonly int _cachedPagesCount;
-        private readonly Memory<PageAccessor> _cachedPages;
-        private readonly Memory<CachedEntry> _cachedEntries;    // We will hit this one very often, so we favor cache locality by putting the PageAccessor in another array
-        private readonly int _stride;
+        private static ConcurrentBag<ChunkRandomAccessor> _pool;
+
+        static ChunkRandomAccessor()
+        {
+            _pool = new ConcurrentBag<ChunkRandomAccessor>();
+        }
+
+        internal static ChunkRandomAccessor GetFromPool(ChunkBasedSegment owner, int cachedPagesCount)
+        {
+            if (!_pool.TryTake(out var cra))
+            {
+                cra = new ChunkRandomAccessor();
+            }
+
+            cra.Initialize(owner, cachedPagesCount);
+            return cra;
+        }
+
+
+        private ChunkBasedSegment _owner;
+        private int _cachedPagesCount;
+        private Memory<PageAccessor> _cachedPages;
+        private Memory<CachedEntry> _cachedEntries;    // We will hit this one very often, so we favor cache locality by putting the PageAccessor in another array
+        private int _stride;
 
         [StructLayout(LayoutKind.Sequential)]
         unsafe private struct CachedEntry
         {
             public int SegmentIndex;
             public int HitCount;
-            public int PinCounter;
+            public short PinCounter;
+            public VirtualDiskManager.PagesAccessMode CurrentAccessMode;
             public short IsDirty;
             public short PromoteCounter;
             public byte* BaseAddress;
@@ -73,6 +94,7 @@ namespace Typhon.Engine
                     if (_cachedPages.Span[i].TryPromoteToExclusive())
                     {
                         page.PromoteCounter = 1;
+                        page.CurrentAccessMode = VirtualDiskManager.PagesAccessMode.Exclusive;
                         return true;
                     }
                     return false;
@@ -135,6 +157,12 @@ namespace Typhon.Engine
                 ref var entry = ref cachedEntries[i];
                 if (entry.SegmentIndex == si)
                 {
+                    if (entry.CurrentAccessMode == VirtualDiskManager.PagesAccessMode.Idle)
+                    {
+                        _cachedPages.Span[i] = _owner.GetPageSharedAccessor(si);
+                        entry.CurrentAccessMode = VirtualDiskManager.PagesAccessMode.Shared;
+                    }
+
                     if (pin)
                     {
                         ++entry.PinCounter;
@@ -170,11 +198,12 @@ namespace Typhon.Engine
             }
             cachedPagesAccess[pageI].Dispose();
 
-            cachedEntry.HitCount = 1;
-            cachedEntry.SegmentIndex = si;
-            cachedEntry.PinCounter = pin ? 1 : 0;
-            cachedEntry.PromoteCounter = 0;
-            cachedEntry.IsDirty = (short)(dirtyPage ? 1 : 0);
+            cachedEntry.HitCount          = 1;
+            cachedEntry.SegmentIndex      = si;
+            cachedEntry.PinCounter        = pin ? (short)1 : (short)0;
+            cachedEntry.PromoteCounter    = 0;
+            cachedEntry.IsDirty           = (short)(dirtyPage ? 1 : 0);
+            cachedEntry.CurrentAccessMode = VirtualDiskManager.PagesAccessMode.Shared;
 
             cachedPagesAccess[pageI] = _owner.GetPageSharedAccessor(si);
             cachedEntry.BaseAddress = cachedPagesAccess[pageI].PageAddress + VirtualDiskManager.PageHeaderSize;
@@ -188,12 +217,17 @@ namespace Typhon.Engine
             new Span<long>(addr, _stride / 8).Clear();
         }
 
-        public ChunkRandomAccessor(ChunkBasedSegment owner, int cachedPagesCount)
+        private void Initialize(ChunkBasedSegment owner, int cachedPagesCount)
         {
             _owner = owner;
+            var curPagesCount = _cachedPagesCount;
             _cachedPagesCount = cachedPagesCount;
-            _cachedPages = new PageAccessor[cachedPagesCount];
-            _cachedEntries = new CachedEntry[cachedPagesCount];
+
+            if (curPagesCount != _cachedPagesCount)
+            {
+                _cachedPages   = new PageAccessor[cachedPagesCount];
+                _cachedEntries = new CachedEntry[cachedPagesCount];
+            }
 
             _stride = _owner.Stride;
 
@@ -204,10 +238,43 @@ namespace Typhon.Engine
             }
         }
 
-        public void DisposePageAccessors()
+        /// <summary>
+        /// Commit the dirty state of each page and release the share access.
+        /// </summary>
+        /// <remarks>
+        /// Typically call this method at the end of an atomic operation to update the <see cref="VirtualDiskManager"/> accordingly.
+        /// If the page was promoted in exclusive mode, it won't be release, just simply ignored.
+        /// </remarks>
+        public void CommitChanges()
         {
             var cachedPages = _cachedPages.Span;
             var cachedEntries = _cachedEntries.Span;
+
+            for (int i = 0; i < _cachedPagesCount; i++)
+            {
+                ref var cachedEntry = ref cachedEntries[i];
+                if (cachedEntry.CurrentAccessMode != VirtualDiskManager.PagesAccessMode.Shared ||
+                    cachedEntry.PromoteCounter != 0 ||
+                    cachedEntry.PinCounter != 0) continue;
+
+                ref var cachedPage = ref cachedPages[i];
+
+                if (cachedEntry.IsDirty != 0)
+                {
+                    cachedPage.SetPageDirty();
+                    cachedEntry.IsDirty = 0;
+                }
+
+                cachedEntry.CurrentAccessMode = VirtualDiskManager.PagesAccessMode.Idle;
+                cachedPage.Dispose();
+            }
+        }
+
+        public bool DisposePageAccessors()
+        {
+            var cachedPages = _cachedPages.Span;
+            var cachedEntries = _cachedEntries.Span;
+            var res = true;
 
             for (int i = 0; i < _cachedPagesCount; i++)
             {
@@ -223,16 +290,27 @@ namespace Typhon.Engine
                 // Can't dispose if there are still operations ongoing that required their counterpart method to finish them
                 if ((cachedEntry.PromoteCounter != 0) || (cachedEntry.PinCounter != 0))
                 {
+                    res = false;
                     continue;
                 }
                 
                 cachedPage.Dispose();
+                cachedEntry.CurrentAccessMode = VirtualDiskManager.PagesAccessMode.Idle;
                 cachedEntry.HitCount = 0;
                 cachedEntry.SegmentIndex = -1;
             }
+
+            return res;
         }
 
-        public void Dispose() => DisposePageAccessors();
+        public void Dispose()
+        {
+            if (!DisposePageAccessors())
+            {
+                throw new InvalidOperationException("Can't dispose the ChunkRandomAccess: some pages are still promoted and/or pinned.");
+            }
+            _pool.Add(this);
+        }
     }
 
     /// <summary>
@@ -294,9 +372,8 @@ namespace Typhon.Engine
 
         public void FreeChunk(int chunkId) => _map.ClearL0(chunkId);
 
-        public ChunkRandomAccessor CreateChunkRandomAccessor(int cachedPagesCount=1) => new(this, cachedPagesCount);
-
-
+        public ChunkRandomAccessor CreateChunkRandomAccessor(int cachedPagesCount=1) => ChunkRandomAccessor.GetFromPool(this, cachedPagesCount);
+        
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         public (int segmentIndex, int offset) GetChunkLocation(int index)
         {

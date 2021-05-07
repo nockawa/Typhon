@@ -182,9 +182,9 @@ namespace Typhon.Engine.BPTree
     {
         unsafe public class String64NodeStorage : BaseNodeStorage
         {
-            internal override void Initialize(BTree<String64> owner, ChunkBasedSegment segment, ChunkRandomAccessor accessor)
+            internal override void Initialize(BTree<String64> owner, ChunkBasedSegment segment)
             {
-                base.Initialize(owner, segment, accessor);
+                base.Initialize(owner, segment);
                 Debug.Assert(segment.Stride == sizeof(IndexString64Chunk));
             }
 
@@ -689,14 +689,14 @@ namespace Typhon.Engine.BPTree
 
         protected override BaseNodeStorage GetStorage() => new String64NodeStorage();
         public override bool AllowMultiple => false;
-        protected String64BTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        protected String64BTree(ChunkBasedSegment segment) : base(segment)
         {
         }
     }
 
     public class String64MultipleBTree : String64BTree
     {
-        public String64MultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        public String64MultipleBTree(ChunkBasedSegment segment) : base(segment)
         {
         }
 
@@ -707,10 +707,10 @@ namespace Typhon.Engine.BPTree
         {
             private VariableSizedBufferSegment<int> _valueStore;
 
-            internal override void Initialize(BTree<String64> owner, ChunkBasedSegment segment, ChunkRandomAccessor accessor)
+            internal override void Initialize(BTree<String64> owner, ChunkBasedSegment segment)
             {
-                base.Initialize(owner, segment, accessor);
-                _valueStore = new VariableSizedBufferSegment<int>(segment, accessor);
+                base.Initialize(owner, segment);
+                _valueStore = new VariableSizedBufferSegment<int>(segment, ChunkAccessor);
 
             }
 
@@ -726,7 +726,7 @@ namespace Typhon.Engine.BPTree
 
     public class String64SingleBTree : String64BTree
     {
-        public String64SingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        public String64SingleBTree(ChunkBasedSegment segment) : base(segment)
         {
         }
     }

@@ -163,9 +163,9 @@ namespace Typhon.Engine.BPTree
     {
         unsafe public class L32NodeStorage : BaseNodeStorage
         {
-            internal override void Initialize(BTree<TKey> owner, ChunkBasedSegment segment, ChunkRandomAccessor accessor)
+            internal override void Initialize(BTree<TKey> owner, ChunkBasedSegment segment)
             {
-                base.Initialize(owner, segment, accessor);
+                base.Initialize(owner, segment);
                 Debug.Assert(segment.Stride == sizeof(Index32Chunk));
             }
 
@@ -671,14 +671,14 @@ namespace Typhon.Engine.BPTree
 
         protected override BaseNodeStorage GetStorage() => new L32NodeStorage();
         public override bool AllowMultiple => false;
-        protected L32BTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        protected L32BTree(ChunkBasedSegment segment) : base(segment)
         {
         }
     }
 
     public class L32MultipleBTree<TKey> : L32BTree<TKey> where TKey : unmanaged
     {
-        public L32MultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        public L32MultipleBTree(ChunkBasedSegment segment) : base(segment)
         {
         }
 
@@ -689,10 +689,10 @@ namespace Typhon.Engine.BPTree
         {
             private VariableSizedBufferSegment<int> _valueStore;
 
-            internal override void Initialize(BTree<TKey> owner, ChunkBasedSegment segment, ChunkRandomAccessor accessor)
+            internal override void Initialize(BTree<TKey> owner, ChunkBasedSegment segment)
             {
-                base.Initialize(owner, segment, accessor);
-                _valueStore = new VariableSizedBufferSegment<int>(segment, accessor);
+                base.Initialize(owner, segment);
+                _valueStore = new VariableSizedBufferSegment<int>(segment, ChunkAccessor);
 
             }
 
@@ -708,21 +708,21 @@ namespace Typhon.Engine.BPTree
 
     public class IntSingleBTree : L32BTree<int>
     {
-        public IntSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        public IntSingleBTree(ChunkBasedSegment segment) : base(segment)
         {
         }
     }
 
     public class IntMultipleBTree : L32MultipleBTree<int>
     {
-        public IntMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        public IntMultipleBTree(ChunkBasedSegment segment) : base(segment)
         {
         }
     }
 
     public class UIntSingleBTree : L32BTree<uint>
     {
-        public UIntSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        public UIntSingleBTree(ChunkBasedSegment segment) : base(segment)
         {
         }
 
@@ -730,21 +730,21 @@ namespace Typhon.Engine.BPTree
 
     public class UIntMultipleBTree : L32MultipleBTree<uint>
     {
-        public UIntMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        public UIntMultipleBTree(ChunkBasedSegment segment) : base(segment)
         {
         }
     }
 
     public class FloatSingleBTree : L32BTree<float>
     {
-        public FloatSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        public FloatSingleBTree(ChunkBasedSegment segment) : base(segment)
         {
         }
     }
 
     public class FloatMultipleBTree : L32MultipleBTree<float>
     {
-        public FloatMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor) : base(segment, accessor)
+        public FloatMultipleBTree(ChunkBasedSegment segment) : base(segment)
         {
         }
     }

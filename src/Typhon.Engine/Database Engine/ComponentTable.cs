@@ -71,7 +71,7 @@ namespace Typhon.Engine
             DefaultIndexSegment  = lsm.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(Index64Chunk));
             String64IndexSegment = lsm.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(IndexString64Chunk));
 
-            PrimaryKeyIndex = new LongSingleBTree(DefaultIndexSegment, null);
+            PrimaryKeyIndex = new LongSingleBTree(DefaultIndexSegment);
 
             BuildIndexedFieldInfo();
         }
@@ -106,18 +106,18 @@ namespace Typhon.Engine
 
             switch (field.Type)
             {
-                case FieldType.Byte:        return field.IndexAllowMultiple ? new ByteMultipleBTree(s, null)     : new ByteSingleBTree(s, null);
-                case FieldType.Short:       return field.IndexAllowMultiple ? new ShortMultipleBTree(s, null)    : new ShortSingleBTree(s, null);
-                case FieldType.Int:         return field.IndexAllowMultiple ? new IntMultipleBTree(s, null)      : new IntSingleBTree(s, null);
-                case FieldType.Long:        return field.IndexAllowMultiple ? new LongMultipleBTree(s, null)     : new LongSingleBTree(s, null);
-                case FieldType.UByte:       return field.IndexAllowMultiple ? new UByteMultipleBTree(s, null)    : new UByteSingleBTree(s, null);
-                case FieldType.UShort:      return field.IndexAllowMultiple ? new UShortMultipleBTree(s, null)   : new UShortSingleBTree(s, null);
-                case FieldType.UInt:        return field.IndexAllowMultiple ? new UIntMultipleBTree(s, null)     : new UIntSingleBTree(s, null);
-                case FieldType.ULong:       return field.IndexAllowMultiple ? new ULongMultipleBTree(s, null)    : new ULongSingleBTree(s, null);
-                case FieldType.Float:       return field.IndexAllowMultiple ? new FloatMultipleBTree(s, null)    : new FloatSingleBTree(s, null);
-                case FieldType.Double:      return field.IndexAllowMultiple ? new DoubleMultipleBTree(s, null)   : new DoubleSingleBTree(s, null);
-                case FieldType.Char:        return field.IndexAllowMultiple ? new CharMultipleBTree(s, null)     : new CharSingleBTree(s, null);
-                case FieldType.String64:    return field.IndexAllowMultiple ? new String64MultipleBTree(s, null) : new String64SingleBTree(s, null);
+                case FieldType.Byte:        return field.IndexAllowMultiple ? new ByteMultipleBTree(s)     : new ByteSingleBTree(s);
+                case FieldType.Short:       return field.IndexAllowMultiple ? new ShortMultipleBTree(s)    : new ShortSingleBTree(s);
+                case FieldType.Int:         return field.IndexAllowMultiple ? new IntMultipleBTree(s)      : new IntSingleBTree(s);
+                case FieldType.Long:        return field.IndexAllowMultiple ? new LongMultipleBTree(s)     : new LongSingleBTree(s);
+                case FieldType.UByte:       return field.IndexAllowMultiple ? new UByteMultipleBTree(s)    : new UByteSingleBTree(s);
+                case FieldType.UShort:      return field.IndexAllowMultiple ? new UShortMultipleBTree(s)   : new UShortSingleBTree(s);
+                case FieldType.UInt:        return field.IndexAllowMultiple ? new UIntMultipleBTree(s)     : new UIntSingleBTree(s);
+                case FieldType.ULong:       return field.IndexAllowMultiple ? new ULongMultipleBTree(s)    : new ULongSingleBTree(s);
+                case FieldType.Float:       return field.IndexAllowMultiple ? new FloatMultipleBTree(s)    : new FloatSingleBTree(s);
+                case FieldType.Double:      return field.IndexAllowMultiple ? new DoubleMultipleBTree(s)   : new DoubleSingleBTree(s);
+                case FieldType.Char:        return field.IndexAllowMultiple ? new CharMultipleBTree(s)     : new CharSingleBTree(s);
+                case FieldType.String64:    return field.IndexAllowMultiple ? new String64MultipleBTree(s) : new String64SingleBTree(s);
                 default:                    return null;
             }
         }

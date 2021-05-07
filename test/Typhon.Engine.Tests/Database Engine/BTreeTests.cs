@@ -86,7 +86,7 @@ namespace Typhon.Engine.Tests.Database_Engine
         unsafe public void ForwardInsertionTest()
         {
             var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-            var tree = new IntSingleBTree(segment, null);
+            var tree = new IntSingleBTree(segment);
 
             tree.Add(10, 10);
             Assert.That(tree[10], Is.EqualTo(10));
@@ -111,7 +111,7 @@ namespace Typhon.Engine.Tests.Database_Engine
         unsafe public void ForwardFloatInsertionTest()
         {
             var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-            var tree = new FloatSingleBTree(segment, null);
+            var tree = new FloatSingleBTree(segment);
 
             tree.Add(-0.10f, 10);
             Assert.That(tree[-0.10f], Is.EqualTo(10));
@@ -136,7 +136,7 @@ namespace Typhon.Engine.Tests.Database_Engine
         unsafe public void ReverseInsertionTest()
         {
             var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-            var tree = new IntSingleBTree(segment, null);
+            var tree = new IntSingleBTree(segment);
 
             tree.Add(140, 140);
             Assert.That(tree[140], Is.EqualTo(140));
@@ -165,7 +165,7 @@ namespace Typhon.Engine.Tests.Database_Engine
         unsafe public void ReverseString64InsertionTest()
         {
             var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(IndexString64Chunk));
-            var tree = new String64SingleBTree(segment, null);
+            var tree = new String64SingleBTree(segment);
 
             tree.Add("140", 140);
             Assert.That(tree["140"], Is.EqualTo(140));
@@ -202,7 +202,7 @@ namespace Typhon.Engine.Tests.Database_Engine
             };
 
             var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-            var tree = new IntSingleBTree(segment, null);
+            var tree = new IntSingleBTree(segment);
 
             foreach (var v in values)
             {
@@ -234,7 +234,7 @@ namespace Typhon.Engine.Tests.Database_Engine
             };
 
             var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-            var tree = new IntSingleBTree(segment, null);
+            var tree = new IntSingleBTree(segment);
 
             for (int loopC = 0; loopC < 2; loopC++)
             {
@@ -279,7 +279,7 @@ namespace Typhon.Engine.Tests.Database_Engine
             }
 
             var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 20, sizeof(Index32Chunk));
-            var tree = new IntSingleBTree(segment, null);
+            var tree = new IntSingleBTree(segment);
 
 
             var array = samples.ToArray();
@@ -305,7 +305,7 @@ namespace Typhon.Engine.Tests.Database_Engine
         {
 
             var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-            var tree = new IntMultipleBTree(segment, null);
+            var tree = new IntMultipleBTree(segment);
 
             var eid0 = tree.Add(1, 10);
             var eid1 = tree.Add(3, 30);
@@ -350,7 +350,7 @@ namespace Typhon.Engine.Tests.Database_Engine
         {
 
             var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index16Chunk));
-            var tree = new ByteMultipleBTree(segment, null);
+            var tree = new ByteMultipleBTree(segment);
 
             var eid0 = tree.Add(1, 10);
             var eid1 = tree.Add(3, 30);
@@ -396,7 +396,7 @@ namespace Typhon.Engine.Tests.Database_Engine
         {
 
             var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-            var tree = new FloatMultipleBTree(segment, null);
+            var tree = new FloatMultipleBTree(segment);
 
             var eid0 = tree.Add(1.1f, 10);
             var eid1 = tree.Add(3.1f, 30);
@@ -443,7 +443,7 @@ namespace Typhon.Engine.Tests.Database_Engine
             const int itemCount = 1000;
 
             var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 300, sizeof(Index32Chunk));
-            var tree = new IntMultipleBTree(segment, null);
+            var tree = new IntMultipleBTree(segment);
 
             var chunkCapacity = segment.ChunkCapacity;
             var freeChunkCount = segment.FreeChunkCount;
@@ -531,6 +531,50 @@ namespace Typhon.Engine.Tests.Database_Engine
             //tree.First
 
             Log.Logger.Error("Remove all key/values, chunk allocated {cc}", segment.AllocatedChunkCount);
+        }
+
+        [Test]
+        public unsafe void CheckSingleTreeMultiThread()
+        {
+            const int sampleCount = 10000;
+            const int threadCount = 8;
+
+            var samples = new HashSet<int>(sampleCount*threadCount);
+
+            var r = new Random(DateTime.UtcNow.Millisecond);
+            while (samples.Count < (sampleCount*threadCount))
+            {
+                samples.Add(r.Next());
+            }
+
+            var samplesArray = samples.ToArray();
+
+            var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 200, sizeof(Index32Chunk));
+            var tree = new IntSingleBTree(segment);
+
+            var sw = new Stopwatch();
+            sw.Start();
+
+            var tasks = new List<Task>();
+            for (int i = 0; i < threadCount; i++)
+            {
+                var threadIndex = i;
+                tasks.Add(Task.Run(() =>
+                {
+                    for (int j = 0; j < sampleCount; j++)
+                    {
+                        var v = samplesArray[j + threadIndex*sampleCount];
+                        tree.Add(v, v);
+                    }
+                }));
+            }
+
+            Task.WaitAll(tasks.ToArray());
+
+            sw.Stop();
+            Console.WriteLine($"Insertion of {sampleCount*threadCount} spread in {threadCount} threads done in {sw.ElapsedMilliseconds}ms");
+
+            tree.CheckConsistency();
 
         }
     }
