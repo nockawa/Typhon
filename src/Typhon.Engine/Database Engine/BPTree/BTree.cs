@@ -179,7 +179,7 @@ namespace Typhon.Engine.BPTree
         /// contains information about relatives of each node, such as ancestors and siblings.
         /// this information is used for borrow and spill operations.
         /// </summary>
-        public readonly ref struct NodeRelatives
+        public readonly struct NodeRelatives
         {
             /*  Note: "/" is left pointer. "\" is right pointer.
              * 
@@ -251,7 +251,7 @@ namespace Typhon.Engine.BPTree
             /// <summary>
             /// creates new relatives for child node.
             /// </summary>
-            public static NodeRelatives Create(NodeWrapper child, int index, NodeWrapper parent, ref NodeRelatives parentRelatives)
+            public static void Create(NodeWrapper child, int index, NodeWrapper parent, ref NodeRelatives parentRelatives, out NodeRelatives res)
             {
                 Debug.Assert(index >= -1 && index < parent.Length);
 
@@ -298,7 +298,7 @@ namespace Typhon.Engine.BPTree
                     hasTrueRightSibling = true;
                 }
 
-                return new NodeRelatives(leftAncestor, leftAncestorIndex, leftSibling, hasTrueLeftSibling,
+                res = new NodeRelatives(leftAncestor, leftAncestorIndex, leftSibling, hasTrueLeftSibling,
                     rightAncestor, rightAncestorIndex, rightSibling, hasTrueRightSibling);
             }
         }

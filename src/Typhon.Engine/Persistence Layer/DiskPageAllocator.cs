@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Buffers;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -85,13 +86,11 @@ namespace Typhon.Engine
         public bool IsDisposed { get; private set; }
         public int ReferenceCounter { get; private set; }
 
-        public IMemoryOwner<uint> AllocatePages(int length)
+        public void AllocatePages(ref Span<uint> pageIds)
         {
             lock (_occupancyMap)
             {
-                var res = MemoryPool<uint>.Shared.Rent(length);
-                _occupancyMap.Allocate(res.Memory.Slice(0, length));
-                return res;
+                _occupancyMap.Allocate(ref pageIds);
             }
         }
 
@@ -399,13 +398,12 @@ namespace Typhon.Engine
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-            public bool Allocate(Memory<uint> result)
+            public bool Allocate(ref Span<uint> result)
             {
+                Debug.Assert(result.IsEmpty==false && result.Length > 0, "A valid span with a length > 0 must be passed");
                 var length = result.Length;
                 var hasL1 = true;
                 var destI = 0;
-
-                var span = result.Span;
 
                 // Allocate per bulk of 64 pages as long as we can
                 while (hasL1 && (length >= 64))
@@ -418,7 +416,7 @@ namespace Typhon.Engine
                         {
                             for (int j = 0; j < 64; j++)
                             {
-                                span[destI++] = (uint)((i<<6) + j);
+                                result[destI++] = (uint)((i<<6) + j);
                             }
                             length -= 64;
                         }
@@ -435,7 +433,7 @@ namespace Typhon.Engine
                     {
                         if (SetL0(i))
                         {
-                            span[destI++] = (uint)i;
+                            result[destI++] = (uint)i;
                             --length;
                         }
                     }
@@ -445,9 +443,9 @@ namespace Typhon.Engine
                 {
                     for (int i = 0; i < destI; i++)
                     {
-                        ClearL0((int)span[i]);
+                        ClearL0((int)result[i]);
                     }
-                    span.Clear();
+                    result.Clear();
                     return false;
                 }
 

@@ -20,6 +20,7 @@ namespace Typhon.Engine
         public int ChainLength;
     }
 
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
     internal struct RowVersionStorageElement
     {
         public long Tick;

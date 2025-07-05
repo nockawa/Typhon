@@ -31,13 +31,12 @@ namespace Typhon.Engine
         internal const int RootHeaderIndexSectionLength = RootHeaderIndexSectionCount * 4;
 
         private readonly LogicalSegmentManager _manager;
-        private IMemoryOwner<uint> _pagesMemoryOwner;
-        private ReadOnlyMemory<uint> _pages;
+        private uint[] _pages;
 
         public uint RootPageId { get; private set; }
 
         public int Length => _pages.Length;
-        public ReadOnlySpan<uint> Pages => _pages.Span;
+        public ReadOnlySpan<uint> Pages => _pages;
         public PageAccessor GetPageExclusiveAccessor(int segmentIndex) => _manager.VDM.RequestPageExclusive(Pages[segmentIndex]);
         public PageAccessor GetPageSharedAccessor(int segmentIndex) => _manager.VDM.RequestPageShared(Pages[segmentIndex]);
 
@@ -48,8 +47,7 @@ namespace Typhon.Engine
 
         public void Dispose()
         {
-            _pagesMemoryOwner?.Dispose();
-            _pagesMemoryOwner = null;
+            _pages = null;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
@@ -79,19 +77,24 @@ namespace Typhon.Engine
             return (pi + 1, off);
         }
 
-        internal virtual bool Create(PageBlockType type, IMemoryOwner<uint> pagesMemOwner, int length, bool clear)
+        internal bool Create(PageBlockType type, uint pageId, bool clear)
+        {
+            Span<uint> ids = stackalloc uint[1];
+            ids[0] = pageId;
+            return Create(type, ids, clear);
+        }
+        
+        internal virtual bool Create(PageBlockType type, Span<uint> pageIds, bool clear)
         {
             var vdm = _manager.VDM;
 
-            var pagesMemory = pagesMemOwner.Memory.Slice(0, length);
-            var pages = pagesMemory.Span;
-            RootPageId = pages[0];
+            RootPageId = pageIds[0];
 
             // Initialize the subsequent pages on disk
-            var pageLength = Math.Min(pages.Length, RootHeaderIndexSectionCount);
-            for (var i = 0; i < pages.Length; i++)
+            var pageLength = Math.Min(pageIds.Length, RootHeaderIndexSectionCount);
+            for (var i = 0; i < pageIds.Length; i++)
             {
-                var pageIndex = pages[i];
+                var pageIndex = pageIds[i];
                 using var page = vdm.RequestPageExclusive(pageIndex);
                 page.SetPageDirty();
 
@@ -109,25 +112,24 @@ namespace Typhon.Engine
                     int j;
                     for (j = 0; j < pageLength; j++)
                     {
-                        rd[j] = pages[j];
+                        rd[j] = pageIds[j];
                     }
                     rd[j] = 0;              // Mark the end of the segment list
                 }
 
                 // Update link list of the pages that make the segment
                 ref var h = ref page.Header;
-                h.LogicalSegmentNextRawDataPBID = ((i + 1) < pages.Length) ? pages[i + 1] : 0;
+                h.LogicalSegmentNextRawDataPBID = ((i + 1) < pageIds.Length) ? pageIds[i + 1] : 0;
             }
 
             // Overflow, need to store remaining indices in more Index Pages?
-            if (pages.Length > pageLength)
+            if (pageIds.Length > pageLength)
             {
-                var indexPageCount = (pages.Length - RootHeaderIndexSectionCount + VirtualDiskManager.PageSize - 1) / sizeof(int);
+                var indexPageCount = (pageIds.Length - RootHeaderIndexSectionCount + VirtualDiskManager.PageSize - 1) / sizeof(int);
                 throw new NotImplementedException();
             }
 
-            _pagesMemoryOwner = pagesMemOwner;
-            _pages = pagesMemory;
+            _pages = pageIds.ToArray();
 
             return true;
         }

@@ -335,11 +335,12 @@ namespace Typhon.Engine
             ChunkCountPerPage = VirtualDiskManager.PageRawDataSize / stride;
         }
 
-        internal override bool Create(PageBlockType type, IMemoryOwner<uint> pagesMemOwner, int length, bool clear)
+        internal override bool Create(PageBlockType type, Span<uint> pageIds, bool clear)
         {
-            base.Create(type, pagesMemOwner, length, clear);
+            base.Create(type, pageIds, clear);
 
             // Clear the metadata sections that store the chunk's occupancy bitmap
+            var length = pageIds.Length;
             for (int i = 0; i < length; i++)
             {
                 using var page = GetPageExclusiveAccessor(i);

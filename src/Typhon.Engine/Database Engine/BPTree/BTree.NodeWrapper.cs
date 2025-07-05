@@ -236,7 +236,7 @@ namespace Typhon.Engine.BPTree
 
                 // get child to traverse through.
                 var child = GetChild(index);
-                var childRelatives = NodeRelatives.Create(child, index, this, ref relatives);
+                NodeRelatives.Create(child, index, this, ref relatives, out var childRelatives);
 
                 var rightChild = child.Insert(ref args, ref childRelatives, this);
 
@@ -473,7 +473,7 @@ namespace Typhon.Engine.BPTree
                 Debug.Assert(index >= -1 && index < Count);
 
                 var child = GetChild(index);
-                var childRelatives = NodeRelatives.Create(child, index, this, ref relatives);
+                NodeRelatives.Create(child, index, this, ref relatives, out var childRelatives);
                 var childMerged = child.Remove(ref args, ref childRelatives);
 
                 if (childMerged)

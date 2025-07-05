@@ -57,9 +57,7 @@ namespace Typhon.Engine
                 return null;
             }
 
-            var mem = MemoryPool<uint>.Shared.Rent(1);
-            mem.Memory.Span[0] = pageId;
-            if (segment.Create(type, mem, length, true) == false)
+            if (segment.Create(type, pageId, true) == false)
             {
                 return null;
             }
@@ -76,15 +74,16 @@ namespace Typhon.Engine
                 return null;
             }
 
-            var pages = _dpa.AllocatePages(length);
+            Span<uint> pages = stackalloc uint[length];
+            _dpa.AllocatePages(ref pages);
 
             var segment = new LogicalSegment(this);
-            if (dic.TryAdd(pages.Memory.Span[0], segment) == false)
+            if (dic.TryAdd(pages[0], segment) == false)
             {
                 Debug.Assert(true);
             }
 
-            if (segment.Create(type, pages, length, false) == false)
+            if (segment.Create(type, pages, false) == false)
             {
                 return null;
             }
@@ -101,15 +100,16 @@ namespace Typhon.Engine
                 return null;
             }
 
-            var pages = _dpa.AllocatePages(length);
+            Span<uint> pages = stackalloc uint[length];
+            _dpa.AllocatePages(ref pages);
 
             var segment = new ChunkBasedSegment(this, stride);
-            if (dic.TryAdd(pages.Memory.Span[0], segment) == false)
+            if (dic.TryAdd(pages[0], segment) == false)
             {
                 Debug.Assert(true);
             }
 
-            if (segment.Create(type, pages, length, false) == false)
+            if (segment.Create(type, pages, false) == false)
             {
                 return null;
             }

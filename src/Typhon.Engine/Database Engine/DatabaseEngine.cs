@@ -103,7 +103,7 @@ namespace Typhon.Engine
         /// <remarks>
         /// Typhon deals with accesses and changes through transaction only, even for query purpose. When the user creates a transaction, "now" (the
         /// time when the transaction was created) is used as the reference point, every access will be based on the data that existed up to this point.
-        /// Every changes will be isolated from other transactions until the content is committed.
+        /// Every change will be isolated from other transactions until the content is committed.
         /// </remarks>
         public Transaction NewTransaction(bool exclusiveConcurrency) => new(this, exclusiveConcurrency);
 
