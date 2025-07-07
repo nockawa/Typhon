@@ -78,7 +78,6 @@ public static class ServiceProviderExtensions
             services.TryAddSingleton(typeof(IConfiguration<>), typeof(ConfigurationHolder<>));
             services.AddSingleton<PagedMemoryMappedFile>();
             services.AddSingleton<LogicalSegmentManager>();
-            services.AddSingleton<DiskPageAllocator>();
             services.AddSingleton<TimeManager>();
             services.TryAddSingleton<DatabaseEngine>();
         }

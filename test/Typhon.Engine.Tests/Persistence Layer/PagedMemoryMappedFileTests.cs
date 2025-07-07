@@ -14,10 +14,11 @@ class PagedMemoryMappedFileTests
 {
     private IServiceProvider _serviceProvider;
     private ServiceCollection _serviceCollection;
-    private PagedMemoryMappedFile _vdm;
+    private PagedMemoryMappedFile _pmmf;
     private TimeManager _tm;
     private DatabaseConfiguration _configuration;
     private ILogger<PagedMemoryMappedFileTests> _logger;
+    private LogicalSegmentManager _lsm;
 
     private string CurrentDatabaseName => $"{TestContext.CurrentContext.Test.Name}_database";
 
@@ -54,20 +55,23 @@ class PagedMemoryMappedFileTests
 
         _serviceProvider = _serviceCollection.BuildServiceProvider();
 
-        _vdm = _serviceProvider.GetRequiredService<PagedMemoryMappedFile>();
+        _pmmf = _serviceProvider.GetRequiredService<PagedMemoryMappedFile>();
         _tm = _serviceProvider.GetRequiredService<TimeManager>();
         _configuration = _serviceProvider.GetRequiredService<IConfiguration<DatabaseConfiguration>>().Value;
         _logger = _serviceProvider.GetRequiredService<ILogger<PagedMemoryMappedFileTests>>();
         
-        _vdm.Initialize();
+        _pmmf.Initialize();
+
+        _lsm = _serviceProvider.GetRequiredService<LogicalSegmentManager>();
+        _lsm.Initialize();
+        
     }
 
     [TearDown]
     public void TearDown()
     {
-        Thread.Sleep(500);
-        _vdm?.Dispose();
-        _vdm = null;
+        _pmmf?.Dispose();
+        _pmmf = null;
     }
 
     private List<int> GenerateRandomAccess(int min, int max, int count=0)
@@ -100,18 +104,18 @@ class PagedMemoryMappedFileTests
     [Test]
     public void InitializationTest()
     {
-        var debug = _vdm.GetDebugInfo();
+        var debug = _pmmf.GetDebugInfo();
         var cacheHit = debug.MemPageCacheHit;
 
-        using (_vdm.RequestPageShared(0))
+        using (_pmmf.RequestPageShared(0))
         {
-            debug = _vdm.GetDebugInfo();
+            debug = _pmmf.GetDebugInfo();
             Assert.That(debug.MemPageCacheHit, Is.GreaterThan(cacheHit));
         }
 
-        _vdm.ResetDiskManager();
+        _pmmf.ResetDiskManager();
 
-        using (var pa = _vdm.RequestPageShared(0))
+        using (var pa = _pmmf.RequestPageShared(0))
         {
             unsafe
             {
@@ -125,13 +129,13 @@ class PagedMemoryMappedFileTests
     [Test]
     unsafe public void SequentialWrites()
     {
-        var debug = _vdm.GetDebugInfo();
+        var debug = _pmmf.GetDebugInfo();
         var writeCount = debug.WriteToDiskCount;
 
         {
-            using var p1 = _vdm.RequestPageExclusive(10);
-            using var p2 = _vdm.RequestPageExclusive(11);
-            using var p3 = _vdm.RequestPageExclusive(12);
+            using var p1 = _pmmf.RequestPageExclusive(10);
+            using var p2 = _pmmf.RequestPageExclusive(11);
+            using var p3 = _pmmf.RequestPageExclusive(12);
             var a = (int*)p1.PageAddress;
             p1.SetPageDirty();
             *a = 1;
@@ -145,9 +149,9 @@ class PagedMemoryMappedFileTests
             *a = 3;
         }
 
-        _vdm.FlushToDiskAsync(true).Wait();
+        _pmmf.FlushToDiskAsync(true).Wait();
 
-        Assert.That(_vdm.GetDebugInfo().WriteToDiskCount, Is.EqualTo(writeCount+1));
+        Assert.That(_pmmf.GetDebugInfo().WriteToDiskCount, Is.EqualTo(writeCount+1));
     }
 
     struct OPInfo
@@ -214,7 +218,7 @@ class PagedMemoryMappedFileTests
         {
             for (int i = 1; i < pagesCount; i++)
             {
-                using var a = _vdm.RequestPageExclusive((uint)i);
+                using var a = _pmmf.RequestPageExclusive((uint)i);
                 a.SetPageDirty();
 
                 var dest = (int*)a.PageAddress;
@@ -225,7 +229,7 @@ class PagedMemoryMappedFileTests
         {
             Parallel.ForEach(Enumerable.Range(1, pagesCount), i =>
             {
-                using var a = _vdm.RequestPageExclusive((uint)i);
+                using var a = _pmmf.RequestPageExclusive((uint)i);
                 a.SetPageDirty();
 
                 var dest = (int*)a.PageAddress;
@@ -233,18 +237,18 @@ class PagedMemoryMappedFileTests
             });
         }
 
-        _vdm.FlushToDiskAsync(false).Wait();
+        _pmmf.FlushToDiskAsync(false).Wait();
 
-        var di = _vdm.GetDebugInfo();
+        var di = _pmmf.GetDebugInfo();
         Console.WriteLine($"Generated file in {sw.ElapsedMilliseconds}ms, Write counts: {di.WriteToDiskCount}, Total Pages {di.PagesWrittenCount}, Avg Pages Count per write: {di.PagesWrittenCount/(float)di.WriteToDiskCount}, Generated a total of {frameCount*trueOpsCount} Pages operations");
 
         // Reset the Disk Manager to start checking from a brand new one
-        _vdm.ResetDiskManager();
+        _pmmf.ResetDiskManager();
 
         // Check the initial page of each page
         for (int i = 1; i < pagesCount; i++)
         {
-            using var a = _vdm.RequestPageShared((uint)i);
+            using var a = _pmmf.RequestPageShared((uint)i);
 
             var dest = (int*)a.PageAddress;
             Assert.That(*dest, Is.EqualTo(i), () => $"Bad DiskPageId {i}");
@@ -264,7 +268,7 @@ class PagedMemoryMappedFileTests
                 {
                     Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId}] Check Page {info.PageId} is {info.ExpectedValue}");
 
-                    using var a = _vdm.RequestPageShared(info.PageId);
+                    using var a = _pmmf.RequestPageShared(info.PageId);
                     int actual = *(int*)a.PageAddress;
 
                     _logger.LogCritical("Check Page {PageId} has Value {ExpectedValue} and has {value}", info.PageId, info.ExpectedValue, actual);
@@ -274,7 +278,7 @@ class PagedMemoryMappedFileTests
                 {
                     Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId}] Page {info.PageId} bumped to {info.ExpectedValue}");
 
-                    using var a = _vdm.RequestPageExclusive(info.PageId);
+                    using var a = _pmmf.RequestPageExclusive(info.PageId);
                     a.SetPageDirty();
                     var pa = (int*)a.PageAddress;
                     ++*pa;
@@ -282,8 +286,117 @@ class PagedMemoryMappedFileTests
                 }
             });
 
-            _vdm.FlushToDiskAsync(true).Wait();
+            _pmmf.FlushToDiskAsync(true).Wait();
             _tm.BumpFrame();
         }
+    }
+    
+    [Test]
+    public void FindNextUnsetL0Test()
+    {
+        var bitCount = 64 * 64 * 64 * 10;
+        var pageCount = (int)Math.Ceiling((double)bitCount / (PagedMemoryMappedFile.PageRawDataSize * 8));
+
+        var seg = _lsm.AllocateSegment(PageBlockType.None, pageCount);
+
+        var c = new PagedMemoryMappedFile.BitmapL3(bitCount, seg);
+
+        var index = -1;
+        long mask = 0L;
+
+        //c.Set(0);
+        c.SetL0(1);
+        c.SetL0(2);
+
+        c.FindNextUnsetL0(ref index, ref mask);
+        Assert.That(index, Is.EqualTo(0));
+
+        c.FindNextUnsetL0(ref index, ref mask);
+        Assert.That(index, Is.EqualTo(3));
+
+        var offset = 0;
+        var range = 64 * 64 * 64 + 64 * 64 + 1;
+        for (int i = offset; i < (offset + range); i++)
+        {
+            c.SetL0(i);
+        }
+
+        index = -1;
+        c.FindNextUnsetL0(ref index, ref mask);
+        Assert.That(index, Is.EqualTo(range));
+
+        offset = 64 * 64;
+        range = 1;
+        for (int i = offset; i < (offset + range); i++)
+        {
+            c.ClearL0(i);
+        }
+
+        index = -1;
+        c.FindNextUnsetL0(ref index, ref mask);
+        Assert.That(index, Is.EqualTo(offset));
+
+        _lsm.DeleteSegment(seg);
+    }
+    
+    [Test]
+    public void FindNextUnsetL1Test()
+    {
+        var bitCount = 64 * 64 * 64 * 10;
+        var pageCount = (int)Math.Ceiling((double)bitCount / (PagedMemoryMappedFile.PageRawDataSize * 8));
+
+        var seg = _lsm.AllocateSegment(PageBlockType.None, pageCount);
+
+        var c = new PagedMemoryMappedFile.BitmapL3(bitCount, seg);
+
+        var index = -1;
+        long mask = 0L;
+        c.FindNextUnsetL1(ref index, ref mask);
+        Assert.That(index, Is.EqualTo(0));
+
+        c.SetL0(0);
+        c.SetL0(128);
+        index = -1;
+        mask = 0L;
+        c.FindNextUnsetL1(ref index, ref mask);
+        Assert.That(index, Is.EqualTo(1));
+
+        c.FindNextUnsetL1(ref index, ref mask);
+        Assert.That(index, Is.EqualTo(3));
+
+
+        _lsm.DeleteSegment(seg);
+    }
+
+    [Test]
+    public void SetL1Test()
+    {
+        var bitCount = 64 * 64 * 64 * 10;
+        var pageCount = (int)Math.Ceiling((double)bitCount / (PagedMemoryMappedFile.PageRawDataSize * 8));
+
+        var seg = _lsm.AllocateSegment(PageBlockType.None, pageCount);
+
+        var c = new PagedMemoryMappedFile.BitmapL3(bitCount, seg);
+
+        c.SetL1(0);
+        Assert.That(c.IsSet(0), Is.EqualTo(true));
+        Assert.That(c.IsSet(63), Is.EqualTo(true));
+        Assert.That(c.IsSet(64), Is.EqualTo(false));
+
+        var index = -1;
+        long mask = 0L;
+        c.FindNextUnsetL0(ref index, ref mask);
+        Assert.That(index, Is.EqualTo(64));
+            
+        index = -1;
+        mask = 0L;
+        c.FindNextUnsetL1(ref index, ref mask);
+        Assert.That(index, Is.EqualTo(1));
+        c.FindNextUnsetL1(ref index, ref mask);
+        Assert.That(index, Is.EqualTo(2));
+
+
+
+        _lsm.DeleteSegment(seg);
     }
 }

@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -49,6 +50,8 @@ internal unsafe class DatabaseEventArgs : EventArgs
 /// </remarks>
 public partial class PagedMemoryMappedFile : IInitializable, IDisposable
 {
+    private readonly IServiceProvider _sp;
+
     #region Events
 
     internal event EventHandler<DatabaseEventArgs> DatabaseCreating;
@@ -69,6 +72,8 @@ public partial class PagedMemoryMappedFile : IInitializable, IDisposable
     internal const string HeaderSignature = "TyphonDatabase";
     internal const int WriteCachePageSize = 1024 * 1024;
 
+    private const int OccupancySegmentRootPageId = 1;
+    
     #endregion
 
     #region private fields
@@ -111,6 +116,9 @@ public partial class PagedMemoryMappedFile : IInitializable, IDisposable
 
     private readonly ConcurrentBitmapL3Any _dirtyPages;
 
+    private LogicalSegment _occupancySegment;
+    private BitmapL3 _occupancyMap;
+    
     #endregion
 
     #region Debug Info
@@ -195,10 +203,11 @@ public partial class PagedMemoryMappedFile : IInitializable, IDisposable
 
     #region Lifetime
 
-    unsafe public PagedMemoryMappedFile(IConfiguration<DatabaseConfiguration> dc, TimeManager timeManager, ILogger<PagedMemoryMappedFile> logger)
+    unsafe public PagedMemoryMappedFile(IServiceProvider sp, IConfiguration<DatabaseConfiguration> dc, TimeManager timeManager, ILogger<PagedMemoryMappedFile> logger)
     {
         try
         {
+            _sp = sp;
             _dbc = dc.Value;
             _tmg = timeManager;
 
@@ -425,6 +434,23 @@ public partial class PagedMemoryMappedFile : IInitializable, IDisposable
         }
     }
 
+    public void AllocatePages(ref Span<uint> pageIds)
+    {
+        lock (_occupancyMap)
+        {
+            _occupancyMap.Allocate(ref pageIds);
+        }
+    }
+
+    public bool FreePages(ReadOnlySpan<uint> pages)
+    {
+        lock (_occupancyMap)
+        {
+            _occupancyMap.Free(pages);
+        }
+        return false;
+    }
+    
     #endregion
 
     #region Internal API
@@ -1224,8 +1250,29 @@ public partial class PagedMemoryMappedFile : IInitializable, IDisposable
         FlushToDiskAsync(false).Wait();
     }
 
+    unsafe private void OnDatabaseCreatingInternal(RootFileHeader* rootFileHeader)
+    {
+        rootFileHeader->OccupancyMapSPI = OccupancySegmentRootPageId;
+        _log.LogInformation("Initialize DiskPageAllocator service with root at page {PageId}", OccupancySegmentRootPageId);
+
+        var lsm = (LogicalSegmentManager)_sp.GetRequiredService(typeof(LogicalSegmentManager));
+        _occupancySegment = lsm.CreateOccupancySegment(OccupancySegmentRootPageId, PageBlockType.OccupancyMap, 1);
+        
+        // ReSharper disable InconsistentlySynchronizedField
+        _occupancyMap = new BitmapL3(1, _occupancySegment);
+
+        // The first two pages are already manually allocated
+        _occupancyMap.SetL0(0);
+        _occupancyMap.SetL0(1);
+        // ReSharper restore InconsistentlySynchronizedField
+
+        FlushToDiskAsync(false).Wait();
+        
+    }
+    
     unsafe void OnDatabaseCreating(RootFileHeader* rootFileHeader)
     {
+        OnDatabaseCreatingInternal(rootFileHeader);
         var handler = DatabaseCreating;
         handler?.Invoke(this, new DatabaseEventArgs(rootFileHeader));
     }

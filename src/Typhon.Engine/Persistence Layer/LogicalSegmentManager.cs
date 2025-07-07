@@ -14,18 +14,14 @@ public class LogicalSegmentManager : IInitializable, IDisposable
     private readonly ILogger<LogicalSegmentManager> _log;
     private readonly IConfiguration<DatabaseConfiguration> _dbc;
     private readonly PagedMemoryMappedFile _pmmf;
-    private readonly DiskPageAllocator _dpa;
 
     internal PagedMemoryMappedFile PMMF => _pmmf;
-    internal DiskPageAllocator DPA => _dpa;
-
     private ConcurrentDictionary<uint, LogicalSegment> _segments;
 
-    public LogicalSegmentManager(IConfiguration<DatabaseConfiguration> dbc, PagedMemoryMappedFile pmmf, DiskPageAllocator dpa, ILogger<LogicalSegmentManager> log)
+    public LogicalSegmentManager(IConfiguration<DatabaseConfiguration> dbc, PagedMemoryMappedFile pmmf, ILogger<LogicalSegmentManager> log)
     {
         _dbc = dbc;
         _pmmf = pmmf;
-        _dpa = dpa;
         _log = log;
 
         _segments = new ConcurrentDictionary<uint, LogicalSegment>();
@@ -74,7 +70,7 @@ public class LogicalSegmentManager : IInitializable, IDisposable
         }
 
         Span<uint> pages = stackalloc uint[length];
-        _dpa.AllocatePages(ref pages);
+        _pmmf.AllocatePages(ref pages);
 
         var segment = new LogicalSegment(this);
         if (dic.TryAdd(pages[0], segment) == false)
@@ -100,7 +96,7 @@ public class LogicalSegmentManager : IInitializable, IDisposable
         }
 
         Span<uint> pages = stackalloc uint[length];
-        _dpa.AllocatePages(ref pages);
+        _pmmf.AllocatePages(ref pages);
 
         var segment = new ChunkBasedSegment(this, stride);
         if (dic.TryAdd(pages[0], segment) == false)
@@ -130,7 +126,7 @@ public class LogicalSegmentManager : IInitializable, IDisposable
             return false;
         }
 
-        _dpa.FreePages(segment.Pages);
+        _pmmf.FreePages(segment.Pages);
         return true;
     }
 
@@ -144,7 +140,6 @@ public class LogicalSegmentManager : IInitializable, IDisposable
             return;
         }
         _pmmf.Initialize();
-        _dpa.Initialize();
 
         IsInitialized = true;
     }
@@ -162,7 +157,6 @@ public class LogicalSegmentManager : IInitializable, IDisposable
             segment.Dispose();
         }
 
-        _dpa.Dispose();
         _pmmf.Dispose();
 
         IsDisposed = true;

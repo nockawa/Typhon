@@ -1,8 +1,4 @@
-﻿// unset
-
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -10,96 +6,9 @@ using System.Threading;
 
 namespace Typhon.Engine;
 
-public class DiskPageAllocator : IInitializable, IDisposable
+
+public partial class PagedMemoryMappedFile
 {
-    private const int OccupancySegmentRootPageId = 1;
-
-    private readonly IServiceProvider _sp;
-    private readonly DatabaseConfiguration _dbc;
-    private readonly PagedMemoryMappedFile _pmmf;
-    private readonly ILogger<DiskPageAllocator> _log;
-
-    private LogicalSegment _occupancySegment;
-    private BitmapL3 _occupancyMap;
-
-    public DiskPageAllocator(IServiceProvider sp, IConfiguration<DatabaseConfiguration> dbc, PagedMemoryMappedFile pmmf, ILogger<DiskPageAllocator> log)
-    {
-        _sp = sp;
-        _dbc = dbc.Value;
-        _pmmf = pmmf;
-        _log = log;
-        _pmmf.DatabaseCreating += OnDatabaseCreating;
-        _pmmf.DatabaseLoading += OnDatabaseLoading;
-
-    }
-
-    unsafe private void OnDatabaseCreating(object sender, DatabaseEventArgs e)
-    {
-        e.Header->OccupancyMapSPI = OccupancySegmentRootPageId;
-        _log.LogInformation("Initialize DiskPageAllocator service with root at page {PageId}", OccupancySegmentRootPageId);
-
-        var lsm = (LogicalSegmentManager)_sp.GetRequiredService(typeof(LogicalSegmentManager));
-        _occupancySegment = lsm.CreateOccupancySegment(OccupancySegmentRootPageId, PageBlockType.OccupancyMap, 1);
-        _occupancyMap = new BitmapL3(1, _occupancySegment);
-            
-        // The first two pages are already manually allocated
-        _occupancyMap.SetL0(0);
-        _occupancyMap.SetL0(1);
-
-        _pmmf.FlushToDiskAsync(false).Wait();
-
-    }
-
-    private void OnDatabaseLoading(object sender, DatabaseEventArgs e)
-    {
-
-    }
-
-    public void Initialize()
-    {
-        ++ReferenceCounter;
-        if (IsInitialized)
-        {
-            return;
-        }
-        _pmmf.Initialize();
-
-        IsInitialized = true;
-    }
-
-    public void Dispose()
-    {
-        if (IsDisposed || --ReferenceCounter != 0)
-        {
-            return;
-        }
-
-        _pmmf.Dispose();
-
-        IsDisposed = true;
-    }
-
-    public bool IsInitialized { get; private set;  }
-    public bool IsDisposed { get; private set; }
-    public int ReferenceCounter { get; private set; }
-
-    public void AllocatePages(ref Span<uint> pageIds)
-    {
-        lock (_occupancyMap)
-        {
-            _occupancyMap.Allocate(ref pageIds);
-        }
-    }
-
-    public bool FreePages(ReadOnlySpan<uint> pages)
-    {
-        lock (_occupancyMap)
-        {
-            _occupancyMap.Free(pages);
-        }
-        return false;
-    }
-
     public class BitmapL3
     {
         private readonly LogicalSegment _segment;
@@ -460,4 +369,5 @@ public class DiskPageAllocator : IInitializable, IDisposable
 
         public int Capacity { get; }
     }
+    
 }

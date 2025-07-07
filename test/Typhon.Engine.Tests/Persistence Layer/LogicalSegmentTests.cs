@@ -62,11 +62,7 @@ class LogicalSegmentTests
     }
 
     [TearDown]
-    public void TearDown()
-    {
-        Thread.Sleep(500);
-        _lsm?.Dispose();
-    }
+    public void TearDown() => _lsm?.Dispose();
 
 
     [Test]

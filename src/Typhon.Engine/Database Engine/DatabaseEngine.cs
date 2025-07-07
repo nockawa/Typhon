@@ -80,7 +80,6 @@ public class DatabaseEngine : IInitializable, IDisposable
 {
     private readonly DatabaseConfiguration     _dbc;
     private readonly PagedMemoryMappedFile     _pmmf;
-    private readonly DiskPageAllocator         _dpa;
     private readonly ILogger<DatabaseEngine>   _log;
 
     private ComponentTable _fieldsTable;
@@ -108,11 +107,10 @@ public class DatabaseEngine : IInitializable, IDisposable
     /// </remarks>
     public Transaction NewTransaction(bool exclusiveConcurrency) => new(this, exclusiveConcurrency);
 
-    public DatabaseEngine(IConfiguration<DatabaseConfiguration> dbc, PagedMemoryMappedFile pmmf, LogicalSegmentManager lsm, DiskPageAllocator dpa, ILogger<DatabaseEngine> log)
+    public DatabaseEngine(IConfiguration<DatabaseConfiguration> dbc, PagedMemoryMappedFile pmmf, LogicalSegmentManager lsm, ILogger<DatabaseEngine> log)
     {
         _pmmf = pmmf;
         LSM = lsm;
-        _dpa = dpa;
         _log = log;
         _dbc = dbc.Value;
 
@@ -124,17 +122,14 @@ public class DatabaseEngine : IInitializable, IDisposable
 
         _pmmf.DatabaseCreating += OnDatabaseCreating;
         _pmmf.DatabaseLoading += OnDatabaseLoading;
-
     }
 
     private void OnDatabaseLoading(object sender, DatabaseEventArgs e)
     {
     }
 
-    unsafe private void OnDatabaseCreating(object sender, DatabaseEventArgs e)
-    {
+    unsafe private void OnDatabaseCreating(object sender, DatabaseEventArgs e) => 
         CreateComponentStore(e.Header);
-    }
 
     public void Initialize()
     {
@@ -145,7 +140,6 @@ public class DatabaseEngine : IInitializable, IDisposable
         }
         _pmmf.Initialize();
         LSM.Initialize();
-        _dpa.Initialize();
 
         IsInitialized = true;
     }
@@ -163,7 +157,6 @@ public class DatabaseEngine : IInitializable, IDisposable
             return;
         }
 
-        _dpa.Dispose();
         LSM.Dispose();
         _pmmf.Dispose();
 
