@@ -5,142 +5,141 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.InteropServices;
 
-namespace Typhon.Engine
+namespace Typhon.Engine;
+
+public class DatabaseDefinitions
 {
-    public class DatabaseDefinitions
+    private Dictionary<string, DBComponentDefinition> _components;
+    private Dictionary<string, DBObjectDefinition> _objects;
+
+    public DatabaseDefinitions()
     {
-        private Dictionary<string, DBComponentDefinition> _components;
-        private Dictionary<string, DBObjectDefinition> _objects;
+        _components = new Dictionary<string, DBComponentDefinition>();
+        _objects = new Dictionary<string, DBObjectDefinition>();
+    }
 
-        public DatabaseDefinitions()
+    public IDBComponentDefinitionBuilder CreateComponentBuilder(string name) => new DBComponentDefinitionBuilder(this, name);
+
+    public interface IDBComponentDefinitionBuilder
+    {
+        IDbComponentFieldDefinitionBuilder WithField(int fieldId, string name, FieldType type, int offset);
+        void Build();
+    }
+
+    public interface IDbComponentFieldDefinitionBuilder : IDBComponentDefinitionBuilder
+    {
+        IDbComponentFieldDefinitionBuilder IsStatic();
+        IDbComponentFieldDefinitionBuilder IsArray(int length);
+    }
+
+    class DBComponentDefinitionBuilder : IDBComponentDefinitionBuilder
+    {
+        private readonly DatabaseDefinitions _owner;
+        protected readonly DBComponentDefinition _component;
+
+        public DBComponentDefinitionBuilder(DatabaseDefinitions owner, string name)
         {
-            _components = new Dictionary<string, DBComponentDefinition>();
-            _objects = new Dictionary<string, DBObjectDefinition>();
+            _owner = owner;
+            _component = new DBComponentDefinition(name);
         }
 
-        public IDBComponentDefinitionBuilder CreateComponentBuilder(string name) => new DBComponentDefinitionBuilder(this, name);
-
-        public interface IDBComponentDefinitionBuilder
+        protected DBComponentDefinitionBuilder(DatabaseDefinitions owner, DBComponentDefinition component)
         {
-            IDbComponentFieldDefinitionBuilder WithField(int fieldId, string name, FieldType type, int offset);
-            void Build();
+            _owner = owner;
+            _component = component;
         }
 
-        public interface IDbComponentFieldDefinitionBuilder : IDBComponentDefinitionBuilder
+        public IDbComponentFieldDefinitionBuilder WithField(int fieldId, string name, FieldType type, int offset)
         {
-            IDbComponentFieldDefinitionBuilder IsStatic();
-            IDbComponentFieldDefinitionBuilder IsArray(int length);
+            return new DBComponentFieldDefinitionBuilder(_owner, _component, fieldId, name, type, offset);
         }
 
-        class DBComponentDefinitionBuilder : IDBComponentDefinitionBuilder
+        public void Build()
         {
-            private readonly DatabaseDefinitions _owner;
-            protected readonly DBComponentDefinition _component;
+            _component.Build();
+            _owner.AddComponent(_component);
+        }
+    }
 
-            public DBComponentDefinitionBuilder(DatabaseDefinitions owner, string name)
-            {
-                _owner = owner;
-                _component = new DBComponentDefinition(name);
-            }
+    public void AddComponent(DBComponentDefinition component)
+    {
+        if (_components.ContainsKey(component.Name))
+        {
+            throw new ArgumentException($"The component name '{component.Name}' is already taken", nameof(component));
+        }
+        _components.Add(component.Name, component);
+    }
 
-            protected DBComponentDefinitionBuilder(DatabaseDefinitions owner, DBComponentDefinition component)
-            {
-                _owner = owner;
-                _component = component;
-            }
+    class DBComponentFieldDefinitionBuilder : DBComponentDefinitionBuilder, IDbComponentFieldDefinitionBuilder
+    {
+        private DBComponentDefinition.Field _field;
 
-            public IDbComponentFieldDefinitionBuilder WithField(int fieldId, string name, FieldType type, int offset)
-            {
-                return new DBComponentFieldDefinitionBuilder(_owner, _component, fieldId, name, type, offset);
-            }
-
-            public void Build()
-            {
-                _component.Build();
-                _owner.AddComponent(_component);
-            }
+        public IDbComponentFieldDefinitionBuilder IsStatic()
+        {
+            _field.IsStatic = true;
+            return this;
         }
 
-        public void AddComponent(DBComponentDefinition component)
+        public IDbComponentFieldDefinitionBuilder IsArray(int length)
         {
-            if (_components.ContainsKey(component.Name))
-            {
-                throw new ArgumentException($"The component name '{component.Name}' is already taken", nameof(component));
-            }
-            _components.Add(component.Name, component);
+            _field.ArrayLength = length;
+            return this;
         }
 
-        class DBComponentFieldDefinitionBuilder : DBComponentDefinitionBuilder, IDbComponentFieldDefinitionBuilder
+        internal DBComponentFieldDefinitionBuilder(DatabaseDefinitions owner, DBComponentDefinition component, int fieldId, string fieldName,
+            FieldType fieldType, int offset) : base(owner, component)
         {
-            private DBComponentDefinition.Field _field;
-
-            public IDbComponentFieldDefinitionBuilder IsStatic()
-            {
-                _field.IsStatic = true;
-                return this;
-            }
-
-            public IDbComponentFieldDefinitionBuilder IsArray(int length)
-            {
-                _field.ArrayLength = length;
-                return this;
-            }
-
-            internal DBComponentFieldDefinitionBuilder(DatabaseDefinitions owner, DBComponentDefinition component, int fieldId, string fieldName,
-                FieldType fieldType, int offset) : base(owner, component)
-            {
-                DBComponentDefinition.Field.CheckName(fieldName);
-                DBComponentDefinition.Field.CheckType(fieldType);
-                _field = _component.CreateField(fieldId, fieldName, fieldType, offset);
-            }
-
+            DBComponentDefinition.Field.CheckName(fieldName);
+            DBComponentDefinition.Field.CheckType(fieldType);
+            _field = _component.CreateField(fieldId, fieldName, fieldType, offset);
         }
 
-        public DBComponentDefinition GetComponent(string componentName) => _components.TryGetValue(componentName, out var res) == false ? null : res;
+    }
 
-        public DBComponentDefinition CreateFromRowAccessor<T>() where T : unmanaged
+    public DBComponentDefinition GetComponent(string componentName) => _components.TryGetValue(componentName, out var res) == false ? null : res;
+
+    public DBComponentDefinition CreateFromRowAccessor<T>() where T : unmanaged
+    {
+        var t = typeof(T);
+
+        var ca = t.GetCustomAttribute<ComponentAttribute>();
+        var dbc = new DBComponentDefinition((ca != null) ? ca.Name : t.Name);
+
+        if (_components.TryGetValue(dbc.Name, out _)) return null;
+
+        var members = t.GetFields();
+        var fieldId = 0;
+        for (int i = 0; i < members.Length; i++)
         {
-            var t = typeof(T);
+            var fieldInfo = members[i];
 
-            var ca = t.GetCustomAttribute<ComponentAttribute>();
-            var dbc = new DBComponentDefinition((ca != null) ? ca.Name : t.Name);
+            if (fieldInfo.IsStatic) continue;
 
-            if (_components.TryGetValue(dbc.Name, out _)) return null;
+            var fa = fieldInfo.GetCustomAttribute<FieldAttribute>();
+            var ia = fieldInfo.GetCustomAttribute<IndexAttribute>();
 
-            var members = t.GetFields();
-            var fieldId = 0;
-            for (int i = 0; i < members.Length; i++)
+            var fieldType = DatabaseSchemaExtensions.FromType(fieldInfo.FieldType);
+            if (fieldType != FieldType.None)
             {
-                var fieldInfo = members[i];
+                // Name of the field is by default the C# member name, or the one specified by the FieldAttribute
+                var fieldName = fa?.Name ?? fieldInfo.Name;
+                var fieldOffset = Marshal.OffsetOf(t, fieldInfo.Name).ToInt32();
 
-                if (fieldInfo.IsStatic) continue;
+                var field = dbc.CreateField(fa?.FieldId ?? fieldId++, fieldName, fieldType, fieldOffset);
 
-                var fa = fieldInfo.GetCustomAttribute<FieldAttribute>();
-                var ia = fieldInfo.GetCustomAttribute<IndexAttribute>();
-
-                var fieldType = DatabaseSchemaExtensions.FromType(fieldInfo.FieldType);
-                if (fieldType != FieldType.None)
+                // Index related data
+                if (ia != null)
                 {
-                    // Name of the field is by default the C# member name, or the one specified by the FieldAttribute
-                    var fieldName = fa?.Name ?? fieldInfo.Name;
-                    var fieldOffset = Marshal.OffsetOf(t, fieldInfo.Name).ToInt32();
-
-                    var field = dbc.CreateField(fa?.FieldId ?? fieldId++, fieldName, fieldType, fieldOffset);
-
-                    // Index related data
-                    if (ia != null)
-                    {
-                        field.HasIndex = true;
-                        field.IndexAllowMultiple = ia.AllowMultiple;
-                        field.IsIndexAuto = false;
-                    }
+                    field.HasIndex = true;
+                    field.IndexAllowMultiple = ia.AllowMultiple;
+                    field.IsIndexAuto = false;
                 }
             }
-
-            dbc.Build();
-
-            _components.Add(dbc.Name, dbc);
-            return dbc;
         }
+
+        dbc.Build();
+
+        _components.Add(dbc.Name, dbc);
+        return dbc;
     }
 }

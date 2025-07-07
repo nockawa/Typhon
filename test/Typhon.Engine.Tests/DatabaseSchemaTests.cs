@@ -1,93 +1,79 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
-using Serilog;
 using System;
-using System.Runtime.InteropServices;
 
-namespace Typhon.Engine.Tests
+namespace Typhon.Engine.Tests;
+
+public class DatabaseSchemaTests
 {
-    public class DatabaseSchemaTests
+    private IServiceProvider _serviceProvider;
+    private ServiceCollection _serviceCollection;
+    private DatabaseEngine _dbe;
+
+    private string CurrentDatabaseName => $"{TestContext.CurrentContext.Test.Name}_database";
+
+    [SetUp]
+    public void Setup()
     {
-        private IServiceProvider _serviceProvider;
-        private ServiceCollection _serviceCollection;
-        private DatabaseEngine _dbe;
+        var o = TestContext.CurrentContext.Test.Properties.ContainsKey("CacheSize");
+        var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("CacheSize") : (int)PagedMemoryMappedFile.MinimumCacheSize;
 
-        private string CurrentDatabaseName => $"{TestContext.CurrentContext.Test.Name}_database";
-
-        [SetUp]
-        public void Setup()
-        {
-            var o = TestContext.CurrentContext.Test.Properties.ContainsKey("CacheSize");
-            var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("CacheSize") : (int)VirtualDiskManager.MinimumCacheSize;
-
-            Log.Logger = new LoggerConfiguration()
-                .MinimumLevel.Verbose()
-                .Enrich.FromLogContext()
-                .Enrich.WithThreadId()
-                .Enrich.WithCurrentFrame()
-                .WriteTo.Seq("http://localhost:5341", compact: true)
-                .CreateLogger();
-
-            var serviceCollection = new ServiceCollection();
-            _serviceCollection = serviceCollection;
-            _serviceCollection
-                .AddTyphon(builder =>
+        var serviceCollection = new ServiceCollection();
+        _serviceCollection = serviceCollection;
+        _serviceCollection
+            .AddTyphon(builder =>
+            {
+                builder.ConfigureDatabase(dc =>
                 {
-                    builder.ConfigureDatabase(dc =>
-                    {
-                        dc.DatabaseName = CurrentDatabaseName;
-                        dc.RecreateDatabase = true;
-                        dc.DeleteDatabaseOnDispose = true;
-                        dc.DatabaseCacheSize = (ulong)dcs;
-                    });
-                })
-
-                .AddLogging(builder =>
-                {
-                    builder.AddSerilog(dispose: true);
-                    builder.AddSimpleConsole(options =>
-                    {
-                        options.SingleLine = true;
-                        options.IncludeScopes = true;
-                        options.TimestampFormat = "mm:ss.fff ";
-                    });
+                    dc.DatabaseName = CurrentDatabaseName;
+                    dc.RecreateDatabase = true;
+                    dc.DeleteDatabaseOnDispose = true;
+                    dc.DatabaseCacheSize = (ulong)dcs;
                 });
+            })
 
-            _serviceProvider = _serviceCollection.BuildServiceProvider();
+            .AddLogging(builder =>
+            {
+                builder.AddSimpleConsole(options =>
+                {
+                    options.SingleLine = true;
+                    options.IncludeScopes = true;
+                    options.TimestampFormat = "mm:ss.fff ";
+                });
+            });
 
-            _dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
-            _dbe.Initialize();
-        }
+        _serviceProvider = _serviceCollection.BuildServiceProvider();
 
-        [TearDown]
-        public void TearDown()
-        {
-            _dbe?.Dispose();
-            _dbe = null;
+        _dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+        _dbe.Initialize();
+    }
 
-            Log.CloseAndFlush();
-        }
+    [TearDown]
+    public void TearDown()
+    {
+        _dbe?.Dispose();
+        _dbe = null;
+    }
 
-        [Test]
-        public void TestDatabaseSchema()
-        {
-            var dc = new DatabaseDefinitions();
+    [Test]
+    public void TestDatabaseSchema()
+    {
+        var dc = new DatabaseDefinitions();
 
-            dc.CreateFromRowAccessor<FieldRow>();
+        dc.CreateFromRowAccessor<FieldRow>();
 
-            dc.CreateComponentBuilder("DBObject")
-                .WithField(-1, "DBObjectTypeName", FieldType.String64, 0).IsStatic()
-                .WithField(0, "ID", FieldType.Long, 0)
-                .Build();
-        }
+        dc.CreateComponentBuilder("DBObject")
+            .WithField(-1, "DBObjectTypeName", FieldType.String64, 0).IsStatic()
+            .WithField(0, "ID", FieldType.Long, 0)
+            .Build();
+    }
 
-        [Test]
-        unsafe public void TestSchemaStore()
-        {
+    [Test]
+    unsafe public void TestSchemaStore()
+    {
 
-            Assert.That(_dbe.IsInitialized, Is.True);
+        Assert.That(_dbe.IsInitialized, Is.True);
 
-        }
     }
 }

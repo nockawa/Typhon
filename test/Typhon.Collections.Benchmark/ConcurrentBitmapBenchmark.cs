@@ -46,7 +46,7 @@ namespace Typhon.Collections.Benchmark
         private int[] _iList;
         private int[] _vList;
         private int _pageCount;
-        private VirtualDiskManager.PageInfo[] _pages;
+        private PagedMemoryMappedFile.PageInfo[] _pages;
 
         [GlobalSetup]
         public void GlobalSetup()
@@ -61,7 +61,7 @@ namespace Typhon.Collections.Benchmark
             _aList = new PageActivityInfo[_pageCount];
             _iList = new int[_pageCount];
             _vList = new int[_pageCount];
-            _pages = new VirtualDiskManager.PageInfo[_pageCount];
+            _pages = new PagedMemoryMappedFile.PageInfo[_pageCount];
 
             var r = new Random(DateTime.UtcNow.Millisecond);
             for (int i = 0; i < _pageCount; i++)
@@ -71,7 +71,7 @@ namespace Typhon.Collections.Benchmark
                 _aList[i] = new PageActivityInfo { AllocatedTime = at, HitCounter = hc };
                 _iList[i] = hc;
                 _vList[i] = i;
-                _pages[i] = new VirtualDiskManager.PageInfo(i);
+                _pages[i] = new PagedMemoryMappedFile.PageInfo(i);
             }
 
             _aMem = _aList.ToArray();

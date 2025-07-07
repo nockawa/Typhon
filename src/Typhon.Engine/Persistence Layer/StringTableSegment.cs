@@ -5,108 +5,107 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace Typhon.Engine
+namespace Typhon.Engine;
+
+public class StringTableSegment
 {
-    public class StringTableSegment
+    public struct ChunkHeader
     {
-        public struct ChunkHeader
+        public int SizeLeft;
+        public int NextChunkId;
+    }
+
+    public int Stride { get; }
+
+    protected ChunkRandomAccessor ChunkAccessor;
+    protected internal ChunkBasedSegment Segment => ChunkAccessor.Segment;
+
+    public StringTableSegment(ChunkBasedSegment segment, ChunkRandomAccessor accessor=null)
+    {
+        ChunkAccessor = accessor ?? segment.CreateChunkRandomAccessor(4);
+        Stride = Segment.Stride;
+    }
+
+    unsafe public int StoreString(string str)
+    {
+        var byteCount = Encoding.UTF8.GetByteCount(str);
+        var blockSize = Stride - sizeof(ChunkHeader);
+        var chunkCount = (int)Math.Ceiling(byteCount / (double)blockSize);
+
+        var chunks = Segment.AllocateChunks(chunkCount, false);
+        var chunkIds = chunks.Memory.Span.Slice(0, chunkCount);
+        var rootChunkId = chunkIds[0];
+
+        Span<byte> utfString = stackalloc byte[byteCount];
+        Encoding.UTF8.GetBytes(str.AsSpan(), utfString);
+
+        var sizeLeft = byteCount;
+        var curOffset = 0;
+        for (int i = 0; i < chunkCount; i++)
         {
-            public int SizeLeft;
-            public int NextChunkId;
+            var chunkAddr = ChunkAccessor.GetChunkAddress(chunkIds[i], dirtyPage: true);
+            ref var h = ref Unsafe.AsRef<ChunkHeader>(chunkAddr);
+
+            var copySize = Math.Min(sizeLeft, blockSize);
+            h.SizeLeft = sizeLeft;
+            h.NextChunkId = (i + 1 < chunkCount) ? chunkIds[i+1] : 0;
+
+            chunkAddr += sizeof(ChunkHeader);
+            utfString.Slice(curOffset, copySize).CopyTo(new Span<byte>(chunkAddr, copySize));
+
+            sizeLeft -= copySize;
+            curOffset += copySize;
         }
 
-        public int Stride { get; }
+        chunks.Dispose();
+        return rootChunkId;
+    }
 
-        protected ChunkRandomAccessor ChunkAccessor;
-        protected internal ChunkBasedSegment Segment => ChunkAccessor.Segment;
+    unsafe public string LoadString(int stringId)
+    {
+        var curChunkAddr = ChunkAccessor.GetChunkAddress(stringId);
+        ref var curChunk = ref Unsafe.AsRef<ChunkHeader>(curChunkAddr);
 
-        public StringTableSegment(ChunkBasedSegment segment, ChunkRandomAccessor accessor=null)
+        Span<byte> ustr = stackalloc byte[curChunk.SizeLeft];
+        var totalSize = curChunk.SizeLeft;
+
+        var curOffset = 0;
+        var blockSize = Stride - sizeof(ChunkHeader);
+
+        while (true)
         {
-            ChunkAccessor = accessor ?? segment.CreateChunkRandomAccessor(4);
-            Stride = Segment.Stride;
+            var copySize = Math.Min(curChunk.SizeLeft, blockSize);
+            new Span<byte>(curChunkAddr + sizeof(ChunkHeader), copySize).CopyTo(ustr.Slice(curOffset, copySize));
+
+            if (curChunk.NextChunkId == 0) break;
+
+            curOffset += copySize;
+            curChunkAddr = ChunkAccessor.GetChunkAddress(curChunk.NextChunkId);
+            curChunk = ref Unsafe.AsRef<ChunkHeader>(curChunkAddr);
         }
 
-        unsafe public int StoreString(string str)
+        fixed (byte* d = ustr)
         {
-            var byteCount = Encoding.UTF8.GetByteCount(str);
-            var blockSize = Stride - sizeof(ChunkHeader);
-            var chunkCount = (int)Math.Ceiling(byteCount / (double)blockSize);
-
-            var chunks = Segment.AllocateChunks(chunkCount, false);
-            var chunkIds = chunks.Memory.Span.Slice(0, chunkCount);
-            var rootChunkId = chunkIds[0];
-
-            Span<byte> utfString = stackalloc byte[byteCount];
-            Encoding.UTF8.GetBytes(str.AsSpan(), utfString);
-
-            var sizeLeft = byteCount;
-            var curOffset = 0;
-            for (int i = 0; i < chunkCount; i++)
-            {
-                var chunkAddr = ChunkAccessor.GetChunkAddress(chunkIds[i], dirtyPage: true);
-                ref var h = ref Unsafe.AsRef<ChunkHeader>(chunkAddr);
-
-                var copySize = Math.Min(sizeLeft, blockSize);
-                h.SizeLeft = sizeLeft;
-                h.NextChunkId = (i + 1 < chunkCount) ? chunkIds[i+1] : 0;
-
-                chunkAddr += sizeof(ChunkHeader);
-                utfString.Slice(curOffset, copySize).CopyTo(new Span<byte>(chunkAddr, copySize));
-
-                sizeLeft -= copySize;
-                curOffset += copySize;
-            }
-
-            chunks.Dispose();
-            return rootChunkId;
+            return Marshal.PtrToStringUTF8(new IntPtr(d), totalSize);
         }
+    }
 
-        unsafe public string LoadString(int stringId)
+    unsafe public void DeleteString(int stringId)
+    {
+        var curChunkId = stringId;
+        var curChunkAddr = ChunkAccessor.GetChunkAddress(stringId, dirtyPage: true);
+        ref var curChunk = ref Unsafe.AsRef<ChunkHeader>(curChunkAddr);
+
+        while (true)
         {
-            var curChunkAddr = ChunkAccessor.GetChunkAddress(stringId);
-            ref var curChunk = ref Unsafe.AsRef<ChunkHeader>(curChunkAddr);
-
-            Span<byte> ustr = stackalloc byte[curChunk.SizeLeft];
-            var totalSize = curChunk.SizeLeft;
-
-            var curOffset = 0;
-            var blockSize = Stride - sizeof(ChunkHeader);
-
-            while (true)
-            {
-                var copySize = Math.Min(curChunk.SizeLeft, blockSize);
-                new Span<byte>(curChunkAddr + sizeof(ChunkHeader), copySize).CopyTo(ustr.Slice(curOffset, copySize));
-
-                if (curChunk.NextChunkId == 0) break;
-
-                curOffset += copySize;
-                curChunkAddr = ChunkAccessor.GetChunkAddress(curChunk.NextChunkId);
-                curChunk = ref Unsafe.AsRef<ChunkHeader>(curChunkAddr);
-            }
-
-            fixed (byte* d = ustr)
-            {
-                return Marshal.PtrToStringUTF8(new IntPtr(d), totalSize);
-            }
-        }
-
-        unsafe public void DeleteString(int stringId)
-        {
-            var curChunkId = stringId;
-            var curChunkAddr = ChunkAccessor.GetChunkAddress(stringId, dirtyPage: true);
-            ref var curChunk = ref Unsafe.AsRef<ChunkHeader>(curChunkAddr);
-
-            while (true)
-            {
-                var nextChunkId = curChunk.NextChunkId;
-                Segment.FreeChunk(curChunkId);
+            var nextChunkId = curChunk.NextChunkId;
+            Segment.FreeChunk(curChunkId);
                 
-                if (curChunk.NextChunkId == 0) break;
+            if (curChunk.NextChunkId == 0) break;
 
-                curChunkId = nextChunkId;
-                curChunkAddr = ChunkAccessor.GetChunkAddress(curChunkId, dirtyPage: true);
-                curChunk = ref Unsafe.AsRef<ChunkHeader>(curChunkAddr);
-            }
+            curChunkId = nextChunkId;
+            curChunkAddr = ChunkAccessor.GetChunkAddress(curChunkId, dirtyPage: true);
+            curChunk = ref Unsafe.AsRef<ChunkHeader>(curChunkAddr);
         }
     }
 }

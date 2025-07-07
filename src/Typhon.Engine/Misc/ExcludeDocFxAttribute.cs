@@ -2,7 +2,6 @@
 
 using System;
 
-namespace Typhon.Engine
-{
-    public class ExcludeDocFxAttribute : Attribute { }
-}
+namespace Typhon.Engine;
+
+public class ExcludeDocFxAttribute : Attribute { }

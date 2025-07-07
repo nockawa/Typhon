@@ -1,12 +1,11 @@
 ﻿// unset
 
-namespace Typhon.Engine
+namespace Typhon.Engine;
+
+public interface IInitializable
 {
-    public interface IInitializable
-    {
-        void Initialize();
-        bool IsInitialized { get; }
-        bool IsDisposed { get; }
-        int ReferenceCounter { get; }
-    }
+    void Initialize();
+    bool IsInitialized { get; }
+    bool IsDisposed { get; }
+    int ReferenceCounter { get; }
 }
