@@ -12,6 +12,27 @@ using Typhon.Engine.Tests;
 
 namespace Typhon.Benchmark;
 
+
+
+[JsonExporterAttribute.Full]
+[JsonExporterAttribute.FullCompressed]
+public class FibTest
+{
+    public static int Fib(int n) {
+        switch (n)
+        {
+            case 0: return 0;
+            case 1: return 1;
+            default:
+                return Fib(n-2) + Fib(2-1);
+        }
+    }
+
+    [Benchmark]
+    public void Fib10() => Fib(10);
+}
+
+
 [SimpleJob(warmupCount: 3, iterationCount: 3)]
 [JsonExporterAttribute.Full]
 [JsonExporterAttribute.FullCompressed]

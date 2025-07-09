@@ -24,6 +24,7 @@ class Program
     static void Main(string[] args)
     {
         BenchmarkRunner.Run<PagedVirtualMemoryFile_RandomAccess>();
+        BenchmarkRunner.Run<FibTest>();
         /*
         var pvmmft = new PagedVirtualMemoryFile_RandomAccess();
         pvmmft.GlobalSetup();
