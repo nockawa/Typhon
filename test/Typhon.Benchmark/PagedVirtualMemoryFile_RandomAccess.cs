@@ -74,7 +74,7 @@ public class PagedVirtualMemoryFile_RandomAccess
     unsafe public void TestRandomAccess()
     {
         var cacheFactor = CacheFactor;
-        var frameCount = 140;
+        var frameCount = 50;
         var opsPerFrame = OpsPerFrame;
         var readWriteRatio = 0.75f;
 
