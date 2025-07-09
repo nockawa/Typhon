@@ -34,5 +34,21 @@ jobs:
           # Show alert with commit comment on detecting possible performance regression
           alert-threshold: '130%'
           comment-on-alert: true
+          summary-always: true
+          fail-on-alert: false
+          alert-comment-cc-users: '@nockawa'
+
+      - name: Fib benchmark result
+        uses: rhysd/github-action-benchmark@v1
+        with:
+          name: Fibonacci Benchmark
+          tool: 'benchmarkdotnet'
+          output-file-path: test/Typhon.Benchmark/BenchmarkDotNet.Artifacts/results/Typhon.Benchmark.FibTest-report-full-compressed.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          # Show alert with commit comment on detecting possible performance regression
+          alert-threshold: '130%'
+          comment-on-alert: true
+          summary-always: true
           fail-on-alert: false
           alert-comment-cc-users: '@nockawa'
