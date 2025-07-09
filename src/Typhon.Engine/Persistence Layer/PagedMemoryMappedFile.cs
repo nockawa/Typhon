@@ -345,7 +345,7 @@ public partial class PagedMemoryMappedFile : IInitializable, IDisposable
     public int ReferenceCounter { get; private set; }
 
     // Only for debug/unit test purpose. Should be no operating pending or activity on other threads regarding this service
-    internal void ResetDiskManager()
+    internal void Reset()
     {
         FlushToDiskAsync(false).Wait();
 

@@ -3,7 +3,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
-    <StartupObject>Typhon.Collections.Benchmark.Program</StartupObject>
+    <StartupObject>Typhon.Benchmark.Program</StartupObject>
     <Platforms>AnyCPU;x64</Platforms>
     <LangVersion>default</LangVersion>
   </PropertyGroup>
@@ -27,15 +27,16 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="BenchmarkDotNet" Version="0.12.1" />
+    <PackageReference Include="BenchmarkDotNet" Version="0.15.2" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.6" />
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="5.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.6" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.6" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="5.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="9.0.6" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Typhon.Engine\Typhon.Engine.csproj" />
+    <ProjectReference Include="..\Typhon.Engine.Tests\Typhon.Engine.Tests.csproj" />
   </ItemGroup>
 
 </Project>

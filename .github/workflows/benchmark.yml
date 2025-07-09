@@ -1,0 +1,36 @@
+﻿name: Typhon Regression Benchmark
+on:
+  push:
+    branches:
+      - master
+      - dev
+
+permissions:
+  contents: write
+  deployments: write
+
+jobs:
+  benchmark:
+    name: Run Benchmark.Net
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Run benchmark
+        run: cd test/Typhon.Benchmark && dotnet run --configuration Release --exporters json --filter '*'
+
+      - name: Store benchmark result
+        uses: rhysd/github-action-benchmark@v1
+        with:
+          name: Typhon Benchmark
+          tool: 'benchmarkdotnet'
+          output-file-path: test/Typhon.Benchmark/BenchmarkDotNet.Artifacts/results/Typhon.Benchmark.PagedVirtualMemoryFile_RandomAccess-report-full-compressed.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          # Show alert with commit comment on detecting possible performance regression
+          alert-threshold: '130%'
+          comment-on-alert: true
+          fail-on-alert: true
+          alert-comment-cc-users: '@nockawa'

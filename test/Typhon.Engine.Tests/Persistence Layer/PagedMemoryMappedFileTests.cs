@@ -10,7 +10,7 @@ using System.Threading.Tasks;
 
 namespace Typhon.Engine.Tests;
 
-class PagedMemoryMappedFileTests
+public class PagedMemoryMappedFileTests
 {
     private IServiceProvider _serviceProvider;
     private ServiceCollection _serviceCollection;
@@ -26,7 +26,7 @@ class PagedMemoryMappedFileTests
     public void Setup()
     {
         var o = TestContext.CurrentContext.Test.Properties.ContainsKey("CacheSize");
-        var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("CacheSize") : (int)PagedMemoryMappedFile.MinimumCacheSize;
+        var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("CacheSize")! : (int)PagedMemoryMappedFile.MinimumCacheSize;
 
         var serviceCollection = new ServiceCollection();
         _serviceCollection = serviceCollection;
@@ -44,7 +44,6 @@ class PagedMemoryMappedFileTests
                 
             .AddLogging(builder =>
             {
-                // builder.AddSerilog(dispose: true);
                 builder.AddSimpleConsole(options =>
                 {
                     options.SingleLine = true;
@@ -74,7 +73,7 @@ class PagedMemoryMappedFileTests
         _pmmf = null;
     }
 
-    private List<int> GenerateRandomAccess(int min, int max, int count=0)
+    public static List<int> GenerateRandomAccess(int min, int max, int count=0)
     {
         int inputCount = max - min + 1;
         var input = new List<int>(inputCount);
@@ -113,7 +112,7 @@ class PagedMemoryMappedFileTests
             Assert.That(debug.MemPageCacheHit, Is.GreaterThan(cacheHit));
         }
 
-        _pmmf.ResetDiskManager();
+        _pmmf.Reset();
 
         using (var pa = _pmmf.RequestPageShared(0))
         {
@@ -126,6 +125,13 @@ class PagedMemoryMappedFileTests
         }
     }
 
+    /// <summary>
+    /// Modifying multiple consecutive pages should trigger a single write on disk
+    /// </summary>
+    /// <remarks>
+    /// This statement is valid only for an unfragmented/empty file (two consecutive DiskPages should have consecutive MemPages) and can't be kept
+    ///  when the memory cache is being pressured.
+    /// </remarks>
     [Test]
     unsafe public void SequentialWrites()
     {
@@ -173,7 +179,7 @@ class PagedMemoryMappedFileTests
         // Size configured in the Property attribute above, right now it's 8 pages cached, which is vicious because
         //  my actual computer has more thread, which means multiple thread compete for the same memory page.
         var cacheSize = _configuration.DatabaseCacheSize;
-        var pagesCount = (int)(cacheSize* cacheFactor) / PagedMemoryMappedFile.PageSize;
+        var pagesCount = (int)(cacheSize * cacheFactor) / PagedMemoryMappedFile.PageSize;
 
         // Generate IO ops for all the frames
         var frames = new List<List<OPInfo>>(frameCount);
@@ -243,7 +249,7 @@ class PagedMemoryMappedFileTests
         Console.WriteLine($"Generated file in {sw.ElapsedMilliseconds}ms, Write counts: {di.WriteToDiskCount}, Total Pages {di.PagesWrittenCount}, Avg Pages Count per write: {di.PagesWrittenCount/(float)di.WriteToDiskCount}, Generated a total of {frameCount*trueOpsCount} Pages operations");
 
         // Reset the Disk Manager to start checking from a brand new one
-        _pmmf.ResetDiskManager();
+        _pmmf.Reset();
 
         // Check the initial page of each page
         for (int i = 1; i < pagesCount; i++)
@@ -266,23 +272,25 @@ class PagedMemoryMappedFileTests
                 var ro = info.ReadOnly;
                 if (ro)
                 {
-                    Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId}] Check Page {info.PageId} is {info.ExpectedValue}");
+                    // Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId}] Check Page {info.PageId} is {info.ExpectedValue}");
 
                     using var a = _pmmf.RequestPageShared(info.PageId);
                     int actual = *(int*)a.PageAddress;
 
-                    _logger.LogCritical("Check Page {PageId} has Value {ExpectedValue} and has {value}", info.PageId, info.ExpectedValue, actual);
+                    // _logger.LogCritical("Check Page {PageId} has Value {ExpectedValue} and has {value}", info.PageId, info.ExpectedValue, actual);
                     Assert.That(actual, Is.EqualTo(info.ExpectedValue), $"Frame {curFrame}, Page {info.PageId} should be {info.ExpectedValue} but is {actual}");
                 }
                 else
                 {
-                    Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId}] Page {info.PageId} bumped to {info.ExpectedValue}");
+                    // Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId}] Page {info.PageId} bumped to {info.ExpectedValue}");
 
                     using var a = _pmmf.RequestPageExclusive(info.PageId);
                     a.SetPageDirty();
                     var pa = (int*)a.PageAddress;
-                    ++*pa;
-                    _logger.LogCritical("Bump Page {PageId} to {value}, expected {ExpectedValue}", info.PageId, *pa, info.ExpectedValue);
+                    var actual = ++*pa;
+                    
+                    // _logger.LogCritical("Bump Page {PageId} to {value}, expected {ExpectedValue}", info.PageId, *pa, info.ExpectedValue);
+                    Assert.That(actual, Is.EqualTo(info.ExpectedValue), $"Frame {curFrame}, Page {info.PageId} should be {info.ExpectedValue} but is {actual}");
                 }
             });
 

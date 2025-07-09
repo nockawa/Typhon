@@ -7,7 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 [assembly: InternalsVisibleTo("Typhon.Engine.Tests")]
-[assembly: InternalsVisibleTo("Typhon.Collections.Benchmark")]
+[assembly: InternalsVisibleTo("Typhon.Benchmark")]
 
 namespace Typhon.Engine;
 
