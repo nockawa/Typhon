@@ -8,7 +8,9 @@ on:
 permissions:
   contents: write
   deployments: write
-
+  issues: write
+  pull-requests: write
+  
 jobs:
   benchmark:
     name: Run Benchmark.Net
