@@ -15,7 +15,6 @@ namespace Typhon.Benchmark;
 
 
 [JsonExporterAttribute.Full]
-[JsonExporterAttribute.FullCompressed]
 public class FibTest
 {
     public static int Fib(int n) {
@@ -35,7 +34,6 @@ public class FibTest
 
 [SimpleJob(warmupCount: 3, iterationCount: 3)]
 [JsonExporterAttribute.Full]
-[JsonExporterAttribute.FullCompressed]
 public class PagedVirtualMemoryFile_RandomAccess
 {
     private ServiceCollection _serviceCollection;
@@ -95,7 +93,7 @@ public class PagedVirtualMemoryFile_RandomAccess
     unsafe public void TestRandomAccess()
     {
         var cacheFactor = CacheFactor;
-        var frameCount = 50;
+        var frameCount = 1;
         var opsPerFrame = OpsPerFrame;
         var readWriteRatio = 0.75f;
 
