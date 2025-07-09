@@ -70,11 +70,11 @@ class Program
     
     static void Main(string[] args)
     {
-        BenchmarkRunner.Run<PagedVirtualMemoryFile_RandomAccess>();
+        var summary = BenchmarkRunner.Run<PagedVirtualMemoryFile_RandomAccess>();
         BenchmarkRunner.Run<FibTest>();
-        
-        var dir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-        CombineBenchmarkResults(Path.Combine(dir, "./BenchmarkDotNet.Artifacts/results"));
+
+        var path = summary.ResultsDirectoryPath;
+        CombineBenchmarkResults(path);
         
         /*
         var pvmmft = new PagedVirtualMemoryFile_RandomAccess();
