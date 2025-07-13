@@ -21,7 +21,21 @@ public interface IConfigurationProvider<TConfiguration>
     void Configure(TConfiguration configuration);
 }
 
-public sealed class DatabaseConfiguration
+public interface IDatabaseConfiguration
+{
+    string DatabaseName { get; }
+    string DatabaseDirectory { get; }
+    string DatabaseFileName { get; }
+    ulong DatabaseCacheSize { get; }
+    int WriteCacheSize { get; }
+    float WriteThreadRatio { get; }
+    bool RecreateDatabase { get; }
+    bool DeleteDatabaseOnDispose { get; }
+    bool PagesDebugPattern { get; }
+    string DatabaseAbsoluteDirectory { get; }
+}
+
+public sealed class DatabaseConfiguration : IDatabaseConfiguration
 {
     private string _databaseFileName;
 

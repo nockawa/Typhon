@@ -262,7 +262,7 @@ Here come the drones!";
         {
             var t = Task.Run(() =>
             {
-                Thread.CurrentThread.Name = $"UnitTest_{Thread.CurrentThread.ManagedThreadId}";
+                Thread.CurrentThread.Name = $"UnitTest_{Environment.CurrentManagedThreadId}";
 
                 for (int j = 0; j < iterationCount; j++)
                 {
