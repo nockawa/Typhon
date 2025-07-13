@@ -24,7 +24,7 @@ public struct AccessControlSmall
 
     private volatile int _data;
 
-    public bool IsLockedByCurrentThread => Thread.CurrentThread.ManagedThreadId == LockedByThreadId;
+    public bool IsLockedByCurrentThread => System.Environment.CurrentManagedThreadId == LockedByThreadId;
 
     public int LockedByThreadId => _data >> ThreadIdShift;
     public int SharedUsedCounter => _data & SharedUsedCounterMask;
@@ -62,7 +62,7 @@ public struct AccessControlSmall
 
     public void EnterExclusiveAccess()
     {
-        var ct = Thread.CurrentThread.ManagedThreadId << ThreadIdShift;
+        var ct = System.Environment.CurrentManagedThreadId << ThreadIdShift;
 
         // Fast path: exclusive lock works immediately
         var suc = SharedUsedCounter;
@@ -110,7 +110,7 @@ public struct AccessControlSmall
 
     public bool TryPromoteToExclusiveAccess()
     {
-        var ct = Thread.CurrentThread.ManagedThreadId << ThreadIdShift;
+        var ct = System.Environment.CurrentManagedThreadId << ThreadIdShift;
 
         // We can enter only if we are the only user (counter == 1)
         if (SharedUsedCounter != 1)

@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Serilog.Context;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -396,6 +397,7 @@ public partial class PagedMemoryMappedFile : IInitializable, IDisposable
 
     #region Public API
 
+    public IDatabaseConfiguration DatabaseConfiguration => _dbc;
     unsafe public PageAccessor RequestPageShared(uint pageId)
     {
         var memPageId = RequestPage(pageId, false);
@@ -507,7 +509,7 @@ public partial class PagedMemoryMappedFile : IInitializable, IDisposable
                 return false;
             }
 
-            var ct = Thread.CurrentThread.ManagedThreadId;
+            var ct = Environment.CurrentManagedThreadId;
 
             // Check if the thread already own exclusive access
             if (pi.LockedByThreadId != ct)
@@ -565,7 +567,7 @@ public partial class PagedMemoryMappedFile : IInitializable, IDisposable
         if (pi.SyncRoot.Wait(0) == false)
         {
             // Check if the thread already exclusively owns the page, and succeed if it's the case
-            var ct = Thread.CurrentThread.ManagedThreadId;
+            var ct = Environment.CurrentManagedThreadId;
             if (pi.LockedByThreadId == ct)
             {
                 lock (pi)
@@ -590,7 +592,7 @@ public partial class PagedMemoryMappedFile : IInitializable, IDisposable
         // Set to exclusive to prevent shared access
         lock (pi)
         {
-            pi.LockedByThreadId = Thread.CurrentThread.ManagedThreadId;
+            pi.LockedByThreadId = Environment.CurrentManagedThreadId;
             pi.AccessMode = PagesAccessMode.Exclusive;
             pi.ConcurrentUseCounter = 1;
         }
@@ -646,7 +648,7 @@ public partial class PagedMemoryMappedFile : IInitializable, IDisposable
             if ((reallocate == false) && (pi.AccessMode == PagesAccessMode.Shared) && (exclusive == false))
             {
                 // Loose the exclusive access if we now have multiple threads doing Shared access
-                var ct = Thread.CurrentThread.ManagedThreadId;
+                var ct = Environment.CurrentManagedThreadId;
                 pi.LockedByThreadId = (pi.LockedByThreadId==ct) ? ct : 0;
 
                 ++pi.ConcurrentUseCounter;
@@ -658,7 +660,7 @@ public partial class PagedMemoryMappedFile : IInitializable, IDisposable
             if ((reallocate == false) && (pi.AccessMode == PagesAccessMode.Shared) && (pi.ConcurrentUseCounter == 1) && exclusive)
             {
                 // Delay the access to ManagedThreadId as it's not a very cheap call
-                var ct = Thread.CurrentThread.ManagedThreadId;
+                var ct = Environment.CurrentManagedThreadId;
                 if (pi.LockedByThreadId == ct)
                 {
                     // We can promote
@@ -676,7 +678,7 @@ public partial class PagedMemoryMappedFile : IInitializable, IDisposable
             }
 
             // Check for re-entrant Access
-            var currentThread = Thread.CurrentThread.ManagedThreadId;
+            var currentThread = Environment.CurrentManagedThreadId;
 
             // This thread currently owns exclusive access on the page ?
             if (currentThread == pi.LockedByThreadId)
@@ -704,7 +706,7 @@ public partial class PagedMemoryMappedFile : IInitializable, IDisposable
         }
 
         // Exclusive access has we are the only user right now
-        pi.LockedByThreadId = Thread.CurrentThread.ManagedThreadId;
+        pi.LockedByThreadId = Environment.CurrentManagedThreadId;
 
         // Reset if needed
         if (waitIO != null)

@@ -76,6 +76,7 @@ public static class ServiceProviderExtensions
 
             services.AddSingleton<IConfigurationProvider<DatabaseConfiguration>, DefaultDatabaseConfiguration>();
             services.TryAddSingleton(typeof(IConfiguration<>), typeof(ConfigurationHolder<>));
+            services.AddSingleton<PagedFile>();
             services.AddSingleton<PagedMemoryMappedFile>();
             services.AddSingleton<LogicalSegmentManager>();
             services.AddSingleton<TimeManager>();

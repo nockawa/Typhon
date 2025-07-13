@@ -1,41 +1,20 @@
 using BenchmarkDotNet.Attributes;
-using BenchmarkDotNet.Exporters.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using NUnit.Framework;
 using System;
 using System.Collections.Generic;
-using System.Threading;
 using System.Threading.Tasks;
 using Typhon.Engine;
 using Typhon.Engine.Tests;
 
 namespace Typhon.Benchmark;
 
-
-
-[JsonExporterAttribute.Full]
-public class FibTest
-{
-    public static int Fib(int n) {
-        switch (n)
-        {
-            case 0: return 0;
-            case 1: return 1;
-            default:
-                return Fib(n-2) + Fib(2-1);
-        }
-    }
-
-    [Benchmark]
-    public void Fib10() => Fib(10);
-}
-
-
 [SimpleJob(warmupCount: 3, iterationCount: 3)]
 [JsonExporterAttribute.Full]
-public class PagedVirtualMemoryFile_RandomAccess
+public class PagedMemoryFileBenchmarks
 {
+    private const ulong CacheSize = 128 * PagedMemoryMappedFile.PageSize;
+    
     private ServiceCollection _serviceCollection;
     private ServiceProvider _serviceProvider;
     private PagedMemoryMappedFile _pmmf;
@@ -54,7 +33,7 @@ public class PagedVirtualMemoryFile_RandomAccess
                     dc.DatabaseName = $"BenchDatabase{DateTime.UtcNow.Ticks}";
                     dc.RecreateDatabase = true;
                     dc.DeleteDatabaseOnDispose = true;
-                    dc.DatabaseCacheSize = (ulong)32 * 1024 * 8192;
+                    dc.DatabaseCacheSize = CacheSize;
                 });
             });
         _serviceCollection.AddLogging(builder =>
@@ -75,61 +54,37 @@ public class PagedVirtualMemoryFile_RandomAccess
 
     }
 
-    struct OPInfo
+    struct OpInfo
     {
         public uint PageId;
+        public uint Value;
         public bool ReadOnly;
     }
 
-    // [Params(0.5f, 1f, 4f)]
-    [Params(0.5f)]
-    public float CacheFactor { get; set; }
-
-    // [Params(10, 100, 1000)]
-    [Params(100)]
-    public int OpsPerFrame { get; set; }
-    
     [Benchmark]
     unsafe public void TestRandomAccess()
     {
-        var cacheFactor = CacheFactor;
         var frameCount = 1;
-        var opsPerFrame = OpsPerFrame;
         var readWriteRatio = 0.75f;
-
-        // Size configured in the Property attribute above, right now it's 8 pages cached, which is vicious because
-        //  my actual computer has more thread, which means multiple thread compete for the same memory page.
-        var cacheSize = 8 * 1024 * 1024;
-        var pagesCount = (int)(cacheSize * cacheFactor) / PagedMemoryMappedFile.PageSize;
+        var pagesCount = (int)(CacheSize * 8 / PagedMemoryMappedFile.PageSize);
+        var opsPerFrame = 1024;
 
         // Generate IO ops for all the frames
-        var frames = new List<List<OPInfo>>(frameCount);
+        var frames = new List<List<OpInfo>>(frameCount);
 
         // Initialize the Pages access scenario
-        var rand = new Random(DateTime.UtcNow.Millisecond);
+        var rand = new Random(123);
         var range = (int)(1.0f / (1.0f - readWriteRatio));
         var readCut = (int)(readWriteRatio / (1.0f - readWriteRatio));
-        var values = new Dictionary<uint, int>(pagesCount);
-        for (int i = 0; i < pagesCount; i++)
-        {
-            values.Add((uint)i+1, i+1);
-        }
 
-        int trueOpsCount = Math.Min(opsPerFrame, pagesCount);
         for (int i = 0; i < frameCount; i++)
         {
-            var ops = new List<OPInfo>(opsPerFrame);
-            int opsCount = trueOpsCount;
-            var ioPages = PagedMemoryMappedFileTests.GenerateRandomAccess(1, pagesCount, opsCount);
-            for (int j = 0; j < opsCount; j++)
+            var ops = new List<OpInfo>(opsPerFrame);
+            for (int j = 0; j < opsPerFrame; j++)
             {
                 var ro = rand.Next(0, range) < readCut;
-                uint pageId = (uint)ioPages[j];
-                if (ro == false)
-                {
-                    ++values[pageId];
-                }
-                ops.Add(new OPInfo{ PageId = pageId, ReadOnly = ro });
+                uint pageId = (uint)rand.Next(0, pagesCount);
+                ops.Add(new OpInfo{ PageId = pageId, ReadOnly = ro });
             }
             frames.Add(ops);
         }
@@ -139,7 +94,7 @@ public class PagedVirtualMemoryFile_RandomAccess
         {
             var curFrame = _tm.ExecutionFrame;
 
-            //Console.WriteLine($"\r\n************** Simulating Frame {curFrame} ************** \r\n");
+            Console.WriteLine($"\r\n************** Simulating Frame {curFrame} ************** \r\n");
             var frameInfo = frames[curF];
             Parallel.ForEach(frameInfo, info =>
             {
@@ -147,18 +102,19 @@ public class PagedVirtualMemoryFile_RandomAccess
                 if (ro)
                 {
                     using var a = _pmmf.RequestPageShared(info.PageId);
-                    int actual = *(int*)a.PageAddress;
+                    var actual = *(uint*)a.PageAddress;
+                    info.Value += actual;
                 }
                 else
                 {
                     using var a = _pmmf.RequestPageExclusive(info.PageId);
                     a.SetPageDirty();
-                    var pa = (int*)a.PageAddress;
+                    var pa = (uint*)a.PageAddress;
                     var actual = ++*pa;
                 }
             });
 
-            _pmmf.FlushToDiskAsync(true).Wait();
+            //_pmmf.FlushToDiskAsync(true).Wait();
             _tm.BumpFrame();
         }
     }
