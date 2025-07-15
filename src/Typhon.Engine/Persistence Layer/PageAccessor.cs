@@ -1,6 +1,7 @@
 ﻿// unset
 
 using System;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -14,22 +15,27 @@ unsafe public struct PageAccessor : IDisposable
     /// Access to the header of the page. Use a <c>ref var</c> variable when writing into it.
     /// </summary>
     public ref readonly PageBaseHeader HeaderReadOnly => ref MemoryMarshal.Cast<byte, PageBaseHeader>(PageHeaderReadOnly).GetPinnableReference();
+    
     /// <summary>
     /// Span of the whole data of the page.
     /// </summary>
     public ReadOnlySpan<byte> WholePageReadOnly => new(PageAddress, PagedMemoryMappedFile.PageSize);
+    
     /// <summary>
     /// Span of the header of the page, you should prefer <see cref="HeaderReadOnly"/>.
     /// </summary>
     public ReadOnlySpan<byte> PageHeaderReadOnly => new(PageAddress, PagedMemoryMappedFile.PageHeaderSize);
+    
     /// <summary>
     /// Span of the page metadata, it's a 128 bytes zone inside the PageHeader, just right after the BaseHeader
     /// </summary>
     public ReadOnlySpan<byte> PageMetadataReadOnly => new(PageAddress + PagedMemoryMappedFile.PageBaseHeaderSize, PagedMemoryMappedFile.PageMetadataSize);
+    
     /// <summary>
     /// Span of the page raw data, it's a 8000 bytes zone after the header.
     /// </summary>
     public ReadOnlySpan<byte> PageRawDataReadOnly => new(PageAddress + PagedMemoryMappedFile.PageHeaderSize, PagedMemoryMappedFile.PageRawDataSize);
+    
     /// <summary>
     /// Span of the Logical Segment's raw data. See Remarks.
     /// </summary>
@@ -85,7 +91,15 @@ unsafe public struct PageAccessor : IDisposable
     /// <summary>
     /// Span of the page raw data, it's a 8000 bytes zone after the header.
     /// </summary>
-    public Span<byte> PageRawData => new(PageAddress + PagedMemoryMappedFile.PageHeaderSize, PagedMemoryMappedFile.PageRawDataSize);
+    public Span<byte> PageRawData
+    {
+        get
+        {
+            EnsureDataReady();
+            return new Span<byte>(PageAddress + PagedMemoryMappedFile.PageHeaderSize, PagedMemoryMappedFile.PageRawDataSize);
+        }
+    }
+
     /// <summary>
     /// Span of the Logical Segment's raw data. See Remarks.
     /// </summary>
@@ -109,35 +123,74 @@ unsafe public struct PageAccessor : IDisposable
 
     #endregion
 
-    public void SetPageDirty() => _owner.SetPageDirty(_pi);
+    public void SetPageDirty()
+    {
+    }
 
-    public bool TryPromoteToExclusive() => _owner.TryPromoteToExclusive(_pageId, _pi, out _previousMode);
+    public bool TryPromoteToExclusive() => _owner.TryPromoteToExclusive(_filePageIndex, _pi, out _previousMode);
 
     public void DemoteExclusive()
     {
         _owner.DemoteExclusive(_pi, _previousMode);
-        _previousMode = PagedMemoryMappedFile.PagesAccessMode.Idle;
+        _previousMode = PagedFile.PageState.Idle;
     }
 
     /// <summary>
-    /// The Disk Page Id the accessor is into
+    /// The Disk Page ID the accessor is into
     /// </summary>
-    public uint PageId => _pageId;
+    public int FilePageIndex => _filePageIndex;
+    
+    public int MemPageIndex => _pi.MemPageIndex;
         
-    private readonly PagedMemoryMappedFile _owner;
-    private readonly uint _pageId;
-    private PagedMemoryMappedFile.PageInfo _pi;
-    private PagedMemoryMappedFile.PagesAccessMode _previousMode;
+    private readonly PagedFile _owner;
+    private readonly int _filePageIndex;
+    private PagedFile.PageInfo _pi;
+    private PagedFile.PageState _previousMode;
+    private bool _isReady;
 
     internal PageAccessor(PagedMemoryMappedFile owner, PagedMemoryMappedFile.PageInfo pi, byte* pageAddress)
     {
+        /*
         _owner = owner;
         _pageId = pi.PageId;
         _pi = pi;
         _previousMode = PagedMemoryMappedFile.PagesAccessMode.Idle;
         PageAddress = pageAddress;
+    */
     }
 
+    internal PageAccessor(PagedFile owner, PagedFile.PageInfo pi)
+    {
+        _owner = owner;
+        _filePageIndex = pi.FilePageIndex;
+        _pi = pi;
+        _previousMode = PagedFile.PageState.Idle;
+        _isReady = pi.IOReadTask==null || pi.IOReadTask.IsCompletedSuccessfully;
+        PageAddress = owner.GetMemPageAddress(pi.MemPageIndex);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+    private void EnsureDataReady()
+    {
+        if (_isReady)
+        {
+            return;
+        }
+
+        Debug.Assert(_pi.IOReadTask!=null);
+        var ioTask = _pi.IOReadTask;
+        if (ioTask.IsCompletedSuccessfully)
+        {
+            _isReady = true;
+            _pi.ResetIOCompletionTask();
+            return;
+        }
+        
+        ioTask.GetAwaiter().GetResult();
+        _isReady = true;
+        _pi.ResetIOCompletionTask();
+    }
+    
     public bool IsValid => _pi != null;
 
     public void Dispose()
@@ -147,7 +200,7 @@ unsafe public struct PageAccessor : IDisposable
             return;
         }
 
-        if (_previousMode != PagedMemoryMappedFile.PagesAccessMode.Idle)
+        if (_previousMode != PagedFile.PageState.Idle)
         {
             _owner.DemoteExclusive(_pi, _previousMode);
         }
