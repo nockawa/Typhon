@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Struct PageAccessor | Typhon </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Struct PageAccessor | Typhon ">
+      
+      
+      <link rel="icon" href="../images/favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/nockawa/Typhon/new/new-persistence-layer/apiSpec/new?filename=Typhon_Engine_PageAccessor.md&amp;value=---%0Auid%3A%20Typhon.Engine.PageAccessor%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../images/typhon.svg" alt="Typhon">
+            Typhon
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="Typhon.Engine.PageAccessor">
+
+
+
+  <h1 id="Typhon_Engine_PageAccessor" data-uid="Typhon.Engine.PageAccessor" class="text-break">
+Struct PageAccessor  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L10"><i class="bi bi-code-slash"></i></a>
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="Typhon.html">Typhon</a>.<a class="xref" href="Typhon.Engine.html">Engine</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>Typhon.Engine.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"></div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public struct PageAccessor : IDisposable</code></pre>
+  </div>
+
+
+
+
+
+  <dl class="typelist implements">
+    <dt>Implements</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.idisposable">IDisposable</a></div>
+    </dd>
+  </dl>
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.valuetype.equals">ValueType.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode">ValueType.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.valuetype.tostring">ValueType.ToString()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+  </dd></dl>
+
+
+
+
+
+
+  <h2 class="section" id="properties">Properties
+</h2>
+
+
+  <a id="Typhon_Engine_PageAccessor_FilePageIndex_" data-uid="Typhon.Engine.PageAccessor.FilePageIndex*"></a>
+
+  <h3 id="Typhon_Engine_PageAccessor_FilePageIndex" data-uid="Typhon.Engine.PageAccessor.FilePageIndex">
+  FilePageIndex
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L141"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>The Disk Page ID the accessor is into</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int FilePageIndex { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_PageAccessor_Header_" data-uid="Typhon.Engine.PageAccessor.Header*"></a>
+
+  <h3 id="Typhon_Engine_PageAccessor_Header" data-uid="Typhon.Engine.PageAccessor.Header">
+  Header
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L78"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Access to the header of the page. Use a <code>ref var</code> variable when writing into it.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ref PageBaseHeader Header { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.PageBaseHeader.html">PageBaseHeader</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_PageAccessor_HeaderReadOnly_" data-uid="Typhon.Engine.PageAccessor.HeaderReadOnly*"></a>
+
+  <h3 id="Typhon_Engine_PageAccessor_HeaderReadOnly" data-uid="Typhon.Engine.PageAccessor.HeaderReadOnly">
+  HeaderReadOnly
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L17"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Access to the header of the page. Use a <code>ref var</code> variable when writing into it.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ref readonly PageBaseHeader HeaderReadOnly { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.PageBaseHeader.html">PageBaseHeader</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_PageAccessor_IsValid_" data-uid="Typhon.Engine.PageAccessor.IsValid*"></a>
+
+  <h3 id="Typhon_Engine_PageAccessor_IsValid" data-uid="Typhon.Engine.PageAccessor.IsValid">
+  IsValid
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L194"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool IsValid { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_PageAccessor_LogicalSegmentData_" data-uid="Typhon.Engine.PageAccessor.LogicalSegmentData*"></a>
+
+  <h3 id="Typhon_Engine_PageAccessor_LogicalSegmentData" data-uid="Typhon.Engine.PageAccessor.LogicalSegmentData">
+  LogicalSegmentData
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L111"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Span of the Logical Segment's raw data. See Remarks.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Span&lt;byte&gt; LogicalSegmentData { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.span-1">Span</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.byte">byte</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+  <h4 class="section" id="Typhon_Engine_PageAccessor_LogicalSegmentData_remarks">Remarks</h4>
+  <div class="markdown level1 remarks"><p>If the page block is part of a Logical Segment, this will return the span covering its raw data section.
+BEWARE: the root page of a Logical Segment is 6000 bytes wide, subsequent pages will be 8000 bytes.
+Unpredictable result will occur if using this property on a non Logical Segment Page Block.</p>
+</div>
+
+
+
+
+  <a id="Typhon_Engine_PageAccessor_LogicalSegmentDataReadOnly_" data-uid="Typhon.Engine.PageAccessor.LogicalSegmentDataReadOnly*"></a>
+
+  <h3 id="Typhon_Engine_PageAccessor_LogicalSegmentDataReadOnly" data-uid="Typhon.Engine.PageAccessor.LogicalSegmentDataReadOnly">
+  LogicalSegmentDataReadOnly
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L47"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Span of the Logical Segment's raw data. See Remarks.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ReadOnlySpan&lt;byte&gt; LogicalSegmentDataReadOnly { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.readonlyspan-1">ReadOnlySpan</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.byte">byte</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+  <h4 class="section" id="Typhon_Engine_PageAccessor_LogicalSegmentDataReadOnly_remarks">Remarks</h4>
+  <div class="markdown level1 remarks"><p>If the page block is part of a Logical Segment, this will return the span covering its raw data section.
+BEWARE: the root page of a Logical Segment is 6000 bytes wide, subsequent pages will be 8000 bytes.
+Unpredictable result will occur if using this property on a non Logical Segment Page Block.</p>
+</div>
+
+
+
+
+  <a id="Typhon_Engine_PageAccessor_MemPageIndex_" data-uid="Typhon.Engine.PageAccessor.MemPageIndex*"></a>
+
+  <h3 id="Typhon_Engine_PageAccessor_MemPageIndex" data-uid="Typhon.Engine.PageAccessor.MemPageIndex">
+  MemPageIndex
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L143"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int MemPageIndex { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_PageAccessor_PageAddress_" data-uid="Typhon.Engine.PageAccessor.PageAddress*"></a>
+
+  <h3 id="Typhon_Engine_PageAccessor_PageAddress" data-uid="Typhon.Engine.PageAccessor.PageAddress">
+  PageAddress
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L70"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Address of the page in memory. See Remarks</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public readonly byte* PageAddress { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.byte">byte</a>*</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+  <h4 class="section" id="Typhon_Engine_PageAccessor_PageAddress_remarks">Remarks</h4>
+  <div class="markdown level1 remarks"><p>Prefer one of the properties that return a <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.readonlyspan-1">ReadOnlySpan&lt;T&gt;</a>, it's safer, almost as fast.
+Don't exceed the page's size when accessing it.</p>
+</div>
+
+
+
+
+  <a id="Typhon_Engine_PageAccessor_PageHeader_" data-uid="Typhon.Engine.PageAccessor.PageHeader*"></a>
+
+  <h3 id="Typhon_Engine_PageAccessor_PageHeader" data-uid="Typhon.Engine.PageAccessor.PageHeader">
+  PageHeader
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L86"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Span of the header of the page, you should prefer <a class="xref" href="Typhon.Engine.PageAccessor.html#Typhon_Engine_PageAccessor_Header">Header</a>.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Span&lt;byte&gt; PageHeader { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.span-1">Span</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.byte">byte</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_PageAccessor_PageHeaderReadOnly_" data-uid="Typhon.Engine.PageAccessor.PageHeaderReadOnly*"></a>
+
+  <h3 id="Typhon_Engine_PageAccessor_PageHeaderReadOnly" data-uid="Typhon.Engine.PageAccessor.PageHeaderReadOnly">
+  PageHeaderReadOnly
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L27"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Span of the header of the page, you should prefer <a class="xref" href="Typhon.Engine.PageAccessor.html#Typhon_Engine_PageAccessor_HeaderReadOnly">HeaderReadOnly</a>.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ReadOnlySpan&lt;byte&gt; PageHeaderReadOnly { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.readonlyspan-1">ReadOnlySpan</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.byte">byte</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_PageAccessor_PageMetadata_" data-uid="Typhon.Engine.PageAccessor.PageMetadata*"></a>
+
+  <h3 id="Typhon_Engine_PageAccessor_PageMetadata" data-uid="Typhon.Engine.PageAccessor.PageMetadata">
+  PageMetadata
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L90"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Span of the page metadata, it's a 128 bytes zone inside the PageHeader, just right after the BaseHeader</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Span&lt;byte&gt; PageMetadata { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.span-1">Span</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.byte">byte</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_PageAccessor_PageMetadataReadOnly_" data-uid="Typhon.Engine.PageAccessor.PageMetadataReadOnly*"></a>
+
+  <h3 id="Typhon_Engine_PageAccessor_PageMetadataReadOnly" data-uid="Typhon.Engine.PageAccessor.PageMetadataReadOnly">
+  PageMetadataReadOnly
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L32"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Span of the page metadata, it's a 128 bytes zone inside the PageHeader, just right after the BaseHeader</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ReadOnlySpan&lt;byte&gt; PageMetadataReadOnly { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.readonlyspan-1">ReadOnlySpan</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.byte">byte</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_PageAccessor_PageRawData_" data-uid="Typhon.Engine.PageAccessor.PageRawData*"></a>
+
+  <h3 id="Typhon_Engine_PageAccessor_PageRawData" data-uid="Typhon.Engine.PageAccessor.PageRawData">
+  PageRawData
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L94"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Span of the page raw data, it's a 8000 bytes zone after the header.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Span&lt;byte&gt; PageRawData { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.span-1">Span</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.byte">byte</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_PageAccessor_PageRawDataReadOnly_" data-uid="Typhon.Engine.PageAccessor.PageRawDataReadOnly*"></a>
+
+  <h3 id="Typhon_Engine_PageAccessor_PageRawDataReadOnly" data-uid="Typhon.Engine.PageAccessor.PageRawDataReadOnly">
+  PageRawDataReadOnly
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L37"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Span of the page raw data, it's a 8000 bytes zone after the header.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ReadOnlySpan&lt;byte&gt; PageRawDataReadOnly { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.readonlyspan-1">ReadOnlySpan</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.byte">byte</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_PageAccessor_WholePage_" data-uid="Typhon.Engine.PageAccessor.WholePage*"></a>
+
+  <h3 id="Typhon_Engine_PageAccessor_WholePage" data-uid="Typhon.Engine.PageAccessor.WholePage">
+  WholePage
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L82"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Span of the whole data of the page.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Span&lt;byte&gt; WholePage { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.span-1">Span</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.byte">byte</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_PageAccessor_WholePageReadOnly_" data-uid="Typhon.Engine.PageAccessor.WholePageReadOnly*"></a>
+
+  <h3 id="Typhon_Engine_PageAccessor_WholePageReadOnly" data-uid="Typhon.Engine.PageAccessor.WholePageReadOnly">
+  WholePageReadOnly
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L22"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Span of the whole data of the page.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ReadOnlySpan&lt;byte&gt; WholePageReadOnly { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.readonlyspan-1">ReadOnlySpan</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.byte">byte</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="Typhon_Engine_PageAccessor_DemoteExclusive_" data-uid="Typhon.Engine.PageAccessor.DemoteExclusive*"></a>
+
+  <h3 id="Typhon_Engine_PageAccessor_DemoteExclusive" data-uid="Typhon.Engine.PageAccessor.DemoteExclusive">
+  DemoteExclusive()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L132"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void DemoteExclusive()</code></pre>
+  </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_PageAccessor_Dispose_" data-uid="Typhon.Engine.PageAccessor.Dispose*"></a>
+
+  <h3 id="Typhon_Engine_PageAccessor_Dispose" data-uid="Typhon.Engine.PageAccessor.Dispose">
+  Dispose()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L196"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void Dispose()</code></pre>
+  </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_PageAccessor_InitHeader_" data-uid="Typhon.Engine.PageAccessor.InitHeader*"></a>
+
+  <h3 id="Typhon_Engine_PageAccessor_InitHeader_Typhon_Engine_PageClearMode_Typhon_Engine_PageBlockFlags_Typhon_Engine_PageBlockType_System_Int32_System_Int32_" data-uid="Typhon.Engine.PageAccessor.InitHeader(Typhon.Engine.PageClearMode,Typhon.Engine.PageBlockFlags,Typhon.Engine.PageBlockType,System.Int32,System.Int32)">
+  InitHeader(PageClearMode, PageBlockFlags, PageBlockType, int, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L214"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void InitHeader(PageClearMode clearMode, PageBlockFlags flags, PageBlockType type, int changeRevision, int formatRevision)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>clearMode</code> <a class="xref" href="Typhon.Engine.PageClearMode.html">PageClearMode</a></dt>
+    <dd></dd>
+    <dt><code>flags</code> <a class="xref" href="Typhon.Engine.PageBlockFlags.html">PageBlockFlags</a></dt>
+    <dd></dd>
+    <dt><code>type</code> <a class="xref" href="Typhon.Engine.PageBlockType.html">PageBlockType</a></dt>
+    <dd></dd>
+    <dt><code>changeRevision</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>formatRevision</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_PageAccessor_SetPageDirty_" data-uid="Typhon.Engine.PageAccessor.SetPageDirty*"></a>
+
+  <h3 id="Typhon_Engine_PageAccessor_SetPageDirty" data-uid="Typhon.Engine.PageAccessor.SetPageDirty">
+  SetPageDirty()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L126"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void SetPageDirty()</code></pre>
+  </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_PageAccessor_TryPromoteToExclusive_" data-uid="Typhon.Engine.PageAccessor.TryPromoteToExclusive*"></a>
+
+  <h3 id="Typhon_Engine_PageAccessor_TryPromoteToExclusive" data-uid="Typhon.Engine.PageAccessor.TryPromoteToExclusive">
+  TryPromoteToExclusive()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L130"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool TryPromoteToExclusive()</code></pre>
+  </div>
+
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+</article>
+
+        <div class="contribution d-print-none">
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L10" class="edit-link">Edit this page</a>
+        </div>
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          Copyright (c) Loïc Baumann
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

@@ -1,0 +1,1495 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Struct BTree&lt;TKey&gt;.NodeWrapper | Typhon </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Struct BTree&lt;TKey&gt;.NodeWrapper | Typhon ">
+      
+      
+      <link rel="icon" href="../images/favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/nockawa/Typhon/new/new-persistence-layer/apiSpec/new?filename=Typhon_Engine_BPTree_BTree_1_NodeWrapper.md&amp;value=---%0Auid%3A%20Typhon.Engine.BPTree.BTree%601.NodeWrapper%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="ManagedReference">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../images/typhon.svg" alt="Typhon">
+            Typhon
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper">
+
+
+
+  <h1 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper" class="text-break">
+Struct BTree&lt;TKey&gt;.NodeWrapper  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L12"><i class="bi bi-code-slash"></i></a>
+  </h1>
+
+  <div class="facts text-secondary">
+    <dl><dt>Namespace</dt><dd><a class="xref" href="Typhon.html">Typhon</a>.<a class="xref" href="Typhon.Engine.html">Engine</a>.<a class="xref" href="Typhon.Engine.BPTree.html">BPTree</a></dd></dl>
+  <dl><dt>Assembly</dt><dd>Typhon.Engine.dll</dd></dl>
+  </div>
+
+  <div class="markdown summary"></div>
+  <div class="markdown conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public readonly struct BTree&lt;TKey&gt;.NodeWrapper : IEquatable&lt;BTree&lt;TKey&gt;.NodeWrapper&gt;</code></pre>
+  </div>
+
+
+
+
+
+  <dl class="typelist implements">
+    <dt>Implements</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.iequatable-1">IEquatable</a>&lt;<a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a>&gt;</div>
+    </dd>
+  </dl>
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.valuetype.tostring">ValueType.ToString()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+  </dd></dl>
+
+
+
+
+
+
+  <h2 class="section" id="constructors">Constructors
+</h2>
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper__ctor_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.#ctor*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper__ctor_Typhon_Engine_BPTree_BTree__0__BaseNodeStorage_System_Int32_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.#ctor(Typhon.Engine.BPTree.BTree{`0}.BaseNodeStorage,System.Int32)">
+  NodeWrapper(BaseNodeStorage, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L19"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public NodeWrapper(BTree&lt;TKey&gt;.BaseNodeStorage storage, int chunkId)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>storage</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.BaseNodeStorage.html">BaseNodeStorage</a></dt>
+    <dd></dd>
+    <dt><code>chunkId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="properties">Properties
+</h2>
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Capacity_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Capacity*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Capacity" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Capacity">
+  Capacity
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L29"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int Capacity { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Count_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Count*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Count" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Count">
+  Count
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L34"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int Count { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_End_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.End*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_End" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.End">
+  End
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L44"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int End { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_First_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.First*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_First" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.First">
+  First
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L49"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public BTree&lt;TKey&gt;.KeyValueItem First { get; set; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.KeyValueItem.html">KeyValueItem</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_IsFull_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.IsFull*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_IsFull" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.IsFull">
+  IsFull
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L30"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool IsFull { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_IsHalfFull_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.IsHalfFull*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_IsHalfFull" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.IsHalfFull">
+  IsHalfFull
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L31"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool IsHalfFull { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_IsLeaf_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.IsLeaf*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_IsLeaf" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.IsLeaf">
+  IsLeaf
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L28"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool IsLeaf { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_IsValid_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.IsValid*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_IsValid" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.IsValid">
+  IsValid
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L27"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool IsValid { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Last_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Last*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Last" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Last">
+  Last
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L55"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public BTree&lt;TKey&gt;.KeyValueItem Last { get; set; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.KeyValueItem.html">KeyValueItem</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Left_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Left*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Left" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Left">
+  Left
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L73"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public BTree&lt;TKey&gt;.NodeWrapper Left { get; set; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Length_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Length*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Length" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Length">
+  Length
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L32"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int Length { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Next_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Next*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Next" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Next">
+  Next
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L67"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public BTree&lt;TKey&gt;.NodeWrapper Next { get; set; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Previous_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Previous*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Previous" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Previous">
+  Previous
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L61"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public BTree&lt;TKey&gt;.NodeWrapper Previous { get; set; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Start_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Start*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Start" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Start">
+  Start
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L39"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int Start { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Adjust_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Adjust*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Adjust_System_Int32_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Adjust(System.Int32)">
+  Adjust(int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L620"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int Adjust(int index)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Equals_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Equals*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Equals_System_Object_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Equals(System.Object)">
+  Equals(object)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L628"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Indicates whether this instance and a specified object are equal.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public override bool Equals(object obj)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>obj</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></dt>
+    <dd><p>The object to compare with the current instance.</p>
+</dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd><p><a href="https://learn.microsoft.com/dotnet/csharp/language-reference/builtin-types/bool">true</a> if <code class="paramref">obj</code> and this instance are the same type and represent the same value; otherwise, <a href="https://learn.microsoft.com/dotnet/csharp/language-reference/builtin-types/bool">false</a>.</p>
+</dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Equals_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Equals*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Equals_Typhon_Engine_BPTree_BTree__0__NodeWrapper_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Equals(Typhon.Engine.BPTree.BTree{`0}.NodeWrapper)">
+  Equals(NodeWrapper)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L626"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Indicates whether the current object is equal to another object of the same type.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool Equals(BTree&lt;TKey&gt;.NodeWrapper other)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>other</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd><p>An object to compare with this object.</p>
+</dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd><p><a href="https://learn.microsoft.com/dotnet/csharp/language-reference/builtin-types/bool">true</a> if the current object is equal to the <code class="paramref">other</code> parameter; otherwise, <a href="https://learn.microsoft.com/dotnet/csharp/language-reference/builtin-types/bool">false</a>.</p>
+</dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Find_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Find*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Find__0_System_Collections_Generic_IComparer__0__" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Find(`0,System.Collections.Generic.IComparer{`0})">
+  Find(TKey, IComparer&lt;TKey&gt;)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L574"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int Find(TKey key, IComparer&lt;TKey&gt; comparer)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>key</code> <span class="xref">TKey</span></dt>
+    <dd></dd>
+    <dt><code>comparer</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.collections.generic.icomparer-1">IComparer</a>&lt;TKey&gt;</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_GetChild_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.GetChild*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_GetChild_System_Int32_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.GetChild(System.Int32)">
+  GetChild(int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L90"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public BTree&lt;TKey&gt;.NodeWrapper GetChild(int index)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_GetFirstChild_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.GetFirstChild*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_GetFirstChild" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.GetFirstChild">
+  GetFirstChild()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L94"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public BTree&lt;TKey&gt;.NodeWrapper GetFirstChild()</code></pre>
+  </div>
+
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_GetHashCode_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.GetHashCode*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_GetHashCode" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.GetHashCode">
+  GetHashCode()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L630"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Returns the hash code for this instance.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public override int GetHashCode()</code></pre>
+  </div>
+
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd><p>A 32-bit signed integer that is the hash code for this instance.</p>
+</dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_GetItem_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.GetItem*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_GetItem_System_Int32_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.GetItem(System.Int32)">
+  GetItem(int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L79"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public BTree&lt;TKey&gt;.KeyValueItem GetItem(int index)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.KeyValueItem.html">KeyValueItem</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_GetLastChild_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.GetLastChild*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_GetLastChild" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.GetLastChild">
+  GetLastChild()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L92"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public BTree&lt;TKey&gt;.NodeWrapper GetLastChild()</code></pre>
+  </div>
+
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_GetNearestChild_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.GetNearestChild*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_GetNearestChild__0_System_Collections_Generic_IComparer__0__" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.GetNearestChild(`0,System.Collections.Generic.IComparer{`0})">
+  GetNearestChild(TKey, IComparer&lt;TKey&gt;)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L636"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public BTree&lt;TKey&gt;.NodeWrapper GetNearestChild(TKey key, IComparer&lt;TKey&gt; comparer)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>key</code> <span class="xref">TKey</span></dt>
+    <dd></dd>
+    <dt><code>comparer</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.collections.generic.icomparer-1">IComparer</a>&lt;TKey&gt;</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Insert_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Insert*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Insert_System_Int32_Typhon_Engine_BPTree_BTree__0__KeyValueItem_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Insert(System.Int32,Typhon.Engine.BPTree.BTree{`0}.KeyValueItem)">
+  Insert(int, KeyValueItem)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L618"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void Insert(int index, BTree&lt;TKey&gt;.KeyValueItem item)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>item</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.KeyValueItem.html">KeyValueItem</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Insert_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Insert*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Insert_Typhon_Engine_BPTree_BTree__0__InsertArguments__Typhon_Engine_BPTree_BTree__0__NodeRelatives__Typhon_Engine_BPTree_BTree__0__NodeWrapper_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Insert(Typhon.Engine.BPTree.BTree{`0}.InsertArguments@,Typhon.Engine.BPTree.BTree{`0}.NodeRelatives@,Typhon.Engine.BPTree.BTree{`0}.NodeWrapper)">
+  Insert(ref InsertArguments, ref NodeRelatives, NodeWrapper)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L96"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public BTree&lt;TKey&gt;.KeyValueItem? Insert(ref BTree&lt;TKey&gt;.InsertArguments args, ref BTree&lt;TKey&gt;.NodeRelatives relatives, BTree&lt;TKey&gt;.NodeWrapper parent)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>args</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.InsertArguments.html">InsertArguments</a></dt>
+    <dd></dd>
+    <dt><code>relatives</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeRelatives.html">NodeRelatives</a></dt>
+    <dd></dd>
+    <dt><code>parent</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.KeyValueItem.html">KeyValueItem</a>?</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_InsertPopLast_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.InsertPopLast*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_InsertPopLast_System_Int32_Typhon_Engine_BPTree_BTree__0__KeyValueItem_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.InsertPopLast(System.Int32,Typhon.Engine.BPTree.BTree{`0}.KeyValueItem)">
+  InsertPopLast(int, KeyValueItem)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L587"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public BTree&lt;TKey&gt;.KeyValueItem InsertPopLast(int index, BTree&lt;TKey&gt;.KeyValueItem item)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>item</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.KeyValueItem.html">KeyValueItem</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.KeyValueItem.html">KeyValueItem</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_MergeLeft_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.MergeLeft*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_MergeLeft_Typhon_Engine_BPTree_BTree__0__NodeWrapper_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.MergeLeft(Typhon.Engine.BPTree.BTree{`0}.NodeWrapper)">
+  MergeLeft(NodeWrapper)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L88"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void MergeLeft(BTree&lt;TKey&gt;.NodeWrapper right)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>right</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_PopFirstInternal_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.PopFirstInternal*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_PopFirstInternal" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.PopFirstInternal">
+  PopFirstInternal()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L596"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public BTree&lt;TKey&gt;.KeyValueItem PopFirstInternal()</code></pre>
+  </div>
+
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.KeyValueItem.html">KeyValueItem</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_PopLastInternal_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.PopLastInternal*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_PopLastInternal" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.PopLastInternal">
+  PopLastInternal()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L607"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public BTree&lt;TKey&gt;.KeyValueItem PopLastInternal()</code></pre>
+  </div>
+
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.KeyValueItem.html">KeyValueItem</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_PushFirst_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.PushFirst*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_PushFirst_Typhon_Engine_BPTree_BTree__0__KeyValueItem_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.PushFirst(Typhon.Engine.BPTree.BTree{`0}.KeyValueItem)">
+  PushFirst(KeyValueItem)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L86"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void PushFirst(BTree&lt;TKey&gt;.KeyValueItem item)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>item</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.KeyValueItem.html">KeyValueItem</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_PushLast_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.PushLast*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_PushLast_Typhon_Engine_BPTree_BTree__0__KeyValueItem_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.PushLast(Typhon.Engine.BPTree.BTree{`0}.KeyValueItem)">
+  PushLast(KeyValueItem)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L87"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void PushLast(BTree&lt;TKey&gt;.KeyValueItem item)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>item</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.KeyValueItem.html">KeyValueItem</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Remove_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Remove*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_Remove_Typhon_Engine_BPTree_BTree__0__RemoveArguments__Typhon_Engine_BPTree_BTree__0__NodeRelatives__" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.Remove(Typhon.Engine.BPTree.BTree{`0}.RemoveArguments@,Typhon.Engine.BPTree.BTree{`0}.NodeRelatives@)">
+  Remove(ref RemoveArguments, ref NodeRelatives)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L108"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool Remove(ref BTree&lt;TKey&gt;.RemoveArguments args, ref BTree&lt;TKey&gt;.NodeRelatives relatives)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>args</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.RemoveArguments.html">RemoveArguments</a></dt>
+    <dd></dd>
+    <dt><code>relatives</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeRelatives.html">NodeRelatives</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_RemoveInternal_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.RemoveInternal*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_RemoveInternal_Typhon_Engine_BPTree_BTree__0__RemoveArguments__Typhon_Engine_BPTree_BTree__0__NodeRelatives__" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.RemoveInternal(Typhon.Engine.BPTree.BTree{`0}.RemoveArguments@,Typhon.Engine.BPTree.BTree{`0}.NodeRelatives@)">
+  RemoveInternal(ref RemoveArguments, ref NodeRelatives)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L467"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool RemoveInternal(ref BTree&lt;TKey&gt;.RemoveArguments args, ref BTree&lt;TKey&gt;.NodeRelatives relatives)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>args</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.RemoveArguments.html">RemoveArguments</a></dt>
+    <dd></dd>
+    <dt><code>relatives</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeRelatives.html">NodeRelatives</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_RemoveLeaf_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.RemoveLeaf*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_RemoveLeaf_Typhon_Engine_BPTree_BTree__0__RemoveArguments__Typhon_Engine_BPTree_BTree__0__NodeRelatives__" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.RemoveLeaf(Typhon.Engine.BPTree.BTree{`0}.RemoveArguments@,Typhon.Engine.BPTree.BTree{`0}.NodeRelatives@)">
+  RemoveLeaf(ref RemoveArguments, ref NodeRelatives)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L387"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool RemoveLeaf(ref BTree&lt;TKey&gt;.RemoveArguments args, ref BTree&lt;TKey&gt;.NodeRelatives relatives)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>args</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.RemoveArguments.html">RemoveArguments</a></dt>
+    <dd></dd>
+    <dt><code>relatives</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeRelatives.html">NodeRelatives</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_SetItem_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.SetItem*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_SetItem_System_Int32_Typhon_Engine_BPTree_BTree__0__KeyValueItem_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.SetItem(System.Int32,Typhon.Engine.BPTree.BTree{`0}.KeyValueItem)">
+  SetItem(int, KeyValueItem)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L80"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void SetItem(int index, BTree&lt;TKey&gt;.KeyValueItem value)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>value</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.KeyValueItem.html">KeyValueItem</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="operators">Operators
+</h2>
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_op_Equality_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.op_Equality*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_op_Equality_Typhon_Engine_BPTree_BTree__0__NodeWrapper_Typhon_Engine_BPTree_BTree__0__NodeWrapper_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.op_Equality(Typhon.Engine.BPTree.BTree{`0}.NodeWrapper,Typhon.Engine.BPTree.BTree{`0}.NodeWrapper)">
+  operator ==(NodeWrapper, NodeWrapper)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L632"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static bool operator ==(BTree&lt;TKey&gt;.NodeWrapper left, BTree&lt;TKey&gt;.NodeWrapper right)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>left</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+    <dt><code>right</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_op_Inequality_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.op_Inequality*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeWrapper_op_Inequality_Typhon_Engine_BPTree_BTree__0__NodeWrapper_Typhon_Engine_BPTree_BTree__0__NodeWrapper_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeWrapper.op_Inequality(Typhon.Engine.BPTree.BTree{`0}.NodeWrapper,Typhon.Engine.BPTree.BTree{`0}.NodeWrapper)">
+  operator !=(NodeWrapper, NodeWrapper)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L634"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public static bool operator !=(BTree&lt;TKey&gt;.NodeWrapper left, BTree&lt;TKey&gt;.NodeWrapper right)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>left</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+    <dt><code>right</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+</article>
+
+        <div class="contribution d-print-none">
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.NodeWrapper.cs/#L12" class="edit-link">Edit this page</a>
+        </div>
+
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          Copyright (c) Loïc Baumann
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

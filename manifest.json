@@ -1,0 +1,2129 @@
+{
+  "source_base_path": "D:/a/Typhon/Typhon/doc",
+  "xrefmap": "xrefmap.yml",
+  "files": [
+    {
+      "type": "Resource",
+      "output": {
+        "resource": {
+          "relative_path": "index.json"
+        }
+      }
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.AccessControl.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.AccessControl.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.AccessControl",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.AccessControl.yml\" sourcestartlinenumber=\"1\">Synchronization type that allows multiple concurrent shared access or one exclusive.\nDoesn't allow re-entrant calls, burn CPU cycle on wait, using <xref href=\"System.Threading.SpinWait\" data-throw-if-not-resolved=\"false\"></xref>\nCosts 8 bytes of data.</p>\n"
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.AccessControlSmall.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.AccessControlSmall.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.AccessControlSmall",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.AccessControlSmall.yml\" sourcestartlinenumber=\"1\">Synchronization type that allows multiple concurrent shared access or one exclusive.\nDoesn't allow re-entrant calls, burn CPU cycle on wait, using <xref href=\"System.Threading.SpinWait\" data-throw-if-not-resolved=\"false\"></xref>\nCosts 4 bytes of data.</p>\n"
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.AdaptiveWaiter.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.AdaptiveWaiter.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.AdaptiveWaiter",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.BTree-1.BaseNodeStorage.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.BTree-1.BaseNodeStorage.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.BTree<TKey>.BaseNodeStorage",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.BTree-1.InsertArguments.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.BTree-1.InsertArguments.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.BTree<TKey>.InsertArguments",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.BTree-1.KeyValueItem.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.BTree-1.KeyValueItem.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.BTree<TKey>.KeyValueItem",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.BTree-1.NodeRelatives.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.BTree-1.NodeRelatives.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.BTree<TKey>.NodeRelatives",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.BPTree.BTree-1.NodeRelatives.yml\" sourcestartlinenumber=\"1\">contains information about relatives of each node, such as ancestors and siblings.\nthis information is used for borrow and spill operations.</p>\n"
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.BTree-1.NodeWrapper.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.BTree-1.NodeWrapper.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.BTree<TKey>.NodeWrapper",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.BTree-1.RemoveArguments.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.BTree-1.RemoveArguments.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.BTree<TKey>.RemoveArguments",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.BTree-1.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.BTree-1.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.BTree<TKey>",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.ByteMultipleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.ByteMultipleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.ByteMultipleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.ByteSingleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.ByteSingleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.ByteSingleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.CharMultipleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.CharMultipleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.CharMultipleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.CharSingleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.CharSingleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.CharSingleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.DoubleMultipleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.DoubleMultipleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.DoubleMultipleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.DoubleSingleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.DoubleSingleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.DoubleSingleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.FloatMultipleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.FloatMultipleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.FloatMultipleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.FloatSingleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.FloatSingleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.FloatSingleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.IBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.IBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.IBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.Index16Chunk.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.Index16Chunk.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.Index16Chunk",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.Index32Chunk.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.Index32Chunk.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.Index32Chunk",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.Index64Chunk.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.Index64Chunk.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.Index64Chunk",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.IndexString64Chunk.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.IndexString64Chunk.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.IndexString64Chunk",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.IntMultipleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.IntMultipleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.IntMultipleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.IntSingleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.IntSingleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.IntSingleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.L16BTree-1.L16NodeStorage.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.L16BTree-1.L16NodeStorage.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.L16BTree<TKey>.L16NodeStorage",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.L16BTree-1.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.L16BTree-1.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.L16BTree<TKey>",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.L16MultipleBTree-1.L16MultipleNodeStorage.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.L16MultipleBTree-1.L16MultipleNodeStorage.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.L16MultipleBTree<TKey>.L16MultipleNodeStorage",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.L16MultipleBTree-1.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.L16MultipleBTree-1.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.L16MultipleBTree<TKey>",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.L32BTree-1.L32NodeStorage.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.L32BTree-1.L32NodeStorage.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.L32BTree<TKey>.L32NodeStorage",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.L32BTree-1.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.L32BTree-1.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.L32BTree<TKey>",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.L32MultipleBTree-1.L32MultipleNodeStorage.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.L32MultipleBTree-1.L32MultipleNodeStorage.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.L32MultipleBTree<TKey>.L32MultipleNodeStorage",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.L32MultipleBTree-1.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.L32MultipleBTree-1.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.L32MultipleBTree<TKey>",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.L64BTree-1.L64NodeStorage.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.L64BTree-1.L64NodeStorage.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.L64BTree<TKey>.L64NodeStorage",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.L64BTree-1.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.L64BTree-1.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.L64BTree<TKey>",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.L64MultipleBTree-1.L64MultipleNodeStorage.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.L64MultipleBTree-1.L64MultipleNodeStorage.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.L64MultipleBTree<TKey>.L64MultipleNodeStorage",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.L64MultipleBTree-1.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.L64MultipleBTree-1.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.L64MultipleBTree<TKey>",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.LongMultipleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.LongMultipleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.LongMultipleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.LongSingleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.LongSingleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.LongSingleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.NodeStates.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.NodeStates.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.NodeStates",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.ShortMultipleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.ShortMultipleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.ShortMultipleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.ShortSingleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.ShortSingleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.ShortSingleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.String64BTree.String64NodeStorage.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.String64BTree.String64NodeStorage.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.String64BTree.String64NodeStorage",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.String64BTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.String64BTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.String64BTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.String64MultipleBTree.String64MultipleNodeStorage.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.String64MultipleBTree.String64MultipleNodeStorage.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.String64MultipleBTree.String64MultipleNodeStorage",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.String64MultipleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.String64MultipleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.String64MultipleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.String64SingleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.String64SingleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.String64SingleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.UByteMultipleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.UByteMultipleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.UByteMultipleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.UByteSingleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.UByteSingleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.UByteSingleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.UIntMultipleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.UIntMultipleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.UIntMultipleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.UIntSingleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.UIntSingleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.UIntSingleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.ULongMultipleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.ULongMultipleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.ULongMultipleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.ULongSingleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.ULongSingleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.ULongSingleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.UShortMultipleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.UShortMultipleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.UShortMultipleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.UShortSingleBTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.UShortSingleBTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.UShortSingleBTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BitmapL3Any.Enumerator.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BitmapL3Any.Enumerator.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BitmapL3Any.Enumerator",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BitmapL3Any.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BitmapL3Any.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BitmapL3Any",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BlockAllocator.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BlockAllocator.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BlockAllocator",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BlockAllocatorBase.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BlockAllocatorBase.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BlockAllocatorBase",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BufferPage.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BufferPage.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BufferPage",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.BufferPage.yml\" sourcestartlinenumber=\"1\">Represents a page in the buffer pool with metadata for the Clock algorithm</p>\n"
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BufferStats.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BufferStats.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BufferStats",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.BufferStats.yml\" sourcestartlinenumber=\"1\">Buffer manager statistics</p>\n"
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ChangeSet.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ChangeSet.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ChangeSet",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ChunkBasedSegment.BitmapL3.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ChunkBasedSegment.BitmapL3.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ChunkBasedSegment.BitmapL3",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ChunkBasedSegment.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ChunkBasedSegment.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ChunkBasedSegment",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.ChunkBasedSegment.yml\" sourcestartlinenumber=\"1\">Logical Segment that stores fixed sized chunk of data.</p>\n"
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ChunkRandomAccessor.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ChunkRandomAccessor.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ChunkRandomAccessor",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.ChunkRandomAccessor.yml\" sourcestartlinenumber=\"1\">Allow access to chunks in a Chunk based segment</p>\n"
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ClockSweepBufferManager.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ClockSweepBufferManager.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ClockSweepBufferManager",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.ClockSweepBufferManager.yml\" sourcestartlinenumber=\"1\">Clock-Sweep Buffer Manager implementation with usage counters\nBased on PostgreSQL's clock-sweep algorithm</p>\n"
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.CommentGatheringTypeInspector.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.CommentGatheringTypeInspector.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.CommentGatheringTypeInspector",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.CommentsObjectDescriptor.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.CommentsObjectDescriptor.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.CommentsObjectDescriptor",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.CommentsObjectGraphVisitor.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.CommentsObjectGraphVisitor.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.CommentsObjectGraphVisitor",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ComponentAttribute.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ComponentAttribute.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ComponentAttribute",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ComponentCollection-1.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ComponentCollection-1.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ComponentCollection<T>",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ComponentRow.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ComponentRow.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ComponentRow",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ComponentTable.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ComponentTable.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ComponentTable",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ConcurrentBitmap.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ConcurrentBitmap.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ConcurrentBitmap",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ConcurrentBitmapL3All.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ConcurrentBitmapL3All.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ConcurrentBitmapL3All",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ConcurrentBitmapL3Any.Enumerator.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ConcurrentBitmapL3Any.Enumerator.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ConcurrentBitmapL3Any.Enumerator",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ConcurrentBitmapL3Any.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ConcurrentBitmapL3Any.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ConcurrentBitmapL3Any",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.CurrentFrameEnricher.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.CurrentFrameEnricher.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.CurrentFrameEnricher",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.DBComponentDefinition.Field.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.DBComponentDefinition.Field.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.DBComponentDefinition.Field",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.DBComponentDefinition.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.DBComponentDefinition.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.DBComponentDefinition",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.DBObjectDefinition.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.DBObjectDefinition.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.DBObjectDefinition",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.DatabaseConfiguration.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.DatabaseConfiguration.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.DatabaseConfiguration",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.DatabaseDefinitions.IDBComponentDefinitionBuilder.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.DatabaseDefinitions.IDBComponentDefinitionBuilder.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.DatabaseDefinitions.IDBComponentDefinitionBuilder",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.DatabaseDefinitions.IDbComponentFieldDefinitionBuilder.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.DatabaseDefinitions.IDbComponentFieldDefinitionBuilder.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.DatabaseDefinitions.IDbComponentFieldDefinitionBuilder",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.DatabaseDefinitions.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.DatabaseDefinitions.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.DatabaseDefinitions",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.DatabaseEngine.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.DatabaseEngine.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.DatabaseEngine",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.DatabaseSchemaExtensions.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.DatabaseSchemaExtensions.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.DatabaseSchemaExtensions",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ExcludeDocFxAttribute.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ExcludeDocFxAttribute.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ExcludeDocFxAttribute",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.FieldAttribute.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.FieldAttribute.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.FieldAttribute",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.FieldRow.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.FieldRow.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.FieldRow",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.FieldType.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.FieldType.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.FieldType",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.IAsyncInitializable.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.IAsyncInitializable.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.IAsyncInitializable",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ICleanable.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ICleanable.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ICleanable",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.IConfiguration-1.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.IConfiguration-1.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.IConfiguration<TConfiguration>",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.IConfiguration-1.yml\" sourcestartlinenumber=\"1\">Holds configuration of the specified type.</p>\n"
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.IConfigurationProvider-1.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.IConfigurationProvider-1.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.IConfigurationProvider<TConfiguration>",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.IConfigurationProvider-1.yml\" sourcestartlinenumber=\"1\">Provides configuration of the specified type.</p>\n"
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.IDatabaseConfiguration.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.IDatabaseConfiguration.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.IDatabaseConfiguration",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.IInitializable.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.IInitializable.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.IInitializable",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ITyphonBuilder.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ITyphonBuilder.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ITyphonBuilder",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ITyphonBuilderImplementation.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ITyphonBuilderImplementation.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ITyphonBuilderImplementation",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.IndexAttribute.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.IndexAttribute.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.IndexAttribute",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.LogExtensions.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.LogExtensions.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.LogExtensions",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.LogicalSegment.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.LogicalSegment.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.LogicalSegment",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.LogicalSegment.yml\" sourcestartlinenumber=\"1\">Expose a Logical segment of Pages</p>\n"
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.LogicalSegmentManager.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.LogicalSegmentManager.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.LogicalSegmentManager",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.MathExtensions.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.MathExtensions.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.MathExtensions",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.MathHelpers.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.MathHelpers.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.MathHelpers",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.MurmurHash2.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.MurmurHash2.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.MurmurHash2",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.PageAccessor.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.PageAccessor.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.PageAccessor",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.PageBaseHeader.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.PageBaseHeader.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.PageBaseHeader",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.PageBlockFlags.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.PageBlockFlags.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.PageBlockFlags",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.PageBlockType.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.PageBlockType.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.PageBlockType",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.PageClearMode.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.PageClearMode.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.PageClearMode",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.PagedFile.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.PagedFile.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.PagedFile",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.PagedMemoryMappedFile.BitmapL3",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.PagedMemoryMappedFile.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.PagedMemoryMappedFile.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.PagedMemoryMappedFile",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.PagedMemoryMappedFile.yml\" sourcestartlinenumber=\"1\">Provides thread-safe, concurrent low level access to the database file's content.</p>\n"
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Point2D.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Point2D.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Point2D",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Point2F.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Point2F.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Point2F",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Point3D.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Point3D.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Point3D",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Point3F.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Point3F.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Point3F",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Point4D.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Point4D.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Point4D",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Point4F.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Point4F.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Point4F",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Program.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Program.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Program",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.Program.yml\" sourcestartlinenumber=\"1\">Example usage and testing</p>\n"
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.QuaternionD.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.QuaternionD.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.QuaternionD",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.QuaternionF.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.QuaternionF.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.QuaternionF",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ServiceProviderExtensions.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ServiceProviderExtensions.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ServiceProviderExtensions",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.SmallAccessControl.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.SmallAccessControl.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.SmallAccessControl",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.String1024.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.String1024.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.String1024",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.String64.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.String64.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.String64",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.StringExtensions.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.StringExtensions.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.StringExtensions",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.StringTableSegment.ChunkHeader.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.StringTableSegment.ChunkHeader.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.StringTableSegment.ChunkHeader",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.StringTableSegment.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.StringTableSegment.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.StringTableSegment",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.StructAllocator-1.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.StructAllocator-1.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.StructAllocator<T>",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.TimeManager.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.TimeManager.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.TimeManager",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Transaction.TransactionState.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Transaction.TransactionState.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Transaction.TransactionState",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Transaction.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Transaction.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Transaction",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.TyphonBuilderExtensions.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.TyphonBuilderExtensions.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.TyphonBuilderExtensions",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.UnmanagedStructAllocator-1.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.UnmanagedStructAllocator-1.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.UnmanagedStructAllocator<T>",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.VarString.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.VarString.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.VarString",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.VariableSizedBufferAccessor-1.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.VariableSizedBufferAccessor-1.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.VariableSizedBufferAccessor<T>",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.VariableSizedBufferSegment-1.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.VariableSizedBufferSegment-1.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.VariableSizedBufferSegment<T>",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.VariableSizedBufferSegment-1.yml\" sourcestartlinenumber=\"1\">Segment to store variable size buffer of elements</p>\n"
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.YamlConfiguration.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.YamlConfiguration.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.YamlConfiguration",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.YamlConfiguration.yml\" sourcestartlinenumber=\"1\">Type storing the configuration settings of the Engine</p>\n"
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine",
+      "Summary": null
+    },
+    {
+      "type": "Conceptual",
+      "source_relative_path": "api/index.md",
+      "output": {
+        ".html": {
+          "relative_path": "api/index.html"
+        }
+      },
+      "version": ""
+    },
+    {
+      "type": "Toc",
+      "source_relative_path": "api/toc.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/toc.html"
+        },
+        ".json": {
+          "relative_path": "api/toc.json"
+        }
+      },
+      "version": ""
+    },
+    {
+      "type": "Conceptual",
+      "source_relative_path": "design/index.md",
+      "output": {
+        ".html": {
+          "relative_path": "design/index.html"
+        }
+      },
+      "version": ""
+    },
+    {
+      "type": "Toc",
+      "source_relative_path": "design/toc.yml",
+      "output": {
+        ".html": {
+          "relative_path": "design/toc.html"
+        },
+        ".json": {
+          "relative_path": "design/toc.json"
+        }
+      },
+      "version": ""
+    },
+    {
+      "type": "Resource",
+      "source_relative_path": "images/favicon.ico",
+      "output": {
+        "resource": {
+          "relative_path": "images/favicon.ico"
+        }
+      },
+      "version": ""
+    },
+    {
+      "type": "Resource",
+      "source_relative_path": "images/typhon.png",
+      "output": {
+        "resource": {
+          "relative_path": "images/typhon.png"
+        }
+      },
+      "version": ""
+    },
+    {
+      "type": "Resource",
+      "source_relative_path": "images/typhon.svg",
+      "output": {
+        "resource": {
+          "relative_path": "images/typhon.svg"
+        }
+      },
+      "version": ""
+    },
+    {
+      "type": "Conceptual",
+      "source_relative_path": "index.md",
+      "output": {
+        ".html": {
+          "relative_path": "index.html"
+        }
+      },
+      "version": ""
+    },
+    {
+      "type": "Conceptual",
+      "source_relative_path": "overview/index.md",
+      "output": {
+        ".html": {
+          "relative_path": "overview/index.html"
+        }
+      },
+      "version": ""
+    },
+    {
+      "type": "Toc",
+      "source_relative_path": "overview/toc.yml",
+      "output": {
+        ".html": {
+          "relative_path": "overview/toc.html"
+        },
+        ".json": {
+          "relative_path": "overview/toc.json"
+        }
+      },
+      "version": ""
+    },
+    {
+      "type": "Toc",
+      "source_relative_path": "toc.yml",
+      "output": {
+        ".html": {
+          "relative_path": "toc.html"
+        },
+        ".json": {
+          "relative_path": "toc.json"
+        }
+      },
+      "version": ""
+    }
+  ],
+  "groups": [
+    {
+      "xrefmap": "xrefmap.yml"
+    }
+  ]
+}
