@@ -1,4 +1,5 @@
 ﻿using JetBrains.Annotations;
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -7,30 +8,36 @@ namespace Typhon.Engine;
 [PublicAPI]
 public class AdaptiveWaiter
 {
-    private SpinWait _spinWait;
+    static readonly TimeSpan WaitDelay = TimeSpan.FromMicroseconds(100);
+    private int _iterationCount;
+    private int _curCount;
 
     public AdaptiveWaiter()
     {
-        _spinWait = new SpinWait();
+        _iterationCount = 1 << 16;
+        _curCount = 0;
     }
     
     public async Task SpinAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        
-        // SpinWait automatically adapts its behavior:
-        // - First ~10 iterations: Pure spinning (microsecond precision)
-        // - After threshold: Yields to other threads
-        // - Eventually: Uses Thread.Sleep(0) and Thread.Sleep(1)
-        if (_spinWait.NextSpinWillYield)
+
+        if (Environment.ProcessorCount == 1)
         {
-            // For longer waits, yield control back to async context
-            await Task.Yield();
+            await Task.Delay(WaitDelay, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (_iterationCount == ++_curCount)
+        {
+            _iterationCount >>= 1;
+            _iterationCount = Math.Max(_iterationCount, 10);
+            _curCount = 0;
+            await Task.Delay(WaitDelay, cancellationToken).ConfigureAwait(false);
         }
         else
         {
-            // Fast spinning for microsecond-level waits
-            _spinWait.SpinOnce();
+            Thread.SpinWait(100);
         }
     }
 }

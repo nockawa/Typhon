@@ -1,6 +1,8 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
+using Serilog;
+using Serilog.Events;
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
@@ -85,6 +87,15 @@ class TransactionTests
         var o = TestContext.CurrentContext.Test.Properties.ContainsKey("CacheSize");
         var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("CacheSize") : (int)PagedMemoryMappedFile.MinimumCacheSize;
 
+        Log.Logger = new LoggerConfiguration()
+            .MinimumLevel.Information()
+            .MinimumLevel.Override(typeof(LogicalSegmentManager).FullName, LogEventLevel.Verbose)
+            .Enrich.FromLogContext()
+            .Enrich.WithThreadId()
+            .Enrich.WithCurrentFrame()
+            .WriteTo.Seq("http://localhost:5341", compact: true)
+            .CreateLogger();
+
         var serviceCollection = new ServiceCollection();
         _serviceCollection = serviceCollection;
         _serviceCollection
@@ -101,6 +112,7 @@ class TransactionTests
 
             .AddLogging(builder =>
             {
+                builder.AddSerilog(dispose: true);
                 builder.AddSimpleConsole(options =>
                 {
                     options.SingleLine = true;
@@ -126,6 +138,7 @@ class TransactionTests
     {
         _dbe?.Dispose();
         _dbe = null;
+        Log.CloseAndFlush();
     }
 
     [Test]
