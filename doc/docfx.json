@@ -10,25 +10,18 @@
         }
       ],
       "dest": "api",
-      "filter": "filterConfig.yml",
-      "disableGitFeatures": false,
-      "disableDefaultFilter": true
+      "filter": "filterConfig.yml"
     }
   ],
   "build": {
     "content": [
       {
         "files": [
-          "api/**.yml",
-          "api/index.md"
-        ]
-      },
-      {
-        "files": [
-          "design/**.md",
-          "design/**/toc.yml",
-          "toc.yml",
-          "*.md"
+          "**/*.{md,yml}"
+        ],
+        "exclude": [
+          "live/**",
+          "ovr/**"
         ]
       }
     ],
@@ -42,29 +35,25 @@
     "overwrite": [
       {
         "files": [
-          "apidoc/**.md"
-        ],
-        "exclude": [
-          "obj/**",
-          "_site/**"
+          "ovr/*.md"
         ]
       }
     ],
-    "dest": "_site",
-    "globalMetadata": {
-      "_enableSearch": true
-    },
-    "globalMetadataFiles": [],
-    "fileMetadataFiles": [],
     "template": [
       "default",
-      "lbatemplate"
+      "modern",
+      "template"
     ],
-    "postProcessors": [],
-    "markdownEngineName": "markdig",
-    "noLangKeyword": false,
-    "keepFileLink": false,
-    "cleanupCacheHistory": false,
-    "disableGitFeatures": false
+    "globalMetadata": {
+      "_appName": "Typhon",
+      "_appTitle": "Typhon",
+      "_appFaviconPath": "images/favicon.ico",
+      "_appLogoPath": "images/typhon.svg",
+      "_appFooter": "Copyright (c) Loïc Baumann",
+      "_enableSearch": true,
+
+      "pdf": false
+    },
+    "dest": "live"
   }
 }
