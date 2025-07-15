@@ -3,7 +3,7 @@ name: Building documentation
 on:
   push:
     branches:
-      - dev
+      - new-persistence-layer
     paths:
       - doc/**
       - src/**
