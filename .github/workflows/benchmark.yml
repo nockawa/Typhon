@@ -29,6 +29,7 @@ jobs:
           name: Typhon Benchmark
           tool: 'benchmarkdotnet'
           output-file-path: test/Typhon.Benchmark/BenchmarkDotNet.Artifacts/results/Combined.Benchmarks.json
+          benchmark-data-dir-path: bench
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true
           alert-threshold: '130%'
