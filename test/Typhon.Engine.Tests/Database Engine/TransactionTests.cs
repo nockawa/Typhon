@@ -83,7 +83,7 @@ class TransactionTests
     public void Setup()
     {
         var o = TestContext.CurrentContext.Test.Properties.ContainsKey("CacheSize");
-        var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("CacheSize")! : (int)PMMF.MinimumCacheSize;
+        var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("CacheSize")! : (int)PagedMMF.MinimumCacheSize;
 
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()

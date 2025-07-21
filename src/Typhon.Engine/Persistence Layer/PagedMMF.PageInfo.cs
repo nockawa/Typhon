@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 
 namespace Typhon.Engine;
 
-public partial class PMMF
+public partial class PagedMMF
 {
     internal class PageInfo
     {

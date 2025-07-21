@@ -13,11 +13,11 @@ namespace Typhon.Benchmark;
 [JsonExporterAttribute.Full]
 public class PagedMemoryFileBenchmarks
 {
-    private const ulong CacheSize = 128 * PMMF.PageSize;
+    private const ulong CacheSize = 128 * PagedMMF.PageSize;
     
     private ServiceCollection _serviceCollection;
     private ServiceProvider _serviceProvider;
-    private PMMF _pmmf;
+    private PagedMMF _pmmf;
     private TimeManager _tm;
 
     [GlobalSetup]
@@ -49,7 +49,7 @@ public class PagedMemoryFileBenchmarks
         });
         _serviceProvider = _serviceCollection.BuildServiceProvider();
 
-        _pmmf = _serviceProvider.GetRequiredService<PMMF>();
+        _pmmf = _serviceProvider.GetRequiredService<PagedMMF>();
         /*
         _pmmf.Initialize();
         */
@@ -70,7 +70,7 @@ public class PagedMemoryFileBenchmarks
     {
         var frameCount = 1;
         var readWriteRatio = 0.75f;
-        var pagesCount = (int)(CacheSize * 8 / PMMF.PageSize);
+        var pagesCount = (int)(CacheSize * 8 / PagedMMF.PageSize);
         var opsPerFrame = 1024;
 
         // Generate IO ops for all the frames

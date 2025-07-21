@@ -8,11 +8,11 @@ namespace Typhon.Engine;
 [PublicAPI]
 public class ChangeSet
 {
-    private readonly PMMF _owner;
+    private readonly PagedMMF _owner;
     private readonly HashSet<int> _changedMemoryPageIndices;
     private Task _saveTask;
 
-    public ChangeSet(PMMF owner)
+    public ChangeSet(PagedMMF owner)
     {
         _owner = owner;
         _changedMemoryPageIndices = [];

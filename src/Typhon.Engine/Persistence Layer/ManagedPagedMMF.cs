@@ -14,7 +14,7 @@ public class ManagedPagedMMFOptions : PagedMMFOptions
 } 
 
 [PublicAPI]
-public partial class ManagedPagedMMF : PMMF
+public partial class ManagedPagedMMF : PagedMMF
 {
     #region Constants
 
@@ -27,7 +27,7 @@ public partial class ManagedPagedMMF : PMMF
     private LogicalSegment _occupancySegment;
     private BitmapL3 _occupancyMap;
 
-    public ManagedPagedMMF(IServiceProvider serviceProvider, PagedMMFOptions options, TimeManager timeManager, ILogger<PMMF> logger) : 
+    public ManagedPagedMMF(IServiceProvider serviceProvider, PagedMMFOptions options, TimeManager timeManager, ILogger<PagedMMF> logger) : 
         base(serviceProvider, options, timeManager, logger)
     {
     }

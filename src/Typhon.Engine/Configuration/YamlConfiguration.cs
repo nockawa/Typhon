@@ -1,4 +1,5 @@
-﻿using System;
+﻿#if DEADCODE
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
@@ -229,3 +230,4 @@ public class CommentsObjectGraphVisitor : ChainedObjectGraphVisitor
     }
 }
 #endregion
+#endif

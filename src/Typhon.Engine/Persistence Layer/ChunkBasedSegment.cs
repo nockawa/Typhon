@@ -36,7 +36,6 @@ public class ChunkRandomAccessor : IDisposable
         return cra;
     }
 
-
     private ChunkBasedSegment _owner;
     private int _cachedPagesCount;
     private Memory<PageAccessor> _cachedPages;
@@ -49,7 +48,7 @@ public class ChunkRandomAccessor : IDisposable
         public int SegmentIndex;
         public int HitCount;
         public short PinCounter;
-        public PMMF.PageState CurrentPageState;
+        public PagedMMF.PageState CurrentPageState;
         public short IsDirty;
         public short PromoteCounter;
         public byte* BaseAddress;
@@ -94,7 +93,7 @@ public class ChunkRandomAccessor : IDisposable
                 if (_cachedPages.Span[i].TryPromoteToExclusive())
                 {
                     page.PromoteCounter = 1;
-                    page.CurrentPageState = PMMF.PageState.Exclusive;
+                    page.CurrentPageState = PagedMMF.PageState.Exclusive;
                     return true;
                 }
                 return false;
@@ -157,10 +156,10 @@ public class ChunkRandomAccessor : IDisposable
             ref var entry = ref cachedEntries[i];
             if (entry.SegmentIndex == si)
             {
-                if (entry.CurrentPageState == PMMF.PageState.Idle)
+                if (entry.CurrentPageState == PagedMMF.PageState.Idle)
                 {
                     _owner.GetPageSharedAccessor(si, out _cachedPages.Span[i]);
-                    entry.CurrentPageState = PMMF.PageState.Shared;
+                    entry.CurrentPageState = PagedMMF.PageState.Shared;
                 }
 
                 if (pin)
@@ -203,10 +202,10 @@ public class ChunkRandomAccessor : IDisposable
         cachedEntry.PinCounter        = pin ? (short)1 : (short)0;
         cachedEntry.PromoteCounter    = 0;
         cachedEntry.IsDirty           = (short)(dirtyPage ? 1 : 0);
-        cachedEntry.CurrentPageState = PMMF.PageState.Shared;
+        cachedEntry.CurrentPageState = PagedMMF.PageState.Shared;
 
         _owner.GetPageSharedAccessor(si, out cachedPagesAccess[pageI]);
-        cachedEntry.BaseAddress = cachedPagesAccess[pageI].PageAddress + PMMF.PageHeaderSize;
+        cachedEntry.BaseAddress = cachedPagesAccess[pageI].PageAddress + PagedMMF.PageHeaderSize;
 
         return cachedEntry.BaseAddress + (si == 0 ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (off * _stride);
     }
@@ -242,7 +241,7 @@ public class ChunkRandomAccessor : IDisposable
     /// Commit the dirty state of each page and release the share access.
     /// </summary>
     /// <remarks>
-    /// Typically call this method at the end of an atomic operation to update the <see cref="PMMF"/> accordingly.
+    /// Typically call this method at the end of an atomic operation to update the <see cref="PagedMMF"/> accordingly.
     /// If the page was promoted in exclusive mode, it won't be release, just simply ignored.
     /// </remarks>
     public void CommitChanges()
@@ -253,7 +252,7 @@ public class ChunkRandomAccessor : IDisposable
         for (int i = 0; i < _cachedPagesCount; i++)
         {
             ref var cachedEntry = ref cachedEntries[i];
-            if (cachedEntry.CurrentPageState != PMMF.PageState.Shared ||
+            if (cachedEntry.CurrentPageState != PagedMMF.PageState.Shared ||
                 cachedEntry.PromoteCounter != 0 ||
                 cachedEntry.PinCounter != 0) continue;
 
@@ -265,7 +264,7 @@ public class ChunkRandomAccessor : IDisposable
                 cachedEntry.IsDirty = 0;
             }
 
-            cachedEntry.CurrentPageState = PMMF.PageState.Idle;
+            cachedEntry.CurrentPageState = PagedMMF.PageState.Idle;
             cachedPage.Dispose();
         }
     }
@@ -295,7 +294,7 @@ public class ChunkRandomAccessor : IDisposable
             }
                 
             cachedPage.Dispose();
-            cachedEntry.CurrentPageState = PMMF.PageState.Idle;
+            cachedEntry.CurrentPageState = PagedMMF.PageState.Idle;
             cachedEntry.HitCount = 0;
             cachedEntry.SegmentIndex = -1;
         }
@@ -331,8 +330,8 @@ public class ChunkBasedSegment : LogicalSegment
         }
 
         Stride = stride;
-        ChunkCountRootPage = (PMMF.PageRawDataSize - RootHeaderIndexSectionLength) / stride;
-        ChunkCountPerPage = PMMF.PageRawDataSize / stride;
+        ChunkCountRootPage = (PagedMMF.PageRawDataSize - RootHeaderIndexSectionLength) / stride;
+        ChunkCountPerPage = PagedMMF.PageRawDataSize / stride;
     }
 
     internal override bool Create(PageBlockType type, Span<int> filePageIndices, bool clear)

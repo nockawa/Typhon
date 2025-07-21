@@ -37,7 +37,7 @@ public class LogicalSegment : IDisposable
 
     internal const int RootHeaderIndexSectionCount = 500;
     internal const int RootHeaderIndexSectionLength = RootHeaderIndexSectionCount * sizeof(int);
-    internal const int NextHeadersIndexSectionCount = PMMF.PageRawDataSize / sizeof(int);
+    internal const int NextHeadersIndexSectionCount = PagedMMF.PageRawDataSize / sizeof(int);
 
     private readonly ManagedPagedMMF _manager;
     private int[] _pages;
@@ -67,19 +67,19 @@ public class LogicalSegment : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public static int GetMaxItemCount<T>(bool firstPage) where T : unmanaged => GetMaxItemCount(firstPage, Marshal.SizeOf<T>());
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    public static int GetMaxItemCount(bool firstPage, int itemSize) => (firstPage ? (PMMF.PageRawDataSize - RootHeaderIndexSectionLength) : PMMF.PageRawDataSize) / itemSize;
+    public static int GetMaxItemCount(bool firstPage, int itemSize) => (firstPage ? (PagedMMF.PageRawDataSize - RootHeaderIndexSectionLength) : PagedMMF.PageRawDataSize) / itemSize;
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public static int GetItemCount<T>(int pageCount) where T : unmanaged => GetItemCount(pageCount, Marshal.SizeOf<T>());
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    public static int GetItemCount(int pageCount, int itemSize) => ((pageCount * PMMF.PageRawDataSize) - RootHeaderIndexSectionLength) / itemSize;
+    public static int GetItemCount(int pageCount, int itemSize) => ((pageCount * PagedMMF.PageRawDataSize) - RootHeaderIndexSectionLength) / itemSize;
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public static (int, int) GetItemLocation<T>(int itemIndex) => GetItemLocation(itemIndex, Marshal.SizeOf<T>());
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public static (int, int) GetItemLocation(int itemIndex, int itemSize)
     {
         var s = itemSize;
-        var fs = PMMF.PageRawDataSize - RootHeaderIndexSectionLength;
-        var ss = PMMF.PageRawDataSize;
+        var fs = PagedMMF.PageRawDataSize - RootHeaderIndexSectionLength;
+        var ss = PagedMMF.PageRawDataSize;
 
         var fc = fs / s;
         if (itemIndex < fc)
