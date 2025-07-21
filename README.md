@@ -1,20 +1,30 @@
-# Introduction 
-TODO: Give a short introduction of your project. Let this section explain the objectives or the motivation behind this project. 
+# 🐍 Typhon 🐍
 
-# Getting Started
-TODO: Guide users through getting your code up and running on their own system. In this section you can talk about:
-1.	Installation process
-2.	Software dependencies
-3.	Latest releases
-4.	API references
+**A real-time, low latency and very fast ACID database.**
 
-# Build and Test
-TODO: Describe and show how to build your code and run the tests. 
+Documentation can be found [here](https://nockawa.github.io/Typhon/).
 
-# Contribute
-TODO: Explain how other users and developers can contribute to make your code better. 
+# History
+This project went through many things:
+- Bootstrapped in 2015 with a very different design and intent, then quickly put on a shelf.
+- Resurrected during COVID in 2020 as a POC of "is it possible to make a real-time ACID database, down to the µs", oriented for persistent games ? Then put on a shelf after promising work.
+- Re-resurrected in summer 2025 with the "firm but fragile" intention to reach an alpha stage.
 
-If you want to learn more about creating good readme files then refer the following [guidelines](https://docs.microsoft.com/en-us/azure/devops/repos/git/create-a-readme?view=azure-devops). You can also seek inspiration from the below readme files:
-- [ASP.NET Core](https://github.com/aspnet/Home)
-- [Visual Studio Code](https://github.com/Microsoft/vscode)
-- [Chakra Core](https://github.com/Microsoft/ChakraCore)
+## Why ?
+Initially I wanted to "make a database engine for MMOs, something fast, reliable and scalable" (in that order).
+
+Something like a weird mixed between [ECS](https://en.wikipedia.org/wiki/Entity_component_system) and a "regular database engine".
+
+### Fast
+In the realm of the micro-second. Concessions would have to be made, but it has to be fast, otherwise there's no really a point to it.
+
+### More suitable
+Not the original intent, but quickly a very interesting angle. Adopting some of the ECS principals would make this more natural for the users.
+
+### Reliable, meaning Durable (or not...)
+Atomic, transaction-based and durable operations. 
+
+Through a design decision, the user can opt-out durability on chosen components.
+
+### Scalable
+While it's still a goal, the ambitions were tuned down. A theoretical evolution would be a shard/hash based implementation, but the resulting complexity makes this no longer an objective.
