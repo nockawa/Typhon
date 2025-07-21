@@ -6,8 +6,7 @@ using System.Threading;
 
 namespace Typhon.Engine;
 
-
-public partial class PagedMemoryMappedFile
+public partial class ManagedPagedMMF
 {
     public class BitmapL3
     {
@@ -24,8 +23,8 @@ public partial class PagedMemoryMappedFile
             var length = Math.Max(1, (Capacity + 4095) / 4096);
             _l1All = new long[length];
             _l1Any = new long[length];
-
             length = Math.Max(1, (length + 63) / 64);
+
             _l2All = new long[length];
         }
 
@@ -36,41 +35,42 @@ public partial class PagedMemoryMappedFile
             var l0Mask = 1L << (bitIndex & 0x3F);
 
             var (pageIndex, pageOffset) = LogicalSegment.GetItemLocation<long>(l0Offset);
-            using var page = _segment.GetPageExclusiveAccessor(pageIndex);
-
-            var data = page.LogicalSegmentData.Cast<byte, long>();
-            var prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
-            page.SetPageDirty();                                                        // TODO only if changed
-            if ((prevL0 & l0Mask) != 0)
+            _segment.GetPageExclusiveAccessor(pageIndex, out var page);
+            using (page)
             {
-                // The bit was concurrently set by someone else
-                return false;
-            }
-
-            if (prevL0 != -1 && (prevL0 | l0Mask) == -1)
-            {
-                var l1Offset = l0Offset >> 6;
-                var l1Mask = 1L << (l0Offset & 0x3F);
-
-                var prevL1 = _l1All.Span[l1Offset];
-                _l1All.Span[l1Offset] |= l1Mask;
-
-                if (prevL1 != -1 && (prevL1 | l1Mask) == -1)
+                var data = page.LogicalSegmentData.Cast<byte, long>();
+                var prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
+                page.SetPageDirty();                                                        // TODO only if changed
+                if ((prevL0 & l0Mask) != 0)
                 {
-                    var l2Offset = l1Offset >> 6;
-                    var l2Mask = 1L << (l1Offset & 0x3F);
-                    _l2All.Span[l2Offset] |= l2Mask;
+                    // The bit was concurrently set by someone else
+                    return false;
+                }
+
+                if (prevL0 != -1 && (prevL0 | l0Mask) == -1)
+                {
+                    var l1Offset = l0Offset >> 6;
+                    var l1Mask = 1L << (l0Offset & 0x3F);
+
+                    var prevL1 = _l1All.Span[l1Offset];
+                    _l1All.Span[l1Offset] |= l1Mask;
+
+                    if (prevL1 != -1 && (prevL1 | l1Mask) == -1)
+                    {
+                        var l2Offset = l1Offset >> 6;
+                        var l2Mask = 1L << (l1Offset & 0x3F);
+                        _l2All.Span[l2Offset] |= l2Mask;
+                    }
+                }
+
+                if (prevL0 == 0 && (prevL0 | l0Mask) != 0)
+                {
+                    var l1Offset = l0Offset >> 6;
+                    var l1Mask = 1L << (l0Offset & 0x3F);
+
+                    _l1Any.Span[l1Offset] |= l1Mask;
                 }
             }
-
-            if (prevL0 == 0 && (prevL0 | l0Mask) != 0)
-            {
-                var l1Offset = l0Offset >> 6;
-                var l1Mask = 1L << (l0Offset & 0x3F);
-
-                _l1Any.Span[l1Offset] |= l1Mask;
-            }
-
             return true;
         }
 
@@ -81,41 +81,42 @@ public partial class PagedMemoryMappedFile
             var l0Mask = -1L;
 
             var (pageIndex, pageOffset) = LogicalSegment.GetItemLocation<long>(l0Offset);
-            using var page = _segment.GetPageExclusiveAccessor(pageIndex);
-
-            var data = page.LogicalSegmentData.Cast<byte, long>();
-            var prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
-            page.SetPageDirty();                                                        // TODO only if changed
-            if (prevL0 != 0)
+            _segment.GetPageExclusiveAccessor(pageIndex, out var page);
+            using (page)
             {
-                // Can't allocate the whole L1, some bits are set at L0
-                return false;
-            }
-
-            if (prevL0 != -1 && (prevL0 | l0Mask) == -1)
-            {
-                var l1Offset = l0Offset >> 6;
-                var l1Mask = 1L << (l0Offset & 0x3F);
-
-                var prevL1 = _l1All.Span[l1Offset];
-                _l1All.Span[l1Offset] |= l1Mask;
-
-                if (prevL1 != -1 && (prevL1 | l1Mask) == -1)
+                var data = page.LogicalSegmentData.Cast<byte, long>();
+                var prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
+                page.SetPageDirty();                                                        // TODO only if changed
+                if (prevL0 != 0)
                 {
-                    var l2Offset = l1Offset >> 6;
-                    var l2Mask = 1L << (l1Offset & 0x3F);
-                    _l2All.Span[l2Offset] |= l2Mask;
+                    // Can't allocate the whole L1, some bits are set at L0
+                    return false;
+                }
+
+                if (prevL0 != -1 && (prevL0 | l0Mask) == -1)
+                {
+                    var l1Offset = l0Offset >> 6;
+                    var l1Mask = 1L << (l0Offset & 0x3F);
+
+                    var prevL1 = _l1All.Span[l1Offset];
+                    _l1All.Span[l1Offset] |= l1Mask;
+
+                    if (prevL1 != -1 && (prevL1 | l1Mask) == -1)
+                    {
+                        var l2Offset = l1Offset >> 6;
+                        var l2Mask = 1L << (l1Offset & 0x3F);
+                        _l2All.Span[l2Offset] |= l2Mask;
+                    }
+                }
+
+                if (prevL0 == 0 && (prevL0 | l0Mask) != 0)
+                {
+                    var l1Offset = l0Offset >> 6;
+                    var l1Mask = 1L << (l0Offset & 0x3F);
+
+                    _l1Any.Span[l1Offset] |= l1Mask;
                 }
             }
-
-            if (prevL0 == 0 && (prevL0 | l0Mask) != 0)
-            {
-                var l1Offset = l0Offset >> 6;
-                var l1Mask = 1L << (l0Offset & 0x3F);
-
-                _l1Any.Span[l1Offset] |= l1Mask;
-            }
-
             return true;
         }
 
@@ -126,33 +127,35 @@ public partial class PagedMemoryMappedFile
             var l0Mask = ~(1L << (index & 0x3F));
 
             var (pageIndex, pageOffset) = LogicalSegment.GetItemLocation<long>(l0Offset);
-            using var page = _segment.GetPageExclusiveAccessor(pageIndex);
-
-            var data = page.LogicalSegmentData.Cast<byte, long>();
-            var prevL0 = Interlocked.And(ref data[pageOffset], l0Mask);
-            page.SetPageDirty();                                                        // TODO only if changed
-            if ((prevL0 == -1) && ((prevL0 & l0Mask) != -1))
+            _segment.GetPageExclusiveAccessor(pageIndex, out var page);
+            using (page)
             {
-                var l1Offset = l0Offset >> 6;
-                var l1Mask = 1L << (l0Offset & 0x3F);
-
-                var prevL1 = _l1All.Span[l1Offset];
-                _l1All.Span[l1Offset] &= l1Mask;
-
-                if (prevL1 == -1)
+                var data = page.LogicalSegmentData.Cast<byte, long>();
+                var prevL0 = Interlocked.And(ref data[pageOffset], l0Mask);
+                page.SetPageDirty();                                                        // TODO only if changed
+                if ((prevL0 == -1) && ((prevL0 & l0Mask) != -1))
                 {
-                    var l2Offset = l1Offset >> 6;
-                    var l2Mask = 1L << (l1Offset & 0x3F);
-                    _l2All.Span[l2Offset] &= l2Mask;
+                    var l1Offset = l0Offset >> 6;
+                    var l1Mask = 1L << (l0Offset & 0x3F);
+
+                    var prevL1 = _l1All.Span[l1Offset];
+                    _l1All.Span[l1Offset] &= l1Mask;
+
+                    if (prevL1 == -1)
+                    {
+                        var l2Offset = l1Offset >> 6;
+                        var l2Mask = 1L << (l1Offset & 0x3F);
+                        _l2All.Span[l2Offset] &= l2Mask;
+                    }
                 }
-            }
 
-            if ((prevL0 != 0) && ((prevL0 & l0Mask) == 0))
-            {
-                var l1Offset = l0Offset >> 6;
-                var l1Mask = 1L << (l0Offset & 0x3F);
+                if ((prevL0 != 0) && ((prevL0 & l0Mask) == 0))
+                {
+                    var l1Offset = l0Offset >> 6;
+                    var l1Mask = 1L << (l0Offset & 0x3F);
 
-                _l1Any.Span[l1Offset] &= l1Mask;
+                    _l1Any.Span[l1Offset] &= l1Mask;
+                }
             }
         }
 
@@ -163,10 +166,12 @@ public partial class PagedMemoryMappedFile
             var mask = 1L << (index & 0x3F);
 
             var (pageIndex, pageOffset) = LogicalSegment.GetItemLocation<long>(offset);
-            using var page = _segment.GetPageSharedAccessor(pageIndex);
-
-            var data = page.LogicalSegmentDataReadOnly.Cast<byte, long>();
-            return (data[pageOffset] & mask) != 0L;
+            _segment.GetPageSharedAccessor(pageIndex, out var page);
+            using (page)
+            {
+                var data = page.LogicalSegmentDataReadOnly.Cast<byte, long>();
+                return (data[pageOffset] & mask) != 0L;
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
@@ -198,7 +203,7 @@ public partial class PagedMemoryMappedFile
                         if (pageId != curPageId)
                         {
                             curPage.Dispose();
-                            curPage = _segment.GetPageSharedAccessor(pageId);
+                            _segment.GetPageSharedAccessor(pageId, out curPage);
                             curPageId = pageId;
                         }
                         var data = curPage.LogicalSegmentDataReadOnly.Cast<byte, long>();
@@ -304,7 +309,7 @@ public partial class PagedMemoryMappedFile
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public bool Allocate(ref Span<uint> result)
+        public bool Allocate(ref Span<int> result)
         {
             Debug.Assert(result.IsEmpty==false && result.Length > 0, "A valid span with a length > 0 must be passed");
             var length = result.Length;
@@ -322,7 +327,7 @@ public partial class PagedMemoryMappedFile
                     {
                         for (int j = 0; j < 64; j++)
                         {
-                            result[destI++] = (uint)((i<<6) + j);
+                            result[destI++] = (i<<6) + j;
                         }
                         length -= 64;
                     }
@@ -339,7 +344,7 @@ public partial class PagedMemoryMappedFile
                 {
                     if (SetL0(i))
                     {
-                        result[destI++] = (uint)i;
+                        result[destI++] = i;
                         --length;
                     }
                 }
@@ -358,16 +363,15 @@ public partial class PagedMemoryMappedFile
             return true;
         }
 
-        public void Free(ReadOnlySpan<uint> pages)
+        public void Free(ReadOnlySpan<int> pages)
         {
             var length = pages.Length;
             for (int i = 0; i < length; i++)
             {
-                ClearL0((int)pages[i]);
+                ClearL0(pages[i]);
             }
         }
 
         public int Capacity { get; }
     }
-    
 }

@@ -8,6 +8,7 @@ using System;
 using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using Typhon.Engine;
 
 namespace Typhon.Benchmark;
@@ -18,7 +19,6 @@ public class PageAccessBenchmark
 {
     private ServiceCollection _serviceCollection;
     private ServiceProvider _serviceProvider;
-    private LogicalSegmentManager _lsm;
     private LogicalSegment _segment;
 
     [GlobalSetup]
@@ -26,8 +26,9 @@ public class PageAccessBenchmark
     {
         var serviceCollection = new ServiceCollection();
         _serviceCollection = serviceCollection;
+        /*
         _serviceCollection
-            .AddTyphon(builder =>
+            .AddTyphonSingleton(builder =>
             {
                 builder.ConfigureDatabase(dc =>
                 {
@@ -37,6 +38,7 @@ public class PageAccessBenchmark
                     dc.DatabaseCacheSize = (ulong)32 * 1024 * 8192;
                 });
             });
+        */
         _serviceCollection.AddLogging(builder =>
         {
             builder.AddSimpleConsole(options =>
@@ -48,17 +50,16 @@ public class PageAccessBenchmark
         });
         _serviceProvider = _serviceCollection.BuildServiceProvider();
 
-        _lsm = _serviceProvider.GetRequiredService<LogicalSegmentManager>();
-        _lsm.Initialize();
+        /*
         _segment = _lsm.AllocateSegment(PageBlockType.None, 10);
+        */
 
     }
 
+    /*
     [GlobalCleanup]
-    public void GlobalCleanup()
-    {
-        _lsm?.Dispose();
-    }
+    public void GlobalCleanup() => _lsm?.Dispose();
+    */
 
     [Benchmark(Baseline = true)]
     public int BenchmarkSegmentManualAccess()
@@ -68,13 +69,15 @@ public class PageAccessBenchmark
         var length = _segment.Length;
         for (int i = 0; i < length; i++)
         {
-            using var page = _segment.GetPageSharedAccessor(i);
-
-            var rd = page.LogicalSegmentDataReadOnly.Cast<byte, int>();
-            var c = rd.Length;
-            for (int j = 0; j < c; j++)
+            _segment.GetPageSharedAccessor(i, out var page);
+            using (page)
             {
-                v |= rd[j];
+                var rd = page.LogicalSegmentDataReadOnly.Cast<byte, int>();
+                var c = rd.Length;
+                for (int j = 0; j < c; j++)
+                {
+                    v |= rd[j];
+                }
             }
         }
 

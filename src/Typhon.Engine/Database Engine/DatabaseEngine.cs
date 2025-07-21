@@ -1,10 +1,10 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using JetBrains.Annotations;
+using Microsoft.Extensions.Logging;
 using System.Runtime.CompilerServices;
 using System;
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Threading;
-using System.Threading.Tasks;
 
 [assembly: InternalsVisibleTo("Typhon.Engine.Tests")]
 [assembly: InternalsVisibleTo("Typhon.Benchmark")]
@@ -76,21 +76,25 @@ public struct ComponentCollection<T> where T : unmanaged
 
 }
 
-public class DatabaseEngine : IInitializable, IDisposable
+public class DatabaseEngineOptions
 {
-    private readonly DatabaseConfiguration     _dbc;
-    private readonly PagedMemoryMappedFile     _pmmf;
-    private readonly ILogger<DatabaseEngine>   _log;
+}
+
+[PublicAPI]
+public class DatabaseEngine : IDisposable
+{
+    private readonly DatabaseEngineOptions      _options;
+    private readonly ManagedPagedMMF            _pmmf;
+    private readonly ILogger<DatabaseEngine>    _log;
 
     private ComponentTable _fieldsTable;
     private ComponentTable _componentsTable;
     private ConcurrentDictionary<Type, ComponentTable> _componentTableByType;
     private long _curPrimaryKey;
 
-    public LogicalSegmentManager LSM { get; }
-
     public DatabaseDefinitions DBD { get; }
-
+    public ManagedPagedMMF PMMF => _pmmf;
+    
     /// <summary>
     /// Create a transaction in order to make Queries and CRUD operation on the database
     /// </summary>
@@ -107,57 +111,40 @@ public class DatabaseEngine : IInitializable, IDisposable
     /// </remarks>
     public Transaction NewTransaction(bool exclusiveConcurrency) => new(this, exclusiveConcurrency);
 
-    public DatabaseEngine(IConfiguration<DatabaseConfiguration> dbc, PagedMemoryMappedFile pmmf, LogicalSegmentManager lsm, ILogger<DatabaseEngine> log)
+    public DatabaseEngine(DatabaseEngineOptions options, ManagedPagedMMF pmmf, ILogger<DatabaseEngine> log)
     {
         _pmmf = pmmf;
-        LSM = lsm;
         _log = log;
-        _dbc = dbc.Value;
+        _options = options;
 
         DBD = new DatabaseDefinitions();
         ConstructComponentStore();
 
-        // Check the configuration
-        _dbc.Validate(false, out _);
-
-        _pmmf.DatabaseCreating += OnDatabaseCreating;
-        _pmmf.DatabaseLoading += OnDatabaseLoading;
+        _pmmf.CreatingEvent += OnCreating;
+        _pmmf.LoadingEvent += OnLoading;
     }
 
-    private void OnDatabaseLoading(object sender, DatabaseEventArgs e)
+    private void OnLoading(object sender, EventArgs args)
     {
     }
 
-    unsafe private void OnDatabaseCreating(object sender, DatabaseEventArgs e) => 
-        CreateComponentStore(e.Header);
-
-    public void Initialize()
+    unsafe private void OnCreating(object sender, EventArgs args)
     {
-        ++ReferenceCounter;
-        if (IsInitialized)
-        {
-            return;
-        }
-        _pmmf.Initialize();
-        LSM.Initialize();
-
-        IsInitialized = true;
+        // TOFIX
+        // CreateComponentStore(e.Header);
     }
 
-    public bool IsInitialized { get; private set; }
     public bool IsDisposed { get; private set; }
-    public int ReferenceCounter { get; private set; }
-
-    public Task FlushToDisk() => _pmmf.FlushToDiskAsync(false);
 
     public void Dispose()
     {
-        if (IsDisposed || --ReferenceCounter!=0)
+        if (IsDisposed)
         {
             return;
         }
 
-        LSM.Dispose();
+        GC.SuppressFinalize(this);
+        
         _pmmf.Dispose();
 
         IsDisposed = true;

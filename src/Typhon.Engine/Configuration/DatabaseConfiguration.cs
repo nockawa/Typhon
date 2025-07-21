@@ -104,14 +104,14 @@ public sealed class DatabaseConfiguration : IDatabaseConfiguration
 
         // DatabaseCacheSize
         var dcs = DatabaseCacheSize;
-        if ((dcs & (PagedMemoryMappedFile.PageSize - 1)) != 0UL)
+        if ((dcs & (PMMF.PageSize - 1)) != 0UL)
         {
-            sb.AppendLine($"Database Cache Size must be a multiple of the Page Size ('{PagedMemoryMappedFile.PageSize}').");
+            sb.AppendLine($"Database Cache Size must be a multiple of the Page Size ('{PMMF.PageSize}').");
             success = false;
         }
-        if (dcs < PagedMemoryMappedFile.MinimumCacheSize && OverrideDatabaseCacheMinSize==false)
+        if (dcs < PMMF.MinimumCacheSize && OverrideDatabaseCacheMinSize==false)
         {
-            sb.AppendLine($"Database Cache Size must be at least '{PagedMemoryMappedFile.MinimumCacheSize/(1024*1024)}'MiB.");
+            sb.AppendLine($"Database Cache Size must be at least '{PMMF.MinimumCacheSize/(1024*1024)}'MiB.");
             success = false;
         }
 
@@ -123,7 +123,7 @@ public sealed class DatabaseConfiguration : IDatabaseConfiguration
 
         // WriteCacheSize
         var wcs = WriteCacheSize;
-        if ((wcs & (PagedMemoryMappedFile.WriteCachePageSize-1)) != 0)
+        if ((wcs & (PMMF.WriteCachePageSize-1)) != 0)
         {
             sb.AppendLine($"Database Write Cache Size must be a multiple 1Mib (1024*1024) but is ('{dcs}').");
             success = false;
@@ -151,8 +151,8 @@ internal class DefaultDatabaseConfiguration : IConfigurationProvider<DatabaseCon
     {
         configuration.DatabaseName = "Database";
         configuration.DatabaseDirectory = Directory.GetCurrentDirectory();
-        configuration.DatabaseCacheSize = PagedMemoryMappedFile.MinimumCacheSize;
-        configuration.WriteCacheSize = 128 * PagedMemoryMappedFile.WriteCachePageSize;
+        configuration.DatabaseCacheSize = PMMF.MinimumCacheSize;
+        configuration.WriteCacheSize = 128 * PMMF.WriteCachePageSize;
         configuration.WriteThreadRatio = 0.5f;
     }
 }

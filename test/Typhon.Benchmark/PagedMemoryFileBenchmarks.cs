@@ -13,11 +13,11 @@ namespace Typhon.Benchmark;
 [JsonExporterAttribute.Full]
 public class PagedMemoryFileBenchmarks
 {
-    private const ulong CacheSize = 128 * PagedMemoryMappedFile.PageSize;
+    private const ulong CacheSize = 128 * PMMF.PageSize;
     
     private ServiceCollection _serviceCollection;
     private ServiceProvider _serviceProvider;
-    private PagedMemoryMappedFile _pmmf;
+    private PMMF _pmmf;
     private TimeManager _tm;
 
     [GlobalSetup]
@@ -25,8 +25,9 @@ public class PagedMemoryFileBenchmarks
     {
         var serviceCollection = new ServiceCollection();
         _serviceCollection = serviceCollection;
+        /*
         _serviceCollection
-            .AddTyphon(builder =>
+            .AddTyphonSingleton(builder =>
             {
                 builder.ConfigureDatabase(dc =>
                 {
@@ -36,6 +37,7 @@ public class PagedMemoryFileBenchmarks
                     dc.DatabaseCacheSize = CacheSize;
                 });
             });
+        */
         _serviceCollection.AddLogging(builder =>
         {
             builder.AddSimpleConsole(options =>
@@ -47,8 +49,10 @@ public class PagedMemoryFileBenchmarks
         });
         _serviceProvider = _serviceCollection.BuildServiceProvider();
 
-        _pmmf = _serviceProvider.GetRequiredService<PagedMemoryMappedFile>();
+        _pmmf = _serviceProvider.GetRequiredService<PMMF>();
+        /*
         _pmmf.Initialize();
+        */
         
         _tm = _serviceProvider.GetRequiredService<TimeManager>();
 
@@ -56,7 +60,7 @@ public class PagedMemoryFileBenchmarks
 
     struct OpInfo
     {
-        public uint PageId;
+        public int FilePageIndex;
         public uint Value;
         public bool ReadOnly;
     }
@@ -66,7 +70,7 @@ public class PagedMemoryFileBenchmarks
     {
         var frameCount = 1;
         var readWriteRatio = 0.75f;
-        var pagesCount = (int)(CacheSize * 8 / PagedMemoryMappedFile.PageSize);
+        var pagesCount = (int)(CacheSize * 8 / PMMF.PageSize);
         var opsPerFrame = 1024;
 
         // Generate IO ops for all the frames
@@ -83,8 +87,8 @@ public class PagedMemoryFileBenchmarks
             for (int j = 0; j < opsPerFrame; j++)
             {
                 var ro = rand.Next(0, range) < readCut;
-                uint pageId = (uint)rand.Next(0, pagesCount);
-                ops.Add(new OpInfo{ PageId = pageId, ReadOnly = ro });
+                var pageId = rand.Next(0, pagesCount);
+                ops.Add(new OpInfo{ FilePageIndex = pageId, ReadOnly = ro });
             }
             frames.Add(ops);
         }
@@ -101,16 +105,22 @@ public class PagedMemoryFileBenchmarks
                 var ro = info.ReadOnly;
                 if (ro)
                 {
-                    using var a = _pmmf.RequestPageShared(info.PageId);
-                    var actual = *(uint*)a.PageAddress;
-                    info.Value += actual;
+                    _pmmf.RequestPage(info.FilePageIndex, false, out var a);
+                    using (a)
+                    {
+                        var actual = *(uint*)a.PageAddress;
+                        info.Value += actual;
+                    }
                 }
                 else
                 {
-                    using var a = _pmmf.RequestPageExclusive(info.PageId);
-                    a.SetPageDirty();
-                    var pa = (uint*)a.PageAddress;
-                    var actual = ++*pa;
+                    _pmmf.RequestPage(info.FilePageIndex, true, out var a);
+                    using (a)
+                    {
+                        a.SetPageDirty();
+                        var pa = (uint*)a.PageAddress;
+                        var actual = ++*pa;
+                    }
                 }
             });
 

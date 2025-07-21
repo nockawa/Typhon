@@ -49,7 +49,7 @@ public class ChunkRandomAccessor : IDisposable
         public int SegmentIndex;
         public int HitCount;
         public short PinCounter;
-        public PagedMemoryMappedFile.PagesAccessMode CurrentAccessMode;
+        public PMMF.PageState CurrentPageState;
         public short IsDirty;
         public short PromoteCounter;
         public byte* BaseAddress;
@@ -94,7 +94,7 @@ public class ChunkRandomAccessor : IDisposable
                 if (_cachedPages.Span[i].TryPromoteToExclusive())
                 {
                     page.PromoteCounter = 1;
-                    page.CurrentAccessMode = PagedMemoryMappedFile.PagesAccessMode.Exclusive;
+                    page.CurrentPageState = PMMF.PageState.Exclusive;
                     return true;
                 }
                 return false;
@@ -157,10 +157,10 @@ public class ChunkRandomAccessor : IDisposable
             ref var entry = ref cachedEntries[i];
             if (entry.SegmentIndex == si)
             {
-                if (entry.CurrentAccessMode == PagedMemoryMappedFile.PagesAccessMode.Idle)
+                if (entry.CurrentPageState == PMMF.PageState.Idle)
                 {
-                    _cachedPages.Span[i] = _owner.GetPageSharedAccessor(si);
-                    entry.CurrentAccessMode = PagedMemoryMappedFile.PagesAccessMode.Shared;
+                    _owner.GetPageSharedAccessor(si, out _cachedPages.Span[i]);
+                    entry.CurrentPageState = PMMF.PageState.Shared;
                 }
 
                 if (pin)
@@ -203,10 +203,10 @@ public class ChunkRandomAccessor : IDisposable
         cachedEntry.PinCounter        = pin ? (short)1 : (short)0;
         cachedEntry.PromoteCounter    = 0;
         cachedEntry.IsDirty           = (short)(dirtyPage ? 1 : 0);
-        cachedEntry.CurrentAccessMode = PagedMemoryMappedFile.PagesAccessMode.Shared;
+        cachedEntry.CurrentPageState = PMMF.PageState.Shared;
 
-        cachedPagesAccess[pageI] = _owner.GetPageSharedAccessor(si);
-        cachedEntry.BaseAddress = cachedPagesAccess[pageI].PageAddress + PagedMemoryMappedFile.PageHeaderSize;
+        _owner.GetPageSharedAccessor(si, out cachedPagesAccess[pageI]);
+        cachedEntry.BaseAddress = cachedPagesAccess[pageI].PageAddress + PMMF.PageHeaderSize;
 
         return cachedEntry.BaseAddress + (si == 0 ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (off * _stride);
     }
@@ -242,7 +242,7 @@ public class ChunkRandomAccessor : IDisposable
     /// Commit the dirty state of each page and release the share access.
     /// </summary>
     /// <remarks>
-    /// Typically call this method at the end of an atomic operation to update the <see cref="PagedMemoryMappedFile"/> accordingly.
+    /// Typically call this method at the end of an atomic operation to update the <see cref="PMMF"/> accordingly.
     /// If the page was promoted in exclusive mode, it won't be release, just simply ignored.
     /// </remarks>
     public void CommitChanges()
@@ -253,7 +253,7 @@ public class ChunkRandomAccessor : IDisposable
         for (int i = 0; i < _cachedPagesCount; i++)
         {
             ref var cachedEntry = ref cachedEntries[i];
-            if (cachedEntry.CurrentAccessMode != PagedMemoryMappedFile.PagesAccessMode.Shared ||
+            if (cachedEntry.CurrentPageState != PMMF.PageState.Shared ||
                 cachedEntry.PromoteCounter != 0 ||
                 cachedEntry.PinCounter != 0) continue;
 
@@ -265,7 +265,7 @@ public class ChunkRandomAccessor : IDisposable
                 cachedEntry.IsDirty = 0;
             }
 
-            cachedEntry.CurrentAccessMode = PagedMemoryMappedFile.PagesAccessMode.Idle;
+            cachedEntry.CurrentPageState = PMMF.PageState.Idle;
             cachedPage.Dispose();
         }
     }
@@ -295,7 +295,7 @@ public class ChunkRandomAccessor : IDisposable
             }
                 
             cachedPage.Dispose();
-            cachedEntry.CurrentAccessMode = PagedMemoryMappedFile.PagesAccessMode.Idle;
+            cachedEntry.CurrentPageState = PMMF.PageState.Idle;
             cachedEntry.HitCount = 0;
             cachedEntry.SegmentIndex = -1;
         }
@@ -323,7 +323,7 @@ public class ChunkBasedSegment : LogicalSegment
 {
     private BitmapL3 _map;
 
-    internal ChunkBasedSegment(LogicalSegmentManager manager, int stride) : base(manager)
+    internal ChunkBasedSegment(ManagedPagedMMF manager, int stride) : base(manager)
     {
         if (stride < sizeof(long))
         {
@@ -331,22 +331,25 @@ public class ChunkBasedSegment : LogicalSegment
         }
 
         Stride = stride;
-        ChunkCountRootPage = (PagedMemoryMappedFile.PageRawDataSize - RootHeaderIndexSectionLength) / stride;
-        ChunkCountPerPage = PagedMemoryMappedFile.PageRawDataSize / stride;
+        ChunkCountRootPage = (PMMF.PageRawDataSize - RootHeaderIndexSectionLength) / stride;
+        ChunkCountPerPage = PMMF.PageRawDataSize / stride;
     }
 
-    internal override bool Create(PageBlockType type, Span<uint> pageIds, bool clear)
+    internal override bool Create(PageBlockType type, Span<int> filePageIndices, bool clear)
     {
-        base.Create(type, pageIds, clear);
+        base.Create(type, filePageIndices, clear);
 
         // Clear the metadata sections that store the chunk's occupancy bitmap
-        var length = pageIds.Length;
+        var length = filePageIndices.Length;
         for (int i = 0; i < length; i++)
         {
-            using var page = GetPageExclusiveAccessor(i);
-            page.SetPageDirty();
-            int longSize = (i==0 ? (ChunkCountRootPage+63) : (ChunkCountPerPage+63)) >> 6;
-            page.PageMetadata.Cast<byte, long>().Slice(0, longSize).Clear();
+            GetPageExclusiveAccessor(i, out var page);
+            using (page)
+            {
+                page.SetPageDirty();
+                int longSize = (i==0 ? (ChunkCountRootPage+63) : (ChunkCountPerPage+63)) >> 6;
+                page.PageMetadata.Cast<byte, long>().Slice(0, longSize).Clear();
+            }
         }
 
         _map = new BitmapL3(length, this);
@@ -458,43 +461,45 @@ public class ChunkBasedSegment : LogicalSegment
             var l0Mask = 1L << (bitIndex & 0x3F);
 
             var (pageIndex, pageOffset) = GetBitmapMaskLocation(l0Offset);
-            using var page = _segment.GetPageSharedAccessor(pageIndex);
-
-            var data = page.PageMetadata.Cast<byte, long>();
-            var prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
-            page.SetPageDirty();                                                            // TODO only if changed
-            if ((prevL0 & l0Mask) != 0)
+            _segment.GetPageSharedAccessor(pageIndex, out var page);
+            using (page)
             {
-                // The bit was concurrently set by someone else
-                return false;
-            }
-
-            if (prevL0 != -1 && (prevL0 | l0Mask) == -1)
-            {
-                var l1Offset = l0Offset >> 6;
-                var l1Mask = 1L << (l0Offset & 0x3F);
-
-                var prevL1 = _l1All.Span[l1Offset];
-                _l1All.Span[l1Offset] |= l1Mask;
-
-                if (prevL1 != -1 && (prevL1 | l1Mask) == -1)
+                var data = page.PageMetadata.Cast<byte, long>();
+                var prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
+                page.SetPageDirty();                                                            // TODO only if changed
+                if ((prevL0 & l0Mask) != 0)
                 {
-                    var l2Offset = l1Offset >> 6;
-                    var l2Mask = 1L << (l1Offset & 0x3F);
-                    _l2All.Span[l2Offset] |= l2Mask;
+                    // The bit was concurrently set by someone else
+                    return false;
                 }
+
+                if (prevL0 != -1 && (prevL0 | l0Mask) == -1)
+                {
+                    var l1Offset = l0Offset >> 6;
+                    var l1Mask = 1L << (l0Offset & 0x3F);
+
+                    var prevL1 = _l1All.Span[l1Offset];
+                    _l1All.Span[l1Offset] |= l1Mask;
+
+                    if (prevL1 != -1 && (prevL1 | l1Mask) == -1)
+                    {
+                        var l2Offset = l1Offset >> 6;
+                        var l2Mask = 1L << (l1Offset & 0x3F);
+                        _l2All.Span[l2Offset] |= l2Mask;
+                    }
+                }
+
+                if (prevL0 == 0 && (prevL0 | l0Mask) != 0)
+                {
+                    var l1Offset = l0Offset >> 6;
+                    var l1Mask = 1L << (l0Offset & 0x3F);
+
+                    _l1Any.Span[l1Offset] |= l1Mask;
+                }
+
+                ++Allocated;
+                return true;
             }
-
-            if (prevL0 == 0 && (prevL0 | l0Mask) != 0)
-            {
-                var l1Offset = l0Offset >> 6;
-                var l1Mask = 1L << (l0Offset & 0x3F);
-
-                _l1Any.Span[l1Offset] |= l1Mask;
-            }
-
-            ++Allocated;
-            return true;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
@@ -504,43 +509,45 @@ public class ChunkBasedSegment : LogicalSegment
             var l0Mask = -1L;
 
             var (pageIndex, pageOffset) = GetBitmapMaskLocation(l0Offset);
-            using var page = _segment.GetPageSharedAccessor(pageIndex);
-
-            var data = page.PageMetadata.Cast<byte, long>();
-            var prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
-            page.SetPageDirty();                                                            // TODO Only if changed
-            if (prevL0 != 0)
+            _segment.GetPageSharedAccessor(pageIndex, out var page);
+            using (page)
             {
-                // Can't allocate the whole L1, some bits are set at L0
-                return false;
-            }
-
-            if (prevL0 != -1 && (prevL0 | l0Mask) == -1)
-            {
-                var l1Offset = l0Offset >> 6;
-                var l1Mask = 1L << (l0Offset & 0x3F);
-
-                var prevL1 = _l1All.Span[l1Offset];
-                _l1All.Span[l1Offset] |= l1Mask;
-
-                if (prevL1 != -1 && (prevL1 | l1Mask) == -1)
+                var data = page.PageMetadata.Cast<byte, long>();
+                var prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
+                page.SetPageDirty();                                                            // TODO Only if changed
+                if (prevL0 != 0)
                 {
-                    var l2Offset = l1Offset >> 6;
-                    var l2Mask = 1L << (l1Offset & 0x3F);
-                    _l2All.Span[l2Offset] |= l2Mask;
+                    // Can't allocate the whole L1, some bits are set at L0
+                    return false;
                 }
+
+                if (prevL0 != -1 && (prevL0 | l0Mask) == -1)
+                {
+                    var l1Offset = l0Offset >> 6;
+                    var l1Mask = 1L << (l0Offset & 0x3F);
+
+                    var prevL1 = _l1All.Span[l1Offset];
+                    _l1All.Span[l1Offset] |= l1Mask;
+
+                    if (prevL1 != -1 && (prevL1 | l1Mask) == -1)
+                    {
+                        var l2Offset = l1Offset >> 6;
+                        var l2Mask = 1L << (l1Offset & 0x3F);
+                        _l2All.Span[l2Offset] |= l2Mask;
+                    }
+                }
+
+                if (prevL0 == 0 && (prevL0 | l0Mask) != 0)
+                {
+                    var l1Offset = l0Offset >> 6;
+                    var l1Mask = 1L << (l0Offset & 0x3F);
+
+                    _l1Any.Span[l1Offset] |= l1Mask;
+                }
+
+                Allocated += 64;
+                return true;
             }
-
-            if (prevL0 == 0 && (prevL0 | l0Mask) != 0)
-            {
-                var l1Offset = l0Offset >> 6;
-                var l1Mask = 1L << (l0Offset & 0x3F);
-
-                _l1Any.Span[l1Offset] |= l1Mask;
-            }
-
-            Allocated += 64;
-            return true;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
@@ -550,36 +557,38 @@ public class ChunkBasedSegment : LogicalSegment
             var l0Mask = ~(1L << (index & 0x3F));
 
             var (pageIndex, pageOffset) = GetBitmapMaskLocation(l0Offset);
-            using var page = _segment.GetPageSharedAccessor(pageIndex);
-
-            var data = page.PageMetadata.Cast<byte, long>();
-            var prevL0 = Interlocked.And(ref data[pageOffset], l0Mask);
-            page.SetPageDirty();                                                                // TODO dirty only if changed
-            if ((prevL0 == -1) && ((prevL0 & l0Mask) != -1))
+            _segment.GetPageSharedAccessor(pageIndex, out var page);
+            using (page)
             {
-                var l1Offset = l0Offset >> 6;
-                var l1Mask = 1L << (l0Offset & 0x3F);
-
-                var prevL1 = _l1All.Span[l1Offset];
-                _l1All.Span[l1Offset] &= l1Mask;
-
-                if (prevL1 == -1)
+                var data = page.PageMetadata.Cast<byte, long>();
+                var prevL0 = Interlocked.And(ref data[pageOffset], l0Mask);
+                page.SetPageDirty();                                                                // TODO dirty only if changed
+                if ((prevL0 == -1) && ((prevL0 & l0Mask) != -1))
                 {
-                    var l2Offset = l1Offset >> 6;
-                    var l2Mask = 1L << (l1Offset & 0x3F);
-                    _l2All.Span[l2Offset] &= l2Mask;
+                    var l1Offset = l0Offset >> 6;
+                    var l1Mask = 1L << (l0Offset & 0x3F);
+
+                    var prevL1 = _l1All.Span[l1Offset];
+                    _l1All.Span[l1Offset] &= l1Mask;
+
+                    if (prevL1 == -1)
+                    {
+                        var l2Offset = l1Offset >> 6;
+                        var l2Mask = 1L << (l1Offset & 0x3F);
+                        _l2All.Span[l2Offset] &= l2Mask;
+                    }
                 }
+
+                if ((prevL0 != 0) && ((prevL0 & l0Mask) == 0))
+                {
+                    var l1Offset = l0Offset >> 6;
+                    var l1Mask = 1L << (l0Offset & 0x3F);
+
+                    _l1Any.Span[l1Offset] &= l1Mask;
+                }
+
+                --Allocated;
             }
-
-            if ((prevL0 != 0) && ((prevL0 & l0Mask) == 0))
-            {
-                var l1Offset = l0Offset >> 6;
-                var l1Mask = 1L << (l0Offset & 0x3F);
-
-                _l1Any.Span[l1Offset] &= l1Mask;
-            }
-
-            --Allocated;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
@@ -589,10 +598,12 @@ public class ChunkBasedSegment : LogicalSegment
             var mask = 1L << (index & 0x3F);
 
             var (pageIndex, pageOffset) = GetBitmapMaskLocation(offset);
-            using var page = _segment.GetPageSharedAccessor(pageIndex);
-
-            var data = page.PageMetadata.Cast<byte, long>();
-            return (data[pageOffset] & mask) != 0L;
+            _segment.GetPageSharedAccessor(pageIndex, out var page);
+            using (page)
+            {
+                var data = page.PageMetadata.Cast<byte, long>();
+                return (data[pageOffset] & mask) != 0L;
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
@@ -624,7 +635,7 @@ public class ChunkBasedSegment : LogicalSegment
                         if (pageId != curPageId)
                         {
                             curPage.Dispose();
-                            curPage = _segment.GetPageSharedAccessor(pageId);
+                            _segment.GetPageSharedAccessor(pageId, out curPage);
                             curPageId = pageId;
                         }
                         var data = curPage.PageMetadata.Cast<byte, long>();

@@ -2,7 +2,6 @@
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
 using Serilog;
-using Serilog.Events;
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
@@ -77,7 +76,6 @@ class TransactionTests
 {
     private IServiceProvider _serviceProvider;
     private ServiceCollection _serviceCollection;
-    private DatabaseEngine _dbe;
 
     private string CurrentDatabaseName => $"{TestContext.CurrentContext.Test.Name}_database";
 
@@ -85,11 +83,13 @@ class TransactionTests
     public void Setup()
     {
         var o = TestContext.CurrentContext.Test.Properties.ContainsKey("CacheSize");
-        var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("CacheSize") : (int)PagedMemoryMappedFile.MinimumCacheSize;
+        var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("CacheSize")! : (int)PMMF.MinimumCacheSize;
 
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()
+            /*
             .MinimumLevel.Override(typeof(LogicalSegmentManager).FullName, LogEventLevel.Verbose)
+            */
             .Enrich.FromLogContext()
             .Enrich.WithThreadId()
             .Enrich.WithCurrentFrame()
@@ -99,53 +99,52 @@ class TransactionTests
         var serviceCollection = new ServiceCollection();
         _serviceCollection = serviceCollection;
         _serviceCollection
-            .AddTyphon(builder =>
-            {
-                builder.ConfigureDatabase(dc =>
-                {
-                    dc.DatabaseName = CurrentDatabaseName;
-                    dc.RecreateDatabase = true;
-                    dc.DeleteDatabaseOnDispose = true;
-                    dc.DatabaseCacheSize = (ulong)dcs;
-                });
-            })
-
             .AddLogging(builder =>
             {
-                builder.AddSerilog(dispose: true);
                 builder.AddSimpleConsole(options =>
                 {
                     options.SingleLine = true;
                     options.IncludeScopes = true;
                     options.TimestampFormat = "mm:ss.fff ";
                 });
+                builder.SetMinimumLevel(LogLevel.Information);
             })
-            ;
-
+            .AddScopedManagedPagedMemoryMappedFile(options =>
+            {
+                options.DatabaseName = CurrentDatabaseName;
+                options.DatabaseCacheSize = (ulong)dcs;
+                options.PagesDebugPattern = false;
+            })
+            .AddScopedDatabaseEngine(options =>
+            {
+            });
+        
         _serviceProvider = _serviceCollection.BuildServiceProvider();
-
-        _dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
-        _dbe.Initialize();
-
-        _dbe.RegisterComponentFromRowAccessor<CompA>();
-        _dbe.RegisterComponentFromRowAccessor<CompB>();
-        _dbe.RegisterComponentFromRowAccessor<CompC>();
-        _dbe.RegisterComponentFromRowAccessor<CompD>();
+        _serviceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
     }
 
     [TearDown]
     public void TearDown()
     {
-        _dbe?.Dispose();
-        _dbe = null;
         Log.CloseAndFlush();
     }
 
+    private static void RegisterComponents(DatabaseEngine dbe)
+    {
+        dbe.RegisterComponentFromRowAccessor<CompA>();
+        dbe.RegisterComponentFromRowAccessor<CompB>();
+        dbe.RegisterComponentFromRowAccessor<CompC>();
+        dbe.RegisterComponentFromRowAccessor<CompD>();
+    }
+    
     [Test]
     public void CreateAndReadInsideSameTransaction()
     {
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
 
             var a = new CompA(1);
             var b = new CompB(1, 1.2f);
@@ -178,7 +177,10 @@ class TransactionTests
         long e1;
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
 
             e1 = t.CreateEntity(ref a, ref b, ref c);
             Assert.That(e1, Is.Not.Zero);
@@ -187,7 +189,10 @@ class TransactionTests
         }
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
             var ca = new CompA();
             var cb = new CompB();
             var cc = new CompC();
@@ -212,7 +217,10 @@ class TransactionTests
         var cc = new CompC("Porcupine Tree");
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
 
             var a = new CompA(1);
             var b = new CompB(1, 1.2f);
@@ -230,7 +238,10 @@ class TransactionTests
         }
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
             var a = new CompA();
             var b = new CompB();
             var c = new CompC();
@@ -252,7 +263,10 @@ class TransactionTests
         var cc = new CompC("Porcupine Tree");
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
 
             var a = new CompA(1);
             var b = new CompB(1, 1.2f);
@@ -267,7 +281,10 @@ class TransactionTests
         }
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
 
             t.UpdateEntity(e1, ref ca, ref cb, ref cc);
             Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(2));
@@ -278,7 +295,10 @@ class TransactionTests
         }
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
             var a = new CompA();
             var b = new CompB();
             var c = new CompC();
@@ -297,7 +317,10 @@ class TransactionTests
         long e1;
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
 
             var a = new CompA(1);
             var b = new CompB(1, 1.2f);
@@ -315,7 +338,10 @@ class TransactionTests
         }
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
             var a = new CompA();
             var b = new CompB();
             var c = new CompC();
@@ -332,7 +358,10 @@ class TransactionTests
         long e1;
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
 
             var a = new CompA(1);
             var b = new CompB(1, 1.2f);
@@ -347,7 +376,10 @@ class TransactionTests
         }
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
             t.DeleteEntity<CompA, CompB, CompC>(e1);
             Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(2));
 
@@ -357,7 +389,10 @@ class TransactionTests
         }
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
             var a = new CompA();
             var b = new CompB();
             var c = new CompC();
@@ -373,7 +408,10 @@ class TransactionTests
     {
         long e1;
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
 
             var a = new CompA(1);
             var b = new CompB(1, 1.2f);
@@ -396,7 +434,10 @@ class TransactionTests
             Assert.That(t.CommittedOperationCount, Is.EqualTo(3));
         }
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
 
             var res = t.ReadEntity(e1, out CompA a, out CompB b, out CompC c);
             Assert.That(res, Is.False);
@@ -413,7 +454,10 @@ class TransactionTests
         long e1;
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
 
             e1 = t.CreateEntity(ref a, ref b, ref c);
             Assert.That(e1, Is.Not.Zero);
@@ -423,7 +467,10 @@ class TransactionTests
         }
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
             var ca = new CompA();
             var cb = new CompB();
             var cc = new CompC();
@@ -438,7 +485,10 @@ class TransactionTests
             Assert.That(t.CommittedOperationCount, Is.EqualTo(3));
         }
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
 
             var res = t.ReadEntity(e1, out CompA ba, out CompB bb, out CompC bc);
             Assert.That(res, Is.True);
@@ -462,7 +512,10 @@ class TransactionTests
         var bc = new CompC("Porcupine Tree");
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
 
             e1 = t.CreateEntity(ref oa, ref ob, ref oc);
             Assert.That(e1, Is.Not.Zero);
@@ -477,7 +530,10 @@ class TransactionTests
         }
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
             var ra = new CompA();
             var rb = new CompB();
             var rc = new CompC();
@@ -501,7 +557,10 @@ class TransactionTests
         var bc = new CompC("Porcupine Tree");
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
 
             e1 = t.CreateEntity(ref oa, ref ob, ref oc);
             Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1));
@@ -513,7 +572,10 @@ class TransactionTests
         }
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
 
             t.UpdateEntity(e1, ref ba, ref bb, ref bc);
             Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(2));
@@ -524,7 +586,10 @@ class TransactionTests
         }
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
             var ra = new CompA();
             var rb = new CompB();
             var rc = new CompC();
@@ -546,7 +611,10 @@ class TransactionTests
         var oc = new CompC("Porcupine Tree");
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
 
             e1 = t.CreateEntity(ref oa, ref ob, ref oc);
             Assert.That(e1, Is.Not.Zero);
@@ -562,7 +630,10 @@ class TransactionTests
         }
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
             var ra = new CompA();
             var rb = new CompB();
             var rc = new CompC();
@@ -582,7 +653,10 @@ class TransactionTests
         var oc = new CompC("Porcupine Tree");
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
 
             e1 = t.CreateEntity(ref oa, ref ob, ref oc);
             Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1));
@@ -594,7 +668,10 @@ class TransactionTests
         }
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
 
             t.DeleteEntity<CompA, CompB, CompC>(e1);
             Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(2));
@@ -606,7 +683,10 @@ class TransactionTests
         }
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
             var ra = new CompA();
             var rb = new CompB();
             var rc = new CompC();
@@ -626,7 +706,10 @@ class TransactionTests
         var ca = new CompD(11.0f, 12, 13.0);
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
 
             var a = new CompD(1.0f, 2, 3.0);
             e1 = t.CreateEntity(ref a);
@@ -639,7 +722,10 @@ class TransactionTests
         }
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
 
             t.UpdateEntity(e1, ref ca);
             Assert.That(t.GetComponentRevision<CompD>(e1), Is.EqualTo(2));
@@ -650,7 +736,10 @@ class TransactionTests
         }
 
         {
-            using var t = _dbe.NewTransaction(true);
+            using var dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            using var t = dbe.NewTransaction(true);
             var a = new CompD();
             t.ReadEntity(e1, out a);
 
