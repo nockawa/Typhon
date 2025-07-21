@@ -89,7 +89,7 @@
 
 
   <h1 id="Typhon_Engine_ChangeSet" data-uid="Typhon.Engine.ChangeSet" class="text-break">
-Class ChangeSet  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedFile.cs/#L18"><i class="bi bi-code-slash"></i></a>
+Class ChangeSet  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChangeSet.cs/#L8"><i class="bi bi-code-slash"></i></a>
   </h1>
 
   <div class="facts text-secondary">
@@ -101,7 +101,8 @@ Class ChangeSet  <a class="header-action link-secondary" title="View source" hre
   <div class="markdown conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public class ChangeSet</code></pre>
+    <pre><code class="lang-csharp hljs">[PublicAPI]
+public class ChangeSet</code></pre>
   </div>
 
 
@@ -154,21 +155,21 @@ Class ChangeSet  <a class="header-action link-secondary" title="View source" hre
 
   <a id="Typhon_Engine_ChangeSet__ctor_" data-uid="Typhon.Engine.ChangeSet.#ctor*"></a>
 
-  <h3 id="Typhon_Engine_ChangeSet__ctor_Typhon_Engine_PagedFile_" data-uid="Typhon.Engine.ChangeSet.#ctor(Typhon.Engine.PagedFile)">
-  ChangeSet(PagedFile)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedFile.cs/#L24"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_ChangeSet__ctor_Typhon_Engine_PMMF_" data-uid="Typhon.Engine.ChangeSet.#ctor(Typhon.Engine.PMMF)">
+  ChangeSet(PMMF)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChangeSet.cs/#L15"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public ChangeSet(PagedFile owner)</code></pre>
+    <pre><code class="lang-csharp hljs">public ChangeSet(PMMF owner)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
-    <dt><code>owner</code> <a class="xref" href="Typhon.Engine.PagedFile.html">PagedFile</a></dt>
+    <dt><code>owner</code> <a class="xref" href="Typhon.Engine.PMMF.html">PMMF</a></dt>
     <dd></dd>
   </dl>
 
@@ -191,7 +192,7 @@ Class ChangeSet  <a class="header-action link-secondary" title="View source" hre
 
   <h3 id="Typhon_Engine_ChangeSet_Add_Typhon_Engine_PageAccessor_" data-uid="Typhon.Engine.ChangeSet.Add(Typhon.Engine.PageAccessor)">
   Add(PageAccessor)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedFile.cs/#L30"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChangeSet.cs/#L21"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -222,7 +223,7 @@ Class ChangeSet  <a class="header-action link-secondary" title="View source" hre
 
   <h3 id="Typhon_Engine_ChangeSet_Reset" data-uid="Typhon.Engine.ChangeSet.Reset">
   Reset()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedFile.cs/#L64"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChangeSet.cs/#L44"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -244,11 +245,37 @@ Class ChangeSet  <a class="header-action link-secondary" title="View source" hre
 
 
 
+  <a id="Typhon_Engine_ChangeSet_SaveChanges_" data-uid="Typhon.Engine.ChangeSet.SaveChanges*"></a>
+
+  <h3 id="Typhon_Engine_ChangeSet_SaveChanges" data-uid="Typhon.Engine.ChangeSet.SaveChanges">
+  SaveChanges()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChangeSet.cs/#L29"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void SaveChanges()</code></pre>
+  </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
   <a id="Typhon_Engine_ChangeSet_SaveChangesAsync_" data-uid="Typhon.Engine.ChangeSet.SaveChangesAsync*"></a>
 
   <h3 id="Typhon_Engine_ChangeSet_SaveChangesAsync" data-uid="Typhon.Engine.ChangeSet.SaveChangesAsync">
   SaveChangesAsync()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedFile.cs/#L38"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChangeSet.cs/#L31"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -279,7 +306,7 @@ Class ChangeSet  <a class="header-action link-secondary" title="View source" hre
 </article>
 
         <div class="contribution d-print-none">
-          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedFile.cs/#L18" class="edit-link">Edit this page</a>
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChangeSet.cs/#L8" class="edit-link">Edit this page</a>
         </div>
 
 

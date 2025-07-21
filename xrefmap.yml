@@ -304,6 +304,19 @@ references:
   fullName.vb: Typhon.Engine.AdaptiveWaiter.New
   nameWithType: AdaptiveWaiter.AdaptiveWaiter
   nameWithType.vb: AdaptiveWaiter.New
+- uid: Typhon.Engine.AdaptiveWaiter.Spin
+  name: Spin()
+  href: api/Typhon.Engine.AdaptiveWaiter.html#Typhon_Engine_AdaptiveWaiter_Spin
+  commentId: M:Typhon.Engine.AdaptiveWaiter.Spin
+  fullName: Typhon.Engine.AdaptiveWaiter.Spin()
+  nameWithType: AdaptiveWaiter.Spin()
+- uid: Typhon.Engine.AdaptiveWaiter.Spin*
+  name: Spin
+  href: api/Typhon.Engine.AdaptiveWaiter.html#Typhon_Engine_AdaptiveWaiter_Spin_
+  commentId: Overload:Typhon.Engine.AdaptiveWaiter.Spin
+  isSpec: "True"
+  fullName: Typhon.Engine.AdaptiveWaiter.Spin
+  nameWithType: AdaptiveWaiter.Spin
 - uid: Typhon.Engine.AdaptiveWaiter.SpinAsync(System.Threading.CancellationToken)
   name: SpinAsync(CancellationToken)
   href: api/Typhon.Engine.AdaptiveWaiter.html#Typhon_Engine_AdaptiveWaiter_SpinAsync_System_Threading_CancellationToken_
@@ -7343,15 +7356,15 @@ references:
   commentId: T:Typhon.Engine.ChangeSet
   fullName: Typhon.Engine.ChangeSet
   nameWithType: ChangeSet
-- uid: Typhon.Engine.ChangeSet.#ctor(Typhon.Engine.PagedFile)
-  name: ChangeSet(PagedFile)
-  href: api/Typhon.Engine.ChangeSet.html#Typhon_Engine_ChangeSet__ctor_Typhon_Engine_PagedFile_
-  commentId: M:Typhon.Engine.ChangeSet.#ctor(Typhon.Engine.PagedFile)
-  name.vb: New(PagedFile)
-  fullName: Typhon.Engine.ChangeSet.ChangeSet(Typhon.Engine.PagedFile)
-  fullName.vb: Typhon.Engine.ChangeSet.New(Typhon.Engine.PagedFile)
-  nameWithType: ChangeSet.ChangeSet(PagedFile)
-  nameWithType.vb: ChangeSet.New(PagedFile)
+- uid: Typhon.Engine.ChangeSet.#ctor(Typhon.Engine.PMMF)
+  name: ChangeSet(PMMF)
+  href: api/Typhon.Engine.ChangeSet.html#Typhon_Engine_ChangeSet__ctor_Typhon_Engine_PMMF_
+  commentId: M:Typhon.Engine.ChangeSet.#ctor(Typhon.Engine.PMMF)
+  name.vb: New(PMMF)
+  fullName: Typhon.Engine.ChangeSet.ChangeSet(Typhon.Engine.PMMF)
+  fullName.vb: Typhon.Engine.ChangeSet.New(Typhon.Engine.PMMF)
+  nameWithType: ChangeSet.ChangeSet(PMMF)
+  nameWithType.vb: ChangeSet.New(PMMF)
 - uid: Typhon.Engine.ChangeSet.#ctor*
   name: ChangeSet
   href: api/Typhon.Engine.ChangeSet.html#Typhon_Engine_ChangeSet__ctor_
@@ -7388,6 +7401,19 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.ChangeSet.Reset
   nameWithType: ChangeSet.Reset
+- uid: Typhon.Engine.ChangeSet.SaveChanges
+  name: SaveChanges()
+  href: api/Typhon.Engine.ChangeSet.html#Typhon_Engine_ChangeSet_SaveChanges
+  commentId: M:Typhon.Engine.ChangeSet.SaveChanges
+  fullName: Typhon.Engine.ChangeSet.SaveChanges()
+  nameWithType: ChangeSet.SaveChanges()
+- uid: Typhon.Engine.ChangeSet.SaveChanges*
+  name: SaveChanges
+  href: api/Typhon.Engine.ChangeSet.html#Typhon_Engine_ChangeSet_SaveChanges_
+  commentId: Overload:Typhon.Engine.ChangeSet.SaveChanges
+  isSpec: "True"
+  fullName: Typhon.Engine.ChangeSet.SaveChanges
+  nameWithType: ChangeSet.SaveChanges
 - uid: Typhon.Engine.ChangeSet.SaveChangesAsync
   name: SaveChangesAsync()
   href: api/Typhon.Engine.ChangeSet.html#Typhon_Engine_ChangeSet_SaveChangesAsync
@@ -9519,15 +9545,15 @@ references:
   commentId: T:Typhon.Engine.DatabaseEngine
   fullName: Typhon.Engine.DatabaseEngine
   nameWithType: DatabaseEngine
-- uid: Typhon.Engine.DatabaseEngine.#ctor(Typhon.Engine.IConfiguration{Typhon.Engine.DatabaseConfiguration},Typhon.Engine.PagedMemoryMappedFile,Typhon.Engine.LogicalSegmentManager,Microsoft.Extensions.Logging.ILogger{Typhon.Engine.DatabaseEngine})
-  name: DatabaseEngine(IConfiguration<DatabaseConfiguration>, PagedMemoryMappedFile, LogicalSegmentManager, ILogger<DatabaseEngine>)
-  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine__ctor_Typhon_Engine_IConfiguration_Typhon_Engine_DatabaseConfiguration__Typhon_Engine_PagedMemoryMappedFile_Typhon_Engine_LogicalSegmentManager_Microsoft_Extensions_Logging_ILogger_Typhon_Engine_DatabaseEngine__
-  commentId: M:Typhon.Engine.DatabaseEngine.#ctor(Typhon.Engine.IConfiguration{Typhon.Engine.DatabaseConfiguration},Typhon.Engine.PagedMemoryMappedFile,Typhon.Engine.LogicalSegmentManager,Microsoft.Extensions.Logging.ILogger{Typhon.Engine.DatabaseEngine})
-  name.vb: New(IConfiguration(Of DatabaseConfiguration), PagedMemoryMappedFile, LogicalSegmentManager, ILogger(Of DatabaseEngine))
-  fullName: Typhon.Engine.DatabaseEngine.DatabaseEngine(Typhon.Engine.IConfiguration<Typhon.Engine.DatabaseConfiguration>, Typhon.Engine.PagedMemoryMappedFile, Typhon.Engine.LogicalSegmentManager, Microsoft.Extensions.Logging.ILogger<Typhon.Engine.DatabaseEngine>)
-  fullName.vb: Typhon.Engine.DatabaseEngine.New(Typhon.Engine.IConfiguration(Of Typhon.Engine.DatabaseConfiguration), Typhon.Engine.PagedMemoryMappedFile, Typhon.Engine.LogicalSegmentManager, Microsoft.Extensions.Logging.ILogger(Of Typhon.Engine.DatabaseEngine))
-  nameWithType: DatabaseEngine.DatabaseEngine(IConfiguration<DatabaseConfiguration>, PagedMemoryMappedFile, LogicalSegmentManager, ILogger<DatabaseEngine>)
-  nameWithType.vb: DatabaseEngine.New(IConfiguration(Of DatabaseConfiguration), PagedMemoryMappedFile, LogicalSegmentManager, ILogger(Of DatabaseEngine))
+- uid: Typhon.Engine.DatabaseEngine.#ctor(Typhon.Engine.DatabaseEngineOptions,Typhon.Engine.ManagedPagedMMF,Microsoft.Extensions.Logging.ILogger{Typhon.Engine.DatabaseEngine})
+  name: DatabaseEngine(DatabaseEngineOptions, ManagedPagedMMF, ILogger<DatabaseEngine>)
+  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine__ctor_Typhon_Engine_DatabaseEngineOptions_Typhon_Engine_ManagedPagedMMF_Microsoft_Extensions_Logging_ILogger_Typhon_Engine_DatabaseEngine__
+  commentId: M:Typhon.Engine.DatabaseEngine.#ctor(Typhon.Engine.DatabaseEngineOptions,Typhon.Engine.ManagedPagedMMF,Microsoft.Extensions.Logging.ILogger{Typhon.Engine.DatabaseEngine})
+  name.vb: New(DatabaseEngineOptions, ManagedPagedMMF, ILogger(Of DatabaseEngine))
+  fullName: Typhon.Engine.DatabaseEngine.DatabaseEngine(Typhon.Engine.DatabaseEngineOptions, Typhon.Engine.ManagedPagedMMF, Microsoft.Extensions.Logging.ILogger<Typhon.Engine.DatabaseEngine>)
+  fullName.vb: Typhon.Engine.DatabaseEngine.New(Typhon.Engine.DatabaseEngineOptions, Typhon.Engine.ManagedPagedMMF, Microsoft.Extensions.Logging.ILogger(Of Typhon.Engine.DatabaseEngine))
+  nameWithType: DatabaseEngine.DatabaseEngine(DatabaseEngineOptions, ManagedPagedMMF, ILogger<DatabaseEngine>)
+  nameWithType.vb: DatabaseEngine.New(DatabaseEngineOptions, ManagedPagedMMF, ILogger(Of DatabaseEngine))
 - uid: Typhon.Engine.DatabaseEngine.#ctor*
   name: DatabaseEngine
   href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine__ctor_
@@ -9564,19 +9590,6 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.DatabaseEngine.Dispose
   nameWithType: DatabaseEngine.Dispose
-- uid: Typhon.Engine.DatabaseEngine.FlushToDisk
-  name: FlushToDisk()
-  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_FlushToDisk
-  commentId: M:Typhon.Engine.DatabaseEngine.FlushToDisk
-  fullName: Typhon.Engine.DatabaseEngine.FlushToDisk()
-  nameWithType: DatabaseEngine.FlushToDisk()
-- uid: Typhon.Engine.DatabaseEngine.FlushToDisk*
-  name: FlushToDisk
-  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_FlushToDisk_
-  commentId: Overload:Typhon.Engine.DatabaseEngine.FlushToDisk
-  isSpec: "True"
-  fullName: Typhon.Engine.DatabaseEngine.FlushToDisk
-  nameWithType: DatabaseEngine.FlushToDisk
 - uid: Typhon.Engine.DatabaseEngine.GetComponentTable(System.Type)
   name: GetComponentTable(Type)
   href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_GetComponentTable_System_Type_
@@ -9599,19 +9612,6 @@ references:
   fullName.vb: Typhon.Engine.DatabaseEngine.GetComponentTable(Of T)()
   nameWithType: DatabaseEngine.GetComponentTable<T>()
   nameWithType.vb: DatabaseEngine.GetComponentTable(Of T)()
-- uid: Typhon.Engine.DatabaseEngine.Initialize
-  name: Initialize()
-  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_Initialize
-  commentId: M:Typhon.Engine.DatabaseEngine.Initialize
-  fullName: Typhon.Engine.DatabaseEngine.Initialize()
-  nameWithType: DatabaseEngine.Initialize()
-- uid: Typhon.Engine.DatabaseEngine.Initialize*
-  name: Initialize
-  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_Initialize_
-  commentId: Overload:Typhon.Engine.DatabaseEngine.Initialize
-  isSpec: "True"
-  fullName: Typhon.Engine.DatabaseEngine.Initialize
-  nameWithType: DatabaseEngine.Initialize
 - uid: Typhon.Engine.DatabaseEngine.IsDisposed
   name: IsDisposed
   href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_IsDisposed
@@ -9625,32 +9625,6 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.DatabaseEngine.IsDisposed
   nameWithType: DatabaseEngine.IsDisposed
-- uid: Typhon.Engine.DatabaseEngine.IsInitialized
-  name: IsInitialized
-  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_IsInitialized
-  commentId: P:Typhon.Engine.DatabaseEngine.IsInitialized
-  fullName: Typhon.Engine.DatabaseEngine.IsInitialized
-  nameWithType: DatabaseEngine.IsInitialized
-- uid: Typhon.Engine.DatabaseEngine.IsInitialized*
-  name: IsInitialized
-  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_IsInitialized_
-  commentId: Overload:Typhon.Engine.DatabaseEngine.IsInitialized
-  isSpec: "True"
-  fullName: Typhon.Engine.DatabaseEngine.IsInitialized
-  nameWithType: DatabaseEngine.IsInitialized
-- uid: Typhon.Engine.DatabaseEngine.LSM
-  name: LSM
-  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_LSM
-  commentId: P:Typhon.Engine.DatabaseEngine.LSM
-  fullName: Typhon.Engine.DatabaseEngine.LSM
-  nameWithType: DatabaseEngine.LSM
-- uid: Typhon.Engine.DatabaseEngine.LSM*
-  name: LSM
-  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_LSM_
-  commentId: Overload:Typhon.Engine.DatabaseEngine.LSM
-  isSpec: "True"
-  fullName: Typhon.Engine.DatabaseEngine.LSM
-  nameWithType: DatabaseEngine.LSM
 - uid: Typhon.Engine.DatabaseEngine.NewTransaction(System.Boolean)
   name: NewTransaction(bool)
   href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_NewTransaction_System_Boolean_
@@ -9667,19 +9641,19 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.DatabaseEngine.NewTransaction
   nameWithType: DatabaseEngine.NewTransaction
-- uid: Typhon.Engine.DatabaseEngine.ReferenceCounter
-  name: ReferenceCounter
-  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_ReferenceCounter
-  commentId: P:Typhon.Engine.DatabaseEngine.ReferenceCounter
-  fullName: Typhon.Engine.DatabaseEngine.ReferenceCounter
-  nameWithType: DatabaseEngine.ReferenceCounter
-- uid: Typhon.Engine.DatabaseEngine.ReferenceCounter*
-  name: ReferenceCounter
-  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_ReferenceCounter_
-  commentId: Overload:Typhon.Engine.DatabaseEngine.ReferenceCounter
+- uid: Typhon.Engine.DatabaseEngine.PMMF
+  name: PMMF
+  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_PMMF
+  commentId: P:Typhon.Engine.DatabaseEngine.PMMF
+  fullName: Typhon.Engine.DatabaseEngine.PMMF
+  nameWithType: DatabaseEngine.PMMF
+- uid: Typhon.Engine.DatabaseEngine.PMMF*
+  name: PMMF
+  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_PMMF_
+  commentId: Overload:Typhon.Engine.DatabaseEngine.PMMF
   isSpec: "True"
-  fullName: Typhon.Engine.DatabaseEngine.ReferenceCounter
-  nameWithType: DatabaseEngine.ReferenceCounter
+  fullName: Typhon.Engine.DatabaseEngine.PMMF
+  nameWithType: DatabaseEngine.PMMF
 - uid: Typhon.Engine.DatabaseEngine.RegisterComponentFromRowAccessor*
   name: RegisterComponentFromRowAccessor
   href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_RegisterComponentFromRowAccessor_
@@ -9696,6 +9670,12 @@ references:
   fullName.vb: Typhon.Engine.DatabaseEngine.RegisterComponentFromRowAccessor(Of T)()
   nameWithType: DatabaseEngine.RegisterComponentFromRowAccessor<T>()
   nameWithType.vb: DatabaseEngine.RegisterComponentFromRowAccessor(Of T)()
+- uid: Typhon.Engine.DatabaseEngineOptions
+  name: DatabaseEngineOptions
+  href: api/Typhon.Engine.DatabaseEngineOptions.html
+  commentId: T:Typhon.Engine.DatabaseEngineOptions
+  fullName: Typhon.Engine.DatabaseEngineOptions
+  nameWithType: DatabaseEngineOptions
 - uid: Typhon.Engine.DatabaseSchemaExtensions
   name: DatabaseSchemaExtensions
   href: api/Typhon.Engine.DatabaseSchemaExtensions.html
@@ -9800,64 +9780,6 @@ references:
   commentId: T:Typhon.Engine.FieldType
   fullName: Typhon.Engine.FieldType
   nameWithType: FieldType
-- uid: Typhon.Engine.IAsyncInitializable
-  name: IAsyncInitializable
-  href: api/Typhon.Engine.IAsyncInitializable.html
-  commentId: T:Typhon.Engine.IAsyncInitializable
-  fullName: Typhon.Engine.IAsyncInitializable
-  nameWithType: IAsyncInitializable
-- uid: Typhon.Engine.IAsyncInitializable.InitializeAsync
-  name: InitializeAsync()
-  href: api/Typhon.Engine.IAsyncInitializable.html#Typhon_Engine_IAsyncInitializable_InitializeAsync
-  commentId: M:Typhon.Engine.IAsyncInitializable.InitializeAsync
-  fullName: Typhon.Engine.IAsyncInitializable.InitializeAsync()
-  nameWithType: IAsyncInitializable.InitializeAsync()
-- uid: Typhon.Engine.IAsyncInitializable.InitializeAsync*
-  name: InitializeAsync
-  href: api/Typhon.Engine.IAsyncInitializable.html#Typhon_Engine_IAsyncInitializable_InitializeAsync_
-  commentId: Overload:Typhon.Engine.IAsyncInitializable.InitializeAsync
-  isSpec: "True"
-  fullName: Typhon.Engine.IAsyncInitializable.InitializeAsync
-  nameWithType: IAsyncInitializable.InitializeAsync
-- uid: Typhon.Engine.IAsyncInitializable.IsDisposed
-  name: IsDisposed
-  href: api/Typhon.Engine.IAsyncInitializable.html#Typhon_Engine_IAsyncInitializable_IsDisposed
-  commentId: P:Typhon.Engine.IAsyncInitializable.IsDisposed
-  fullName: Typhon.Engine.IAsyncInitializable.IsDisposed
-  nameWithType: IAsyncInitializable.IsDisposed
-- uid: Typhon.Engine.IAsyncInitializable.IsDisposed*
-  name: IsDisposed
-  href: api/Typhon.Engine.IAsyncInitializable.html#Typhon_Engine_IAsyncInitializable_IsDisposed_
-  commentId: Overload:Typhon.Engine.IAsyncInitializable.IsDisposed
-  isSpec: "True"
-  fullName: Typhon.Engine.IAsyncInitializable.IsDisposed
-  nameWithType: IAsyncInitializable.IsDisposed
-- uid: Typhon.Engine.IAsyncInitializable.IsInitialized
-  name: IsInitialized
-  href: api/Typhon.Engine.IAsyncInitializable.html#Typhon_Engine_IAsyncInitializable_IsInitialized
-  commentId: P:Typhon.Engine.IAsyncInitializable.IsInitialized
-  fullName: Typhon.Engine.IAsyncInitializable.IsInitialized
-  nameWithType: IAsyncInitializable.IsInitialized
-- uid: Typhon.Engine.IAsyncInitializable.IsInitialized*
-  name: IsInitialized
-  href: api/Typhon.Engine.IAsyncInitializable.html#Typhon_Engine_IAsyncInitializable_IsInitialized_
-  commentId: Overload:Typhon.Engine.IAsyncInitializable.IsInitialized
-  isSpec: "True"
-  fullName: Typhon.Engine.IAsyncInitializable.IsInitialized
-  nameWithType: IAsyncInitializable.IsInitialized
-- uid: Typhon.Engine.IAsyncInitializable.ReferenceCounter
-  name: ReferenceCounter
-  href: api/Typhon.Engine.IAsyncInitializable.html#Typhon_Engine_IAsyncInitializable_ReferenceCounter
-  commentId: P:Typhon.Engine.IAsyncInitializable.ReferenceCounter
-  fullName: Typhon.Engine.IAsyncInitializable.ReferenceCounter
-  nameWithType: IAsyncInitializable.ReferenceCounter
-- uid: Typhon.Engine.IAsyncInitializable.ReferenceCounter*
-  name: ReferenceCounter
-  href: api/Typhon.Engine.IAsyncInitializable.html#Typhon_Engine_IAsyncInitializable_ReferenceCounter_
-  commentId: Overload:Typhon.Engine.IAsyncInitializable.ReferenceCounter
-  isSpec: "True"
-  fullName: Typhon.Engine.IAsyncInitializable.ReferenceCounter
-  nameWithType: IAsyncInitializable.ReferenceCounter
 - uid: Typhon.Engine.ICleanable
   name: ICleanable
   href: api/Typhon.Engine.ICleanable.html
@@ -9903,32 +9825,6 @@ references:
   fullName.vb: Typhon.Engine.IConfigurationProvider(Of TConfiguration).Configure
   nameWithType: IConfigurationProvider<TConfiguration>.Configure
   nameWithType.vb: IConfigurationProvider(Of TConfiguration).Configure
-- uid: Typhon.Engine.IConfiguration`1
-  name: IConfiguration<TConfiguration>
-  href: api/Typhon.Engine.IConfiguration-1.html
-  commentId: T:Typhon.Engine.IConfiguration`1
-  name.vb: IConfiguration(Of TConfiguration)
-  fullName: Typhon.Engine.IConfiguration<TConfiguration>
-  fullName.vb: Typhon.Engine.IConfiguration(Of TConfiguration)
-  nameWithType: IConfiguration<TConfiguration>
-  nameWithType.vb: IConfiguration(Of TConfiguration)
-- uid: Typhon.Engine.IConfiguration`1.Value
-  name: Value
-  href: api/Typhon.Engine.IConfiguration-1.html#Typhon_Engine_IConfiguration_1_Value
-  commentId: P:Typhon.Engine.IConfiguration`1.Value
-  fullName: Typhon.Engine.IConfiguration<TConfiguration>.Value
-  fullName.vb: Typhon.Engine.IConfiguration(Of TConfiguration).Value
-  nameWithType: IConfiguration<TConfiguration>.Value
-  nameWithType.vb: IConfiguration(Of TConfiguration).Value
-- uid: Typhon.Engine.IConfiguration`1.Value*
-  name: Value
-  href: api/Typhon.Engine.IConfiguration-1.html#Typhon_Engine_IConfiguration_1_Value_
-  commentId: Overload:Typhon.Engine.IConfiguration`1.Value
-  isSpec: "True"
-  fullName: Typhon.Engine.IConfiguration<TConfiguration>.Value
-  fullName.vb: Typhon.Engine.IConfiguration(Of TConfiguration).Value
-  nameWithType: IConfiguration<TConfiguration>.Value
-  nameWithType.vb: IConfiguration(Of TConfiguration).Value
 - uid: Typhon.Engine.IDatabaseConfiguration
   name: IDatabaseConfiguration
   href: api/Typhon.Engine.IDatabaseConfiguration.html
@@ -10065,92 +9961,6 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.IDatabaseConfiguration.WriteThreadRatio
   nameWithType: IDatabaseConfiguration.WriteThreadRatio
-- uid: Typhon.Engine.IInitializable
-  name: IInitializable
-  href: api/Typhon.Engine.IInitializable.html
-  commentId: T:Typhon.Engine.IInitializable
-  fullName: Typhon.Engine.IInitializable
-  nameWithType: IInitializable
-- uid: Typhon.Engine.IInitializable.Initialize
-  name: Initialize()
-  href: api/Typhon.Engine.IInitializable.html#Typhon_Engine_IInitializable_Initialize
-  commentId: M:Typhon.Engine.IInitializable.Initialize
-  fullName: Typhon.Engine.IInitializable.Initialize()
-  nameWithType: IInitializable.Initialize()
-- uid: Typhon.Engine.IInitializable.Initialize*
-  name: Initialize
-  href: api/Typhon.Engine.IInitializable.html#Typhon_Engine_IInitializable_Initialize_
-  commentId: Overload:Typhon.Engine.IInitializable.Initialize
-  isSpec: "True"
-  fullName: Typhon.Engine.IInitializable.Initialize
-  nameWithType: IInitializable.Initialize
-- uid: Typhon.Engine.IInitializable.IsDisposed
-  name: IsDisposed
-  href: api/Typhon.Engine.IInitializable.html#Typhon_Engine_IInitializable_IsDisposed
-  commentId: P:Typhon.Engine.IInitializable.IsDisposed
-  fullName: Typhon.Engine.IInitializable.IsDisposed
-  nameWithType: IInitializable.IsDisposed
-- uid: Typhon.Engine.IInitializable.IsDisposed*
-  name: IsDisposed
-  href: api/Typhon.Engine.IInitializable.html#Typhon_Engine_IInitializable_IsDisposed_
-  commentId: Overload:Typhon.Engine.IInitializable.IsDisposed
-  isSpec: "True"
-  fullName: Typhon.Engine.IInitializable.IsDisposed
-  nameWithType: IInitializable.IsDisposed
-- uid: Typhon.Engine.IInitializable.IsInitialized
-  name: IsInitialized
-  href: api/Typhon.Engine.IInitializable.html#Typhon_Engine_IInitializable_IsInitialized
-  commentId: P:Typhon.Engine.IInitializable.IsInitialized
-  fullName: Typhon.Engine.IInitializable.IsInitialized
-  nameWithType: IInitializable.IsInitialized
-- uid: Typhon.Engine.IInitializable.IsInitialized*
-  name: IsInitialized
-  href: api/Typhon.Engine.IInitializable.html#Typhon_Engine_IInitializable_IsInitialized_
-  commentId: Overload:Typhon.Engine.IInitializable.IsInitialized
-  isSpec: "True"
-  fullName: Typhon.Engine.IInitializable.IsInitialized
-  nameWithType: IInitializable.IsInitialized
-- uid: Typhon.Engine.IInitializable.ReferenceCounter
-  name: ReferenceCounter
-  href: api/Typhon.Engine.IInitializable.html#Typhon_Engine_IInitializable_ReferenceCounter
-  commentId: P:Typhon.Engine.IInitializable.ReferenceCounter
-  fullName: Typhon.Engine.IInitializable.ReferenceCounter
-  nameWithType: IInitializable.ReferenceCounter
-- uid: Typhon.Engine.IInitializable.ReferenceCounter*
-  name: ReferenceCounter
-  href: api/Typhon.Engine.IInitializable.html#Typhon_Engine_IInitializable_ReferenceCounter_
-  commentId: Overload:Typhon.Engine.IInitializable.ReferenceCounter
-  isSpec: "True"
-  fullName: Typhon.Engine.IInitializable.ReferenceCounter
-  nameWithType: IInitializable.ReferenceCounter
-- uid: Typhon.Engine.ITyphonBuilder
-  name: ITyphonBuilder
-  href: api/Typhon.Engine.ITyphonBuilder.html
-  commentId: T:Typhon.Engine.ITyphonBuilder
-  fullName: Typhon.Engine.ITyphonBuilder
-  nameWithType: ITyphonBuilder
-- uid: Typhon.Engine.ITyphonBuilderImplementation
-  name: ITyphonBuilderImplementation
-  href: api/Typhon.Engine.ITyphonBuilderImplementation.html
-  commentId: T:Typhon.Engine.ITyphonBuilderImplementation
-  fullName: Typhon.Engine.ITyphonBuilderImplementation
-  nameWithType: ITyphonBuilderImplementation
-- uid: Typhon.Engine.ITyphonBuilderImplementation.ConfigureServices(System.Action{Microsoft.Extensions.DependencyInjection.IServiceCollection})
-  name: ConfigureServices(Action<IServiceCollection>)
-  href: api/Typhon.Engine.ITyphonBuilderImplementation.html#Typhon_Engine_ITyphonBuilderImplementation_ConfigureServices_System_Action_Microsoft_Extensions_DependencyInjection_IServiceCollection__
-  commentId: M:Typhon.Engine.ITyphonBuilderImplementation.ConfigureServices(System.Action{Microsoft.Extensions.DependencyInjection.IServiceCollection})
-  name.vb: ConfigureServices(Action(Of IServiceCollection))
-  fullName: Typhon.Engine.ITyphonBuilderImplementation.ConfigureServices(System.Action<Microsoft.Extensions.DependencyInjection.IServiceCollection>)
-  fullName.vb: Typhon.Engine.ITyphonBuilderImplementation.ConfigureServices(System.Action(Of Microsoft.Extensions.DependencyInjection.IServiceCollection))
-  nameWithType: ITyphonBuilderImplementation.ConfigureServices(Action<IServiceCollection>)
-  nameWithType.vb: ITyphonBuilderImplementation.ConfigureServices(Action(Of IServiceCollection))
-- uid: Typhon.Engine.ITyphonBuilderImplementation.ConfigureServices*
-  name: ConfigureServices
-  href: api/Typhon.Engine.ITyphonBuilderImplementation.html#Typhon_Engine_ITyphonBuilderImplementation_ConfigureServices_
-  commentId: Overload:Typhon.Engine.ITyphonBuilderImplementation.ConfigureServices
-  isSpec: "True"
-  fullName: Typhon.Engine.ITyphonBuilderImplementation.ConfigureServices
-  nameWithType: ITyphonBuilderImplementation.ConfigureServices
 - uid: Typhon.Engine.IndexAttribute
   name: IndexAttribute
   href: api/Typhon.Engine.IndexAttribute.html
@@ -10312,15 +10122,15 @@ references:
   fullName.vb: Typhon.Engine.LogicalSegment.GetMaxItemCount(Of T)(Boolean)
   nameWithType: LogicalSegment.GetMaxItemCount<T>(bool)
   nameWithType.vb: LogicalSegment.GetMaxItemCount(Of T)(Boolean)
-- uid: Typhon.Engine.LogicalSegment.GetPageExclusiveAccessor(System.Int32)
-  name: GetPageExclusiveAccessor(int)
-  href: api/Typhon.Engine.LogicalSegment.html#Typhon_Engine_LogicalSegment_GetPageExclusiveAccessor_System_Int32_
-  commentId: M:Typhon.Engine.LogicalSegment.GetPageExclusiveAccessor(System.Int32)
-  name.vb: GetPageExclusiveAccessor(Integer)
-  fullName: Typhon.Engine.LogicalSegment.GetPageExclusiveAccessor(int)
-  fullName.vb: Typhon.Engine.LogicalSegment.GetPageExclusiveAccessor(Integer)
-  nameWithType: LogicalSegment.GetPageExclusiveAccessor(int)
-  nameWithType.vb: LogicalSegment.GetPageExclusiveAccessor(Integer)
+- uid: Typhon.Engine.LogicalSegment.GetPageExclusiveAccessor(System.Int32,Typhon.Engine.PageAccessor@,System.Int64,System.Threading.CancellationToken)
+  name: GetPageExclusiveAccessor(int, out PageAccessor, long, CancellationToken)
+  href: api/Typhon.Engine.LogicalSegment.html#Typhon_Engine_LogicalSegment_GetPageExclusiveAccessor_System_Int32_Typhon_Engine_PageAccessor__System_Int64_System_Threading_CancellationToken_
+  commentId: M:Typhon.Engine.LogicalSegment.GetPageExclusiveAccessor(System.Int32,Typhon.Engine.PageAccessor@,System.Int64,System.Threading.CancellationToken)
+  name.vb: GetPageExclusiveAccessor(Integer, PageAccessor, Long, CancellationToken)
+  fullName: Typhon.Engine.LogicalSegment.GetPageExclusiveAccessor(int, out Typhon.Engine.PageAccessor, long, System.Threading.CancellationToken)
+  fullName.vb: Typhon.Engine.LogicalSegment.GetPageExclusiveAccessor(Integer, Typhon.Engine.PageAccessor, Long, System.Threading.CancellationToken)
+  nameWithType: LogicalSegment.GetPageExclusiveAccessor(int, out PageAccessor, long, CancellationToken)
+  nameWithType.vb: LogicalSegment.GetPageExclusiveAccessor(Integer, PageAccessor, Long, CancellationToken)
 - uid: Typhon.Engine.LogicalSegment.GetPageExclusiveAccessor*
   name: GetPageExclusiveAccessor
   href: api/Typhon.Engine.LogicalSegment.html#Typhon_Engine_LogicalSegment_GetPageExclusiveAccessor_
@@ -10328,15 +10138,15 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.LogicalSegment.GetPageExclusiveAccessor
   nameWithType: LogicalSegment.GetPageExclusiveAccessor
-- uid: Typhon.Engine.LogicalSegment.GetPageSharedAccessor(System.Int32)
-  name: GetPageSharedAccessor(int)
-  href: api/Typhon.Engine.LogicalSegment.html#Typhon_Engine_LogicalSegment_GetPageSharedAccessor_System_Int32_
-  commentId: M:Typhon.Engine.LogicalSegment.GetPageSharedAccessor(System.Int32)
-  name.vb: GetPageSharedAccessor(Integer)
-  fullName: Typhon.Engine.LogicalSegment.GetPageSharedAccessor(int)
-  fullName.vb: Typhon.Engine.LogicalSegment.GetPageSharedAccessor(Integer)
-  nameWithType: LogicalSegment.GetPageSharedAccessor(int)
-  nameWithType.vb: LogicalSegment.GetPageSharedAccessor(Integer)
+- uid: Typhon.Engine.LogicalSegment.GetPageSharedAccessor(System.Int32,Typhon.Engine.PageAccessor@,System.Int64,System.Threading.CancellationToken)
+  name: GetPageSharedAccessor(int, out PageAccessor, long, CancellationToken)
+  href: api/Typhon.Engine.LogicalSegment.html#Typhon_Engine_LogicalSegment_GetPageSharedAccessor_System_Int32_Typhon_Engine_PageAccessor__System_Int64_System_Threading_CancellationToken_
+  commentId: M:Typhon.Engine.LogicalSegment.GetPageSharedAccessor(System.Int32,Typhon.Engine.PageAccessor@,System.Int64,System.Threading.CancellationToken)
+  name.vb: GetPageSharedAccessor(Integer, PageAccessor, Long, CancellationToken)
+  fullName: Typhon.Engine.LogicalSegment.GetPageSharedAccessor(int, out Typhon.Engine.PageAccessor, long, System.Threading.CancellationToken)
+  fullName.vb: Typhon.Engine.LogicalSegment.GetPageSharedAccessor(Integer, Typhon.Engine.PageAccessor, Long, System.Threading.CancellationToken)
+  nameWithType: LogicalSegment.GetPageSharedAccessor(int, out PageAccessor, long, CancellationToken)
+  nameWithType.vb: LogicalSegment.GetPageSharedAccessor(Integer, PageAccessor, Long, CancellationToken)
 - uid: Typhon.Engine.LogicalSegment.GetPageSharedAccessor*
   name: GetPageSharedAccessor
   href: api/Typhon.Engine.LogicalSegment.html#Typhon_Engine_LogicalSegment_GetPageSharedAccessor_
@@ -10357,15 +10167,15 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.LogicalSegment.Length
   nameWithType: LogicalSegment.Length
-- uid: Typhon.Engine.LogicalSegment.Load(System.UInt32)
-  name: Load(uint)
-  href: api/Typhon.Engine.LogicalSegment.html#Typhon_Engine_LogicalSegment_Load_System_UInt32_
-  commentId: M:Typhon.Engine.LogicalSegment.Load(System.UInt32)
-  name.vb: Load(UInteger)
-  fullName: Typhon.Engine.LogicalSegment.Load(uint)
-  fullName.vb: Typhon.Engine.LogicalSegment.Load(UInteger)
-  nameWithType: LogicalSegment.Load(uint)
-  nameWithType.vb: LogicalSegment.Load(UInteger)
+- uid: Typhon.Engine.LogicalSegment.Load(System.Int32)
+  name: Load(int)
+  href: api/Typhon.Engine.LogicalSegment.html#Typhon_Engine_LogicalSegment_Load_System_Int32_
+  commentId: M:Typhon.Engine.LogicalSegment.Load(System.Int32)
+  name.vb: Load(Integer)
+  fullName: Typhon.Engine.LogicalSegment.Load(int)
+  fullName.vb: Typhon.Engine.LogicalSegment.Load(Integer)
+  nameWithType: LogicalSegment.Load(int)
+  nameWithType.vb: LogicalSegment.Load(Integer)
 - uid: Typhon.Engine.LogicalSegment.Load*
   name: Load
   href: api/Typhon.Engine.LogicalSegment.html#Typhon_Engine_LogicalSegment_Load_
@@ -10386,179 +10196,357 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.LogicalSegment.Pages
   nameWithType: LogicalSegment.Pages
-- uid: Typhon.Engine.LogicalSegment.RootPageId
-  name: RootPageId
-  href: api/Typhon.Engine.LogicalSegment.html#Typhon_Engine_LogicalSegment_RootPageId
-  commentId: P:Typhon.Engine.LogicalSegment.RootPageId
-  fullName: Typhon.Engine.LogicalSegment.RootPageId
-  nameWithType: LogicalSegment.RootPageId
-- uid: Typhon.Engine.LogicalSegment.RootPageId*
-  name: RootPageId
-  href: api/Typhon.Engine.LogicalSegment.html#Typhon_Engine_LogicalSegment_RootPageId_
-  commentId: Overload:Typhon.Engine.LogicalSegment.RootPageId
+- uid: Typhon.Engine.LogicalSegment.RootPageIndex
+  name: RootPageIndex
+  href: api/Typhon.Engine.LogicalSegment.html#Typhon_Engine_LogicalSegment_RootPageIndex
+  commentId: P:Typhon.Engine.LogicalSegment.RootPageIndex
+  fullName: Typhon.Engine.LogicalSegment.RootPageIndex
+  nameWithType: LogicalSegment.RootPageIndex
+- uid: Typhon.Engine.LogicalSegment.RootPageIndex*
+  name: RootPageIndex
+  href: api/Typhon.Engine.LogicalSegment.html#Typhon_Engine_LogicalSegment_RootPageIndex_
+  commentId: Overload:Typhon.Engine.LogicalSegment.RootPageIndex
   isSpec: "True"
-  fullName: Typhon.Engine.LogicalSegment.RootPageId
-  nameWithType: LogicalSegment.RootPageId
-- uid: Typhon.Engine.LogicalSegmentManager
-  name: LogicalSegmentManager
-  href: api/Typhon.Engine.LogicalSegmentManager.html
-  commentId: T:Typhon.Engine.LogicalSegmentManager
-  fullName: Typhon.Engine.LogicalSegmentManager
-  nameWithType: LogicalSegmentManager
-- uid: Typhon.Engine.LogicalSegmentManager.#ctor(Typhon.Engine.IConfiguration{Typhon.Engine.DatabaseConfiguration},Typhon.Engine.PagedMemoryMappedFile,Microsoft.Extensions.Logging.ILogger{Typhon.Engine.LogicalSegmentManager})
-  name: LogicalSegmentManager(IConfiguration<DatabaseConfiguration>, PagedMemoryMappedFile, ILogger<LogicalSegmentManager>)
-  href: api/Typhon.Engine.LogicalSegmentManager.html#Typhon_Engine_LogicalSegmentManager__ctor_Typhon_Engine_IConfiguration_Typhon_Engine_DatabaseConfiguration__Typhon_Engine_PagedMemoryMappedFile_Microsoft_Extensions_Logging_ILogger_Typhon_Engine_LogicalSegmentManager__
-  commentId: M:Typhon.Engine.LogicalSegmentManager.#ctor(Typhon.Engine.IConfiguration{Typhon.Engine.DatabaseConfiguration},Typhon.Engine.PagedMemoryMappedFile,Microsoft.Extensions.Logging.ILogger{Typhon.Engine.LogicalSegmentManager})
-  name.vb: New(IConfiguration(Of DatabaseConfiguration), PagedMemoryMappedFile, ILogger(Of LogicalSegmentManager))
-  fullName: Typhon.Engine.LogicalSegmentManager.LogicalSegmentManager(Typhon.Engine.IConfiguration<Typhon.Engine.DatabaseConfiguration>, Typhon.Engine.PagedMemoryMappedFile, Microsoft.Extensions.Logging.ILogger<Typhon.Engine.LogicalSegmentManager>)
-  fullName.vb: Typhon.Engine.LogicalSegmentManager.New(Typhon.Engine.IConfiguration(Of Typhon.Engine.DatabaseConfiguration), Typhon.Engine.PagedMemoryMappedFile, Microsoft.Extensions.Logging.ILogger(Of Typhon.Engine.LogicalSegmentManager))
-  nameWithType: LogicalSegmentManager.LogicalSegmentManager(IConfiguration<DatabaseConfiguration>, PagedMemoryMappedFile, ILogger<LogicalSegmentManager>)
-  nameWithType.vb: LogicalSegmentManager.New(IConfiguration(Of DatabaseConfiguration), PagedMemoryMappedFile, ILogger(Of LogicalSegmentManager))
-- uid: Typhon.Engine.LogicalSegmentManager.#ctor*
-  name: LogicalSegmentManager
-  href: api/Typhon.Engine.LogicalSegmentManager.html#Typhon_Engine_LogicalSegmentManager__ctor_
-  commentId: Overload:Typhon.Engine.LogicalSegmentManager.#ctor
+  fullName: Typhon.Engine.LogicalSegment.RootPageIndex
+  nameWithType: LogicalSegment.RootPageIndex
+- uid: Typhon.Engine.ManagedPagedMMF
+  name: ManagedPagedMMF
+  href: api/Typhon.Engine.ManagedPagedMMF.html
+  commentId: T:Typhon.Engine.ManagedPagedMMF
+  fullName: Typhon.Engine.ManagedPagedMMF
+  nameWithType: ManagedPagedMMF
+- uid: Typhon.Engine.ManagedPagedMMF.#ctor(System.IServiceProvider,Typhon.Engine.PagedMMFOptions,Typhon.Engine.TimeManager,Microsoft.Extensions.Logging.ILogger{Typhon.Engine.PMMF})
+  name: ManagedPagedMMF(IServiceProvider, PagedMMFOptions, TimeManager, ILogger<PMMF>)
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF__ctor_System_IServiceProvider_Typhon_Engine_PagedMMFOptions_Typhon_Engine_TimeManager_Microsoft_Extensions_Logging_ILogger_Typhon_Engine_PMMF__
+  commentId: M:Typhon.Engine.ManagedPagedMMF.#ctor(System.IServiceProvider,Typhon.Engine.PagedMMFOptions,Typhon.Engine.TimeManager,Microsoft.Extensions.Logging.ILogger{Typhon.Engine.PMMF})
+  name.vb: New(IServiceProvider, PagedMMFOptions, TimeManager, ILogger(Of PMMF))
+  fullName: Typhon.Engine.ManagedPagedMMF.ManagedPagedMMF(System.IServiceProvider, Typhon.Engine.PagedMMFOptions, Typhon.Engine.TimeManager, Microsoft.Extensions.Logging.ILogger<Typhon.Engine.PMMF>)
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.New(System.IServiceProvider, Typhon.Engine.PagedMMFOptions, Typhon.Engine.TimeManager, Microsoft.Extensions.Logging.ILogger(Of Typhon.Engine.PMMF))
+  nameWithType: ManagedPagedMMF.ManagedPagedMMF(IServiceProvider, PagedMMFOptions, TimeManager, ILogger<PMMF>)
+  nameWithType.vb: ManagedPagedMMF.New(IServiceProvider, PagedMMFOptions, TimeManager, ILogger(Of PMMF))
+- uid: Typhon.Engine.ManagedPagedMMF.#ctor*
+  name: ManagedPagedMMF
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF__ctor_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.#ctor
   isSpec: "True"
   name.vb: New
-  fullName: Typhon.Engine.LogicalSegmentManager.LogicalSegmentManager
-  fullName.vb: Typhon.Engine.LogicalSegmentManager.New
-  nameWithType: LogicalSegmentManager.LogicalSegmentManager
-  nameWithType.vb: LogicalSegmentManager.New
-- uid: Typhon.Engine.LogicalSegmentManager.AllocateChunkBasedSegment(Typhon.Engine.PageBlockType,System.Int32,System.Int32)
+  fullName: Typhon.Engine.ManagedPagedMMF.ManagedPagedMMF
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.New
+  nameWithType: ManagedPagedMMF.ManagedPagedMMF
+  nameWithType.vb: ManagedPagedMMF.New
+- uid: Typhon.Engine.ManagedPagedMMF.AllocateChunkBasedSegment(Typhon.Engine.PageBlockType,System.Int32,System.Int32)
   name: AllocateChunkBasedSegment(PageBlockType, int, int)
-  href: api/Typhon.Engine.LogicalSegmentManager.html#Typhon_Engine_LogicalSegmentManager_AllocateChunkBasedSegment_Typhon_Engine_PageBlockType_System_Int32_System_Int32_
-  commentId: M:Typhon.Engine.LogicalSegmentManager.AllocateChunkBasedSegment(Typhon.Engine.PageBlockType,System.Int32,System.Int32)
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_AllocateChunkBasedSegment_Typhon_Engine_PageBlockType_System_Int32_System_Int32_
+  commentId: M:Typhon.Engine.ManagedPagedMMF.AllocateChunkBasedSegment(Typhon.Engine.PageBlockType,System.Int32,System.Int32)
   name.vb: AllocateChunkBasedSegment(PageBlockType, Integer, Integer)
-  fullName: Typhon.Engine.LogicalSegmentManager.AllocateChunkBasedSegment(Typhon.Engine.PageBlockType, int, int)
-  fullName.vb: Typhon.Engine.LogicalSegmentManager.AllocateChunkBasedSegment(Typhon.Engine.PageBlockType, Integer, Integer)
-  nameWithType: LogicalSegmentManager.AllocateChunkBasedSegment(PageBlockType, int, int)
-  nameWithType.vb: LogicalSegmentManager.AllocateChunkBasedSegment(PageBlockType, Integer, Integer)
-- uid: Typhon.Engine.LogicalSegmentManager.AllocateChunkBasedSegment*
+  fullName: Typhon.Engine.ManagedPagedMMF.AllocateChunkBasedSegment(Typhon.Engine.PageBlockType, int, int)
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.AllocateChunkBasedSegment(Typhon.Engine.PageBlockType, Integer, Integer)
+  nameWithType: ManagedPagedMMF.AllocateChunkBasedSegment(PageBlockType, int, int)
+  nameWithType.vb: ManagedPagedMMF.AllocateChunkBasedSegment(PageBlockType, Integer, Integer)
+- uid: Typhon.Engine.ManagedPagedMMF.AllocateChunkBasedSegment*
   name: AllocateChunkBasedSegment
-  href: api/Typhon.Engine.LogicalSegmentManager.html#Typhon_Engine_LogicalSegmentManager_AllocateChunkBasedSegment_
-  commentId: Overload:Typhon.Engine.LogicalSegmentManager.AllocateChunkBasedSegment
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_AllocateChunkBasedSegment_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.AllocateChunkBasedSegment
   isSpec: "True"
-  fullName: Typhon.Engine.LogicalSegmentManager.AllocateChunkBasedSegment
-  nameWithType: LogicalSegmentManager.AllocateChunkBasedSegment
-- uid: Typhon.Engine.LogicalSegmentManager.AllocateSegment(Typhon.Engine.PageBlockType,System.Int32)
+  fullName: Typhon.Engine.ManagedPagedMMF.AllocateChunkBasedSegment
+  nameWithType: ManagedPagedMMF.AllocateChunkBasedSegment
+- uid: Typhon.Engine.ManagedPagedMMF.AllocatePages(System.Span{System.Int32}@)
+  name: AllocatePages(ref Span<int>)
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_AllocatePages_System_Span_System_Int32___
+  commentId: M:Typhon.Engine.ManagedPagedMMF.AllocatePages(System.Span{System.Int32}@)
+  name.vb: AllocatePages(Span(Of Integer))
+  fullName: Typhon.Engine.ManagedPagedMMF.AllocatePages(ref System.Span<int>)
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.AllocatePages(System.Span(Of Integer))
+  nameWithType: ManagedPagedMMF.AllocatePages(ref Span<int>)
+  nameWithType.vb: ManagedPagedMMF.AllocatePages(Span(Of Integer))
+- uid: Typhon.Engine.ManagedPagedMMF.AllocatePages*
+  name: AllocatePages
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_AllocatePages_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.AllocatePages
+  isSpec: "True"
+  fullName: Typhon.Engine.ManagedPagedMMF.AllocatePages
+  nameWithType: ManagedPagedMMF.AllocatePages
+- uid: Typhon.Engine.ManagedPagedMMF.AllocateSegment(Typhon.Engine.PageBlockType,System.Int32)
   name: AllocateSegment(PageBlockType, int)
-  href: api/Typhon.Engine.LogicalSegmentManager.html#Typhon_Engine_LogicalSegmentManager_AllocateSegment_Typhon_Engine_PageBlockType_System_Int32_
-  commentId: M:Typhon.Engine.LogicalSegmentManager.AllocateSegment(Typhon.Engine.PageBlockType,System.Int32)
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_AllocateSegment_Typhon_Engine_PageBlockType_System_Int32_
+  commentId: M:Typhon.Engine.ManagedPagedMMF.AllocateSegment(Typhon.Engine.PageBlockType,System.Int32)
   name.vb: AllocateSegment(PageBlockType, Integer)
-  fullName: Typhon.Engine.LogicalSegmentManager.AllocateSegment(Typhon.Engine.PageBlockType, int)
-  fullName.vb: Typhon.Engine.LogicalSegmentManager.AllocateSegment(Typhon.Engine.PageBlockType, Integer)
-  nameWithType: LogicalSegmentManager.AllocateSegment(PageBlockType, int)
-  nameWithType.vb: LogicalSegmentManager.AllocateSegment(PageBlockType, Integer)
-- uid: Typhon.Engine.LogicalSegmentManager.AllocateSegment*
+  fullName: Typhon.Engine.ManagedPagedMMF.AllocateSegment(Typhon.Engine.PageBlockType, int)
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.AllocateSegment(Typhon.Engine.PageBlockType, Integer)
+  nameWithType: ManagedPagedMMF.AllocateSegment(PageBlockType, int)
+  nameWithType.vb: ManagedPagedMMF.AllocateSegment(PageBlockType, Integer)
+- uid: Typhon.Engine.ManagedPagedMMF.AllocateSegment*
   name: AllocateSegment
-  href: api/Typhon.Engine.LogicalSegmentManager.html#Typhon_Engine_LogicalSegmentManager_AllocateSegment_
-  commentId: Overload:Typhon.Engine.LogicalSegmentManager.AllocateSegment
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_AllocateSegment_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.AllocateSegment
   isSpec: "True"
-  fullName: Typhon.Engine.LogicalSegmentManager.AllocateSegment
-  nameWithType: LogicalSegmentManager.AllocateSegment
-- uid: Typhon.Engine.LogicalSegmentManager.DeleteSegment(System.UInt32)
-  name: DeleteSegment(uint)
-  href: api/Typhon.Engine.LogicalSegmentManager.html#Typhon_Engine_LogicalSegmentManager_DeleteSegment_System_UInt32_
-  commentId: M:Typhon.Engine.LogicalSegmentManager.DeleteSegment(System.UInt32)
-  name.vb: DeleteSegment(UInteger)
-  fullName: Typhon.Engine.LogicalSegmentManager.DeleteSegment(uint)
-  fullName.vb: Typhon.Engine.LogicalSegmentManager.DeleteSegment(UInteger)
-  nameWithType: LogicalSegmentManager.DeleteSegment(uint)
-  nameWithType.vb: LogicalSegmentManager.DeleteSegment(UInteger)
-- uid: Typhon.Engine.LogicalSegmentManager.DeleteSegment(Typhon.Engine.LogicalSegment)
+  fullName: Typhon.Engine.ManagedPagedMMF.AllocateSegment
+  nameWithType: ManagedPagedMMF.AllocateSegment
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3
+  name: ManagedPagedMMF.BitmapL3
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html
+  commentId: T:Typhon.Engine.ManagedPagedMMF.BitmapL3
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3
+  nameWithType: ManagedPagedMMF.BitmapL3
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.#ctor(System.Int32,Typhon.Engine.LogicalSegment)
+  name: BitmapL3(int, LogicalSegment)
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3__ctor_System_Int32_Typhon_Engine_LogicalSegment_
+  commentId: M:Typhon.Engine.ManagedPagedMMF.BitmapL3.#ctor(System.Int32,Typhon.Engine.LogicalSegment)
+  name.vb: New(Integer, LogicalSegment)
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.BitmapL3(int, Typhon.Engine.LogicalSegment)
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.BitmapL3.New(Integer, Typhon.Engine.LogicalSegment)
+  nameWithType: ManagedPagedMMF.BitmapL3.BitmapL3(int, LogicalSegment)
+  nameWithType.vb: ManagedPagedMMF.BitmapL3.New(Integer, LogicalSegment)
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.#ctor*
+  name: BitmapL3
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3__ctor_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.BitmapL3.#ctor
+  isSpec: "True"
+  name.vb: New
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.BitmapL3
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.BitmapL3.New
+  nameWithType: ManagedPagedMMF.BitmapL3.BitmapL3
+  nameWithType.vb: ManagedPagedMMF.BitmapL3.New
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.Allocate(System.Span{System.Int32}@)
+  name: Allocate(ref Span<int>)
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_Allocate_System_Span_System_Int32___
+  commentId: M:Typhon.Engine.ManagedPagedMMF.BitmapL3.Allocate(System.Span{System.Int32}@)
+  name.vb: Allocate(Span(Of Integer))
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.Allocate(ref System.Span<int>)
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.BitmapL3.Allocate(System.Span(Of Integer))
+  nameWithType: ManagedPagedMMF.BitmapL3.Allocate(ref Span<int>)
+  nameWithType.vb: ManagedPagedMMF.BitmapL3.Allocate(Span(Of Integer))
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.Allocate*
+  name: Allocate
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_Allocate_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.BitmapL3.Allocate
+  isSpec: "True"
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.Allocate
+  nameWithType: ManagedPagedMMF.BitmapL3.Allocate
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.Capacity
+  name: Capacity
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_Capacity
+  commentId: P:Typhon.Engine.ManagedPagedMMF.BitmapL3.Capacity
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.Capacity
+  nameWithType: ManagedPagedMMF.BitmapL3.Capacity
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.Capacity*
+  name: Capacity
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_Capacity_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.BitmapL3.Capacity
+  isSpec: "True"
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.Capacity
+  nameWithType: ManagedPagedMMF.BitmapL3.Capacity
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.ClearL0(System.Int32)
+  name: ClearL0(int)
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_ClearL0_System_Int32_
+  commentId: M:Typhon.Engine.ManagedPagedMMF.BitmapL3.ClearL0(System.Int32)
+  name.vb: ClearL0(Integer)
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.ClearL0(int)
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.BitmapL3.ClearL0(Integer)
+  nameWithType: ManagedPagedMMF.BitmapL3.ClearL0(int)
+  nameWithType.vb: ManagedPagedMMF.BitmapL3.ClearL0(Integer)
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.ClearL0*
+  name: ClearL0
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_ClearL0_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.BitmapL3.ClearL0
+  isSpec: "True"
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.ClearL0
+  nameWithType: ManagedPagedMMF.BitmapL3.ClearL0
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.FindNextUnsetL0(System.Int32@,System.Int64@)
+  name: FindNextUnsetL0(ref int, ref long)
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_FindNextUnsetL0_System_Int32__System_Int64__
+  commentId: M:Typhon.Engine.ManagedPagedMMF.BitmapL3.FindNextUnsetL0(System.Int32@,System.Int64@)
+  name.vb: FindNextUnsetL0(Integer, Long)
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.FindNextUnsetL0(ref int, ref long)
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.BitmapL3.FindNextUnsetL0(Integer, Long)
+  nameWithType: ManagedPagedMMF.BitmapL3.FindNextUnsetL0(ref int, ref long)
+  nameWithType.vb: ManagedPagedMMF.BitmapL3.FindNextUnsetL0(Integer, Long)
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.FindNextUnsetL0*
+  name: FindNextUnsetL0
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_FindNextUnsetL0_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.BitmapL3.FindNextUnsetL0
+  isSpec: "True"
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.FindNextUnsetL0
+  nameWithType: ManagedPagedMMF.BitmapL3.FindNextUnsetL0
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.FindNextUnsetL1(System.Int32@,System.Int64@)
+  name: FindNextUnsetL1(ref int, ref long)
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_FindNextUnsetL1_System_Int32__System_Int64__
+  commentId: M:Typhon.Engine.ManagedPagedMMF.BitmapL3.FindNextUnsetL1(System.Int32@,System.Int64@)
+  name.vb: FindNextUnsetL1(Integer, Long)
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.FindNextUnsetL1(ref int, ref long)
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.BitmapL3.FindNextUnsetL1(Integer, Long)
+  nameWithType: ManagedPagedMMF.BitmapL3.FindNextUnsetL1(ref int, ref long)
+  nameWithType.vb: ManagedPagedMMF.BitmapL3.FindNextUnsetL1(Integer, Long)
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.FindNextUnsetL1*
+  name: FindNextUnsetL1
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_FindNextUnsetL1_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.BitmapL3.FindNextUnsetL1
+  isSpec: "True"
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.FindNextUnsetL1
+  nameWithType: ManagedPagedMMF.BitmapL3.FindNextUnsetL1
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.Free(System.ReadOnlySpan{System.Int32})
+  name: Free(ReadOnlySpan<int>)
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_Free_System_ReadOnlySpan_System_Int32__
+  commentId: M:Typhon.Engine.ManagedPagedMMF.BitmapL3.Free(System.ReadOnlySpan{System.Int32})
+  name.vb: Free(ReadOnlySpan(Of Integer))
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.Free(System.ReadOnlySpan<int>)
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.BitmapL3.Free(System.ReadOnlySpan(Of Integer))
+  nameWithType: ManagedPagedMMF.BitmapL3.Free(ReadOnlySpan<int>)
+  nameWithType.vb: ManagedPagedMMF.BitmapL3.Free(ReadOnlySpan(Of Integer))
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.Free*
+  name: Free
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_Free_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.BitmapL3.Free
+  isSpec: "True"
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.Free
+  nameWithType: ManagedPagedMMF.BitmapL3.Free
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.IsSet(System.Int32)
+  name: IsSet(int)
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_IsSet_System_Int32_
+  commentId: M:Typhon.Engine.ManagedPagedMMF.BitmapL3.IsSet(System.Int32)
+  name.vb: IsSet(Integer)
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.IsSet(int)
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.BitmapL3.IsSet(Integer)
+  nameWithType: ManagedPagedMMF.BitmapL3.IsSet(int)
+  nameWithType.vb: ManagedPagedMMF.BitmapL3.IsSet(Integer)
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.IsSet*
+  name: IsSet
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_IsSet_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.BitmapL3.IsSet
+  isSpec: "True"
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.IsSet
+  nameWithType: ManagedPagedMMF.BitmapL3.IsSet
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.SetL0(System.Int32)
+  name: SetL0(int)
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_SetL0_System_Int32_
+  commentId: M:Typhon.Engine.ManagedPagedMMF.BitmapL3.SetL0(System.Int32)
+  name.vb: SetL0(Integer)
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.SetL0(int)
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.BitmapL3.SetL0(Integer)
+  nameWithType: ManagedPagedMMF.BitmapL3.SetL0(int)
+  nameWithType.vb: ManagedPagedMMF.BitmapL3.SetL0(Integer)
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.SetL0*
+  name: SetL0
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_SetL0_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.BitmapL3.SetL0
+  isSpec: "True"
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.SetL0
+  nameWithType: ManagedPagedMMF.BitmapL3.SetL0
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.SetL1(System.Int32)
+  name: SetL1(int)
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_SetL1_System_Int32_
+  commentId: M:Typhon.Engine.ManagedPagedMMF.BitmapL3.SetL1(System.Int32)
+  name.vb: SetL1(Integer)
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.SetL1(int)
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.BitmapL3.SetL1(Integer)
+  nameWithType: ManagedPagedMMF.BitmapL3.SetL1(int)
+  nameWithType.vb: ManagedPagedMMF.BitmapL3.SetL1(Integer)
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.SetL1*
+  name: SetL1
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_SetL1_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.BitmapL3.SetL1
+  isSpec: "True"
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.SetL1
+  nameWithType: ManagedPagedMMF.BitmapL3.SetL1
+- uid: Typhon.Engine.ManagedPagedMMF.DeleteSegment(System.Int32)
+  name: DeleteSegment(int)
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_DeleteSegment_System_Int32_
+  commentId: M:Typhon.Engine.ManagedPagedMMF.DeleteSegment(System.Int32)
+  name.vb: DeleteSegment(Integer)
+  fullName: Typhon.Engine.ManagedPagedMMF.DeleteSegment(int)
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.DeleteSegment(Integer)
+  nameWithType: ManagedPagedMMF.DeleteSegment(int)
+  nameWithType.vb: ManagedPagedMMF.DeleteSegment(Integer)
+- uid: Typhon.Engine.ManagedPagedMMF.DeleteSegment(Typhon.Engine.LogicalSegment)
   name: DeleteSegment(LogicalSegment)
-  href: api/Typhon.Engine.LogicalSegmentManager.html#Typhon_Engine_LogicalSegmentManager_DeleteSegment_Typhon_Engine_LogicalSegment_
-  commentId: M:Typhon.Engine.LogicalSegmentManager.DeleteSegment(Typhon.Engine.LogicalSegment)
-  fullName: Typhon.Engine.LogicalSegmentManager.DeleteSegment(Typhon.Engine.LogicalSegment)
-  nameWithType: LogicalSegmentManager.DeleteSegment(LogicalSegment)
-- uid: Typhon.Engine.LogicalSegmentManager.DeleteSegment*
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_DeleteSegment_Typhon_Engine_LogicalSegment_
+  commentId: M:Typhon.Engine.ManagedPagedMMF.DeleteSegment(Typhon.Engine.LogicalSegment)
+  fullName: Typhon.Engine.ManagedPagedMMF.DeleteSegment(Typhon.Engine.LogicalSegment)
+  nameWithType: ManagedPagedMMF.DeleteSegment(LogicalSegment)
+- uid: Typhon.Engine.ManagedPagedMMF.DeleteSegment*
   name: DeleteSegment
-  href: api/Typhon.Engine.LogicalSegmentManager.html#Typhon_Engine_LogicalSegmentManager_DeleteSegment_
-  commentId: Overload:Typhon.Engine.LogicalSegmentManager.DeleteSegment
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_DeleteSegment_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.DeleteSegment
   isSpec: "True"
-  fullName: Typhon.Engine.LogicalSegmentManager.DeleteSegment
-  nameWithType: LogicalSegmentManager.DeleteSegment
-- uid: Typhon.Engine.LogicalSegmentManager.Dispose
-  name: Dispose()
-  href: api/Typhon.Engine.LogicalSegmentManager.html#Typhon_Engine_LogicalSegmentManager_Dispose
-  commentId: M:Typhon.Engine.LogicalSegmentManager.Dispose
-  fullName: Typhon.Engine.LogicalSegmentManager.Dispose()
-  nameWithType: LogicalSegmentManager.Dispose()
-- uid: Typhon.Engine.LogicalSegmentManager.Dispose*
-  name: Dispose
-  href: api/Typhon.Engine.LogicalSegmentManager.html#Typhon_Engine_LogicalSegmentManager_Dispose_
-  commentId: Overload:Typhon.Engine.LogicalSegmentManager.Dispose
+  fullName: Typhon.Engine.ManagedPagedMMF.DeleteSegment
+  nameWithType: ManagedPagedMMF.DeleteSegment
+- uid: Typhon.Engine.ManagedPagedMMF.FreePages(System.ReadOnlySpan{System.Int32})
+  name: FreePages(ReadOnlySpan<int>)
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_FreePages_System_ReadOnlySpan_System_Int32__
+  commentId: M:Typhon.Engine.ManagedPagedMMF.FreePages(System.ReadOnlySpan{System.Int32})
+  name.vb: FreePages(ReadOnlySpan(Of Integer))
+  fullName: Typhon.Engine.ManagedPagedMMF.FreePages(System.ReadOnlySpan<int>)
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.FreePages(System.ReadOnlySpan(Of Integer))
+  nameWithType: ManagedPagedMMF.FreePages(ReadOnlySpan<int>)
+  nameWithType.vb: ManagedPagedMMF.FreePages(ReadOnlySpan(Of Integer))
+- uid: Typhon.Engine.ManagedPagedMMF.FreePages*
+  name: FreePages
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_FreePages_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.FreePages
   isSpec: "True"
-  fullName: Typhon.Engine.LogicalSegmentManager.Dispose
-  nameWithType: LogicalSegmentManager.Dispose
-- uid: Typhon.Engine.LogicalSegmentManager.GetSegment(System.UInt32)
-  name: GetSegment(uint)
-  href: api/Typhon.Engine.LogicalSegmentManager.html#Typhon_Engine_LogicalSegmentManager_GetSegment_System_UInt32_
-  commentId: M:Typhon.Engine.LogicalSegmentManager.GetSegment(System.UInt32)
-  name.vb: GetSegment(UInteger)
-  fullName: Typhon.Engine.LogicalSegmentManager.GetSegment(uint)
-  fullName.vb: Typhon.Engine.LogicalSegmentManager.GetSegment(UInteger)
-  nameWithType: LogicalSegmentManager.GetSegment(uint)
-  nameWithType.vb: LogicalSegmentManager.GetSegment(UInteger)
-- uid: Typhon.Engine.LogicalSegmentManager.GetSegment*
+  fullName: Typhon.Engine.ManagedPagedMMF.FreePages
+  nameWithType: ManagedPagedMMF.FreePages
+- uid: Typhon.Engine.ManagedPagedMMF.GetSegment(System.Int32)
+  name: GetSegment(int)
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_GetSegment_System_Int32_
+  commentId: M:Typhon.Engine.ManagedPagedMMF.GetSegment(System.Int32)
+  name.vb: GetSegment(Integer)
+  fullName: Typhon.Engine.ManagedPagedMMF.GetSegment(int)
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.GetSegment(Integer)
+  nameWithType: ManagedPagedMMF.GetSegment(int)
+  nameWithType.vb: ManagedPagedMMF.GetSegment(Integer)
+- uid: Typhon.Engine.ManagedPagedMMF.GetSegment*
   name: GetSegment
-  href: api/Typhon.Engine.LogicalSegmentManager.html#Typhon_Engine_LogicalSegmentManager_GetSegment_
-  commentId: Overload:Typhon.Engine.LogicalSegmentManager.GetSegment
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_GetSegment_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.GetSegment
   isSpec: "True"
-  fullName: Typhon.Engine.LogicalSegmentManager.GetSegment
-  nameWithType: LogicalSegmentManager.GetSegment
-- uid: Typhon.Engine.LogicalSegmentManager.Initialize
-  name: Initialize()
-  href: api/Typhon.Engine.LogicalSegmentManager.html#Typhon_Engine_LogicalSegmentManager_Initialize
-  commentId: M:Typhon.Engine.LogicalSegmentManager.Initialize
-  fullName: Typhon.Engine.LogicalSegmentManager.Initialize()
-  nameWithType: LogicalSegmentManager.Initialize()
-- uid: Typhon.Engine.LogicalSegmentManager.Initialize*
-  name: Initialize
-  href: api/Typhon.Engine.LogicalSegmentManager.html#Typhon_Engine_LogicalSegmentManager_Initialize_
-  commentId: Overload:Typhon.Engine.LogicalSegmentManager.Initialize
+  fullName: Typhon.Engine.ManagedPagedMMF.GetSegment
+  nameWithType: ManagedPagedMMF.GetSegment
+- uid: Typhon.Engine.ManagedPagedMMF.OnDispose
+  name: OnDispose()
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_OnDispose
+  commentId: M:Typhon.Engine.ManagedPagedMMF.OnDispose
+  fullName: Typhon.Engine.ManagedPagedMMF.OnDispose()
+  nameWithType: ManagedPagedMMF.OnDispose()
+- uid: Typhon.Engine.ManagedPagedMMF.OnDispose*
+  name: OnDispose
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_OnDispose_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.OnDispose
   isSpec: "True"
-  fullName: Typhon.Engine.LogicalSegmentManager.Initialize
-  nameWithType: LogicalSegmentManager.Initialize
-- uid: Typhon.Engine.LogicalSegmentManager.IsDisposed
-  name: IsDisposed
-  href: api/Typhon.Engine.LogicalSegmentManager.html#Typhon_Engine_LogicalSegmentManager_IsDisposed
-  commentId: P:Typhon.Engine.LogicalSegmentManager.IsDisposed
-  fullName: Typhon.Engine.LogicalSegmentManager.IsDisposed
-  nameWithType: LogicalSegmentManager.IsDisposed
-- uid: Typhon.Engine.LogicalSegmentManager.IsDisposed*
-  name: IsDisposed
-  href: api/Typhon.Engine.LogicalSegmentManager.html#Typhon_Engine_LogicalSegmentManager_IsDisposed_
-  commentId: Overload:Typhon.Engine.LogicalSegmentManager.IsDisposed
+  fullName: Typhon.Engine.ManagedPagedMMF.OnDispose
+  nameWithType: ManagedPagedMMF.OnDispose
+- uid: Typhon.Engine.ManagedPagedMMF.OnFileCreating
+  name: OnFileCreating()
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_OnFileCreating
+  commentId: M:Typhon.Engine.ManagedPagedMMF.OnFileCreating
+  fullName: Typhon.Engine.ManagedPagedMMF.OnFileCreating()
+  nameWithType: ManagedPagedMMF.OnFileCreating()
+- uid: Typhon.Engine.ManagedPagedMMF.OnFileCreating*
+  name: OnFileCreating
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_OnFileCreating_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.OnFileCreating
   isSpec: "True"
-  fullName: Typhon.Engine.LogicalSegmentManager.IsDisposed
-  nameWithType: LogicalSegmentManager.IsDisposed
-- uid: Typhon.Engine.LogicalSegmentManager.IsInitialized
-  name: IsInitialized
-  href: api/Typhon.Engine.LogicalSegmentManager.html#Typhon_Engine_LogicalSegmentManager_IsInitialized
-  commentId: P:Typhon.Engine.LogicalSegmentManager.IsInitialized
-  fullName: Typhon.Engine.LogicalSegmentManager.IsInitialized
-  nameWithType: LogicalSegmentManager.IsInitialized
-- uid: Typhon.Engine.LogicalSegmentManager.IsInitialized*
-  name: IsInitialized
-  href: api/Typhon.Engine.LogicalSegmentManager.html#Typhon_Engine_LogicalSegmentManager_IsInitialized_
-  commentId: Overload:Typhon.Engine.LogicalSegmentManager.IsInitialized
+  fullName: Typhon.Engine.ManagedPagedMMF.OnFileCreating
+  nameWithType: ManagedPagedMMF.OnFileCreating
+- uid: Typhon.Engine.ManagedPagedMMF.OnFileLoading
+  name: OnFileLoading()
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_OnFileLoading
+  commentId: M:Typhon.Engine.ManagedPagedMMF.OnFileLoading
+  fullName: Typhon.Engine.ManagedPagedMMF.OnFileLoading()
+  nameWithType: ManagedPagedMMF.OnFileLoading()
+- uid: Typhon.Engine.ManagedPagedMMF.OnFileLoading*
+  name: OnFileLoading
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_OnFileLoading_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.OnFileLoading
   isSpec: "True"
-  fullName: Typhon.Engine.LogicalSegmentManager.IsInitialized
-  nameWithType: LogicalSegmentManager.IsInitialized
-- uid: Typhon.Engine.LogicalSegmentManager.ReferenceCounter
-  name: ReferenceCounter
-  href: api/Typhon.Engine.LogicalSegmentManager.html#Typhon_Engine_LogicalSegmentManager_ReferenceCounter
-  commentId: P:Typhon.Engine.LogicalSegmentManager.ReferenceCounter
-  fullName: Typhon.Engine.LogicalSegmentManager.ReferenceCounter
-  nameWithType: LogicalSegmentManager.ReferenceCounter
-- uid: Typhon.Engine.LogicalSegmentManager.ReferenceCounter*
-  name: ReferenceCounter
-  href: api/Typhon.Engine.LogicalSegmentManager.html#Typhon_Engine_LogicalSegmentManager_ReferenceCounter_
-  commentId: Overload:Typhon.Engine.LogicalSegmentManager.ReferenceCounter
-  isSpec: "True"
-  fullName: Typhon.Engine.LogicalSegmentManager.ReferenceCounter
-  nameWithType: LogicalSegmentManager.ReferenceCounter
+  fullName: Typhon.Engine.ManagedPagedMMF.OnFileLoading
+  nameWithType: ManagedPagedMMF.OnFileLoading
+- uid: Typhon.Engine.ManagedPagedMMFOptions
+  name: ManagedPagedMMFOptions
+  href: api/Typhon.Engine.ManagedPagedMMFOptions.html
+  commentId: T:Typhon.Engine.ManagedPagedMMFOptions
+  fullName: Typhon.Engine.ManagedPagedMMFOptions
+  nameWithType: ManagedPagedMMFOptions
 - uid: Typhon.Engine.MathExtensions
   name: MathExtensions
   href: api/Typhon.Engine.MathExtensions.html
@@ -10818,6 +10806,138 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.MurmurHash2.Hash
   nameWithType: MurmurHash2.Hash
+- uid: Typhon.Engine.PMMF
+  name: PMMF
+  href: api/Typhon.Engine.PMMF.html
+  commentId: T:Typhon.Engine.PMMF
+  fullName: Typhon.Engine.PMMF
+  nameWithType: PMMF
+- uid: Typhon.Engine.PMMF.#ctor(System.IServiceProvider,Typhon.Engine.PagedMMFOptions,Typhon.Engine.TimeManager,Microsoft.Extensions.Logging.ILogger{Typhon.Engine.PMMF})
+  name: PMMF(IServiceProvider, PagedMMFOptions, TimeManager, ILogger<PMMF>)
+  href: api/Typhon.Engine.PMMF.html#Typhon_Engine_PMMF__ctor_System_IServiceProvider_Typhon_Engine_PagedMMFOptions_Typhon_Engine_TimeManager_Microsoft_Extensions_Logging_ILogger_Typhon_Engine_PMMF__
+  commentId: M:Typhon.Engine.PMMF.#ctor(System.IServiceProvider,Typhon.Engine.PagedMMFOptions,Typhon.Engine.TimeManager,Microsoft.Extensions.Logging.ILogger{Typhon.Engine.PMMF})
+  name.vb: New(IServiceProvider, PagedMMFOptions, TimeManager, ILogger(Of PMMF))
+  fullName: Typhon.Engine.PMMF.PMMF(System.IServiceProvider, Typhon.Engine.PagedMMFOptions, Typhon.Engine.TimeManager, Microsoft.Extensions.Logging.ILogger<Typhon.Engine.PMMF>)
+  fullName.vb: Typhon.Engine.PMMF.New(System.IServiceProvider, Typhon.Engine.PagedMMFOptions, Typhon.Engine.TimeManager, Microsoft.Extensions.Logging.ILogger(Of Typhon.Engine.PMMF))
+  nameWithType: PMMF.PMMF(IServiceProvider, PagedMMFOptions, TimeManager, ILogger<PMMF>)
+  nameWithType.vb: PMMF.New(IServiceProvider, PagedMMFOptions, TimeManager, ILogger(Of PMMF))
+- uid: Typhon.Engine.PMMF.#ctor*
+  name: PMMF
+  href: api/Typhon.Engine.PMMF.html#Typhon_Engine_PMMF__ctor_
+  commentId: Overload:Typhon.Engine.PMMF.#ctor
+  isSpec: "True"
+  name.vb: New
+  fullName: Typhon.Engine.PMMF.PMMF
+  fullName.vb: Typhon.Engine.PMMF.New
+  nameWithType: PMMF.PMMF
+  nameWithType.vb: PMMF.New
+- uid: Typhon.Engine.PMMF.CreateChangeSet
+  name: CreateChangeSet()
+  href: api/Typhon.Engine.PMMF.html#Typhon_Engine_PMMF_CreateChangeSet
+  commentId: M:Typhon.Engine.PMMF.CreateChangeSet
+  fullName: Typhon.Engine.PMMF.CreateChangeSet()
+  nameWithType: PMMF.CreateChangeSet()
+- uid: Typhon.Engine.PMMF.CreateChangeSet*
+  name: CreateChangeSet
+  href: api/Typhon.Engine.PMMF.html#Typhon_Engine_PMMF_CreateChangeSet_
+  commentId: Overload:Typhon.Engine.PMMF.CreateChangeSet
+  isSpec: "True"
+  fullName: Typhon.Engine.PMMF.CreateChangeSet
+  nameWithType: PMMF.CreateChangeSet
+- uid: Typhon.Engine.PMMF.DeleteDatabaseFile
+  name: DeleteDatabaseFile()
+  href: api/Typhon.Engine.PMMF.html#Typhon_Engine_PMMF_DeleteDatabaseFile
+  commentId: M:Typhon.Engine.PMMF.DeleteDatabaseFile
+  fullName: Typhon.Engine.PMMF.DeleteDatabaseFile()
+  nameWithType: PMMF.DeleteDatabaseFile()
+- uid: Typhon.Engine.PMMF.DeleteDatabaseFile*
+  name: DeleteDatabaseFile
+  href: api/Typhon.Engine.PMMF.html#Typhon_Engine_PMMF_DeleteDatabaseFile_
+  commentId: Overload:Typhon.Engine.PMMF.DeleteDatabaseFile
+  isSpec: "True"
+  fullName: Typhon.Engine.PMMF.DeleteDatabaseFile
+  nameWithType: PMMF.DeleteDatabaseFile
+- uid: Typhon.Engine.PMMF.Dispose
+  name: Dispose()
+  href: api/Typhon.Engine.PMMF.html#Typhon_Engine_PMMF_Dispose
+  commentId: M:Typhon.Engine.PMMF.Dispose
+  fullName: Typhon.Engine.PMMF.Dispose()
+  nameWithType: PMMF.Dispose()
+- uid: Typhon.Engine.PMMF.Dispose*
+  name: Dispose
+  href: api/Typhon.Engine.PMMF.html#Typhon_Engine_PMMF_Dispose_
+  commentId: Overload:Typhon.Engine.PMMF.Dispose
+  isSpec: "True"
+  fullName: Typhon.Engine.PMMF.Dispose
+  nameWithType: PMMF.Dispose
+- uid: Typhon.Engine.PMMF.IsDisposed
+  name: IsDisposed
+  href: api/Typhon.Engine.PMMF.html#Typhon_Engine_PMMF_IsDisposed
+  commentId: P:Typhon.Engine.PMMF.IsDisposed
+  fullName: Typhon.Engine.PMMF.IsDisposed
+  nameWithType: PMMF.IsDisposed
+- uid: Typhon.Engine.PMMF.IsDisposed*
+  name: IsDisposed
+  href: api/Typhon.Engine.PMMF.html#Typhon_Engine_PMMF_IsDisposed_
+  commentId: Overload:Typhon.Engine.PMMF.IsDisposed
+  isSpec: "True"
+  fullName: Typhon.Engine.PMMF.IsDisposed
+  nameWithType: PMMF.IsDisposed
+- uid: Typhon.Engine.PMMF.OnDispose
+  name: OnDispose()
+  href: api/Typhon.Engine.PMMF.html#Typhon_Engine_PMMF_OnDispose
+  commentId: M:Typhon.Engine.PMMF.OnDispose
+  fullName: Typhon.Engine.PMMF.OnDispose()
+  nameWithType: PMMF.OnDispose()
+- uid: Typhon.Engine.PMMF.OnDispose*
+  name: OnDispose
+  href: api/Typhon.Engine.PMMF.html#Typhon_Engine_PMMF_OnDispose_
+  commentId: Overload:Typhon.Engine.PMMF.OnDispose
+  isSpec: "True"
+  fullName: Typhon.Engine.PMMF.OnDispose
+  nameWithType: PMMF.OnDispose
+- uid: Typhon.Engine.PMMF.OnFileCreating
+  name: OnFileCreating()
+  href: api/Typhon.Engine.PMMF.html#Typhon_Engine_PMMF_OnFileCreating
+  commentId: M:Typhon.Engine.PMMF.OnFileCreating
+  fullName: Typhon.Engine.PMMF.OnFileCreating()
+  nameWithType: PMMF.OnFileCreating()
+- uid: Typhon.Engine.PMMF.OnFileCreating*
+  name: OnFileCreating
+  href: api/Typhon.Engine.PMMF.html#Typhon_Engine_PMMF_OnFileCreating_
+  commentId: Overload:Typhon.Engine.PMMF.OnFileCreating
+  isSpec: "True"
+  fullName: Typhon.Engine.PMMF.OnFileCreating
+  nameWithType: PMMF.OnFileCreating
+- uid: Typhon.Engine.PMMF.OnFileLoading
+  name: OnFileLoading()
+  href: api/Typhon.Engine.PMMF.html#Typhon_Engine_PMMF_OnFileLoading
+  commentId: M:Typhon.Engine.PMMF.OnFileLoading
+  fullName: Typhon.Engine.PMMF.OnFileLoading()
+  nameWithType: PMMF.OnFileLoading()
+- uid: Typhon.Engine.PMMF.OnFileLoading*
+  name: OnFileLoading
+  href: api/Typhon.Engine.PMMF.html#Typhon_Engine_PMMF_OnFileLoading_
+  commentId: Overload:Typhon.Engine.PMMF.OnFileLoading
+  isSpec: "True"
+  fullName: Typhon.Engine.PMMF.OnFileLoading
+  nameWithType: PMMF.OnFileLoading
+- uid: Typhon.Engine.PMMF.RequestPage(System.Int32,System.Boolean,Typhon.Engine.PageAccessor@,System.Int64,System.Threading.CancellationToken)
+  name: RequestPage(int, bool, out PageAccessor, long, CancellationToken)
+  href: api/Typhon.Engine.PMMF.html#Typhon_Engine_PMMF_RequestPage_System_Int32_System_Boolean_Typhon_Engine_PageAccessor__System_Int64_System_Threading_CancellationToken_
+  commentId: M:Typhon.Engine.PMMF.RequestPage(System.Int32,System.Boolean,Typhon.Engine.PageAccessor@,System.Int64,System.Threading.CancellationToken)
+  name.vb: RequestPage(Integer, Boolean, PageAccessor, Long, CancellationToken)
+  fullName: Typhon.Engine.PMMF.RequestPage(int, bool, out Typhon.Engine.PageAccessor, long, System.Threading.CancellationToken)
+  fullName.vb: Typhon.Engine.PMMF.RequestPage(Integer, Boolean, Typhon.Engine.PageAccessor, Long, System.Threading.CancellationToken)
+  nameWithType: PMMF.RequestPage(int, bool, out PageAccessor, long, CancellationToken)
+  nameWithType.vb: PMMF.RequestPage(Integer, Boolean, PageAccessor, Long, CancellationToken)
+- uid: Typhon.Engine.PMMF.RequestPage*
+  name: RequestPage
+  href: api/Typhon.Engine.PMMF.html#Typhon_Engine_PMMF_RequestPage_
+  commentId: Overload:Typhon.Engine.PMMF.RequestPage
+  isSpec: "True"
+  fullName: Typhon.Engine.PMMF.RequestPage
+  nameWithType: PMMF.RequestPage
 - uid: Typhon.Engine.PageAccessor
   name: PageAccessor
   href: api/Typhon.Engine.PageAccessor.html
@@ -10889,15 +11009,15 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.PageAccessor.HeaderReadOnly
   nameWithType: PageAccessor.HeaderReadOnly
-- uid: Typhon.Engine.PageAccessor.InitHeader(Typhon.Engine.PageClearMode,Typhon.Engine.PageBlockFlags,Typhon.Engine.PageBlockType,System.Int32,System.Int32)
-  name: InitHeader(PageClearMode, PageBlockFlags, PageBlockType, int, int)
-  href: api/Typhon.Engine.PageAccessor.html#Typhon_Engine_PageAccessor_InitHeader_Typhon_Engine_PageClearMode_Typhon_Engine_PageBlockFlags_Typhon_Engine_PageBlockType_System_Int32_System_Int32_
-  commentId: M:Typhon.Engine.PageAccessor.InitHeader(Typhon.Engine.PageClearMode,Typhon.Engine.PageBlockFlags,Typhon.Engine.PageBlockType,System.Int32,System.Int32)
-  name.vb: InitHeader(PageClearMode, PageBlockFlags, PageBlockType, Integer, Integer)
-  fullName: Typhon.Engine.PageAccessor.InitHeader(Typhon.Engine.PageClearMode, Typhon.Engine.PageBlockFlags, Typhon.Engine.PageBlockType, int, int)
-  fullName.vb: Typhon.Engine.PageAccessor.InitHeader(Typhon.Engine.PageClearMode, Typhon.Engine.PageBlockFlags, Typhon.Engine.PageBlockType, Integer, Integer)
-  nameWithType: PageAccessor.InitHeader(PageClearMode, PageBlockFlags, PageBlockType, int, int)
-  nameWithType.vb: PageAccessor.InitHeader(PageClearMode, PageBlockFlags, PageBlockType, Integer, Integer)
+- uid: Typhon.Engine.PageAccessor.InitHeader(Typhon.Engine.PageClearMode,Typhon.Engine.PageBlockFlags,Typhon.Engine.PageBlockType,System.Int16)
+  name: InitHeader(PageClearMode, PageBlockFlags, PageBlockType, short)
+  href: api/Typhon.Engine.PageAccessor.html#Typhon_Engine_PageAccessor_InitHeader_Typhon_Engine_PageClearMode_Typhon_Engine_PageBlockFlags_Typhon_Engine_PageBlockType_System_Int16_
+  commentId: M:Typhon.Engine.PageAccessor.InitHeader(Typhon.Engine.PageClearMode,Typhon.Engine.PageBlockFlags,Typhon.Engine.PageBlockType,System.Int16)
+  name.vb: InitHeader(PageClearMode, PageBlockFlags, PageBlockType, Short)
+  fullName: Typhon.Engine.PageAccessor.InitHeader(Typhon.Engine.PageClearMode, Typhon.Engine.PageBlockFlags, Typhon.Engine.PageBlockType, short)
+  fullName.vb: Typhon.Engine.PageAccessor.InitHeader(Typhon.Engine.PageClearMode, Typhon.Engine.PageBlockFlags, Typhon.Engine.PageBlockType, Short)
+  nameWithType: PageAccessor.InitHeader(PageClearMode, PageBlockFlags, PageBlockType, short)
+  nameWithType.vb: PageAccessor.InitHeader(PageClearMode, PageBlockFlags, PageBlockType, Short)
 - uid: Typhon.Engine.PageAccessor.InitHeader*
   name: InitHeader
   href: api/Typhon.Engine.PageAccessor.html#Typhon_Engine_PageAccessor_InitHeader_
@@ -11124,471 +11244,77 @@ references:
   commentId: T:Typhon.Engine.PageClearMode
   fullName: Typhon.Engine.PageClearMode
   nameWithType: PageClearMode
-- uid: Typhon.Engine.PagedFile
-  name: PagedFile
-  href: api/Typhon.Engine.PagedFile.html
-  commentId: T:Typhon.Engine.PagedFile
-  fullName: Typhon.Engine.PagedFile
-  nameWithType: PagedFile
-- uid: Typhon.Engine.PagedFile.#ctor(System.IServiceProvider,Typhon.Engine.IConfiguration{Typhon.Engine.DatabaseConfiguration},Typhon.Engine.TimeManager,Microsoft.Extensions.Logging.ILogger{Typhon.Engine.PagedMemoryMappedFile})
-  name: PagedFile(IServiceProvider, IConfiguration<DatabaseConfiguration>, TimeManager, ILogger<PagedMemoryMappedFile>)
-  href: api/Typhon.Engine.PagedFile.html#Typhon_Engine_PagedFile__ctor_System_IServiceProvider_Typhon_Engine_IConfiguration_Typhon_Engine_DatabaseConfiguration__Typhon_Engine_TimeManager_Microsoft_Extensions_Logging_ILogger_Typhon_Engine_PagedMemoryMappedFile__
-  commentId: M:Typhon.Engine.PagedFile.#ctor(System.IServiceProvider,Typhon.Engine.IConfiguration{Typhon.Engine.DatabaseConfiguration},Typhon.Engine.TimeManager,Microsoft.Extensions.Logging.ILogger{Typhon.Engine.PagedMemoryMappedFile})
-  name.vb: New(IServiceProvider, IConfiguration(Of DatabaseConfiguration), TimeManager, ILogger(Of PagedMemoryMappedFile))
-  fullName: Typhon.Engine.PagedFile.PagedFile(System.IServiceProvider, Typhon.Engine.IConfiguration<Typhon.Engine.DatabaseConfiguration>, Typhon.Engine.TimeManager, Microsoft.Extensions.Logging.ILogger<Typhon.Engine.PagedMemoryMappedFile>)
-  fullName.vb: Typhon.Engine.PagedFile.New(System.IServiceProvider, Typhon.Engine.IConfiguration(Of Typhon.Engine.DatabaseConfiguration), Typhon.Engine.TimeManager, Microsoft.Extensions.Logging.ILogger(Of Typhon.Engine.PagedMemoryMappedFile))
-  nameWithType: PagedFile.PagedFile(IServiceProvider, IConfiguration<DatabaseConfiguration>, TimeManager, ILogger<PagedMemoryMappedFile>)
-  nameWithType.vb: PagedFile.New(IServiceProvider, IConfiguration(Of DatabaseConfiguration), TimeManager, ILogger(Of PagedMemoryMappedFile))
-- uid: Typhon.Engine.PagedFile.#ctor*
-  name: PagedFile
-  href: api/Typhon.Engine.PagedFile.html#Typhon_Engine_PagedFile__ctor_
-  commentId: Overload:Typhon.Engine.PagedFile.#ctor
+- uid: Typhon.Engine.PagedMMFOptions
+  name: PagedMMFOptions
+  href: api/Typhon.Engine.PagedMMFOptions.html
+  commentId: T:Typhon.Engine.PagedMMFOptions
+  fullName: Typhon.Engine.PagedMMFOptions
+  nameWithType: PagedMMFOptions
+- uid: Typhon.Engine.PagedMMFOptions.DatabaseAbsoluteDirectory
+  name: DatabaseAbsoluteDirectory
+  href: api/Typhon.Engine.PagedMMFOptions.html#Typhon_Engine_PagedMMFOptions_DatabaseAbsoluteDirectory
+  commentId: P:Typhon.Engine.PagedMMFOptions.DatabaseAbsoluteDirectory
+  fullName: Typhon.Engine.PagedMMFOptions.DatabaseAbsoluteDirectory
+  nameWithType: PagedMMFOptions.DatabaseAbsoluteDirectory
+- uid: Typhon.Engine.PagedMMFOptions.DatabaseAbsoluteDirectory*
+  name: DatabaseAbsoluteDirectory
+  href: api/Typhon.Engine.PagedMMFOptions.html#Typhon_Engine_PagedMMFOptions_DatabaseAbsoluteDirectory_
+  commentId: Overload:Typhon.Engine.PagedMMFOptions.DatabaseAbsoluteDirectory
   isSpec: "True"
-  name.vb: New
-  fullName: Typhon.Engine.PagedFile.PagedFile
-  fullName.vb: Typhon.Engine.PagedFile.New
-  nameWithType: PagedFile.PagedFile
-  nameWithType.vb: PagedFile.New
-- uid: Typhon.Engine.PagedFile.CreateChangeSet
-  name: CreateChangeSet()
-  href: api/Typhon.Engine.PagedFile.html#Typhon_Engine_PagedFile_CreateChangeSet
-  commentId: M:Typhon.Engine.PagedFile.CreateChangeSet
-  fullName: Typhon.Engine.PagedFile.CreateChangeSet()
-  nameWithType: PagedFile.CreateChangeSet()
-- uid: Typhon.Engine.PagedFile.CreateChangeSet*
-  name: CreateChangeSet
-  href: api/Typhon.Engine.PagedFile.html#Typhon_Engine_PagedFile_CreateChangeSet_
-  commentId: Overload:Typhon.Engine.PagedFile.CreateChangeSet
+  fullName: Typhon.Engine.PagedMMFOptions.DatabaseAbsoluteDirectory
+  nameWithType: PagedMMFOptions.DatabaseAbsoluteDirectory
+- uid: Typhon.Engine.PagedMMFOptions.DatabaseCacheSize
+  name: DatabaseCacheSize
+  href: api/Typhon.Engine.PagedMMFOptions.html#Typhon_Engine_PagedMMFOptions_DatabaseCacheSize
+  commentId: P:Typhon.Engine.PagedMMFOptions.DatabaseCacheSize
+  fullName: Typhon.Engine.PagedMMFOptions.DatabaseCacheSize
+  nameWithType: PagedMMFOptions.DatabaseCacheSize
+- uid: Typhon.Engine.PagedMMFOptions.DatabaseCacheSize*
+  name: DatabaseCacheSize
+  href: api/Typhon.Engine.PagedMMFOptions.html#Typhon_Engine_PagedMMFOptions_DatabaseCacheSize_
+  commentId: Overload:Typhon.Engine.PagedMMFOptions.DatabaseCacheSize
   isSpec: "True"
-  fullName: Typhon.Engine.PagedFile.CreateChangeSet
-  nameWithType: PagedFile.CreateChangeSet
-- uid: Typhon.Engine.PagedFile.DisposeAsync
-  name: DisposeAsync()
-  href: api/Typhon.Engine.PagedFile.html#Typhon_Engine_PagedFile_DisposeAsync
-  commentId: M:Typhon.Engine.PagedFile.DisposeAsync
-  fullName: Typhon.Engine.PagedFile.DisposeAsync()
-  nameWithType: PagedFile.DisposeAsync()
-- uid: Typhon.Engine.PagedFile.DisposeAsync*
-  name: DisposeAsync
-  href: api/Typhon.Engine.PagedFile.html#Typhon_Engine_PagedFile_DisposeAsync_
-  commentId: Overload:Typhon.Engine.PagedFile.DisposeAsync
+  fullName: Typhon.Engine.PagedMMFOptions.DatabaseCacheSize
+  nameWithType: PagedMMFOptions.DatabaseCacheSize
+- uid: Typhon.Engine.PagedMMFOptions.DatabaseName
+  name: DatabaseName
+  href: api/Typhon.Engine.PagedMMFOptions.html#Typhon_Engine_PagedMMFOptions_DatabaseName
+  commentId: P:Typhon.Engine.PagedMMFOptions.DatabaseName
+  fullName: Typhon.Engine.PagedMMFOptions.DatabaseName
+  nameWithType: PagedMMFOptions.DatabaseName
+- uid: Typhon.Engine.PagedMMFOptions.DatabaseName*
+  name: DatabaseName
+  href: api/Typhon.Engine.PagedMMFOptions.html#Typhon_Engine_PagedMMFOptions_DatabaseName_
+  commentId: Overload:Typhon.Engine.PagedMMFOptions.DatabaseName
   isSpec: "True"
-  fullName: Typhon.Engine.PagedFile.DisposeAsync
-  nameWithType: PagedFile.DisposeAsync
-- uid: Typhon.Engine.PagedFile.InitializeAsync
-  name: InitializeAsync()
-  href: api/Typhon.Engine.PagedFile.html#Typhon_Engine_PagedFile_InitializeAsync
-  commentId: M:Typhon.Engine.PagedFile.InitializeAsync
-  fullName: Typhon.Engine.PagedFile.InitializeAsync()
-  nameWithType: PagedFile.InitializeAsync()
-- uid: Typhon.Engine.PagedFile.InitializeAsync*
-  name: InitializeAsync
-  href: api/Typhon.Engine.PagedFile.html#Typhon_Engine_PagedFile_InitializeAsync_
-  commentId: Overload:Typhon.Engine.PagedFile.InitializeAsync
+  fullName: Typhon.Engine.PagedMMFOptions.DatabaseName
+  nameWithType: PagedMMFOptions.DatabaseName
+- uid: Typhon.Engine.PagedMMFOptions.EnsureFileDeleted
+  name: EnsureFileDeleted()
+  href: api/Typhon.Engine.PagedMMFOptions.html#Typhon_Engine_PagedMMFOptions_EnsureFileDeleted
+  commentId: M:Typhon.Engine.PagedMMFOptions.EnsureFileDeleted
+  fullName: Typhon.Engine.PagedMMFOptions.EnsureFileDeleted()
+  nameWithType: PagedMMFOptions.EnsureFileDeleted()
+- uid: Typhon.Engine.PagedMMFOptions.EnsureFileDeleted*
+  name: EnsureFileDeleted
+  href: api/Typhon.Engine.PagedMMFOptions.html#Typhon_Engine_PagedMMFOptions_EnsureFileDeleted_
+  commentId: Overload:Typhon.Engine.PagedMMFOptions.EnsureFileDeleted
   isSpec: "True"
-  fullName: Typhon.Engine.PagedFile.InitializeAsync
-  nameWithType: PagedFile.InitializeAsync
-- uid: Typhon.Engine.PagedFile.IsDisposed
-  name: IsDisposed
-  href: api/Typhon.Engine.PagedFile.html#Typhon_Engine_PagedFile_IsDisposed
-  commentId: P:Typhon.Engine.PagedFile.IsDisposed
-  fullName: Typhon.Engine.PagedFile.IsDisposed
-  nameWithType: PagedFile.IsDisposed
-- uid: Typhon.Engine.PagedFile.IsDisposed*
-  name: IsDisposed
-  href: api/Typhon.Engine.PagedFile.html#Typhon_Engine_PagedFile_IsDisposed_
-  commentId: Overload:Typhon.Engine.PagedFile.IsDisposed
+  fullName: Typhon.Engine.PagedMMFOptions.EnsureFileDeleted
+  nameWithType: PagedMMFOptions.EnsureFileDeleted
+- uid: Typhon.Engine.PagedMMFOptions.PagesDebugPattern
+  name: PagesDebugPattern
+  href: api/Typhon.Engine.PagedMMFOptions.html#Typhon_Engine_PagedMMFOptions_PagesDebugPattern
+  commentId: P:Typhon.Engine.PagedMMFOptions.PagesDebugPattern
+  fullName: Typhon.Engine.PagedMMFOptions.PagesDebugPattern
+  nameWithType: PagedMMFOptions.PagesDebugPattern
+- uid: Typhon.Engine.PagedMMFOptions.PagesDebugPattern*
+  name: PagesDebugPattern
+  href: api/Typhon.Engine.PagedMMFOptions.html#Typhon_Engine_PagedMMFOptions_PagesDebugPattern_
+  commentId: Overload:Typhon.Engine.PagedMMFOptions.PagesDebugPattern
   isSpec: "True"
-  fullName: Typhon.Engine.PagedFile.IsDisposed
-  nameWithType: PagedFile.IsDisposed
-- uid: Typhon.Engine.PagedFile.IsInitialized
-  name: IsInitialized
-  href: api/Typhon.Engine.PagedFile.html#Typhon_Engine_PagedFile_IsInitialized
-  commentId: P:Typhon.Engine.PagedFile.IsInitialized
-  fullName: Typhon.Engine.PagedFile.IsInitialized
-  nameWithType: PagedFile.IsInitialized
-- uid: Typhon.Engine.PagedFile.IsInitialized*
-  name: IsInitialized
-  href: api/Typhon.Engine.PagedFile.html#Typhon_Engine_PagedFile_IsInitialized_
-  commentId: Overload:Typhon.Engine.PagedFile.IsInitialized
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedFile.IsInitialized
-  nameWithType: PagedFile.IsInitialized
-- uid: Typhon.Engine.PagedFile.ReferenceCounter
-  name: ReferenceCounter
-  href: api/Typhon.Engine.PagedFile.html#Typhon_Engine_PagedFile_ReferenceCounter
-  commentId: P:Typhon.Engine.PagedFile.ReferenceCounter
-  fullName: Typhon.Engine.PagedFile.ReferenceCounter
-  nameWithType: PagedFile.ReferenceCounter
-- uid: Typhon.Engine.PagedFile.ReferenceCounter*
-  name: ReferenceCounter
-  href: api/Typhon.Engine.PagedFile.html#Typhon_Engine_PagedFile_ReferenceCounter_
-  commentId: Overload:Typhon.Engine.PagedFile.ReferenceCounter
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedFile.ReferenceCounter
-  nameWithType: PagedFile.ReferenceCounter
-- uid: Typhon.Engine.PagedFile.RequestPageAsync(System.Int32,System.Boolean)
-  name: RequestPageAsync(int, bool)
-  href: api/Typhon.Engine.PagedFile.html#Typhon_Engine_PagedFile_RequestPageAsync_System_Int32_System_Boolean_
-  commentId: M:Typhon.Engine.PagedFile.RequestPageAsync(System.Int32,System.Boolean)
-  name.vb: RequestPageAsync(Integer, Boolean)
-  fullName: Typhon.Engine.PagedFile.RequestPageAsync(int, bool)
-  fullName.vb: Typhon.Engine.PagedFile.RequestPageAsync(Integer, Boolean)
-  nameWithType: PagedFile.RequestPageAsync(int, bool)
-  nameWithType.vb: PagedFile.RequestPageAsync(Integer, Boolean)
-- uid: Typhon.Engine.PagedFile.RequestPageAsync*
-  name: RequestPageAsync
-  href: api/Typhon.Engine.PagedFile.html#Typhon_Engine_PagedFile_RequestPageAsync_
-  commentId: Overload:Typhon.Engine.PagedFile.RequestPageAsync
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedFile.RequestPageAsync
-  nameWithType: PagedFile.RequestPageAsync
-- uid: Typhon.Engine.PagedMemoryMappedFile
-  name: PagedMemoryMappedFile
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html
-  commentId: T:Typhon.Engine.PagedMemoryMappedFile
-  fullName: Typhon.Engine.PagedMemoryMappedFile
-  nameWithType: PagedMemoryMappedFile
-- uid: Typhon.Engine.PagedMemoryMappedFile.#ctor(System.IServiceProvider,Typhon.Engine.IConfiguration{Typhon.Engine.DatabaseConfiguration},Typhon.Engine.TimeManager,Microsoft.Extensions.Logging.ILogger{Typhon.Engine.PagedMemoryMappedFile})
-  name: PagedMemoryMappedFile(IServiceProvider, IConfiguration<DatabaseConfiguration>, TimeManager, ILogger<PagedMemoryMappedFile>)
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile__ctor_System_IServiceProvider_Typhon_Engine_IConfiguration_Typhon_Engine_DatabaseConfiguration__Typhon_Engine_TimeManager_Microsoft_Extensions_Logging_ILogger_Typhon_Engine_PagedMemoryMappedFile__
-  commentId: M:Typhon.Engine.PagedMemoryMappedFile.#ctor(System.IServiceProvider,Typhon.Engine.IConfiguration{Typhon.Engine.DatabaseConfiguration},Typhon.Engine.TimeManager,Microsoft.Extensions.Logging.ILogger{Typhon.Engine.PagedMemoryMappedFile})
-  name.vb: New(IServiceProvider, IConfiguration(Of DatabaseConfiguration), TimeManager, ILogger(Of PagedMemoryMappedFile))
-  fullName: Typhon.Engine.PagedMemoryMappedFile.PagedMemoryMappedFile(System.IServiceProvider, Typhon.Engine.IConfiguration<Typhon.Engine.DatabaseConfiguration>, Typhon.Engine.TimeManager, Microsoft.Extensions.Logging.ILogger<Typhon.Engine.PagedMemoryMappedFile>)
-  fullName.vb: Typhon.Engine.PagedMemoryMappedFile.New(System.IServiceProvider, Typhon.Engine.IConfiguration(Of Typhon.Engine.DatabaseConfiguration), Typhon.Engine.TimeManager, Microsoft.Extensions.Logging.ILogger(Of Typhon.Engine.PagedMemoryMappedFile))
-  nameWithType: PagedMemoryMappedFile.PagedMemoryMappedFile(IServiceProvider, IConfiguration<DatabaseConfiguration>, TimeManager, ILogger<PagedMemoryMappedFile>)
-  nameWithType.vb: PagedMemoryMappedFile.New(IServiceProvider, IConfiguration(Of DatabaseConfiguration), TimeManager, ILogger(Of PagedMemoryMappedFile))
-- uid: Typhon.Engine.PagedMemoryMappedFile.#ctor*
-  name: PagedMemoryMappedFile
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile__ctor_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.#ctor
-  isSpec: "True"
-  name.vb: New
-  fullName: Typhon.Engine.PagedMemoryMappedFile.PagedMemoryMappedFile
-  fullName.vb: Typhon.Engine.PagedMemoryMappedFile.New
-  nameWithType: PagedMemoryMappedFile.PagedMemoryMappedFile
-  nameWithType.vb: PagedMemoryMappedFile.New
-- uid: Typhon.Engine.PagedMemoryMappedFile.AllocatePages(System.Span{System.UInt32}@)
-  name: AllocatePages(ref Span<uint>)
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_AllocatePages_System_Span_System_UInt32___
-  commentId: M:Typhon.Engine.PagedMemoryMappedFile.AllocatePages(System.Span{System.UInt32}@)
-  name.vb: AllocatePages(Span(Of UInteger))
-  fullName: Typhon.Engine.PagedMemoryMappedFile.AllocatePages(ref System.Span<uint>)
-  fullName.vb: Typhon.Engine.PagedMemoryMappedFile.AllocatePages(System.Span(Of UInteger))
-  nameWithType: PagedMemoryMappedFile.AllocatePages(ref Span<uint>)
-  nameWithType.vb: PagedMemoryMappedFile.AllocatePages(Span(Of UInteger))
-- uid: Typhon.Engine.PagedMemoryMappedFile.AllocatePages*
-  name: AllocatePages
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_AllocatePages_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.AllocatePages
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedMemoryMappedFile.AllocatePages
-  nameWithType: PagedMemoryMappedFile.AllocatePages
-- uid: Typhon.Engine.PagedMemoryMappedFile.BitmapL3
-  name: PagedMemoryMappedFile.BitmapL3
-  href: api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html
-  commentId: T:Typhon.Engine.PagedMemoryMappedFile.BitmapL3
-  fullName: Typhon.Engine.PagedMemoryMappedFile.BitmapL3
-  nameWithType: PagedMemoryMappedFile.BitmapL3
-- uid: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.#ctor(System.Int32,Typhon.Engine.LogicalSegment)
-  name: BitmapL3(int, LogicalSegment)
-  href: api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html#Typhon_Engine_PagedMemoryMappedFile_BitmapL3__ctor_System_Int32_Typhon_Engine_LogicalSegment_
-  commentId: M:Typhon.Engine.PagedMemoryMappedFile.BitmapL3.#ctor(System.Int32,Typhon.Engine.LogicalSegment)
-  name.vb: New(Integer, LogicalSegment)
-  fullName: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.BitmapL3(int, Typhon.Engine.LogicalSegment)
-  fullName.vb: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.New(Integer, Typhon.Engine.LogicalSegment)
-  nameWithType: PagedMemoryMappedFile.BitmapL3.BitmapL3(int, LogicalSegment)
-  nameWithType.vb: PagedMemoryMappedFile.BitmapL3.New(Integer, LogicalSegment)
-- uid: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.#ctor*
-  name: BitmapL3
-  href: api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html#Typhon_Engine_PagedMemoryMappedFile_BitmapL3__ctor_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.BitmapL3.#ctor
-  isSpec: "True"
-  name.vb: New
-  fullName: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.BitmapL3
-  fullName.vb: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.New
-  nameWithType: PagedMemoryMappedFile.BitmapL3.BitmapL3
-  nameWithType.vb: PagedMemoryMappedFile.BitmapL3.New
-- uid: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.Allocate(System.Span{System.UInt32}@)
-  name: Allocate(ref Span<uint>)
-  href: api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html#Typhon_Engine_PagedMemoryMappedFile_BitmapL3_Allocate_System_Span_System_UInt32___
-  commentId: M:Typhon.Engine.PagedMemoryMappedFile.BitmapL3.Allocate(System.Span{System.UInt32}@)
-  name.vb: Allocate(Span(Of UInteger))
-  fullName: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.Allocate(ref System.Span<uint>)
-  fullName.vb: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.Allocate(System.Span(Of UInteger))
-  nameWithType: PagedMemoryMappedFile.BitmapL3.Allocate(ref Span<uint>)
-  nameWithType.vb: PagedMemoryMappedFile.BitmapL3.Allocate(Span(Of UInteger))
-- uid: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.Allocate*
-  name: Allocate
-  href: api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html#Typhon_Engine_PagedMemoryMappedFile_BitmapL3_Allocate_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.BitmapL3.Allocate
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.Allocate
-  nameWithType: PagedMemoryMappedFile.BitmapL3.Allocate
-- uid: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.Capacity
-  name: Capacity
-  href: api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html#Typhon_Engine_PagedMemoryMappedFile_BitmapL3_Capacity
-  commentId: P:Typhon.Engine.PagedMemoryMappedFile.BitmapL3.Capacity
-  fullName: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.Capacity
-  nameWithType: PagedMemoryMappedFile.BitmapL3.Capacity
-- uid: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.Capacity*
-  name: Capacity
-  href: api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html#Typhon_Engine_PagedMemoryMappedFile_BitmapL3_Capacity_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.BitmapL3.Capacity
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.Capacity
-  nameWithType: PagedMemoryMappedFile.BitmapL3.Capacity
-- uid: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.ClearL0(System.Int32)
-  name: ClearL0(int)
-  href: api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html#Typhon_Engine_PagedMemoryMappedFile_BitmapL3_ClearL0_System_Int32_
-  commentId: M:Typhon.Engine.PagedMemoryMappedFile.BitmapL3.ClearL0(System.Int32)
-  name.vb: ClearL0(Integer)
-  fullName: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.ClearL0(int)
-  fullName.vb: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.ClearL0(Integer)
-  nameWithType: PagedMemoryMappedFile.BitmapL3.ClearL0(int)
-  nameWithType.vb: PagedMemoryMappedFile.BitmapL3.ClearL0(Integer)
-- uid: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.ClearL0*
-  name: ClearL0
-  href: api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html#Typhon_Engine_PagedMemoryMappedFile_BitmapL3_ClearL0_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.BitmapL3.ClearL0
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.ClearL0
-  nameWithType: PagedMemoryMappedFile.BitmapL3.ClearL0
-- uid: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.FindNextUnsetL0(System.Int32@,System.Int64@)
-  name: FindNextUnsetL0(ref int, ref long)
-  href: api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html#Typhon_Engine_PagedMemoryMappedFile_BitmapL3_FindNextUnsetL0_System_Int32__System_Int64__
-  commentId: M:Typhon.Engine.PagedMemoryMappedFile.BitmapL3.FindNextUnsetL0(System.Int32@,System.Int64@)
-  name.vb: FindNextUnsetL0(Integer, Long)
-  fullName: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.FindNextUnsetL0(ref int, ref long)
-  fullName.vb: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.FindNextUnsetL0(Integer, Long)
-  nameWithType: PagedMemoryMappedFile.BitmapL3.FindNextUnsetL0(ref int, ref long)
-  nameWithType.vb: PagedMemoryMappedFile.BitmapL3.FindNextUnsetL0(Integer, Long)
-- uid: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.FindNextUnsetL0*
-  name: FindNextUnsetL0
-  href: api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html#Typhon_Engine_PagedMemoryMappedFile_BitmapL3_FindNextUnsetL0_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.BitmapL3.FindNextUnsetL0
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.FindNextUnsetL0
-  nameWithType: PagedMemoryMappedFile.BitmapL3.FindNextUnsetL0
-- uid: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.FindNextUnsetL1(System.Int32@,System.Int64@)
-  name: FindNextUnsetL1(ref int, ref long)
-  href: api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html#Typhon_Engine_PagedMemoryMappedFile_BitmapL3_FindNextUnsetL1_System_Int32__System_Int64__
-  commentId: M:Typhon.Engine.PagedMemoryMappedFile.BitmapL3.FindNextUnsetL1(System.Int32@,System.Int64@)
-  name.vb: FindNextUnsetL1(Integer, Long)
-  fullName: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.FindNextUnsetL1(ref int, ref long)
-  fullName.vb: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.FindNextUnsetL1(Integer, Long)
-  nameWithType: PagedMemoryMappedFile.BitmapL3.FindNextUnsetL1(ref int, ref long)
-  nameWithType.vb: PagedMemoryMappedFile.BitmapL3.FindNextUnsetL1(Integer, Long)
-- uid: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.FindNextUnsetL1*
-  name: FindNextUnsetL1
-  href: api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html#Typhon_Engine_PagedMemoryMappedFile_BitmapL3_FindNextUnsetL1_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.BitmapL3.FindNextUnsetL1
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.FindNextUnsetL1
-  nameWithType: PagedMemoryMappedFile.BitmapL3.FindNextUnsetL1
-- uid: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.Free(System.ReadOnlySpan{System.UInt32})
-  name: Free(ReadOnlySpan<uint>)
-  href: api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html#Typhon_Engine_PagedMemoryMappedFile_BitmapL3_Free_System_ReadOnlySpan_System_UInt32__
-  commentId: M:Typhon.Engine.PagedMemoryMappedFile.BitmapL3.Free(System.ReadOnlySpan{System.UInt32})
-  name.vb: Free(ReadOnlySpan(Of UInteger))
-  fullName: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.Free(System.ReadOnlySpan<uint>)
-  fullName.vb: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.Free(System.ReadOnlySpan(Of UInteger))
-  nameWithType: PagedMemoryMappedFile.BitmapL3.Free(ReadOnlySpan<uint>)
-  nameWithType.vb: PagedMemoryMappedFile.BitmapL3.Free(ReadOnlySpan(Of UInteger))
-- uid: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.Free*
-  name: Free
-  href: api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html#Typhon_Engine_PagedMemoryMappedFile_BitmapL3_Free_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.BitmapL3.Free
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.Free
-  nameWithType: PagedMemoryMappedFile.BitmapL3.Free
-- uid: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.IsSet(System.Int32)
-  name: IsSet(int)
-  href: api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html#Typhon_Engine_PagedMemoryMappedFile_BitmapL3_IsSet_System_Int32_
-  commentId: M:Typhon.Engine.PagedMemoryMappedFile.BitmapL3.IsSet(System.Int32)
-  name.vb: IsSet(Integer)
-  fullName: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.IsSet(int)
-  fullName.vb: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.IsSet(Integer)
-  nameWithType: PagedMemoryMappedFile.BitmapL3.IsSet(int)
-  nameWithType.vb: PagedMemoryMappedFile.BitmapL3.IsSet(Integer)
-- uid: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.IsSet*
-  name: IsSet
-  href: api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html#Typhon_Engine_PagedMemoryMappedFile_BitmapL3_IsSet_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.BitmapL3.IsSet
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.IsSet
-  nameWithType: PagedMemoryMappedFile.BitmapL3.IsSet
-- uid: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.SetL0(System.Int32)
-  name: SetL0(int)
-  href: api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html#Typhon_Engine_PagedMemoryMappedFile_BitmapL3_SetL0_System_Int32_
-  commentId: M:Typhon.Engine.PagedMemoryMappedFile.BitmapL3.SetL0(System.Int32)
-  name.vb: SetL0(Integer)
-  fullName: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.SetL0(int)
-  fullName.vb: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.SetL0(Integer)
-  nameWithType: PagedMemoryMappedFile.BitmapL3.SetL0(int)
-  nameWithType.vb: PagedMemoryMappedFile.BitmapL3.SetL0(Integer)
-- uid: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.SetL0*
-  name: SetL0
-  href: api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html#Typhon_Engine_PagedMemoryMappedFile_BitmapL3_SetL0_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.BitmapL3.SetL0
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.SetL0
-  nameWithType: PagedMemoryMappedFile.BitmapL3.SetL0
-- uid: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.SetL1(System.Int32)
-  name: SetL1(int)
-  href: api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html#Typhon_Engine_PagedMemoryMappedFile_BitmapL3_SetL1_System_Int32_
-  commentId: M:Typhon.Engine.PagedMemoryMappedFile.BitmapL3.SetL1(System.Int32)
-  name.vb: SetL1(Integer)
-  fullName: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.SetL1(int)
-  fullName.vb: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.SetL1(Integer)
-  nameWithType: PagedMemoryMappedFile.BitmapL3.SetL1(int)
-  nameWithType.vb: PagedMemoryMappedFile.BitmapL3.SetL1(Integer)
-- uid: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.SetL1*
-  name: SetL1
-  href: api/Typhon.Engine.PagedMemoryMappedFile.BitmapL3.html#Typhon_Engine_PagedMemoryMappedFile_BitmapL3_SetL1_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.BitmapL3.SetL1
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedMemoryMappedFile.BitmapL3.SetL1
-  nameWithType: PagedMemoryMappedFile.BitmapL3.SetL1
-- uid: Typhon.Engine.PagedMemoryMappedFile.DatabaseConfiguration
-  name: DatabaseConfiguration
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_DatabaseConfiguration
-  commentId: P:Typhon.Engine.PagedMemoryMappedFile.DatabaseConfiguration
-  fullName: Typhon.Engine.PagedMemoryMappedFile.DatabaseConfiguration
-  nameWithType: PagedMemoryMappedFile.DatabaseConfiguration
-- uid: Typhon.Engine.PagedMemoryMappedFile.DatabaseConfiguration*
-  name: DatabaseConfiguration
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_DatabaseConfiguration_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.DatabaseConfiguration
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedMemoryMappedFile.DatabaseConfiguration
-  nameWithType: PagedMemoryMappedFile.DatabaseConfiguration
-- uid: Typhon.Engine.PagedMemoryMappedFile.DeleteDatabaseFile
-  name: DeleteDatabaseFile()
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_DeleteDatabaseFile
-  commentId: M:Typhon.Engine.PagedMemoryMappedFile.DeleteDatabaseFile
-  fullName: Typhon.Engine.PagedMemoryMappedFile.DeleteDatabaseFile()
-  nameWithType: PagedMemoryMappedFile.DeleteDatabaseFile()
-- uid: Typhon.Engine.PagedMemoryMappedFile.DeleteDatabaseFile*
-  name: DeleteDatabaseFile
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_DeleteDatabaseFile_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.DeleteDatabaseFile
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedMemoryMappedFile.DeleteDatabaseFile
-  nameWithType: PagedMemoryMappedFile.DeleteDatabaseFile
-- uid: Typhon.Engine.PagedMemoryMappedFile.Dispose
-  name: Dispose()
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_Dispose
-  commentId: M:Typhon.Engine.PagedMemoryMappedFile.Dispose
-  fullName: Typhon.Engine.PagedMemoryMappedFile.Dispose()
-  nameWithType: PagedMemoryMappedFile.Dispose()
-- uid: Typhon.Engine.PagedMemoryMappedFile.Dispose*
-  name: Dispose
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_Dispose_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.Dispose
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedMemoryMappedFile.Dispose
-  nameWithType: PagedMemoryMappedFile.Dispose
-- uid: Typhon.Engine.PagedMemoryMappedFile.FreePages(System.ReadOnlySpan{System.UInt32})
-  name: FreePages(ReadOnlySpan<uint>)
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_FreePages_System_ReadOnlySpan_System_UInt32__
-  commentId: M:Typhon.Engine.PagedMemoryMappedFile.FreePages(System.ReadOnlySpan{System.UInt32})
-  name.vb: FreePages(ReadOnlySpan(Of UInteger))
-  fullName: Typhon.Engine.PagedMemoryMappedFile.FreePages(System.ReadOnlySpan<uint>)
-  fullName.vb: Typhon.Engine.PagedMemoryMappedFile.FreePages(System.ReadOnlySpan(Of UInteger))
-  nameWithType: PagedMemoryMappedFile.FreePages(ReadOnlySpan<uint>)
-  nameWithType.vb: PagedMemoryMappedFile.FreePages(ReadOnlySpan(Of UInteger))
-- uid: Typhon.Engine.PagedMemoryMappedFile.FreePages*
-  name: FreePages
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_FreePages_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.FreePages
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedMemoryMappedFile.FreePages
-  nameWithType: PagedMemoryMappedFile.FreePages
-- uid: Typhon.Engine.PagedMemoryMappedFile.Initialize
-  name: Initialize()
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_Initialize
-  commentId: M:Typhon.Engine.PagedMemoryMappedFile.Initialize
-  fullName: Typhon.Engine.PagedMemoryMappedFile.Initialize()
-  nameWithType: PagedMemoryMappedFile.Initialize()
-- uid: Typhon.Engine.PagedMemoryMappedFile.Initialize*
-  name: Initialize
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_Initialize_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.Initialize
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedMemoryMappedFile.Initialize
-  nameWithType: PagedMemoryMappedFile.Initialize
-- uid: Typhon.Engine.PagedMemoryMappedFile.IsDisposed
-  name: IsDisposed
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_IsDisposed
-  commentId: P:Typhon.Engine.PagedMemoryMappedFile.IsDisposed
-  fullName: Typhon.Engine.PagedMemoryMappedFile.IsDisposed
-  nameWithType: PagedMemoryMappedFile.IsDisposed
-- uid: Typhon.Engine.PagedMemoryMappedFile.IsDisposed*
-  name: IsDisposed
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_IsDisposed_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.IsDisposed
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedMemoryMappedFile.IsDisposed
-  nameWithType: PagedMemoryMappedFile.IsDisposed
-- uid: Typhon.Engine.PagedMemoryMappedFile.IsInitialized
-  name: IsInitialized
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_IsInitialized
-  commentId: P:Typhon.Engine.PagedMemoryMappedFile.IsInitialized
-  fullName: Typhon.Engine.PagedMemoryMappedFile.IsInitialized
-  nameWithType: PagedMemoryMappedFile.IsInitialized
-- uid: Typhon.Engine.PagedMemoryMappedFile.IsInitialized*
-  name: IsInitialized
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_IsInitialized_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.IsInitialized
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedMemoryMappedFile.IsInitialized
-  nameWithType: PagedMemoryMappedFile.IsInitialized
-- uid: Typhon.Engine.PagedMemoryMappedFile.ReferenceCounter
-  name: ReferenceCounter
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_ReferenceCounter
-  commentId: P:Typhon.Engine.PagedMemoryMappedFile.ReferenceCounter
-  fullName: Typhon.Engine.PagedMemoryMappedFile.ReferenceCounter
-  nameWithType: PagedMemoryMappedFile.ReferenceCounter
-- uid: Typhon.Engine.PagedMemoryMappedFile.ReferenceCounter*
-  name: ReferenceCounter
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_ReferenceCounter_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.ReferenceCounter
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedMemoryMappedFile.ReferenceCounter
-  nameWithType: PagedMemoryMappedFile.ReferenceCounter
-- uid: Typhon.Engine.PagedMemoryMappedFile.RequestPageExclusive(System.UInt32)
-  name: RequestPageExclusive(uint)
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_RequestPageExclusive_System_UInt32_
-  commentId: M:Typhon.Engine.PagedMemoryMappedFile.RequestPageExclusive(System.UInt32)
-  name.vb: RequestPageExclusive(UInteger)
-  fullName: Typhon.Engine.PagedMemoryMappedFile.RequestPageExclusive(uint)
-  fullName.vb: Typhon.Engine.PagedMemoryMappedFile.RequestPageExclusive(UInteger)
-  nameWithType: PagedMemoryMappedFile.RequestPageExclusive(uint)
-  nameWithType.vb: PagedMemoryMappedFile.RequestPageExclusive(UInteger)
-- uid: Typhon.Engine.PagedMemoryMappedFile.RequestPageExclusive*
-  name: RequestPageExclusive
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_RequestPageExclusive_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.RequestPageExclusive
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedMemoryMappedFile.RequestPageExclusive
-  nameWithType: PagedMemoryMappedFile.RequestPageExclusive
-- uid: Typhon.Engine.PagedMemoryMappedFile.RequestPageShared(System.UInt32)
-  name: RequestPageShared(uint)
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_RequestPageShared_System_UInt32_
-  commentId: M:Typhon.Engine.PagedMemoryMappedFile.RequestPageShared(System.UInt32)
-  name.vb: RequestPageShared(UInteger)
-  fullName: Typhon.Engine.PagedMemoryMappedFile.RequestPageShared(uint)
-  fullName.vb: Typhon.Engine.PagedMemoryMappedFile.RequestPageShared(UInteger)
-  nameWithType: PagedMemoryMappedFile.RequestPageShared(uint)
-  nameWithType.vb: PagedMemoryMappedFile.RequestPageShared(UInteger)
-- uid: Typhon.Engine.PagedMemoryMappedFile.RequestPageShared*
-  name: RequestPageShared
-  href: api/Typhon.Engine.PagedMemoryMappedFile.html#Typhon_Engine_PagedMemoryMappedFile_RequestPageShared_
-  commentId: Overload:Typhon.Engine.PagedMemoryMappedFile.RequestPageShared
-  isSpec: "True"
-  fullName: Typhon.Engine.PagedMemoryMappedFile.RequestPageShared
-  nameWithType: PagedMemoryMappedFile.RequestPageShared
+  fullName: Typhon.Engine.PagedMMFOptions.PagesDebugPattern
+  nameWithType: PagedMMFOptions.PagesDebugPattern
 - uid: Typhon.Engine.Point2D
   name: Point2D
   href: api/Typhon.Engine.Point2D.html
@@ -11659,28 +11385,156 @@ references:
   commentId: T:Typhon.Engine.QuaternionF
   fullName: Typhon.Engine.QuaternionF
   nameWithType: QuaternionF
-- uid: Typhon.Engine.ServiceProviderExtensions
-  name: ServiceProviderExtensions
-  href: api/Typhon.Engine.ServiceProviderExtensions.html
-  commentId: T:Typhon.Engine.ServiceProviderExtensions
-  fullName: Typhon.Engine.ServiceProviderExtensions
-  nameWithType: ServiceProviderExtensions
-- uid: Typhon.Engine.ServiceProviderExtensions.AddTyphon(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.ITyphonBuilder})
-  name: AddTyphon(IServiceCollection, Action<ITyphonBuilder>)
-  href: api/Typhon.Engine.ServiceProviderExtensions.html#Typhon_Engine_ServiceProviderExtensions_AddTyphon_Microsoft_Extensions_DependencyInjection_IServiceCollection_System_Action_Typhon_Engine_ITyphonBuilder__
-  commentId: M:Typhon.Engine.ServiceProviderExtensions.AddTyphon(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.ITyphonBuilder})
-  name.vb: AddTyphon(IServiceCollection, Action(Of ITyphonBuilder))
-  fullName: Typhon.Engine.ServiceProviderExtensions.AddTyphon(Microsoft.Extensions.DependencyInjection.IServiceCollection, System.Action<Typhon.Engine.ITyphonBuilder>)
-  fullName.vb: Typhon.Engine.ServiceProviderExtensions.AddTyphon(Microsoft.Extensions.DependencyInjection.IServiceCollection, System.Action(Of Typhon.Engine.ITyphonBuilder))
-  nameWithType: ServiceProviderExtensions.AddTyphon(IServiceCollection, Action<ITyphonBuilder>)
-  nameWithType.vb: ServiceProviderExtensions.AddTyphon(IServiceCollection, Action(Of ITyphonBuilder))
-- uid: Typhon.Engine.ServiceProviderExtensions.AddTyphon*
-  name: AddTyphon
-  href: api/Typhon.Engine.ServiceProviderExtensions.html#Typhon_Engine_ServiceProviderExtensions_AddTyphon_
-  commentId: Overload:Typhon.Engine.ServiceProviderExtensions.AddTyphon
+- uid: Typhon.Engine.ServiceCollectionExtensions
+  name: ServiceCollectionExtensions
+  href: api/Typhon.Engine.ServiceCollectionExtensions.html
+  commentId: T:Typhon.Engine.ServiceCollectionExtensions
+  fullName: Typhon.Engine.ServiceCollectionExtensions
+  nameWithType: ServiceCollectionExtensions
+- uid: Typhon.Engine.ServiceCollectionExtensions.AddDatabaseEngine(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.DatabaseEngineOptions})
+  name: AddDatabaseEngine(IServiceCollection, Action<DatabaseEngineOptions>)
+  href: api/Typhon.Engine.ServiceCollectionExtensions.html#Typhon_Engine_ServiceCollectionExtensions_AddDatabaseEngine_Microsoft_Extensions_DependencyInjection_IServiceCollection_System_Action_Typhon_Engine_DatabaseEngineOptions__
+  commentId: M:Typhon.Engine.ServiceCollectionExtensions.AddDatabaseEngine(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.DatabaseEngineOptions})
+  name.vb: AddDatabaseEngine(IServiceCollection, Action(Of DatabaseEngineOptions))
+  fullName: Typhon.Engine.ServiceCollectionExtensions.AddDatabaseEngine(Microsoft.Extensions.DependencyInjection.IServiceCollection, System.Action<Typhon.Engine.DatabaseEngineOptions>)
+  fullName.vb: Typhon.Engine.ServiceCollectionExtensions.AddDatabaseEngine(Microsoft.Extensions.DependencyInjection.IServiceCollection, System.Action(Of Typhon.Engine.DatabaseEngineOptions))
+  nameWithType: ServiceCollectionExtensions.AddDatabaseEngine(IServiceCollection, Action<DatabaseEngineOptions>)
+  nameWithType.vb: ServiceCollectionExtensions.AddDatabaseEngine(IServiceCollection, Action(Of DatabaseEngineOptions))
+- uid: Typhon.Engine.ServiceCollectionExtensions.AddDatabaseEngine*
+  name: AddDatabaseEngine
+  href: api/Typhon.Engine.ServiceCollectionExtensions.html#Typhon_Engine_ServiceCollectionExtensions_AddDatabaseEngine_
+  commentId: Overload:Typhon.Engine.ServiceCollectionExtensions.AddDatabaseEngine
   isSpec: "True"
-  fullName: Typhon.Engine.ServiceProviderExtensions.AddTyphon
-  nameWithType: ServiceProviderExtensions.AddTyphon
+  fullName: Typhon.Engine.ServiceCollectionExtensions.AddDatabaseEngine
+  nameWithType: ServiceCollectionExtensions.AddDatabaseEngine
+- uid: Typhon.Engine.ServiceCollectionExtensions.AddManagedPagedMMF(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.ManagedPagedMMFOptions})
+  name: AddManagedPagedMMF(IServiceCollection, Action<ManagedPagedMMFOptions>)
+  href: api/Typhon.Engine.ServiceCollectionExtensions.html#Typhon_Engine_ServiceCollectionExtensions_AddManagedPagedMMF_Microsoft_Extensions_DependencyInjection_IServiceCollection_System_Action_Typhon_Engine_ManagedPagedMMFOptions__
+  commentId: M:Typhon.Engine.ServiceCollectionExtensions.AddManagedPagedMMF(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.ManagedPagedMMFOptions})
+  name.vb: AddManagedPagedMMF(IServiceCollection, Action(Of ManagedPagedMMFOptions))
+  fullName: Typhon.Engine.ServiceCollectionExtensions.AddManagedPagedMMF(Microsoft.Extensions.DependencyInjection.IServiceCollection, System.Action<Typhon.Engine.ManagedPagedMMFOptions>)
+  fullName.vb: Typhon.Engine.ServiceCollectionExtensions.AddManagedPagedMMF(Microsoft.Extensions.DependencyInjection.IServiceCollection, System.Action(Of Typhon.Engine.ManagedPagedMMFOptions))
+  nameWithType: ServiceCollectionExtensions.AddManagedPagedMMF(IServiceCollection, Action<ManagedPagedMMFOptions>)
+  nameWithType.vb: ServiceCollectionExtensions.AddManagedPagedMMF(IServiceCollection, Action(Of ManagedPagedMMFOptions))
+- uid: Typhon.Engine.ServiceCollectionExtensions.AddManagedPagedMMF*
+  name: AddManagedPagedMMF
+  href: api/Typhon.Engine.ServiceCollectionExtensions.html#Typhon_Engine_ServiceCollectionExtensions_AddManagedPagedMMF_
+  commentId: Overload:Typhon.Engine.ServiceCollectionExtensions.AddManagedPagedMMF
+  isSpec: "True"
+  fullName: Typhon.Engine.ServiceCollectionExtensions.AddManagedPagedMMF
+  nameWithType: ServiceCollectionExtensions.AddManagedPagedMMF
+- uid: Typhon.Engine.ServiceCollectionExtensions.AddPagedMMF(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.PagedMMFOptions})
+  name: AddPagedMMF(IServiceCollection, Action<PagedMMFOptions>)
+  href: api/Typhon.Engine.ServiceCollectionExtensions.html#Typhon_Engine_ServiceCollectionExtensions_AddPagedMMF_Microsoft_Extensions_DependencyInjection_IServiceCollection_System_Action_Typhon_Engine_PagedMMFOptions__
+  commentId: M:Typhon.Engine.ServiceCollectionExtensions.AddPagedMMF(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.PagedMMFOptions})
+  name.vb: AddPagedMMF(IServiceCollection, Action(Of PagedMMFOptions))
+  fullName: Typhon.Engine.ServiceCollectionExtensions.AddPagedMMF(Microsoft.Extensions.DependencyInjection.IServiceCollection, System.Action<Typhon.Engine.PagedMMFOptions>)
+  fullName.vb: Typhon.Engine.ServiceCollectionExtensions.AddPagedMMF(Microsoft.Extensions.DependencyInjection.IServiceCollection, System.Action(Of Typhon.Engine.PagedMMFOptions))
+  nameWithType: ServiceCollectionExtensions.AddPagedMMF(IServiceCollection, Action<PagedMMFOptions>)
+  nameWithType.vb: ServiceCollectionExtensions.AddPagedMMF(IServiceCollection, Action(Of PagedMMFOptions))
+- uid: Typhon.Engine.ServiceCollectionExtensions.AddPagedMMF*
+  name: AddPagedMMF
+  href: api/Typhon.Engine.ServiceCollectionExtensions.html#Typhon_Engine_ServiceCollectionExtensions_AddPagedMMF_
+  commentId: Overload:Typhon.Engine.ServiceCollectionExtensions.AddPagedMMF
+  isSpec: "True"
+  fullName: Typhon.Engine.ServiceCollectionExtensions.AddPagedMMF
+  nameWithType: ServiceCollectionExtensions.AddPagedMMF
+- uid: Typhon.Engine.ServiceCollectionExtensions.AddScopedDatabaseEngine(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.DatabaseEngineOptions})
+  name: AddScopedDatabaseEngine(IServiceCollection, Action<DatabaseEngineOptions>)
+  href: api/Typhon.Engine.ServiceCollectionExtensions.html#Typhon_Engine_ServiceCollectionExtensions_AddScopedDatabaseEngine_Microsoft_Extensions_DependencyInjection_IServiceCollection_System_Action_Typhon_Engine_DatabaseEngineOptions__
+  commentId: M:Typhon.Engine.ServiceCollectionExtensions.AddScopedDatabaseEngine(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.DatabaseEngineOptions})
+  name.vb: AddScopedDatabaseEngine(IServiceCollection, Action(Of DatabaseEngineOptions))
+  fullName: Typhon.Engine.ServiceCollectionExtensions.AddScopedDatabaseEngine(Microsoft.Extensions.DependencyInjection.IServiceCollection, System.Action<Typhon.Engine.DatabaseEngineOptions>)
+  fullName.vb: Typhon.Engine.ServiceCollectionExtensions.AddScopedDatabaseEngine(Microsoft.Extensions.DependencyInjection.IServiceCollection, System.Action(Of Typhon.Engine.DatabaseEngineOptions))
+  nameWithType: ServiceCollectionExtensions.AddScopedDatabaseEngine(IServiceCollection, Action<DatabaseEngineOptions>)
+  nameWithType.vb: ServiceCollectionExtensions.AddScopedDatabaseEngine(IServiceCollection, Action(Of DatabaseEngineOptions))
+- uid: Typhon.Engine.ServiceCollectionExtensions.AddScopedDatabaseEngine*
+  name: AddScopedDatabaseEngine
+  href: api/Typhon.Engine.ServiceCollectionExtensions.html#Typhon_Engine_ServiceCollectionExtensions_AddScopedDatabaseEngine_
+  commentId: Overload:Typhon.Engine.ServiceCollectionExtensions.AddScopedDatabaseEngine
+  isSpec: "True"
+  fullName: Typhon.Engine.ServiceCollectionExtensions.AddScopedDatabaseEngine
+  nameWithType: ServiceCollectionExtensions.AddScopedDatabaseEngine
+- uid: Typhon.Engine.ServiceCollectionExtensions.AddScopedManagedPagedMemoryMappedFile(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.ManagedPagedMMFOptions})
+  name: AddScopedManagedPagedMemoryMappedFile(IServiceCollection, Action<ManagedPagedMMFOptions>)
+  href: api/Typhon.Engine.ServiceCollectionExtensions.html#Typhon_Engine_ServiceCollectionExtensions_AddScopedManagedPagedMemoryMappedFile_Microsoft_Extensions_DependencyInjection_IServiceCollection_System_Action_Typhon_Engine_ManagedPagedMMFOptions__
+  commentId: M:Typhon.Engine.ServiceCollectionExtensions.AddScopedManagedPagedMemoryMappedFile(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.ManagedPagedMMFOptions})
+  name.vb: AddScopedManagedPagedMemoryMappedFile(IServiceCollection, Action(Of ManagedPagedMMFOptions))
+  fullName: Typhon.Engine.ServiceCollectionExtensions.AddScopedManagedPagedMemoryMappedFile(Microsoft.Extensions.DependencyInjection.IServiceCollection, System.Action<Typhon.Engine.ManagedPagedMMFOptions>)
+  fullName.vb: Typhon.Engine.ServiceCollectionExtensions.AddScopedManagedPagedMemoryMappedFile(Microsoft.Extensions.DependencyInjection.IServiceCollection, System.Action(Of Typhon.Engine.ManagedPagedMMFOptions))
+  nameWithType: ServiceCollectionExtensions.AddScopedManagedPagedMemoryMappedFile(IServiceCollection, Action<ManagedPagedMMFOptions>)
+  nameWithType.vb: ServiceCollectionExtensions.AddScopedManagedPagedMemoryMappedFile(IServiceCollection, Action(Of ManagedPagedMMFOptions))
+- uid: Typhon.Engine.ServiceCollectionExtensions.AddScopedManagedPagedMemoryMappedFile*
+  name: AddScopedManagedPagedMemoryMappedFile
+  href: api/Typhon.Engine.ServiceCollectionExtensions.html#Typhon_Engine_ServiceCollectionExtensions_AddScopedManagedPagedMemoryMappedFile_
+  commentId: Overload:Typhon.Engine.ServiceCollectionExtensions.AddScopedManagedPagedMemoryMappedFile
+  isSpec: "True"
+  fullName: Typhon.Engine.ServiceCollectionExtensions.AddScopedManagedPagedMemoryMappedFile
+  nameWithType: ServiceCollectionExtensions.AddScopedManagedPagedMemoryMappedFile
+- uid: Typhon.Engine.ServiceCollectionExtensions.AddScopedPagedMemoryMappedFile(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.PagedMMFOptions})
+  name: AddScopedPagedMemoryMappedFile(IServiceCollection, Action<PagedMMFOptions>)
+  href: api/Typhon.Engine.ServiceCollectionExtensions.html#Typhon_Engine_ServiceCollectionExtensions_AddScopedPagedMemoryMappedFile_Microsoft_Extensions_DependencyInjection_IServiceCollection_System_Action_Typhon_Engine_PagedMMFOptions__
+  commentId: M:Typhon.Engine.ServiceCollectionExtensions.AddScopedPagedMemoryMappedFile(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.PagedMMFOptions})
+  name.vb: AddScopedPagedMemoryMappedFile(IServiceCollection, Action(Of PagedMMFOptions))
+  fullName: Typhon.Engine.ServiceCollectionExtensions.AddScopedPagedMemoryMappedFile(Microsoft.Extensions.DependencyInjection.IServiceCollection, System.Action<Typhon.Engine.PagedMMFOptions>)
+  fullName.vb: Typhon.Engine.ServiceCollectionExtensions.AddScopedPagedMemoryMappedFile(Microsoft.Extensions.DependencyInjection.IServiceCollection, System.Action(Of Typhon.Engine.PagedMMFOptions))
+  nameWithType: ServiceCollectionExtensions.AddScopedPagedMemoryMappedFile(IServiceCollection, Action<PagedMMFOptions>)
+  nameWithType.vb: ServiceCollectionExtensions.AddScopedPagedMemoryMappedFile(IServiceCollection, Action(Of PagedMMFOptions))
+- uid: Typhon.Engine.ServiceCollectionExtensions.AddScopedPagedMemoryMappedFile*
+  name: AddScopedPagedMemoryMappedFile
+  href: api/Typhon.Engine.ServiceCollectionExtensions.html#Typhon_Engine_ServiceCollectionExtensions_AddScopedPagedMemoryMappedFile_
+  commentId: Overload:Typhon.Engine.ServiceCollectionExtensions.AddScopedPagedMemoryMappedFile
+  isSpec: "True"
+  fullName: Typhon.Engine.ServiceCollectionExtensions.AddScopedPagedMemoryMappedFile
+  nameWithType: ServiceCollectionExtensions.AddScopedPagedMemoryMappedFile
+- uid: Typhon.Engine.ServiceCollectionExtensions.AddTransientDatabaseEngine(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.DatabaseEngineOptions})
+  name: AddTransientDatabaseEngine(IServiceCollection, Action<DatabaseEngineOptions>)
+  href: api/Typhon.Engine.ServiceCollectionExtensions.html#Typhon_Engine_ServiceCollectionExtensions_AddTransientDatabaseEngine_Microsoft_Extensions_DependencyInjection_IServiceCollection_System_Action_Typhon_Engine_DatabaseEngineOptions__
+  commentId: M:Typhon.Engine.ServiceCollectionExtensions.AddTransientDatabaseEngine(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.DatabaseEngineOptions})
+  name.vb: AddTransientDatabaseEngine(IServiceCollection, Action(Of DatabaseEngineOptions))
+  fullName: Typhon.Engine.ServiceCollectionExtensions.AddTransientDatabaseEngine(Microsoft.Extensions.DependencyInjection.IServiceCollection, System.Action<Typhon.Engine.DatabaseEngineOptions>)
+  fullName.vb: Typhon.Engine.ServiceCollectionExtensions.AddTransientDatabaseEngine(Microsoft.Extensions.DependencyInjection.IServiceCollection, System.Action(Of Typhon.Engine.DatabaseEngineOptions))
+  nameWithType: ServiceCollectionExtensions.AddTransientDatabaseEngine(IServiceCollection, Action<DatabaseEngineOptions>)
+  nameWithType.vb: ServiceCollectionExtensions.AddTransientDatabaseEngine(IServiceCollection, Action(Of DatabaseEngineOptions))
+- uid: Typhon.Engine.ServiceCollectionExtensions.AddTransientDatabaseEngine*
+  name: AddTransientDatabaseEngine
+  href: api/Typhon.Engine.ServiceCollectionExtensions.html#Typhon_Engine_ServiceCollectionExtensions_AddTransientDatabaseEngine_
+  commentId: Overload:Typhon.Engine.ServiceCollectionExtensions.AddTransientDatabaseEngine
+  isSpec: "True"
+  fullName: Typhon.Engine.ServiceCollectionExtensions.AddTransientDatabaseEngine
+  nameWithType: ServiceCollectionExtensions.AddTransientDatabaseEngine
+- uid: Typhon.Engine.ServiceCollectionExtensions.AddTransientManagedPagedMemoryMappedFile(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.ManagedPagedMMFOptions})
+  name: AddTransientManagedPagedMemoryMappedFile(IServiceCollection, Action<ManagedPagedMMFOptions>)
+  href: api/Typhon.Engine.ServiceCollectionExtensions.html#Typhon_Engine_ServiceCollectionExtensions_AddTransientManagedPagedMemoryMappedFile_Microsoft_Extensions_DependencyInjection_IServiceCollection_System_Action_Typhon_Engine_ManagedPagedMMFOptions__
+  commentId: M:Typhon.Engine.ServiceCollectionExtensions.AddTransientManagedPagedMemoryMappedFile(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.ManagedPagedMMFOptions})
+  name.vb: AddTransientManagedPagedMemoryMappedFile(IServiceCollection, Action(Of ManagedPagedMMFOptions))
+  fullName: Typhon.Engine.ServiceCollectionExtensions.AddTransientManagedPagedMemoryMappedFile(Microsoft.Extensions.DependencyInjection.IServiceCollection, System.Action<Typhon.Engine.ManagedPagedMMFOptions>)
+  fullName.vb: Typhon.Engine.ServiceCollectionExtensions.AddTransientManagedPagedMemoryMappedFile(Microsoft.Extensions.DependencyInjection.IServiceCollection, System.Action(Of Typhon.Engine.ManagedPagedMMFOptions))
+  nameWithType: ServiceCollectionExtensions.AddTransientManagedPagedMemoryMappedFile(IServiceCollection, Action<ManagedPagedMMFOptions>)
+  nameWithType.vb: ServiceCollectionExtensions.AddTransientManagedPagedMemoryMappedFile(IServiceCollection, Action(Of ManagedPagedMMFOptions))
+- uid: Typhon.Engine.ServiceCollectionExtensions.AddTransientManagedPagedMemoryMappedFile*
+  name: AddTransientManagedPagedMemoryMappedFile
+  href: api/Typhon.Engine.ServiceCollectionExtensions.html#Typhon_Engine_ServiceCollectionExtensions_AddTransientManagedPagedMemoryMappedFile_
+  commentId: Overload:Typhon.Engine.ServiceCollectionExtensions.AddTransientManagedPagedMemoryMappedFile
+  isSpec: "True"
+  fullName: Typhon.Engine.ServiceCollectionExtensions.AddTransientManagedPagedMemoryMappedFile
+  nameWithType: ServiceCollectionExtensions.AddTransientManagedPagedMemoryMappedFile
+- uid: Typhon.Engine.ServiceCollectionExtensions.AddTransientPagedMemoryMappedFile(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.PagedMMFOptions})
+  name: AddTransientPagedMemoryMappedFile(IServiceCollection, Action<PagedMMFOptions>)
+  href: api/Typhon.Engine.ServiceCollectionExtensions.html#Typhon_Engine_ServiceCollectionExtensions_AddTransientPagedMemoryMappedFile_Microsoft_Extensions_DependencyInjection_IServiceCollection_System_Action_Typhon_Engine_PagedMMFOptions__
+  commentId: M:Typhon.Engine.ServiceCollectionExtensions.AddTransientPagedMemoryMappedFile(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.PagedMMFOptions})
+  name.vb: AddTransientPagedMemoryMappedFile(IServiceCollection, Action(Of PagedMMFOptions))
+  fullName: Typhon.Engine.ServiceCollectionExtensions.AddTransientPagedMemoryMappedFile(Microsoft.Extensions.DependencyInjection.IServiceCollection, System.Action<Typhon.Engine.PagedMMFOptions>)
+  fullName.vb: Typhon.Engine.ServiceCollectionExtensions.AddTransientPagedMemoryMappedFile(Microsoft.Extensions.DependencyInjection.IServiceCollection, System.Action(Of Typhon.Engine.PagedMMFOptions))
+  nameWithType: ServiceCollectionExtensions.AddTransientPagedMemoryMappedFile(IServiceCollection, Action<PagedMMFOptions>)
+  nameWithType.vb: ServiceCollectionExtensions.AddTransientPagedMemoryMappedFile(IServiceCollection, Action(Of PagedMMFOptions))
+- uid: Typhon.Engine.ServiceCollectionExtensions.AddTransientPagedMemoryMappedFile*
+  name: AddTransientPagedMemoryMappedFile
+  href: api/Typhon.Engine.ServiceCollectionExtensions.html#Typhon_Engine_ServiceCollectionExtensions_AddTransientPagedMemoryMappedFile_
+  commentId: Overload:Typhon.Engine.ServiceCollectionExtensions.AddTransientPagedMemoryMappedFile
+  isSpec: "True"
+  fullName: Typhon.Engine.ServiceCollectionExtensions.AddTransientPagedMemoryMappedFile
+  nameWithType: ServiceCollectionExtensions.AddTransientPagedMemoryMappedFile
 - uid: Typhon.Engine.SmallAccessControl
   name: SmallAccessControl
   href: api/Typhon.Engine.SmallAccessControl.html
@@ -12406,44 +12260,6 @@ references:
   fullName.vb: Typhon.Engine.Transaction.UpdateEntity(Of T, U, V)(Long, T, U, V)
   nameWithType: Transaction.UpdateEntity<T, U, V>(long, ref T, ref U, ref V)
   nameWithType.vb: Transaction.UpdateEntity(Of T, U, V)(Long, T, U, V)
-- uid: Typhon.Engine.TyphonBuilderExtensions
-  name: TyphonBuilderExtensions
-  href: api/Typhon.Engine.TyphonBuilderExtensions.html
-  commentId: T:Typhon.Engine.TyphonBuilderExtensions
-  fullName: Typhon.Engine.TyphonBuilderExtensions
-  nameWithType: TyphonBuilderExtensions
-- uid: Typhon.Engine.TyphonBuilderExtensions.AddProvider(Typhon.Engine.ITyphonBuilder,Typhon.Engine.IConfigurationProvider{Typhon.Engine.DatabaseConfiguration})
-  name: AddProvider(ITyphonBuilder, IConfigurationProvider<DatabaseConfiguration>)
-  href: api/Typhon.Engine.TyphonBuilderExtensions.html#Typhon_Engine_TyphonBuilderExtensions_AddProvider_Typhon_Engine_ITyphonBuilder_Typhon_Engine_IConfigurationProvider_Typhon_Engine_DatabaseConfiguration__
-  commentId: M:Typhon.Engine.TyphonBuilderExtensions.AddProvider(Typhon.Engine.ITyphonBuilder,Typhon.Engine.IConfigurationProvider{Typhon.Engine.DatabaseConfiguration})
-  name.vb: AddProvider(ITyphonBuilder, IConfigurationProvider(Of DatabaseConfiguration))
-  fullName: Typhon.Engine.TyphonBuilderExtensions.AddProvider(Typhon.Engine.ITyphonBuilder, Typhon.Engine.IConfigurationProvider<Typhon.Engine.DatabaseConfiguration>)
-  fullName.vb: Typhon.Engine.TyphonBuilderExtensions.AddProvider(Typhon.Engine.ITyphonBuilder, Typhon.Engine.IConfigurationProvider(Of Typhon.Engine.DatabaseConfiguration))
-  nameWithType: TyphonBuilderExtensions.AddProvider(ITyphonBuilder, IConfigurationProvider<DatabaseConfiguration>)
-  nameWithType.vb: TyphonBuilderExtensions.AddProvider(ITyphonBuilder, IConfigurationProvider(Of DatabaseConfiguration))
-- uid: Typhon.Engine.TyphonBuilderExtensions.AddProvider*
-  name: AddProvider
-  href: api/Typhon.Engine.TyphonBuilderExtensions.html#Typhon_Engine_TyphonBuilderExtensions_AddProvider_
-  commentId: Overload:Typhon.Engine.TyphonBuilderExtensions.AddProvider
-  isSpec: "True"
-  fullName: Typhon.Engine.TyphonBuilderExtensions.AddProvider
-  nameWithType: TyphonBuilderExtensions.AddProvider
-- uid: Typhon.Engine.TyphonBuilderExtensions.ConfigureDatabase(Typhon.Engine.ITyphonBuilder,System.Action{Typhon.Engine.DatabaseConfiguration})
-  name: ConfigureDatabase(ITyphonBuilder, Action<DatabaseConfiguration>)
-  href: api/Typhon.Engine.TyphonBuilderExtensions.html#Typhon_Engine_TyphonBuilderExtensions_ConfigureDatabase_Typhon_Engine_ITyphonBuilder_System_Action_Typhon_Engine_DatabaseConfiguration__
-  commentId: M:Typhon.Engine.TyphonBuilderExtensions.ConfigureDatabase(Typhon.Engine.ITyphonBuilder,System.Action{Typhon.Engine.DatabaseConfiguration})
-  name.vb: ConfigureDatabase(ITyphonBuilder, Action(Of DatabaseConfiguration))
-  fullName: Typhon.Engine.TyphonBuilderExtensions.ConfigureDatabase(Typhon.Engine.ITyphonBuilder, System.Action<Typhon.Engine.DatabaseConfiguration>)
-  fullName.vb: Typhon.Engine.TyphonBuilderExtensions.ConfigureDatabase(Typhon.Engine.ITyphonBuilder, System.Action(Of Typhon.Engine.DatabaseConfiguration))
-  nameWithType: TyphonBuilderExtensions.ConfigureDatabase(ITyphonBuilder, Action<DatabaseConfiguration>)
-  nameWithType.vb: TyphonBuilderExtensions.ConfigureDatabase(ITyphonBuilder, Action(Of DatabaseConfiguration))
-- uid: Typhon.Engine.TyphonBuilderExtensions.ConfigureDatabase*
-  name: ConfigureDatabase
-  href: api/Typhon.Engine.TyphonBuilderExtensions.html#Typhon_Engine_TyphonBuilderExtensions_ConfigureDatabase_
-  commentId: Overload:Typhon.Engine.TyphonBuilderExtensions.ConfigureDatabase
-  isSpec: "True"
-  fullName: Typhon.Engine.TyphonBuilderExtensions.ConfigureDatabase
-  nameWithType: TyphonBuilderExtensions.ConfigureDatabase
 - uid: Typhon.Engine.UnmanagedStructAllocator`1
   name: UnmanagedStructAllocator<T>
   href: api/Typhon.Engine.UnmanagedStructAllocator-1.html

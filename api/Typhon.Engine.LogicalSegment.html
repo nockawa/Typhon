@@ -89,7 +89,7 @@
 
 
   <h1 id="Typhon_Engine_LogicalSegment" data-uid="Typhon.Engine.LogicalSegment" class="text-break">
-Class LogicalSegment  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L21"><i class="bi bi-code-slash"></i></a>
+Class LogicalSegment  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L30"><i class="bi bi-code-slash"></i></a>
   </h1>
 
   <div class="facts text-secondary">
@@ -160,11 +160,11 @@ Class LogicalSegment  <a class="header-action link-secondary" title="View source
 
 
   <h2 id="Typhon_Engine_LogicalSegment_remarks">Remarks</h2>
-  <div class="markdown level0 remarks"><p>Logical Segment is made of several Pages which IDs are stored in a dedicated private section of the logical segment.
-The segment can easily be shrink/grown by removing/adding more pages. The first page of the Logical Segment is split in two parts</p>
+  <div class="markdown level0 remarks"><p>Logical Segment is made of several Pages which IDs are stored in a dedicated private section of its raw data.
+The segment can easily be shrunk/grown by removing/adding more pages. The first page of the Logical Segment is split in two parts</p>
 <ul>
-<li>The Page Directory: 512 entries that reference the first 512 pages of the Logical Segment, overflown data is stored into
-subsequent dedicated pages.</li>
+<li>The Page Directory: 500 entries that reference the first 500 pages of the Logical Segment, overflown data is stored into
+subsequent dedicated pages that store only indices, so 2000 per page.</li>
 <li>The segment first raw data, which is 6000 bytes, instead of 8000 for all subsequent pages.
 The segment also maintain a linked list in the Page Header to allow faster forward traversal.
 There is some basic API that allow to store/enumerate fixed size elements, indexed into the logical segment.</li>
@@ -180,7 +180,7 @@ There is some basic API that allow to store/enumerate fixed size elements, index
 
   <h3 id="Typhon_Engine_LogicalSegment_Length" data-uid="Typhon.Engine.LogicalSegment.Length">
   Length
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L37"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L47"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -211,14 +211,14 @@ There is some basic API that allow to store/enumerate fixed size elements, index
 
   <h3 id="Typhon_Engine_LogicalSegment_Pages" data-uid="Typhon.Engine.LogicalSegment.Pages">
   Pages
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L38"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L48"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public ReadOnlySpan&lt;uint&gt; Pages { get; }</code></pre>
+    <pre><code class="lang-csharp hljs">public ReadOnlySpan&lt;int&gt; Pages { get; }</code></pre>
   </div>
 
 
@@ -227,7 +227,7 @@ There is some basic API that allow to store/enumerate fixed size elements, index
 
   <h4 class="section">Property Value</h4>
   <dl class="parameters">
-    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.readonlyspan-1">ReadOnlySpan</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.uint32">uint</a>&gt;</dt>
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.readonlyspan-1">ReadOnlySpan</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>&gt;</dt>
     <dd></dd>
   </dl>
 
@@ -238,18 +238,18 @@ There is some basic API that allow to store/enumerate fixed size elements, index
 
 
 
-  <a id="Typhon_Engine_LogicalSegment_RootPageId_" data-uid="Typhon.Engine.LogicalSegment.RootPageId*"></a>
+  <a id="Typhon_Engine_LogicalSegment_RootPageIndex_" data-uid="Typhon.Engine.LogicalSegment.RootPageIndex*"></a>
 
-  <h3 id="Typhon_Engine_LogicalSegment_RootPageId" data-uid="Typhon.Engine.LogicalSegment.RootPageId">
-  RootPageId
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L35"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_LogicalSegment_RootPageIndex" data-uid="Typhon.Engine.LogicalSegment.RootPageIndex">
+  RootPageIndex
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L45"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public uint RootPageId { get; }</code></pre>
+    <pre><code class="lang-csharp hljs">public int RootPageIndex { get; }</code></pre>
   </div>
 
 
@@ -258,7 +258,7 @@ There is some basic API that allow to store/enumerate fixed size elements, index
 
   <h4 class="section">Property Value</h4>
   <dl class="parameters">
-    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.uint32">uint</a></dt>
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>
   </dl>
 
@@ -277,7 +277,7 @@ There is some basic API that allow to store/enumerate fixed size elements, index
 
   <h3 id="Typhon_Engine_LogicalSegment_Clear" data-uid="Typhon.Engine.LogicalSegment.Clear">
   Clear()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L141"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L240"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -303,7 +303,7 @@ There is some basic API that allow to store/enumerate fixed size elements, index
 
   <h3 id="Typhon_Engine_LogicalSegment_Dispose" data-uid="Typhon.Engine.LogicalSegment.Dispose">
   Dispose()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L47"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L62"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</p>
@@ -330,7 +330,7 @@ There is some basic API that allow to store/enumerate fixed size elements, index
 
   <h3 id="Typhon_Engine_LogicalSegment_Fill_System_Byte_" data-uid="Typhon.Engine.LogicalSegment.Fill(System.Byte)">
   Fill(byte)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L151"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L256"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -361,7 +361,7 @@ There is some basic API that allow to store/enumerate fixed size elements, index
 
   <h3 id="Typhon_Engine_LogicalSegment_GetItemCount_System_Int32_System_Int32_" data-uid="Typhon.Engine.LogicalSegment.GetItemCount(System.Int32,System.Int32)">
   GetItemCount(int, int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L58"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L73"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -399,7 +399,7 @@ There is some basic API that allow to store/enumerate fixed size elements, index
 
   <h3 id="Typhon_Engine_LogicalSegment_GetItemCount__1_System_Int32_" data-uid="Typhon.Engine.LogicalSegment.GetItemCount``1(System.Int32)">
   GetItemCount&lt;T&gt;(int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L56"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L71"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -440,7 +440,7 @@ There is some basic API that allow to store/enumerate fixed size elements, index
 
   <h3 id="Typhon_Engine_LogicalSegment_GetItemLocation_System_Int32_System_Int32_" data-uid="Typhon.Engine.LogicalSegment.GetItemLocation(System.Int32,System.Int32)">
   GetItemLocation(int, int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L62"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L77"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -478,7 +478,7 @@ There is some basic API that allow to store/enumerate fixed size elements, index
 
   <h3 id="Typhon_Engine_LogicalSegment_GetItemLocation__1_System_Int32_" data-uid="Typhon.Engine.LogicalSegment.GetItemLocation``1(System.Int32)">
   GetItemLocation&lt;T&gt;(int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L60"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L75"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -519,7 +519,7 @@ There is some basic API that allow to store/enumerate fixed size elements, index
 
   <h3 id="Typhon_Engine_LogicalSegment_GetMaxItemCount_System_Boolean_System_Int32_" data-uid="Typhon.Engine.LogicalSegment.GetMaxItemCount(System.Boolean,System.Int32)">
   GetMaxItemCount(bool, int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L54"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L69"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -557,7 +557,7 @@ There is some basic API that allow to store/enumerate fixed size elements, index
 
   <h3 id="Typhon_Engine_LogicalSegment_GetMaxItemCount__1_System_Boolean_" data-uid="Typhon.Engine.LogicalSegment.GetMaxItemCount``1(System.Boolean)">
   GetMaxItemCount&lt;T&gt;(bool)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L52"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L67"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -596,27 +596,33 @@ There is some basic API that allow to store/enumerate fixed size elements, index
 
   <a id="Typhon_Engine_LogicalSegment_GetPageExclusiveAccessor_" data-uid="Typhon.Engine.LogicalSegment.GetPageExclusiveAccessor*"></a>
 
-  <h3 id="Typhon_Engine_LogicalSegment_GetPageExclusiveAccessor_System_Int32_" data-uid="Typhon.Engine.LogicalSegment.GetPageExclusiveAccessor(System.Int32)">
-  GetPageExclusiveAccessor(int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L39"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_LogicalSegment_GetPageExclusiveAccessor_System_Int32_Typhon_Engine_PageAccessor__System_Int64_System_Threading_CancellationToken_" data-uid="Typhon.Engine.LogicalSegment.GetPageExclusiveAccessor(System.Int32,Typhon.Engine.PageAccessor@,System.Int64,System.Threading.CancellationToken)">
+  GetPageExclusiveAccessor(int, out PageAccessor, long, CancellationToken)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L49"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public PageAccessor GetPageExclusiveAccessor(int segmentIndex)</code></pre>
+    <pre><code class="lang-csharp hljs">public bool GetPageExclusiveAccessor(int segmentFilePageIndex, out PageAccessor result, long timeout = -1, CancellationToken cancellationToken = default)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
-    <dt><code>segmentIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dt><code>segmentFilePageIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>result</code> <a class="xref" href="Typhon.Engine.PageAccessor.html">PageAccessor</a></dt>
+    <dd></dd>
+    <dt><code>timeout</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int64">long</a></dt>
+    <dd></dd>
+    <dt><code>cancellationToken</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.threading.cancellationtoken">CancellationToken</a></dt>
     <dd></dd>
   </dl>
 
   <h4 class="section">Returns</h4>
   <dl class="parameters">
-    <dt><a class="xref" href="Typhon.Engine.PageAccessor.html">PageAccessor</a></dt>
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
     <dd></dd>
   </dl>
 
@@ -632,27 +638,33 @@ There is some basic API that allow to store/enumerate fixed size elements, index
 
   <a id="Typhon_Engine_LogicalSegment_GetPageSharedAccessor_" data-uid="Typhon.Engine.LogicalSegment.GetPageSharedAccessor*"></a>
 
-  <h3 id="Typhon_Engine_LogicalSegment_GetPageSharedAccessor_System_Int32_" data-uid="Typhon.Engine.LogicalSegment.GetPageSharedAccessor(System.Int32)">
-  GetPageSharedAccessor(int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L40"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_LogicalSegment_GetPageSharedAccessor_System_Int32_Typhon_Engine_PageAccessor__System_Int64_System_Threading_CancellationToken_" data-uid="Typhon.Engine.LogicalSegment.GetPageSharedAccessor(System.Int32,Typhon.Engine.PageAccessor@,System.Int64,System.Threading.CancellationToken)">
+  GetPageSharedAccessor(int, out PageAccessor, long, CancellationToken)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L53"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public PageAccessor GetPageSharedAccessor(int segmentIndex)</code></pre>
+    <pre><code class="lang-csharp hljs">public bool GetPageSharedAccessor(int segmentFilePageIndex, out PageAccessor result, long timeout = -1, CancellationToken cancellationToken = default)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
-    <dt><code>segmentIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dt><code>segmentFilePageIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>result</code> <a class="xref" href="Typhon.Engine.PageAccessor.html">PageAccessor</a></dt>
+    <dd></dd>
+    <dt><code>timeout</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int64">long</a></dt>
+    <dd></dd>
+    <dt><code>cancellationToken</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.threading.cancellationtoken">CancellationToken</a></dt>
     <dd></dd>
   </dl>
 
   <h4 class="section">Returns</h4>
   <dl class="parameters">
-    <dt><a class="xref" href="Typhon.Engine.PageAccessor.html">PageAccessor</a></dt>
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
     <dd></dd>
   </dl>
 
@@ -668,21 +680,21 @@ There is some basic API that allow to store/enumerate fixed size elements, index
 
   <a id="Typhon_Engine_LogicalSegment_Load_" data-uid="Typhon.Engine.LogicalSegment.Load*"></a>
 
-  <h3 id="Typhon_Engine_LogicalSegment_Load_System_UInt32_" data-uid="Typhon.Engine.LogicalSegment.Load(System.UInt32)">
-  Load(uint)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L136"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_LogicalSegment_Load_System_Int32_" data-uid="Typhon.Engine.LogicalSegment.Load(System.Int32)">
+  Load(int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L206"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public bool Load(uint pageId)</code></pre>
+    <pre><code class="lang-csharp hljs">public bool Load(int filePageIndex)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
-    <dt><code>pageId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.uint32">uint</a></dt>
+    <dt><code>filePageIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>
   </dl>
 
@@ -706,7 +718,7 @@ There is some basic API that allow to store/enumerate fixed size elements, index
 </article>
 
         <div class="contribution d-print-none">
-          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L21" class="edit-link">Edit this page</a>
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L30" class="edit-link">Edit this page</a>
         </div>
 
 

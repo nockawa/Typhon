@@ -2,9 +2,9 @@
 <html>
   <head>
     <meta charset="utf-8">
-      <title>Interface ITyphonBuilder | Typhon </title>
+      <title>Class ManagedPagedMMFOptions | Typhon </title>
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <meta name="title" content="Interface ITyphonBuilder | Typhon ">
+      <meta name="title" content="Class ManagedPagedMMFOptions | Typhon ">
       
       
       <link rel="icon" href="../images/favicon.ico">
@@ -16,7 +16,7 @@
       <meta name="docfx:rel" content="../">
       
       
-      <meta name="docfx:docurl" content="https://github.com/nockawa/Typhon/new/new-persistence-layer/apiSpec/new?filename=Typhon_Engine_ITyphonBuilder.md&amp;value=---%0Auid%3A%20Typhon.Engine.ITyphonBuilder%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="docfx:docurl" content="https://github.com/nockawa/Typhon/new/new-persistence-layer/apiSpec/new?filename=Typhon_Engine_ManagedPagedMMFOptions.md&amp;value=---%0Auid%3A%20Typhon.Engine.ManagedPagedMMFOptions%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
       <meta name="loc:inThisArticle" content="In this article">
       <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
       <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
@@ -84,12 +84,12 @@
           <nav id="breadcrumb"></nav>
         </div>
 
-        <article data-uid="Typhon.Engine.ITyphonBuilder">
+        <article data-uid="Typhon.Engine.ManagedPagedMMFOptions">
 
 
 
-  <h1 id="Typhon_Engine_ITyphonBuilder" data-uid="Typhon.Engine.ITyphonBuilder" class="text-break">
-Interface ITyphonBuilder  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Hosting/TyphonBuilderExtensions.cs/#L56"><i class="bi bi-code-slash"></i></a>
+  <h1 id="Typhon_Engine_ManagedPagedMMFOptions" data-uid="Typhon.Engine.ManagedPagedMMFOptions" class="text-break">
+Class ManagedPagedMMFOptions  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L10"><i class="bi bi-code-slash"></i></a>
   </h1>
 
   <div class="facts text-secondary">
@@ -101,26 +101,65 @@ Interface ITyphonBuilder  <a class="header-action link-secondary" title="View so
   <div class="markdown conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public interface ITyphonBuilder</code></pre>
+    <pre><code class="lang-csharp hljs">[PublicAPI]
+public class ManagedPagedMMFOptions : PagedMMFOptions</code></pre>
   </div>
 
 
 
 
-
-
-
-
-  <dl class="typelist extensionMethods">
-    <dt>Extension Methods</dt>
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
     <dd>
-  <div>
-      <a class="xref" href="Typhon.Engine.TyphonBuilderExtensions.html#Typhon_Engine_TyphonBuilderExtensions_AddProvider_Typhon_Engine_ITyphonBuilder_Typhon_Engine_IConfigurationProvider_Typhon_Engine_DatabaseConfiguration__">TyphonBuilderExtensions.AddProvider(ITyphonBuilder, IConfigurationProvider&lt;DatabaseConfiguration&gt;)</a>
-  </div>
-  <div>
-      <a class="xref" href="Typhon.Engine.TyphonBuilderExtensions.html#Typhon_Engine_TyphonBuilderExtensions_ConfigureDatabase_Typhon_Engine_ITyphonBuilder_System_Action_Typhon_Engine_DatabaseConfiguration__">TyphonBuilderExtensions.ConfigureDatabase(ITyphonBuilder, Action&lt;DatabaseConfiguration&gt;)</a>
-  </div>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><a class="xref" href="Typhon.Engine.PagedMMFOptions.html">PagedMMFOptions</a></div>
+      <div><span class="xref">ManagedPagedMMFOptions</span></div>
+    </dd>
+  </dl>
+
+
+
+  <dl class="typelist inheritedMembers">
+    <dt>Inherited Members</dt>
+    <dd>
+    <div>
+      <a class="xref" href="Typhon.Engine.PagedMMFOptions.html#Typhon_Engine_PagedMMFOptions_DatabaseName">PagedMMFOptions.DatabaseName</a>
+    </div>
+    <div>
+      <a class="xref" href="Typhon.Engine.PagedMMFOptions.html#Typhon_Engine_PagedMMFOptions_DatabaseAbsoluteDirectory">PagedMMFOptions.DatabaseAbsoluteDirectory</a>
+    </div>
+    <div>
+      <a class="xref" href="Typhon.Engine.PagedMMFOptions.html#Typhon_Engine_PagedMMFOptions_DatabaseCacheSize">PagedMMFOptions.DatabaseCacheSize</a>
+    </div>
+    <div>
+      <a class="xref" href="Typhon.Engine.PagedMMFOptions.html#Typhon_Engine_PagedMMFOptions_PagesDebugPattern">PagedMMFOptions.PagesDebugPattern</a>
+    </div>
+    <div>
+      <a class="xref" href="Typhon.Engine.PagedMMFOptions.html#Typhon_Engine_PagedMMFOptions_EnsureFileDeleted">PagedMMFOptions.EnsureFileDeleted()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone">object.MemberwiseClone()</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
+    </div>
   </dd></dl>
+
 
 
 
@@ -130,7 +169,7 @@ Interface ITyphonBuilder  <a class="header-action link-secondary" title="View so
 </article>
 
         <div class="contribution d-print-none">
-          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Hosting/TyphonBuilderExtensions.cs/#L56" class="edit-link">Edit this page</a>
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L10" class="edit-link">Edit this page</a>
         </div>
 
 

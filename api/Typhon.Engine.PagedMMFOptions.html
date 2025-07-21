@@ -2,9 +2,9 @@
 <html>
   <head>
     <meta charset="utf-8">
-      <title>Class ServiceProviderExtensions | Typhon </title>
+      <title>Class PagedMMFOptions | Typhon </title>
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <meta name="title" content="Class ServiceProviderExtensions | Typhon ">
+      <meta name="title" content="Class PagedMMFOptions | Typhon ">
       
       
       <link rel="icon" href="../images/favicon.ico">
@@ -16,7 +16,7 @@
       <meta name="docfx:rel" content="../">
       
       
-      <meta name="docfx:docurl" content="https://github.com/nockawa/Typhon/new/new-persistence-layer/apiSpec/new?filename=Typhon_Engine_ServiceProviderExtensions.md&amp;value=---%0Auid%3A%20Typhon.Engine.ServiceProviderExtensions%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="docfx:docurl" content="https://github.com/nockawa/Typhon/new/new-persistence-layer/apiSpec/new?filename=Typhon_Engine_PagedMMFOptions.md&amp;value=---%0Auid%3A%20Typhon.Engine.PagedMMFOptions%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
       <meta name="loc:inThisArticle" content="In this article">
       <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
       <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
@@ -84,12 +84,12 @@
           <nav id="breadcrumb"></nav>
         </div>
 
-        <article data-uid="Typhon.Engine.ServiceProviderExtensions">
+        <article data-uid="Typhon.Engine.PagedMMFOptions">
 
 
 
-  <h1 id="Typhon_Engine_ServiceProviderExtensions" data-uid="Typhon.Engine.ServiceProviderExtensions" class="text-break">
-Class ServiceProviderExtensions  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Hosting/TyphonBuilderExtensions.cs/#L66"><i class="bi bi-code-slash"></i></a>
+  <h1 id="Typhon_Engine_PagedMMFOptions" data-uid="Typhon.Engine.PagedMMFOptions" class="text-break">
+Class PagedMMFOptions  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PMMF.cs/#L16"><i class="bi bi-code-slash"></i></a>
   </h1>
 
   <div class="facts text-secondary">
@@ -101,7 +101,8 @@ Class ServiceProviderExtensions  <a class="header-action link-secondary" title="
   <div class="markdown conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public static class ServiceProviderExtensions</code></pre>
+    <pre><code class="lang-csharp hljs">[PublicAPI]
+public class PagedMMFOptions</code></pre>
   </div>
 
 
@@ -111,11 +112,17 @@ Class ServiceProviderExtensions  <a class="header-action link-secondary" title="
     <dt>Inheritance</dt>
     <dd>
       <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
-      <div><span class="xref">ServiceProviderExtensions</span></div>
+      <div><span class="xref">PagedMMFOptions</span></div>
     </dd>
   </dl>
 
 
+  <dl class="typelist derived">
+    <dt>Derived</dt>
+    <dd>
+      <div><a class="xref" href="Typhon.Engine.ManagedPagedMMFOptions.html">ManagedPagedMMFOptions</a></div>
+    </dd>
+  </dl>
 
   <dl class="typelist inheritedMembers">
     <dt>Inherited Members</dt>
@@ -148,37 +155,153 @@ Class ServiceProviderExtensions  <a class="header-action link-secondary" title="
 
 
 
-  <h2 class="section" id="methods">Methods
+  <h2 class="section" id="properties">Properties
 </h2>
 
 
-  <a id="Typhon_Engine_ServiceProviderExtensions_AddTyphon_" data-uid="Typhon.Engine.ServiceProviderExtensions.AddTyphon*"></a>
+  <a id="Typhon_Engine_PagedMMFOptions_DatabaseAbsoluteDirectory_" data-uid="Typhon.Engine.PagedMMFOptions.DatabaseAbsoluteDirectory*"></a>
 
-  <h3 id="Typhon_Engine_ServiceProviderExtensions_AddTyphon_Microsoft_Extensions_DependencyInjection_IServiceCollection_System_Action_Typhon_Engine_ITyphonBuilder__" data-uid="Typhon.Engine.ServiceProviderExtensions.AddTyphon(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.ITyphonBuilder})">
-  AddTyphon(IServiceCollection, Action&lt;ITyphonBuilder&gt;)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Hosting/TyphonBuilderExtensions.cs/#L68"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_PagedMMFOptions_DatabaseAbsoluteDirectory" data-uid="Typhon.Engine.PagedMMFOptions.DatabaseAbsoluteDirectory">
+  DatabaseAbsoluteDirectory
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PMMF.cs/#L20"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public static IServiceCollection AddTyphon(this IServiceCollection services, Action&lt;ITyphonBuilder&gt; configure = null)</code></pre>
+    <pre><code class="lang-csharp hljs">public string DatabaseAbsoluteDirectory { get; set; }</code></pre>
   </div>
 
-  <h4 class="section">Parameters</h4>
+
+
+
+
+  <h4 class="section">Property Value</h4>
   <dl class="parameters">
-    <dt><code>services</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/microsoft.extensions.dependencyinjection.iservicecollection">IServiceCollection</a></dt>
-    <dd></dd>
-    <dt><code>configure</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-1">Action</a>&lt;<a class="xref" href="Typhon.Engine.ITyphonBuilder.html">ITyphonBuilder</a>&gt;</dt>
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
     <dd></dd>
   </dl>
 
-  <h4 class="section">Returns</h4>
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_PagedMMFOptions_DatabaseCacheSize_" data-uid="Typhon.Engine.PagedMMFOptions.DatabaseCacheSize*"></a>
+
+  <h3 id="Typhon_Engine_PagedMMFOptions_DatabaseCacheSize" data-uid="Typhon.Engine.PagedMMFOptions.DatabaseCacheSize">
+  DatabaseCacheSize
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PMMF.cs/#L21"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ulong DatabaseCacheSize { get; set; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
   <dl class="parameters">
-    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/microsoft.extensions.dependencyinjection.iservicecollection">IServiceCollection</a></dt>
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.uint64">ulong</a></dt>
     <dd></dd>
   </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_PagedMMFOptions_DatabaseName_" data-uid="Typhon.Engine.PagedMMFOptions.DatabaseName*"></a>
+
+  <h3 id="Typhon_Engine_PagedMMFOptions_DatabaseName" data-uid="Typhon.Engine.PagedMMFOptions.DatabaseName">
+  DatabaseName
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PMMF.cs/#L19"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string DatabaseName { get; set; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_PagedMMFOptions_PagesDebugPattern_" data-uid="Typhon.Engine.PagedMMFOptions.PagesDebugPattern*"></a>
+
+  <h3 id="Typhon_Engine_PagedMMFOptions_PagesDebugPattern" data-uid="Typhon.Engine.PagedMMFOptions.PagesDebugPattern">
+  PagesDebugPattern
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PMMF.cs/#L22"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool PagesDebugPattern { get; set; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="Typhon_Engine_PagedMMFOptions_EnsureFileDeleted_" data-uid="Typhon.Engine.PagedMMFOptions.EnsureFileDeleted*"></a>
+
+  <h3 id="Typhon_Engine_PagedMMFOptions_EnsureFileDeleted" data-uid="Typhon.Engine.PagedMMFOptions.EnsureFileDeleted">
+  EnsureFileDeleted()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PMMF.cs/#L24"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void EnsureFileDeleted()</code></pre>
+  </div>
+
+
 
 
 
@@ -194,7 +317,7 @@ Class ServiceProviderExtensions  <a class="header-action link-secondary" title="
 </article>
 
         <div class="contribution d-print-none">
-          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Hosting/TyphonBuilderExtensions.cs/#L66" class="edit-link">Edit this page</a>
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PMMF.cs/#L16" class="edit-link">Edit this page</a>
         </div>
 
 

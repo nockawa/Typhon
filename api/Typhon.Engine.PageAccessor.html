@@ -248,7 +248,7 @@ Struct PageAccessor  <a class="header-action link-secondary" title="View source"
 
   <h3 id="Typhon_Engine_PageAccessor_IsValid" data-uid="Typhon.Engine.PageAccessor.IsValid">
   IsValid
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L194"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L183"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -306,7 +306,7 @@ Struct PageAccessor  <a class="header-action link-secondary" title="View source"
   <h4 class="section" id="Typhon_Engine_PageAccessor_LogicalSegmentData_remarks">Remarks</h4>
   <div class="markdown level1 remarks"><p>If the page block is part of a Logical Segment, this will return the span covering its raw data section.
 BEWARE: the root page of a Logical Segment is 6000 bytes wide, subsequent pages will be 8000 bytes.
-Unpredictable result will occur if using this property on a non Logical Segment Page Block.</p>
+Unpredictable result will occur if using this property on a non-Logical Segment Page Block.</p>
 </div>
 
 
@@ -706,7 +706,7 @@ Don't exceed the page's size when accessing it.</p>
 
   <h3 id="Typhon_Engine_PageAccessor_Dispose" data-uid="Typhon.Engine.PageAccessor.Dispose">
   Dispose()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L196"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L185"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</p>
@@ -731,16 +731,16 @@ Don't exceed the page's size when accessing it.</p>
 
   <a id="Typhon_Engine_PageAccessor_InitHeader_" data-uid="Typhon.Engine.PageAccessor.InitHeader*"></a>
 
-  <h3 id="Typhon_Engine_PageAccessor_InitHeader_Typhon_Engine_PageClearMode_Typhon_Engine_PageBlockFlags_Typhon_Engine_PageBlockType_System_Int32_System_Int32_" data-uid="Typhon.Engine.PageAccessor.InitHeader(Typhon.Engine.PageClearMode,Typhon.Engine.PageBlockFlags,Typhon.Engine.PageBlockType,System.Int32,System.Int32)">
-  InitHeader(PageClearMode, PageBlockFlags, PageBlockType, int, int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L214"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_PageAccessor_InitHeader_Typhon_Engine_PageClearMode_Typhon_Engine_PageBlockFlags_Typhon_Engine_PageBlockType_System_Int16_" data-uid="Typhon.Engine.PageAccessor.InitHeader(Typhon.Engine.PageClearMode,Typhon.Engine.PageBlockFlags,Typhon.Engine.PageBlockType,System.Int16)">
+  InitHeader(PageClearMode, PageBlockFlags, PageBlockType, short)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L203"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public void InitHeader(PageClearMode clearMode, PageBlockFlags flags, PageBlockType type, int changeRevision, int formatRevision)</code></pre>
+    <pre><code class="lang-csharp hljs">public void InitHeader(PageClearMode clearMode, PageBlockFlags flags, PageBlockType type, short formatRevision)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -751,9 +751,7 @@ Don't exceed the page's size when accessing it.</p>
     <dd></dd>
     <dt><code>type</code> <a class="xref" href="Typhon.Engine.PageBlockType.html">PageBlockType</a></dt>
     <dd></dd>
-    <dt><code>changeRevision</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
-    <dd></dd>
-    <dt><code>formatRevision</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dt><code>formatRevision</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int16">short</a></dt>
     <dd></dd>
   </dl>
 
@@ -779,7 +777,7 @@ Don't exceed the page's size when accessing it.</p>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public void SetPageDirty()</code></pre>
+    <pre><code class="lang-csharp hljs">public readonly void SetPageDirty()</code></pre>
   </div>
 
 
