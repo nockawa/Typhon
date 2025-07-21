@@ -20,7 +20,7 @@ public class ManagedPagedMMFTests
     public void Setup()
     {
         var o = TestContext.CurrentContext.Test.Properties.ContainsKey("CacheSize");
-        var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("CacheSize")! : (int)PMMF.MinimumCacheSize;
+        var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("CacheSize")! : (int)PagedMMF.MinimumCacheSize;
 
         var serviceCollection = new ServiceCollection();
         _serviceCollection = serviceCollection;
@@ -89,7 +89,7 @@ public class ManagedPagedMMFTests
     public void FindNextUnsetL0Test()
     {
         var bitCount = 64 * 64 * 64 * 10;
-        var pageCount = (int)Math.Ceiling((double)bitCount / (PMMF.PageRawDataSize * 8));
+        var pageCount = (int)Math.Ceiling((double)bitCount / (PagedMMF.PageRawDataSize * 8));
         
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
 
@@ -141,7 +141,7 @@ public class ManagedPagedMMFTests
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         
         var bitCount = 64 * 64 * 64 * 10;
-        var pageCount = (int)Math.Ceiling((double)bitCount / (PMMF.PageRawDataSize * 8));
+        var pageCount = (int)Math.Ceiling((double)bitCount / (PagedMMF.PageRawDataSize * 8));
 
         var seg = pmmf.AllocateSegment(PageBlockType.None, pageCount);
 
@@ -171,7 +171,7 @@ public class ManagedPagedMMFTests
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
 
         var bitCount = 64 * 64 * 64 * 10;
-        var pageCount = (int)Math.Ceiling((double)bitCount / (PMMF.PageRawDataSize * 8));
+        var pageCount = (int)Math.Ceiling((double)bitCount / (PagedMMF.PageRawDataSize * 8));
 
         var seg = pmmf.AllocateSegment(PageBlockType.None, pageCount);
 

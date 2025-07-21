@@ -1,7 +1,4 @@
-﻿// unset
-
-#if DEADCODE
-
+﻿using JetBrains.Annotations;
 using System;
 using System.IO;
 using System.Text;
@@ -9,59 +6,42 @@ using System.Text.RegularExpressions;
 
 namespace Typhon.Engine;
 
-/// <summary>
-/// Provides configuration of the specified type.
-/// </summary>
-/// <typeparam name="TConfiguration">The configuration type.</typeparam>
-// ReSharper disable once TypeParameterCanBeVariant
-public interface IConfigurationProvider<TConfiguration>
-{
-    /// <summary>
-    /// Populates the provided configuration object.
-    /// </summary>
-    /// <param name="configuration">The configuration.</param>
-    void Configure(TConfiguration configuration);
-}
-
-public interface IDatabaseConfiguration
-{
-    string DatabaseName { get; }
-    string DatabaseDirectory { get; }
-    string DatabaseFileName { get; }
-    ulong DatabaseCacheSize { get; }
-    int WriteCacheSize { get; }
-    float WriteThreadRatio { get; }
-    bool RecreateDatabase { get; }
-    bool DeleteDatabaseOnDispose { get; }
-    bool PagesDebugPattern { get; }
-    string DatabaseAbsoluteDirectory { get; }
-}
-
-public sealed class DatabaseConfiguration : IDatabaseConfiguration
+[PublicAPI]
+public class PagedMMFOptions
 {
     private string _databaseFileName;
-
-    public string DatabaseName { get; set; }
-    public string DatabaseDirectory { get; set; }
+    public string DatabaseName { get; set; } = "TyphonDB";
+    public string DatabaseAbsoluteDirectory
+    {
+        get => Path.GetFullPath(DatabaseDirectory);
+    }
+    public string DatabaseDirectory { get; set; } = Environment.CurrentDirectory;
     public string DatabaseFileName
     {
         get => _databaseFileName ?? DatabaseName;
         set => _databaseFileName = value;
     }
-    public ulong DatabaseCacheSize { get; set; }
-    public int WriteCacheSize { get; set; }
-    public float WriteThreadRatio { get; set; }
-    public bool RecreateDatabase { get; set; }
-    public bool DeleteDatabaseOnDispose { get; set; }
-    public bool PagesDebugPattern { get; set; }
-
-    public string DatabaseAbsoluteDirectory
-    {
-        get => Path.GetFullPath(DatabaseDirectory);
-    }
+    public ulong DatabaseCacheSize { get; set; } = PagedMMF.DefaultMemPageCount * PagedMMF.PageSize;
+    public bool PagesDebugPattern { get; set; } = false;
 
     internal bool OverrideDatabaseCacheMinSize { get; set; }
-
+    
+    public void EnsureFileDeleted()
+    {
+        try
+        {
+            var pfn = BuildDatabasePathFileName();
+            if (File.Exists(pfn))
+            {
+                File.Delete(pfn);
+            }
+        }
+        catch (Exception)
+        {
+            // ignored
+        }
+    }
+    
     public bool IsValid => Validate(true, out _);
     internal bool Validate(bool silent, out string validation)
     {
@@ -83,7 +63,7 @@ public sealed class DatabaseConfiguration : IDatabaseConfiguration
         }
 
         // DatabaseDirectory
-        var absDir = DatabaseAbsoluteDirectory;
+        var absDir = DatabaseDirectory;
         var di = new DirectoryInfo(absDir);
         if (di.Exists == false)
         {
@@ -123,14 +103,6 @@ public sealed class DatabaseConfiguration : IDatabaseConfiguration
             success = false;
         }
 
-        // WriteCacheSize
-        var wcs = WriteCacheSize;
-        if ((wcs & (PagedMMF.WriteCachePageSize-1)) != 0)
-        {
-            sb.AppendLine($"Database Write Cache Size must be a multiple 1Mib (1024*1024) but is ('{dcs}').");
-            success = false;
-        }
-
         // Throw exception if necessary and required
         if (success == false && silent == false)
         {
@@ -140,22 +112,7 @@ public sealed class DatabaseConfiguration : IDatabaseConfiguration
         validation = sb.Length==0 ? null : sb.ToString();
         return success;
     }
-
-    internal static bool IsPowerOfTwo(ulong x) => (x & (x - 1)) == 0;
-    internal static int FirstSetBitPos(long n) => (int)((Math.Log10(n & -n)) / Math.Log10(2));
+    
+    internal string BuildDatabaseFileName() => $"{DatabaseName}.bin";
+    internal string BuildDatabasePathFileName() => Path.Combine(DatabaseDirectory, BuildDatabaseFileName());
 }
-
-internal class DefaultDatabaseConfiguration : IConfigurationProvider<DatabaseConfiguration>
-{
-    internal const ulong DefaultDatabaseFileChunkSize = 1*1024*1024*1024UL;
-
-    public void Configure(DatabaseConfiguration configuration)
-    {
-        configuration.DatabaseName = "Database";
-        configuration.DatabaseDirectory = Directory.GetCurrentDirectory();
-        configuration.DatabaseCacheSize = PagedMMF.MinimumCacheSize;
-        configuration.WriteCacheSize = 128 * PagedMMF.WriteCachePageSize;
-        configuration.WriteThreadRatio = 0.5f;
-    }
-}
-#endif

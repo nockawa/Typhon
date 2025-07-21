@@ -16,7 +16,7 @@ public class DatabaseSchemaTests
     public void Setup()
     {
         var o = TestContext.CurrentContext.Test.Properties.ContainsKey("CacheSize");
-        var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("CacheSize")! : (int)PMMF.MinimumCacheSize;
+        var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("CacheSize")! : (int)PagedMMF.MinimumCacheSize;
 
         var serviceCollection = new ServiceCollection();
         _serviceCollection = serviceCollection;

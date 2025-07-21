@@ -22,8 +22,8 @@ class BtreeTests
     public void Setup()
     {
         var o = TestContext.CurrentContext.Test.Properties.ContainsKey("MemPageCount");
-        var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("MemPageCount")! : PMMF.DefaultMemPageCount;
-        dcs *= PMMF.PageSize;
+        var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("MemPageCount")! : PagedMMF.DefaultMemPageCount;
+        dcs *= PagedMMF.PageSize;
 
 #if DEBUG
         Log.Logger = new LoggerConfiguration()

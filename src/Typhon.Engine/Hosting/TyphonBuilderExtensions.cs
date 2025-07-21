@@ -13,17 +13,17 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddPagedMMF(
         this IServiceCollection services,
         Action<PagedMMFOptions> configure = null) =>
-        AddPagedMMF<PMMF, PagedMMFOptions>(services, ServiceLifetime.Singleton, configure);
+        AddPagedMMF<PagedMMF, PagedMMFOptions>(services, ServiceLifetime.Singleton, configure);
 
     public static IServiceCollection AddScopedPagedMemoryMappedFile(
         this IServiceCollection services,
         Action<PagedMMFOptions> configure = null) =>
-        AddPagedMMF<PMMF, PagedMMFOptions>(services, ServiceLifetime.Scoped, configure);
+        AddPagedMMF<PagedMMF, PagedMMFOptions>(services, ServiceLifetime.Scoped, configure);
 
     public static IServiceCollection AddTransientPagedMemoryMappedFile(
         this IServiceCollection services,
         Action<PagedMMFOptions> configure = null) =>
-        AddPagedMMF<PMMF, PagedMMFOptions>(services, ServiceLifetime.Transient, configure);
+        AddPagedMMF<PagedMMF, PagedMMFOptions>(services, ServiceLifetime.Transient, configure);
 
     public static IServiceCollection AddManagedPagedMMF(
         this IServiceCollection services,
@@ -58,7 +58,7 @@ public static class ServiceCollectionExtensions
     private static IServiceCollection AddPagedMMF<TS, TO>(
         this IServiceCollection services,
         ServiceLifetime lifetime,
-        Action<TO> configure = null) where TS : PMMF where TO : PagedMMFOptions
+        Action<TO> configure = null) where TS : PagedMMF where TO : PagedMMFOptions
     {
         services.AddOptions<TO>();
         services.TryAddSingleton<TimeManager>();
@@ -89,7 +89,7 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    private static TS CreatePagedMemoryMappedFile<TS, TO>(IServiceProvider serviceProvider) where TS : PMMF where TO : PagedMMFOptions
+    private static TS CreatePagedMemoryMappedFile<TS, TO>(IServiceProvider serviceProvider) where TS : PagedMMF where TO : PagedMMFOptions
     {
         try
         {

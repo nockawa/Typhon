@@ -14,35 +14,7 @@ using System.Threading.Tasks;
 namespace Typhon.Engine;
 
 [PublicAPI]
-public class PagedMMFOptions
-{
-    public string DatabaseName { get; set; }
-    public string DatabaseAbsoluteDirectory { get; set; } = Environment.CurrentDirectory;
-    public ulong DatabaseCacheSize { get; set; } = PMMF.DefaultMemPageCount * PMMF.PageSize;
-    public bool PagesDebugPattern { get; set; } = false;
-
-    public void EnsureFileDeleted()
-    {
-        try
-        {
-            var pfn = BuildDatabasePathFileName();
-            if (File.Exists(pfn))
-            {
-                File.Delete(pfn);
-            }
-        }
-        catch (Exception)
-        {
-            // ignored
-        }
-    }
-    
-    internal string BuildDatabaseFileName() => $"{DatabaseName}.bin";
-    internal string BuildDatabasePathFileName() => Path.Combine(DatabaseAbsoluteDirectory, BuildDatabaseFileName());
-}
-
-[PublicAPI]
-public partial class PMMF : IDisposable
+public partial class PagedMMF : IDisposable
 {
     public const int DefaultMemPageCount = 256;
 
@@ -62,7 +34,7 @@ public partial class PMMF : IDisposable
     internal const int PageRawDataSize = PageSize - PageHeaderSize;
     internal const int PageSizePow2 = 13; // 2^( PageSizePow2 = PageSize
     internal const int DatabaseFormatRevision = 1;
-    internal const ulong MinimumCacheSize = 512 * 1024 * 1024;
+    internal const ulong MinimumCacheSize = DefaultMemPageCount * PageSize;
     internal const int WriteCachePageSize = 1024 * 1024;
 
     #endregion
@@ -120,7 +92,7 @@ public partial class PMMF : IDisposable
 
     protected readonly PagedMMFOptions Options;
     protected readonly IServiceProvider ServiceProvider;
-    protected readonly ILogger<PMMF> Logger;
+    protected readonly ILogger<PagedMMF> Logger;
     
     private readonly TimeManager _tmg;
     private byte[] _memPages;
@@ -136,8 +108,13 @@ public partial class PMMF : IDisposable
 
     private readonly ConcurrentDictionary<int, int> _memPageIndexByFilePageIndex;
 
-    unsafe public PMMF(IServiceProvider serviceProvider, PagedMMFOptions options, TimeManager timeManager, ILogger<PMMF> logger)
+    unsafe public PagedMMF(IServiceProvider serviceProvider, PagedMMFOptions options, TimeManager timeManager, ILogger<PagedMMF> logger)
     {
+        if (options.Validate(true, out var errors) == false)
+        {
+            throw new ArgumentException("Invalid PagedMMF options", nameof(options), new AggregateException(errors));
+        }
+        
         ServiceProvider = serviceProvider;
         Options = options;
         _tmg = timeManager;

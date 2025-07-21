@@ -25,8 +25,8 @@ class PagedMMFTests
     public void Setup()
     {
         var o = TestContext.CurrentContext.Test.Properties.ContainsKey("MemPageCount");
-        var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("MemPageCount")! : PMMF.DefaultMemPageCount;
-        dcs *= PMMF.PageSize;
+        var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("MemPageCount")! : PagedMMF.DefaultMemPageCount;
+        dcs *= PagedMMF.PageSize;
 
 #if DEBUG
         Log.Logger = new LoggerConfiguration()
@@ -59,6 +59,7 @@ class PagedMMFTests
                 options.DatabaseName = CurrentDatabaseName;
                 options.DatabaseCacheSize = (ulong)dcs;
                 options.PagesDebugPattern = true;
+                options.OverrideDatabaseCacheMinSize = true;
             });
         
         _serviceProvider = _serviceCollection.BuildServiceProvider();
@@ -69,7 +70,7 @@ class PagedMMFTests
     [TearDown]
     public void TearDown() => Log.CloseAndFlush();
 
-    private const int CreateFillPagesThenReadThemMemPageCount = 256;
+    private const int CreateFillPagesThenReadThemMemPageCount = 512;
     [Test]
     [Property("MemPageCount", CreateFillPagesThenReadThemMemPageCount)]
     public void CreateFillPagesThenReadThem()
@@ -78,7 +79,7 @@ class PagedMMFTests
 
         {
             using var scope = _serviceProvider.CreateScope();
-            var pmmf = scope.ServiceProvider.GetService<PMMF>();
+            var pmmf = scope.ServiceProvider.GetService<PagedMMF>();
 
             Assert.That(pmmf.GetMetrics().FreeMemPageCount, Is.EqualTo(CreateFillPagesThenReadThemMemPageCount));
         
@@ -111,7 +112,7 @@ class PagedMMFTests
 
         {
             using var scope = _serviceProvider.CreateScope();
-            var pmmf = scope.ServiceProvider.GetService<PMMF>();
+            var pmmf = scope.ServiceProvider.GetService<PagedMMF>();
 
             Assert.That(pmmf.GetMetrics().FreeMemPageCount, Is.EqualTo(CreateFillPagesThenReadThemMemPageCount));
             long totalRequest = 0;
@@ -148,7 +149,7 @@ class PagedMMFTests
     public void MemPageStarvation()
     {
         using var scope = _serviceProvider.CreateScope();
-        var pmmf = scope.ServiceProvider.GetService<PMMF>();
+        var pmmf = scope.ServiceProvider.GetService<PagedMMF>();
         
         var waitTask0PagesCreated = new ManualResetEventSlim();
         
@@ -239,7 +240,7 @@ class PagedMMFTests
         // Write
         {
             using var scope = _serviceProvider.CreateScope();
-            var pmmf = scope.ServiceProvider.GetService<PMMF>();
+            var pmmf = scope.ServiceProvider.GetService<PagedMMF>();
 
             var metrics = pmmf.GetMetrics();
             var pageWrittenCount = metrics.PageWrittenToDiskCount;
@@ -278,7 +279,7 @@ class PagedMMFTests
         // Check read
         {
             using var scope = _serviceProvider.CreateScope();
-            var pmmf = scope.ServiceProvider.GetService<PMMF>();
+            var pmmf = scope.ServiceProvider.GetService<PagedMMF>();
 
             pmmf.RequestPage(10, true, out var p1);
             pmmf.RequestPage(11, true, out var p2);
@@ -323,7 +324,7 @@ class PagedMMFTests
         // Size configured in the Property attribute above, right now it's 8 pages cached, which is vicious because
         //  my actual computer has more thread, which means multiple thread compete for the same memory page.
         var cacheSize = _serviceProvider.GetRequiredService<IOptions<PagedMMFOptions>>().Value.DatabaseCacheSize;
-        var pagesCount = (int)(cacheSize * cacheFactor) / PMMF.PageSize;
+        var pagesCount = (int)(cacheSize * cacheFactor) / PagedMMF.PageSize;
 
         // Generate IO ops for all the frames
         var frames = new List<List<OPInfo>>(frameCount);
@@ -372,7 +373,7 @@ class PagedMMFTests
         
         {
             using var scope = _serviceProvider.CreateScope();
-            var pmmf = scope.ServiceProvider.GetService<PMMF>();
+            var pmmf = scope.ServiceProvider.GetService<PagedMMF>();
 
             // Setup initial value of each page
             var sw = new Stopwatch();
@@ -408,7 +409,7 @@ class PagedMMFTests
 
         {
             using var scope = _serviceProvider.CreateScope();
-            var pmmf = scope.ServiceProvider.GetService<PMMF>();
+            var pmmf = scope.ServiceProvider.GetService<PagedMMF>();
             var tm = scope.ServiceProvider.GetRequiredService<TimeManager>();
 
             // Check the initial page of each page
