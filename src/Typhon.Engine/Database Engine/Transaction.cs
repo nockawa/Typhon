@@ -660,7 +660,7 @@ public unsafe struct Transaction : IDisposable
     }
 
     // Return true if the whole component is deleted (all rows versions were delete/rollbacked)
-    internal bool CommitRow(long pk, ComponentInfo info, long minTick, ref ComponentInfo.RowInfo rowInfo, bool isRollback, bool isExclusive)
+    private bool CommitRow(long pk, ComponentInfo info, long minTick, ref ComponentInfo.RowInfo rowInfo, bool isRollback, bool isExclusive)
     {
         var versionTableAccessor = info.VersionTableAccessor;
         var componentSegment = info.ComponentSegment;

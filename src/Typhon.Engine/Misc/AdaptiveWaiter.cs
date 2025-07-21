@@ -20,8 +20,6 @@ public class AdaptiveWaiter
     
     public async Task SpinAsync(CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-
         if (Environment.ProcessorCount == 1)
         {
             await Task.Delay(WaitDelay, cancellationToken).ConfigureAwait(false);
@@ -33,7 +31,34 @@ public class AdaptiveWaiter
             _iterationCount >>= 1;
             _iterationCount = Math.Max(_iterationCount, 10);
             _curCount = 0;
-            await Task.Delay(WaitDelay, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await Task.Delay(WaitDelay, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+        else
+        {
+            Thread.SpinWait(100);
+        }
+    }
+
+    public void Spin()
+    {
+        if (Environment.ProcessorCount == 1)
+        {
+            Thread.Sleep(WaitDelay);
+            return;
+        }
+
+        if (_iterationCount == ++_curCount)
+        {
+            _iterationCount >>= 1;
+            _iterationCount = Math.Max(_iterationCount, 10);
+            _curCount = 0;
+            Thread.Sleep(WaitDelay);
         }
         else
         {

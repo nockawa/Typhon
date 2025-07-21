@@ -1,13 +1,11 @@
 using JetBrains.Annotations;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32.SafeHandles;
-using Serilog.Context;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -15,68 +13,43 @@ using System.Threading.Tasks;
 
 namespace Typhon.Engine;
 
-public class ChangeSet
+[PublicAPI]
+public class PagedMMFOptions
 {
-    private readonly PagedFile _owner;
-    private readonly HashSet<int> _changedMemoryPageIndices;
-    private Task _saveTask;
+    public string DatabaseName { get; set; }
+    public string DatabaseAbsoluteDirectory { get; set; } = Environment.CurrentDirectory;
+    public ulong DatabaseCacheSize { get; set; } = PMMF.DefaultMemPageCount * PMMF.PageSize;
+    public bool PagesDebugPattern { get; set; } = false;
 
-    public ChangeSet(PagedFile owner)
+    public void EnsureFileDeleted()
     {
-        _owner = owner;
-        _changedMemoryPageIndices = new HashSet<int>();
-    }
-
-    public void Add(PageAccessor accessor)
-    {
-        if (_changedMemoryPageIndices.Add(accessor.MemPageIndex))
+        try
         {
-            _owner.IncrementDirty(accessor.MemPageIndex);
-        }
-    }
-
-    public Task SaveChangesAsync()
-    {
-        if (_changedMemoryPageIndices.Count == 0)
-        {
-            return Task.CompletedTask;
-        }
-        
-        var memPageIndices = _changedMemoryPageIndices.ToArray();
-        var tasks = new List<Task>(_changedMemoryPageIndices.Count);
-        foreach (var memPageIndex in memPageIndices)
-        {
-            tasks.Add(_owner.SavePage(memPageIndex).AsTask());
-        }
-
-        _changedMemoryPageIndices.Clear();
-        
-        _saveTask = Task.WhenAll(tasks).ContinueWith(_ =>
-        {
-            foreach (int memPageIndex in memPageIndices)
+            var pfn = BuildDatabasePathFileName();
+            if (File.Exists(pfn))
             {
-                _owner.DecrementDirty(memPageIndex);
+                File.Delete(pfn);
             }
-        });
-        return _saveTask;
+        }
+        catch (Exception)
+        {
+            // ignored
+        }
     }
-
-    public void Reset()
-    {
-        _changedMemoryPageIndices.Clear();
-        _saveTask = null;
-    }
+    
+    internal string BuildDatabaseFileName() => $"{DatabaseName}.bin";
+    internal string BuildDatabasePathFileName() => Path.Combine(DatabaseAbsoluteDirectory, BuildDatabaseFileName());
 }
 
 [PublicAPI]
-public class PagedFile : IAsyncInitializable, IAsyncDisposable
+public partial class PMMF : IDisposable
 {
     public const int DefaultMemPageCount = 256;
 
     #region Events
 
-    internal event EventHandler<DatabaseEventArgs> DatabaseCreating;
-    internal event EventHandler<DatabaseEventArgs> DatabaseLoading;
+    internal event EventHandler CreatingEvent;
+    internal event EventHandler LoadingEvent;
 
     #endregion
 
@@ -90,10 +63,7 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
     internal const int PageSizePow2 = 13; // 2^( PageSizePow2 = PageSize
     internal const int DatabaseFormatRevision = 1;
     internal const ulong MinimumCacheSize = 512 * 1024 * 1024;
-    internal const string HeaderSignature = "TyphonDatabase";
     internal const int WriteCachePageSize = 1024 * 1024;
-
-    private const int OccupancySegmentRootPageIndex = 1;
 
     #endregion
 
@@ -119,7 +89,10 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
         public int ReadFromDiskCount;
         
         /// Approximately the number of pages that were written to disk
-        public int WriteToDiskCount;
+        public int PageWrittenToDiskCount;
+
+        /// Approximately the number of IO write operations executed
+        public int WrittenOperationCount;
         
         /// The exact number of Memory Pages that are currently free (and can be used to allocate new file pages).
         public int FreeMemPageCount;
@@ -145,85 +118,11 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
         IdleAndDirty = 5,   // The page access was released but its content yet need to be written to disk.
     }
 
-    internal class PageInfo
-    {
-        private const int ClockSweepMaxValue = 5;
-        
-        public readonly int MemPageIndex;
-        public int FilePageIndex;
-        public int ClockSweepCounter => _clockSweepCounter;
-        public int DirtyCounter;
-
-        public SmallAccessControl StateSyncRoot;
-        public PageState PageState;                 // Must always be changed under StateSyncRoot lock
-        public int LockedByThreadId;                // Same
-        public int ConcurrentSharedCounter;         // Same
-
-        private int _clockSweepCounter;
-        private Lazy<Task<int>> _ioReadTask;
-
-        public void SetIOReadTask(ValueTask<int> task) => _ioReadTask = new Lazy<Task<int>>(task.AsTask);
-
-        public Task<int> IOReadTask => _ioReadTask?.Value ?? Task.FromResult(0);
-
-        public void ResetIOCompletionTask() => _ioReadTask = null;
-
-        public PageInfo(int memPageIndex)
-        {
-            MemPageIndex = memPageIndex;
-            FilePageIndex = -1;
-            _clockSweepCounter = 0;
-            ConcurrentSharedCounter = 0;
-            StateSyncRoot = new SmallAccessControl();
-        }
-
-        public void IncrementClockSweepCounter()
-        {
-            var curValue = _clockSweepCounter;
-            if (curValue == ClockSweepMaxValue)
-            {
-                return;
-            }
-
-            SpinWait sw = new();
-            while (Interlocked.CompareExchange(ref _clockSweepCounter, curValue + 1, curValue) != curValue)
-            {
-                curValue = _clockSweepCounter;
-                if (curValue == ClockSweepMaxValue)
-                {
-                    return;
-                }
-                sw.SpinOnce();
-            }
-        }
-
-        public void DecrementClockSweepCounter()
-        {
-            var curValue = _clockSweepCounter;
-            if (curValue == 0)
-            {
-                return;
-            }
-
-            SpinWait sw = new();
-            while (Interlocked.CompareExchange(ref _clockSweepCounter, curValue - 1, curValue) != curValue)
-            {
-                curValue = _clockSweepCounter;
-                if (curValue == 0)
-                {
-                    return;
-                }
-                sw.SpinOnce();
-            }
-        }
-
-        public void ResetClockSweepCounter() => _clockSweepCounter = 0;
-    }
+    protected readonly PagedMMFOptions Options;
+    protected readonly IServiceProvider ServiceProvider;
+    protected readonly ILogger<PMMF> Logger;
     
-    private readonly IServiceProvider _sp;
-    private readonly DatabaseConfiguration _dbc;
     private readonly TimeManager _tmg;
-    private readonly ILogger<PagedMemoryMappedFile> _log;
     private byte[] _memPages;
     private GCHandle _memPagesHandle;
     private unsafe byte* _memPagesAddr;
@@ -236,16 +135,16 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
     private long _fileSize;
 
     private readonly ConcurrentDictionary<int, int> _memPageIndexByFilePageIndex;
-    
-    unsafe public PagedFile(IServiceProvider sp, IConfiguration<DatabaseConfiguration> dc, TimeManager timeManager, ILogger<PagedMemoryMappedFile> logger)
+
+    unsafe public PMMF(IServiceProvider serviceProvider, PagedMMFOptions options, TimeManager timeManager, ILogger<PMMF> logger)
     {
-        _sp = sp;
-        _dbc = dc.Value;
+        ServiceProvider = serviceProvider;
+        Options = options;
         _tmg = timeManager;
-        _log = logger;
+        Logger = logger;
 
         // Create the cache of the page, pin it and keeps its address
-        var cacheSize = _dbc.DatabaseCacheSize;
+        var cacheSize = Options.DatabaseCacheSize;
         _memPages = new byte[cacheSize];
         _memPagesHandle = GCHandle.Alloc(_memPages, GCHandleType.Pinned);
         _memPagesAddr = (byte*)_memPagesHandle.AddrOfPinnedObject();
@@ -264,158 +163,100 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
         _memPageIndexByFilePageIndex = new ConcurrentDictionary<int, int>();
 
         _metrics = new Metrics { FreeMemPageCount = _memPagesCount };
-    }
-
-    // This method is used for internal / testing purposes only, the user knows what (s)he is doing
-    internal async Task ResetAsync()
-    {
-        LogResetAsync();
-        
-        _memPages.AsSpan().Cast<byte, ulong>().Clear();
-        for (int i = 0; i < _memPagesCount; i++)
-        {
-            _memPagesInfo[i] = new PageInfo(i);
-        }
-        _clockSweepCurrentIndex = 0;
-
-        _memPageIndexByFilePageIndex.Clear();
-        
-        // Reset the File
-        if (_fileHandle != null)
-        {
-            _fileHandle.Dispose();
-            _fileHandle = null;
-        }
-        _fileSize = 0L;
-        
-        // Reset the counters
-        ReferenceCounter = 0;
-        IsInitialized = false;
-        IsDisposed = false;
-
-        _metrics = new Metrics { FreeMemPageCount = _memPagesCount };
-
-        await InitializeAsync();
-    }
-    
-    public async Task InitializeAsync()
-    {
-        ++ReferenceCounter;
-        if (IsInitialized)
-        {
-            return;
-        }
 
         try
         {
             // Init or load the file
-            var filePathName = BuildDatabasePathFileName();
+            var filePathName = Options.BuildDatabasePathFileName();
             var fi = new FileInfo(filePathName);
             var isCreationMode = fi.Exists == false;
-            if (isCreationMode || _dbc.RecreateDatabase)
+            if (isCreationMode)
             {
-                await CreateDatabaseFileAsync();
+                CreateFile();
             }
             else
             {
-                await LoadDatabaseFileAsync();
+                LoadFile();
             }
-            _log.LogInformation("Virtual Disk Manager service initialized successfully");
+            Logger.LogInformation("Virtual Disk Manager service initialized successfully");
         }
         catch (Exception e)
         {
-            _log.LogError(e, "Virtual Disk Manager service initialization failed");
-            await DisposeAsync();
+            Logger.LogError(e, "Virtual Disk Manager service initialization failed");
+            Dispose();
             throw new Exception("Virtual Disk Manager initialization error, check inner exception.", e);
         }
-
-        IsInitialized = true;
     }
 
-    private async Task CreateDatabaseFileAsync()
+    public void DeleteDatabaseFile()
+    {
+        var fi = new FileInfo(Options.BuildDatabasePathFileName());
+        if (fi.Exists)
+        {
+            fi.Delete();
+        }
+    }
+
+    private void CreateFile()
     {
         // Create the Files
-        var filePathName = BuildDatabasePathFileName();
+        var filePathName = Options.BuildDatabasePathFileName();
 
         _fileHandle = File.OpenHandle(filePathName, FileMode.Create, FileAccess.ReadWrite, FileShare.None, FileOptions.Asynchronous | FileOptions.RandomAccess);
         _fileSize = 0L;
+
+        Logger.LogInformation("Create Database '{DatabaseName}' in file '{FilePathName}'", Options.DatabaseName, filePathName);
         
-        var c = _dbc;
-        _log.LogInformation("Create Database '{DatabaseName}' in file '{FilePathName}'", c.DatabaseName, filePathName);
-
-        using (var pa = await RequestPageAsync(0, true))
-        {
-            /*
-            pa.SetPageDirty();
-            var h = (RootFileHeader*)pa.PageAddress;
-            StringExtensions.StoreString(HeaderSignature, h->HeaderSignature, 32);
-            h->DatabaseFormatRevision = DatabaseFormatRevision;
-            StringExtensions.StoreString(c.DatabaseName, h->DatabaseName, 64);
-            */
-
-            /*
-            rootFileHeader->OccupancyMapSPI = OccupancySegmentRootPageIndex;
-            _log.LogInformation("Initialize DiskPageAllocator service with root at page {PageId}", OccupancySegmentRootPageIndex);
-
-            var lsm = (LogicalSegmentManager)_sp.GetRequiredService(typeof(LogicalSegmentManager));
-            _occupancySegment = lsm.CreateOccupancySegment(OccupancySegmentRootPageIndex, PageBlockType.OccupancyMap, 1);
-        
-            // ReSharper disable InconsistentlySynchronizedField
-            _occupancyMap = new BitmapL3(1, _occupancySegment);
-
-            // The first two pages are already manually allocated
-            _occupancyMap.SetL0(0);
-            _occupancyMap.SetL0(1);
-            // ReSharper restore InconsistentlySynchronizedField
-
-            FlushToDiskAsync(false).Wait();
-            */
-            
-            //OnDatabaseCreating(h);
-        }
-        
+        OnFileCreating();
     }
 
-    unsafe void OnDatabaseCreating(RootFileHeader* rootFileHeader)
+    protected virtual void OnFileCreating()
     {
-        var handler = DatabaseCreating;
-        handler?.Invoke(this, new DatabaseEventArgs(rootFileHeader));
+        var handler = CreatingEvent;
+        handler?.Invoke(this, null!);
     }
-    
-    private Task LoadDatabaseFileAsync()
+
+    private void LoadFile()
     {
         // Create the Files
-        var filePathName = BuildDatabasePathFileName();
+        var filePathName = Options.BuildDatabasePathFileName();
         _fileHandle = File.OpenHandle(filePathName, FileMode.Open, FileAccess.ReadWrite, FileShare.None, FileOptions.Asynchronous|FileOptions.RandomAccess);
         {
             var fi = new FileInfo(filePathName);
             _fileSize = fi.Length;
         }
-
-        return Task.CompletedTask;
+        
+        OnFileLoading();
     }
 
-    public bool IsInitialized { get; private set; }
-    public bool IsDisposed { get; private set; }
-    public int ReferenceCounter { get; private set; }
-
-    unsafe public ValueTask DisposeAsync()
+    protected virtual void OnFileLoading()
     {
-        if (IsDisposed || --ReferenceCounter != 0)
+        var handler = LoadingEvent;
+        handler?.Invoke(this, null!);
+    }
+    
+    public bool IsDisposed { get; private set; }
+
+    public void Dispose()
+    {
+        OnDispose();
+        GC.SuppressFinalize(this);
+    }
+
+    unsafe protected virtual void OnDispose()
+    {
+        if (IsDisposed)
         {
-            return ValueTask.CompletedTask;
+            return;
         }
-        _log.LogInformation("Disposing Virtual Disk Manager");
 
-        //FlushToDiskAsync(false).Wait();
-
-        _fileHandle.Dispose();
-
-        if (_dbc.DeleteDatabaseOnDispose)
+        Logger.LogInformation("Disposing Virtual Disk Manager");
+        if (_fileHandle != null)
         {
-            //DeleteDatabaseFile();
+            _fileHandle.Dispose();
+            _fileHandle = null;
         }
-
+        
         _memPagesInfo = null;
 
         _memPagesHandle.Free();
@@ -423,25 +264,30 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
         _memPages = null;
 
         IsDisposed = true;
-        _log.LogInformation("Virtual Disk Manager disposed");
-        
-        return ValueTask.CompletedTask;
-    }
 
+        Logger.LogInformation("Virtual Disk Manager disposed");
+    }
+    
     /// <summary>
     /// Request access to a File Page, either Shared or Exclusive.
     /// </summary>
     /// <param name="filePageIndex">The index of the File Page to access.</param>
     /// <param name="exclusive"><c>true</c> for Exclusive access, <c>false</c> for Shared.</param>
-    /// <returns>The accessor</returns>
+    /// <param name="result">The <see cref="PageAccessor"/> allowing access to the page, valid only if the method returns <c>true</c>.</param>
+    /// <param name="timeout">The time (in tick) the method should wait to return successfully.</param>
+    /// <param name="cancellationToken">An optional cancellation token for the user to cancel the call.</param>
+    /// <returns><c>true</c> if the call succeeded, <paramref name="result"/> will be valid. <c>false</c> if the operation was cancelled or time out
+    /// <paramref name="result"/> won't be valid and be set to default.</returns>
     /// <remarks>
-    /// This method goes async if the Memory Page is not allocated and there are no free Memory Pages available or if the requested access requires to
-    ///  wait for the transition to be made (one or many threads hold an access not compatible with the one we request).
+    /// This method will enter a wait cycle if:
+    /// <li> - The Memory Page is not allocated and there are no free Memory Pages available </li>
+    /// <li> - The requested access requires to wait for the transition to be made (one or many threads hold an access not compatible with the one we request).</li>
+    /// <br/>
     /// If the File Page is being loading from disk to memory, the read is completely independent of this operation, the <see cref="PageAccessor"/> will
     ///  wait for it upon its first content access.
-    /// Going async on this call should be very rare.
     /// </remarks>
-    public async ValueTask<PageAccessor> RequestPageAsync(int filePageIndex, bool exclusive)
+    public bool RequestPage(int filePageIndex, bool exclusive, out PageAccessor result, 
+        long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
     {
 #if VERBOSELOGGING
         using var logId = LogContext.PushProperty("FilePageIndex", filePageIndex);
@@ -451,36 +297,54 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
 
         // Race condition can occur during TransitionPageToAccessAsync (e.g. waiting for the lock while the memory page is being reallocated for another disk page)
         // So we loop until we get the page in the right state
+        AdaptiveWaiter waiter = null;
         while (true)
         {
-            var memPageIndex = await FetchPageToMemoryAsync(filePageIndex);
+            // If this returns false, it means we can't request a page right now: we return false
+            if (!FetchPageToMemory(filePageIndex, out var memPageIndex, timeout, cancellationToken))
+            {
+                result = default;
+                return false;
+            }
             var pi = _memPagesInfo[memPageIndex];
         
-            if (await TransitionPageToAccessAsync(filePageIndex, pi, exclusive))
+            // If this return false, it's most likely a race condition where the Memory Page was reallocated for another File Page
+            if (!TransitionPageToAccess(filePageIndex, pi, exclusive, timeout, cancellationToken))
             {
-                return new PageAccessor(this, pi);
+                waiter ??= new AdaptiveWaiter();
+                waiter.Spin();
+                continue;
             }
+            result = new PageAccessor(this, pi);
+            return true;
         }
     }
-    
+
     /// <summary>
     /// Fetch the requested File Page to memory, allocating a Memory Page if needed.
     /// </summary>
     /// <param name="filePageIndex">Index of the File Page to fetch</param>
-    /// <returns>The index of the Memory Page for the request File Page</returns>
+    /// <param name="memPageIndex"></param>
+    /// <param name="timeout">The time (in tick) the method should wait to return successfully.</param>
+    /// <param name="cancellationToken">An optional cancellation token for the user to cancel the call.</param>
+    /// <returns><c>true</c> if the call succeeded, <paramref name="memPageIndex"/> will be valid. <c>false</c> if the operation was cancelled or time out
+    /// <paramref name="memPageIndex"/> won't be valid.</returns>
     /// <remarks>
-    /// This method goes async if the Memory Page is not allocated and there are no free Memory Pages available.
+    /// This method will enter a wait cycle if the Memory Page is not allocated and there are no free Memory Pages available.
     /// </remarks>
-    private async ValueTask<int> FetchPageToMemoryAsync(int filePageIndex)
+    private bool FetchPageToMemory(int filePageIndex, out int memPageIndex, long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
     {
         // Get the memory page from the cache, if it fails we allocate a new one
-        if (_memPageIndexByFilePageIndex.TryGetValue(filePageIndex, out var memPageIndex) == false)
+        if (_memPageIndexByFilePageIndex.TryGetValue(filePageIndex, out memPageIndex) == false)
         {
             ++_metrics.MemPageCacheMiss;
             LogMemPageCacheMiss();
 
             // Page is not cached, we assign an available Memory Page to it
-            memPageIndex = await AllocateMemoryPageAsync(filePageIndex);
+            if (!AllocateMemoryPage(filePageIndex, out memPageIndex, timeout, cancellationToken))
+            {
+                return false;
+            }
             
             // Load the page from disk, if it's stored there already. (won't be the case for new pages)
             // The load is async and not part of the returned task but stored in the PageInfo
@@ -492,7 +356,7 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
                 ++_metrics.ReadFromDiskCount;
                 
                 var pi = _memPagesInfo[memPageIndex];
-                pi.SetIOReadTask(RandomAccess.ReadAsync(_fileHandle, _memPages.AsMemory(memPageIndex * PageSize, PageSize), pageOffset));
+                pi.SetIOReadTask(RandomAccess.ReadAsync(_fileHandle, _memPages.AsMemory(memPageIndex * PageSize, PageSize), pageOffset, cancellationToken));
             }            
         }
         else
@@ -506,7 +370,7 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
 #endif
 
         LogRequestPageFound();
-        return memPageIndex;
+        return true;
     }
 
     private int AdvanceClockHand()
@@ -526,12 +390,16 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
     /// Allocate a Memory Page for the given File Page Index.
     /// </summary>
     /// <param name="filePageIndex">The file page index to mount to memory</param>
-    /// <returns>The Memory Page Index</returns>
+    /// <param name="memPageIndex">The index of the memory page for the requested file page if the call is successful.</param>
+    /// <param name="timeout">The time (in tick) the method should wait to return successfully.</param>
+    /// <param name="cancellationToken">An optional cancellation token for the user to cancel the call.</param>
+    /// <returns><c>true</c> if the call succeeded, <paramref name="memPageIndex"/> will be valid. <c>false</c> if the operation was cancelled or time out
+    /// <paramref name="memPageIndex"/> won't be valid.</returns>
     /// <remarks>
-    /// This method goes async if no Memory Page is available, it will wait and loop until it finds one.
+    /// This method will enter a wait cycle if no Memory Page is available, it will wait and loop until it finds one.
     /// Use the clock-sweep algorithm to find a free Memory Page.
     /// </remarks>
-    private async ValueTask<int> AllocateMemoryPageAsync(int filePageIndex)
+    private bool AllocateMemoryPage(int filePageIndex, out int memPageIndex, long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
     {
 #if VERBOSELOGGING
         int loopCount = 0;
@@ -542,10 +410,15 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
         LogAllocatePageEnter();
         while (true)
         {
-
+            if (cancellationToken.IsCancellationRequested)
+            {
+                memPageIndex = -1;
+                return false;
+            }
+            
             bool found = false;
             PageInfo pi = null;
-            int memPageIndex = -1;
+            memPageIndex = -1;
 
             // If we already have a MemPage fetch for the FilePage just before the one we allocate, then we try to take the MemPage that follows
             // We request FilePage 123, there's a FilePage 122 allocated to MemPage 34, then we try to allocate 35 for 123, which will allow, if needed,
@@ -634,7 +507,7 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
                     loopCount++;
 #endif
                     waiter ??= new AdaptiveWaiter();
-                    await waiter.SpinAsync();
+                    waiter.Spin();
                     continue;
                 }
             }
@@ -644,16 +517,16 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
             ++_metrics.TotalMemPageAllocatedCount;
             LogAllocatePageFound(memPageIndex);
 
-            if (_dbc.PagesDebugPattern)
+            if (Options.PagesDebugPattern)
             {
                 var pageAddr = _memPages.AsMemory(memPageIndex * PageSize).Span.Cast<byte, int>();
                 int i;
-                for (i = 0; i < PagedMemoryMappedFile.PageHeaderSize >> 2; i++)
+                for (i = 0; i < PageHeaderSize >> 2; i++)
                 {
                     pageAddr[i] = (filePageIndex << 16) | 0xFF00 | i;
                 }
 
-                for (int j = 0; j < PagedMemoryMappedFile.PageRawDataSize >> 2; j++, i++)
+                for (int j = 0; j < PageRawDataSize >> 2; j++, i++)
                 {
                     pageAddr[i] = (filePageIndex << 16) | j;
                 }
@@ -679,12 +552,20 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
                 _metrics.TotalMemPageAllocatedCount--;
             }
 
-            return memPageIndex;
+            return true;
         }
     }
 
     private bool TryAcquire(PageInfo info)
     {
+        // First pass, check without locking (we won't bother to acquire the lock if the page is not in Free or Idle state)
+        var state = info.PageState;
+        if (state != PageState.Free && state != PageState.Idle)
+        {
+            return false;
+        }
+
+        // Second pass, under lock
         try
         {
             info.StateSyncRoot.Enter();
@@ -695,9 +576,15 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
             {
                 info.ResetIOCompletionTask();
             }
-            
+
+            // We need to check the state again, because another thread might have changed between the first and second pass
             if (info.PageState is PageState.Free or PageState.Idle)
             {
+                // Idle page is still referenced in the cache directory, so we remove it
+                if (info.PageState == PageState.Idle)
+                {
+                    _memPageIndexByFilePageIndex.TryRemove(info.FilePageIndex, out _);
+                }
                 info.ResetClockSweepCounter();
                 info.FilePageIndex = -1;
                 info.PageState = PageState.Allocating;
@@ -723,6 +610,8 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
     /// <param name="filePageIndex">Disk Page Id</param>
     /// <param name="pi">The corresponding PageInfo</param>
     /// <param name="exclusive"><c>true</c> if we are doing Exclusive access, otherwise it's Shared access</param>
+    /// <param name="timeout">The time (in tick) the method should wait to return successfully.</param>
+    /// <param name="cancellationToken">An optional cancellation token for the user to cancel the call.</param>
     /// <returns><c>true</c> is we successfully transitioned to access, <c>false</c> if we failed because of a race condition</returns>
     /// <remarks>
     /// This is...not easy... because there are many cases to cover
@@ -744,7 +633,8 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
     ///  instead of a single field.
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    private async Task<bool> TransitionPageToAccessAsync(int filePageIndex, PageInfo pi, bool exclusive)
+    private bool TransitionPageToAccess(int filePageIndex, PageInfo pi, bool exclusive, 
+        long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
     {
 #if VERBOSELOGGING
         int loopCount = 0;
@@ -783,11 +673,17 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
                 // If the page is Allocating or Idle (and Dirty), we can transition to Shared or Exclusive very simply
                 if (pi.PageState is PageState.Allocating or PageState.Idle or PageState.IdleAndDirty)
                 {
+                    // Setting the page to Allocating already updated the FreeMemPageCount, but we need to update it for other states
+                    if (pi.PageState != PageState.Allocating)
+                    {
+                        Interlocked.Decrement(ref _metrics.FreeMemPageCount);
+                    }
+                    
                     pi.PageState = exclusive ? PageState.Exclusive : PageState.Shared;
                     pi.LockedByThreadId = Environment.CurrentManagedThreadId;
                     pi.ConcurrentSharedCounter = 1;
                     pi.IncrementClockSweepCounter();
-                    
+
                     LogTransitionSuccessful(prevState, pi.PageState);
                     return true;
                 }
@@ -838,7 +734,7 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
                 {
                     // Check for re-entrant Access: we are in Exclusive access, we want exclusive access, and we are the thread that already owns the page.
                     // In this case we can return immediately
-                    if (exclusive && Environment.CurrentManagedThreadId == pi.LockedByThreadId)
+                    if (/*exclusive &&*/ Environment.CurrentManagedThreadId == pi.LockedByThreadId)
                     {
                         ++pi.ConcurrentSharedCounter;
                         pi.IncrementClockSweepCounter();
@@ -856,25 +752,74 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
             // We arrive here because we couldn't make the requested transition, in a leap of faith, we wait...and retry.
             // But we log it, because, ya know...
 #if VERBOSELOGGING
-            LogTransitionWaitAndLoop(prevState, exclusive ? PageState.Exclusive : PageState.Shared, loopCount, DateTime.UtcNow - start);
+            if (loopCount.IsPowerOf2())
+            {
+                LogTransitionWaitAndLoop(prevState, exclusive ? PageState.Exclusive : PageState.Shared, loopCount, DateTime.UtcNow - start);
+            }
             loopCount++;
 #endif
             
             waiter ??= new AdaptiveWaiter();
-            await waiter.SpinAsync();
+            waiter.Spin();
         }
     }
 
     public ChangeSet CreateChangeSet() => new(this);
 
-    internal bool TryPromoteToExclusive(int pageId, PageInfo pi, out PageState previousMode)
+    internal bool TryPromoteToExclusive(int filePageIndex, PageInfo pi, out PageState previousMode)
     {
-        throw new NotImplementedException();
+        try
+        {
+            pi.StateSyncRoot.Enter();
+            
+            previousMode = pi.PageState;
+
+            // Check if the page was reallocated by the time we got the lock
+            if (filePageIndex != pi.FilePageIndex)
+            {
+                return false;
+            }
+
+            var ct = Environment.CurrentManagedThreadId;
+
+            // Check if the thread already own exclusive access
+            if (pi.LockedByThreadId != ct)
+            {
+                return false;
+            }
+
+            pi.IncrementClockSweepCounter();
+            ++pi.ConcurrentSharedCounter;
+
+            // If the thread is already in write mode, there's nothing to do, the call succeeds.
+            if (pi.PageState == PageState.Exclusive)
+            {
+                return true;
+            }
+
+            // Switch to write, set the page as dirty
+            pi.PageState = PageState.Exclusive;
+
+            return true;
+        }
+        finally
+        {
+            pi.StateSyncRoot.Exit();
+        }
     }
 
     internal void DemoteExclusive(PageInfo pi, PageState previousMode)
     {
-        throw new NotImplementedException();
+        try
+        {
+            pi.StateSyncRoot.Enter();
+            --pi.ConcurrentSharedCounter;
+            pi.PageState = previousMode;
+        }
+        finally
+        {
+            pi.StateSyncRoot.Exit();
+        }
     }
 
     internal void IncrementDirty(int memPageIndex)
@@ -899,16 +844,63 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
         pi.StateSyncRoot.Exit();
     }
 
-    internal ValueTask SavePage(int memPageIndex)
+    internal Task SavePages(int[] memPageIndices)
     {
-        var pi = _memPagesInfo[memPageIndex];
+        // We want to generate as few IO operations as possible, so we sort the pages to identify the ones that are contiguous in the file
+        Array.Sort(memPageIndices, (x, y) => x - y);
+
+        var operations = new List<(int memPageIndex, int length)>();
+
+        var curPageInfo = _memPagesInfo[memPageIndices[0]];
+        var curOperation = (memPageIndex: memPageIndices[0], length: 1);
+
+        for (int i = 1; i < memPageIndices.Length; i++)
+        {
+            var nextMemPageIndex = memPageIndices[i];
+            var nextPageInfo = _memPagesInfo[nextMemPageIndex];
+            if ((curPageInfo.MemPageIndex+1)==nextPageInfo.MemPageIndex && (curPageInfo.FilePageIndex+1)==nextPageInfo.FilePageIndex)
+            {
+                // We are contiguous, extend the current operation
+                curOperation.length++;
+                curPageInfo = nextPageInfo;
+            }
+            else
+            {
+                // We are not contiguous, store the current operation and start a new one
+                operations.Add(curOperation);
+                curOperation = (nextMemPageIndex, 1);
+            }
+        }
+        // Don't forget to add the last operation
+        operations.Add(curOperation);
+        
+        var tasks = new Task[operations.Count];
+        for (int i = 0; i < operations.Count; i++)
+        {
+            tasks[i] = SavePageInternal(operations[i].memPageIndex, operations[i].length).AsTask();
+        }
+
+        var saveTask = Task.WhenAll(tasks).ContinueWith(_ =>
+        {
+            foreach (int memPageIndex in memPageIndices)
+            {
+                DecrementDirty(memPageIndex);
+            }
+        });
+        return saveTask;
+    }
+    
+    internal ValueTask SavePageInternal(int firstMemPageIndex, int length)
+    {
+        var pi = _memPagesInfo[firstMemPageIndex];
         
         // Save the page to disk
         var filePageIndex = pi.FilePageIndex;
         var pageOffset = filePageIndex * (long)PageSize;
-        var pageData = _memPages.AsMemory(memPageIndex * PageSize, PageSize);
+        var pageData = _memPages.AsMemory(firstMemPageIndex * PageSize, PageSize * length);
 
-        ++_metrics.WriteToDiskCount;
+        _metrics.PageWrittenToDiskCount += length;
+        _metrics.WrittenOperationCount++;
         return RandomAccess.WriteAsync(_fileHandle, pageData, pageOffset);
     }
 
@@ -948,100 +940,60 @@ public class PagedFile : IAsyncInitializable, IAsyncDisposable
             pi.StateSyncRoot.Exit();
         }
     }
-    
+
     internal unsafe byte* GetMemPageAddress(int memPageIndex) => &_memPagesAddr[memPageIndex * (long)PageSize];
-    
-    private string BuildDatabaseFileName() => $"{_dbc.DatabaseName}.bin";
-    private string BuildDatabasePathFileName() => Path.Combine(_dbc.DatabaseAbsoluteDirectory, BuildDatabaseFileName());
     
     #region Logging helpers
 
     [Conditional("VERBOSELOGGING")]
-    private void LogRequestPage(int pageId, bool doesWrite) => _log.LogDebug(10, "Request Disk Page: {PageId}, Write: {IsExclusive}", pageId, doesWrite);
+    private void LogRequestPage(int pageId, bool doesWrite) => Logger.LogDebug(10, "Request Disk Page: {PageId}, Write: {IsExclusive}", pageId, doesWrite);
     
     [Conditional("VERBOSELOGGING")]
-    private void LogMemPageCacheHit() => _log.LogTrace(11, "MemPage Cache Hit");
+    private void LogMemPageCacheHit() => Logger.LogTrace(11, "MemPage Cache Hit");
     
     [Conditional("VERBOSELOGGING")]
-    private void LogMemPageCacheMiss() => _log.LogTrace(12, "MemPage Cache Miss");
+    private void LogMemPageCacheMiss() => Logger.LogTrace(12, "MemPage Cache Miss");
     
     [Conditional("VERBOSELOGGING")]
-    private void LogRequestPageFound() => _log.LogTrace(13, "Request Page Found");
+    private void LogRequestPageFound() => Logger.LogTrace(13, "Request Page Found");
     
     [Conditional("VERBOSELOGGING")]
-    private void LogRequestPageRace() => _log.LogTrace(14, "Request Page Race Condition (reallocation)");
+    private void LogRequestPageRace() => Logger.LogTrace(14, "Request Page Race Condition (reallocation)");
 
     [Conditional("VERBOSELOGGING")]
-    private void LogAllocatePageEnter() => _log.LogTrace(20, "Allocate Page Enter");
+    private void LogAllocatePageEnter() => Logger.LogTrace(20, "Allocate Page Enter");
     
     [Conditional("VERBOSELOGGING")]
-    private void LogAllocatePageSequential() => _log.LogTrace(22, "Allocate Page Sequential");
+    private void LogAllocatePageSequential() => Logger.LogTrace(22, "Allocate Page Sequential");
     
     [Conditional("VERBOSELOGGING")]
-    private void LogAllocatePageFound(int memPageIndex) => _log.LogTrace(24, "Allocate Page Found {MemPageId}", memPageIndex);
+    private void LogAllocatePageFound(int memPageIndex) => Logger.LogTrace(24, "Allocate Page Found {MemPageId}", memPageIndex);
     
     [Conditional("VERBOSELOGGING")]
-    private void LogAllocatePageLoad() => _log.LogTrace(25, "Allocate Page Load From Disk");
+    private void LogAllocatePageLoad() => Logger.LogTrace(25, "Allocate Page Load From Disk");
 
-    [Conditional("VERBOSELOGGING")]
-    private void LogFlushToDiskStart() => _log.LogTrace(30, "Flush To Disk Start");
-    
-    [Conditional("VERBOSELOGGING")]
-    private void LogFlushToDiskConcurrentFlush() => _log.LogTrace(31, "Flush To Disk exiting due to concurrent Flush");
-    
-    [Conditional("VERBOSELOGGING")]
-    private void LogFlushToDiskEnd() => _log.LogTrace(32, "Flush To Disk End");
-    
-    [Conditional("VERBOSELOGGING")]
-    private void LogFlushToDiskWaitPrevious() => _log.LogTrace(33, "Wait Previous Flush To Complete");
-    
-    /*
-    [Conditional("VERBOSELOGGING")]
-    private void LogFlushToDiskWritePage(SegmentInfo segment, List<int> fragList, bool isFrag)
-    {
-        if (isFrag)
-        {
-            _log.LogTrace(34, "Write fragmented segment StartDiskPage: {StartDiskPageId}, PageCount: {PageCount}, MemPages: {MemPageIdList}",
-                segment.StartPageId, segment.PageCount, fragList.GetRange(segment.StartMemPageId, segment.PageCount));
-        }
-        else
-        {
-            _log.LogTrace(34, "Write contiguous segment StartDiskPage: {StartDiskPageId}, PageCount: {PageCount}, FirstMemPage: {StartMemPageId}",
-                segment.StartPageId, segment.PageCount, segment.StartMemPageId);
-        }
-
-    }
-
-    [Conditional("VERBOSELOGGING")]
-    private void LogFlushToDiskPages(SortedDictionary<uint, int> pagesToWrite)
-    {
-        _log.LogDebug(35, "Flush pages {DiskPageList}", pagesToWrite);
-    }
-    */
-
-    // TransitionPageTo
     [Conditional("VERBOSELOGGING")]
     private void LogTransitionSuccessful(PageState prevMode, PageState newMode) => 
-        _log.LogTrace(40, "Transition completed from {PrevMode} to {NewMode}", prevMode, newMode);
+        Logger.LogTrace(40, "Transition completed from {PrevMode} to {NewMode}", prevMode, newMode);
 
     [Conditional("VERBOSELOGGING")]
     private void LogTransitionFailed(PageState newMode) => 
-        _log.LogTrace(41, "Transition completed to {NewMode} failed due to reallocation", newMode);
+        Logger.LogTrace(41, "Transition completed to {NewMode} failed due to reallocation", newMode);
 
 
     [Conditional("VERBOSELOGGING")]
     private void LogTransitionWaitAndLoop(PageState prevMode, PageState newMode, int loopCount, TimeSpan duration) => 
-        _log.LogTrace(42, "Transition waiting/reloop from {prevNode} to {NewMode} loop count: {loopCount}, duration: {duration}", prevMode, newMode, loopCount, duration);
+        Logger.LogTrace(42, "Transition waiting/reloop from {prevNode} to {NewMode} loop count: {loopCount}, duration: {duration}", prevMode, newMode, loopCount, duration);
 
  
     [Conditional("VERBOSELOGGING")]
     private void LogPendingPageAllocation(int filePageIndex, int loopCount, TimeSpan duration) => 
-        _log.LogTrace(43, "Page Allocation pending/reloop for page {filePageIndex} loop count: {loopCount}, duration: {duration}", filePageIndex, loopCount, duration);
+        Logger.LogTrace(43, "Page Allocation pending/reloop for page {filePageIndex} loop count: {loopCount}, duration: {duration}", filePageIndex, loopCount, duration);
 
  
     [Conditional("VERBOSELOGGING")]
-    private void LogResetAsync() => 
-        _log.LogTrace(44, "Resetting PagedFile instance !!!");
+    private void LogReset() => 
+        Logger.LogTrace(44, "Resetting PagedFile instance !!!");
 
     #endregion
 }

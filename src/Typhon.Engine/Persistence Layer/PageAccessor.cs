@@ -19,22 +19,22 @@ unsafe public struct PageAccessor : IDisposable
     /// <summary>
     /// Span of the whole data of the page.
     /// </summary>
-    public ReadOnlySpan<byte> WholePageReadOnly => new(PageAddress, PagedMemoryMappedFile.PageSize);
+    public ReadOnlySpan<byte> WholePageReadOnly => new(PageAddress, PMMF.PageSize);
     
     /// <summary>
     /// Span of the header of the page, you should prefer <see cref="HeaderReadOnly"/>.
     /// </summary>
-    public ReadOnlySpan<byte> PageHeaderReadOnly => new(PageAddress, PagedMemoryMappedFile.PageHeaderSize);
+    public ReadOnlySpan<byte> PageHeaderReadOnly => new(PageAddress, PMMF.PageHeaderSize);
     
     /// <summary>
     /// Span of the page metadata, it's a 128 bytes zone inside the PageHeader, just right after the BaseHeader
     /// </summary>
-    public ReadOnlySpan<byte> PageMetadataReadOnly => new(PageAddress + PagedMemoryMappedFile.PageBaseHeaderSize, PagedMemoryMappedFile.PageMetadataSize);
+    public ReadOnlySpan<byte> PageMetadataReadOnly => new(PageAddress + PMMF.PageBaseHeaderSize, PMMF.PageMetadataSize);
     
     /// <summary>
     /// Span of the page raw data, it's a 8000 bytes zone after the header.
     /// </summary>
-    public ReadOnlySpan<byte> PageRawDataReadOnly => new(PageAddress + PagedMemoryMappedFile.PageHeaderSize, PagedMemoryMappedFile.PageRawDataSize);
+    public ReadOnlySpan<byte> PageRawDataReadOnly => new(PageAddress + PMMF.PageHeaderSize, PMMF.PageRawDataSize);
     
     /// <summary>
     /// Span of the Logical Segment's raw data. See Remarks.
@@ -50,11 +50,11 @@ unsafe public struct PageAccessor : IDisposable
         {
             var root = (PageAddress[0] & (byte)PageBlockFlags.IsLogicalSegmentRoot) != 0;
             var offset = root ? LogicalSegment.RootHeaderIndexSectionLength : 0;
-            return new(PageAddress + PagedMemoryMappedFile.PageHeaderSize + offset, PagedMemoryMappedFile.PageRawDataSize - offset);
+            return new ReadOnlySpan<byte>(PageAddress + PMMF.PageHeaderSize + offset, PMMF.PageRawDataSize - offset);
         }
     }
     internal ref readonly T GetElementReadOnly<T>(int index, bool isLogicalRoot) where T : unmanaged =>
-        ref Unsafe.AsRef<T>(PageAddress + PagedMemoryMappedFile.PageHeaderSize + (isLogicalRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (index * sizeof(T)));
+        ref Unsafe.AsRef<T>(PageAddress + PMMF.PageHeaderSize + (isLogicalRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (index * sizeof(T)));
 
     #endregion
 
@@ -70,7 +70,7 @@ unsafe public struct PageAccessor : IDisposable
     public byte* PageAddress { get; }
 
     internal byte* GetElementAddr(int index, int stride, bool isLogicalRoot) =>
-        PageAddress + PagedMemoryMappedFile.PageHeaderSize + (isLogicalRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (index * stride);
+        PageAddress + PMMF.PageHeaderSize + (isLogicalRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (index * stride);
 
     /// <summary>
     /// Access to the header of the page. Use a <c>ref var</c> variable when writing into it.
@@ -79,15 +79,15 @@ unsafe public struct PageAccessor : IDisposable
     /// <summary>
     /// Span of the whole data of the page.
     /// </summary>
-    public Span<byte> WholePage => new(PageAddress, PagedMemoryMappedFile.PageSize);
+    public Span<byte> WholePage => new(PageAddress, PMMF.PageSize);
     /// <summary>
     /// Span of the header of the page, you should prefer <see cref="Header"/>.
     /// </summary>
-    public Span<byte> PageHeader => new(PageAddress, PagedMemoryMappedFile.PageHeaderSize);
+    public Span<byte> PageHeader => new(PageAddress, PMMF.PageHeaderSize);
     /// <summary>
     /// Span of the page metadata, it's a 128 bytes zone inside the PageHeader, just right after the BaseHeader
     /// </summary>
-    public Span<byte> PageMetadata => new(PageAddress + PagedMemoryMappedFile.PageBaseHeaderSize, PagedMemoryMappedFile.PageMetadataSize);
+    public Span<byte> PageMetadata => new(PageAddress + PMMF.PageBaseHeaderSize, PMMF.PageMetadataSize);
     /// <summary>
     /// Span of the page raw data, it's a 8000 bytes zone after the header.
     /// </summary>
@@ -96,7 +96,7 @@ unsafe public struct PageAccessor : IDisposable
         get
         {
             EnsureDataReady();
-            return new Span<byte>(PageAddress + PagedMemoryMappedFile.PageHeaderSize, PagedMemoryMappedFile.PageRawDataSize);
+            return new Span<byte>(PageAddress + PMMF.PageHeaderSize, PMMF.PageRawDataSize);
         }
     }
 
@@ -106,7 +106,7 @@ unsafe public struct PageAccessor : IDisposable
     /// <remarks>
     /// If the page block is part of a Logical Segment, this will return the span covering its raw data section.
     /// BEWARE: the root page of a Logical Segment is 6000 bytes wide, subsequent pages will be 8000 bytes.
-    /// Unpredictable result will occur if using this property on a non Logical Segment Page Block.
+    /// Unpredictable result will occur if using this property on a non-Logical Segment Page Block.
     /// </remarks>
     public Span<byte> LogicalSegmentData
     {
@@ -114,16 +114,16 @@ unsafe public struct PageAccessor : IDisposable
         {
             var root = (PageAddress[0] & (byte)PageBlockFlags.IsLogicalSegmentRoot) != 0;
             var offset = root ? LogicalSegment.RootHeaderIndexSectionLength : 0;
-            return new(PageAddress + PagedMemoryMappedFile.PageHeaderSize + offset, PagedMemoryMappedFile.PageRawDataSize - offset);
+            return new(PageAddress + PMMF.PageHeaderSize + offset, PMMF.PageRawDataSize - offset);
         }
     }
 
     internal ref T GetElement<T>(int index, bool isLogicalRoot) where T : unmanaged =>
-        ref Unsafe.AsRef<T>(PageAddress + PagedMemoryMappedFile.PageHeaderSize + (isLogicalRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (index * sizeof(T)));
+        ref Unsafe.AsRef<T>(PageAddress + PMMF.PageHeaderSize + (isLogicalRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (index * sizeof(T)));
 
     #endregion
 
-    public void SetPageDirty()
+    public readonly void SetPageDirty()
     {
     }
 
@@ -132,7 +132,7 @@ unsafe public struct PageAccessor : IDisposable
     public void DemoteExclusive()
     {
         _owner.DemoteExclusive(_pi, _previousMode);
-        _previousMode = PagedFile.PageState.Idle;
+        _previousMode = PMMF.PageState.Idle;
     }
 
     /// <summary>
@@ -142,29 +142,18 @@ unsafe public struct PageAccessor : IDisposable
     
     public int MemPageIndex => _pi.MemPageIndex;
         
-    private readonly PagedFile _owner;
+    private readonly PMMF _owner;
     private readonly int _filePageIndex;
-    private PagedFile.PageInfo _pi;
-    private PagedFile.PageState _previousMode;
+    private PMMF.PageInfo _pi;
+    private PMMF.PageState _previousMode;
     private bool _isReady;
 
-    internal PageAccessor(PagedMemoryMappedFile owner, PagedMemoryMappedFile.PageInfo pi, byte* pageAddress)
-    {
-        /*
-        _owner = owner;
-        _pageId = pi.PageId;
-        _pi = pi;
-        _previousMode = PagedMemoryMappedFile.PagesAccessMode.Idle;
-        PageAddress = pageAddress;
-    */
-    }
-
-    internal PageAccessor(PagedFile owner, PagedFile.PageInfo pi)
+    internal PageAccessor(PMMF owner, PMMF.PageInfo pi)
     {
         _owner = owner;
         _filePageIndex = pi.FilePageIndex;
         _pi = pi;
-        _previousMode = PagedFile.PageState.Idle;
+        _previousMode = PMMF.PageState.Idle;
         _isReady = pi.IOReadTask==null || pi.IOReadTask.IsCompletedSuccessfully;
         PageAddress = owner.GetMemPageAddress(pi.MemPageIndex);
     }
@@ -200,7 +189,7 @@ unsafe public struct PageAccessor : IDisposable
             return;
         }
 
-        if (_previousMode != PagedFile.PageState.Idle)
+        if (_previousMode != PMMF.PageState.Idle)
         {
             _owner.DemoteExclusive(_pi, _previousMode);
         }
@@ -211,11 +200,11 @@ unsafe public struct PageAccessor : IDisposable
 
         _pi = null;
     }
-    public void InitHeader(PageClearMode clearMode, PageBlockFlags flags, PageBlockType type, int changeRevision, int formatRevision)
+    public void InitHeader(PageClearMode clearMode, PageBlockFlags flags, PageBlockType type, short formatRevision)
     {
         if (clearMode == PageClearMode.Header)
         {
-            PageHeader.Slice(0, PagedMemoryMappedFile.PageHeaderSize).Clear();
+            PageHeader.Slice(0, PMMF.PageHeaderSize).Clear();
         }
         else if (clearMode == PageClearMode.WholePage)
         {
@@ -224,7 +213,6 @@ unsafe public struct PageAccessor : IDisposable
         ref var header = ref Header;
         header.Flags = flags;
         header.Type = type;
-        header.ChangeRevision = 1;
-        header.FormatRevision = 1;
+        header.FormatRevision = formatRevision;
     }
 }

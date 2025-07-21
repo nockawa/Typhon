@@ -37,11 +37,21 @@
 
   <ItemGroup>
     <PackageReference Include="JetBrains.Annotations" Version="2024.3.0" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.6" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.6" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.6" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.7" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.7" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.7" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="9.0.7" />
     <PackageReference Include="YamlDotNet" Version="9.1.4" />
     <PackageReference Include="Serilog" Version="2.10.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Update="Persistence Layer\ManagedPagedMMF.BitmapL3.cs">
+      <DependentUpon>ManagedPagedMMF.cs</DependentUpon>
+    </Compile>
+    <Compile Update="Persistence Layer\MMF.PageInfo.cs">
+      <DependentUpon>PagedMMF.cs</DependentUpon>
+    </Compile>
   </ItemGroup>
 
 </Project>

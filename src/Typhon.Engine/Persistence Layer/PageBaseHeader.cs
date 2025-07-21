@@ -10,7 +10,7 @@ unsafe internal struct RootFileHeader
     public int DatabaseFormatRevision;
     public ulong DatabaseFilesChunkSize;
     public fixed byte DatabaseName[64];
-    public uint OccupancyMapSPI;
+    public int OccupancyMapSPI;
 
     public DatabaseEngine.SerializationData DatabaseEngine;
 
@@ -69,7 +69,7 @@ public struct PageBaseHeader
     /// <summary>
     /// If the Page Block is a Logical Segment, will store the index to the next block storing Map Data, 0 if there's none.
     /// </summary>
-    public uint LogicalSegmentNextMapPBID;
+    public int LogicalSegmentNextMapPBID;
     /// <summary>
     /// The Change Revision is incremented every time the Page is written to disk.
     /// </summary>
@@ -77,5 +77,5 @@ public struct PageBaseHeader
     /// <summary>
     /// If the Page Block is a Logical Segment, will store the index to the next block storing Raw Data, 0 if there's none.
     /// </summary>
-    public uint LogicalSegmentNextRawDataPBID;
+    public int LogicalSegmentNextRawDataPBID;
 }

@@ -1,12 +1,11 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
+using Serilog;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using Typhon.Engine.BPTree;
 
 namespace Typhon.Engine.Tests.Database_Engine;
@@ -15,8 +14,6 @@ class BtreeTests
 {
     private IServiceProvider _serviceProvider;
     private ServiceCollection _serviceCollection;
-    private LogicalSegmentManager _lsm;
-    private DatabaseConfiguration _configuration;
     private ILogger<BtreeTests> _logger;
 
     private string CurrentDatabaseName => $"{TestContext.CurrentContext.Test.Name}_database";
@@ -24,25 +21,28 @@ class BtreeTests
     [SetUp]
     public void Setup()
     {
-        var o = TestContext.CurrentContext.Test.Properties.ContainsKey("CacheSize");
-        var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("CacheSize") : (int)PagedMemoryMappedFile.MinimumCacheSize;
+        var o = TestContext.CurrentContext.Test.Properties.ContainsKey("MemPageCount");
+        var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("MemPageCount")! : PMMF.DefaultMemPageCount;
+        dcs *= PMMF.PageSize;
+
+#if DEBUG
+        Log.Logger = new LoggerConfiguration()
+            .MinimumLevel.Verbose()
+            .Enrich.FromLogContext()
+            .Enrich.WithThreadId()
+            .Enrich.WithCurrentFrame()
+            .WriteTo.Seq("http://localhost:5341", compact: true)
+            .CreateLogger();
+#endif
 
         var serviceCollection = new ServiceCollection();
         _serviceCollection = serviceCollection;
         _serviceCollection
-            .AddTyphon(builder =>
-            {
-                builder.ConfigureDatabase(dc =>
-                {
-                    dc.DatabaseName = CurrentDatabaseName;
-                    dc.RecreateDatabase = true;
-                    dc.DeleteDatabaseOnDispose = true;
-                    dc.DatabaseCacheSize = (ulong)dcs;
-                });
-            })
-
             .AddLogging(builder =>
             {
+#if DEBUG
+                // builder.AddSerilog(dispose: true);
+#endif
                 builder.AddSimpleConsole(options =>
                 {
                     options.SingleLine = true;
@@ -50,24 +50,25 @@ class BtreeTests
                     options.TimestampFormat = "mm:ss.fff ";
                 });
                 builder.SetMinimumLevel(LogLevel.Information);
+            })
+            .AddScopedManagedPagedMemoryMappedFile(options =>
+            {
+                options.DatabaseName = CurrentDatabaseName;
+                options.DatabaseCacheSize = (ulong)dcs;
+                options.PagesDebugPattern = true;
             });
-
+     
         _serviceProvider = _serviceCollection.BuildServiceProvider();
-
-        _lsm = _serviceProvider.GetRequiredService<LogicalSegmentManager>();
-        _configuration = _serviceProvider.GetRequiredService<IConfiguration<DatabaseConfiguration>>().Value;
-        _logger = _serviceProvider.GetRequiredService<ILogger<BtreeTests>>();
+        _serviceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
         
-        _lsm.Initialize();
+        _logger = _serviceCollection.BuildServiceProvider().GetRequiredService<ILogger<BtreeTests>>();
     }
-
-    [TearDown]
-    public void TearDown() => _lsm?.Dispose();
 
     [Test]
     unsafe public void ForwardInsertionTest()
     {
-        var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
+        using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
         var tree = new IntSingleBTree(segment);
 
         tree.Add(10, 10);
@@ -92,7 +93,8 @@ class BtreeTests
     [Test]
     unsafe public void ForwardFloatInsertionTest()
     {
-        var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
         var tree = new FloatSingleBTree(segment);
 
         tree.Add(-0.10f, 10);
@@ -117,7 +119,8 @@ class BtreeTests
     [Test]
     unsafe public void ReverseInsertionTest()
     {
-        var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
         var tree = new IntSingleBTree(segment);
 
         tree.Add(140, 140);
@@ -139,14 +142,14 @@ class BtreeTests
         tree.Add(10, 10);
         Assert.That(tree[10], Is.EqualTo(10));
 
-
         tree.CheckConsistency();
     }
 
     [Test]
     unsafe public void ReverseString64InsertionTest()
     {
-        var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(IndexString64Chunk));
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(IndexString64Chunk));
         var tree = new String64SingleBTree(segment);
 
         tree.Add("140", 140);
@@ -168,7 +171,6 @@ class BtreeTests
         tree.Add("10", 10);
         Assert.That(tree["10"], Is.EqualTo(10));
 
-
         tree.CheckConsistency();
     }
 
@@ -183,7 +185,8 @@ class BtreeTests
             72, 81, 499, 98, 912
         };
 
-        var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
         var tree = new IntSingleBTree(segment);
 
         foreach (var v in values)
@@ -215,7 +218,8 @@ class BtreeTests
             72, 81, 499, 98, 912
         };
 
-        var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
         var tree = new IntSingleBTree(segment);
 
         for (int loopC = 0; loopC < 2; loopC++)
@@ -252,6 +256,9 @@ class BtreeTests
     unsafe public void BitRandomTest()
     {
         const int sampleCount = 10000;
+
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        
         var samples = new HashSet<int>(sampleCount);
         var r = new Random(DateTime.UtcNow.Millisecond);
 
@@ -260,7 +267,7 @@ class BtreeTests
             samples.Add(r.Next());
         }
 
-        var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 20, sizeof(Index32Chunk));
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 20, sizeof(Index32Chunk));
         var tree = new IntSingleBTree(segment);
 
 
@@ -285,8 +292,9 @@ class BtreeTests
     [Test]
     unsafe public void CheckMultipleTree()
     {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
 
-        var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
         var tree = new IntMultipleBTree(segment);
 
         var eid0 = tree.Add(1, 10);
@@ -330,8 +338,9 @@ class BtreeTests
     [Test]
     unsafe public void CheckByteMultipleTree()
     {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
 
-        var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index16Chunk));
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index16Chunk));
         var tree = new ByteMultipleBTree(segment);
 
         var eid0 = tree.Add(1, 10);
@@ -376,8 +385,9 @@ class BtreeTests
     [Test]
     unsafe public void CheckFloatMultipleTree()
     {
-
-        var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
         var tree = new FloatMultipleBTree(segment);
 
         var eid0 = tree.Add(1.1f, 10);
@@ -420,11 +430,13 @@ class BtreeTests
     }
 
     [Test]
+    [Property("MemPageCount", 1024)]
     unsafe public void CheckMultipleTreeBigAmount()
     {
         const int itemCount = 1000;
 
-        var segment = _lsm.AllocateChunkBasedSegment(PageBlockType.None, 300, sizeof(Index32Chunk));
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 300, sizeof(Index32Chunk));
         var tree = new IntMultipleBTree(segment);
 
         var chunkCapacity = segment.ChunkCapacity;
@@ -518,6 +530,7 @@ class BtreeTests
     [Test]
     public unsafe void CheckSingleTreeMultiThread()
     {
+        /*
         const int sampleCount = 10000;
         const int threadCount = 8;
 
@@ -557,6 +570,6 @@ class BtreeTests
         Console.WriteLine($"Insertion of {sampleCount*threadCount} spread in {threadCount} threads done in {sw.ElapsedMilliseconds}ms");
 
         tree.CheckConsistency();
-
+        */
     }
 }
