@@ -8,7 +8,8 @@ Documentation can be found [here](https://nockawa.github.io/Typhon/).
 This project went through many things:
 - Bootstrapped in 2015 with a very different design and intent, then quickly put on a shelf.
 - Resurrected during COVID in 2020 as a POC of "is it possible to make a real-time ACID database, down to the µs", oriented for persistent games ? Then put on a shelf after promising work.
-- Re-resurrected in summer 2025 with the "firm but fragile" intention to reach an alpha stage.
+- Many concepts around unsafe/GC-free .net programming lead me to develop [🍅](https://github.com/nockawa/Tomate), but the two projects are not dependent. I, for once, successfully restrained myself to retrofit 🍅 into this one, it's totally doable, but as usual, just a matter of time...
+- Re-resurrected in summer 2025 with the "firm, but fragile" intention to reach an alpha stage.
 
 ## Why ?
 Initially I wanted to "make a database engine for MMOs, something fast, reliable and scalable" (in that order).
