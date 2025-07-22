@@ -1,7 +1,7 @@
-# 🐍 Typhon 🐍 
+# 🐍 Typhon documentation 🐍 
 
-A real-time, low latency and very fast ACID database.
+(Please refer to the main sections on the top of this page for further info.)
 
-## Design
+The GitHub repository can be found [here](https://github.com/nockawa/Typhon).
 
-Please refer to the [Design](design/index.md)
+Your entry point will be the [overview](overview/index.md).

@@ -17,8 +17,6 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "test", "test", "{A8F8B13C-A
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Typhon.Engine", "src\Typhon.Engine\Typhon.Engine.csproj", "{B85343C9-0201-4698-A475-3A94433D212A}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "doc", "doc", "{CE583F29-9290-4CF0-8486-0755DAF9C50C}"
-EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Typhon.Engine.Tests", "test\Typhon.Engine.Tests\Typhon.Engine.Tests.csproj", "{B76CFDEF-5599-4A6A-A2D1-1AA392EF2A19}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Typhon.Benchmark", "test\Typhon.Benchmark\Typhon.Benchmark.csproj", "{B5AA6546-E2A1-478F-A5EF-8DAF4CF6AF9A}"
