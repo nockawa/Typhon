@@ -852,34 +852,6 @@
     },
     {
       "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.BufferPage.yml",
-      "output": {
-        ".html": {
-          "relative_path": "api/Typhon.Engine.BufferPage.html"
-        }
-      },
-      "version": "",
-      "Uid": null,
-      "IsMRef": true,
-      "Title": "Typhon.Engine.BufferPage",
-      "Summary": "<p sourcefile=\"api/Typhon.Engine.BufferPage.yml\" sourcestartlinenumber=\"1\">Represents a page in the buffer pool with metadata for the Clock algorithm</p>\n"
-    },
-    {
-      "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.BufferStats.yml",
-      "output": {
-        ".html": {
-          "relative_path": "api/Typhon.Engine.BufferStats.html"
-        }
-      },
-      "version": "",
-      "Uid": null,
-      "IsMRef": true,
-      "Title": "Typhon.Engine.BufferStats",
-      "Summary": "<p sourcefile=\"api/Typhon.Engine.BufferStats.yml\" sourcestartlinenumber=\"1\">Buffer manager statistics</p>\n"
-    },
-    {
-      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.ChangeSet.yml",
       "output": {
         ".html": {
@@ -933,62 +905,6 @@
       "IsMRef": true,
       "Title": "Typhon.Engine.ChunkRandomAccessor",
       "Summary": "<p sourcefile=\"api/Typhon.Engine.ChunkRandomAccessor.yml\" sourcestartlinenumber=\"1\">Allow access to chunks in a Chunk based segment</p>\n"
-    },
-    {
-      "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.ClockSweepBufferManager.yml",
-      "output": {
-        ".html": {
-          "relative_path": "api/Typhon.Engine.ClockSweepBufferManager.html"
-        }
-      },
-      "version": "",
-      "Uid": null,
-      "IsMRef": true,
-      "Title": "Typhon.Engine.ClockSweepBufferManager",
-      "Summary": "<p sourcefile=\"api/Typhon.Engine.ClockSweepBufferManager.yml\" sourcestartlinenumber=\"1\">Clock-Sweep Buffer Manager implementation with usage counters\nBased on PostgreSQL's clock-sweep algorithm</p>\n"
-    },
-    {
-      "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.CommentGatheringTypeInspector.yml",
-      "output": {
-        ".html": {
-          "relative_path": "api/Typhon.Engine.CommentGatheringTypeInspector.html"
-        }
-      },
-      "version": "",
-      "Uid": null,
-      "IsMRef": true,
-      "Title": "Typhon.Engine.CommentGatheringTypeInspector",
-      "Summary": null
-    },
-    {
-      "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.CommentsObjectDescriptor.yml",
-      "output": {
-        ".html": {
-          "relative_path": "api/Typhon.Engine.CommentsObjectDescriptor.html"
-        }
-      },
-      "version": "",
-      "Uid": null,
-      "IsMRef": true,
-      "Title": "Typhon.Engine.CommentsObjectDescriptor",
-      "Summary": null
-    },
-    {
-      "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.CommentsObjectGraphVisitor.yml",
-      "output": {
-        ".html": {
-          "relative_path": "api/Typhon.Engine.CommentsObjectGraphVisitor.html"
-        }
-      },
-      "version": "",
-      "Uid": null,
-      "IsMRef": true,
-      "Title": "Typhon.Engine.CommentsObjectGraphVisitor",
-      "Summary": null
     },
     {
       "type": "ManagedReference",
@@ -1160,20 +1076,6 @@
     },
     {
       "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.DatabaseConfiguration.yml",
-      "output": {
-        ".html": {
-          "relative_path": "api/Typhon.Engine.DatabaseConfiguration.html"
-        }
-      },
-      "version": "",
-      "Uid": null,
-      "IsMRef": true,
-      "Title": "Typhon.Engine.DatabaseConfiguration",
-      "Summary": null
-    },
-    {
-      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.DatabaseDefinitions.IDBComponentDefinitionBuilder.yml",
       "output": {
         ".html": {
@@ -1328,34 +1230,6 @@
     },
     {
       "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.IConfigurationProvider-1.yml",
-      "output": {
-        ".html": {
-          "relative_path": "api/Typhon.Engine.IConfigurationProvider-1.html"
-        }
-      },
-      "version": "",
-      "Uid": null,
-      "IsMRef": true,
-      "Title": "Typhon.Engine.IConfigurationProvider<TConfiguration>",
-      "Summary": "<p sourcefile=\"api/Typhon.Engine.IConfigurationProvider-1.yml\" sourcestartlinenumber=\"1\">Provides configuration of the specified type.</p>\n"
-    },
-    {
-      "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.IDatabaseConfiguration.yml",
-      "output": {
-        ".html": {
-          "relative_path": "api/Typhon.Engine.IDatabaseConfiguration.html"
-        }
-      },
-      "version": "",
-      "Uid": null,
-      "IsMRef": true,
-      "Title": "Typhon.Engine.IDatabaseConfiguration",
-      "Summary": null
-    },
-    {
-      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.IndexAttribute.yml",
       "output": {
         ".html": {
@@ -1482,20 +1356,6 @@
     },
     {
       "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.PMMF.yml",
-      "output": {
-        ".html": {
-          "relative_path": "api/Typhon.Engine.PMMF.html"
-        }
-      },
-      "version": "",
-      "Uid": null,
-      "IsMRef": true,
-      "Title": "Typhon.Engine.PMMF",
-      "Summary": null
-    },
-    {
-      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.PageAccessor.yml",
       "output": {
         ".html": {
@@ -1562,6 +1422,20 @@
       "Uid": null,
       "IsMRef": true,
       "Title": "Typhon.Engine.PageClearMode",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.PagedMMF.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.PagedMMF.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.PagedMMF",
       "Summary": null
     },
     {
@@ -1661,20 +1535,6 @@
       "IsMRef": true,
       "Title": "Typhon.Engine.Point4F",
       "Summary": null
-    },
-    {
-      "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.Program.yml",
-      "output": {
-        ".html": {
-          "relative_path": "api/Typhon.Engine.Program.html"
-        }
-      },
-      "version": "",
-      "Uid": null,
-      "IsMRef": true,
-      "Title": "Typhon.Engine.Program",
-      "Summary": "<p sourcefile=\"api/Typhon.Engine.Program.yml\" sourcestartlinenumber=\"1\">Example usage and testing</p>\n"
     },
     {
       "type": "ManagedReference",
@@ -1916,20 +1776,6 @@
     },
     {
       "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.YamlConfiguration.yml",
-      "output": {
-        ".html": {
-          "relative_path": "api/Typhon.Engine.YamlConfiguration.html"
-        }
-      },
-      "version": "",
-      "Uid": null,
-      "IsMRef": true,
-      "Title": "Typhon.Engine.YamlConfiguration",
-      "Summary": "<p sourcefile=\"api/Typhon.Engine.YamlConfiguration.yml\" sourcestartlinenumber=\"1\">Type storing the configuration settings of the Engine</p>\n"
-    },
-    {
-      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.yml",
       "output": {
         ".html": {
@@ -1967,6 +1813,16 @@
     },
     {
       "type": "Conceptual",
+      "source_relative_path": "design/datalayers.md",
+      "output": {
+        ".html": {
+          "relative_path": "design/datalayers.html"
+        }
+      },
+      "version": ""
+    },
+    {
+      "type": "Conceptual",
       "source_relative_path": "design/index.md",
       "output": {
         ".html": {
@@ -1994,6 +1850,16 @@
       "output": {
         ".html": {
           "relative_path": "diagrams/readme.html"
+        }
+      },
+      "version": ""
+    },
+    {
+      "type": "Resource",
+      "source_relative_path": "images/DataLayersOverview.svg",
+      "output": {
+        "resource": {
+          "relative_path": "images/DataLayersOverview.svg"
         }
       },
       "version": ""

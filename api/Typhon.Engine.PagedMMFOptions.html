@@ -89,7 +89,7 @@
 
 
   <h1 id="Typhon_Engine_PagedMMFOptions" data-uid="Typhon.Engine.PagedMMFOptions" class="text-break">
-Class PagedMMFOptions  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PMMF.cs/#L16"><i class="bi bi-code-slash"></i></a>
+Class PagedMMFOptions  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMFOptions.cs/#L9"><i class="bi bi-code-slash"></i></a>
   </h1>
 
   <div class="facts text-secondary">
@@ -163,14 +163,14 @@ public class PagedMMFOptions</code></pre>
 
   <h3 id="Typhon_Engine_PagedMMFOptions_DatabaseAbsoluteDirectory" data-uid="Typhon.Engine.PagedMMFOptions.DatabaseAbsoluteDirectory">
   DatabaseAbsoluteDirectory
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PMMF.cs/#L20"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMFOptions.cs/#L14"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public string DatabaseAbsoluteDirectory { get; set; }</code></pre>
+    <pre><code class="lang-csharp hljs">public string DatabaseAbsoluteDirectory { get; }</code></pre>
   </div>
 
 
@@ -194,7 +194,7 @@ public class PagedMMFOptions</code></pre>
 
   <h3 id="Typhon_Engine_PagedMMFOptions_DatabaseCacheSize" data-uid="Typhon.Engine.PagedMMFOptions.DatabaseCacheSize">
   DatabaseCacheSize
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PMMF.cs/#L21"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMFOptions.cs/#L24"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -221,11 +221,73 @@ public class PagedMMFOptions</code></pre>
 
 
 
+  <a id="Typhon_Engine_PagedMMFOptions_DatabaseDirectory_" data-uid="Typhon.Engine.PagedMMFOptions.DatabaseDirectory*"></a>
+
+  <h3 id="Typhon_Engine_PagedMMFOptions_DatabaseDirectory" data-uid="Typhon.Engine.PagedMMFOptions.DatabaseDirectory">
+  DatabaseDirectory
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMFOptions.cs/#L18"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string DatabaseDirectory { get; set; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_PagedMMFOptions_DatabaseFileName_" data-uid="Typhon.Engine.PagedMMFOptions.DatabaseFileName*"></a>
+
+  <h3 id="Typhon_Engine_PagedMMFOptions_DatabaseFileName" data-uid="Typhon.Engine.PagedMMFOptions.DatabaseFileName">
+  DatabaseFileName
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMFOptions.cs/#L19"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public string DatabaseFileName { get; set; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
   <a id="Typhon_Engine_PagedMMFOptions_DatabaseName_" data-uid="Typhon.Engine.PagedMMFOptions.DatabaseName*"></a>
 
   <h3 id="Typhon_Engine_PagedMMFOptions_DatabaseName" data-uid="Typhon.Engine.PagedMMFOptions.DatabaseName">
   DatabaseName
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PMMF.cs/#L19"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMFOptions.cs/#L13"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -252,11 +314,42 @@ public class PagedMMFOptions</code></pre>
 
 
 
+  <a id="Typhon_Engine_PagedMMFOptions_IsValid_" data-uid="Typhon.Engine.PagedMMFOptions.IsValid*"></a>
+
+  <h3 id="Typhon_Engine_PagedMMFOptions_IsValid" data-uid="Typhon.Engine.PagedMMFOptions.IsValid">
+  IsValid
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMFOptions.cs/#L45"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool IsValid { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
   <a id="Typhon_Engine_PagedMMFOptions_PagesDebugPattern_" data-uid="Typhon.Engine.PagedMMFOptions.PagesDebugPattern*"></a>
 
   <h3 id="Typhon_Engine_PagedMMFOptions_PagesDebugPattern" data-uid="Typhon.Engine.PagedMMFOptions.PagesDebugPattern">
   PagesDebugPattern
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PMMF.cs/#L22"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMFOptions.cs/#L25"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -291,7 +384,7 @@ public class PagedMMFOptions</code></pre>
 
   <h3 id="Typhon_Engine_PagedMMFOptions_EnsureFileDeleted" data-uid="Typhon.Engine.PagedMMFOptions.EnsureFileDeleted">
   EnsureFileDeleted()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PMMF.cs/#L24"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMFOptions.cs/#L29"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -317,7 +410,7 @@ public class PagedMMFOptions</code></pre>
 </article>
 
         <div class="contribution d-print-none">
-          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PMMF.cs/#L16" class="edit-link">Edit this page</a>
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMFOptions.cs/#L9" class="edit-link">Edit this page</a>
         </div>
 
 

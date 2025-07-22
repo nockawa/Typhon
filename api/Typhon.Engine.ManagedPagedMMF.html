@@ -102,7 +102,7 @@ Class ManagedPagedMMF  <a class="header-action link-secondary" title="View sourc
 
   <div class="codewrapper">
     <pre><code class="lang-csharp hljs">[PublicAPI]
-public class ManagedPagedMMF : PMMF, IDisposable</code></pre>
+public class ManagedPagedMMF : PagedMMF, IDisposable</code></pre>
   </div>
 
 
@@ -112,7 +112,7 @@ public class ManagedPagedMMF : PMMF, IDisposable</code></pre>
     <dt>Inheritance</dt>
     <dd>
       <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
-      <div><a class="xref" href="Typhon.Engine.PMMF.html">PMMF</a></div>
+      <div><a class="xref" href="Typhon.Engine.PagedMMF.html">PagedMMF</a></div>
       <div><span class="xref">ManagedPagedMMF</span></div>
     </dd>
   </dl>
@@ -129,19 +129,19 @@ public class ManagedPagedMMF : PMMF, IDisposable</code></pre>
     <dt>Inherited Members</dt>
     <dd>
     <div>
-      <a class="xref" href="Typhon.Engine.PMMF.html#Typhon_Engine_PMMF_DeleteDatabaseFile">PMMF.DeleteDatabaseFile()</a>
+      <a class="xref" href="Typhon.Engine.PagedMMF.html#Typhon_Engine_PagedMMF_DeleteDatabaseFile">PagedMMF.DeleteDatabaseFile()</a>
     </div>
     <div>
-      <a class="xref" href="Typhon.Engine.PMMF.html#Typhon_Engine_PMMF_IsDisposed">PMMF.IsDisposed</a>
+      <a class="xref" href="Typhon.Engine.PagedMMF.html#Typhon_Engine_PagedMMF_IsDisposed">PagedMMF.IsDisposed</a>
     </div>
     <div>
-      <a class="xref" href="Typhon.Engine.PMMF.html#Typhon_Engine_PMMF_Dispose">PMMF.Dispose()</a>
+      <a class="xref" href="Typhon.Engine.PagedMMF.html#Typhon_Engine_PagedMMF_Dispose">PagedMMF.Dispose()</a>
     </div>
     <div>
-      <a class="xref" href="Typhon.Engine.PMMF.html#Typhon_Engine_PMMF_RequestPage_System_Int32_System_Boolean_Typhon_Engine_PageAccessor__System_Int64_System_Threading_CancellationToken_">PMMF.RequestPage(int, bool, out PageAccessor, long, CancellationToken)</a>
+      <a class="xref" href="Typhon.Engine.PagedMMF.html#Typhon_Engine_PagedMMF_RequestPage_System_Int32_System_Boolean_Typhon_Engine_PageAccessor__System_Int64_System_Threading_CancellationToken_">PagedMMF.RequestPage(int, bool, out PageAccessor, long, CancellationToken)</a>
     </div>
     <div>
-      <a class="xref" href="Typhon.Engine.PMMF.html#Typhon_Engine_PMMF_CreateChangeSet">PMMF.CreateChangeSet()</a>
+      <a class="xref" href="Typhon.Engine.PagedMMF.html#Typhon_Engine_PagedMMF_CreateChangeSet">PagedMMF.CreateChangeSet()</a>
     </div>
     <div>
       <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
@@ -177,8 +177,8 @@ public class ManagedPagedMMF : PMMF, IDisposable</code></pre>
 
   <a id="Typhon_Engine_ManagedPagedMMF__ctor_" data-uid="Typhon.Engine.ManagedPagedMMF.#ctor*"></a>
 
-  <h3 id="Typhon_Engine_ManagedPagedMMF__ctor_System_IServiceProvider_Typhon_Engine_PagedMMFOptions_Typhon_Engine_TimeManager_Microsoft_Extensions_Logging_ILogger_Typhon_Engine_PMMF__" data-uid="Typhon.Engine.ManagedPagedMMF.#ctor(System.IServiceProvider,Typhon.Engine.PagedMMFOptions,Typhon.Engine.TimeManager,Microsoft.Extensions.Logging.ILogger{Typhon.Engine.PMMF})">
-  ManagedPagedMMF(IServiceProvider, PagedMMFOptions, TimeManager, ILogger&lt;PMMF&gt;)
+  <h3 id="Typhon_Engine_ManagedPagedMMF__ctor_System_IServiceProvider_Typhon_Engine_PagedMMFOptions_Typhon_Engine_TimeManager_Microsoft_Extensions_Logging_ILogger_Typhon_Engine_PagedMMF__" data-uid="Typhon.Engine.ManagedPagedMMF.#ctor(System.IServiceProvider,Typhon.Engine.PagedMMFOptions,Typhon.Engine.TimeManager,Microsoft.Extensions.Logging.ILogger{Typhon.Engine.PagedMMF})">
+  ManagedPagedMMF(IServiceProvider, PagedMMFOptions, TimeManager, ILogger&lt;PagedMMF&gt;)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L30"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -186,7 +186,7 @@ public class ManagedPagedMMF : PMMF, IDisposable</code></pre>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public ManagedPagedMMF(IServiceProvider serviceProvider, PagedMMFOptions options, TimeManager timeManager, ILogger&lt;PMMF&gt; logger)</code></pre>
+    <pre><code class="lang-csharp hljs">public ManagedPagedMMF(IServiceProvider serviceProvider, PagedMMFOptions options, TimeManager timeManager, ILogger&lt;PagedMMF&gt; logger)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -197,7 +197,7 @@ public class ManagedPagedMMF : PMMF, IDisposable</code></pre>
     <dd></dd>
     <dt><code>timeManager</code> <a class="xref" href="Typhon.Engine.TimeManager.html">TimeManager</a></dt>
     <dd></dd>
-    <dt><code>logger</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/microsoft.extensions.logging.ilogger-1">ILogger</a>&lt;<a class="xref" href="Typhon.Engine.PMMF.html">PMMF</a>&gt;</dt>
+    <dt><code>logger</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/microsoft.extensions.logging.ilogger-1">ILogger</a>&lt;<a class="xref" href="Typhon.Engine.PagedMMF.html">PagedMMF</a>&gt;</dt>
     <dd></dd>
   </dl>
 
