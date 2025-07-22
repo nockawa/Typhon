@@ -1,11 +1,14 @@
 <mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0" version="28.0.6">
   <diagram name="Page-1" id="OxlweUy8bB46aSIBiWku">
-    <mxGraphModel dx="1309" dy="807" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1390" pageHeight="980" background="none" math="0" shadow="0">
+    <mxGraphModel dx="1528" dy="942" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1390" pageHeight="980" background="none" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
+        <mxCell id="Gp1W5Qj4doXePmGiKsAD-197" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=none;fillColor=light-dark(#E6FFCC,#173D4D);fillStyle=auto;shadow=0;opacity=50;movable=1;resizable=1;rotatable=1;deletable=1;editable=1;locked=0;connectable=1;" vertex="1" parent="1">
+          <mxGeometry x="10" y="580" width="1280" height="170" as="geometry" />
+        </mxCell>
         <mxCell id="Gp1W5Qj4doXePmGiKsAD-190" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=none;fillColor=light-dark(#FFFFCC,#173D4D);fillStyle=auto;shadow=0;opacity=50;movable=1;resizable=1;rotatable=1;deletable=1;editable=1;locked=0;connectable=1;" vertex="1" parent="1">
-          <mxGeometry x="10" y="73" width="880" height="457" as="geometry" />
+          <mxGeometry x="10" y="73" width="880" height="487" as="geometry" />
         </mxCell>
         <mxCell id="Gp1W5Qj4doXePmGiKsAD-188" value="" style="rounded=0;whiteSpace=wrap;html=1;strokeColor=none;fillColor=light-dark(#E5E5E5,#173D4D);fillStyle=auto;shadow=0;opacity=50;movable=1;resizable=1;rotatable=1;deletable=1;editable=1;locked=0;connectable=1;" vertex="1" parent="1">
           <mxGeometry x="10" y="610" width="1270" height="90" as="geometry" />
@@ -157,7 +160,7 @@
         <mxCell id="Gp1W5Qj4doXePmGiKsAD-67" value="Occupency Map&lt;br&gt;&lt;font style=&quot;font-size: 9px;&quot;&gt;Logical segment using page 0&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CCCCFF;strokeColor=#9999FF;movable=1;resizable=1;rotatable=1;deletable=1;editable=1;locked=0;connectable=1;" vertex="1" parent="1">
           <mxGeometry x="120" y="210" width="70" height="70" as="geometry" />
         </mxCell>
-        <mxCell id="Gp1W5Qj4doXePmGiKsAD-68" value="Logical segment&lt;div&gt;&lt;br&gt;&lt;font style=&quot;font-size: 9px;&quot;&gt;Contains a bitfield, one bit for each page. &lt;br&gt;0 is free, 1 is allocated&lt;/font&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CCCCFF;strokeColor=#9999FF;movable=1;resizable=1;rotatable=1;deletable=1;editable=1;locked=0;connectable=1;" vertex="1" parent="1">
+        <mxCell id="Gp1W5Qj4doXePmGiKsAD-68" value="Logical segment&lt;div&gt;&lt;br&gt;&lt;font style=&quot;font-size: 9px;&quot;&gt;Tracking page allocations in a bitfield, one bit per page. &lt;br&gt;0 is free, 1 is allocated&lt;/font&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CCCCFF;strokeColor=#9999FF;movable=1;resizable=1;rotatable=1;deletable=1;editable=1;locked=0;connectable=1;" vertex="1" parent="1">
           <mxGeometry x="1100" y="350" width="130" height="140" as="geometry" />
         </mxCell>
         <mxCell id="Gp1W5Qj4doXePmGiKsAD-70" value="Occupency Map" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;movable=1;resizable=1;rotatable=1;deletable=1;editable=1;locked=0;connectable=1;" vertex="1" parent="1">
@@ -457,6 +460,9 @@
         </mxCell>
         <mxCell id="Gp1W5Qj4doXePmGiKsAD-195" value="Memory" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;movable=1;resizable=1;rotatable=1;deletable=1;editable=1;locked=0;connectable=1;fontSize=20;" vertex="1" parent="1">
           <mxGeometry x="20" y="720" width="110" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="Gp1W5Qj4doXePmGiKsAD-196" value="&lt;div style=&quot;&quot;&gt;&lt;font style=&quot;font-size: 10px;&quot;&gt;&lt;font style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;Contains chunks of a fixed size.&lt;/font&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;Can allocate/free chunks, segment will grow as needed.&lt;/span&gt;&lt;/font&gt;&lt;/div&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;spacing=2;spacingLeft=0;movable=1;resizable=1;rotatable=1;deletable=1;editable=1;locked=0;connectable=1;" vertex="1" parent="1">
+          <mxGeometry x="760" y="110" width="120" height="50" as="geometry" />
         </mxCell>
       </root>
     </mxGraphModel>
