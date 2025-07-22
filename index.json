@@ -699,6 +699,11 @@
     "title": "Introduction to Typhon | Typhon",
     "summary": "Introduction to Typhon Work in progress"
   },
+  "diagrams/readme.html": {
+    "href": "diagrams/readme.html",
+    "title": "| Typhon",
+    "summary": "Directory where diagram are stored"
+  },
   "index.html": {
     "href": "index.html",
     "title": "\uD83D\uDC0D Typhon \uD83D\uDC0D | Typhon",

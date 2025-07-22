@@ -1989,6 +1989,16 @@
       "version": ""
     },
     {
+      "type": "Conceptual",
+      "source_relative_path": "diagrams/readme.md",
+      "output": {
+        ".html": {
+          "relative_path": "diagrams/readme.html"
+        }
+      },
+      "version": ""
+    },
+    {
       "type": "Resource",
       "source_relative_path": "images/favicon.ico",
       "output": {
