@@ -50,7 +50,7 @@
       <DependentUpon>ManagedPagedMMF.cs</DependentUpon>
     </Compile>
     <Compile Update="Persistence Layer\PagedMMF.PageInfo.cs">
-      <DependentUpon>PagedMemoryMappedFile.cs</DependentUpon>
+      <DependentUpon>PagedMMF.cs</DependentUpon>
     </Compile>
     <Compile Update="Persistence Layer\PagedMMFOptions.cs">
       <DependentUpon>PagedMMF.cs</DependentUpon>

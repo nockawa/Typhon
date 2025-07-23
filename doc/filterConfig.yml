@@ -1,4 +1,6 @@
-﻿apiRules:
+﻿### YamlMime:ManagedReference
+
+apiRules:
 - include:
     type: Type
 - include:

@@ -27,12 +27,12 @@ public partial class PagedMMF : IDisposable
 
     #region Constants
 
-    internal const int PageHeaderSize = 192;        // Base Header + Metadata
+    internal const int PageHeaderSize = 192;                                    // Base Header + Metadata
     internal const int PageBaseHeaderSize = 64;
     internal const int PageMetadataSize = 128;
-    internal const int PageSize = 8192;             // Base Header + Metadata + RawData
+    internal const int PageSize = 8192;                                         // Base Header + Metadata + RawData
     internal const int PageRawDataSize = PageSize - PageHeaderSize;
-    internal const int PageSizePow2 = 13; // 2^( PageSizePow2 = PageSize
+    internal const int PageSizePow2 = 13;                                       // 2^( PageSizePow2 = PageSize
     internal const int DatabaseFormatRevision = 1;
     internal const ulong MinimumCacheSize = DefaultMemPageCount * PageSize;
     internal const int WriteCachePageSize = 1024 * 1024;
@@ -257,8 +257,8 @@ public partial class PagedMMF : IDisposable
     /// <paramref name="result"/> won't be valid and be set to default.</returns>
     /// <remarks>
     /// This method will enter a wait cycle if:
-    /// <li> - The Memory Page is not allocated and there are no free Memory Pages available </li>
-    /// <li> - The requested access requires to wait for the transition to be made (one or many threads hold an access not compatible with the one we request).</li>
+    /// <li> The Memory Page is not allocated and there are no free Memory Pages available </li>
+    /// <li> The requested access requires to wait for the transition to be made (one or many threads hold an access not compatible with the one we request).</li>
     /// <br/>
     /// If the File Page is being loading from disk to memory, the read is completely independent of this operation, the <see cref="PageAccessor"/> will
     ///  wait for it upon its first content access.
