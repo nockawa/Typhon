@@ -120,7 +120,7 @@ public unsafe struct String64 : IComparable<String64>, IEquatable<String64>
     /// Construct a String64 instance from a memory area containing the string
     /// </summary>
     /// <param name="stringAddr">Address of the memory area containing the UTF8 string data</param>
-    /// <param name="length">Length of the <see cref="stringAddr"/> memory area</param>
+    /// <param name="length">Length of the <paramref name="stringAddr"/> memory area</param>
     public String64(byte* stringAddr, int length=64)
     {
         fixed (byte* a = _data)

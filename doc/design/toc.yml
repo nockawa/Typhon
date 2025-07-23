@@ -3,3 +3,5 @@
   href: index.md
 - name: Core data structures
   href: datalayers.md
+- name: Data access pattern
+  href: dataaccess.md
