@@ -2,9 +2,9 @@
 <html>
   <head>
     <meta charset="utf-8">
-      <title>PLACEHOLDER | Typhon </title>
+      <title>Data access pattern | Typhon </title>
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <meta name="title" content="PLACEHOLDER | Typhon ">
+      <meta name="title" content="Data access pattern | Typhon ">
       
       
       <link rel="icon" href="../images/favicon.ico">
@@ -16,7 +16,7 @@
       <meta name="docfx:rel" content="../">
       
       
-      <meta name="docfx:docurl" content="https://github.com/nockawa/Typhon/blob/new-persistence-layer/doc/api/index.md/#L1">
+      <meta name="docfx:docurl" content="https://github.com/nockawa/Typhon/blob/new-persistence-layer/doc/design/dataaccess.md/#L1">
       <meta name="loc:inThisArticle" content="In this article">
       <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
       <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
@@ -85,14 +85,53 @@
         </div>
 
         <article data-uid="">
-<h1 id="placeholder">PLACEHOLDER</h1>
+<h1 id="data-access-pattern">Data access pattern</h1>
 
-<p>TODO: Add .NET projects to the <em>src</em> folder and run <code>docfx</code> to generate <strong>REAL</strong> <em>API Documentation</em>!</p>
+<h2 id="page-access">Page access</h2>
+<p>Typhon was designed with multi-cores, concurrent execution of the code, how to access the data is a key concept to understand in order to &quot;do things right&quot;.</p>
+<p>In this engine, the core data is the <strong>Page</strong> and there's only one method to request access to a given one :</p>
+<p><a class="xref" href="../api/Typhon.Engine.PagedMMF.html#Typhon_Engine_PagedMMF_RequestPage_System_Int32_System_Boolean_Typhon_Engine_PageAccessor__System_Int64_System_Threading_CancellationToken_">bool PagedMMF.<strong>RequestPage</strong>(int filePageIndex, bool exclusive, out PageAccessor result, long timeout, CancellationToken cancellationToken)</a></p>
+<p>Accessing a resource, if successfully acquired, will almost always return a <code>accessor</code>: an object which lifetime is matching the one of the access the user wants, dedicated to the requested resource and exposing the APIs to access the data.</p>
+<p>The method returns:</p>
+<ul>
+<li><code>true</code> if the resource access was acquired, the <code>accessor</code> instance is then valid.</li>
+<li><code>false</code> if the user specified conditions that can't be met to acquire the access.</li>
+</ul>
+<p>There are many rules that dictate if the resource access can be acquired or not, most of the time they make sense:</p>
+<ul>
+<li>You can get a shared or exclusive access if the resource is 'idle'.</li>
+<li>Many can access a given resource as long as it's in share mode (<code>exclusive=false</code>)</li>
+<li>You can't get an exclusive access if there's already one acquired by 'someone else' (being most of the time another thread).</li>
+<li>Re-entrance may be more subtle, refer to the API documentation.</li>
+</ul>
+<p>What has to be understood is:</p>
+<ul>
+<li>Most of the time, the access request won't be blocking and will be very fast. But...</li>
+<li>... we have to account for the rare cases when the resource access can't be acquired (e.g. long blocking execution on another thread, resource starvation preventing to allocate the resource before requesting access, etc.).</li>
+</ul>
+<h3 id="understanding-sharedexclusive-access">Understanding shared/exclusive access</h3>
+<p>There are many levels of granularity when it's about data access. The lowest level one will be the <code>Page</code>, middle could be a <code>Chunk</code> inside a <a class="xref" href="../api/Typhon.Engine.ChunkBasedSegment.html">ChunkBasedSegment</a>, high level being a <code>Component Data</code> or an <code>Index</code>.</p>
+<p>Getting shared or exclusive access at a given level may imply different rules than another one.</p>
+<p>⚠️ <strong>Thinking &quot;shared is read-only, exclusive is read-write&quot; is wrong !</strong> ⚠️</p>
+<p>It all depends on own things are designed and implemented.</p>
+<p>💡 Things to consider (non-exhaustive list of examples/rules):</p>
+<ul>
+<li>When modifying the content of a component, only a shared access can be requested on the page that hosts its data.</li>
+<li>We can modify the content of multiple chunks that are hosted in the same page as long as we don't change the <strong>structure</strong> of how the data is stored.</li>
+<li>There might be multiple levels of access control, at different granularities.</li>
+<li>A general rule (but not always true) is:
+<ul>
+<li>Content can be read/modified in shared access.</li>
+<li>Structure can be read in shared access.</li>
+<li>Structure can be modified in exclusive access.</li>
+</ul>
+</li>
+</ul>
 
 </article>
 
         <div class="contribution d-print-none">
-          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/doc/api/index.md/#L1" class="edit-link">Edit this page</a>
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/doc/design/dataaccess.md/#L1" class="edit-link">Edit this page</a>
         </div>
 
         <div class="next-article d-print-none border-top" id="nextArticle"></div>

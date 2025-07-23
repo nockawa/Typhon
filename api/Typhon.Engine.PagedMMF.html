@@ -453,8 +453,8 @@ public class PagedMMF : IDisposable</code></pre>
 
   <h4 class="section" id="Typhon_Engine_PagedMMF_RequestPage_System_Int32_System_Boolean_Typhon_Engine_PageAccessor__System_Int64_System_Threading_CancellationToken__remarks">Remarks</h4>
   <div class="markdown level1 remarks"><p>This method will enter a wait cycle if:</p>
-<li> - The Memory Page is not allocated and there are no free Memory Pages available </li>
-<li> - The requested access requires to wait for the transition to be made (one or many threads hold an access not compatible with the one we request).</li>
+<li> The Memory Page is not allocated and there are no free Memory Pages available </li>
+<li> The requested access requires to wait for the transition to be made (one or many threads hold an access not compatible with the one we request).</li>
 <br>
 If the File Page is being loading from disk to memory, the read is completely independent of this operation, the <a class="xref" href="Typhon.Engine.PageAccessor.html">PageAccessor</a> will
  wait for it upon its first content access.

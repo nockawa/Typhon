@@ -2,9 +2,9 @@
 <html>
   <head>
     <meta charset="utf-8">
-      <title>Introduction to Typhon | Typhon </title>
+      <title>Introduction to Typhon design &amp; core concepts | Typhon </title>
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <meta name="title" content="Introduction to Typhon | Typhon ">
+      <meta name="title" content="Introduction to Typhon design &amp; core concepts | Typhon ">
       
       
       <link rel="icon" href="../images/favicon.ico">
@@ -85,9 +85,42 @@
         </div>
 
         <article data-uid="">
-<h1 id="introduction-to-typhon">Introduction to Typhon</h1>
+<h1 id="introduction-to-typhon-design--core-concepts">Introduction to Typhon design &amp; core concepts</h1>
 
-<h1 id="section"></h1>
+<h2 id="general-concepts">General concepts</h2>
+<p>Refer to the index in the left pane of this documentation window to access other pages.</p>
+<h3 id="basic-data-layout">Basic data layout</h3>
+<p>For many types of data their storage/access work this way:</p>
+<ul>
+<li>An array or a list of pages that stores all the elements.</li>
+<li>A bitmap which specifies for each element if it's free (<code>0</code>) or allocated (<code>1</code>).</li>
+<li>Each element is identified by its index into its owning structure.
+<ul>
+<li>If it's owned by a single array, the access is very simple.</li>
+<li>If it's owned by a list of pages, all the pages have the same size, so finding the element is a <a href="https://learn.microsoft.com/fr-fr/dotnet/api/system.math.divrem">DivRem</a> operation to identify which page and the index in this page.</li>
+</ul>
+</li>
+</ul>
+<h3 id="waiting-and-burning">Waiting and burning</h3>
+<p>Or more accurately &quot;burning, then waiting&quot;. Data is often shared among many threads, the lapse of time we need to acquire exclusive access on it must be very short (nanosecond order of magnitude).</p>
+<p>Typhon tries to deal with concurrency with the following mechanisms, in order of preference:</p>
+<ol>
+<li>Using the <a href="https://learn.microsoft.com/en-us/dotnet/api/system.threading.interlocked">Interlocked</a> class, when possible, for lock-free (or <a href="https://en.wikipedia.org/wiki/Non-blocking_algorithm">non-blocking</a>) programming.</li>
+<li>Relying on home-made types such as <a class="xref" href="../api/Typhon.Engine.AccessControl.html">AccessControl</a> or <a class="xref" href="../api/Typhon.Engine.AdaptiveWaiter.html">AdaptiveWaiter</a> that relies on the <code>Interlocked</code> type to :
+<ul>
+<li>Acquire the control on a resource, or...</li>
+<li>...wait to get it, first by burning some CPU cycles, then yielding the thread's execution, and eventually sleep/async wait.</li>
+<li>Release the control when the resource access is no longer needed.</li>
+</ul>
+</li>
+<li>Using the C# <code>lock</code> keyword/pattern.</li>
+</ol>
+<p>Nothing is free and everything has pros/cons, here the key thing to understand is <strong>what latency are we willing to deal with</strong>.</p>
+<p>A C# lock (the <a href="https://learn.microsoft.com/en-us/dotnet/api/system.threading.monitor">monitor</a> class) is dealing with OS level resources for the synchronization, it's great, but the latency is usually in the order of the millisecond (which is at least thousands time longer than what we need).</p>
+<p>So if we attempt to acquire a resource but can't because it's currently being used by another thread, if we don't want to &quot;give up our execution to another thread for at least 1ms&quot;, we need to rely on something else than a Thread level operation. The alternative is &quot;looping doing nothing&quot;, aka &quot;burning the CPU&quot;.</p>
+<p>By design, Typhon doesn't acquire exclusive access to data for a long time (here long is <code>&gt; 1ms</code>).</p>
+<p>If the user needs to acquire for an undetermined time, there's a <code>TryEnter()</code> variant method with a timeout that allows not to block, if possible.</p>
+<p>All in all, there's no miracle: very low latency and efficient use of the CPU don't match well and one has to find the pros/cons that suit the most its usage.</p>
 
 </article>
 
