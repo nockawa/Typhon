@@ -7492,15 +7492,15 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.ChunkBasedSegment.ChunkCountRootPage
   nameWithType: ChunkBasedSegment.ChunkCountRootPage
-- uid: Typhon.Engine.ChunkBasedSegment.CreateChunkRandomAccessor(System.Int32)
-  name: CreateChunkRandomAccessor(int)
-  href: api/Typhon.Engine.ChunkBasedSegment.html#Typhon_Engine_ChunkBasedSegment_CreateChunkRandomAccessor_System_Int32_
-  commentId: M:Typhon.Engine.ChunkBasedSegment.CreateChunkRandomAccessor(System.Int32)
-  name.vb: CreateChunkRandomAccessor(Integer)
-  fullName: Typhon.Engine.ChunkBasedSegment.CreateChunkRandomAccessor(int)
-  fullName.vb: Typhon.Engine.ChunkBasedSegment.CreateChunkRandomAccessor(Integer)
-  nameWithType: ChunkBasedSegment.CreateChunkRandomAccessor(int)
-  nameWithType.vb: ChunkBasedSegment.CreateChunkRandomAccessor(Integer)
+- uid: Typhon.Engine.ChunkBasedSegment.CreateChunkRandomAccessor(System.Int32,Typhon.Engine.ChangeSet)
+  name: CreateChunkRandomAccessor(int, ChangeSet)
+  href: api/Typhon.Engine.ChunkBasedSegment.html#Typhon_Engine_ChunkBasedSegment_CreateChunkRandomAccessor_System_Int32_Typhon_Engine_ChangeSet_
+  commentId: M:Typhon.Engine.ChunkBasedSegment.CreateChunkRandomAccessor(System.Int32,Typhon.Engine.ChangeSet)
+  name.vb: CreateChunkRandomAccessor(Integer, ChangeSet)
+  fullName: Typhon.Engine.ChunkBasedSegment.CreateChunkRandomAccessor(int, Typhon.Engine.ChangeSet)
+  fullName.vb: Typhon.Engine.ChunkBasedSegment.CreateChunkRandomAccessor(Integer, Typhon.Engine.ChangeSet)
+  nameWithType: ChunkBasedSegment.CreateChunkRandomAccessor(int, ChangeSet)
+  nameWithType.vb: ChunkBasedSegment.CreateChunkRandomAccessor(Integer, ChangeSet)
 - uid: Typhon.Engine.ChunkBasedSegment.CreateChunkRandomAccessor*
   name: CreateChunkRandomAccessor
   href: api/Typhon.Engine.ChunkBasedSegment.html#Typhon_Engine_ChunkBasedSegment_CreateChunkRandomAccessor_
@@ -8959,6 +8959,19 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.DatabaseEngine.IsDisposed
   nameWithType: DatabaseEngine.IsDisposed
+- uid: Typhon.Engine.DatabaseEngine.MMF
+  name: MMF
+  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_MMF
+  commentId: P:Typhon.Engine.DatabaseEngine.MMF
+  fullName: Typhon.Engine.DatabaseEngine.MMF
+  nameWithType: DatabaseEngine.MMF
+- uid: Typhon.Engine.DatabaseEngine.MMF*
+  name: MMF
+  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_MMF_
+  commentId: Overload:Typhon.Engine.DatabaseEngine.MMF
+  isSpec: "True"
+  fullName: Typhon.Engine.DatabaseEngine.MMF
+  nameWithType: DatabaseEngine.MMF
 - uid: Typhon.Engine.DatabaseEngine.NewTransaction(System.Boolean)
   name: NewTransaction(bool)
   href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_NewTransaction_System_Boolean_
@@ -8975,19 +8988,6 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.DatabaseEngine.NewTransaction
   nameWithType: DatabaseEngine.NewTransaction
-- uid: Typhon.Engine.DatabaseEngine.PMMF
-  name: PMMF
-  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_PMMF
-  commentId: P:Typhon.Engine.DatabaseEngine.PMMF
-  fullName: Typhon.Engine.DatabaseEngine.PMMF
-  nameWithType: DatabaseEngine.PMMF
-- uid: Typhon.Engine.DatabaseEngine.PMMF*
-  name: PMMF
-  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_PMMF_
-  commentId: Overload:Typhon.Engine.DatabaseEngine.PMMF
-  isSpec: "True"
-  fullName: Typhon.Engine.DatabaseEngine.PMMF
-  nameWithType: DatabaseEngine.PMMF
 - uid: Typhon.Engine.DatabaseEngine.RegisterComponentFromRowAccessor*
   name: RegisterComponentFromRowAccessor
   href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_RegisterComponentFromRowAccessor_
@@ -11243,23 +11243,23 @@ references:
   nameWithType: Transaction.CreateEntity<T>(ref T)
   nameWithType.vb: Transaction.CreateEntity(Of T)(T)
 - uid: Typhon.Engine.Transaction.CreateEntity``2(``0@,``1@)
-  name: CreateEntity<T, U>(ref T, ref U)
+  name: CreateEntity<TC1, TC2>(ref TC1, ref TC2)
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CreateEntity__2___0____1__
   commentId: M:Typhon.Engine.Transaction.CreateEntity``2(``0@,``1@)
-  name.vb: CreateEntity(Of T, U)(T, U)
-  fullName: Typhon.Engine.Transaction.CreateEntity<T, U>(ref T, ref U)
-  fullName.vb: Typhon.Engine.Transaction.CreateEntity(Of T, U)(T, U)
-  nameWithType: Transaction.CreateEntity<T, U>(ref T, ref U)
-  nameWithType.vb: Transaction.CreateEntity(Of T, U)(T, U)
+  name.vb: CreateEntity(Of TC1, TC2)(TC1, TC2)
+  fullName: Typhon.Engine.Transaction.CreateEntity<TC1, TC2>(ref TC1, ref TC2)
+  fullName.vb: Typhon.Engine.Transaction.CreateEntity(Of TC1, TC2)(TC1, TC2)
+  nameWithType: Transaction.CreateEntity<TC1, TC2>(ref TC1, ref TC2)
+  nameWithType.vb: Transaction.CreateEntity(Of TC1, TC2)(TC1, TC2)
 - uid: Typhon.Engine.Transaction.CreateEntity``3(``0@,``1@,``2@)
-  name: CreateEntity<T, U, V>(ref T, ref U, ref V)
+  name: CreateEntity<TC1, TC2, TC3>(ref TC1, ref TC2, ref TC3)
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CreateEntity__3___0____1____2__
   commentId: M:Typhon.Engine.Transaction.CreateEntity``3(``0@,``1@,``2@)
-  name.vb: CreateEntity(Of T, U, V)(T, U, V)
-  fullName: Typhon.Engine.Transaction.CreateEntity<T, U, V>(ref T, ref U, ref V)
-  fullName.vb: Typhon.Engine.Transaction.CreateEntity(Of T, U, V)(T, U, V)
-  nameWithType: Transaction.CreateEntity<T, U, V>(ref T, ref U, ref V)
-  nameWithType.vb: Transaction.CreateEntity(Of T, U, V)(T, U, V)
+  name.vb: CreateEntity(Of TC1, TC2, TC3)(TC1, TC2, TC3)
+  fullName: Typhon.Engine.Transaction.CreateEntity<TC1, TC2, TC3>(ref TC1, ref TC2, ref TC3)
+  fullName.vb: Typhon.Engine.Transaction.CreateEntity(Of TC1, TC2, TC3)(TC1, TC2, TC3)
+  nameWithType: Transaction.CreateEntity<TC1, TC2, TC3>(ref TC1, ref TC2, ref TC3)
+  nameWithType.vb: Transaction.CreateEntity(Of TC1, TC2, TC3)(TC1, TC2, TC3)
 - uid: Typhon.Engine.Transaction.DeleteEntity*
   name: DeleteEntity
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_DeleteEntity_
@@ -11277,23 +11277,23 @@ references:
   nameWithType: Transaction.DeleteEntity<T>(long)
   nameWithType.vb: Transaction.DeleteEntity(Of T)(Long)
 - uid: Typhon.Engine.Transaction.DeleteEntity``2(System.Int64)
-  name: DeleteEntity<T, U>(long)
+  name: DeleteEntity<TC1, TC2>(long)
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_DeleteEntity__2_System_Int64_
   commentId: M:Typhon.Engine.Transaction.DeleteEntity``2(System.Int64)
-  name.vb: DeleteEntity(Of T, U)(Long)
-  fullName: Typhon.Engine.Transaction.DeleteEntity<T, U>(long)
-  fullName.vb: Typhon.Engine.Transaction.DeleteEntity(Of T, U)(Long)
-  nameWithType: Transaction.DeleteEntity<T, U>(long)
-  nameWithType.vb: Transaction.DeleteEntity(Of T, U)(Long)
+  name.vb: DeleteEntity(Of TC1, TC2)(Long)
+  fullName: Typhon.Engine.Transaction.DeleteEntity<TC1, TC2>(long)
+  fullName.vb: Typhon.Engine.Transaction.DeleteEntity(Of TC1, TC2)(Long)
+  nameWithType: Transaction.DeleteEntity<TC1, TC2>(long)
+  nameWithType.vb: Transaction.DeleteEntity(Of TC1, TC2)(Long)
 - uid: Typhon.Engine.Transaction.DeleteEntity``3(System.Int64)
-  name: DeleteEntity<T, U, V>(long)
+  name: DeleteEntity<TC1, TC2, TC3>(long)
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_DeleteEntity__3_System_Int64_
   commentId: M:Typhon.Engine.Transaction.DeleteEntity``3(System.Int64)
-  name.vb: DeleteEntity(Of T, U, V)(Long)
-  fullName: Typhon.Engine.Transaction.DeleteEntity<T, U, V>(long)
-  fullName.vb: Typhon.Engine.Transaction.DeleteEntity(Of T, U, V)(Long)
-  nameWithType: Transaction.DeleteEntity<T, U, V>(long)
-  nameWithType.vb: Transaction.DeleteEntity(Of T, U, V)(Long)
+  name.vb: DeleteEntity(Of TC1, TC2, TC3)(Long)
+  fullName: Typhon.Engine.Transaction.DeleteEntity<TC1, TC2, TC3>(long)
+  fullName.vb: Typhon.Engine.Transaction.DeleteEntity(Of TC1, TC2, TC3)(Long)
+  nameWithType: Transaction.DeleteEntity<TC1, TC2, TC3>(long)
+  nameWithType.vb: Transaction.DeleteEntity(Of TC1, TC2, TC3)(Long)
 - uid: Typhon.Engine.Transaction.Dispose
   name: Dispose()
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_Dispose
@@ -11340,23 +11340,23 @@ references:
   nameWithType: Transaction.ReadEntity<T>(long, out T)
   nameWithType.vb: Transaction.ReadEntity(Of T)(Long, T)
 - uid: Typhon.Engine.Transaction.ReadEntity``2(System.Int64,``0@,``1@)
-  name: ReadEntity<T, U>(long, out T, out U)
+  name: ReadEntity<TC1, TC2>(long, out TC1, out TC2)
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_ReadEntity__2_System_Int64___0____1__
   commentId: M:Typhon.Engine.Transaction.ReadEntity``2(System.Int64,``0@,``1@)
-  name.vb: ReadEntity(Of T, U)(Long, T, U)
-  fullName: Typhon.Engine.Transaction.ReadEntity<T, U>(long, out T, out U)
-  fullName.vb: Typhon.Engine.Transaction.ReadEntity(Of T, U)(Long, T, U)
-  nameWithType: Transaction.ReadEntity<T, U>(long, out T, out U)
-  nameWithType.vb: Transaction.ReadEntity(Of T, U)(Long, T, U)
+  name.vb: ReadEntity(Of TC1, TC2)(Long, TC1, TC2)
+  fullName: Typhon.Engine.Transaction.ReadEntity<TC1, TC2>(long, out TC1, out TC2)
+  fullName.vb: Typhon.Engine.Transaction.ReadEntity(Of TC1, TC2)(Long, TC1, TC2)
+  nameWithType: Transaction.ReadEntity<TC1, TC2>(long, out TC1, out TC2)
+  nameWithType.vb: Transaction.ReadEntity(Of TC1, TC2)(Long, TC1, TC2)
 - uid: Typhon.Engine.Transaction.ReadEntity``3(System.Int64,``0@,``1@,``2@)
-  name: ReadEntity<T, U, V>(long, out T, out U, out V)
+  name: ReadEntity<TC1, TC2, TC3>(long, out TC1, out TC2, out TC3)
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_ReadEntity__3_System_Int64___0____1____2__
   commentId: M:Typhon.Engine.Transaction.ReadEntity``3(System.Int64,``0@,``1@,``2@)
-  name.vb: ReadEntity(Of T, U, V)(Long, T, U, V)
-  fullName: Typhon.Engine.Transaction.ReadEntity<T, U, V>(long, out T, out U, out V)
-  fullName.vb: Typhon.Engine.Transaction.ReadEntity(Of T, U, V)(Long, T, U, V)
-  nameWithType: Transaction.ReadEntity<T, U, V>(long, out T, out U, out V)
-  nameWithType.vb: Transaction.ReadEntity(Of T, U, V)(Long, T, U, V)
+  name.vb: ReadEntity(Of TC1, TC2, TC3)(Long, TC1, TC2, TC3)
+  fullName: Typhon.Engine.Transaction.ReadEntity<TC1, TC2, TC3>(long, out TC1, out TC2, out TC3)
+  fullName.vb: Typhon.Engine.Transaction.ReadEntity(Of TC1, TC2, TC3)(Long, TC1, TC2, TC3)
+  nameWithType: Transaction.ReadEntity<TC1, TC2, TC3>(long, out TC1, out TC2, out TC3)
+  nameWithType.vb: Transaction.ReadEntity(Of TC1, TC2, TC3)(Long, TC1, TC2, TC3)
 - uid: Typhon.Engine.Transaction.Rollback
   name: Rollback()
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_Rollback
@@ -11419,23 +11419,23 @@ references:
   nameWithType: Transaction.UpdateEntity<T>(long, ref T)
   nameWithType.vb: Transaction.UpdateEntity(Of T)(Long, T)
 - uid: Typhon.Engine.Transaction.UpdateEntity``2(System.Int64,``0@,``1@)
-  name: UpdateEntity<T, U>(long, ref T, ref U)
+  name: UpdateEntity<TC1, TC2>(long, ref TC1, ref TC2)
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_UpdateEntity__2_System_Int64___0____1__
   commentId: M:Typhon.Engine.Transaction.UpdateEntity``2(System.Int64,``0@,``1@)
-  name.vb: UpdateEntity(Of T, U)(Long, T, U)
-  fullName: Typhon.Engine.Transaction.UpdateEntity<T, U>(long, ref T, ref U)
-  fullName.vb: Typhon.Engine.Transaction.UpdateEntity(Of T, U)(Long, T, U)
-  nameWithType: Transaction.UpdateEntity<T, U>(long, ref T, ref U)
-  nameWithType.vb: Transaction.UpdateEntity(Of T, U)(Long, T, U)
+  name.vb: UpdateEntity(Of TC1, TC2)(Long, TC1, TC2)
+  fullName: Typhon.Engine.Transaction.UpdateEntity<TC1, TC2>(long, ref TC1, ref TC2)
+  fullName.vb: Typhon.Engine.Transaction.UpdateEntity(Of TC1, TC2)(Long, TC1, TC2)
+  nameWithType: Transaction.UpdateEntity<TC1, TC2>(long, ref TC1, ref TC2)
+  nameWithType.vb: Transaction.UpdateEntity(Of TC1, TC2)(Long, TC1, TC2)
 - uid: Typhon.Engine.Transaction.UpdateEntity``3(System.Int64,``0@,``1@,``2@)
-  name: UpdateEntity<T, U, V>(long, ref T, ref U, ref V)
+  name: UpdateEntity<TC1, TC2, TC3>(long, ref TC1, ref TC2, ref TC3)
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_UpdateEntity__3_System_Int64___0____1____2__
   commentId: M:Typhon.Engine.Transaction.UpdateEntity``3(System.Int64,``0@,``1@,``2@)
-  name.vb: UpdateEntity(Of T, U, V)(Long, T, U, V)
-  fullName: Typhon.Engine.Transaction.UpdateEntity<T, U, V>(long, ref T, ref U, ref V)
-  fullName.vb: Typhon.Engine.Transaction.UpdateEntity(Of T, U, V)(Long, T, U, V)
-  nameWithType: Transaction.UpdateEntity<T, U, V>(long, ref T, ref U, ref V)
-  nameWithType.vb: Transaction.UpdateEntity(Of T, U, V)(Long, T, U, V)
+  name.vb: UpdateEntity(Of TC1, TC2, TC3)(Long, TC1, TC2, TC3)
+  fullName: Typhon.Engine.Transaction.UpdateEntity<TC1, TC2, TC3>(long, ref TC1, ref TC2, ref TC3)
+  fullName.vb: Typhon.Engine.Transaction.UpdateEntity(Of TC1, TC2, TC3)(Long, TC1, TC2, TC3)
+  nameWithType: Transaction.UpdateEntity<TC1, TC2, TC3>(long, ref TC1, ref TC2, ref TC3)
+  nameWithType.vb: Transaction.UpdateEntity(Of TC1, TC2, TC3)(Long, TC1, TC2, TC3)
 - uid: Typhon.Engine.UnmanagedStructAllocator`1
   name: UnmanagedStructAllocator<T>
   href: api/Typhon.Engine.UnmanagedStructAllocator-1.html
