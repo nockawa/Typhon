@@ -14,13 +14,28 @@ public class ManagedPagedMMFTests
     private IServiceProvider _serviceProvider;
     private ServiceCollection _serviceCollection;
 
-    private static string CurrentDatabaseName => $"Typhon_{TestContext.CurrentContext.Test.Name}_db";
+    static readonly char[] charToRemove = ['(', ')'];
+    private static string CurrentDatabaseName
+    {
+        get
+        {
+            var testName = TestContext.CurrentContext.Test.Name;
+
+            foreach (var c in charToRemove)
+            {
+                testName = testName.Replace(c, '_');
+            }
+            
+            return $"Typhon_{testName}_db";
+        }
+    }
 
     [SetUp]
     public void Setup()
     {
-        var o = TestContext.CurrentContext.Test.Properties.ContainsKey("CacheSize");
-        var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("CacheSize")! : (int)PagedMMF.MinimumCacheSize;
+        var o = TestContext.CurrentContext.Test.Properties.ContainsKey("MemPageCount");
+        var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("MemPageCount")! : PagedMMF.DefaultMemPageCount;
+        dcs *= PagedMMF.PageSize;
 
         var serviceCollection = new ServiceCollection();
         _serviceCollection = serviceCollection;
@@ -75,12 +90,9 @@ public class ManagedPagedMMFTests
             pmmf.RequestPage(0, false, out var pa);
             using (pa)
             {
-                unsafe
-                {
-                    var h = (RootFileHeader*)pa.PageAddress;
-                    Assert.That(h->HeaderSignatureString, Is.EqualTo(ManagedPagedMMF.HeaderSignature));
-                    Assert.That(h->DatabaseNameString, Is.EqualTo(CurrentDatabaseName));
-                }
+                ref var h = ref pa.WholePage.Cast<byte, RootFileHeader>()[0];
+                Assert.That(h.HeaderSignatureString, Is.EqualTo(ManagedPagedMMF.HeaderSignature));
+                Assert.That(h.DatabaseNameString, Is.EqualTo(CurrentDatabaseName));
             }
         }
     }
@@ -212,10 +224,14 @@ public class ManagedPagedMMFTests
         pmmf.DeleteSegment(s1);
         pmmf.DeleteSegment(s3);
     }
+    
+    static object[] Cases = {
+        new TestCaseData(5000).SetProperty("MemPageCount", 6000),
+        new TestCaseData(4500).SetProperty("MemPageCount", 6000)
+    };    
 
     [Test]
-    [TestCase(5000)]                    // Enough to store the indices in 3 more pages: 500 (Root) + 2000 (P1) + 2000 (P2) + 500 (P3)
-    [TestCase(4500)]                    // Also in 3 pages, but the last one is only to store the 0 termination value
+    [TestCaseSource(nameof(Cases))]
     public void CreateAndLoadBigSegment(int segmentLength)
     {
         int rootSegmentIndex;

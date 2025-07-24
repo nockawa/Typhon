@@ -250,20 +250,20 @@ class PagedMMFTests
             pmmf.RequestPage(11, true, out var p2);    //  allowing a single write
             pmmf.RequestPage(12, true, out var p3);
             pmmf.RequestPage(14, true, out var p4);
-            var a = (int*)p1.PageAddress;
-            *a = 10;
+            var a = p1.WholePage.Cast<byte, int>();
+            a[0] = 10;
             cs.Add(p1);
                 
-            a = (int*)p2.PageAddress;
-            *a = 11;
+            a = p2.WholePage.Cast<byte, int>();
+            a[0] = 11;
             cs.Add(p2);
                 
-            a = (int*)p3.PageAddress;
-            *a = 12;
+            a = p3.WholePage.Cast<byte, int>();
+            a[0] = 12;
             cs.Add(p3);
             
-            a = (int*)p4.PageAddress;
-            *a = 14;
+            a = p4.WholePage.Cast<byte, int>();
+            a[0] = 14;
             cs.Add(p4);
             
             p1.Dispose();
@@ -286,17 +286,17 @@ class PagedMMFTests
             pmmf.RequestPage(12, true, out var p3);
             pmmf.RequestPage(14, true, out var p4);
 
-            var a = (int*)p1.PageAddress;
-            Assert.That(*a, Is.EqualTo(10), "Page 10 should be 10");
+            var a = p1.WholePage.Cast<byte, int>();
+            Assert.That(a[0], Is.EqualTo(10), "Page 10 should be 10");
 
-            var b = (int*)p2.PageAddress;
-            Assert.That(*b, Is.EqualTo(11), "Page 11 should be 11");
+            var b = p2.WholePage.Cast<byte, int>();
+            Assert.That(b[0], Is.EqualTo(11), "Page 11 should be 11");
             
-            var c = (int*)p3.PageAddress;
-            Assert.That(*c, Is.EqualTo(12), "Page 12 should be 12");
+            var c = p3.WholePage.Cast<byte, int>();
+            Assert.That(c[0], Is.EqualTo(12), "Page 12 should be 12");
             
-            var d = (int*)p4.PageAddress;
-            Assert.That(*d, Is.EqualTo(14), "Page 14 should be 14");
+            var d = p4.WholePage.Cast<byte, int>();
+            Assert.That(d[0], Is.EqualTo(14), "Page 14 should be 14");
             
             p1.Dispose();
             p2.Dispose();
@@ -396,8 +396,8 @@ class PagedMMFTests
                     pmmf.RequestPage(pageIndex, true, out var a);
                     cs.Add(a);
 
-                    var dest = (int*)a.PageAddress;
-                    *dest = pageIndex;
+                    var dest = a.WholePage.Cast<byte, int>();
+                    dest[0] = pageIndex;
                     a.Dispose();
                 }
                 cs.SaveChanges();
@@ -417,9 +417,9 @@ class PagedMMFTests
             {
                 pmmf.RequestPage(i, false, out var a);
 
-                var dest = (int*)a.PageAddress;
+                var dest = a.WholePage.Cast<byte, int>();
                 var localI = i;
-                Assert.That(*dest, Is.EqualTo(i), () => $"Bad DiskPageId {localI}");
+                Assert.That(dest[0], Is.EqualTo(i), () => $"Bad DiskPageId {localI}");
             
                 a.Dispose();
             }
@@ -439,7 +439,7 @@ class PagedMMFTests
                         // Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId}] Check Page {info.PageId} is {info.ExpectedValue}");
 
                         pmmf.RequestPage(info.PageId, false, out var a);
-                        int actual = *(int*)a.PageAddress;
+                        int actual = a.WholePage.Cast<byte, int>()[0];
 
                         // _logger.LogCritical("Check Page {PageId} has Value {ExpectedValue} and has {value}", info.PageId, info.ExpectedValue, actual);
                         Assert.That(actual, Is.EqualTo(info.ExpectedValue), $"Frame {curFrame}, Page {info.PageId} should be {info.ExpectedValue} but is {actual}");
@@ -453,8 +453,9 @@ class PagedMMFTests
 
                         pmmf.RequestPage(info.PageId, true, out var a);
                         cs.Add(a);
-                        var pa = (int*)a.PageAddress;
-                        var actual = ++*pa;
+                        var pa = a.WholePage.Cast<byte, int>();
+                        ++pa[0]; // Bump the value
+                        var actual = pa[0];
                     
                         // _logger.LogCritical("Bump Page {PageId} to {value}, expected {ExpectedValue}", info.PageId, *pa, info.ExpectedValue);
                         Assert.That(actual, Is.EqualTo(info.ExpectedValue), $"Frame {curFrame}, Page {info.PageId} should be {info.ExpectedValue} but is {actual}");

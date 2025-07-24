@@ -153,7 +153,7 @@ public unsafe struct Transaction : IDisposable
         }
     }
 
-    internal static TransactionChain Transactions;
+    internal static readonly TransactionChain Transactions;
 
     static Transaction()
     {
@@ -695,7 +695,7 @@ public unsafe struct Transaction : IDisposable
             --chunkIndexInChain;
         }
 
-        // Free all row versions that are older than minTick, except the last one when we rollback: we still need it
+        // Free all row versions that are older than minTick, except the last one because if we roll back, we still need it
         var prevRowChunkId = 0;
         var prevRowFirstIndex = firstChunkHeader->FirstItemIndex;
         var itemLeftCount = firstChunkHeader->ItemCount;
@@ -739,7 +739,7 @@ public unsafe struct Transaction : IDisposable
             firstChunkHeader->FirstItemIndex = prevRowFirstIndex;
         }
 
-        // If there's a previous row version, diff it against the new one on the field that are indexed to update them
+        // If there's a previous row version, diff it against the new one on the fields that are indexed to update them
         else if (prevRowChunkId != 0)
         {
             var prev = info.RowAccessor.GetChunkAddress(prevRowChunkId, pin: true);
