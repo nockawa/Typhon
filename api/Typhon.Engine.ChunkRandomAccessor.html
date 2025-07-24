@@ -89,7 +89,7 @@
 
 
   <h1 id="Typhon_Engine_ChunkRandomAccessor" data-uid="Typhon.Engine.ChunkRandomAccessor" class="text-break">
-Class ChunkRandomAccessor  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkBasedSegment.cs/#L19"><i class="bi bi-code-slash"></i></a>
+Class ChunkRandomAccessor  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L14"><i class="bi bi-code-slash"></i></a>
   </h1>
 
   <div class="facts text-secondary">
@@ -166,7 +166,7 @@ Class ChunkRandomAccessor  <a class="header-action link-secondary" title="View s
 
   <h3 id="Typhon_Engine_ChunkRandomAccessor_Segment" data-uid="Typhon.Engine.ChunkRandomAccessor.Segment">
   Segment
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkBasedSegment.cs/#L60"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L55"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -201,10 +201,10 @@ Class ChunkRandomAccessor  <a class="header-action link-secondary" title="View s
 
   <h3 id="Typhon_Engine_ChunkRandomAccessor_CommitChanges" data-uid="Typhon.Engine.ChunkRandomAccessor.CommitChanges">
   CommitChanges()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkBasedSegment.cs/#L247"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L242"><i class="bi bi-code-slash"></i></a>
   </h3>
 
-  <div class="markdown level1 summary"><p>Commit the dirty state of each page and release the share access.</p>
+  <div class="markdown level1 summary"><p>Commit the dirty state of each page and release the shared access.</p>
 </div>
   <div class="markdown level1 conceptual"></div>
 
@@ -232,7 +232,7 @@ If the page was promoted in exclusive mode, it won't be release, just simply ign
 
   <h3 id="Typhon_Engine_ChunkRandomAccessor_Dispose" data-uid="Typhon.Engine.ChunkRandomAccessor.Dispose">
   Dispose()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkBasedSegment.cs/#L305"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L300"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</p>
@@ -259,7 +259,7 @@ If the page was promoted in exclusive mode, it won't be release, just simply ign
 
   <h3 id="Typhon_Engine_ChunkRandomAccessor_DisposePageAccessors" data-uid="Typhon.Engine.ChunkRandomAccessor.DisposePageAccessors">
   DisposePageAccessors()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkBasedSegment.cs/#L272"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L267"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -290,7 +290,7 @@ If the page was promoted in exclusive mode, it won't be release, just simply ign
 
   <h3 id="Typhon_Engine_ChunkRandomAccessor_GetChunkAsReadOnlySpan_System_Int32_System_Boolean_System_Boolean_" data-uid="Typhon.Engine.ChunkRandomAccessor.GetChunkAsReadOnlySpan(System.Int32,System.Boolean,System.Boolean)">
   GetChunkAsReadOnlySpan(int, bool, bool)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkBasedSegment.cs/#L142"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L137"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -330,7 +330,7 @@ If the page was promoted in exclusive mode, it won't be release, just simply ign
 
   <h3 id="Typhon_Engine_ChunkRandomAccessor_GetChunkAsSpan_System_Int32_System_Boolean_System_Boolean_" data-uid="Typhon.Engine.ChunkRandomAccessor.GetChunkAsSpan(System.Int32,System.Boolean,System.Boolean)">
   GetChunkAsSpan(int, bool, bool)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkBasedSegment.cs/#L139"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L134"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -370,7 +370,7 @@ If the page was promoted in exclusive mode, it won't be release, just simply ign
 
   <h3 id="Typhon_Engine_ChunkRandomAccessor_GetChunkReadOnly__1_System_Int32_" data-uid="Typhon.Engine.ChunkRandomAccessor.GetChunkReadOnly``1(System.Int32)">
   GetChunkReadOnly&lt;T&gt;(int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkBasedSegment.cs/#L57"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L52"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -411,7 +411,7 @@ If the page was promoted in exclusive mode, it won't be release, just simply ign
 
   <h3 id="Typhon_Engine_ChunkRandomAccessor_GetChunk__1_System_Int32_System_Boolean_" data-uid="Typhon.Engine.ChunkRandomAccessor.GetChunk``1(System.Int32,System.Boolean)">
   GetChunk&lt;T&gt;(int, bool)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkBasedSegment.cs/#L58"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L53"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -454,7 +454,7 @@ If the page was promoted in exclusive mode, it won't be release, just simply ign
 </article>
 
         <div class="contribution d-print-none">
-          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkBasedSegment.cs/#L19" class="edit-link">Edit this page</a>
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L14" class="edit-link">Edit this page</a>
         </div>
 
 

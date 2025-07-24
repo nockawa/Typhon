@@ -10117,19 +10117,6 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.PageAccessor.MemPageIndex
   nameWithType: PageAccessor.MemPageIndex
-- uid: Typhon.Engine.PageAccessor.PageAddress
-  name: PageAddress
-  href: api/Typhon.Engine.PageAccessor.html#Typhon_Engine_PageAccessor_PageAddress
-  commentId: P:Typhon.Engine.PageAccessor.PageAddress
-  fullName: Typhon.Engine.PageAccessor.PageAddress
-  nameWithType: PageAccessor.PageAddress
-- uid: Typhon.Engine.PageAccessor.PageAddress*
-  name: PageAddress
-  href: api/Typhon.Engine.PageAccessor.html#Typhon_Engine_PageAccessor_PageAddress_
-  commentId: Overload:Typhon.Engine.PageAccessor.PageAddress
-  isSpec: "True"
-  fullName: Typhon.Engine.PageAccessor.PageAddress
-  nameWithType: PageAccessor.PageAddress
 - uid: Typhon.Engine.PageAccessor.PageHeader
   name: PageHeader
   href: api/Typhon.Engine.PageAccessor.html#Typhon_Engine_PageAccessor_PageHeader
