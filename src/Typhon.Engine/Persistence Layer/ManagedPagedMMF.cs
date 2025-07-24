@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Typhon.Engine;
@@ -60,12 +61,18 @@ public partial class ManagedPagedMMF : PagedMMF
             // Set header information
             var cs = CreateChangeSet();
             cs.Add(pa);
-            var rootFileHeader = (RootFileHeader*)pa.PageAddress;
-            StringExtensions.StoreString(HeaderSignature, rootFileHeader->HeaderSignature, 32);
-            rootFileHeader->DatabaseFormatRevision = DatabaseFormatRevision;
-            StringExtensions.StoreString(Options.DatabaseName, rootFileHeader->DatabaseName, 64);
+            ref var rootFileHeader = ref pa.PageHeader.Cast<byte, RootFileHeader>()[0];
+            fixed (byte* headerSignature = rootFileHeader.HeaderSignature)
+            {
+                StringExtensions.StoreString(HeaderSignature, headerSignature, 32);
+            };
+            rootFileHeader.DatabaseFormatRevision = DatabaseFormatRevision;
+            fixed (byte* databaseName = rootFileHeader.DatabaseName)
+            {
+                StringExtensions.StoreString(Options.DatabaseName, databaseName, 64);
+            }
 
-            rootFileHeader->OccupancyMapSPI = OccupancySegmentRootPageIndex;
+            rootFileHeader.OccupancyMapSPI = OccupancySegmentRootPageIndex;
             Logger.LogInformation("Initialize DiskPageAllocator service with root at page {PageId}", OccupancySegmentRootPageIndex);
 
             cs.SaveChanges();
@@ -91,24 +98,24 @@ public partial class ManagedPagedMMF : PagedMMF
         RequestPage(0, false, out var pa);
         using (pa)
         {
-            var h = (RootFileHeader*)pa.PageAddress;
+            ref var h = ref pa.PageHeader.Cast<byte, RootFileHeader>()[0];
 
-            if (h->HeaderSignatureString != HeaderSignature)
+            if (h.HeaderSignatureString != HeaderSignature)
             {
                 throw new NotImplementedException();
             }
 
-            if (h->DatabaseNameString != Options.DatabaseName)
+            if (h.DatabaseNameString != Options.DatabaseName)
             {
                 throw new NotImplementedException();
             }
             
-            Logger.LogInformation("Load Database '{DatabaseName}' from file '{FilePathName}'", h->DatabaseNameString, Options.BuildDatabasePathFileName());
+            Logger.LogInformation("Load Database '{DatabaseName}' from file '{FilePathName}'", h.DatabaseNameString, Options.BuildDatabasePathFileName());
 
             // Initialize the occupancy segment and map
             _segments = new ConcurrentDictionary<int, LogicalSegment>();
 
-            _occupancySegment = LoadOccupancySegment(h->OccupancyMapSPI, PageBlockType.OccupancyMap);
+            _occupancySegment = LoadOccupancySegment(h.OccupancyMapSPI, PageBlockType.OccupancyMap);
 
             // ReSharper disable once InconsistentlySynchronizedField
             _occupancyMap = new BitmapL3(1, _occupancySegment);

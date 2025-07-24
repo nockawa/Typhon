@@ -108,7 +108,7 @@ public class PagedMemoryFileBenchmarks
                     _pmmf.RequestPage(info.FilePageIndex, false, out var a);
                     using (a)
                     {
-                        var actual = *(uint*)a.PageAddress;
+                        var actual = a.WholePage.Cast<byte, uint>()[0];
                         info.Value += actual;
                     }
                 }
@@ -117,9 +117,9 @@ public class PagedMemoryFileBenchmarks
                     _pmmf.RequestPage(info.FilePageIndex, true, out var a);
                     using (a)
                     {
-                        a.SetPageDirty();
-                        var pa = (uint*)a.PageAddress;
-                        var actual = ++*pa;
+                        //a.SetPageDirty();
+                        var page = a.WholePage.Cast<byte, uint>();
+                        ++page[0];
                     }
                 }
             });

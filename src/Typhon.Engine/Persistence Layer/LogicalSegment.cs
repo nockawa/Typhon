@@ -246,7 +246,6 @@ public class LogicalSegment : IDisposable
             using (pa)
             {
                 cs.Add(pa);
-                pa.SetPageDirty();
                 pa.PageRawData.Clear();
             }
         }
@@ -262,7 +261,6 @@ public class LogicalSegment : IDisposable
             using (pa)
             {
                 cs.Add(pa);
-                pa.SetPageDirty();
                 pa.LogicalSegmentData.Fill(value);
             }
         }

@@ -11,6 +11,10 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
+#if VERBOSELOGGING
+    using Serilog.Context;
+#endif
+
 namespace Typhon.Engine;
 
 [PublicAPI]
