@@ -25,7 +25,7 @@ internal struct RowVersionStorageElement
     public int RowChunkId;
 }
 
-[DebuggerDisplay("Offset: {OffsetToField} Size: {Size} HasIndex {HasIndex}")]
+[DebuggerDisplay("Offset: {OffsetToField} Size: {Size}")]
 internal struct IndexedFieldInfo
 {
     public int OffsetToField;
@@ -61,13 +61,13 @@ public unsafe class ComponentTable : IDisposable
         DBE = dbe;
         _definition = definition;
 
-        var pmmf = DBE.PMMF;
-        ComponentSegment    = pmmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, RowTotalSize);
-        VersionTableSegment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, RowVersionDataChunkSize);
+        var mmf = DBE.MMF;
+        ComponentSegment    = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, RowTotalSize);
+        VersionTableSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, RowVersionDataChunkSize);
             
         // This segment will be used for all kind of index types except String64 which needs a dedicated one because its chunk size is different (all others are 64 bytes)
-        DefaultIndexSegment  = pmmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(Index64Chunk));
-        String64IndexSegment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(IndexString64Chunk));
+        DefaultIndexSegment  = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(Index64Chunk));
+        String64IndexSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(IndexString64Chunk));
 
         PrimaryKeyIndex = new LongSingleBTree(DefaultIndexSegment);
 

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using System.Runtime.CompilerServices;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -84,7 +85,7 @@ public class DatabaseEngineOptions
 public class DatabaseEngine : IDisposable
 {
     private readonly DatabaseEngineOptions      _options;
-    private readonly ManagedPagedMMF            _pmmf;
+    private readonly ManagedPagedMMF            _mmf;
     private readonly ILogger<DatabaseEngine>    _log;
 
     private ComponentTable _fieldsTable;
@@ -93,7 +94,7 @@ public class DatabaseEngine : IDisposable
     private long _curPrimaryKey;
 
     public DatabaseDefinitions DBD { get; }
-    public ManagedPagedMMF PMMF => _pmmf;
+    public ManagedPagedMMF MMF => _mmf;
     
     /// <summary>
     /// Create a transaction in order to make Queries and CRUD operation on the database
@@ -111,17 +112,17 @@ public class DatabaseEngine : IDisposable
     /// </remarks>
     public Transaction NewTransaction(bool exclusiveConcurrency) => new(this, exclusiveConcurrency);
 
-    public DatabaseEngine(DatabaseEngineOptions options, ManagedPagedMMF pmmf, ILogger<DatabaseEngine> log)
+    public DatabaseEngine(DatabaseEngineOptions options, ManagedPagedMMF mmf, ILogger<DatabaseEngine> log)
     {
-        _pmmf = pmmf;
+        _mmf = mmf;
         _log = log;
         _options = options;
 
         DBD = new DatabaseDefinitions();
         ConstructComponentStore();
 
-        _pmmf.CreatingEvent += OnCreating;
-        _pmmf.LoadingEvent += OnLoading;
+        _mmf.CreatingEvent += OnCreating;
+        _mmf.LoadingEvent += OnLoading;
     }
 
     private void OnLoading(object sender, EventArgs args)
@@ -145,7 +146,7 @@ public class DatabaseEngine : IDisposable
 
         GC.SuppressFinalize(this);
         
-        _pmmf.Dispose();
+        _mmf.Dispose();
 
         IsDisposed = true;
     }
@@ -182,15 +183,8 @@ public class DatabaseEngine : IDisposable
 
     public ComponentTable GetComponentTable<T>() where T : unmanaged => GetComponentTable(typeof(T));
 
-    public ComponentTable GetComponentTable(Type type)
-    {
-        if (_componentTableByType.TryGetValue(type, out var ct) == false)
-        {
-            return null;
-        }
+    public ComponentTable GetComponentTable(Type type) => _componentTableByType.GetValueOrDefault(type);
 
-        return ct;
-    }
     internal struct SerializationData
     {
         public ComponentTable.SerializationData FieldsTable;
