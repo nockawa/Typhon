@@ -20,14 +20,14 @@ public class ChunkRandomAccessor : IDisposable
         Pool = new ConcurrentBag<ChunkRandomAccessor>();
     }
 
-    internal static ChunkRandomAccessor GetFromPool(ChunkBasedSegment owner, int cachedPagesCount)
+    internal static ChunkRandomAccessor GetFromPool(ChunkBasedSegment owner, int cachedPagesCount, ChangeSet changeSet)
     {
         if (!Pool.TryTake(out var cra))
         {
             cra = new ChunkRandomAccessor();
         }
 
-        cra.Initialize(owner, cachedPagesCount);
+        cra.Initialize(owner, cachedPagesCount, changeSet);
         return cra;
     }
 
@@ -36,6 +36,7 @@ public class ChunkRandomAccessor : IDisposable
     private Memory<PageAccessor> _cachedPages;
     private Memory<CachedEntry> _cachedEntries;    // We will hit this one very often, so we favor cache locality by putting the PageAccessor in another array
     private int _stride;
+    private ChangeSet _changeSet;
 
     [StructLayout(LayoutKind.Sequential)]
     unsafe private struct CachedEntry
@@ -186,9 +187,10 @@ public class ChunkRandomAccessor : IDisposable
         ref var cachedEntry = ref _cachedEntries.Span[pageI];
         var cachedPagesAccess = _cachedPages.Span;
 
-        if (cachedEntry.IsDirty != 0)
+        if (cachedEntry.IsDirty != 0 && _changeSet != null)
         {
-            cachedPagesAccess[pageI].SetPageDirty();
+            _changeSet.Add(cachedPagesAccess[pageI]);
+            //cachedPagesAccess[pageI].SetPageDirty();
         }
         cachedPagesAccess[pageI].Dispose();
 
@@ -211,9 +213,10 @@ public class ChunkRandomAccessor : IDisposable
         new Span<long>(addr, _stride / 8).Clear();
     }
 
-    private void Initialize(ChunkBasedSegment owner, int cachedPagesCount)
+    private void Initialize(ChunkBasedSegment owner, int cachedPagesCount, ChangeSet changeSet)
     {
         _owner = owner;
+        _changeSet = changeSet;
         var curPagesCount = _cachedPagesCount;
         _cachedPagesCount = cachedPagesCount;
 
@@ -255,7 +258,8 @@ public class ChunkRandomAccessor : IDisposable
 
             if (cachedEntry.IsDirty != 0)
             {
-                cachedPage.SetPageDirty();
+                _changeSet?.Add(cachedPage);
+                // cachedPage.SetPageDirty();
                 cachedEntry.IsDirty = 0;
             }
 
@@ -277,7 +281,8 @@ public class ChunkRandomAccessor : IDisposable
 
             if (cachedEntry.IsDirty != 0)
             {
-                cachedPage.SetPageDirty();
+                _changeSet?.Add(cachedPage);
+                // cachedPage.SetPageDirty();
                 cachedEntry.IsDirty = 0;
             }
 

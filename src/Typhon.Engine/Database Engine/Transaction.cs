@@ -1,5 +1,6 @@
 ﻿// unset
 
+using JetBrains.Annotations;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -9,6 +10,7 @@ using Typhon.Engine.BPTree;
 
 namespace Typhon.Engine;
 
+[PublicAPI]
 public unsafe struct Transaction : IDisposable
 {
     private const int RandomAccessCachedPagesCount = 16;
@@ -22,8 +24,8 @@ public unsafe struct Transaction : IDisposable
             Type = type;
             Data = data;
         }
-        public Type Type;
-        public void* Data;
+        public readonly Type Type;
+        public readonly void* Data;
     }
 
     internal class ComponentInfo
@@ -177,6 +179,7 @@ public unsafe struct Transaction : IDisposable
 
     private int? _committedOperationCount;
     private int _deletedComponentCount;
+    private readonly ChangeSet _changeSet;
 
     public int CommittedOperationCount
     {
@@ -204,6 +207,7 @@ public unsafe struct Transaction : IDisposable
         _transactionCreationTick = DateTime.UtcNow.Ticks;
         _committedOperationCount = null;
         _deletedComponentCount = 0;
+        _changeSet = _dbe.MMF.CreateChangeSet();
         TransactionId = Interlocked.Increment(ref TransactionIdCounter);
         State = TransactionState.Created;
 
@@ -225,10 +229,10 @@ public unsafe struct Transaction : IDisposable
 
     public long CreateEntity<T>(ref T t) where T : unmanaged 
         => CreateEntity(new ComponentData(typeof(T), Unsafe.AsPointer(ref t)));
-    public long CreateEntity<T, U>(ref T t, ref U u) where T : unmanaged where U : unmanaged
-        => CreateEntity(new ComponentData(typeof(T), Unsafe.AsPointer(ref t)), new ComponentData(typeof(U), Unsafe.AsPointer(ref u)));
-    public long CreateEntity<T, U, V>(ref T t, ref U u, ref V v) where T : unmanaged where U : unmanaged where V : unmanaged
-        => CreateEntity(new ComponentData(typeof(T), Unsafe.AsPointer(ref t)), new ComponentData(typeof(U), Unsafe.AsPointer(ref u)), new ComponentData(typeof(V), Unsafe.AsPointer(ref v)));
+    public long CreateEntity<TC1, TC2>(ref TC1 t, ref TC2 u) where TC1 : unmanaged where TC2 : unmanaged
+        => CreateEntity(new ComponentData(typeof(TC1), Unsafe.AsPointer(ref t)), new ComponentData(typeof(TC2), Unsafe.AsPointer(ref u)));
+    public long CreateEntity<TC1, TC2, TC3>(ref TC1 t, ref TC2 u, ref TC3 v) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
+        => CreateEntity(new ComponentData(typeof(TC1), Unsafe.AsPointer(ref t)), new ComponentData(typeof(TC2), Unsafe.AsPointer(ref u)), new ComponentData(typeof(TC3), Unsafe.AsPointer(ref v)));
 
     public bool ReadEntity<T>(long pk, out T t) where T : unmanaged
     {
@@ -236,38 +240,38 @@ public unsafe struct Transaction : IDisposable
         return ReadEntity(pk, new ComponentData(typeof(T), Unsafe.AsPointer(ref t)));
     }
 
-    public bool ReadEntity<T, U>(long pk, out T t, out U u) where T : unmanaged where U : unmanaged
+    public bool ReadEntity<TC1, TC2>(long pk, out TC1 t, out TC2 u) where TC1 : unmanaged where TC2 : unmanaged
     {
         t = default;
         u = default;
-        return ReadEntity(pk, new ComponentData(typeof(T), Unsafe.AsPointer(ref t)), new ComponentData(typeof(U), Unsafe.AsPointer(ref u)));
+        return ReadEntity(pk, new ComponentData(typeof(TC1), Unsafe.AsPointer(ref t)), new ComponentData(typeof(TC2), Unsafe.AsPointer(ref u)));
     }
 
-    public bool ReadEntity<T, U, V>(long pk, out T t, out U u, out V v) where T : unmanaged where U : unmanaged where V : unmanaged
+    public bool ReadEntity<TC1, TC2, TC3>(long pk, out TC1 t, out TC2 u, out TC3 v) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
     {
         t = default;
         u = default;
         v = default;
-        return ReadEntity(pk, new ComponentData(typeof(T), Unsafe.AsPointer(ref t)), new ComponentData(typeof(U), Unsafe.AsPointer(ref u)), new ComponentData(typeof(V), Unsafe.AsPointer(ref v)));
+        return ReadEntity(pk, new ComponentData(typeof(TC1), Unsafe.AsPointer(ref t)), new ComponentData(typeof(TC2), Unsafe.AsPointer(ref u)), new ComponentData(typeof(TC3), Unsafe.AsPointer(ref v)));
     }
 
     public bool UpdateEntity<T>(long pk, ref T t) where T : unmanaged 
         => UpdateEntity(pk, new ComponentData(typeof(T), Unsafe.AsPointer(ref t)));
 
-    public bool UpdateEntity<T, U>(long pk, ref T t, ref U u) where T : unmanaged where U : unmanaged 
-        => UpdateEntity(pk, new ComponentData(typeof(T), Unsafe.AsPointer(ref t)), new ComponentData(typeof(U), Unsafe.AsPointer(ref u)));
+    public bool UpdateEntity<TC1, TC2>(long pk, ref TC1 t, ref TC2 u) where TC1 : unmanaged where TC2 : unmanaged 
+        => UpdateEntity(pk, new ComponentData(typeof(TC1), Unsafe.AsPointer(ref t)), new ComponentData(typeof(TC2), Unsafe.AsPointer(ref u)));
 
-    public bool UpdateEntity<T, U, V>(long pk, ref T t, ref U u, ref V v) where T : unmanaged where U : unmanaged where V : unmanaged 
-        => UpdateEntity(pk, new ComponentData(typeof(T), Unsafe.AsPointer(ref t)), new ComponentData(typeof(U), Unsafe.AsPointer(ref u)), new ComponentData(typeof(V), Unsafe.AsPointer(ref v)));
+    public bool UpdateEntity<TC1, TC2, TC3>(long pk, ref TC1 t, ref TC2 u, ref TC3 v) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged 
+        => UpdateEntity(pk, new ComponentData(typeof(TC1), Unsafe.AsPointer(ref t)), new ComponentData(typeof(TC2), Unsafe.AsPointer(ref u)), new ComponentData(typeof(TC3), Unsafe.AsPointer(ref v)));
 
     public bool DeleteEntity<T>(long pk) where T : unmanaged
         => UpdateEntity(pk, new ComponentData(typeof(T), null));
 
-    public bool DeleteEntity<T, U>(long pk) where T : unmanaged where U : unmanaged
-        => UpdateEntity(pk, new ComponentData(typeof(T), null), new ComponentData(typeof(U), null));
+    public bool DeleteEntity<TC1, TC2>(long pk) where TC1 : unmanaged where TC2 : unmanaged
+        => UpdateEntity(pk, new ComponentData(typeof(TC1), null), new ComponentData(typeof(TC2), null));
 
-    public bool DeleteEntity<T, U, V>(long pk) where T : unmanaged where U : unmanaged where V : unmanaged
-        => UpdateEntity(pk, new ComponentData(typeof(T), null), new ComponentData(typeof(U), null), new ComponentData(typeof(V), null));
+    public bool DeleteEntity<TC1, TC2, TC3>(long pk) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
+        => UpdateEntity(pk, new ComponentData(typeof(TC1), null), new ComponentData(typeof(TC2), null), new ComponentData(typeof(TC3), null));
 
     public int GetComponentRevision<T>(long pk) where T : unmanaged
     {
@@ -286,24 +290,29 @@ public unsafe struct Transaction : IDisposable
 
     private ComponentInfo GetComponentInfo(Type componentType)
     {
-        if (!_componentInfos.TryGetValue(componentType, out var info))
+        if (_componentInfos.TryGetValue(componentType, out var info))
         {
-            var ct = _dbe.GetComponentTable(componentType);
-            if (ct == null) throw new InvalidOperationException($"The type {componentType} doesn't have a registered Component Table");
-
-            info = new ComponentInfo
-            {
-                ComponentTable       = ct,
-                ComponentSegment     = ct.ComponentSegment,
-                VersionTableSegment  = ct.VersionTableSegment,
-                PrimaryKeyIndex      = ct.PrimaryKeyIndex,
-                RowAccessor          = ct.ComponentSegment.CreateChunkRandomAccessor(RandomAccessCachedPagesCount),
-                VersionTableAccessor = ct.VersionTableSegment.CreateChunkRandomAccessor(RandomAccessCachedPagesCount),
-                RowInfoCache         = new Dictionary<long, ComponentInfo.RowInfo>()
-            };
-
-            _componentInfos.Add(componentType, info);
+            return info;
         }
+
+        var ct = _dbe.GetComponentTable(componentType);
+        if (ct == null)
+        {
+            throw new InvalidOperationException($"The type {componentType} doesn't have a registered Component Table");
+        }
+
+        info = new ComponentInfo
+        {
+            ComponentTable       = ct,
+            ComponentSegment     = ct.ComponentSegment,
+            VersionTableSegment  = ct.VersionTableSegment,
+            PrimaryKeyIndex      = ct.PrimaryKeyIndex,
+            RowAccessor          = ct.ComponentSegment.CreateChunkRandomAccessor(RandomAccessCachedPagesCount, _changeSet),
+            VersionTableAccessor = ct.VersionTableSegment.CreateChunkRandomAccessor(RandomAccessCachedPagesCount, _changeSet),
+            RowInfoCache         = new Dictionary<long, ComponentInfo.RowInfo>()
+        };
+
+        _componentInfos.Add(componentType, info);
 
         return info;
     }
@@ -460,7 +469,7 @@ public unsafe struct Transaction : IDisposable
         return true;
     }
 
-    internal int CreateComponent(long primaryKey, ComponentInfo info, long tick, bool isExclusive, out int rowVersionStorageChunkId)
+    private int CreateComponent(long primaryKey, ComponentInfo info, long tick, bool isExclusive, out int rowVersionStorageChunkId)
     {
         // Allocate the chunk that will store the component's row
         var componentChunkId = info.ComponentSegment.AllocateChunk(false);
@@ -474,7 +483,7 @@ public unsafe struct Transaction : IDisposable
         return componentChunkId;
     }
 
-    internal int AllocRowVersionStorage(ComponentInfo info, long tick, int firstRowChunkId, bool isExclusive)
+    private int AllocRowVersionStorage(ComponentInfo info, long tick, int firstRowChunkId, bool isExclusive)
     {
         var chunkId = info.VersionTableSegment.AllocateChunk(false);
         var chunkAddr = info.VersionTableAccessor.GetChunkAddress(chunkId);
@@ -488,7 +497,10 @@ public unsafe struct Transaction : IDisposable
         header->ItemCount = 1;
         header->ChainLength = 1;
 
-        if (isExclusive) header->Control.EnterExclusiveAccess();
+        if (isExclusive)
+        {
+            header->Control.EnterExclusiveAccess();
+        }
 
         // Initialize the first element
         var chunkElements = (RowVersionStorageElement*)(chunkAddr + sizeof(RowVersionStorageHeader));
@@ -499,9 +511,9 @@ public unsafe struct Transaction : IDisposable
         return chunkId;
     }
 
-    internal bool GetRowVersionTableFirstChunkId(long pk, ComponentInfo info, out int firstChunkId) => info.PrimaryKeyIndex.TryGet(pk, out firstChunkId);
+    private bool GetRowVersionTableFirstChunkId(long pk, ComponentInfo info, out int firstChunkId) => info.PrimaryKeyIndex.TryGet(pk, out firstChunkId);
 
-    internal void AddRow(ComponentInfo info, ref ComponentInfo.RowInfo rowInfo, long tick, bool isDelete, bool isExclusive)
+    private void AddRow(ComponentInfo info, ref ComponentInfo.RowInfo rowInfo, long tick, bool isDelete, bool isExclusive)
     {
         var versionTableAccessor = info.VersionTableAccessor;
         var versionTableSegment = info.VersionTableSegment;
@@ -583,7 +595,7 @@ public unsafe struct Transaction : IDisposable
         }
     }
 
-    internal bool GetComponentRowInfoFromIndex(long pk, ComponentInfo info, long tick, out ComponentInfo.RowInfo rowInfo)
+    private bool GetComponentRowInfoFromIndex(long pk, ComponentInfo info, long tick, out ComponentInfo.RowInfo rowInfo)
     {
         var versionTableAccessor = info.VersionTableAccessor;
 
@@ -855,7 +867,7 @@ public unsafe struct Transaction : IDisposable
         return res;
     }
 
-    internal void UpdateRow(ComponentInfo info, ref ComponentInfo.RowInfo rowInfo, long rowTick, bool isDelete, bool exclusiveRow)
+    private void UpdateRow(ComponentInfo info, ref ComponentInfo.RowInfo rowInfo, long rowTick, bool isDelete, bool exclusiveRow)
     {
         var versionTableAccessor = info.VersionTableAccessor;
         var componentSegment = info.ComponentSegment;

@@ -86,7 +86,7 @@ class TransactionTests
         var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("CacheSize")! : (int)PagedMMF.MinimumCacheSize;
 
         Log.Logger = new LoggerConfiguration()
-            .MinimumLevel.Information()
+            .MinimumLevel.Verbose()
             /*
             .MinimumLevel.Override(typeof(LogicalSegmentManager).FullName, LogEventLevel.Verbose)
             */
@@ -101,6 +101,7 @@ class TransactionTests
         _serviceCollection
             .AddLogging(builder =>
             {
+                // builder.AddSerilog();
                 builder.AddSimpleConsole(options =>
                 {
                     options.SingleLine = true;

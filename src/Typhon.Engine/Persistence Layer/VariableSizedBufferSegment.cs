@@ -263,7 +263,7 @@ public struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanaged
         _segment = owner.Segment;
         _rootChunkId = rootChunkId;
 
-        _accessor = ChunkRandomAccessor.GetFromPool(_segment, 8);
+        _accessor = ChunkRandomAccessor.GetFromPool(_segment, 8, null);
 
         _rootChunkAddr = _accessor.GetChunkAddress(_rootChunkId);
         ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(_rootChunkAddr);
