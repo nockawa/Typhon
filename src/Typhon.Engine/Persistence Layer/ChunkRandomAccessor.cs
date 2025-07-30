@@ -20,7 +20,7 @@ public class ChunkRandomAccessor : IDisposable
         Pool = new ConcurrentBag<ChunkRandomAccessor>();
     }
 
-    internal static ChunkRandomAccessor GetFromPool(ChunkBasedSegment owner, int cachedPagesCount, ChangeSet changeSet)
+    internal static ChunkRandomAccessor GetFromPool(ChunkBasedSegment owner, int cachedPagesCount, ChangeSet changeSet = null)
     {
         if (!Pool.TryTake(out var cra))
         {
@@ -54,6 +54,7 @@ public class ChunkRandomAccessor : IDisposable
     unsafe public ref T GetChunk<T>(int index, bool dirtyPage = false) where T : unmanaged => ref Unsafe.AsRef<T>(GetChunkAddress(index, dirtyPage: dirtyPage));
 
     public ChunkBasedSegment Segment => _owner;
+    public ChangeSet ChangeSet => _changeSet;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     internal void UnpinChunk(int index)
@@ -147,6 +148,7 @@ public class ChunkRandomAccessor : IDisposable
         var pageI = -1;
 
         var cachedEntries = _cachedEntries.Span;
+        var cachedPagesAccess = _cachedPages.Span;
         for (int i = 0; i < _cachedPagesCount; i++)
         {
             ref var entry = ref cachedEntries[i];
@@ -154,7 +156,7 @@ public class ChunkRandomAccessor : IDisposable
             {
                 if (entry.CurrentPageState == PagedMMF.PageState.Idle)
                 {
-                    _owner.GetPageSharedAccessor(si, out _cachedPages.Span[i]);
+                    _owner.GetPageSharedAccessor(si, out cachedPagesAccess[i]);
                     entry.CurrentPageState = PagedMMF.PageState.Shared;
                 }
 
@@ -185,7 +187,6 @@ public class ChunkRandomAccessor : IDisposable
         }
 
         ref var cachedEntry = ref _cachedEntries.Span[pageI];
-        var cachedPagesAccess = _cachedPages.Span;
 
         if (cachedEntry.IsDirty != 0 && _changeSet != null)
         {
@@ -213,7 +214,7 @@ public class ChunkRandomAccessor : IDisposable
         new Span<long>(addr, _stride / 8).Clear();
     }
 
-    private void Initialize(ChunkBasedSegment owner, int cachedPagesCount, ChangeSet changeSet)
+    private void Initialize(ChunkBasedSegment owner, int cachedPagesCount, ChangeSet changeSet = null)
     {
         _owner = owner;
         _changeSet = changeSet;

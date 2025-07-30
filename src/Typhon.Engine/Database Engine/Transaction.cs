@@ -478,7 +478,8 @@ public unsafe struct Transaction : IDisposable
         rowVersionStorageChunkId = AllocRowVersionStorage(info, tick, componentChunkId, isExclusive);
 
         // Update the index with this new entry
-        info.PrimaryKeyIndex.Add(primaryKey, rowVersionStorageChunkId);
+        using var accessor = info.PrimaryKeyIndex.Segment.CreateChunkRandomAccessor(8, _changeSet);
+        info.PrimaryKeyIndex.Add(primaryKey, rowVersionStorageChunkId, accessor);
 
         return componentChunkId;
     }
@@ -511,7 +512,11 @@ public unsafe struct Transaction : IDisposable
         return chunkId;
     }
 
-    private bool GetRowVersionTableFirstChunkId(long pk, ComponentInfo info, out int firstChunkId) => info.PrimaryKeyIndex.TryGet(pk, out firstChunkId);
+    private bool GetRowVersionTableFirstChunkId(long pk, ComponentInfo info, out int firstChunkId)
+    {
+        using var accessor = info.PrimaryKeyIndex.Segment.CreateChunkRandomAccessor(8, _changeSet);
+        return info.PrimaryKeyIndex.TryGet(pk, out firstChunkId, accessor);
+    }
 
     private void AddRow(ComponentInfo info, ref ComponentInfo.RowInfo rowInfo, long tick, bool isDelete, bool isExclusive)
     {
@@ -599,7 +604,8 @@ public unsafe struct Transaction : IDisposable
     {
         var versionTableAccessor = info.VersionTableAccessor;
 
-        if (!info.PrimaryKeyIndex.TryGet(pk, out var rowVersionFirstChunkId))
+        using var accessor = info.PrimaryKeyIndex.Segment.CreateChunkRandomAccessor(8, _changeSet);
+        if (!info.PrimaryKeyIndex.TryGet(pk, out var rowVersionFirstChunkId, accessor))
         {
             rowInfo = default;
             return false;
@@ -744,7 +750,7 @@ public unsafe struct Transaction : IDisposable
 
         curChunkHeader = (RowVersionStorageHeader*)versionTableAccessor.GetChunkAddress(rowInfo.RowVersionChunkId, dirtyPage: true);
         curElements = (RowVersionStorageElement*)(curChunkHeader + 1);
-
+        
         // If we are roll-backing, re-correct the version to keep the last before minTick
         if (isRollback)
         {
@@ -767,15 +773,16 @@ public unsafe struct Transaction : IDisposable
                 // The update changed the field?
                 if (prevSpan.Slice(ifi.OffsetToField, ifi.Size).SequenceEqual(curSpan.Slice(ifi.OffsetToField, ifi.Size)) == false)
                 {
+                    using var accessor = ifi.Index.Segment.CreateChunkRandomAccessor(8, _changeSet);
                     if (ifi.Index.AllowMultiple)
                     {
-                        ifi.Index.RemoveValue(&prev[ifi.OffsetToField], *(int*)&prev[ifi.OffsetToIndexElementId], rowInfo.RowVersionFirstChunkId);
-                        *(int*)&cur[ifi.OffsetToIndexElementId] = ifi.Index.Add(&cur[ifi.OffsetToField], rowInfo.RowVersionFirstChunkId);
+                        ifi.Index.RemoveValue(&prev[ifi.OffsetToField], *(int*)&prev[ifi.OffsetToIndexElementId], rowInfo.RowVersionFirstChunkId, accessor);
+                        *(int*)&cur[ifi.OffsetToIndexElementId] = ifi.Index.Add(&cur[ifi.OffsetToField], rowInfo.RowVersionFirstChunkId, accessor);
                     }
                     else
                     {
-                        ifi.Index.Remove(&prev[ifi.OffsetToField], out var val);
-                        ifi.Index.Add(&cur[ifi.OffsetToField], val);
+                        ifi.Index.Remove(&prev[ifi.OffsetToField], out var val, accessor);
+                        ifi.Index.Add(&cur[ifi.OffsetToField], val, accessor);
                     }
                 }
             }
@@ -796,13 +803,14 @@ public unsafe struct Transaction : IDisposable
             {
                 ref var ifi = ref indexedFieldInfos[i];
 
+                using var accessor = ifi.Index.Segment.CreateChunkRandomAccessor(8, _changeSet);
                 if (ifi.Index.AllowMultiple)
                 {
-                    *(int*)&cur[ifi.OffsetToIndexElementId] = ifi.Index.Add(&cur[ifi.OffsetToField], rowInfo.RowVersionFirstChunkId);
+                    *(int*)&cur[ifi.OffsetToIndexElementId] = ifi.Index.Add(&cur[ifi.OffsetToField], rowInfo.RowVersionFirstChunkId, accessor);
                 }
                 else
                 {
-                    ifi.Index.Add(&cur[ifi.OffsetToField], rowInfo.RowVersionFirstChunkId);
+                    ifi.Index.Add(&cur[ifi.OffsetToField], rowInfo.RowVersionFirstChunkId, accessor);
                 }
             }
         }
@@ -840,7 +848,8 @@ public unsafe struct Transaction : IDisposable
             Debug.Assert(curElements[rowInfo.RowVersionIndexInChunk].RowChunkId == 0, "Current Row Version point to an allocated Row Component, should be 0.");
 
             // Remove the index
-            info.PrimaryKeyIndex.Remove(pk, out _);
+            using var accessor = info.PrimaryKeyIndex.Segment.CreateChunkRandomAccessor(8, _changeSet);
+            info.PrimaryKeyIndex.Remove(pk, out _, accessor);
 
             // Free the Row Version chain chunks
             curChunkId = rowInfo.RowVersionFirstChunkId;

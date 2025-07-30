@@ -83,7 +83,7 @@ public partial class PagedMMF : IDisposable
 
     #endregion
 
-    internal enum PageState
+    internal enum PageState : ushort
     {
         Free         = 0,   // The page is free, yet to be allocated.
         Allocating   = 1,   // The page is being allocating by a call to AllocateMemoryPage.

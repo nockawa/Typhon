@@ -29,7 +29,7 @@ public partial class ManagedPagedMMF
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public bool SetL0(int bitIndex)
+        public bool SetL0(int bitIndex, ChangeSet changeSet = null)
         {
             var l0Offset = bitIndex >> 6;
             var l0Mask = 1L << (bitIndex & 0x3F);
@@ -40,13 +40,17 @@ public partial class ManagedPagedMMF
             {
                 var data = page.LogicalSegmentData.Cast<byte, long>();
                 var prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
-                page.SetPageDirty();                                                        // TODO only if changed
                 if ((prevL0 & l0Mask) != 0)
                 {
                     // The bit was concurrently set by someone else
                     return false;
                 }
 
+                if (data[pageOffset] != prevL0)
+                {
+                    changeSet?.Add(page);
+                }
+                
                 if (prevL0 != -1 && (prevL0 | l0Mask) == -1)
                 {
                     var l1Offset = l0Offset >> 6;
@@ -75,7 +79,7 @@ public partial class ManagedPagedMMF
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public bool SetL1(int index)
+        public bool SetL1(int index, ChangeSet changeSet = null)
         {
             var l0Offset = index;
             var l0Mask = -1L;
@@ -86,11 +90,16 @@ public partial class ManagedPagedMMF
             {
                 var data = page.LogicalSegmentData.Cast<byte, long>();
                 var prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
-                page.SetPageDirty();                                                        // TODO only if changed
+
                 if (prevL0 != 0)
                 {
                     // Can't allocate the whole L1, some bits are set at L0
                     return false;
+                }
+                
+                if (data[pageOffset] != prevL0)
+                {
+                    changeSet?.Add(page);
                 }
 
                 if (prevL0 != -1 && (prevL0 | l0Mask) == -1)
@@ -121,7 +130,7 @@ public partial class ManagedPagedMMF
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public void ClearL0(int index)
+        public void ClearL0(int index, ChangeSet changeSet = null)
         {
             var l0Offset = index >> 6;
             var l0Mask = ~(1L << (index & 0x3F));
@@ -132,7 +141,10 @@ public partial class ManagedPagedMMF
             {
                 var data = page.LogicalSegmentData.Cast<byte, long>();
                 var prevL0 = Interlocked.And(ref data[pageOffset], l0Mask);
-                page.SetPageDirty();                                                        // TODO only if changed
+                if (data[pageOffset] != prevL0)
+                {
+                    changeSet?.Add(page);
+                }
                 if ((prevL0 == -1) && ((prevL0 & l0Mask) != -1))
                 {
                     var l1Offset = l0Offset >> 6;
@@ -309,7 +321,7 @@ public partial class ManagedPagedMMF
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public bool Allocate(ref Span<int> result)
+        public bool Allocate(ref Span<int> result, ChangeSet changeSet = null)
         {
             Debug.Assert(result.IsEmpty==false && result.Length > 0, "A valid span with a length > 0 must be passed");
             var length = result.Length;
@@ -323,7 +335,7 @@ public partial class ManagedPagedMMF
                 long mask = 0;
                 while (FindNextUnsetL1(ref i, ref mask) && (length >= 64))
                 {
-                    if (SetL1(i))
+                    if (SetL1(i, changeSet))
                     {
                         for (int j = 0; j < 64; j++)
                         {
@@ -342,7 +354,7 @@ public partial class ManagedPagedMMF
                 long mask = 0;
                 while (FindNextUnsetL0(ref i, ref mask) && (length > 0))
                 {
-                    if (SetL0(i))
+                    if (SetL0(i, changeSet))
                     {
                         result[destI++] = i;
                         --length;
@@ -350,11 +362,12 @@ public partial class ManagedPagedMMF
                 }
             }
 
+            // Error during allocation, rollback
             if (length > 0)
             {
                 for (int i = 0; i < destI; i++)
                 {
-                    ClearL0((int)result[i]);
+                    ClearL0((int)result[i], changeSet);
                 }
                 result.Clear();
                 return false;
@@ -363,12 +376,12 @@ public partial class ManagedPagedMMF
             return true;
         }
 
-        public void Free(ReadOnlySpan<int> pages)
+        public void Free(ReadOnlySpan<int> pages, ChangeSet changeSet = null)
         {
             var length = pages.Length;
             for (int i = 0; i < length; i++)
             {
-                ClearL0(pages[i]);
+                ClearL0(pages[i], changeSet);
             }
         }
 

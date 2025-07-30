@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using NUnit.Framework;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -239,8 +240,9 @@ public class ManagedPagedMMFTests
             using var scope = _serviceProvider.CreateScope();
             var pmmf = scope.ServiceProvider.GetRequiredService<ManagedPagedMMF>();
             
-            var s0 = pmmf.AllocateSegment(PageBlockType.None, segmentLength);
             var cs = pmmf.CreateChangeSet();
+
+            var s0 = pmmf.AllocateSegment(PageBlockType.None, segmentLength, cs);
             
             for (int i = 0; i < segmentLength; i++)
             {
@@ -273,6 +275,32 @@ public class ManagedPagedMMFTests
                     Assert.That(rd[^1], Is.EqualTo(i + 1000));
                 }
             }
+        }
+    }
+
+    [Test]
+    public void OccupancyMapSaveTest()
+    {
+        int[] s0Pages;
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var mmf = scope.ServiceProvider.GetRequiredService<ManagedPagedMMF>();
+            
+            var cs = mmf.CreateChangeSet();
+            var s0 = mmf.AllocateSegment(PageBlockType.None, 10, cs);
+            s0Pages = s0.Pages.ToArray();
+            cs.SaveChanges();
+        }
+        
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var mmf = scope.ServiceProvider.GetRequiredService<ManagedPagedMMF>();
+
+            var newS0 = mmf.AllocateSegment(PageBlockType.None, 10);
+
+            int[] newS0Array = newS0.Pages.ToArray();
+            Assert.That(newS0Array.All(p => p != 0 && p != 1), Is.True);       // The returned pages can't be 0 (header) or 1 (occupancy segment)
+            Assert.That(newS0Array.All(p => !s0Pages.Contains(p)), Is.True);            
         }
     }
 
@@ -317,19 +345,20 @@ public class ManagedPagedMMFTests
 
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var s = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 64);
+        using var accessor = s.CreateChunkRandomAccessor(8);
 
         var vsb = new VariableSizedBufferSegment<long>(s);
 
 
-        var id0 = vsb.AllocateBuffer();
+        var id0 = vsb.AllocateBuffer(accessor);
 
         for (int i = 0; i < itemCount; i++)
         {
-            vsb.AddElement(id0, 1234);
+            vsb.AddElement(id0, 1234, accessor);
         }
 
         var loopCount = 0;
-        var ba = vsb.GetReadOnlyAccessor(id0);
+        var ba = vsb.GetReadOnlyAccessor(id0, accessor.ChangeSet);
         do
         {
             var elements = ba.ReadOnlyElements;
@@ -404,30 +433,31 @@ Here come the drones!";
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var s = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 64);
+        using var accessor = s.CreateChunkRandomAccessor(8);
 
         var vsb = new VariableSizedBufferSegment<long>(s);
 
 
-        var id0 = vsb.AllocateBuffer();
+        var id0 = vsb.AllocateBuffer(accessor);
         var elIdList = new int[15];
 
         // 15 is spread into 3 chunks: 4, 7, 4
         for (int i = 0; i < 15; i++)
         {
-            elIdList[i] = vsb.AddElement(id0, i);
+            elIdList[i] = vsb.AddElement(id0, i, accessor);
         }
 
         // Delete all the elements of the second chunk
         for (int i = 4; i < 11; i++)
         {
-            Assert.That(vsb.DeleteElement(id0, elIdList[i], i), Is.Not.EqualTo(-1));
+            Assert.That(vsb.DeleteElement(id0, elIdList[i], i, accessor), Is.Not.EqualTo(-1));
         }
 
         // Trigger an enumeration that will remove the second chunk from the stored list and put it in the free list
         {
             int count = 0;
             int hops = 0;
-            using var ba = vsb.GetReadOnlyAccessor(id0);
+            using var ba = vsb.GetReadOnlyAccessor(id0, accessor.ChangeSet);
             do
             {
                 count += ba.ReadOnlyElements.Length;

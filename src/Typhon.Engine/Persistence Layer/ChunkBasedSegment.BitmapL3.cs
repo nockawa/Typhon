@@ -7,10 +7,9 @@ namespace Typhon.Engine;
 
 public partial class ChunkBasedSegment
 {
-    public class BitmapL3
+    internal class BitmapL3
     {
         private readonly ChunkBasedSegment _segment;
-        private readonly int _stride;
         internal readonly int _rootChunkCount;
         internal readonly int _otherChunkCount;
 
@@ -18,13 +17,13 @@ public partial class ChunkBasedSegment
         private readonly Memory<long> _l2All;
         private readonly Memory<long> _l1Any;
 
-        public BitmapL3(int pageCount, ChunkBasedSegment segment)
+        public BitmapL3(ChunkBasedSegment segment, bool isLoading)
         {
             _segment = segment;
-            _stride = segment.Stride;
             _rootChunkCount = segment.ChunkCountRootPage;
             _otherChunkCount = segment.ChunkCountPerPage;
 
+            var pageCount = segment.Length;
             Capacity = GetChunkCount(pageCount);
             Allocated = 0;
 
@@ -34,12 +33,17 @@ public partial class ChunkBasedSegment
 
             length = Math.Max(1, (length + 63) / 64);
             _l2All = new long[length];
+
+            if (isLoading)
+            {
+                
+            }
         }
 
-        public int GetChunkCount(int pageCount) => (pageCount-1) * _otherChunkCount + _rootChunkCount;
+        private int GetChunkCount(int pageCount) => (pageCount-1) * _otherChunkCount + _rootChunkCount;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public (int page, int offset) GetChunkLocation(int index)
+        private (int page, int offset) GetChunkLocation(int index)
         {
             var fs = _rootChunkCount;
             var ss = _otherChunkCount;
@@ -54,7 +58,7 @@ public partial class ChunkBasedSegment
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public (int page, int offset) GetBitmapMaskLocation(int index)
+        private (int page, int offset) GetBitmapMaskLocation(int index)
         {
             var (pi, o) = GetChunkLocation(index << 6);
             return (pi, o >> 6);
@@ -109,7 +113,7 @@ public partial class ChunkBasedSegment
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public bool SetL1(int index)
+        private bool SetL1(int index)
         {
             var l0Offset = index;
             var l0Mask = -1L;
@@ -213,20 +217,18 @@ public partial class ChunkBasedSegment
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public bool FindNextUnsetL0(ref int index, ref long mask)
+        private bool FindNextUnsetL0(ref int index, ref long mask)
         {
             var capacity = Capacity;
 
             var c0 = ++index;
             long v0 = mask;
-            long t0;
 
             var ll0 = (capacity + 63) / 64;
             var ll1 = _l1All.Length;
             var ll2 = _l2All.Length;
 
             var curPageId = -1;
-            var i0 = 0;
             PageAccessor curPage = default;
 
             while (c0 < capacity)
@@ -235,6 +237,7 @@ public partial class ChunkBasedSegment
                 if (((c0 & 0x3F) == 0) || (v0 == -1))
                 {
                     // Check if we can skip the rest of the level 0
+                    int i0;
                     for (i0 = c0 >> 6; i0 < ll0; i0 = c0 >> 6)
                     {
                         var (pageId, offset) = GetBitmapMaskLocation(i0);
@@ -245,7 +248,7 @@ public partial class ChunkBasedSegment
                             curPageId = pageId;
                         }
                         var data = curPage.PageMetadata.Cast<byte, long>();
-                        t0 = 1L << (c0 & 0x3F);
+                        long t0 = 1L << (c0 & 0x3F);
                         v0 = data[offset] | (t0 - 1);
 
                         if (v0 != -1)
@@ -294,11 +297,10 @@ public partial class ChunkBasedSegment
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public bool FindNextUnsetL1(ref int index, ref long mask)
+        private bool FindNextUnsetL1(ref int index, ref long mask)
         {
             var c1 = ++index;
             long v1 = mask;
-            int i1 = 0;
             var ll1 = _l1All.Length;
             var ll2 = _l2All.Length;
 
@@ -307,6 +309,7 @@ public partial class ChunkBasedSegment
                 if (((c1 & 0x3F) == 0) || (v1 == -1))
                 {
                     // Check if we can skip the rest of the level 1
+                    int i1;
                     for (i1 = c1 >> 6; i1 < ll1; i1 = c1 >> 6)
                     {
                         var t1 = 1L << (c1 & 0x3F);
@@ -331,7 +334,6 @@ public partial class ChunkBasedSegment
                             c1 = ++i2 << 12;
                         }
                     }
-
                 }
 
                 var t = 1L << (c1 & 0x3F);
@@ -355,7 +357,7 @@ public partial class ChunkBasedSegment
 
             var span = result.Span;
 
-            ChunkRandomAccessor chunkAccessor = default;
+            ChunkRandomAccessor chunkAccessor = null;
             if (clearContent)
             {
                 chunkAccessor = _segment.CreateChunkRandomAccessor(8);
@@ -409,7 +411,7 @@ public partial class ChunkBasedSegment
             {
                 for (int i = 0; i < destI; i++)
                 {
-                    ClearL0((int)span[i]);
+                    ClearL0(span[i]);
                 }
                 span.Clear();
                 return false;

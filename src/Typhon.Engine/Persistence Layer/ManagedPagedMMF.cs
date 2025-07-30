@@ -33,19 +33,19 @@ public partial class ManagedPagedMMF : PagedMMF
     {
     }
     
-    public void AllocatePages(ref Span<int> pageIds)
+    public void AllocatePages(ref Span<int> pageIds, ChangeSet changeSet = null)
     {
         lock (_occupancyMap)
         {
-            _occupancyMap.Allocate(ref pageIds);
+            _occupancyMap.Allocate(ref pageIds, changeSet);
         }
     }
 
-    public bool FreePages(ReadOnlySpan<int> pages)
+    public bool FreePages(ReadOnlySpan<int> pages, ChangeSet changeSet = null)
     {
         lock (_occupancyMap)
         {
-            _occupancyMap.Free(pages);
+            _occupancyMap.Free(pages, changeSet);
         }
 
         return false;
@@ -74,21 +74,21 @@ public partial class ManagedPagedMMF : PagedMMF
 
             rootFileHeader.OccupancyMapSPI = OccupancySegmentRootPageIndex;
             Logger.LogInformation("Initialize DiskPageAllocator service with root at page {PageId}", OccupancySegmentRootPageIndex);
-
-            cs.SaveChanges();
             
             // Initialize the occupancy segment and map
             _segments = new ConcurrentDictionary<int, LogicalSegment>();
 
-            _occupancySegment = CreateOccupancySegment(OccupancySegmentRootPageIndex, PageBlockType.OccupancyMap, 1);
+            _occupancySegment = CreateOccupancySegment(OccupancySegmentRootPageIndex, PageBlockType.OccupancyMap, 1, cs);
 
             // ReSharper disable InconsistentlySynchronizedField
             _occupancyMap = new BitmapL3(1, _occupancySegment);
 
-            // The first two pages are already manually allocated
+            // The first two pages are already manually allocated (file header and occupancy segment root page)
             _occupancyMap.SetL0(0);
             _occupancyMap.SetL0(1);
             // ReSharper restore InconsistentlySynchronizedField
+            
+            cs.SaveChanges();
         }
     }
 
@@ -132,7 +132,7 @@ public partial class ManagedPagedMMF : PagedMMF
         });
     }
 
-    internal LogicalSegment CreateOccupancySegment(int filePageIndex, PageBlockType type, int length)
+    internal LogicalSegment CreateOccupancySegment(int filePageIndex, PageBlockType type, int length, ChangeSet cs)
     {
         var dic = _segments;
         if (dic == null)
@@ -146,7 +146,7 @@ public partial class ManagedPagedMMF : PagedMMF
             return null;
         }
 
-        if (segment.Create(type, filePageIndex, true) == false)
+        if (segment.Create(type, filePageIndex, true, cs) == false)
         {
             return null;
         }
@@ -178,7 +178,7 @@ public partial class ManagedPagedMMF : PagedMMF
         return segment;
     }
 
-    public LogicalSegment AllocateSegment(PageBlockType type, int length)
+    public LogicalSegment AllocateSegment(PageBlockType type, int length, ChangeSet changeSet = null)
     {
         var dic = _segments;
         if (dic == null)
@@ -187,7 +187,7 @@ public partial class ManagedPagedMMF : PagedMMF
         }
 
         var pages = (length < 64) ? stackalloc int[length] : new int[length];
-        AllocatePages(ref pages);
+        AllocatePages(ref pages, changeSet);
 
         var segment = new LogicalSegment(this);
         if (dic.TryAdd(pages[0], segment) == false)
@@ -195,7 +195,7 @@ public partial class ManagedPagedMMF : PagedMMF
             Debug.Assert(true);
         }
 
-        if (segment.Create(type, pages, false) == false)
+        if (segment.Create(type, pages, false, changeSet) == false)
         {
             return null;
         }
@@ -223,7 +223,7 @@ public partial class ManagedPagedMMF : PagedMMF
         base.OnDispose();
     }
 
-    public ChunkBasedSegment AllocateChunkBasedSegment(PageBlockType type, int length, int stride)
+    public ChunkBasedSegment AllocateChunkBasedSegment(PageBlockType type, int length, int stride, ChangeSet changeSet = null)
     {
         var dic = _segments;
         if (dic == null)
@@ -232,7 +232,7 @@ public partial class ManagedPagedMMF : PagedMMF
         }
 
         Span<int> pages = stackalloc int[length];
-        AllocatePages(ref pages);
+        AllocatePages(ref pages, changeSet);
 
         var segment = new ChunkBasedSegment(this, stride);
         if (dic.TryAdd(pages[0], segment) == false)
@@ -240,7 +240,7 @@ public partial class ManagedPagedMMF : PagedMMF
             Debug.Assert(true);
         }
 
-        if (segment.Create(type, pages, false) == false)
+        if (segment.Create(type, pages, false, changeSet) == false)
         {
             return null;
         }
@@ -248,8 +248,31 @@ public partial class ManagedPagedMMF : PagedMMF
         Logger.LogDebug("Create Chunk Based Logical Segment at {StartPageId} using pages {Pages}", segment.Pages[0], segment.Pages.ToArray());
         return segment;
     }
+    
+    public ChunkBasedSegment LoadChunkBasedSegment(int filePageIndex, int stride)
+    {
+        var dic = _segments;
+        if (dic == null)
+        {
+            return null;
+        }
 
-    public bool DeleteSegment(int filePageIndex)
+        var segment = new ChunkBasedSegment(this, stride);
+        if (dic.TryAdd(filePageIndex, segment) == false)
+        {
+            Debug.Assert(true);
+        }
+
+        if (segment.Load(filePageIndex) == false)
+        {
+            return null;
+        }
+
+        Logger.LogDebug("Load Chunk Based Logical Segment at {StartPageId} using pages {Pages}", segment.Pages[0], segment.Pages.ToArray());
+        return segment;
+    }
+
+    public bool DeleteSegment(int filePageIndex, ChangeSet changeSet = null)
     {
         var dic = _segments;
         if (dic == null)
@@ -262,11 +285,9 @@ public partial class ManagedPagedMMF : PagedMMF
             return false;
         }
 
-        /*
-        _pmmf.FreePages(segment.Pages);
-        */
+        FreePages(segment.Pages, changeSet);
         return true;
     }
 
-    public bool DeleteSegment(LogicalSegment segment) => DeleteSegment(segment.RootPageIndex);
+    public bool DeleteSegment(LogicalSegment segment, ChangeSet changeSet = null) => DeleteSegment(segment.RootPageIndex, changeSet);
 }

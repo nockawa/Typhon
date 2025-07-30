@@ -240,7 +240,7 @@ class PagedMMFTests
         // Write
         {
             using var scope = _serviceProvider.CreateScope();
-            var pmmf = scope.ServiceProvider.GetService<PagedMMF>();
+            using var pmmf = scope.ServiceProvider.GetService<PagedMMF>();
 
             var metrics = pmmf.GetMetrics();
             var pageWrittenCount = metrics.PageWrittenToDiskCount;
