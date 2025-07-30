@@ -866,20 +866,6 @@
     },
     {
       "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.ChunkBasedSegment.BitmapL3.yml",
-      "output": {
-        ".html": {
-          "relative_path": "api/Typhon.Engine.ChunkBasedSegment.BitmapL3.html"
-        }
-      },
-      "version": "",
-      "Uid": null,
-      "IsMRef": true,
-      "Title": "Typhon.Engine.ChunkBasedSegment.BitmapL3",
-      "Summary": null
-    },
-    {
-      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.ChunkBasedSegment.yml",
       "output": {
         ".html": {

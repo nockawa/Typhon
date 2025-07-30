@@ -89,7 +89,7 @@
 
 
   <h1 id="Typhon_Engine_VariableSizedBufferAccessor_1" data-uid="Typhon.Engine.VariableSizedBufferAccessor`1" class="text-break">
-Struct VariableSizedBufferAccessor&lt;T&gt;  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L239"><i class="bi bi-code-slash"></i></a>
+Struct VariableSizedBufferAccessor&lt;T&gt;  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L240"><i class="bi bi-code-slash"></i></a>
   </h1>
 
   <div class="facts text-secondary">
@@ -155,16 +155,16 @@ Struct VariableSizedBufferAccessor&lt;T&gt;  <a class="header-action link-second
 
   <a id="Typhon_Engine_VariableSizedBufferAccessor_1__ctor_" data-uid="Typhon.Engine.VariableSizedBufferAccessor`1.#ctor*"></a>
 
-  <h3 id="Typhon_Engine_VariableSizedBufferAccessor_1__ctor_Typhon_Engine_VariableSizedBufferSegment__0__System_Int32_" data-uid="Typhon.Engine.VariableSizedBufferAccessor`1.#ctor(Typhon.Engine.VariableSizedBufferSegment{`0},System.Int32)">
-  VariableSizedBufferAccessor(VariableSizedBufferSegment&lt;T&gt;, int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L260"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_VariableSizedBufferAccessor_1__ctor_Typhon_Engine_VariableSizedBufferSegment__0__System_Int32_Typhon_Engine_ChangeSet_" data-uid="Typhon.Engine.VariableSizedBufferAccessor`1.#ctor(Typhon.Engine.VariableSizedBufferSegment{`0},System.Int32,Typhon.Engine.ChangeSet)">
+  VariableSizedBufferAccessor(VariableSizedBufferSegment&lt;T&gt;, int, ChangeSet)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L261"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public VariableSizedBufferAccessor(VariableSizedBufferSegment&lt;T&gt; owner, int rootChunkId)</code></pre>
+    <pre><code class="lang-csharp hljs">public VariableSizedBufferAccessor(VariableSizedBufferSegment&lt;T&gt; owner, int rootChunkId, ChangeSet changeSet = null)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -172,6 +172,8 @@ Struct VariableSizedBufferAccessor&lt;T&gt;  <a class="header-action link-second
     <dt><code>owner</code> <a class="xref" href="Typhon.Engine.VariableSizedBufferSegment-1.html">VariableSizedBufferSegment</a>&lt;T&gt;</dt>
     <dd></dd>
     <dt><code>rootChunkId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>changeSet</code> <a class="xref" href="Typhon.Engine.ChangeSet.html">ChangeSet</a></dt>
     <dd></dd>
   </dl>
 
@@ -194,7 +196,7 @@ Struct VariableSizedBufferAccessor&lt;T&gt;  <a class="header-action link-second
 
   <h3 id="Typhon_Engine_VariableSizedBufferAccessor_1_Elements" data-uid="Typhon.Engine.VariableSizedBufferAccessor`1.Elements">
   Elements
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L257"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L258"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -225,7 +227,7 @@ Struct VariableSizedBufferAccessor&lt;T&gt;  <a class="header-action link-second
 
   <h3 id="Typhon_Engine_VariableSizedBufferAccessor_1_IsValid" data-uid="Typhon.Engine.VariableSizedBufferAccessor`1.IsValid">
   IsValid
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L255"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L256"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -256,7 +258,7 @@ Struct VariableSizedBufferAccessor&lt;T&gt;  <a class="header-action link-second
 
   <h3 id="Typhon_Engine_VariableSizedBufferAccessor_1_ReadOnlyElements" data-uid="Typhon.Engine.VariableSizedBufferAccessor`1.ReadOnlyElements">
   ReadOnlyElements
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L256"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L257"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -291,7 +293,7 @@ Struct VariableSizedBufferAccessor&lt;T&gt;  <a class="header-action link-second
 
   <h3 id="Typhon_Engine_VariableSizedBufferAccessor_1_DirtyChunk" data-uid="Typhon.Engine.VariableSizedBufferAccessor`1.DirtyChunk">
   DirtyChunk()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L258"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L259"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -317,7 +319,7 @@ Struct VariableSizedBufferAccessor&lt;T&gt;  <a class="header-action link-second
 
   <h3 id="Typhon_Engine_VariableSizedBufferAccessor_1_Dispose" data-uid="Typhon.Engine.VariableSizedBufferAccessor`1.Dispose">
   Dispose()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L397"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L398"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</p>
@@ -344,7 +346,7 @@ Struct VariableSizedBufferAccessor&lt;T&gt;  <a class="header-action link-second
 
   <h3 id="Typhon_Engine_VariableSizedBufferAccessor_1_NextChunk" data-uid="Typhon.Engine.VariableSizedBufferAccessor`1.NextChunk">
   NextChunk()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L284"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L285"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -375,7 +377,7 @@ Struct VariableSizedBufferAccessor&lt;T&gt;  <a class="header-action link-second
 </article>
 
         <div class="contribution d-print-none">
-          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L239" class="edit-link">Edit this page</a>
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L240" class="edit-link">Edit this page</a>
         </div>
 
 

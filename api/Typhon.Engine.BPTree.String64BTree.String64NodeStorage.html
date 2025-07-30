@@ -128,13 +128,10 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
     <dt>Inherited Members</dt>
     <dd>
     <div>
-      <a class="xref" href="Typhon.Engine.BPTree.BTree-1.BaseNodeStorage.html#Typhon_Engine_BPTree_BTree_1_BaseNodeStorage_ChunkAccessor">BTree&lt;String64&gt;.BaseNodeStorage.ChunkAccessor</a>
+      <a class="xref" href="Typhon.Engine.BPTree.BTree-1.BaseNodeStorage.html#Typhon_Engine_BPTree_BTree_1_BaseNodeStorage_CommitChanges_Typhon_Engine_ChunkRandomAccessor_">BTree&lt;String64&gt;.BaseNodeStorage.CommitChanges(ChunkRandomAccessor)</a>
     </div>
     <div>
-      <a class="xref" href="Typhon.Engine.BPTree.BTree-1.BaseNodeStorage.html#Typhon_Engine_BPTree_BTree_1_BaseNodeStorage_CommitChanges">BTree&lt;String64&gt;.BaseNodeStorage.CommitChanges()</a>
-    </div>
-    <div>
-      <a class="xref" href="Typhon.Engine.BPTree.BTree-1.BaseNodeStorage.html#Typhon_Engine_BPTree_BTree_1_BaseNodeStorage_GetChild_Typhon_Engine_BPTree_BTree__0__NodeWrapper_System_Int32_">BTree&lt;String64&gt;.BaseNodeStorage.GetChild(BTree&lt;String64&gt;.NodeWrapper, int)</a>
+      <a class="xref" href="Typhon.Engine.BPTree.BTree-1.BaseNodeStorage.html#Typhon_Engine_BPTree_BTree_1_BaseNodeStorage_GetChild_Typhon_Engine_BPTree_BTree__0__NodeWrapper_System_Int32_Typhon_Engine_ChunkRandomAccessor_">BTree&lt;String64&gt;.BaseNodeStorage.GetChild(BTree&lt;String64&gt;.NodeWrapper, int, ChunkRandomAccessor)</a>
     </div>
     <div>
       <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
@@ -170,8 +167,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_Append_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.Append*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_Append_System_Int32_System_Int32_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.Append(System.Int32,System.Int32)">
-  Append(int, int)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_Append_System_Int32_System_Int32_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.Append(System.Int32,System.Int32,Typhon.Engine.ChunkRandomAccessor)">
+  Append(int, int, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L309"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -179,7 +176,7 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override int Append(int bufferId, int value)</code></pre>
+    <pre><code class="lang-csharp hljs">public override int Append(int bufferId, int value, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -187,6 +184,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
     <dt><code>bufferId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>
     <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -208,8 +207,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_BinarySearch_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.BinarySearch*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_BinarySearch_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_String64_System_Collections_Generic_IComparer_Typhon_Engine_String64__" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.BinarySearch(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.String64,System.Collections.Generic.IComparer{Typhon.Engine.String64})">
-  BinarySearch(NodeWrapper, String64, IComparer&lt;String64&gt;)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_BinarySearch_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_String64_System_Collections_Generic_IComparer_Typhon_Engine_String64__Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.BinarySearch(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.String64,System.Collections.Generic.IComparer{Typhon.Engine.String64},Typhon.Engine.ChunkRandomAccessor)">
+  BinarySearch(NodeWrapper, String64, IComparer&lt;String64&gt;, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L350"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -217,7 +216,7 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override int BinarySearch(BTree&lt;String64&gt;.NodeWrapper node, String64 key, IComparer&lt;String64&gt; comparer)</code></pre>
+    <pre><code class="lang-csharp hljs">public override int BinarySearch(BTree&lt;String64&gt;.NodeWrapper node, String64 key, IComparer&lt;String64&gt; comparer, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -227,6 +226,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
     <dt><code>key</code> <a class="xref" href="Typhon.Engine.String64.html">String64</a></dt>
     <dd></dd>
     <dt><code>comparer</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.collections.generic.icomparer-1">IComparer</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -248,8 +249,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_CreateBuffer_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.CreateBuffer*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_CreateBuffer" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.CreateBuffer">
-  CreateBuffer()
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_CreateBuffer_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.CreateBuffer(Typhon.Engine.ChunkRandomAccessor)">
+  CreateBuffer(ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L332"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -257,9 +258,14 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override int CreateBuffer()</code></pre>
+    <pre><code class="lang-csharp hljs">public override int CreateBuffer(ChunkRandomAccessor accessor)</code></pre>
   </div>
 
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
+    <dd></dd>
+  </dl>
 
   <h4 class="section">Returns</h4>
   <dl class="parameters">
@@ -279,8 +285,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_DecrementStart_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.DecrementStart*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_DecrementStart_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.DecrementStart(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper)">
-  DecrementStart(NodeWrapper)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_DecrementStart_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.DecrementStart(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.ChunkRandomAccessor)">
+  DecrementStart(NodeWrapper, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L529"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -288,12 +294,14 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override void DecrementStart(BTree&lt;String64&gt;.NodeWrapper node)</code></pre>
+    <pre><code class="lang-csharp hljs">public override void DecrementStart(BTree&lt;String64&gt;.NodeWrapper node, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -310,8 +318,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_DeleteBuffer_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.DeleteBuffer*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_DeleteBuffer_System_Int32_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.DeleteBuffer(System.Int32)">
-  DeleteBuffer(int)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_DeleteBuffer_System_Int32_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.DeleteBuffer(System.Int32,Typhon.Engine.ChunkRandomAccessor)">
+  DeleteBuffer(int, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L336"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -319,12 +327,14 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override void DeleteBuffer(int bufferId)</code></pre>
+    <pre><code class="lang-csharp hljs">public override void DeleteBuffer(int bufferId, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>bufferId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -341,8 +351,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetBufferReadOnlyAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetBufferReadOnlyAccessor*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetBufferReadOnlyAccessor_System_Int32_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetBufferReadOnlyAccessor(System.Int32)">
-  GetBufferReadOnlyAccessor(int)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetBufferReadOnlyAccessor_System_Int32_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetBufferReadOnlyAccessor(System.Int32,Typhon.Engine.ChunkRandomAccessor)">
+  GetBufferReadOnlyAccessor(int, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L334"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -350,12 +360,14 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override VariableSizedBufferAccessor&lt;int&gt; GetBufferReadOnlyAccessor(int bufferId)</code></pre>
+    <pre><code class="lang-csharp hljs">public override VariableSizedBufferAccessor&lt;int&gt; GetBufferReadOnlyAccessor(int bufferId, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>bufferId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -377,8 +389,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetCount_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetCount*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetCount_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetCount(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper)">
-  GetCount(NodeWrapper)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetCount_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetCount(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.ChunkRandomAccessor)">
+  GetCount(NodeWrapper, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L249"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -386,12 +398,14 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override int GetCount(BTree&lt;String64&gt;.NodeWrapper node)</code></pre>
+    <pre><code class="lang-csharp hljs">public override int GetCount(BTree&lt;String64&gt;.NodeWrapper node, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -413,8 +427,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetEnd_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetEnd*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetEnd_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetEnd(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper)">
-  GetEnd(NodeWrapper)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetEnd_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetEnd(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.ChunkRandomAccessor)">
+  GetEnd(NodeWrapper, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L273"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -422,12 +436,14 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override int GetEnd(BTree&lt;String64&gt;.NodeWrapper node)</code></pre>
+    <pre><code class="lang-csharp hljs">public override int GetEnd(BTree&lt;String64&gt;.NodeWrapper node, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -449,8 +465,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetFirstChild_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetFirstChild*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetFirstChild_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetFirstChild(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper)">
-  GetFirstChild(NodeWrapper)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetFirstChild_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetFirstChild(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.ChunkRandomAccessor)">
+  GetFirstChild(NodeWrapper, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L338"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -458,12 +474,14 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override BTree&lt;String64&gt;.NodeWrapper GetFirstChild(BTree&lt;String64&gt;.NodeWrapper node)</code></pre>
+    <pre><code class="lang-csharp hljs">public override BTree&lt;String64&gt;.NodeWrapper GetFirstChild(BTree&lt;String64&gt;.NodeWrapper node, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -485,8 +503,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetItem_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetItem*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetItem_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_System_Int32_System_Boolean_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetItem(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,System.Int32,System.Boolean)">
-  GetItem(NodeWrapper, int, bool)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetItem_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_System_Int32_System_Boolean_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetItem(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,System.Int32,System.Boolean,Typhon.Engine.ChunkRandomAccessor)">
+  GetItem(NodeWrapper, int, bool, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L235"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -494,7 +512,7 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override BTree&lt;String64&gt;.KeyValueItem GetItem(BTree&lt;String64&gt;.NodeWrapper node, int index, bool adjust)</code></pre>
+    <pre><code class="lang-csharp hljs">public override BTree&lt;String64&gt;.KeyValueItem GetItem(BTree&lt;String64&gt;.NodeWrapper node, int index, bool adjust, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -504,6 +522,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
     <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>
     <dt><code>adjust</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -525,8 +545,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetLastChild_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetLastChild*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetLastChild_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetLastChild(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper)">
-  GetLastChild(NodeWrapper)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetLastChild_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetLastChild(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.ChunkRandomAccessor)">
+  GetLastChild(NodeWrapper, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L516"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -534,12 +554,14 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override BTree&lt;String64&gt;.NodeWrapper GetLastChild(BTree&lt;String64&gt;.NodeWrapper node)</code></pre>
+    <pre><code class="lang-csharp hljs">public override BTree&lt;String64&gt;.NodeWrapper GetLastChild(BTree&lt;String64&gt;.NodeWrapper node, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -561,8 +583,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetLeftNode_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetLeftNode*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetLeftNode_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetLeftNode(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper)">
-  GetLeftNode(NodeWrapper)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetLeftNode_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetLeftNode(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.ChunkRandomAccessor)">
+  GetLeftNode(NodeWrapper, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L199"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -570,12 +592,14 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override BTree&lt;String64&gt;.NodeWrapper GetLeftNode(BTree&lt;String64&gt;.NodeWrapper node)</code></pre>
+    <pre><code class="lang-csharp hljs">public override BTree&lt;String64&gt;.NodeWrapper GetLeftNode(BTree&lt;String64&gt;.NodeWrapper node, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -597,8 +621,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetNextNode_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetNextNode*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetNextNode_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetNextNode(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper)">
-  GetNextNode(NodeWrapper)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetNextNode_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetNextNode(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.ChunkRandomAccessor)">
+  GetNextNode(NodeWrapper, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L223"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -606,12 +630,14 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override BTree&lt;String64&gt;.NodeWrapper GetNextNode(BTree&lt;String64&gt;.NodeWrapper node)</code></pre>
+    <pre><code class="lang-csharp hljs">public override BTree&lt;String64&gt;.NodeWrapper GetNextNode(BTree&lt;String64&gt;.NodeWrapper node, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -664,8 +690,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetNodeStates_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetNodeStates*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetNodeStates_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetNodeStates(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper)">
-  GetNodeStates(NodeWrapper)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetNodeStates_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetNodeStates(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.ChunkRandomAccessor)">
+  GetNodeStates(NodeWrapper, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L279"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -673,12 +699,14 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override NodeStates GetNodeStates(BTree&lt;String64&gt;.NodeWrapper node)</code></pre>
+    <pre><code class="lang-csharp hljs">public override NodeStates GetNodeStates(BTree&lt;String64&gt;.NodeWrapper node, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -700,8 +728,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetPreviousNode_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetPreviousNode*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetPreviousNode_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetPreviousNode(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper)">
-  GetPreviousNode(NodeWrapper)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetPreviousNode_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetPreviousNode(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.ChunkRandomAccessor)">
+  GetPreviousNode(NodeWrapper, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L211"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -709,12 +737,14 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override BTree&lt;String64&gt;.NodeWrapper GetPreviousNode(BTree&lt;String64&gt;.NodeWrapper node)</code></pre>
+    <pre><code class="lang-csharp hljs">public override BTree&lt;String64&gt;.NodeWrapper GetPreviousNode(BTree&lt;String64&gt;.NodeWrapper node, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -736,8 +766,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetStart_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetStart*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetStart_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetStart(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper)">
-  GetStart(NodeWrapper)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_GetStart_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.GetStart(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.ChunkRandomAccessor)">
+  GetStart(NodeWrapper, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L261"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -745,12 +775,14 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override int GetStart(BTree&lt;String64&gt;.NodeWrapper node)</code></pre>
+    <pre><code class="lang-csharp hljs">public override int GetStart(BTree&lt;String64&gt;.NodeWrapper node, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -772,8 +804,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_IncrementStart_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.IncrementStart*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_IncrementStart_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.IncrementStart(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper)">
-  IncrementStart(NodeWrapper)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_IncrementStart_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.IncrementStart(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.ChunkRandomAccessor)">
+  IncrementStart(NodeWrapper, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L523"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -781,12 +813,14 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override void IncrementStart(BTree&lt;String64&gt;.NodeWrapper node)</code></pre>
+    <pre><code class="lang-csharp hljs">public override void IncrementStart(BTree&lt;String64&gt;.NodeWrapper node, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -803,8 +837,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_InitializeNode_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.InitializeNode*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_InitializeNode_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_BPTree_NodeStates_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.InitializeNode(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.BPTree.NodeStates)">
-  InitializeNode(NodeWrapper, NodeStates)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_InitializeNode_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_BPTree_NodeStates_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.InitializeNode(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.BPTree.NodeStates,Typhon.Engine.ChunkRandomAccessor)">
+  InitializeNode(NodeWrapper, NodeStates, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L192"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -812,7 +846,7 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override void InitializeNode(BTree&lt;String64&gt;.NodeWrapper node, NodeStates states)</code></pre>
+    <pre><code class="lang-csharp hljs">public override void InitializeNode(BTree&lt;String64&gt;.NodeWrapper node, NodeStates states, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -820,6 +854,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
     <dd></dd>
     <dt><code>states</code> <a class="xref" href="Typhon.Engine.BPTree.NodeStates.html">NodeStates</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -836,8 +872,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_Insert_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.Insert*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_Insert_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_System_Int32_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__KeyValueItem_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.Insert(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,System.Int32,Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.KeyValueItem)">
-  Insert(NodeWrapper, int, KeyValueItem)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_Insert_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_System_Int32_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__KeyValueItem_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.Insert(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,System.Int32,Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.KeyValueItem,Typhon.Engine.ChunkRandomAccessor)">
+  Insert(NodeWrapper, int, KeyValueItem, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L311"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -845,7 +881,7 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override void Insert(BTree&lt;String64&gt;.NodeWrapper node, int index, BTree&lt;String64&gt;.KeyValueItem item)</code></pre>
+    <pre><code class="lang-csharp hljs">public override void Insert(BTree&lt;String64&gt;.NodeWrapper node, int index, BTree&lt;String64&gt;.KeyValueItem item, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -855,6 +891,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
     <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>
     <dt><code>item</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.KeyValueItem.html">KeyValueItem</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -871,8 +909,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_IsRotated_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.IsRotated*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_IsRotated_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.IsRotated(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper)">
-  IsRotated(NodeWrapper)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_IsRotated_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.IsRotated(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.ChunkRandomAccessor)">
+  IsRotated(NodeWrapper, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L344"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -880,12 +918,14 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override bool IsRotated(BTree&lt;String64&gt;.NodeWrapper node)</code></pre>
+    <pre><code class="lang-csharp hljs">public override bool IsRotated(BTree&lt;String64&gt;.NodeWrapper node, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -907,8 +947,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_MergeLeft_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.MergeLeft*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_MergeLeft_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.MergeLeft(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper)">
-  MergeLeft(NodeWrapper, NodeWrapper)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_MergeLeft_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.MergeLeft(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.ChunkRandomAccessor)">
+  MergeLeft(NodeWrapper, NodeWrapper, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L406"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -916,7 +956,7 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override void MergeLeft(BTree&lt;String64&gt;.NodeWrapper left, BTree&lt;String64&gt;.NodeWrapper right)</code></pre>
+    <pre><code class="lang-csharp hljs">public override void MergeLeft(BTree&lt;String64&gt;.NodeWrapper left, BTree&lt;String64&gt;.NodeWrapper right, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -924,6 +964,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
     <dt><code>left</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
     <dd></dd>
     <dt><code>right</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -940,8 +982,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_PushFirst_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.PushFirst*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_PushFirst_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__KeyValueItem_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.PushFirst(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.KeyValueItem)">
-  PushFirst(NodeWrapper, KeyValueItem)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_PushFirst_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__KeyValueItem_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.PushFirst(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.KeyValueItem,Typhon.Engine.ChunkRandomAccessor)">
+  PushFirst(NodeWrapper, KeyValueItem, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L289"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -949,7 +991,7 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override void PushFirst(BTree&lt;String64&gt;.NodeWrapper node, BTree&lt;String64&gt;.KeyValueItem item)</code></pre>
+    <pre><code class="lang-csharp hljs">public override void PushFirst(BTree&lt;String64&gt;.NodeWrapper node, BTree&lt;String64&gt;.KeyValueItem item, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -957,6 +999,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
     <dd></dd>
     <dt><code>item</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.KeyValueItem.html">KeyValueItem</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -973,8 +1017,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_PushLast_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.PushLast*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_PushLast_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__KeyValueItem_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.PushLast(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.KeyValueItem)">
-  PushLast(NodeWrapper, KeyValueItem)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_PushLast_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__KeyValueItem_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.PushLast(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.KeyValueItem,Typhon.Engine.ChunkRandomAccessor)">
+  PushLast(NodeWrapper, KeyValueItem, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L302"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -982,7 +1026,7 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override void PushLast(BTree&lt;String64&gt;.NodeWrapper node, BTree&lt;String64&gt;.KeyValueItem item)</code></pre>
+    <pre><code class="lang-csharp hljs">public override void PushLast(BTree&lt;String64&gt;.NodeWrapper node, BTree&lt;String64&gt;.KeyValueItem item, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -990,6 +1034,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
     <dd></dd>
     <dt><code>item</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.KeyValueItem.html">KeyValueItem</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -1006,8 +1052,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_RemoveAt_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.RemoveAt*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_RemoveAt_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_System_Int32_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.RemoveAt(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,System.Int32)">
-  RemoveAt(NodeWrapper, int)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_RemoveAt_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_System_Int32_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.RemoveAt(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,System.Int32,Typhon.Engine.ChunkRandomAccessor)">
+  RemoveAt(NodeWrapper, int, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L382"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -1015,7 +1061,7 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override BTree&lt;String64&gt;.KeyValueItem RemoveAt(BTree&lt;String64&gt;.NodeWrapper node, int index)</code></pre>
+    <pre><code class="lang-csharp hljs">public override BTree&lt;String64&gt;.KeyValueItem RemoveAt(BTree&lt;String64&gt;.NodeWrapper node, int index, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -1023,6 +1069,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
     <dd></dd>
     <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -1044,8 +1092,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_RemoveFromBuffer_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.RemoveFromBuffer*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_RemoveFromBuffer_System_Int32_System_Int32_System_Int32_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.RemoveFromBuffer(System.Int32,System.Int32,System.Int32)">
-  RemoveFromBuffer(int, int, int)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_RemoveFromBuffer_System_Int32_System_Int32_System_Int32_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.RemoveFromBuffer(System.Int32,System.Int32,System.Int32,Typhon.Engine.ChunkRandomAccessor)">
+  RemoveFromBuffer(int, int, int, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L335"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -1053,7 +1101,7 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override int RemoveFromBuffer(int bufferId, int elementId, int value)</code></pre>
+    <pre><code class="lang-csharp hljs">public override int RemoveFromBuffer(int bufferId, int elementId, int value, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -1063,6 +1111,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
     <dt><code>elementId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>
     <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -1084,8 +1134,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SetCount_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SetCount*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SetCount_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_System_Int32_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SetCount(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,System.Int32)">
-  SetCount(NodeWrapper, int)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SetCount_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_System_Int32_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SetCount(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,System.Int32,Typhon.Engine.ChunkRandomAccessor)">
+  SetCount(NodeWrapper, int, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L255"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -1093,7 +1143,7 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override void SetCount(BTree&lt;String64&gt;.NodeWrapper node, int value)</code></pre>
+    <pre><code class="lang-csharp hljs">public override void SetCount(BTree&lt;String64&gt;.NodeWrapper node, int value, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -1101,6 +1151,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
     <dd></dd>
     <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -1117,8 +1169,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SetItem_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SetItem*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SetItem_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_System_Int32_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__KeyValueItem_System_Boolean_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SetItem(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,System.Int32,Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.KeyValueItem,System.Boolean)">
-  SetItem(NodeWrapper, int, KeyValueItem, bool)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SetItem_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_System_Int32_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__KeyValueItem_System_Boolean_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SetItem(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,System.Int32,Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.KeyValueItem,System.Boolean,Typhon.Engine.ChunkRandomAccessor)">
+  SetItem(NodeWrapper, int, KeyValueItem, bool, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L243"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -1126,7 +1178,7 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override void SetItem(BTree&lt;String64&gt;.NodeWrapper node, int index, BTree&lt;String64&gt;.KeyValueItem value, bool adjust)</code></pre>
+    <pre><code class="lang-csharp hljs">public override void SetItem(BTree&lt;String64&gt;.NodeWrapper node, int index, BTree&lt;String64&gt;.KeyValueItem value, bool adjust, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -1138,6 +1190,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
     <dt><code>value</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.KeyValueItem.html">KeyValueItem</a></dt>
     <dd></dd>
     <dt><code>adjust</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -1154,8 +1208,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SetLeftNode_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SetLeftNode*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SetLeftNode_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_System_Int32_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SetLeftNode(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,System.Int32)">
-  SetLeftNode(NodeWrapper, int)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SetLeftNode_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_System_Int32_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SetLeftNode(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,System.Int32,Typhon.Engine.ChunkRandomAccessor)">
+  SetLeftNode(NodeWrapper, int, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L205"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -1163,7 +1217,7 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override void SetLeftNode(BTree&lt;String64&gt;.NodeWrapper node, int previousNodeId)</code></pre>
+    <pre><code class="lang-csharp hljs">public override void SetLeftNode(BTree&lt;String64&gt;.NodeWrapper node, int previousNodeId, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -1171,6 +1225,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
     <dd></dd>
     <dt><code>previousNodeId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -1187,8 +1243,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SetNextNode_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SetNextNode*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SetNextNode_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_System_Int32_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SetNextNode(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,System.Int32)">
-  SetNextNode(NodeWrapper, int)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SetNextNode_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_System_Int32_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SetNextNode(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,System.Int32,Typhon.Engine.ChunkRandomAccessor)">
+  SetNextNode(NodeWrapper, int, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L229"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -1196,7 +1252,7 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override void SetNextNode(BTree&lt;String64&gt;.NodeWrapper node, int nextNodeId)</code></pre>
+    <pre><code class="lang-csharp hljs">public override void SetNextNode(BTree&lt;String64&gt;.NodeWrapper node, int nextNodeId, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -1204,6 +1260,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
     <dd></dd>
     <dt><code>nextNodeId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -1220,8 +1278,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SetPreviousNode_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SetPreviousNode*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SetPreviousNode_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_System_Int32_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SetPreviousNode(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,System.Int32)">
-  SetPreviousNode(NodeWrapper, int)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SetPreviousNode_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_System_Int32_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SetPreviousNode(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,System.Int32,Typhon.Engine.ChunkRandomAccessor)">
+  SetPreviousNode(NodeWrapper, int, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L217"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -1229,7 +1287,7 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override void SetPreviousNode(BTree&lt;String64&gt;.NodeWrapper node, int previousNodeId)</code></pre>
+    <pre><code class="lang-csharp hljs">public override void SetPreviousNode(BTree&lt;String64&gt;.NodeWrapper node, int previousNodeId, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -1237,6 +1295,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
     <dd></dd>
     <dt><code>previousNodeId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -1253,8 +1313,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SetStart_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SetStart*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SetStart_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_System_Int32_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SetStart(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,System.Int32)">
-  SetStart(NodeWrapper, int)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SetStart_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_System_Int32_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SetStart(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,System.Int32,Typhon.Engine.ChunkRandomAccessor)">
+  SetStart(NodeWrapper, int, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L267"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -1262,7 +1322,7 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override void SetStart(BTree&lt;String64&gt;.NodeWrapper node, int value)</code></pre>
+    <pre><code class="lang-csharp hljs">public override void SetStart(BTree&lt;String64&gt;.NodeWrapper node, int value, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -1270,6 +1330,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
     <dd></dd>
     <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -1286,8 +1348,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SplitRight_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SplitRight*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SplitRight_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_BPTree_NodeStates_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SplitRight(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.BPTree.NodeStates)">
-  SplitRight(NodeWrapper, NodeStates)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SplitRight_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_BPTree_NodeStates_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SplitRight(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64}.NodeWrapper,Typhon.Engine.BPTree.NodeStates,Typhon.Engine.ChunkRandomAccessor)">
+  SplitRight(NodeWrapper, NodeStates, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L376"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -1295,7 +1357,7 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public override BTree&lt;String64&gt;.NodeWrapper SplitRight(BTree&lt;String64&gt;.NodeWrapper node, NodeStates states)</code></pre>
+    <pre><code class="lang-csharp hljs">public override BTree&lt;String64&gt;.NodeWrapper SplitRight(BTree&lt;String64&gt;.NodeWrapper node, NodeStates states, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -1303,6 +1365,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
     <dd></dd>
     <dt><code>states</code> <a class="xref" href="Typhon.Engine.BPTree.NodeStates.html">NodeStates</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -1324,8 +1388,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
 
   <a id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SplitRight_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SplitRight*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SplitRight_Typhon_Engine_BPTree_IndexString64Chunk__Typhon_Engine_BPTree_NodeStates_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SplitRight(Typhon.Engine.BPTree.IndexString64Chunk@,Typhon.Engine.BPTree.NodeStates)">
-  SplitRight(ref IndexString64Chunk, NodeStates)
+  <h3 id="Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SplitRight_Typhon_Engine_BPTree_IndexString64Chunk__Typhon_Engine_BPTree_NodeStates_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.SplitRight(Typhon.Engine.BPTree.IndexString64Chunk@,Typhon.Engine.BPTree.NodeStates,Typhon.Engine.ChunkRandomAccessor)">
+  SplitRight(ref IndexString64Chunk, NodeStates, ChunkRandomAccessor)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L641"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -1333,7 +1397,7 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public BTree&lt;String64&gt;.NodeWrapper SplitRight(ref IndexString64Chunk left, NodeStates states)</code></pre>
+    <pre><code class="lang-csharp hljs">public BTree&lt;String64&gt;.NodeWrapper SplitRight(ref IndexString64Chunk left, NodeStates states, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -1341,6 +1405,8 @@ Class String64BTree.String64NodeStorage  <a class="header-action link-secondary"
     <dt><code>left</code> <a class="xref" href="Typhon.Engine.BPTree.IndexString64Chunk.html">IndexString64Chunk</a></dt>
     <dd></dd>
     <dt><code>states</code> <a class="xref" href="Typhon.Engine.BPTree.NodeStates.html">NodeStates</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 

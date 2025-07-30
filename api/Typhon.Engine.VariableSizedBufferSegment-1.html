@@ -177,8 +177,8 @@ a linear search into it.</li>
 
   <a id="Typhon_Engine_VariableSizedBufferSegment_1__ctor_" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.#ctor*"></a>
 
-  <h3 id="Typhon_Engine_VariableSizedBufferSegment_1__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor)">
-  VariableSizedBufferSegment(ChunkBasedSegment, ChunkRandomAccessor)
+  <h3 id="Typhon_Engine_VariableSizedBufferSegment_1__ctor_Typhon_Engine_ChunkBasedSegment_" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.#ctor(Typhon.Engine.ChunkBasedSegment)">
+  VariableSizedBufferSegment(ChunkBasedSegment)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L37"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -186,55 +186,18 @@ a linear search into it.</li>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public VariableSizedBufferSegment(ChunkBasedSegment segment, ChunkRandomAccessor accessor = null)</code></pre>
+    <pre><code class="lang-csharp hljs">public VariableSizedBufferSegment(ChunkBasedSegment segment)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>segment</code> <a class="xref" href="Typhon.Engine.ChunkBasedSegment.html">ChunkBasedSegment</a></dt>
     <dd></dd>
-    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
-    <dd></dd>
   </dl>
 
 
 
 
-
-
-
-
-
-
-
-
-  <h2 class="section" id="properties">Properties
-</h2>
-
-
-  <a id="Typhon_Engine_VariableSizedBufferSegment_1_Segment_" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.Segment*"></a>
-
-  <h3 id="Typhon_Engine_VariableSizedBufferSegment_1_Segment" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.Segment">
-  Segment
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L35"><i class="bi bi-code-slash"></i></a>
-  </h3>
-
-  <div class="markdown level1 summary"></div>
-  <div class="markdown level1 conceptual"></div>
-
-  <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">protected ChunkBasedSegment Segment { get; }</code></pre>
-  </div>
-
-
-
-
-
-  <h4 class="section">Property Value</h4>
-  <dl class="parameters">
-    <dt><a class="xref" href="Typhon.Engine.ChunkBasedSegment.html">ChunkBasedSegment</a></dt>
-    <dd></dd>
-  </dl>
 
 
 
@@ -249,16 +212,16 @@ a linear search into it.</li>
 
   <a id="Typhon_Engine_VariableSizedBufferSegment_1_AddElement_" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.AddElement*"></a>
 
-  <h3 id="Typhon_Engine_VariableSizedBufferSegment_1_AddElement_System_Int32__0_" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.AddElement(System.Int32,`0)">
-  AddElement(int, T)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L96"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_VariableSizedBufferSegment_1_AddElement_System_Int32__0_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.AddElement(System.Int32,`0,Typhon.Engine.ChunkRandomAccessor)">
+  AddElement(int, T, ChunkRandomAccessor)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L97"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public int AddElement(int bufferId, T value)</code></pre>
+    <pre><code class="lang-csharp hljs">public int AddElement(int bufferId, T value, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -266,6 +229,8 @@ a linear search into it.</li>
     <dt><code>bufferId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>
     <dt><code>value</code> <span class="xref">T</span></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -287,18 +252,23 @@ a linear search into it.</li>
 
   <a id="Typhon_Engine_VariableSizedBufferSegment_1_AllocateBuffer_" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.AllocateBuffer*"></a>
 
-  <h3 id="Typhon_Engine_VariableSizedBufferSegment_1_AllocateBuffer" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.AllocateBuffer">
-  AllocateBuffer()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L46"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_VariableSizedBufferSegment_1_AllocateBuffer_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.AllocateBuffer(Typhon.Engine.ChunkRandomAccessor)">
+  AllocateBuffer(ChunkRandomAccessor)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L47"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public int AllocateBuffer()</code></pre>
+    <pre><code class="lang-csharp hljs">public int AllocateBuffer(ChunkRandomAccessor accessor)</code></pre>
   </div>
 
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
+    <dd></dd>
+  </dl>
 
   <h4 class="section">Returns</h4>
   <dl class="parameters">
@@ -318,21 +288,23 @@ a linear search into it.</li>
 
   <a id="Typhon_Engine_VariableSizedBufferSegment_1_DeleteBuffer_" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.DeleteBuffer*"></a>
 
-  <h3 id="Typhon_Engine_VariableSizedBufferSegment_1_DeleteBuffer_System_Int32_" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.DeleteBuffer(System.Int32)">
-  DeleteBuffer(int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L62"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_VariableSizedBufferSegment_1_DeleteBuffer_System_Int32_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.DeleteBuffer(System.Int32,Typhon.Engine.ChunkRandomAccessor)">
+  DeleteBuffer(int, ChunkRandomAccessor)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L63"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public void DeleteBuffer(int bufferId)</code></pre>
+    <pre><code class="lang-csharp hljs">public void DeleteBuffer(int bufferId, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>bufferId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -349,16 +321,16 @@ a linear search into it.</li>
 
   <a id="Typhon_Engine_VariableSizedBufferSegment_1_DeleteElement_" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.DeleteElement*"></a>
 
-  <h3 id="Typhon_Engine_VariableSizedBufferSegment_1_DeleteElement_System_Int32_System_Int32__0_" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.DeleteElement(System.Int32,System.Int32,`0)">
-  DeleteElement(int, int, T)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L169"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_VariableSizedBufferSegment_1_DeleteElement_System_Int32_System_Int32__0_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.DeleteElement(System.Int32,System.Int32,`0,Typhon.Engine.ChunkRandomAccessor)">
+  DeleteElement(int, int, T, ChunkRandomAccessor)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L170"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public int DeleteElement(int bufferId, int elementId, T element)</code></pre>
+    <pre><code class="lang-csharp hljs">public int DeleteElement(int bufferId, int elementId, T element, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -368,6 +340,8 @@ a linear search into it.</li>
     <dt><code>elementId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>
     <dt><code>element</code> <span class="xref">T</span></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -389,21 +363,23 @@ a linear search into it.</li>
 
   <a id="Typhon_Engine_VariableSizedBufferSegment_1_GetReadOnlyAccessor_" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.GetReadOnlyAccessor*"></a>
 
-  <h3 id="Typhon_Engine_VariableSizedBufferSegment_1_GetReadOnlyAccessor_System_Int32_" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.GetReadOnlyAccessor(System.Int32)">
-  GetReadOnlyAccessor(int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L214"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_VariableSizedBufferSegment_1_GetReadOnlyAccessor_System_Int32_Typhon_Engine_ChangeSet_" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.GetReadOnlyAccessor(System.Int32,Typhon.Engine.ChangeSet)">
+  GetReadOnlyAccessor(int, ChangeSet)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L215"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public VariableSizedBufferAccessor&lt;T&gt; GetReadOnlyAccessor(int bufferId)</code></pre>
+    <pre><code class="lang-csharp hljs">public VariableSizedBufferAccessor&lt;T&gt; GetReadOnlyAccessor(int bufferId, ChangeSet changeSet)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>bufferId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>changeSet</code> <a class="xref" href="Typhon.Engine.ChangeSet.html">ChangeSet</a></dt>
     <dd></dd>
   </dl>
 

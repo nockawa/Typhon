@@ -124,7 +124,7 @@ Interface IBTree  <a class="header-action link-secondary" title="View source" hr
 
   <h3 id="Typhon_Engine_BPTree_IBTree_AllowMultiple" data-uid="Typhon.Engine.BPTree.IBTree.AllowMultiple">
   AllowMultiple
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L79"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L80"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -155,7 +155,7 @@ Interface IBTree  <a class="header-action link-secondary" title="View source" hr
 
   <h3 id="Typhon_Engine_BPTree_IBTree_Count" data-uid="Typhon.Engine.BPTree.IBTree.Count">
   Count
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L80"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L81"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -182,22 +182,53 @@ Interface IBTree  <a class="header-action link-secondary" title="View source" hr
 
 
 
-  <h2 class="section" id="methods">Methods
-</h2>
+  <a id="Typhon_Engine_BPTree_IBTree_Segment_" data-uid="Typhon.Engine.BPTree.IBTree.Segment*"></a>
 
-
-  <a id="Typhon_Engine_BPTree_IBTree_Add_" data-uid="Typhon.Engine.BPTree.IBTree.Add*"></a>
-
-  <h3 id="Typhon_Engine_BPTree_IBTree_Add_System_Void__System_Int32_" data-uid="Typhon.Engine.BPTree.IBTree.Add(System.Void*,System.Int32)">
-  Add(void*, int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L81"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_BPTree_IBTree_Segment" data-uid="Typhon.Engine.BPTree.IBTree.Segment">
+  Segment
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L79"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">int Add(void* keyAddr, int value)</code></pre>
+    <pre><code class="lang-csharp hljs">ChunkBasedSegment Segment { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.ChunkBasedSegment.html">ChunkBasedSegment</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="Typhon_Engine_BPTree_IBTree_Add_" data-uid="Typhon.Engine.BPTree.IBTree.Add*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_IBTree_Add_System_Void__System_Int32_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.IBTree.Add(System.Void*,System.Int32,Typhon.Engine.ChunkRandomAccessor)">
+  Add(void*, int, ChunkRandomAccessor)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L82"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">int Add(void* keyAddr, int value, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -205,6 +236,8 @@ Interface IBTree  <a class="header-action link-secondary" title="View source" hr
     <dt><code>keyAddr</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.void">void</a>*</dt>
     <dd></dd>
     <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -226,18 +259,23 @@ Interface IBTree  <a class="header-action link-secondary" title="View source" hr
 
   <a id="Typhon_Engine_BPTree_IBTree_CheckConsistency_" data-uid="Typhon.Engine.BPTree.IBTree.CheckConsistency*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_IBTree_CheckConsistency" data-uid="Typhon.Engine.BPTree.IBTree.CheckConsistency">
-  CheckConsistency()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L86"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_BPTree_IBTree_CheckConsistency_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.IBTree.CheckConsistency(Typhon.Engine.ChunkRandomAccessor)">
+  CheckConsistency(ChunkRandomAccessor)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L87"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">void CheckConsistency()</code></pre>
+    <pre><code class="lang-csharp hljs">void CheckConsistency(ChunkRandomAccessor accessor)</code></pre>
   </div>
 
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
+    <dd></dd>
+  </dl>
 
 
 
@@ -252,16 +290,16 @@ Interface IBTree  <a class="header-action link-secondary" title="View source" hr
 
   <a id="Typhon_Engine_BPTree_IBTree_Remove_" data-uid="Typhon.Engine.BPTree.IBTree.Remove*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_IBTree_Remove_System_Void__System_Int32__" data-uid="Typhon.Engine.BPTree.IBTree.Remove(System.Void*,System.Int32@)">
-  Remove(void*, out int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L82"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_BPTree_IBTree_Remove_System_Void__System_Int32__Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.IBTree.Remove(System.Void*,System.Int32@,Typhon.Engine.ChunkRandomAccessor)">
+  Remove(void*, out int, ChunkRandomAccessor)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L83"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">bool Remove(void* keyAddr, out int value)</code></pre>
+    <pre><code class="lang-csharp hljs">bool Remove(void* keyAddr, out int value, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -269,6 +307,8 @@ Interface IBTree  <a class="header-action link-secondary" title="View source" hr
     <dt><code>keyAddr</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.void">void</a>*</dt>
     <dd></dd>
     <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -290,16 +330,16 @@ Interface IBTree  <a class="header-action link-secondary" title="View source" hr
 
   <a id="Typhon_Engine_BPTree_IBTree_RemoveValue_" data-uid="Typhon.Engine.BPTree.IBTree.RemoveValue*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_IBTree_RemoveValue_System_Void__System_Int32_System_Int32_" data-uid="Typhon.Engine.BPTree.IBTree.RemoveValue(System.Void*,System.Int32,System.Int32)">
-  RemoveValue(void*, int, int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L84"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_BPTree_IBTree_RemoveValue_System_Void__System_Int32_System_Int32_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.IBTree.RemoveValue(System.Void*,System.Int32,System.Int32,Typhon.Engine.ChunkRandomAccessor)">
+  RemoveValue(void*, int, int, ChunkRandomAccessor)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L85"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">bool RemoveValue(void* keyAddr, int elementId, int value)</code></pre>
+    <pre><code class="lang-csharp hljs">bool RemoveValue(void* keyAddr, int elementId, int value, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -309,6 +349,8 @@ Interface IBTree  <a class="header-action link-secondary" title="View source" hr
     <dt><code>elementId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>
     <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -330,16 +372,16 @@ Interface IBTree  <a class="header-action link-secondary" title="View source" hr
 
   <a id="Typhon_Engine_BPTree_IBTree_TryGet_" data-uid="Typhon.Engine.BPTree.IBTree.TryGet*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_IBTree_TryGet_System_Void__System_Int32__" data-uid="Typhon.Engine.BPTree.IBTree.TryGet(System.Void*,System.Int32@)">
-  TryGet(void*, out int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L83"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_BPTree_IBTree_TryGet_System_Void__System_Int32__Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.IBTree.TryGet(System.Void*,System.Int32@,Typhon.Engine.ChunkRandomAccessor)">
+  TryGet(void*, out int, ChunkRandomAccessor)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L84"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">bool TryGet(void* keyAddr, out int value)</code></pre>
+    <pre><code class="lang-csharp hljs">bool TryGet(void* keyAddr, out int value, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -347,6 +389,8 @@ Interface IBTree  <a class="header-action link-secondary" title="View source" hr
     <dt><code>keyAddr</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.void">void</a>*</dt>
     <dd></dd>
     <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -368,21 +412,23 @@ Interface IBTree  <a class="header-action link-secondary" title="View source" hr
 
   <a id="Typhon_Engine_BPTree_IBTree_TryGetMultiple_" data-uid="Typhon.Engine.BPTree.IBTree.TryGetMultiple*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_IBTree_TryGetMultiple_System_Void__" data-uid="Typhon.Engine.BPTree.IBTree.TryGetMultiple(System.Void*)">
-  TryGetMultiple(void*)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L85"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_BPTree_IBTree_TryGetMultiple_System_Void__Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.IBTree.TryGetMultiple(System.Void*,Typhon.Engine.ChunkRandomAccessor)">
+  TryGetMultiple(void*, ChunkRandomAccessor)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L86"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">VariableSizedBufferAccessor&lt;int&gt; TryGetMultiple(void* keyAddr)</code></pre>
+    <pre><code class="lang-csharp hljs">VariableSizedBufferAccessor&lt;int&gt; TryGetMultiple(void* keyAddr, ChunkRandomAccessor accessor)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>keyAddr</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.void">void</a>*</dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 

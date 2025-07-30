@@ -89,7 +89,7 @@
 
 
   <h1 id="Typhon_Engine_BPTree_BTree_1_InsertArguments" data-uid="Typhon.Engine.BPTree.BTree`1.InsertArguments" class="text-break">
-Struct BTree&lt;TKey&gt;.InsertArguments  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L118"><i class="bi bi-code-slash"></i></a>
+Struct BTree&lt;TKey&gt;.InsertArguments  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L119"><i class="bi bi-code-slash"></i></a>
   </h1>
 
   <div class="facts text-secondary">
@@ -144,16 +144,16 @@ Struct BTree&lt;TKey&gt;.InsertArguments  <a class="header-action link-secondary
 
   <a id="Typhon_Engine_BPTree_BTree_1_InsertArguments__ctor_" data-uid="Typhon.Engine.BPTree.BTree`1.InsertArguments.#ctor*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_BTree_1_InsertArguments__ctor__0_System_Int32_System_Collections_Generic_IComparer__0__" data-uid="Typhon.Engine.BPTree.BTree`1.InsertArguments.#ctor(`0,System.Int32,System.Collections.Generic.IComparer{`0})">
-  InsertArguments(TKey, int, IComparer&lt;TKey&gt;)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L120"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_BPTree_BTree_1_InsertArguments__ctor__0_System_Int32_System_Collections_Generic_IComparer__0__Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.BTree`1.InsertArguments.#ctor(`0,System.Int32,System.Collections.Generic.IComparer{`0},Typhon.Engine.ChunkRandomAccessor)">
+  InsertArguments(TKey, int, IComparer&lt;TKey&gt;, ChunkRandomAccessor)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L121"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public InsertArguments(TKey key, int value, IComparer&lt;TKey&gt; comparer = null)</code></pre>
+    <pre><code class="lang-csharp hljs">public InsertArguments(TKey key, int value, IComparer&lt;TKey&gt; comparer = null, ChunkRandomAccessor accessor = null)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -163,6 +163,8 @@ Struct BTree&lt;TKey&gt;.InsertArguments  <a class="header-action link-secondary
     <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>
     <dt><code>comparer</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.collections.generic.icomparer-1">IComparer</a>&lt;TKey&gt;</dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -185,7 +187,7 @@ Struct BTree&lt;TKey&gt;.InsertArguments  <a class="header-action link-secondary
 
   <h3 id="Typhon_Engine_BPTree_BTree_1_InsertArguments_Added" data-uid="Typhon.Engine.BPTree.BTree`1.InsertArguments.Added">
   Added
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L129"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L131"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -216,7 +218,7 @@ Struct BTree&lt;TKey&gt;.InsertArguments  <a class="header-action link-secondary
 
   <h3 id="Typhon_Engine_BPTree_BTree_1_InsertArguments_KeyComparer" data-uid="Typhon.Engine.BPTree.BTree`1.InsertArguments.KeyComparer">
   KeyComparer
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L144"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L148"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -251,7 +253,7 @@ Struct BTree&lt;TKey&gt;.InsertArguments  <a class="header-action link-secondary
 
   <h3 id="Typhon_Engine_BPTree_BTree_1_InsertArguments_Compare__0__0_" data-uid="Typhon.Engine.BPTree.BTree`1.InsertArguments.Compare(`0,`0)">
   Compare(TKey, TKey)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L142"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L146"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -289,7 +291,7 @@ Struct BTree&lt;TKey&gt;.InsertArguments  <a class="header-action link-secondary
 
   <h3 id="Typhon_Engine_BPTree_BTree_1_InsertArguments_GetValue" data-uid="Typhon.Engine.BPTree.BTree`1.InsertArguments.GetValue">
   GetValue()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L136"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L140"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -320,7 +322,7 @@ Struct BTree&lt;TKey&gt;.InsertArguments  <a class="header-action link-secondary
 </article>
 
         <div class="contribution d-print-none">
-          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L118" class="edit-link">Edit this page</a>
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L119" class="edit-link">Edit this page</a>
         </div>
 
 
