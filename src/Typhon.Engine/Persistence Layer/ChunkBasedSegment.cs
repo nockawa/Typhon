@@ -30,9 +30,12 @@ public partial class ChunkBasedSegment : LogicalSegment
         ChunkCountPerPage = PagedMMF.PageRawDataSize / stride;
     }
 
-    internal override bool Create(PageBlockType type, Span<int> filePageIndices, bool clear)
+    internal override bool Create(PageBlockType type, Span<int> filePageIndices, bool clear, ChangeSet changeSet = null)
     {
-        base.Create(type, filePageIndices, clear);
+        if (!base.Create(type, filePageIndices, clear, changeSet))
+        {
+            return false;
+        }
 
         // Clear the metadata sections that store the chunk's occupancy bitmap
         var length = filePageIndices.Length;
@@ -47,8 +50,20 @@ public partial class ChunkBasedSegment : LogicalSegment
             }
         }
 
-        _map = new BitmapL3(length, this);
+        _map = new BitmapL3(this, false);
         ReserveChunk(0);                    // It's always handy to consider ChunkId:0 as "null", so we reserve the chunk to prevent it is a valid id.
+        return true;
+    }
+
+    internal override bool Load(int filePageIndex)
+    {
+        if (!base.Load(filePageIndex))
+        {
+            return false;
+        }
+
+        _map = new BitmapL3(this, true);
+
         return true;
     }
 

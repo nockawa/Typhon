@@ -91,19 +91,17 @@ public class LogicalSegment : IDisposable
         return (pi + 1, off);
     }
 
-    internal bool Create(PageBlockType type, int filePageIndex, bool clear)
+    internal bool Create(PageBlockType type, int filePageIndex, bool clear, ChangeSet changeSet = null)
     {
         Span<int> ids = stackalloc int[1];
         ids[0] = filePageIndex;
-        return Create(type, ids, clear);
+        return Create(type, ids, clear, changeSet);
     }
         
-    unsafe internal virtual bool Create(PageBlockType type, Span<int> filePageIndices, bool clear)
+    unsafe internal virtual bool Create(PageBlockType type, Span<int> filePageIndices, bool clear, ChangeSet changeSet = null)
     {
         RootPageIndex = filePageIndices[0];
 
-        var cs = _manager.CreateChangeSet();
-        
         // Compute the number of subsequent pages needed to store the indices (if they don't fit in the root page)
         // The end of the indices list is marked by a 0 value, we need to save space for this entry too, so the next line is accurate, if you wonder.
         var subIndicesPageCount = (filePageIndices.Length - RootHeaderIndexSectionCount + NextHeadersIndexSectionCount) / NextHeadersIndexSectionCount;
@@ -122,7 +120,7 @@ public class LogicalSegment : IDisposable
             Span<int> indicesPagesIndices = stackalloc int[subIndicesPageCount];
             if (subIndicesPageCount > 0)
             {
-                _manager.AllocatePages(ref indicesPagesIndices);
+                _manager.AllocatePages(ref indicesPagesIndices, changeSet);
             }
             bool isFirstPage = true;
             var remainingIndices = filePageIndices.Length;
@@ -136,7 +134,7 @@ public class LogicalSegment : IDisposable
                 _manager.RequestPage(isFirstPage ? filePageIndices[0] : indicesPagesIndices[curIndicesPageIndex++], true, out var pa);
                 using (pa)
                 {
-                    cs.Add(pa);
+                    changeSet?.Add(pa);
 
                     pa.InitHeader(
                         PageClearMode.None, 
@@ -165,7 +163,7 @@ public class LogicalSegment : IDisposable
                             _manager.RequestPage(indicesPagesIndices[curIndicesPageIndex], true, out var paEnd);
                             using (paEnd)
                             {
-                                cs.Add(paEnd);
+                                changeSet?.Add(paEnd);
                                 paEnd.PageRawData.Cast<byte, int>()[0] = 0;
                             }
                         }
@@ -182,7 +180,7 @@ public class LogicalSegment : IDisposable
             _manager.RequestPage(pageIndex, true, out var pa);
             using (pa)
             {
-                cs.Add(pa);
+                changeSet?.Add(pa);
 
                 if (clear)
                 {
@@ -195,15 +193,13 @@ public class LogicalSegment : IDisposable
                 pa.Header.LogicalSegmentNextRawDataPBID = ((i + 1) < filePageIndices.Length) ? filePageIndices[i + 1] : 0;
             }
         }
-
-        cs.SaveChanges();
         
         _pages = filePageIndices.ToArray();
 
         return true;
     }
 
-    public bool Load(int filePageIndex)
+    internal virtual bool Load(int filePageIndex)
     {
         RootPageIndex = filePageIndex;
         
