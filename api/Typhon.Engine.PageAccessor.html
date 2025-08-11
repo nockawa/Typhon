@@ -153,7 +153,7 @@ public struct PageAccessor : IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_PageAccessor_FilePageIndex" data-uid="Typhon.Engine.PageAccessor.FilePageIndex">
   FilePageIndex
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L208"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L205"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>The Disk Page ID the accessor is into</p>
@@ -181,75 +181,11 @@ public struct PageAccessor : IDisposable</code></pre>
 
 
 
-  <a id="Typhon_Engine_PageAccessor_Header_" data-uid="Typhon.Engine.PageAccessor.Header*"></a>
-
-  <h3 id="Typhon_Engine_PageAccessor_Header" data-uid="Typhon.Engine.PageAccessor.Header">
-  Header
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L116"><i class="bi bi-code-slash"></i></a>
-  </h3>
-
-  <div class="markdown level1 summary"><p>Access to the header of the page. Use a <code>ref var</code> variable when writing into it.</p>
-</div>
-  <div class="markdown level1 conceptual"></div>
-
-  <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public ref PageBaseHeader Header { get; }</code></pre>
-  </div>
-
-
-
-
-
-  <h4 class="section">Property Value</h4>
-  <dl class="parameters">
-    <dt><a class="xref" href="Typhon.Engine.PageBaseHeader.html">PageBaseHeader</a></dt>
-    <dd></dd>
-  </dl>
-
-
-
-
-
-
-
-
-  <a id="Typhon_Engine_PageAccessor_HeaderReadOnly_" data-uid="Typhon.Engine.PageAccessor.HeaderReadOnly*"></a>
-
-  <h3 id="Typhon_Engine_PageAccessor_HeaderReadOnly" data-uid="Typhon.Engine.PageAccessor.HeaderReadOnly">
-  HeaderReadOnly
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L19"><i class="bi bi-code-slash"></i></a>
-  </h3>
-
-  <div class="markdown level1 summary"><p>Access to the header of the page. Use a <code>ref var</code> variable when writing into it.</p>
-</div>
-  <div class="markdown level1 conceptual"></div>
-
-  <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public ref readonly PageBaseHeader HeaderReadOnly { get; }</code></pre>
-  </div>
-
-
-
-
-
-  <h4 class="section">Property Value</h4>
-  <dl class="parameters">
-    <dt><a class="xref" href="Typhon.Engine.PageBaseHeader.html">PageBaseHeader</a></dt>
-    <dd></dd>
-  </dl>
-
-
-
-
-
-
-
-
   <a id="Typhon_Engine_PageAccessor_IsValid_" data-uid="Typhon.Engine.PageAccessor.IsValid*"></a>
 
   <h3 id="Typhon_Engine_PageAccessor_IsValid" data-uid="Typhon.Engine.PageAccessor.IsValid">
   IsValid
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L250"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L247"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -280,7 +216,7 @@ public struct PageAccessor : IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_PageAccessor_LogicalSegmentData" data-uid="Typhon.Engine.PageAccessor.LogicalSegmentData">
   LogicalSegmentData
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L173"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L170"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Span of the Logical Segment's raw data. See Remarks.</p>
@@ -317,7 +253,7 @@ Unpredictable result will occur if using this property on a non-Logical Segment 
 
   <h3 id="Typhon_Engine_PageAccessor_LogicalSegmentDataReadOnly" data-uid="Typhon.Engine.PageAccessor.LogicalSegmentDataReadOnly">
   LogicalSegmentDataReadOnly
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L77"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L78"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Span of the Logical Segment's raw data. See Remarks.</p>
@@ -354,7 +290,7 @@ Unpredictable result will occur if using this property on a non-Logical Segment 
 
   <h3 id="Typhon_Engine_PageAccessor_MemPageIndex" data-uid="Typhon.Engine.PageAccessor.MemPageIndex">
   MemPageIndex
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L210"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L207"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -385,10 +321,10 @@ Unpredictable result will occur if using this property on a non-Logical Segment 
 
   <h3 id="Typhon_Engine_PageAccessor_PageHeader" data-uid="Typhon.Engine.PageAccessor.PageHeader">
   PageHeader
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L132"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L129"><i class="bi bi-code-slash"></i></a>
   </h3>
 
-  <div class="markdown level1 summary"><p>Span of the header of the page, you should prefer <a class="xref" href="Typhon.Engine.PageAccessor.html#Typhon_Engine_PageAccessor_Header">Header</a>.</p>
+  <div class="markdown level1 summary"><p>Span of the header of the page, you should prefer Header.</p>
 </div>
   <div class="markdown level1 conceptual"></div>
 
@@ -417,10 +353,10 @@ Unpredictable result will occur if using this property on a non-Logical Segment 
 
   <h3 id="Typhon_Engine_PageAccessor_PageHeaderReadOnly" data-uid="Typhon.Engine.PageAccessor.PageHeaderReadOnly">
   PageHeaderReadOnly
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L36"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L37"><i class="bi bi-code-slash"></i></a>
   </h3>
 
-  <div class="markdown level1 summary"><p>Span of the header of the page, you should prefer <a class="xref" href="Typhon.Engine.PageAccessor.html#Typhon_Engine_PageAccessor_HeaderReadOnly">HeaderReadOnly</a>.</p>
+  <div class="markdown level1 summary"><p>Span of the header of the page, you should prefer HeaderReadOnly.</p>
 </div>
   <div class="markdown level1 conceptual"></div>
 
@@ -449,7 +385,7 @@ Unpredictable result will occur if using this property on a non-Logical Segment 
 
   <h3 id="Typhon_Engine_PageAccessor_PageMetadata" data-uid="Typhon.Engine.PageAccessor.PageMetadata">
   PageMetadata
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L144"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L141"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Span of the page metadata, it's a 128 bytes zone inside the PageHeader, just right after the BaseHeader</p>
@@ -481,7 +417,7 @@ Unpredictable result will occur if using this property on a non-Logical Segment 
 
   <h3 id="Typhon_Engine_PageAccessor_PageMetadataReadOnly" data-uid="Typhon.Engine.PageAccessor.PageMetadataReadOnly">
   PageMetadataReadOnly
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L48"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L49"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Span of the page metadata, it's a 128 bytes zone inside the PageHeader, just right after the BaseHeader</p>
@@ -513,7 +449,7 @@ Unpredictable result will occur if using this property on a non-Logical Segment 
 
   <h3 id="Typhon_Engine_PageAccessor_PageRawData" data-uid="Typhon.Engine.PageAccessor.PageRawData">
   PageRawData
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L156"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L153"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Span of the page raw data, it's a 8000 bytes zone after the header.</p>
@@ -545,7 +481,7 @@ Unpredictable result will occur if using this property on a non-Logical Segment 
 
   <h3 id="Typhon_Engine_PageAccessor_PageRawDataReadOnly" data-uid="Typhon.Engine.PageAccessor.PageRawDataReadOnly">
   PageRawDataReadOnly
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L60"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L61"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Span of the page raw data, it's a 8000 bytes zone after the header.</p>
@@ -577,7 +513,7 @@ Unpredictable result will occur if using this property on a non-Logical Segment 
 
   <h3 id="Typhon_Engine_PageAccessor_WholePage" data-uid="Typhon.Engine.PageAccessor.WholePage">
   WholePage
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L120"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L117"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Span of the whole data of the page.</p>
@@ -609,7 +545,7 @@ Unpredictable result will occur if using this property on a non-Logical Segment 
 
   <h3 id="Typhon_Engine_PageAccessor_WholePageReadOnly" data-uid="Typhon.Engine.PageAccessor.WholePageReadOnly">
   WholePageReadOnly
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L24"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L25"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Span of the whole data of the page.</p>
@@ -645,7 +581,7 @@ Unpredictable result will occur if using this property on a non-Logical Segment 
 
   <h3 id="Typhon_Engine_PageAccessor_DemoteExclusive" data-uid="Typhon.Engine.PageAccessor.DemoteExclusive">
   DemoteExclusive()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L199"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L196"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -671,7 +607,7 @@ Unpredictable result will occur if using this property on a non-Logical Segment 
 
   <h3 id="Typhon_Engine_PageAccessor_Dispose" data-uid="Typhon.Engine.PageAccessor.Dispose">
   Dispose()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L252"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L249"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</p>
@@ -698,7 +634,7 @@ Unpredictable result will occur if using this property on a non-Logical Segment 
 
   <h3 id="Typhon_Engine_PageAccessor_InitHeader_Typhon_Engine_PageClearMode_Typhon_Engine_PageBlockFlags_Typhon_Engine_PageBlockType_System_Int16_" data-uid="Typhon.Engine.PageAccessor.InitHeader(Typhon.Engine.PageClearMode,Typhon.Engine.PageBlockFlags,Typhon.Engine.PageBlockType,System.Int16)">
   InitHeader(PageClearMode, PageBlockFlags, PageBlockType, short)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L270"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L267"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -735,7 +671,7 @@ Unpredictable result will occur if using this property on a non-Logical Segment 
 
   <h3 id="Typhon_Engine_PageAccessor_SetPageDirty" data-uid="Typhon.Engine.PageAccessor.SetPageDirty">
   SetPageDirty()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L193"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L190"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -761,7 +697,7 @@ Unpredictable result will occur if using this property on a non-Logical Segment 
 
   <h3 id="Typhon_Engine_PageAccessor_TryPromoteToExclusive" data-uid="Typhon.Engine.PageAccessor.TryPromoteToExclusive">
   TryPromoteToExclusive()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L197"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PageAccessor.cs/#L194"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>

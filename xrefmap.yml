@@ -336,6 +336,12 @@ references:
   commentId: N:Typhon.Engine.BPTree
   fullName: Typhon.Engine.BPTree
   nameWithType: Typhon.Engine.BPTree
+- uid: Typhon.Engine.BPTree.BTreeHeader
+  name: BTreeHeader
+  href: api/Typhon.Engine.BPTree.BTreeHeader.html
+  commentId: T:Typhon.Engine.BPTree.BTreeHeader
+  fullName: Typhon.Engine.BPTree.BTreeHeader
+  nameWithType: BTreeHeader
 - uid: Typhon.Engine.BPTree.BTree`1
   name: BTree<TKey>
   href: api/Typhon.Engine.BPTree.BTree-1.html
@@ -1061,23 +1067,23 @@ references:
   fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).CheckConsistency
   nameWithType: BTree<TKey>.CheckConsistency
   nameWithType.vb: BTree(Of TKey).CheckConsistency
-- uid: Typhon.Engine.BPTree.BTree`1.Count
-  name: Count
-  href: api/Typhon.Engine.BPTree.BTree-1.html#Typhon_Engine_BPTree_BTree_1_Count
-  commentId: P:Typhon.Engine.BPTree.BTree`1.Count
-  fullName: Typhon.Engine.BPTree.BTree<TKey>.Count
-  fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).Count
-  nameWithType: BTree<TKey>.Count
-  nameWithType.vb: BTree(Of TKey).Count
-- uid: Typhon.Engine.BPTree.BTree`1.Count*
-  name: Count
-  href: api/Typhon.Engine.BPTree.BTree-1.html#Typhon_Engine_BPTree_BTree_1_Count_
-  commentId: Overload:Typhon.Engine.BPTree.BTree`1.Count
+- uid: Typhon.Engine.BPTree.BTree`1.DecCount(Typhon.Engine.ChunkRandomAccessor)
+  name: DecCount(ChunkRandomAccessor)
+  href: api/Typhon.Engine.BPTree.BTree-1.html#Typhon_Engine_BPTree_BTree_1_DecCount_Typhon_Engine_ChunkRandomAccessor_
+  commentId: M:Typhon.Engine.BPTree.BTree`1.DecCount(Typhon.Engine.ChunkRandomAccessor)
+  fullName: Typhon.Engine.BPTree.BTree<TKey>.DecCount(Typhon.Engine.ChunkRandomAccessor)
+  fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).DecCount(Typhon.Engine.ChunkRandomAccessor)
+  nameWithType: BTree<TKey>.DecCount(ChunkRandomAccessor)
+  nameWithType.vb: BTree(Of TKey).DecCount(ChunkRandomAccessor)
+- uid: Typhon.Engine.BPTree.BTree`1.DecCount*
+  name: DecCount
+  href: api/Typhon.Engine.BPTree.BTree-1.html#Typhon_Engine_BPTree_BTree_1_DecCount_
+  commentId: Overload:Typhon.Engine.BPTree.BTree`1.DecCount
   isSpec: "True"
-  fullName: Typhon.Engine.BPTree.BTree<TKey>.Count
-  fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).Count
-  nameWithType: BTree<TKey>.Count
-  nameWithType.vb: BTree(Of TKey).Count
+  fullName: Typhon.Engine.BPTree.BTree<TKey>.DecCount
+  fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).DecCount
+  nameWithType: BTree<TKey>.DecCount
+  nameWithType.vb: BTree(Of TKey).DecCount
 - uid: Typhon.Engine.BPTree.BTree`1.GetFirst(Typhon.Engine.ChunkRandomAccessor)
   name: GetFirst(ChunkRandomAccessor)
   href: api/Typhon.Engine.BPTree.BTree-1.html#Typhon_Engine_BPTree_BTree_1_GetFirst_Typhon_Engine_ChunkRandomAccessor_
@@ -1112,6 +1118,23 @@ references:
   fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).GetLast
   nameWithType: BTree<TKey>.GetLast
   nameWithType.vb: BTree(Of TKey).GetLast
+- uid: Typhon.Engine.BPTree.BTree`1.GetRootChunkId(Typhon.Engine.ChunkRandomAccessor)
+  name: GetRootChunkId(ChunkRandomAccessor)
+  href: api/Typhon.Engine.BPTree.BTree-1.html#Typhon_Engine_BPTree_BTree_1_GetRootChunkId_Typhon_Engine_ChunkRandomAccessor_
+  commentId: M:Typhon.Engine.BPTree.BTree`1.GetRootChunkId(Typhon.Engine.ChunkRandomAccessor)
+  fullName: Typhon.Engine.BPTree.BTree<TKey>.GetRootChunkId(Typhon.Engine.ChunkRandomAccessor)
+  fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).GetRootChunkId(Typhon.Engine.ChunkRandomAccessor)
+  nameWithType: BTree<TKey>.GetRootChunkId(ChunkRandomAccessor)
+  nameWithType.vb: BTree(Of TKey).GetRootChunkId(ChunkRandomAccessor)
+- uid: Typhon.Engine.BPTree.BTree`1.GetRootChunkId*
+  name: GetRootChunkId
+  href: api/Typhon.Engine.BPTree.BTree-1.html#Typhon_Engine_BPTree_BTree_1_GetRootChunkId_
+  commentId: Overload:Typhon.Engine.BPTree.BTree`1.GetRootChunkId
+  isSpec: "True"
+  fullName: Typhon.Engine.BPTree.BTree<TKey>.GetRootChunkId
+  fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).GetRootChunkId
+  nameWithType: BTree<TKey>.GetRootChunkId
+  nameWithType.vb: BTree(Of TKey).GetRootChunkId
 - uid: Typhon.Engine.BPTree.BTree`1.GetStorage
   name: GetStorage()
   href: api/Typhon.Engine.BPTree.BTree-1.html#Typhon_Engine_BPTree_BTree_1_GetStorage
@@ -1129,6 +1152,23 @@ references:
   fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).GetStorage
   nameWithType: BTree<TKey>.GetStorage
   nameWithType.vb: BTree(Of TKey).GetStorage
+- uid: Typhon.Engine.BPTree.BTree`1.IncCount(Typhon.Engine.ChunkRandomAccessor)
+  name: IncCount(ChunkRandomAccessor)
+  href: api/Typhon.Engine.BPTree.BTree-1.html#Typhon_Engine_BPTree_BTree_1_IncCount_Typhon_Engine_ChunkRandomAccessor_
+  commentId: M:Typhon.Engine.BPTree.BTree`1.IncCount(Typhon.Engine.ChunkRandomAccessor)
+  fullName: Typhon.Engine.BPTree.BTree<TKey>.IncCount(Typhon.Engine.ChunkRandomAccessor)
+  fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).IncCount(Typhon.Engine.ChunkRandomAccessor)
+  nameWithType: BTree<TKey>.IncCount(ChunkRandomAccessor)
+  nameWithType.vb: BTree(Of TKey).IncCount(ChunkRandomAccessor)
+- uid: Typhon.Engine.BPTree.BTree`1.IncCount*
+  name: IncCount
+  href: api/Typhon.Engine.BPTree.BTree-1.html#Typhon_Engine_BPTree_BTree_1_IncCount_
+  commentId: Overload:Typhon.Engine.BPTree.BTree`1.IncCount
+  isSpec: "True"
+  fullName: Typhon.Engine.BPTree.BTree<TKey>.IncCount
+  fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).IncCount
+  nameWithType: BTree<TKey>.IncCount
+  nameWithType.vb: BTree(Of TKey).IncCount
 - uid: Typhon.Engine.BPTree.BTree`1.InsertArguments
   name: BTree<TKey>.InsertArguments
   href: api/Typhon.Engine.BPTree.BTree-1.InsertArguments.html
@@ -1225,6 +1265,23 @@ references:
   fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).InsertArguments.KeyComparer
   nameWithType: BTree<TKey>.InsertArguments.KeyComparer
   nameWithType.vb: BTree(Of TKey).InsertArguments.KeyComparer
+- uid: Typhon.Engine.BPTree.BTree`1.IsEmpty(Typhon.Engine.ChunkRandomAccessor)
+  name: IsEmpty(ChunkRandomAccessor)
+  href: api/Typhon.Engine.BPTree.BTree-1.html#Typhon_Engine_BPTree_BTree_1_IsEmpty_Typhon_Engine_ChunkRandomAccessor_
+  commentId: M:Typhon.Engine.BPTree.BTree`1.IsEmpty(Typhon.Engine.ChunkRandomAccessor)
+  fullName: Typhon.Engine.BPTree.BTree<TKey>.IsEmpty(Typhon.Engine.ChunkRandomAccessor)
+  fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).IsEmpty(Typhon.Engine.ChunkRandomAccessor)
+  nameWithType: BTree<TKey>.IsEmpty(ChunkRandomAccessor)
+  nameWithType.vb: BTree(Of TKey).IsEmpty(ChunkRandomAccessor)
+- uid: Typhon.Engine.BPTree.BTree`1.IsEmpty*
+  name: IsEmpty
+  href: api/Typhon.Engine.BPTree.BTree-1.html#Typhon_Engine_BPTree_BTree_1_IsEmpty_
+  commentId: Overload:Typhon.Engine.BPTree.BTree`1.IsEmpty
+  isSpec: "True"
+  fullName: Typhon.Engine.BPTree.BTree<TKey>.IsEmpty
+  fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).IsEmpty
+  nameWithType: BTree<TKey>.IsEmpty
+  nameWithType.vb: BTree(Of TKey).IsEmpty
 - uid: Typhon.Engine.BPTree.BTree`1.Item(`0)
   name: this[TKey]
   href: api/Typhon.Engine.BPTree.BTree-1.html#Typhon_Engine_BPTree_BTree_1_Item__0_
@@ -2244,6 +2301,24 @@ references:
   fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).Segment
   nameWithType: BTree<TKey>.Segment
   nameWithType.vb: BTree(Of TKey).Segment
+- uid: Typhon.Engine.BPTree.BTree`1.SetRootChunkId(Typhon.Engine.ChunkRandomAccessor,System.Int32)
+  name: SetRootChunkId(ChunkRandomAccessor, int)
+  href: api/Typhon.Engine.BPTree.BTree-1.html#Typhon_Engine_BPTree_BTree_1_SetRootChunkId_Typhon_Engine_ChunkRandomAccessor_System_Int32_
+  commentId: M:Typhon.Engine.BPTree.BTree`1.SetRootChunkId(Typhon.Engine.ChunkRandomAccessor,System.Int32)
+  name.vb: SetRootChunkId(ChunkRandomAccessor, Integer)
+  fullName: Typhon.Engine.BPTree.BTree<TKey>.SetRootChunkId(Typhon.Engine.ChunkRandomAccessor, int)
+  fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).SetRootChunkId(Typhon.Engine.ChunkRandomAccessor, Integer)
+  nameWithType: BTree<TKey>.SetRootChunkId(ChunkRandomAccessor, int)
+  nameWithType.vb: BTree(Of TKey).SetRootChunkId(ChunkRandomAccessor, Integer)
+- uid: Typhon.Engine.BPTree.BTree`1.SetRootChunkId*
+  name: SetRootChunkId
+  href: api/Typhon.Engine.BPTree.BTree-1.html#Typhon_Engine_BPTree_BTree_1_SetRootChunkId_
+  commentId: Overload:Typhon.Engine.BPTree.BTree`1.SetRootChunkId
+  isSpec: "True"
+  fullName: Typhon.Engine.BPTree.BTree<TKey>.SetRootChunkId
+  fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).SetRootChunkId
+  nameWithType: BTree<TKey>.SetRootChunkId
+  nameWithType.vb: BTree(Of TKey).SetRootChunkId
 - uid: Typhon.Engine.BPTree.BTree`1.TryGet(System.Void*,System.Int32@,Typhon.Engine.ChunkRandomAccessor)
   name: TryGet(void*, out int, ChunkRandomAccessor)
   href: api/Typhon.Engine.BPTree.BTree-1.html#Typhon_Engine_BPTree_BTree_1_TryGet_System_Void__System_Int32__Typhon_Engine_ChunkRandomAccessor_
@@ -2545,19 +2620,6 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.BPTree.IBTree.CheckConsistency
   nameWithType: IBTree.CheckConsistency
-- uid: Typhon.Engine.BPTree.IBTree.Count
-  name: Count
-  href: api/Typhon.Engine.BPTree.IBTree.html#Typhon_Engine_BPTree_IBTree_Count
-  commentId: P:Typhon.Engine.BPTree.IBTree.Count
-  fullName: Typhon.Engine.BPTree.IBTree.Count
-  nameWithType: IBTree.Count
-- uid: Typhon.Engine.BPTree.IBTree.Count*
-  name: Count
-  href: api/Typhon.Engine.BPTree.IBTree.html#Typhon_Engine_BPTree_IBTree_Count_
-  commentId: Overload:Typhon.Engine.BPTree.IBTree.Count
-  isSpec: "True"
-  fullName: Typhon.Engine.BPTree.IBTree.Count
-  nameWithType: IBTree.Count
 - uid: Typhon.Engine.BPTree.IBTree.Remove(System.Void*,System.Int32@,Typhon.Engine.ChunkRandomAccessor)
   name: Remove(void*, out int, ChunkRandomAccessor)
   href: api/Typhon.Engine.BPTree.IBTree.html#Typhon_Engine_BPTree_IBTree_Remove_System_Void__System_Int32__Typhon_Engine_ChunkRandomAccessor_
@@ -7453,6 +7515,12 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.ChunkBasedSegment.Stride
   nameWithType: ChunkBasedSegment.Stride
+- uid: Typhon.Engine.ChunkBasedSegmentHeader
+  name: ChunkBasedSegmentHeader
+  href: api/Typhon.Engine.ChunkBasedSegmentHeader.html
+  commentId: T:Typhon.Engine.ChunkBasedSegmentHeader
+  fullName: Typhon.Engine.ChunkBasedSegmentHeader
+  nameWithType: ChunkBasedSegmentHeader
 - uid: Typhon.Engine.ChunkRandomAccessor
   name: ChunkRandomAccessor
   href: api/Typhon.Engine.ChunkRandomAccessor.html
@@ -9249,6 +9317,12 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.LogicalSegment.RootPageIndex
   nameWithType: LogicalSegment.RootPageIndex
+- uid: Typhon.Engine.LogicalSegmentHeader
+  name: LogicalSegmentHeader
+  href: api/Typhon.Engine.LogicalSegmentHeader.html
+  commentId: T:Typhon.Engine.LogicalSegmentHeader
+  fullName: Typhon.Engine.LogicalSegmentHeader
+  nameWithType: LogicalSegmentHeader
 - uid: Typhon.Engine.ManagedPagedMMF
   name: ManagedPagedMMF
   href: api/Typhon.Engine.ManagedPagedMMF.html
@@ -9907,32 +9981,6 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.PageAccessor.FilePageIndex
   nameWithType: PageAccessor.FilePageIndex
-- uid: Typhon.Engine.PageAccessor.Header
-  name: Header
-  href: api/Typhon.Engine.PageAccessor.html#Typhon_Engine_PageAccessor_Header
-  commentId: P:Typhon.Engine.PageAccessor.Header
-  fullName: Typhon.Engine.PageAccessor.Header
-  nameWithType: PageAccessor.Header
-- uid: Typhon.Engine.PageAccessor.Header*
-  name: Header
-  href: api/Typhon.Engine.PageAccessor.html#Typhon_Engine_PageAccessor_Header_
-  commentId: Overload:Typhon.Engine.PageAccessor.Header
-  isSpec: "True"
-  fullName: Typhon.Engine.PageAccessor.Header
-  nameWithType: PageAccessor.Header
-- uid: Typhon.Engine.PageAccessor.HeaderReadOnly
-  name: HeaderReadOnly
-  href: api/Typhon.Engine.PageAccessor.html#Typhon_Engine_PageAccessor_HeaderReadOnly
-  commentId: P:Typhon.Engine.PageAccessor.HeaderReadOnly
-  fullName: Typhon.Engine.PageAccessor.HeaderReadOnly
-  nameWithType: PageAccessor.HeaderReadOnly
-- uid: Typhon.Engine.PageAccessor.HeaderReadOnly*
-  name: HeaderReadOnly
-  href: api/Typhon.Engine.PageAccessor.html#Typhon_Engine_PageAccessor_HeaderReadOnly_
-  commentId: Overload:Typhon.Engine.PageAccessor.HeaderReadOnly
-  isSpec: "True"
-  fullName: Typhon.Engine.PageAccessor.HeaderReadOnly
-  nameWithType: PageAccessor.HeaderReadOnly
 - uid: Typhon.Engine.PageAccessor.InitHeader(Typhon.Engine.PageClearMode,Typhon.Engine.PageBlockFlags,Typhon.Engine.PageBlockType,System.Int16)
   name: InitHeader(PageClearMode, PageBlockFlags, PageBlockType, short)
   href: api/Typhon.Engine.PageAccessor.html#Typhon_Engine_PageAccessor_InitHeader_Typhon_Engine_PageClearMode_Typhon_Engine_PageBlockFlags_Typhon_Engine_PageBlockType_System_Int16_
