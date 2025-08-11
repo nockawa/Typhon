@@ -166,7 +166,9 @@ public class DatabaseEngine : IDisposable
         _fieldsTable = GetComponentTable<FieldRow>();
         _componentsTable = GetComponentTable<ComponentRow>();
 
+        /*
         rootFileHeader->DatabaseEngine = SerializeSettings();
+    */
     }
 
     public bool RegisterComponentFromRowAccessor<T>() where T : unmanaged
@@ -185,6 +187,7 @@ public class DatabaseEngine : IDisposable
 
     public ComponentTable GetComponentTable(Type type) => _componentTableByType.GetValueOrDefault(type);
 
+    /*
     internal struct SerializationData
     {
         public ComponentTable.SerializationData FieldsTable;
@@ -197,4 +200,5 @@ public class DatabaseEngine : IDisposable
             FieldsTable = _fieldsTable.SerializeSettings(),
             ComponentsTable = _componentsTable.SerializeSettings()
         };
+*/
 }

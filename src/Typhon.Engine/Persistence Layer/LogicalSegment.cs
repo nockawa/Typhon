@@ -1,5 +1,6 @@
 ﻿// unset
 
+using JetBrains.Annotations;
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
@@ -13,6 +14,24 @@ public enum PageClearMode
     None = 0,
     Header = 1,
     WholePage = 2
+}
+
+[PublicAPI]
+[StructLayout(LayoutKind.Sequential, Pack = 4)]
+public struct LogicalSegmentHeader
+{
+    unsafe public static readonly int Size = sizeof(LogicalSegmentHeader);
+    public static readonly int TotalSize =  PageBaseHeader.Size + Size;
+    public static readonly int Offset = PageBaseHeader.Size;
+    
+    /// <summary>
+    /// If the Page Block is a Logical Segment, will store the index to the next block storing Map Data, 0 if there's none.
+    /// </summary>
+    public int LogicalSegmentNextMapPBID;
+    /// <summary>
+    /// If the Page Block is a Logical Segment, will store the index to the next block storing Raw Data, 0 if there's none.
+    /// </summary>
+    public int LogicalSegmentNextRawDataPBID;
 }
 
 /// <summary>
@@ -29,11 +48,13 @@ public enum PageClearMode
 /// </remarks>
 public class LogicalSegment : IDisposable
 {
+    /*
     internal struct SerializationData
     {
         public int RootPageId;
     }
     internal SerializationData SerializeSettings() => new() { RootPageId = RootPageIndex };
+    */
 
     internal const int RootHeaderIndexSectionCount = 500;
     internal const int RootHeaderIndexSectionLength = RootHeaderIndexSectionCount * sizeof(int);
@@ -137,10 +158,12 @@ public class LogicalSegment : IDisposable
                     changeSet?.Add(pa);
 
                     pa.InitHeader(
-                        PageClearMode.None, 
+                        PageClearMode.Header, 
                         PageBlockFlags.IsLogicalSegment | (isFirstPage ? PageBlockFlags.IsLogicalSegmentRoot : PageBlockFlags.None), 
                         type, 1);
-                    pa.Header.LogicalSegmentNextMapPBID = (curIndicesPageIndex < indicesPagesIndices.Length) ? indicesPagesIndices[curIndicesPageIndex] : 0;
+
+                    ref var lsh = ref pa.GetHeader<LogicalSegmentHeader>(LogicalSegmentHeader.Offset);
+                    lsh.LogicalSegmentNextMapPBID = (curIndicesPageIndex < indicesPagesIndices.Length) ? indicesPagesIndices[curIndicesPageIndex] : 0;
                     
                     var rd = pa.PageRawData.Cast<byte, int>();
                     int j;
@@ -190,7 +213,8 @@ public class LogicalSegment : IDisposable
                 pa.InitHeader(PageClearMode.None, PageBlockFlags.IsLogicalSegment|(i==0 ? PageBlockFlags.IsLogicalSegmentRoot : PageBlockFlags.None), type, 1);
 
                 // Update link list of the pages that make the segment
-                pa.Header.LogicalSegmentNextRawDataPBID = ((i + 1) < filePageIndices.Length) ? filePageIndices[i + 1] : 0;
+                ref var lsh = ref pa.GetHeader<LogicalSegmentHeader>(LogicalSegmentHeader.Offset);
+                lsh.LogicalSegmentNextRawDataPBID = ((i + 1) < filePageIndices.Length) ? filePageIndices[i + 1] : 0;
             }
         }
         
@@ -198,7 +222,7 @@ public class LogicalSegment : IDisposable
 
         return true;
     }
-
+    
     internal virtual bool Load(int filePageIndex)
     {
         RootPageIndex = filePageIndex;
@@ -215,12 +239,13 @@ public class LogicalSegment : IDisposable
             if (i == maxIndicesForPage)
             {
                 // We reached the end of the root page, we need to load more pages
-                if (pa.Header.LogicalSegmentNextMapPBID == 0)
+                ref var lsh = ref pa.GetHeader<LogicalSegmentHeader>(LogicalSegmentHeader.Offset);
+                if (lsh.LogicalSegmentNextMapPBID == 0)
                 {
                     break; // No more pages
                 }
                 pa.Dispose();
-                _manager.RequestPage(pa.Header.LogicalSegmentNextMapPBID, true, out pa);
+                _manager.RequestPage(lsh.LogicalSegmentNextMapPBID, true, out pa);
                 rd = pa.PageRawData.Cast<byte, int>();
                 i = 0; // Reset index for the new page
                 maxIndicesForPage = NextHeadersIndexSectionCount;

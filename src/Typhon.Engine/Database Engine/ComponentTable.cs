@@ -132,6 +132,7 @@ public unsafe class ComponentTable : IDisposable
         ComponentSegment = null;
     }
 
+    /*
     internal struct SerializationData
     {
         public LogicalSegment.SerializationData ComponentSegment;
@@ -147,4 +148,5 @@ public unsafe class ComponentTable : IDisposable
             DefaultIndexSegment  = DefaultIndexSegment.SerializeSettings(),
             String64IndexSegment = String64IndexSegment.SerializeSettings()
         };
+*/
 }

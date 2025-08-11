@@ -13,11 +13,12 @@ unsafe public struct PageAccessor : IDisposable
 {
     #region Read-Only Access
 
-    /// <summary>
-    /// Access to the header of the page. Use a <c>ref var</c> variable when writing into it.
-    /// </summary>
-    public ref readonly PageBaseHeader HeaderReadOnly => ref MemoryMarshal.Cast<byte, PageBaseHeader>(PageHeaderReadOnly).GetPinnableReference();
-    
+    internal ref T GetHeader<T>(int offset) where T : unmanaged
+    {
+        EnsureDataReady();
+        return ref PageHeader.Slice(offset).Cast<byte, T>()[0];
+    }
+
     /// <summary>
     /// Span of the whole data of the page.
     /// </summary>
@@ -110,10 +111,6 @@ unsafe public struct PageAccessor : IDisposable
         return _pageAddress + PagedMMF.PageHeaderSize;
     }
     
-    /// <summary>
-    /// Access to the header of the page. Use a <c>ref var</c> variable when writing into it.
-    /// </summary>
-    public ref PageBaseHeader Header => ref MemoryMarshal.Cast<byte, PageBaseHeader>(PageHeader).GetPinnableReference();
     /// <summary>
     /// Span of the whole data of the page.
     /// </summary>
@@ -277,7 +274,7 @@ unsafe public struct PageAccessor : IDisposable
         {
             PageHeader.Clear();
         }
-        ref var header = ref Header;
+        ref var header = ref GetHeader<PageBaseHeader>(PageBaseHeader.Offset);
         header.Flags = flags;
         header.Type = type;
         header.FormatRevision = formatRevision;

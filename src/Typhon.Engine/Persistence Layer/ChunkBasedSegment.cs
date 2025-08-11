@@ -1,12 +1,24 @@
 ﻿// unset
 
+using JetBrains.Annotations;
 using System;
 using System.Buffers;
-using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace Typhon.Engine;
+
+[PublicAPI]
+[StructLayout(LayoutKind.Sequential, Pack = 4)]
+public struct ChunkBasedSegmentHeader
+{
+    unsafe public static readonly int Size = sizeof(ChunkBasedSegmentHeader);
+    public static readonly int TotalSize =  LogicalSegmentHeader.TotalSize + Size;
+    public static readonly int Offset = LogicalSegmentHeader.TotalSize;
+
+    private int _fill0;
+}
 
 /// <summary>
 /// Logical Segment that stores fixed sized chunk of data.

@@ -1,5 +1,6 @@
 ﻿// unset
 
+using JetBrains.Annotations;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -29,6 +30,18 @@ public enum NodeStates
 }
 
 #endregion
+
+[PublicAPI]
+[StructLayout(LayoutKind.Sequential, Pack = 4)]
+public struct BTreeHeader
+{
+    unsafe public static readonly int Size = sizeof(BTreeHeader);
+    public static readonly int TotalSize =  ChunkBasedSegmentHeader.TotalSize + Size;
+    public static readonly int Offset = ChunkBasedSegmentHeader.TotalSize;
+    
+    public int Count;
+    public int RootChunkId;
+}
 
 #region Misc Helpers
 
@@ -78,7 +91,7 @@ public interface IBTree
 {
     ChunkBasedSegment Segment { get; }
     bool AllowMultiple { get; }
-    int Count { get; }
+    // int Count { get; }
     unsafe int Add(void* keyAddr, int value, ChunkRandomAccessor accessor);
     unsafe bool Remove(void* keyAddr, out int value, ChunkRandomAccessor accessor);
     unsafe bool TryGet(void* keyAddr, out int value, ChunkRandomAccessor accessor);
@@ -320,7 +333,44 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     private readonly ChunkBasedSegment _segment;
     private readonly BaseNodeStorage _storage;
 
-    public int Count { get; private set; }
+    public bool IsEmpty(ChunkRandomAccessor accessor)
+    {
+        ref var header = ref accessor.GetChunkBaseSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false, out var entry);
+        var res = header.Count == 0;
+        accessor.UnpinChunkBasedSegmentHeader(entry);
+        return res;
+    }    
+
+    public int IncCount(ChunkRandomAccessor accessor)
+    {
+        ref var header = ref accessor.GetChunkBaseSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false, out var entry);
+        var res = ++header.Count;
+        accessor.UnpinChunkBasedSegmentHeader(entry);
+        return res;
+    }    
+
+    public int DecCount(ChunkRandomAccessor accessor)
+    {
+        ref var header = ref accessor.GetChunkBaseSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false, out var entry);
+        var res = --header.Count;
+        accessor.UnpinChunkBasedSegmentHeader(entry);
+        return res;
+    }    
+
+    public void SetRootChunkId(ChunkRandomAccessor accessor, int rootChunkId)
+    {
+        ref var header = ref accessor.GetChunkBaseSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false, out var entry);
+        header.RootChunkId = rootChunkId;
+        accessor.UnpinChunkBasedSegmentHeader(entry);
+    }    
+
+    public int GetRootChunkId(ChunkRandomAccessor accessor)
+    {
+        ref var header = ref accessor.GetChunkBaseSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false, out var entry);
+        var res = header.RootChunkId;
+        accessor.UnpinChunkBasedSegmentHeader(entry);
+        return res;
+    }    
 
     private NodeWrapper Root;
     private NodeWrapper LinkList;
@@ -391,7 +441,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     public void CheckConsistency(ChunkRandomAccessor accessor)
     {
         // Recursive check from Root to leaf
-        if (Count == 0)
+        if (IsEmpty(accessor))
         {
             return;
         }
@@ -531,9 +581,11 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     private void RemoveCore(ref RemoveArguments args)
     {
-        if (Count == 0) return;
-
         var accessor = args.Accessor;
+        if (IsEmpty(accessor))
+        {
+            return;
+        }
 
         // optimize for removing items from beginning
         int order = args.Comparer.Compare(args.Key, GetFirst(accessor).Key);
@@ -546,10 +598,11 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         {
             args.SetRemovedValue(LinkList.PopFirstInternal(accessor).Value);
             Debug.Assert(Root == LinkList || LinkList.GetIsHalfFull(accessor));
-            Count--;
-            if (Count == 0)
+            DecCount(accessor);
+            if (IsEmpty(accessor))
             {
                 Root = LinkList = ReverseLinkList = default;
+                SetRootChunkId(args.Accessor, 0);
                 Height--;
             }
             return;
@@ -565,7 +618,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         {
             args.SetRemovedValue(ReverseLinkList.PopLastInternal(accessor).Value);
             Debug.Assert(Root == ReverseLinkList || ReverseLinkList.GetIsHalfFull(accessor));
-            Count--; // here count never becomes zero.
+            DecCount(accessor); // here count never becomes zero.
             return;
         }
 
@@ -574,7 +627,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
         if (args.Removed)
         {
-            Count--;
+            DecCount(accessor);
         }
 
         if (merge && Root.GetLength(accessor) == 0)
@@ -585,6 +638,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
                 LinkList = default;
                 ReverseLinkList = default;
             }
+            SetRootChunkId(args.Accessor, Root.IsValid ? Root.ChunkId : 0);
             Height--;
         }
 
@@ -599,9 +653,10 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     {
         var accessor = args.Accessor;
         
-        if (Count == 0)
+        if (IsEmpty(accessor))
         {
             Root = AllocNode(NodeStates.IsLeaf, args.Accessor);
+            SetRootChunkId(args.Accessor, Root.ChunkId);
             LinkList = Root;
             ReverseLinkList = LinkList;
             Height++;
@@ -615,12 +670,12 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
 
         // append optimization: if item key is in order, this may add item in O(1) operation.
-        int order = Count == 0 ? 1 : args.Compare(args.Key, GetLast(accessor).Key);
+        int order = IsEmpty(accessor) ? 1 : args.Compare(args.Key, GetLast(accessor).Key);
         if (order > 0 && !ReverseLinkList.GetIsFull(accessor))
         {
             var value = AllowMultiple ? CreateBufferAndAddValue(ref args) : args.GetValue();
             ReverseLinkList.PushLast(new KeyValueItem(args.Key, value), accessor);
-            Count++;
+            IncCount(accessor);
             return;
         }
         else if (order == 0)
@@ -638,7 +693,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         {
             var value = AllowMultiple ? CreateBufferAndAddValue(ref args) : args.GetValue();
             LinkList.PushFirst(new KeyValueItem(args.Key, value), accessor);
-            Count++;
+            IncCount(accessor);
             return;
         }
         else if (order == 0)
@@ -655,7 +710,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
         if (args.Added)
         {
-            Count++;
+            IncCount(accessor);
         }
 
         // if split occurred at root, make a new root and increase height.
@@ -666,6 +721,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
             newRoot.Insert(0, rightSplit.Value, accessor);
             Root = newRoot;
+            SetRootChunkId(args.Accessor, Root.ChunkId);
             Height++;
         }
 
@@ -679,7 +735,10 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     private NodeWrapper FindLeaf(TKey key, out int index, ChunkRandomAccessor accessor)
     {
         index = -1;
-        if (Count == 0) return default;
+        if (IsEmpty(accessor))
+        {
+            return default;
+        }
 
         var node = Root;
         while (!node.GetIsLeaf(accessor))

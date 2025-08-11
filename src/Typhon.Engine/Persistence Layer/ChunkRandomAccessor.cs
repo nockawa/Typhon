@@ -144,19 +144,35 @@ public class ChunkRandomAccessor : IDisposable
     {
         var (si, off) = _owner.GetChunkLocation(index);
 
+        var baseAddress = GetPageRawDataAddr(si, pin, dirtyPage, out _);
+        return baseAddress + (si == 0 ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (off * _stride);
+    }
+    
+    internal unsafe ref T GetChunkBaseSegmentHeader<T>(int offset, bool dirtyPage, out int cacheEntryIndex) where T : unmanaged
+    {
+        var baseAddress = GetPageRawDataAddr(0, true, dirtyPage, out cacheEntryIndex) - PagedMMF.PageHeaderSize;
+        return ref Unsafe.AsRef<T>(baseAddress + offset);
+    }
+    
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+    internal void UnpinChunkBasedSegmentHeader(int cacheEntryIndex) => --_cachedEntries.Span[cacheEntryIndex].PinCounter;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+    private unsafe byte* GetPageRawDataAddr(int pageIndex, bool pin, bool dirtyPage, out int cacheEntryIndex)
+    {
         var lowHit = int.MaxValue;
         var pageI = -1;
 
         var cachedEntries = _cachedEntries.Span;
         var cachedPagesAccess = _cachedPages.Span;
-        for (int i = 0; i < _cachedPagesCount; i++)
+        for (cacheEntryIndex = 0; cacheEntryIndex < _cachedPagesCount; cacheEntryIndex++)
         {
-            ref var entry = ref cachedEntries[i];
-            if (entry.SegmentIndex == si)
+            ref var entry = ref cachedEntries[cacheEntryIndex];
+            if (entry.SegmentIndex == pageIndex)
             {
                 if (entry.CurrentPageState == PagedMMF.PageState.Idle)
                 {
-                    _owner.GetPageSharedAccessor(si, out cachedPagesAccess[i]);
+                    _owner.GetPageSharedAccessor(pageIndex, out cachedPagesAccess[cacheEntryIndex]);
                     entry.CurrentPageState = PagedMMF.PageState.Shared;
                 }
 
@@ -170,13 +186,13 @@ public class ChunkRandomAccessor : IDisposable
                     entry.IsDirty = 1;
                 }
                 ++entry.HitCount;
-                return entry.BaseAddress + (si == 0 ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (off * _stride);
+                return entry.BaseAddress;
             }
 
             if ((entry.PinCounter == 0) && (entry.PromoteCounter == 0) && (entry.HitCount < lowHit))
             {
                 lowHit = entry.HitCount;
-                pageI = i;
+                pageI = cacheEntryIndex;
             }
         }
 
@@ -186,6 +202,7 @@ public class ChunkRandomAccessor : IDisposable
             throw new NotImplementedException("No more available pages slot, all are occupied by pinned pages");
         }
 
+        cacheEntryIndex = pageI;
         ref var cachedEntry = ref _cachedEntries.Span[pageI];
 
         if (cachedEntry.IsDirty != 0 && _changeSet != null)
@@ -196,16 +213,16 @@ public class ChunkRandomAccessor : IDisposable
         cachedPagesAccess[pageI].Dispose();
 
         cachedEntry.HitCount          = 1;
-        cachedEntry.SegmentIndex      = si;
+        cachedEntry.SegmentIndex      = pageIndex;
         cachedEntry.PinCounter        = pin ? (short)1 : (short)0;
         cachedEntry.PromoteCounter    = 0;
         cachedEntry.IsDirty           = (short)(dirtyPage ? 1 : 0);
-        cachedEntry.CurrentPageState = PagedMMF.PageState.Shared;
+        cachedEntry.CurrentPageState  = PagedMMF.PageState.Shared;
 
-        _owner.GetPageSharedAccessor(si, out cachedPagesAccess[pageI]);
+        _owner.GetPageSharedAccessor(pageIndex, out cachedPagesAccess[pageI]);
         cachedEntry.BaseAddress = cachedPagesAccess[pageI].GetRawDataAddr();
-
-        return cachedEntry.BaseAddress + (si == 0 ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (off * _stride);
+        
+        return cachedEntry.BaseAddress;
     }
 
     unsafe internal void ClearChunk(int index)

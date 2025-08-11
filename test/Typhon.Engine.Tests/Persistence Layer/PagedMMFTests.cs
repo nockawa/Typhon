@@ -325,6 +325,8 @@ class PagedMMFTests
         //  my actual computer has more thread, which means multiple thread compete for the same memory page.
         var cacheSize = _serviceProvider.GetRequiredService<IOptions<PagedMMFOptions>>().Value.DatabaseCacheSize;
         var pagesCount = (int)(cacheSize * cacheFactor) / PagedMMF.PageSize;
+        var coreCount = Environment.ProcessorCount / 2;
+        pagesCount = pagesCount / coreCount * coreCount;                        // Make sure we have a multiple of the core count
 
         // Generate IO ops for all the frames
         var frames = new List<List<OPInfo>>(frameCount);
@@ -359,7 +361,6 @@ class PagedMMFTests
             frames.Add(ops);
         }
 
-        var coreCount = Environment.ProcessorCount / 2;
         var ranges = new ConcurrentBag<(int, int)>();
         {
             var heapCount = pagesCount / coreCount;
