@@ -9,7 +9,7 @@ namespace Typhon.Engine.BPTree;
 
 public abstract partial class BTree<TKey>
 {
-    [DebuggerDisplay("ChunkId: {ChunkId}, IsValid: {IsValid}, IsLeaf: {IsLeaf}, Count: {Count}")]
+    [DebuggerDisplay("ChunkId: {ChunkId}, IsValid: {IsValid}")]
     [DebuggerTypeProxy(typeof(BTree<>.NodeWrapper.DebugView))]
     public readonly struct NodeWrapper : IEquatable<NodeWrapper>
     {

@@ -3,7 +3,6 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Typhon.Engine;
@@ -27,6 +26,7 @@ public partial class ManagedPagedMMF : PagedMMF
     private ConcurrentDictionary<int, LogicalSegment> _segments;
     private LogicalSegment _occupancySegment;
     private BitmapL3 _occupancyMap;
+    private int _occupancyNextReservedPage;
 
     public ManagedPagedMMF(IServiceProvider serviceProvider, PagedMMFOptions options, TimeManager timeManager, ILogger<PagedMMF> logger) : 
         base(serviceProvider, options, timeManager, logger)
@@ -37,8 +37,24 @@ public partial class ManagedPagedMMF : PagedMMF
     {
         lock (_occupancyMap)
         {
-            _occupancyMap.Allocate(ref pageIds, changeSet);
+            Span<int> nextPage = stackalloc int[1];
+
+            // Need to grow the occupancy segment if we run out of pages
+            while (_occupancyMap.Allocate(ref pageIds, changeSet) == false)
+            {
+                // Will use _occupancyNextReservedPage to grow the segment of one page
+                GrowOccupancySegment(changeSet);
+                
+                // Now that we can allocate many more pages, reserve the next page to be used when the occupancy map needs to grow again
+                AllocatePages(ref nextPage, changeSet);
+                _occupancyNextReservedPage = nextPage[0];
+            }
         }
+    }
+
+    private void GrowOccupancySegment(ChangeSet changeSet)
+    {
+        
     }
 
     public bool FreePages(ReadOnlySpan<int> pages, ChangeSet changeSet = null)
@@ -86,6 +102,10 @@ public partial class ManagedPagedMMF : PagedMMF
             // The first two pages are already manually allocated (file header and occupancy segment root page)
             _occupancyMap.SetL0(0);
             _occupancyMap.SetL0(1);
+            
+            // Reserve a page to use when the occupancy map needs to grow
+            _occupancyNextReservedPage = 2;
+            _occupancyMap.SetL0(_occupancyNextReservedPage);
             // ReSharper restore InconsistentlySynchronizedField
             
             cs.SaveChanges();

@@ -133,19 +133,21 @@ public partial class ManagedPagedMMF
         public void ClearL0(int index, ChangeSet changeSet = null)
         {
             var l0Offset = index >> 6;
-            var l0Mask = ~(1L << (index & 0x3F));
+            var l0SetMask = 1L << (index & 0x3F);
+            var l0ClearMask = ~l0SetMask;
 
             var (pageIndex, pageOffset) = LogicalSegment.GetItemLocation<long>(l0Offset);
             _segment.GetPageExclusiveAccessor(pageIndex, out var page);
             using (page)
             {
                 var data = page.LogicalSegmentData.Cast<byte, long>();
-                var prevL0 = Interlocked.And(ref data[pageOffset], l0Mask);
-                if (data[pageOffset] != prevL0)
+                var prevL0 = Interlocked.And(ref data[pageOffset], l0ClearMask);
+                if ((prevL0 & l0SetMask) != 0)
                 {
                     changeSet?.Add(page);
                 }
-                if ((prevL0 == -1) && ((prevL0 & l0Mask) != -1))
+                
+                if ((prevL0 == -1) && ((prevL0 & l0ClearMask) != -1))
                 {
                     var l1Offset = l0Offset >> 6;
                     var l1Mask = 1L << (l0Offset & 0x3F);
@@ -161,7 +163,7 @@ public partial class ManagedPagedMMF
                     }
                 }
 
-                if ((prevL0 != 0) && ((prevL0 & l0Mask) == 0))
+                if ((prevL0 != 0) && ((prevL0 & l0ClearMask) == 0))
                 {
                     var l1Offset = l0Offset >> 6;
                     var l1Mask = 1L << (l0Offset & 0x3F);
@@ -276,7 +278,8 @@ public partial class ManagedPagedMMF
             var ll1 = _l1All.Length;
             var ll2 = _l2All.Length;
 
-            while (c1 < (ll1<<6))
+            var max = Capacity >> 6;
+            while (c1 < max)
             {
                 if (((c1 & 0x3F) == 0) || (v1 == -1))
                 {

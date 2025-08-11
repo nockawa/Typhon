@@ -530,4 +530,32 @@ Here come the drones!";
 
         Assert.That(rwsl.SharedUsedCounter, Is.EqualTo(0));
     }
+
+    [Test]
+    public void GrowOccupancyMapTest()
+    {
+        const int MaxBeforeGrow = ((PagedMMF.PageRawDataSize - LogicalSegment.RootHeaderIndexSectionLength) * 8) - 2;
+        
+        int rootSegmentIndex;
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var pmmf = scope.ServiceProvider.GetRequiredService<ManagedPagedMMF>();
+            
+            var cs = pmmf.CreateChangeSet();
+
+            var s0 = pmmf.AllocateSegment(PageBlockType.None, MaxBeforeGrow + 10, cs);
+            
+            cs.SaveChanges();
+            rootSegmentIndex = s0.RootPageIndex;
+        }
+        
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var mpmmf = scope.ServiceProvider.GetRequiredService<ManagedPagedMMF>();
+
+            var s0 = mpmmf.GetSegment(rootSegmentIndex);
+
+        }
+        
+    }
 }

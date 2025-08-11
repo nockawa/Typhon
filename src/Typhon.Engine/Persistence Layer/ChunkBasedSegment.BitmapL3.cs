@@ -36,7 +36,64 @@ public partial class ChunkBasedSegment
 
             if (isLoading)
             {
+                InitFromLoad();
+            }
+        }
+
+        private void InitFromLoad()
+        {
+            var pageIndex = -1;
+            PageAccessor page = default;
+            Span<long> data = default;
+            
+            for (int i = 0; i < Capacity; i += 64)
+            {
+                var l0Offset = i >> 6;
+                var prevIndex = pageIndex;
+                int pageOffset = 0;
                 
+                (pageIndex, pageOffset) = GetBitmapMaskLocation(i >> 6);
+                
+                if (pageIndex != prevIndex)
+                {
+                    if (page.IsValid)
+                    {
+                        page.Dispose();
+                    }
+                    _segment.GetPageSharedAccessor(pageIndex, out page);
+                    data = page.PageMetadata.Cast<byte, long>();
+                }
+
+                var mask = data[pageOffset];
+                
+                if (mask == -1)
+                {
+                    var l1Offset = l0Offset >> 6;
+                    var l1Mask = 1L << (l0Offset & 0x3F);
+
+                    var prevL1 = _l1All.Span[l1Offset];
+                    _l1All.Span[l1Offset] |= l1Mask;
+
+                    if (prevL1 != -1 && (prevL1 | l1Mask) == -1)
+                    {
+                        var l2Offset = l1Offset >> 6;
+                        var l2Mask = 1L << (l1Offset & 0x3F);
+                        _l2All.Span[l2Offset] |= l2Mask;
+                    }
+                }
+
+                if (mask != 0)
+                {
+                    var l1Offset = l0Offset >> 6;
+                    var l1Mask = 1L << (l0Offset & 0x3F);
+
+                    _l1Any.Span[l1Offset] |= l1Mask;
+                }
+                
+            }
+            if (page.IsValid)
+            {
+                page.Dispose();
             }
         }
 
