@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using NUnit.Framework;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -14,6 +15,7 @@ public class ManagedPagedMMFTests
 {
     private IServiceProvider _serviceProvider;
     private ServiceCollection _serviceCollection;
+    private ILogger<ManagedPagedMMFTests> _logger;
 
     static readonly char[] charToRemove = ['(', ')'];
     private static string CurrentDatabaseName
@@ -60,6 +62,8 @@ public class ManagedPagedMMFTests
         
         _serviceProvider = _serviceCollection.BuildServiceProvider();
         _serviceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
+
+        _logger = _serviceCollection.BuildServiceProvider().GetRequiredService<ILogger<ManagedPagedMMFTests>>();
     }
 
     [TearDown]
@@ -108,7 +112,7 @@ public class ManagedPagedMMFTests
 
         var seg = pmmf.AllocateSegment(PageBlockType.None, pageCount);
 
-        var c = new ManagedPagedMMF.BitmapL3(bitCount, seg);
+        var c = new ManagedPagedMMF.BitmapL3(seg);
 
         var index = -1;
         long mask = 0L;
@@ -158,7 +162,7 @@ public class ManagedPagedMMFTests
 
         var seg = pmmf.AllocateSegment(PageBlockType.None, pageCount);
 
-        var l3 = new ManagedPagedMMF.BitmapL3(bitCount, seg);
+        var l3 = new ManagedPagedMMF.BitmapL3(seg);
 
         var index = -1;
         long mask = 0L;
@@ -188,7 +192,7 @@ public class ManagedPagedMMFTests
 
         var seg = pmmf.AllocateSegment(PageBlockType.None, pageCount);
 
-        var c = new ManagedPagedMMF.BitmapL3(bitCount, seg);
+        var c = new ManagedPagedMMF.BitmapL3(seg);
 
         c.SetL1(0);
         Assert.That(c.IsSet(0), Is.EqualTo(true));
@@ -531,22 +535,42 @@ Here come the drones!";
         Assert.That(rwsl.SharedUsedCounter, Is.EqualTo(0));
     }
 
-    [Test]
+    [Test, CancelAfter(10_000)]
+    [Property("MemPageCount", 50000)]       // Must be larger than maxBeforeGrow defined below
     public void GrowOccupancyMapTest()
     {
-        const int MaxBeforeGrow = ((PagedMMF.PageRawDataSize - LogicalSegment.RootHeaderIndexSectionLength) * 8) - 2;
+        const int maxBeforeGrow = 
+            ((PagedMMF.PageRawDataSize - LogicalSegment.RootHeaderIndexSectionLength) * 8) - ManagedPagedMMF.InitialReservedPageCount - 25;
         
-        int rootSegmentIndex;
+        int rootSegmentIndex, segmentTotalLength;
+        ReadOnlySpan<int> segmentPages;
+
         {
+            Stopwatch sw = Stopwatch.StartNew();
+            
             using var scope = _serviceProvider.CreateScope();
             var pmmf = scope.ServiceProvider.GetRequiredService<ManagedPagedMMF>();
             
             var cs = pmmf.CreateChangeSet();
 
-            var s0 = pmmf.AllocateSegment(PageBlockType.None, MaxBeforeGrow + 10, cs);
-            
-            cs.SaveChanges();
+            var s0 = pmmf.AllocateSegment(PageBlockType.None, maxBeforeGrow, cs);
             rootSegmentIndex = s0.RootPageIndex;
+            
+            sw.Stop();
+            _logger.LogInformation("Segment allocated in {Elapsed} ms", sw.ElapsedMilliseconds);
+            
+            sw.Restart();
+            cs.SaveChanges();
+            sw.Stop();
+            _logger.LogInformation("Save segment of {Size} in {Elapsed} ms", (s0.Length * PagedMMF.PageSize).FriendlySize(), sw.ElapsedMilliseconds);
+            
+            // Grow the segment to trigger the occupancy map grow
+            s0.Grow(s0.Length + 10, true, cs);
+            cs.SaveChanges();
+
+            segmentPages = s0.Pages;
+            segmentTotalLength = s0.Length;
+            
         }
         
         {
@@ -554,7 +578,35 @@ Here come the drones!";
             var mpmmf = scope.ServiceProvider.GetRequiredService<ManagedPagedMMF>();
 
             var s0 = mpmmf.GetSegment(rootSegmentIndex);
+            Assert.That(s0.Length, Is.EqualTo(segmentTotalLength));
 
+            // Check the pages of the segment were loaded correctly
+            for (int i = 0; i < s0.Pages.Length; i++)
+            {
+                Assert.That(segmentPages[i], Is.EqualTo(s0.Pages[i]));
+            }
+        }
+    }
+
+    [Test]
+    [Property("MemPageCount", 2005)]        // 2000 for the amount of page in an index map (500 for the first, 2000 for the others), 5 for extra system pages
+    public void LogicalSegmentGrowTest()
+    {
+        const int initialSize = 10;         // Header = 10
+        const int firstGrowSize = 510;      // Header = 500, Map #1 (new) = 10
+        const int secondGrowSize = 2510;    // Header = 500, Map #1 = 2000, Map #2 (new) = 10
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var pmmf = scope.ServiceProvider.GetRequiredService<ManagedPagedMMF>();
+            
+            var cs = pmmf.CreateChangeSet();
+
+            var s0 = pmmf.AllocateSegment(PageBlockType.None, initialSize, cs);
+            s0.Grow(firstGrowSize, true, cs);
+            cs.SaveChanges();
+            
+            s0.Grow(secondGrowSize, true, cs);
+            cs.SaveChanges();
         }
         
     }

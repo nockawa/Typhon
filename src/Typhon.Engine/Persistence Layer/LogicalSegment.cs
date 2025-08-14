@@ -7,6 +7,8 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 
+#pragma warning disable CS0728 // Possibly incorrect assignment to local which is the argument to a using or lock statement
+
 namespace Typhon.Engine;
 
 public enum PageClearMode
@@ -46,6 +48,7 @@ public struct LogicalSegmentHeader
 /// The segment also maintain a linked list in the Page Header to allow faster forward traversal.
 /// There is some basic API that allow to store/enumerate fixed size elements, indexed into the logical segment.
 /// </remarks>
+[PublicAPI]
 public class LogicalSegment : IDisposable
 {
     /*
@@ -63,7 +66,18 @@ public class LogicalSegment : IDisposable
     private readonly ManagedPagedMMF _manager;
     private int[] _pages;
 
-    public int RootPageIndex { get; private set; }
+    public int RootPageIndex
+    {
+        get
+        {
+            var pages = _pages;
+            if (pages == null || pages.Length == 0)
+            {
+                throw new InvalidOperationException("Logical segment has not been initialized.");
+            }
+            return pages[0];
+        }
+    }
 
     public int Length => _pages.Length;
     public ReadOnlySpan<int> Pages => _pages;
@@ -75,15 +89,87 @@ public class LogicalSegment : IDisposable
         long timeout = Timeout.Infinite, CancellationToken cancellationToken = default) 
         => _manager.RequestPage(Pages[segmentFilePageIndex], false, out result, timeout, cancellationToken);
 
+    public delegate bool PageWalkPredicate(int indexInSegment, ref PageAccessor accessor);
+    public delegate bool PageMapWalkPredicate(int pageMapIndex, ref PageAccessor accessor);
+    public delegate bool PageMapWalkPredicate<in T>(int pageMapIndex, ref PageAccessor accessor, T extra) where T : allows ref struct;
+
+    public void WalkIndicesMap(PageMapWalkPredicate predicate, bool exclusiveAccess)
+    {
+        var pages = _pages;
+
+        var curPageIndex = pages[0];
+        var pageMapIndex = 0;
+        while (true)
+        {
+            _manager.RequestPage(curPageIndex, exclusiveAccess, out var pa);
+            using (pa)
+            {
+                if (predicate(pageMapIndex++, ref pa) == false)
+                {
+                    break;
+                }
+
+                ref var lsh = ref pa.GetHeader<LogicalSegmentHeader>(LogicalSegmentHeader.Offset);
+                curPageIndex = lsh.LogicalSegmentNextMapPBID;
+                if (curPageIndex == 0)
+                {
+                    break;
+                }
+            }
+        }
+    }
+    public void WalkIndicesMap<T>(PageMapWalkPredicate<T> predicate, bool exclusiveAccess, T extra) where T : allows ref struct
+    {
+        var pages = _pages;
+
+        var curPageIndex = pages[0];
+        var pageMapIndex = 0;
+        while (true)
+        {
+            _manager.RequestPage(curPageIndex, exclusiveAccess, out var pa);
+            using (pa)
+            {
+                if (predicate(pageMapIndex++, ref pa, extra) == false)
+                {
+                    break;
+                }
+
+                ref var lsh = ref pa.GetHeader<LogicalSegmentHeader>(LogicalSegmentHeader.Offset);
+                curPageIndex = lsh.LogicalSegmentNextMapPBID;
+                if (curPageIndex == 0)
+                {
+                    break;
+                }
+            }
+        }
+    }
+    
+    public void Grow(int newLength, bool clearNewPages, ChangeSet changeSet = null)
+    {
+        var curPages = _pages;
+        if (curPages == null)
+        {
+            throw new InvalidOperationException("Logical segment has not been initialized.");
+        }
+        if (newLength <= curPages.Length)
+        {
+            throw new ArgumentException($"New length {newLength} must be greater than current size {curPages.Length}.", nameof(newLength));
+        }
+
+        var newPages = new int[newLength];
+        var newPagesAsSpan = newPages.AsSpan();
+        curPages.CopyTo(newPagesAsSpan);
+        _manager.AllocatePages(ref newPagesAsSpan, curPages.Length, changeSet);
+
+        CreateOrGrow(PageBlockType.None, newPages, Length, ref NoNextMap, clearNewPages, changeSet);
+    }
+    
     internal LogicalSegment(ManagedPagedMMF manager)
     {
         _manager = manager;
     }
 
-    public void Dispose()
-    {
-        _pages = null;
-    }
+    public void Dispose() => _pages = null;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public static int GetMaxItemCount<T>(bool firstPage) where T : unmanaged => GetMaxItemCount(firstPage, Marshal.SizeOf<T>());
@@ -118,14 +204,17 @@ public class LogicalSegment : IDisposable
         ids[0] = filePageIndex;
         return Create(type, ids, clear, changeSet);
     }
-        
-    unsafe internal virtual bool Create(PageBlockType type, Span<int> filePageIndices, bool clear, ChangeSet changeSet = null)
-    {
-        RootPageIndex = filePageIndices[0];
 
-        // Compute the number of subsequent pages needed to store the indices (if they don't fit in the root page)
+    private static int NoNextMap = 0;
+    
+    internal virtual bool Create(PageBlockType type, Span<int> filePageIndices, bool clear, ChangeSet changeSet = null) 
+        => CreateOrGrow(type, filePageIndices, 0, ref NoNextMap, clear, changeSet);
+
+    internal bool CreateOrGrow(PageBlockType type, Span<int> filePageIndices, int growFrom, ref int nextMap, bool clear, ChangeSet changeSet)
+    {
+        // Compute the number of indices map pages needed to store the indices (root + subsequent).
         // The end of the indices list is marked by a 0 value, we need to save space for this entry too, so the next line is accurate, if you wonder.
-        var subIndicesPageCount = (filePageIndices.Length - RootHeaderIndexSectionCount + NextHeadersIndexSectionCount) / NextHeadersIndexSectionCount;
+        var mapPageCount = 1 + ((filePageIndices.Length - RootHeaderIndexSectionCount + NextHeadersIndexSectionCount) / NextHeadersIndexSectionCount);
         
         // Store the indices, code is complex because we may need multiple pages to store them all.
         // Reminder of how data is structured:
@@ -138,66 +227,155 @@ public class LogicalSegment : IDisposable
         // 2. The logical segment next raw data page ID(LogicalSegmentNextRawDataPBID), which is used to traverse the data pages.
         // Both of these linked lists are terminated by 0.
         {
-            Span<int> indicesPagesIndices = stackalloc int[subIndicesPageCount];
-            if (subIndicesPageCount > 0)
+            // Start by building and/or allocating the indices pages, considering the growFrom parameter.
+            Span<int> mapIndices = stackalloc int[mapPageCount];
+            mapIndices[0] = filePageIndices[0];                         // The first page is always the root page, so we set it here.;
+            var mapIndexAllocStartFrom = 0;
+            
+            if (mapPageCount > 1)
             {
-                _manager.AllocatePages(ref indicesPagesIndices, changeSet);
+                // Need to rebuild the indices pages
+                if (growFrom > 0)
+                {
+                    WalkIndicesMap((int i, ref PageAccessor accessor, Span<int> span) =>
+                    {
+                        span[i] = accessor.FilePageIndex;
+                        mapIndexAllocStartFrom = i + 1;                 // Update the start index for the first page to allocate
+                        return true;
+                    }, false, mapIndices);
+                }
+                
+                // If a nextMap is provided, we need to use it as the first new map page
+                var allocStartFrom = mapIndexAllocStartFrom;
+                if ((nextMap != 0) && (allocStartFrom < mapIndices.Length))
+                {
+                    mapIndices[allocStartFrom++] = nextMap;
+                    nextMap = 0;                                        // Signal the caller that we used the given nextMap
+                }
+
+                // Allocated the remaining indices pages using the allocator
+                allocStartFrom = Math.Max(1, allocStartFrom);           // Ensure we start from the second page, as the first is always the root page
+                if (allocStartFrom < mapIndices.Length)
+                {
+                    var pagesToAllocate = mapIndices[1..];
+                    _manager.AllocatePages(ref pagesToAllocate, allocStartFrom - 1, changeSet);
+                }
             }
+            
             bool isFirstPage = true;
             var remainingIndices = filePageIndices.Length;
-            var curIndicesPageIndex = 0;
+            var mapIndexBaseOffset = 0;
+            var curIndexMapIndex = 0;
             var curFilePageIndex = 0;
+            var curStartPageIndex = growFrom;
             
             while (remainingIndices > 0)
             {
                 var curIndicesCount = Math.Min(remainingIndices, isFirstPage ? RootHeaderIndexSectionCount : NextHeadersIndexSectionCount);
 
-                _manager.RequestPage(isFirstPage ? filePageIndices[0] : indicesPagesIndices[curIndicesPageIndex++], true, out var pa);
-                using (pa)
-                {
-                    changeSet?.Add(pa);
+                var isNewPage = (curIndexMapIndex >= mapIndexAllocStartFrom) && ((curIndexMapIndex > 0) || (growFrom == 0));
+                var isLastAllocated = curIndexMapIndex == (mapIndexAllocStartFrom - 1);
+                var curMapPageIndex = mapIndices[curIndexMapIndex];
+                var hasAccessor = false;
+                PageAccessor pa = default;
+                var isPageDirty = false;
 
+                // If it's a new page, initialize it
+                if (isNewPage)
+                {
+                    _manager.RequestPage(curMapPageIndex, true, out pa);
+                    hasAccessor = true;
+                    
                     pa.InitHeader(
                         PageClearMode.Header, 
                         PageBlockFlags.IsLogicalSegment | (isFirstPage ? PageBlockFlags.IsLogicalSegmentRoot : PageBlockFlags.None), 
                         type, 1);
+                    isPageDirty = true;
+                }
 
+                // Update the indices map linked list, starting the index map before the first to allocate
+                if (isNewPage || isLastAllocated)
+                {
+                    if (hasAccessor == false)
+                    {
+                        _manager.RequestPage(curMapPageIndex, true, out pa);
+                        hasAccessor = true;
+                    }
                     ref var lsh = ref pa.GetHeader<LogicalSegmentHeader>(LogicalSegmentHeader.Offset);
-                    lsh.LogicalSegmentNextMapPBID = (curIndicesPageIndex < indicesPagesIndices.Length) ? indicesPagesIndices[curIndicesPageIndex] : 0;
+                    lsh.LogicalSegmentNextMapPBID = ((curIndexMapIndex + 1) < mapIndices.Length) ? mapIndices[curIndexMapIndex + 1] : 0;
+                    isPageDirty = true;
+                }
+
+                // In the current map, set the page indices it contains
+                if ((curStartPageIndex >= mapIndexBaseOffset) && (curStartPageIndex < (mapIndexBaseOffset + curIndicesCount)))
+                {
+                    if (hasAccessor == false)
+                    {
+                        _manager.RequestPage(curMapPageIndex, true, out pa);
+                        hasAccessor = true;
+                    }
                     
                     var rd = pa.PageRawData.Cast<byte, int>();
-                    int j;
-                    for (j = 0; j < curIndicesCount; j++)
+                    int j = curStartPageIndex - mapIndexBaseOffset;
+                    curFilePageIndex += j;
+                    for (; j < curIndicesCount; j++)
                     {
                         rd[j] = filePageIndices[curFilePageIndex++];
                     }
-
-                    remainingIndices -= curIndicesCount;
-                    if (remainingIndices == 0)
+                    
+                    if ((remainingIndices - curIndicesCount) == 0)
                     {
                         if (j < rd.Length)
                         {
                             rd[j] = 0;
                         }
-                        
+                    
                         // The current page is full, we need on fetch one more... just to store the termination 0 value
                         else
                         {
-                            _manager.RequestPage(indicesPagesIndices[curIndicesPageIndex], true, out var paEnd);
+                            _manager.RequestPage(mapIndices[curIndexMapIndex + 1], true, out var paEnd);
                             using (paEnd)
                             {
+                                paEnd.InitHeader(PageClearMode.Header, PageBlockFlags.IsLogicalSegment, type, 1);
                                 changeSet?.Add(paEnd);
                                 paEnd.PageRawData.Cast<byte, int>()[0] = 0;
                             }
                         }
                     }
-                    isFirstPage = false;
+                    isPageDirty = true;
                 }
+                else
+                {
+                    curFilePageIndex += curIndicesCount;
+                }
+
+                mapIndexBaseOffset += curIndicesCount;
+                remainingIndices -= curIndicesCount;
+
+                // Slide the curStartPageIndex range to the next map page if we are after the growFrom index
+                // In other words, keep the growFrom index if we didn't reach it yet
+                if (curStartPageIndex < mapIndexBaseOffset)
+                {
+                    curStartPageIndex = mapIndexBaseOffset;
+                }
+                
+                if (isPageDirty)
+                {
+                    changeSet?.Add(pa);
+                }
+
+                if (hasAccessor)
+                {
+                    pa.Dispose();
+                }
+                    
+                isFirstPage = false;
+                curIndexMapIndex++;
             }
         }
         
         // Initialize the subsequent pages on disk
-        for (var i = 0; i < filePageIndices.Length; i++)
+        for (var i = growFrom; i < filePageIndices.Length; i++)
         {
             var pageIndex = filePageIndices[i];
             _manager.RequestPage(pageIndex, true, out var pa);
@@ -225,31 +403,33 @@ public class LogicalSegment : IDisposable
     
     internal virtual bool Load(int filePageIndex)
     {
-        RootPageIndex = filePageIndex;
-        
-        _manager.RequestPage(RootPageIndex, true, out var pa);
+        _manager.RequestPage(filePageIndex, true, out var pa);
         var pages = new List<int>();
-        var rd = pa.PageRawData.Cast<byte, int>();
+        var rd = pa.PageRawData.Cast<byte, int>()[..RootHeaderIndexSectionCount];
         var maxIndicesForPage = RootHeaderIndexSectionCount;
         var i = 0;
         while (rd[i] != 0)
         {
             pages.Add(rd[i]);
-            i++;
-            if (i == maxIndicesForPage)
+
+            if (++i != maxIndicesForPage)
             {
-                // We reached the end of the root page, we need to load more pages
-                ref var lsh = ref pa.GetHeader<LogicalSegmentHeader>(LogicalSegmentHeader.Offset);
-                if (lsh.LogicalSegmentNextMapPBID == 0)
-                {
-                    break; // No more pages
-                }
-                pa.Dispose();
-                _manager.RequestPage(lsh.LogicalSegmentNextMapPBID, true, out pa);
-                rd = pa.PageRawData.Cast<byte, int>();
-                i = 0; // Reset index for the new page
-                maxIndicesForPage = NextHeadersIndexSectionCount;
+                continue;
             }
+
+            // We reached the end of the root page, we need to load more pages
+            ref var lsh = ref pa.GetHeader<LogicalSegmentHeader>(LogicalSegmentHeader.Offset);
+            if (lsh.LogicalSegmentNextMapPBID == 0)
+            {
+                break; // No more pages
+            }
+            
+            pa.Dispose();
+            _manager.RequestPage(lsh.LogicalSegmentNextMapPBID, true, out pa);
+            rd = pa.PageRawData.Cast<byte, int>();
+            i = 0; // Reset index for the new page
+            
+            maxIndicesForPage = NextHeadersIndexSectionCount;
         }
         pa.Dispose();
         

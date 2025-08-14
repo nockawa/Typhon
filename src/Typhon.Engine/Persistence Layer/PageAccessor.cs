@@ -223,7 +223,7 @@ unsafe public struct PageAccessor : IDisposable
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    private void EnsureDataReady()
+    internal void EnsureDataReady()
     {
         if (_isReady)
         {

@@ -75,6 +75,106 @@ public partial class PagedMMF : IDisposable
         
         /// 
         public int TotalMemPageAllocatedCount;
+
+        private readonly PagedMMF _owner;
+
+        [PublicAPI]
+        public struct MemPageExtraInfo
+        {
+            public int FreeMemPageCount         { get; internal set; }
+            public int AllocatingMemPageCount   { get; internal set; }
+            public int IdleMemPageCount         { get; internal set; }
+            public int SharedMemPageCount       { get; internal set; }
+            public int ExclusiveMemPageCount    { get; internal set; }
+            public int IdleAndDirtyMemPageCount { get; internal set; }
+            public int LockedByThreadCount      { get; internal set; }
+            public int PendingIOReadCount       { get; internal set; }
+            public int MinClockSweepCounter     { get; internal set; }
+            public int MaxClockSweepCounter     { get; internal set; }
+            
+            public override string ToString() =>
+                $"Free: {FreeMemPageCount}, Allocating: {AllocatingMemPageCount}, Idle: {IdleMemPageCount}, " +
+                $"Shared: {SharedMemPageCount}, Exclusive: {ExclusiveMemPageCount}, IdleAndDirty: {IdleAndDirtyMemPageCount}, " +
+                $"LockedByThread: {LockedByThreadCount}, PendingIORead: {PendingIOReadCount}, " +
+                $"MinClockSweepCounter: {MinClockSweepCounter}, MaxClockSweepCounter: {MaxClockSweepCounter}";
+        }
+        
+        public Metrics(PagedMMF owner, int freePageCount)
+        {
+            _owner = owner;
+            FreeMemPageCount = freePageCount;
+        }
+
+        public void GetMemPageExtraInfo(out MemPageExtraInfo res) => _owner.GetMemPageExtraInfo(out res);
+    }
+
+    private void GetMemPageExtraInfo(out Metrics.MemPageExtraInfo res)
+    {
+        int free = 0;
+        int allocating = 0;
+        int idleCount = 0;
+        int sharedCount = 0;
+        int exclusiveCount = 0;
+        int idleAndDirtyCount = 0;
+        int lockedByThreadCount = 0;
+        int pendingIOReadCount = 0;
+        int minClockSweepCounter = int.MaxValue;
+        int maxClockSweepCounter = int.MinValue;
+        
+        foreach (var pi in _memPagesInfo)
+        {
+            switch (pi.PageState)
+            {
+                case PageState.Free:
+                    free++;
+                    break;
+                case PageState.Allocating:
+                    allocating++;
+                    break;
+                case PageState.Idle:
+                    idleCount++;
+                    break;
+                case PageState.Shared:
+                    sharedCount++;
+                    break;
+                case PageState.Exclusive:
+                    exclusiveCount++;
+                    break;
+                case PageState.IdleAndDirty:
+                    idleAndDirtyCount++;
+                    break;
+            }
+            if (pi.LockedByThreadId != 0)
+            {
+                lockedByThreadCount++;
+            }
+            if (pi.IOReadTask != null && pi.IOReadTask.IsCompleted == false)
+            {
+                pendingIOReadCount++;
+            }
+            if (pi.ClockSweepCounter < minClockSweepCounter)
+            {
+                minClockSweepCounter = pi.ClockSweepCounter;
+            }
+            if (pi.ClockSweepCounter > maxClockSweepCounter)
+            {
+                maxClockSweepCounter = pi.ClockSweepCounter;
+            }
+        }
+        
+        res = new Metrics.MemPageExtraInfo
+        {
+            FreeMemPageCount = free,
+            AllocatingMemPageCount = allocating,
+            IdleMemPageCount = idleCount,
+            SharedMemPageCount = sharedCount,
+            ExclusiveMemPageCount = exclusiveCount,
+            IdleAndDirtyMemPageCount = idleAndDirtyCount,
+            LockedByThreadCount = lockedByThreadCount,
+            PendingIOReadCount = pendingIOReadCount,
+            MinClockSweepCounter = minClockSweepCounter,
+            MaxClockSweepCounter = maxClockSweepCounter
+        };
     }
 
     private Metrics _metrics;
@@ -143,7 +243,7 @@ public partial class PagedMMF : IDisposable
         
         _memPageIndexByFilePageIndex = new ConcurrentDictionary<int, int>();
 
-        _metrics = new Metrics { FreeMemPageCount = _memPagesCount };
+        _metrics = new Metrics (this, _memPagesCount);
 
         try
         {
@@ -825,7 +925,7 @@ public partial class PagedMMF : IDisposable
         pi.StateSyncRoot.Exit();
     }
 
-    internal Task SavePages(int[] memPageIndices)
+    unsafe internal Task SavePages(int[] memPageIndices)
     {
         // We want to generate as few IO operations as possible, so we sort the pages to identify the ones that are contiguous in the file
         Array.Sort(memPageIndices, (x, y) => x - y);
@@ -834,16 +934,27 @@ public partial class PagedMMF : IDisposable
 
         var curPageInfo = _memPagesInfo[memPageIndices[0]];
         var curOperation = (memPageIndex: memPageIndices[0], length: 1);
+        var memPageBaseAddr = _memPagesAddr;
 
         for (int i = 1; i < memPageIndices.Length; i++)
         {
+            // Increment the ChangeRevision for the page (File Page 0 is the file header, it's a different format so ignore it)
+            if (curPageInfo.FilePageIndex > 0)
+            {
+                // Make sure the page to save is properly loaded first
+                var pa = new PageAccessor(this, curPageInfo);
+                pa.EnsureDataReady();
+            
+                var headerAddr = (PageBaseHeader*)(memPageBaseAddr + (curPageInfo.MemPageIndex * PageSize));
+                ++headerAddr->ChangeRevision;
+            }
+            
             var nextMemPageIndex = memPageIndices[i];
             var nextPageInfo = _memPagesInfo[nextMemPageIndex];
             if ((curPageInfo.MemPageIndex+1)==nextPageInfo.MemPageIndex && (curPageInfo.FilePageIndex+1)==nextPageInfo.FilePageIndex)
             {
                 // We are contiguous, extend the current operation
                 curOperation.length++;
-                curPageInfo = nextPageInfo;
             }
             else
             {
@@ -851,7 +962,10 @@ public partial class PagedMMF : IDisposable
                 operations.Add(curOperation);
                 curOperation = (nextMemPageIndex, 1);
             }
+
+            curPageInfo = nextPageInfo;
         }
+        
         // Don't forget to add the last operation
         operations.Add(curOperation);
         
@@ -878,8 +992,11 @@ public partial class PagedMMF : IDisposable
         // Save the page to disk
         var filePageIndex = pi.FilePageIndex;
         var pageOffset = filePageIndex * (long)PageSize;
-        var pageData = _memPages.AsMemory(firstMemPageIndex * PageSize, PageSize * length);
+        var lengthToWrite = PageSize * length;
+        var pageData = _memPages.AsMemory(firstMemPageIndex * PageSize, lengthToWrite);
 
+        _fileSize = Math.Max(_fileSize, pageOffset + lengthToWrite);
+        
         _metrics.PageWrittenToDiskCount += length;
         _metrics.WrittenOperationCount++;
         return RandomAccess.WriteAsync(_fileHandle, pageData, pageOffset);
