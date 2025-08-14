@@ -25,7 +25,7 @@ Not the original intent, but quickly a very interesting angle. Adopting some of 
 ### Reliable, meaning Durable (or not...)
 Atomic, transaction-based and durable operations. 
 
-Through a design decision, the user can opt-out durability on chosen components.
+Through a design decision, the user can opt out durability on chosen components.
 
 ### Scalable
 While it's still a goal, the ambitions were tuned down. A theoretical evolution would be a shard/hash based implementation, but the resulting complexity makes this no longer an objective.
