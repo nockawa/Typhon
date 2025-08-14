@@ -1272,6 +1272,48 @@
     },
     {
       "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.LogicalSegment.PageMapWalkPredicate-1.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.LogicalSegment.PageMapWalkPredicate-1.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.LogicalSegment.PageMapWalkPredicate<T>",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.LogicalSegment.PageMapWalkPredicate.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.LogicalSegment.PageMapWalkPredicate.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.LogicalSegment.PageMapWalkPredicate",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.LogicalSegment.PageWalkPredicate.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.LogicalSegment.PageWalkPredicate.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.LogicalSegment.PageWalkPredicate",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.LogicalSegment.yml",
       "output": {
         ".html": {

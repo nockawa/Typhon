@@ -9278,6 +9278,22 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.LogicalSegment.GetPageSharedAccessor
   nameWithType: LogicalSegment.GetPageSharedAccessor
+- uid: Typhon.Engine.LogicalSegment.Grow(System.Int32,System.Boolean,Typhon.Engine.ChangeSet)
+  name: Grow(int, bool, ChangeSet)
+  href: api/Typhon.Engine.LogicalSegment.html#Typhon_Engine_LogicalSegment_Grow_System_Int32_System_Boolean_Typhon_Engine_ChangeSet_
+  commentId: M:Typhon.Engine.LogicalSegment.Grow(System.Int32,System.Boolean,Typhon.Engine.ChangeSet)
+  name.vb: Grow(Integer, Boolean, ChangeSet)
+  fullName: Typhon.Engine.LogicalSegment.Grow(int, bool, Typhon.Engine.ChangeSet)
+  fullName.vb: Typhon.Engine.LogicalSegment.Grow(Integer, Boolean, Typhon.Engine.ChangeSet)
+  nameWithType: LogicalSegment.Grow(int, bool, ChangeSet)
+  nameWithType.vb: LogicalSegment.Grow(Integer, Boolean, ChangeSet)
+- uid: Typhon.Engine.LogicalSegment.Grow*
+  name: Grow
+  href: api/Typhon.Engine.LogicalSegment.html#Typhon_Engine_LogicalSegment_Grow_
+  commentId: Overload:Typhon.Engine.LogicalSegment.Grow
+  isSpec: "True"
+  fullName: Typhon.Engine.LogicalSegment.Grow
+  nameWithType: LogicalSegment.Grow
 - uid: Typhon.Engine.LogicalSegment.Length
   name: Length
   href: api/Typhon.Engine.LogicalSegment.html#Typhon_Engine_LogicalSegment_Length
@@ -9291,6 +9307,27 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.LogicalSegment.Length
   nameWithType: LogicalSegment.Length
+- uid: Typhon.Engine.LogicalSegment.PageMapWalkPredicate
+  name: LogicalSegment.PageMapWalkPredicate
+  href: api/Typhon.Engine.LogicalSegment.PageMapWalkPredicate.html
+  commentId: T:Typhon.Engine.LogicalSegment.PageMapWalkPredicate
+  fullName: Typhon.Engine.LogicalSegment.PageMapWalkPredicate
+  nameWithType: LogicalSegment.PageMapWalkPredicate
+- uid: Typhon.Engine.LogicalSegment.PageMapWalkPredicate`1
+  name: LogicalSegment.PageMapWalkPredicate<T>
+  href: api/Typhon.Engine.LogicalSegment.PageMapWalkPredicate-1.html
+  commentId: T:Typhon.Engine.LogicalSegment.PageMapWalkPredicate`1
+  name.vb: LogicalSegment.PageMapWalkPredicate(Of T)
+  fullName: Typhon.Engine.LogicalSegment.PageMapWalkPredicate<T>
+  fullName.vb: Typhon.Engine.LogicalSegment.PageMapWalkPredicate(Of T)
+  nameWithType: LogicalSegment.PageMapWalkPredicate<T>
+  nameWithType.vb: LogicalSegment.PageMapWalkPredicate(Of T)
+- uid: Typhon.Engine.LogicalSegment.PageWalkPredicate
+  name: LogicalSegment.PageWalkPredicate
+  href: api/Typhon.Engine.LogicalSegment.PageWalkPredicate.html
+  commentId: T:Typhon.Engine.LogicalSegment.PageWalkPredicate
+  fullName: Typhon.Engine.LogicalSegment.PageWalkPredicate
+  nameWithType: LogicalSegment.PageWalkPredicate
 - uid: Typhon.Engine.LogicalSegment.Pages
   name: Pages
   href: api/Typhon.Engine.LogicalSegment.html#Typhon_Engine_LogicalSegment_Pages
@@ -9317,6 +9354,31 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.LogicalSegment.RootPageIndex
   nameWithType: LogicalSegment.RootPageIndex
+- uid: Typhon.Engine.LogicalSegment.WalkIndicesMap(Typhon.Engine.LogicalSegment.PageMapWalkPredicate,System.Boolean)
+  name: WalkIndicesMap(PageMapWalkPredicate, bool)
+  href: api/Typhon.Engine.LogicalSegment.html#Typhon_Engine_LogicalSegment_WalkIndicesMap_Typhon_Engine_LogicalSegment_PageMapWalkPredicate_System_Boolean_
+  commentId: M:Typhon.Engine.LogicalSegment.WalkIndicesMap(Typhon.Engine.LogicalSegment.PageMapWalkPredicate,System.Boolean)
+  name.vb: WalkIndicesMap(PageMapWalkPredicate, Boolean)
+  fullName: Typhon.Engine.LogicalSegment.WalkIndicesMap(Typhon.Engine.LogicalSegment.PageMapWalkPredicate, bool)
+  fullName.vb: Typhon.Engine.LogicalSegment.WalkIndicesMap(Typhon.Engine.LogicalSegment.PageMapWalkPredicate, Boolean)
+  nameWithType: LogicalSegment.WalkIndicesMap(LogicalSegment.PageMapWalkPredicate, bool)
+  nameWithType.vb: LogicalSegment.WalkIndicesMap(LogicalSegment.PageMapWalkPredicate, Boolean)
+- uid: Typhon.Engine.LogicalSegment.WalkIndicesMap*
+  name: WalkIndicesMap
+  href: api/Typhon.Engine.LogicalSegment.html#Typhon_Engine_LogicalSegment_WalkIndicesMap_
+  commentId: Overload:Typhon.Engine.LogicalSegment.WalkIndicesMap
+  isSpec: "True"
+  fullName: Typhon.Engine.LogicalSegment.WalkIndicesMap
+  nameWithType: LogicalSegment.WalkIndicesMap
+- uid: Typhon.Engine.LogicalSegment.WalkIndicesMap``1(Typhon.Engine.LogicalSegment.PageMapWalkPredicate{``0},System.Boolean,``0)
+  name: WalkIndicesMap<T>(PageMapWalkPredicate<T>, bool, T)
+  href: api/Typhon.Engine.LogicalSegment.html#Typhon_Engine_LogicalSegment_WalkIndicesMap__1_Typhon_Engine_LogicalSegment_PageMapWalkPredicate___0__System_Boolean___0_
+  commentId: M:Typhon.Engine.LogicalSegment.WalkIndicesMap``1(Typhon.Engine.LogicalSegment.PageMapWalkPredicate{``0},System.Boolean,``0)
+  name.vb: WalkIndicesMap(Of T)(PageMapWalkPredicate(Of T), Boolean, T)
+  fullName: Typhon.Engine.LogicalSegment.WalkIndicesMap<T>(Typhon.Engine.LogicalSegment.PageMapWalkPredicate<T>, bool, T)
+  fullName.vb: Typhon.Engine.LogicalSegment.WalkIndicesMap(Of T)(Typhon.Engine.LogicalSegment.PageMapWalkPredicate(Of T), Boolean, T)
+  nameWithType: LogicalSegment.WalkIndicesMap<T>(LogicalSegment.PageMapWalkPredicate<T>, bool, T)
+  nameWithType.vb: LogicalSegment.WalkIndicesMap(Of T)(LogicalSegment.PageMapWalkPredicate(Of T), Boolean, T)
 - uid: Typhon.Engine.LogicalSegmentHeader
   name: LogicalSegmentHeader
   href: api/Typhon.Engine.LogicalSegmentHeader.html
@@ -9364,15 +9426,28 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.ManagedPagedMMF.AllocateChunkBasedSegment
   nameWithType: ManagedPagedMMF.AllocateChunkBasedSegment
-- uid: Typhon.Engine.ManagedPagedMMF.AllocatePages(System.Span{System.Int32}@,Typhon.Engine.ChangeSet)
-  name: AllocatePages(ref Span<int>, ChangeSet)
-  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_AllocatePages_System_Span_System_Int32___Typhon_Engine_ChangeSet_
-  commentId: M:Typhon.Engine.ManagedPagedMMF.AllocatePages(System.Span{System.Int32}@,Typhon.Engine.ChangeSet)
-  name.vb: AllocatePages(Span(Of Integer), ChangeSet)
-  fullName: Typhon.Engine.ManagedPagedMMF.AllocatePages(ref System.Span<int>, Typhon.Engine.ChangeSet)
-  fullName.vb: Typhon.Engine.ManagedPagedMMF.AllocatePages(System.Span(Of Integer), Typhon.Engine.ChangeSet)
-  nameWithType: ManagedPagedMMF.AllocatePages(ref Span<int>, ChangeSet)
-  nameWithType.vb: ManagedPagedMMF.AllocatePages(Span(Of Integer), ChangeSet)
+- uid: Typhon.Engine.ManagedPagedMMF.AllocatePage(Typhon.Engine.ChangeSet)
+  name: AllocatePage(ChangeSet)
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_AllocatePage_Typhon_Engine_ChangeSet_
+  commentId: M:Typhon.Engine.ManagedPagedMMF.AllocatePage(Typhon.Engine.ChangeSet)
+  fullName: Typhon.Engine.ManagedPagedMMF.AllocatePage(Typhon.Engine.ChangeSet)
+  nameWithType: ManagedPagedMMF.AllocatePage(ChangeSet)
+- uid: Typhon.Engine.ManagedPagedMMF.AllocatePage*
+  name: AllocatePage
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_AllocatePage_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.AllocatePage
+  isSpec: "True"
+  fullName: Typhon.Engine.ManagedPagedMMF.AllocatePage
+  nameWithType: ManagedPagedMMF.AllocatePage
+- uid: Typhon.Engine.ManagedPagedMMF.AllocatePages(System.Span{System.Int32}@,System.Int32,Typhon.Engine.ChangeSet)
+  name: AllocatePages(ref Span<int>, int, ChangeSet)
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_AllocatePages_System_Span_System_Int32___System_Int32_Typhon_Engine_ChangeSet_
+  commentId: M:Typhon.Engine.ManagedPagedMMF.AllocatePages(System.Span{System.Int32}@,System.Int32,Typhon.Engine.ChangeSet)
+  name.vb: AllocatePages(Span(Of Integer), Integer, ChangeSet)
+  fullName: Typhon.Engine.ManagedPagedMMF.AllocatePages(ref System.Span<int>, int, Typhon.Engine.ChangeSet)
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.AllocatePages(System.Span(Of Integer), Integer, Typhon.Engine.ChangeSet)
+  nameWithType: ManagedPagedMMF.AllocatePages(ref Span<int>, int, ChangeSet)
+  nameWithType.vb: ManagedPagedMMF.AllocatePages(Span(Of Integer), Integer, ChangeSet)
 - uid: Typhon.Engine.ManagedPagedMMF.AllocatePages*
   name: AllocatePages
   href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_AllocatePages_
@@ -9402,15 +9477,15 @@ references:
   commentId: T:Typhon.Engine.ManagedPagedMMF.BitmapL3
   fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3
   nameWithType: ManagedPagedMMF.BitmapL3
-- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.#ctor(System.Int32,Typhon.Engine.LogicalSegment)
-  name: BitmapL3(int, LogicalSegment)
-  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3__ctor_System_Int32_Typhon_Engine_LogicalSegment_
-  commentId: M:Typhon.Engine.ManagedPagedMMF.BitmapL3.#ctor(System.Int32,Typhon.Engine.LogicalSegment)
-  name.vb: New(Integer, LogicalSegment)
-  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.BitmapL3(int, Typhon.Engine.LogicalSegment)
-  fullName.vb: Typhon.Engine.ManagedPagedMMF.BitmapL3.New(Integer, Typhon.Engine.LogicalSegment)
-  nameWithType: ManagedPagedMMF.BitmapL3.BitmapL3(int, LogicalSegment)
-  nameWithType.vb: ManagedPagedMMF.BitmapL3.New(Integer, LogicalSegment)
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.#ctor(Typhon.Engine.LogicalSegment)
+  name: BitmapL3(LogicalSegment)
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3__ctor_Typhon_Engine_LogicalSegment_
+  commentId: M:Typhon.Engine.ManagedPagedMMF.BitmapL3.#ctor(Typhon.Engine.LogicalSegment)
+  name.vb: New(LogicalSegment)
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.BitmapL3(Typhon.Engine.LogicalSegment)
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.BitmapL3.New(Typhon.Engine.LogicalSegment)
+  nameWithType: ManagedPagedMMF.BitmapL3.BitmapL3(LogicalSegment)
+  nameWithType.vb: ManagedPagedMMF.BitmapL3.New(LogicalSegment)
 - uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.#ctor*
   name: BitmapL3
   href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3__ctor_
@@ -9421,15 +9496,15 @@ references:
   fullName.vb: Typhon.Engine.ManagedPagedMMF.BitmapL3.New
   nameWithType: ManagedPagedMMF.BitmapL3.BitmapL3
   nameWithType.vb: ManagedPagedMMF.BitmapL3.New
-- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.Allocate(System.Span{System.Int32}@,Typhon.Engine.ChangeSet)
-  name: Allocate(ref Span<int>, ChangeSet)
-  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_Allocate_System_Span_System_Int32___Typhon_Engine_ChangeSet_
-  commentId: M:Typhon.Engine.ManagedPagedMMF.BitmapL3.Allocate(System.Span{System.Int32}@,Typhon.Engine.ChangeSet)
-  name.vb: Allocate(Span(Of Integer), ChangeSet)
-  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.Allocate(ref System.Span<int>, Typhon.Engine.ChangeSet)
-  fullName.vb: Typhon.Engine.ManagedPagedMMF.BitmapL3.Allocate(System.Span(Of Integer), Typhon.Engine.ChangeSet)
-  nameWithType: ManagedPagedMMF.BitmapL3.Allocate(ref Span<int>, ChangeSet)
-  nameWithType.vb: ManagedPagedMMF.BitmapL3.Allocate(Span(Of Integer), ChangeSet)
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.Allocate(System.Span{System.Int32}@,System.Int32,Typhon.Engine.ChangeSet)
+  name: Allocate(ref Span<int>, int, ChangeSet)
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_Allocate_System_Span_System_Int32___System_Int32_Typhon_Engine_ChangeSet_
+  commentId: M:Typhon.Engine.ManagedPagedMMF.BitmapL3.Allocate(System.Span{System.Int32}@,System.Int32,Typhon.Engine.ChangeSet)
+  name.vb: Allocate(Span(Of Integer), Integer, ChangeSet)
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.Allocate(ref System.Span<int>, int, Typhon.Engine.ChangeSet)
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.BitmapL3.Allocate(System.Span(Of Integer), Integer, Typhon.Engine.ChangeSet)
+  nameWithType: ManagedPagedMMF.BitmapL3.Allocate(ref Span<int>, int, ChangeSet)
+  nameWithType.vb: ManagedPagedMMF.BitmapL3.Allocate(Span(Of Integer), Integer, ChangeSet)
 - uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.Allocate*
   name: Allocate
   href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_Allocate_
@@ -9498,15 +9573,15 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.FindNextUnsetL1
   nameWithType: ManagedPagedMMF.BitmapL3.FindNextUnsetL1
-- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.Free(System.ReadOnlySpan{System.Int32},Typhon.Engine.ChangeSet)
-  name: Free(ReadOnlySpan<int>, ChangeSet)
-  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_Free_System_ReadOnlySpan_System_Int32__Typhon_Engine_ChangeSet_
-  commentId: M:Typhon.Engine.ManagedPagedMMF.BitmapL3.Free(System.ReadOnlySpan{System.Int32},Typhon.Engine.ChangeSet)
-  name.vb: Free(ReadOnlySpan(Of Integer), ChangeSet)
-  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.Free(System.ReadOnlySpan<int>, Typhon.Engine.ChangeSet)
-  fullName.vb: Typhon.Engine.ManagedPagedMMF.BitmapL3.Free(System.ReadOnlySpan(Of Integer), Typhon.Engine.ChangeSet)
-  nameWithType: ManagedPagedMMF.BitmapL3.Free(ReadOnlySpan<int>, ChangeSet)
-  nameWithType.vb: ManagedPagedMMF.BitmapL3.Free(ReadOnlySpan(Of Integer), ChangeSet)
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.Free(System.ReadOnlySpan{System.Int32},System.Int32,Typhon.Engine.ChangeSet)
+  name: Free(ReadOnlySpan<int>, int, ChangeSet)
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_Free_System_ReadOnlySpan_System_Int32__System_Int32_Typhon_Engine_ChangeSet_
+  commentId: M:Typhon.Engine.ManagedPagedMMF.BitmapL3.Free(System.ReadOnlySpan{System.Int32},System.Int32,Typhon.Engine.ChangeSet)
+  name.vb: Free(ReadOnlySpan(Of Integer), Integer, ChangeSet)
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.Free(System.ReadOnlySpan<int>, int, Typhon.Engine.ChangeSet)
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.BitmapL3.Free(System.ReadOnlySpan(Of Integer), Integer, Typhon.Engine.ChangeSet)
+  nameWithType: ManagedPagedMMF.BitmapL3.Free(ReadOnlySpan<int>, int, ChangeSet)
+  nameWithType.vb: ManagedPagedMMF.BitmapL3.Free(ReadOnlySpan(Of Integer), Integer, ChangeSet)
 - uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.Free*
   name: Free
   href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_Free_
@@ -9514,6 +9589,19 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.Free
   nameWithType: ManagedPagedMMF.BitmapL3.Free
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.Grow
+  name: Grow()
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_Grow
+  commentId: M:Typhon.Engine.ManagedPagedMMF.BitmapL3.Grow
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.Grow()
+  nameWithType: ManagedPagedMMF.BitmapL3.Grow()
+- uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.Grow*
+  name: Grow
+  href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_Grow_
+  commentId: Overload:Typhon.Engine.ManagedPagedMMF.BitmapL3.Grow
+  isSpec: "True"
+  fullName: Typhon.Engine.ManagedPagedMMF.BitmapL3.Grow
+  nameWithType: ManagedPagedMMF.BitmapL3.Grow
 - uid: Typhon.Engine.ManagedPagedMMF.BitmapL3.IsSet(System.Int32)
   name: IsSet(int)
   href: api/Typhon.Engine.ManagedPagedMMF.BitmapL3.html#Typhon_Engine_ManagedPagedMMF_BitmapL3_IsSet_System_Int32_
@@ -9584,15 +9672,15 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.ManagedPagedMMF.DeleteSegment
   nameWithType: ManagedPagedMMF.DeleteSegment
-- uid: Typhon.Engine.ManagedPagedMMF.FreePages(System.ReadOnlySpan{System.Int32},Typhon.Engine.ChangeSet)
-  name: FreePages(ReadOnlySpan<int>, ChangeSet)
-  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_FreePages_System_ReadOnlySpan_System_Int32__Typhon_Engine_ChangeSet_
-  commentId: M:Typhon.Engine.ManagedPagedMMF.FreePages(System.ReadOnlySpan{System.Int32},Typhon.Engine.ChangeSet)
-  name.vb: FreePages(ReadOnlySpan(Of Integer), ChangeSet)
-  fullName: Typhon.Engine.ManagedPagedMMF.FreePages(System.ReadOnlySpan<int>, Typhon.Engine.ChangeSet)
-  fullName.vb: Typhon.Engine.ManagedPagedMMF.FreePages(System.ReadOnlySpan(Of Integer), Typhon.Engine.ChangeSet)
-  nameWithType: ManagedPagedMMF.FreePages(ReadOnlySpan<int>, ChangeSet)
-  nameWithType.vb: ManagedPagedMMF.FreePages(ReadOnlySpan(Of Integer), ChangeSet)
+- uid: Typhon.Engine.ManagedPagedMMF.FreePages(System.ReadOnlySpan{System.Int32},System.Int32,Typhon.Engine.ChangeSet)
+  name: FreePages(ReadOnlySpan<int>, int, ChangeSet)
+  href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_FreePages_System_ReadOnlySpan_System_Int32__System_Int32_Typhon_Engine_ChangeSet_
+  commentId: M:Typhon.Engine.ManagedPagedMMF.FreePages(System.ReadOnlySpan{System.Int32},System.Int32,Typhon.Engine.ChangeSet)
+  name.vb: FreePages(ReadOnlySpan(Of Integer), Integer, ChangeSet)
+  fullName: Typhon.Engine.ManagedPagedMMF.FreePages(System.ReadOnlySpan<int>, int, Typhon.Engine.ChangeSet)
+  fullName.vb: Typhon.Engine.ManagedPagedMMF.FreePages(System.ReadOnlySpan(Of Integer), Integer, Typhon.Engine.ChangeSet)
+  nameWithType: ManagedPagedMMF.FreePages(ReadOnlySpan<int>, int, ChangeSet)
+  nameWithType.vb: ManagedPagedMMF.FreePages(ReadOnlySpan(Of Integer), Integer, ChangeSet)
 - uid: Typhon.Engine.ManagedPagedMMF.FreePages*
   name: FreePages
   href: api/Typhon.Engine.ManagedPagedMMF.html#Typhon_Engine_ManagedPagedMMF_FreePages_

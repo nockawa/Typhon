@@ -89,7 +89,7 @@
 
 
   <h1 id="Typhon_Engine_ManagedPagedMMF" data-uid="Typhon.Engine.ManagedPagedMMF" class="text-break">
-Class ManagedPagedMMF  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L16"><i class="bi bi-code-slash"></i></a>
+Class ManagedPagedMMF  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L24"><i class="bi bi-code-slash"></i></a>
   </h1>
 
   <div class="facts text-secondary">
@@ -179,7 +179,7 @@ public class ManagedPagedMMF : PagedMMF, IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_ManagedPagedMMF__ctor_System_IServiceProvider_Typhon_Engine_PagedMMFOptions_Typhon_Engine_TimeManager_Microsoft_Extensions_Logging_ILogger_Typhon_Engine_PagedMMF__" data-uid="Typhon.Engine.ManagedPagedMMF.#ctor(System.IServiceProvider,Typhon.Engine.PagedMMFOptions,Typhon.Engine.TimeManager,Microsoft.Extensions.Logging.ILogger{Typhon.Engine.PagedMMF})">
   ManagedPagedMMF(IServiceProvider, PagedMMFOptions, TimeManager, ILogger&lt;PagedMMF&gt;)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L31"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L41"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -220,7 +220,7 @@ public class ManagedPagedMMF : PagedMMF, IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_ManagedPagedMMF_AllocateChunkBasedSegment_Typhon_Engine_PageBlockType_System_Int32_System_Int32_Typhon_Engine_ChangeSet_" data-uid="Typhon.Engine.ManagedPagedMMF.AllocateChunkBasedSegment(Typhon.Engine.PageBlockType,System.Int32,System.Int32,Typhon.Engine.ChangeSet)">
   AllocateChunkBasedSegment(PageBlockType, int, int, ChangeSet)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L246"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L275"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -258,23 +258,61 @@ public class ManagedPagedMMF : PagedMMF, IDisposable</code></pre>
 
 
 
-  <a id="Typhon_Engine_ManagedPagedMMF_AllocatePages_" data-uid="Typhon.Engine.ManagedPagedMMF.AllocatePages*"></a>
+  <a id="Typhon_Engine_ManagedPagedMMF_AllocatePage_" data-uid="Typhon.Engine.ManagedPagedMMF.AllocatePage*"></a>
 
-  <h3 id="Typhon_Engine_ManagedPagedMMF_AllocatePages_System_Span_System_Int32___Typhon_Engine_ChangeSet_" data-uid="Typhon.Engine.ManagedPagedMMF.AllocatePages(System.Span{System.Int32}@,Typhon.Engine.ChangeSet)">
-  AllocatePages(ref Span&lt;int&gt;, ChangeSet)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L36"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_ManagedPagedMMF_AllocatePage_Typhon_Engine_ChangeSet_" data-uid="Typhon.Engine.ManagedPagedMMF.AllocatePage(Typhon.Engine.ChangeSet)">
+  AllocatePage(ChangeSet)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L46"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public void AllocatePages(ref Span&lt;int&gt; pageIds, ChangeSet changeSet = null)</code></pre>
+    <pre><code class="lang-csharp hljs">public int AllocatePage(ChangeSet changeSet = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>changeSet</code> <a class="xref" href="Typhon.Engine.ChangeSet.html">ChangeSet</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_ManagedPagedMMF_AllocatePages_" data-uid="Typhon.Engine.ManagedPagedMMF.AllocatePages*"></a>
+
+  <h3 id="Typhon_Engine_ManagedPagedMMF_AllocatePages_System_Span_System_Int32___System_Int32_Typhon_Engine_ChangeSet_" data-uid="Typhon.Engine.ManagedPagedMMF.AllocatePages(System.Span{System.Int32}@,System.Int32,Typhon.Engine.ChangeSet)">
+  AllocatePages(ref Span&lt;int&gt;, int, ChangeSet)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L53"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void AllocatePages(ref Span&lt;int&gt; pageIds, int startFrom = 0, ChangeSet changeSet = null)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>pageIds</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.span-1">Span</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>startFrom</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>
     <dt><code>changeSet</code> <a class="xref" href="Typhon.Engine.ChangeSet.html">ChangeSet</a></dt>
     <dd></dd>
@@ -295,7 +333,7 @@ public class ManagedPagedMMF : PagedMMF, IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_ManagedPagedMMF_AllocateSegment_Typhon_Engine_PageBlockType_System_Int32_Typhon_Engine_ChangeSet_" data-uid="Typhon.Engine.ManagedPagedMMF.AllocateSegment(Typhon.Engine.PageBlockType,System.Int32,Typhon.Engine.ChangeSet)">
   AllocateSegment(PageBlockType, int, ChangeSet)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L201"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L230"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -335,7 +373,7 @@ public class ManagedPagedMMF : PagedMMF, IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_ManagedPagedMMF_DeleteSegment_System_Int32_Typhon_Engine_ChangeSet_" data-uid="Typhon.Engine.ManagedPagedMMF.DeleteSegment(System.Int32,Typhon.Engine.ChangeSet)">
   DeleteSegment(int, ChangeSet)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L295"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L324"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -373,7 +411,7 @@ public class ManagedPagedMMF : PagedMMF, IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_ManagedPagedMMF_DeleteSegment_Typhon_Engine_LogicalSegment_Typhon_Engine_ChangeSet_" data-uid="Typhon.Engine.ManagedPagedMMF.DeleteSegment(Typhon.Engine.LogicalSegment,Typhon.Engine.ChangeSet)">
   DeleteSegment(LogicalSegment, ChangeSet)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L312"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L341"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -409,21 +447,23 @@ public class ManagedPagedMMF : PagedMMF, IDisposable</code></pre>
 
   <a id="Typhon_Engine_ManagedPagedMMF_FreePages_" data-uid="Typhon.Engine.ManagedPagedMMF.FreePages*"></a>
 
-  <h3 id="Typhon_Engine_ManagedPagedMMF_FreePages_System_ReadOnlySpan_System_Int32__Typhon_Engine_ChangeSet_" data-uid="Typhon.Engine.ManagedPagedMMF.FreePages(System.ReadOnlySpan{System.Int32},Typhon.Engine.ChangeSet)">
-  FreePages(ReadOnlySpan&lt;int&gt;, ChangeSet)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L60"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_ManagedPagedMMF_FreePages_System_ReadOnlySpan_System_Int32__System_Int32_Typhon_Engine_ChangeSet_" data-uid="Typhon.Engine.ManagedPagedMMF.FreePages(System.ReadOnlySpan{System.Int32},System.Int32,Typhon.Engine.ChangeSet)">
+  FreePages(ReadOnlySpan&lt;int&gt;, int, ChangeSet)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L88"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public bool FreePages(ReadOnlySpan&lt;int&gt; pages, ChangeSet changeSet = null)</code></pre>
+    <pre><code class="lang-csharp hljs">public bool FreePages(ReadOnlySpan&lt;int&gt; pages, int startFrom = 0, ChangeSet changeSet = null)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>pages</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.readonlyspan-1">ReadOnlySpan</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>startFrom</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>
     <dt><code>changeSet</code> <a class="xref" href="Typhon.Engine.ChangeSet.html">ChangeSet</a></dt>
     <dd></dd>
@@ -449,7 +489,7 @@ public class ManagedPagedMMF : PagedMMF, IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_ManagedPagedMMF_GetSegment_System_Int32_" data-uid="Typhon.Engine.ManagedPagedMMF.GetSegment(System.Int32)">
   GetSegment(int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L144"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L173"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -485,7 +525,7 @@ public class ManagedPagedMMF : PagedMMF, IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_ManagedPagedMMF_LoadChunkBasedSegment_System_Int32_System_Int32_" data-uid="Typhon.Engine.ManagedPagedMMF.LoadChunkBasedSegment(System.Int32,System.Int32)">
   LoadChunkBasedSegment(int, int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L272"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L301"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -523,7 +563,7 @@ public class ManagedPagedMMF : PagedMMF, IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_ManagedPagedMMF_OnDispose" data-uid="Typhon.Engine.ManagedPagedMMF.OnDispose">
   OnDispose()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L227"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L256"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -549,7 +589,7 @@ public class ManagedPagedMMF : PagedMMF, IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_ManagedPagedMMF_OnFileCreating" data-uid="Typhon.Engine.ManagedPagedMMF.OnFileCreating">
   OnFileCreating()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L70"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L98"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -575,7 +615,7 @@ public class ManagedPagedMMF : PagedMMF, IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_ManagedPagedMMF_OnFileLoading" data-uid="Typhon.Engine.ManagedPagedMMF.OnFileLoading">
   OnFileLoading()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L115"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L144"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -601,7 +641,7 @@ public class ManagedPagedMMF : PagedMMF, IDisposable</code></pre>
 </article>
 
         <div class="contribution d-print-none">
-          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L16" class="edit-link">Edit this page</a>
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.cs/#L24" class="edit-link">Edit this page</a>
         </div>
 
 

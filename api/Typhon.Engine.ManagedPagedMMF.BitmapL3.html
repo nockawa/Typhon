@@ -154,8 +154,8 @@ Class ManagedPagedMMF.BitmapL3  <a class="header-action link-secondary" title="V
 
   <a id="Typhon_Engine_ManagedPagedMMF_BitmapL3__ctor_" data-uid="Typhon.Engine.ManagedPagedMMF.BitmapL3.#ctor*"></a>
 
-  <h3 id="Typhon_Engine_ManagedPagedMMF_BitmapL3__ctor_System_Int32_Typhon_Engine_LogicalSegment_" data-uid="Typhon.Engine.ManagedPagedMMF.BitmapL3.#ctor(System.Int32,Typhon.Engine.LogicalSegment)">
-  BitmapL3(int, LogicalSegment)
+  <h3 id="Typhon_Engine_ManagedPagedMMF_BitmapL3__ctor_Typhon_Engine_LogicalSegment_" data-uid="Typhon.Engine.ManagedPagedMMF.BitmapL3.#ctor(Typhon.Engine.LogicalSegment)">
+  BitmapL3(LogicalSegment)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.BitmapL3.cs/#L18"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -163,13 +163,11 @@ Class ManagedPagedMMF.BitmapL3  <a class="header-action link-secondary" title="V
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public BitmapL3(int pageCount, LogicalSegment segment)</code></pre>
+    <pre><code class="lang-csharp hljs">public BitmapL3(LogicalSegment segment)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
-    <dt><code>pageCount</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
-    <dd></dd>
     <dt><code>segment</code> <a class="xref" href="Typhon.Engine.LogicalSegment.html">LogicalSegment</a></dt>
     <dd></dd>
   </dl>
@@ -193,7 +191,7 @@ Class ManagedPagedMMF.BitmapL3  <a class="header-action link-secondary" title="V
 
   <h3 id="Typhon_Engine_ManagedPagedMMF_BitmapL3_Capacity" data-uid="Typhon.Engine.ManagedPagedMMF.BitmapL3.Capacity">
   Capacity
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.BitmapL3.cs/#L391"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.BitmapL3.cs/#L421"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -226,21 +224,23 @@ Class ManagedPagedMMF.BitmapL3  <a class="header-action link-secondary" title="V
 
   <a id="Typhon_Engine_ManagedPagedMMF_BitmapL3_Allocate_" data-uid="Typhon.Engine.ManagedPagedMMF.BitmapL3.Allocate*"></a>
 
-  <h3 id="Typhon_Engine_ManagedPagedMMF_BitmapL3_Allocate_System_Span_System_Int32___Typhon_Engine_ChangeSet_" data-uid="Typhon.Engine.ManagedPagedMMF.BitmapL3.Allocate(System.Span{System.Int32}@,Typhon.Engine.ChangeSet)">
-  Allocate(ref Span&lt;int&gt;, ChangeSet)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.BitmapL3.cs/#L326"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_ManagedPagedMMF_BitmapL3_Allocate_System_Span_System_Int32___System_Int32_Typhon_Engine_ChangeSet_" data-uid="Typhon.Engine.ManagedPagedMMF.BitmapL3.Allocate(System.Span{System.Int32}@,System.Int32,Typhon.Engine.ChangeSet)">
+  Allocate(ref Span&lt;int&gt;, int, ChangeSet)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.BitmapL3.cs/#L351"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public bool Allocate(ref Span&lt;int&gt; result, ChangeSet changeSet = null)</code></pre>
+    <pre><code class="lang-csharp hljs">public bool Allocate(ref Span&lt;int&gt; result, int startFrom, ChangeSet changeSet = null)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>result</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.span-1">Span</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>startFrom</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>
     <dt><code>changeSet</code> <a class="xref" href="Typhon.Engine.ChangeSet.html">ChangeSet</a></dt>
     <dd></dd>
@@ -266,7 +266,7 @@ Class ManagedPagedMMF.BitmapL3  <a class="header-action link-secondary" title="V
 
   <h3 id="Typhon_Engine_ManagedPagedMMF_BitmapL3_ClearL0_System_Int32_Typhon_Engine_ChangeSet_" data-uid="Typhon.Engine.ManagedPagedMMF.BitmapL3.ClearL0(System.Int32,Typhon.Engine.ChangeSet)">
   ClearL0(int, ChangeSet)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.BitmapL3.cs/#L132"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.BitmapL3.cs/#L153"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -299,7 +299,7 @@ Class ManagedPagedMMF.BitmapL3  <a class="header-action link-secondary" title="V
 
   <h3 id="Typhon_Engine_ManagedPagedMMF_BitmapL3_FindNextUnsetL0_System_Int32__System_Int64__" data-uid="Typhon.Engine.ManagedPagedMMF.BitmapL3.FindNextUnsetL0(System.Int32@,System.Int64@)">
   FindNextUnsetL0(ref int, ref long)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.BitmapL3.cs/#L191"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.BitmapL3.cs/#L212"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -337,7 +337,7 @@ Class ManagedPagedMMF.BitmapL3  <a class="header-action link-secondary" title="V
 
   <h3 id="Typhon_Engine_ManagedPagedMMF_BitmapL3_FindNextUnsetL1_System_Int32__System_Int64__" data-uid="Typhon.Engine.ManagedPagedMMF.BitmapL3.FindNextUnsetL1(System.Int32@,System.Int64@)">
   FindNextUnsetL1(ref int, ref long)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.BitmapL3.cs/#L272"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.BitmapL3.cs/#L297"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -373,21 +373,23 @@ Class ManagedPagedMMF.BitmapL3  <a class="header-action link-secondary" title="V
 
   <a id="Typhon_Engine_ManagedPagedMMF_BitmapL3_Free_" data-uid="Typhon.Engine.ManagedPagedMMF.BitmapL3.Free*"></a>
 
-  <h3 id="Typhon_Engine_ManagedPagedMMF_BitmapL3_Free_System_ReadOnlySpan_System_Int32__Typhon_Engine_ChangeSet_" data-uid="Typhon.Engine.ManagedPagedMMF.BitmapL3.Free(System.ReadOnlySpan{System.Int32},Typhon.Engine.ChangeSet)">
-  Free(ReadOnlySpan&lt;int&gt;, ChangeSet)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.BitmapL3.cs/#L382"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_ManagedPagedMMF_BitmapL3_Free_System_ReadOnlySpan_System_Int32__System_Int32_Typhon_Engine_ChangeSet_" data-uid="Typhon.Engine.ManagedPagedMMF.BitmapL3.Free(System.ReadOnlySpan{System.Int32},System.Int32,Typhon.Engine.ChangeSet)">
+  Free(ReadOnlySpan&lt;int&gt;, int, ChangeSet)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.BitmapL3.cs/#L409"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public void Free(ReadOnlySpan&lt;int&gt; pages, ChangeSet changeSet = null)</code></pre>
+    <pre><code class="lang-csharp hljs">public void Free(ReadOnlySpan&lt;int&gt; pages, int startFrom, ChangeSet changeSet = null)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>pages</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.readonlyspan-1">ReadOnlySpan</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>startFrom</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>
     <dt><code>changeSet</code> <a class="xref" href="Typhon.Engine.ChangeSet.html">ChangeSet</a></dt>
     <dd></dd>
@@ -404,11 +406,37 @@ Class ManagedPagedMMF.BitmapL3  <a class="header-action link-secondary" title="V
 
 
 
+  <a id="Typhon_Engine_ManagedPagedMMF_BitmapL3_Grow_" data-uid="Typhon.Engine.ManagedPagedMMF.BitmapL3.Grow*"></a>
+
+  <h3 id="Typhon_Engine_ManagedPagedMMF_BitmapL3_Grow" data-uid="Typhon.Engine.ManagedPagedMMF.BitmapL3.Grow">
+  Grow()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.BitmapL3.cs/#L31"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void Grow()</code></pre>
+  </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
   <a id="Typhon_Engine_ManagedPagedMMF_BitmapL3_IsSet_" data-uid="Typhon.Engine.ManagedPagedMMF.BitmapL3.IsSet*"></a>
 
   <h3 id="Typhon_Engine_ManagedPagedMMF_BitmapL3_IsSet_System_Int32_" data-uid="Typhon.Engine.ManagedPagedMMF.BitmapL3.IsSet(System.Int32)">
   IsSet(int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.BitmapL3.cs/#L176"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.BitmapL3.cs/#L197"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -444,7 +472,7 @@ Class ManagedPagedMMF.BitmapL3  <a class="header-action link-secondary" title="V
 
   <h3 id="Typhon_Engine_ManagedPagedMMF_BitmapL3_SetL0_System_Int32_Typhon_Engine_ChangeSet_" data-uid="Typhon.Engine.ManagedPagedMMF.BitmapL3.SetL0(System.Int32,Typhon.Engine.ChangeSet)">
   SetL0(int, ChangeSet)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.BitmapL3.cs/#L31"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.BitmapL3.cs/#L52"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -482,7 +510,7 @@ Class ManagedPagedMMF.BitmapL3  <a class="header-action link-secondary" title="V
 
   <h3 id="Typhon_Engine_ManagedPagedMMF_BitmapL3_SetL1_System_Int32_Typhon_Engine_ChangeSet_" data-uid="Typhon.Engine.ManagedPagedMMF.BitmapL3.SetL1(System.Int32,Typhon.Engine.ChangeSet)">
   SetL1(int, ChangeSet)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.BitmapL3.cs/#L81"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ManagedPagedMMF.BitmapL3.cs/#L102"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>

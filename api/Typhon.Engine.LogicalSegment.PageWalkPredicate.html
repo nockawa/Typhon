@@ -2,9 +2,9 @@
 <html>
   <head>
     <meta charset="utf-8">
-      <title>Enum PageClearMode | Typhon </title>
+      <title>Delegate LogicalSegment.PageWalkPredicate | Typhon </title>
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <meta name="title" content="Enum PageClearMode | Typhon ">
+      <meta name="title" content="Delegate LogicalSegment.PageWalkPredicate | Typhon ">
       
       
       <link rel="icon" href="../images/favicon.ico">
@@ -16,7 +16,7 @@
       <meta name="docfx:rel" content="../">
       
       
-      <meta name="docfx:docurl" content="https://github.com/nockawa/Typhon/new/new-persistence-layer/apiSpec/new?filename=Typhon_Engine_PageClearMode.md&amp;value=---%0Auid%3A%20Typhon.Engine.PageClearMode%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="docfx:docurl" content="https://github.com/nockawa/Typhon/new/new-persistence-layer/apiSpec/new?filename=Typhon_Engine_LogicalSegment_PageWalkPredicate.md&amp;value=---%0Auid%3A%20Typhon.Engine.LogicalSegment.PageWalkPredicate%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
       <meta name="loc:inThisArticle" content="In this article">
       <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
       <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
@@ -84,13 +84,12 @@
           <nav id="breadcrumb"></nav>
         </div>
 
-        <article data-uid="Typhon.Engine.PageClearMode">
+        <article data-uid="Typhon.Engine.LogicalSegment.PageWalkPredicate">
 
 
 
-
-  <h1 id="Typhon_Engine_PageClearMode" data-uid="Typhon.Engine.PageClearMode" class="text-break">
-Enum PageClearMode  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L14"><i class="bi bi-code-slash"></i></a>
+  <h1 id="Typhon_Engine_LogicalSegment_PageWalkPredicate" data-uid="Typhon.Engine.LogicalSegment.PageWalkPredicate" class="text-break">
+Delegate LogicalSegment.PageWalkPredicate  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L92"><i class="bi bi-code-slash"></i></a>
   </h1>
 
   <div class="facts text-secondary">
@@ -102,8 +101,22 @@ Enum PageClearMode  <a class="header-action link-secondary" title="View source" 
   <div class="markdown conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public enum PageClearMode</code></pre>
+    <pre><code class="lang-csharp hljs">public delegate bool LogicalSegment.PageWalkPredicate(int indexInSegment, ref PageAccessor accessor)</code></pre>
   </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>indexInSegment</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.PageAccessor.html">PageAccessor</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
 
 
 
@@ -119,7 +132,7 @@ Enum PageClearMode  <a class="header-action link-secondary" title="View source" 
 </article>
 
         <div class="contribution d-print-none">
-          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L14" class="edit-link">Edit this page</a>
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/LogicalSegment.cs/#L92" class="edit-link">Edit this page</a>
         </div>
 
 
