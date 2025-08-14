@@ -32,7 +32,7 @@ unsafe public struct PageAccessor : IDisposable
     }
 
     /// <summary>
-    /// Span of the header of the page, you should prefer <see cref="HeaderReadOnly"/>.
+    /// Span of the header of the page.
     /// </summary>
     public ReadOnlySpan<byte> PageHeaderReadOnly
     {
@@ -124,7 +124,7 @@ unsafe public struct PageAccessor : IDisposable
     }
 
     /// <summary>
-    /// Span of the header of the page, you should prefer <see cref="Header"/>.
+    /// Span of the header of the page.
     /// </summary>
     public Span<byte> PageHeader
     {
