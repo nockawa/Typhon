@@ -12,12 +12,21 @@ public class ManagedPagedMMFOptions : PagedMMFOptions
 {
     
 } 
+// ============================================================================================================================================================
+// Pages of an empty file
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------
+// 0: Root file header
+// 1: Occupancy segment root page
+// 2: Reserved page for occupancy map growth
+// 3: Reserved page for occupancy map next map data (in case we need more than 500 pages to store the occupancy map)
+// ============================================================================================================================================================
 
 [PublicAPI]
 public partial class ManagedPagedMMF : PagedMMF
 {
     #region Constants
 
+    internal const int InitialReservedPageCount = 4;
     private const int OccupancySegmentRootPageIndex = 1;
     internal const string HeaderSignature = "TyphonDatabase";
 
@@ -26,42 +35,61 @@ public partial class ManagedPagedMMF : PagedMMF
     private ConcurrentDictionary<int, LogicalSegment> _segments;
     private LogicalSegment _occupancySegment;
     private BitmapL3 _occupancyMap;
-    private int _occupancyNextReservedPage;
+    private int _occupancyNextReservedPageIndex;
+    private int _occupancyNextReservedMapPageIndex;
 
     public ManagedPagedMMF(IServiceProvider serviceProvider, PagedMMFOptions options, TimeManager timeManager, ILogger<PagedMMF> logger) : 
         base(serviceProvider, options, timeManager, logger)
     {
     }
+
+    public int AllocatePage(ChangeSet changeSet = null)
+    {
+        Span<int> pageId = stackalloc int[1];
+        AllocatePages(ref pageId, 0, changeSet);
+        return pageId[0];
+    }
     
-    public void AllocatePages(ref Span<int> pageIds, ChangeSet changeSet = null)
+    public void AllocatePages(ref Span<int> pageIds, int startFrom = 0, ChangeSet changeSet = null)
     {
         lock (_occupancyMap)
         {
-            Span<int> nextPage = stackalloc int[1];
-
             // Need to grow the occupancy segment if we run out of pages
-            while (_occupancyMap.Allocate(ref pageIds, changeSet) == false)
+            while (_occupancyMap.Allocate(ref pageIds, startFrom, changeSet) == false)
             {
                 // Will use _occupancyNextReservedPage to grow the segment of one page
                 GrowOccupancySegment(changeSet);
                 
                 // Now that we can allocate many more pages, reserve the next page to be used when the occupancy map needs to grow again
-                AllocatePages(ref nextPage, changeSet);
-                _occupancyNextReservedPage = nextPage[0];
+                _occupancyNextReservedPageIndex = AllocatePage(changeSet);
             }
         }
     }
 
+    // Under lock of caller
     private void GrowOccupancySegment(ChangeSet changeSet)
     {
+        // Note: adding one page will allow to track 8000 * 8 more pages which is 500MiB of data stored in the file
+        var length = _occupancySegment.Length + 1;
+        var pages = (length < 64) ? stackalloc int[length] : new int[length];
+        _occupancySegment.Pages.CopyTo(pages);
+        pages[length - 1] = _occupancyNextReservedPageIndex;
+
+        _occupancySegment.CreateOrGrow(PageBlockType.OccupancyMap, pages, length - 1, ref _occupancyNextReservedMapPageIndex, true, changeSet);
+        _occupancyMap.Grow();
         
+        // If CreateOrGrow uses the reserved page for map extension, the value after the call is 0, so we need to allocate a new one
+        if (_occupancyNextReservedMapPageIndex == 0)
+        {
+            _occupancyNextReservedMapPageIndex = AllocatePage();
+        }
     }
 
-    public bool FreePages(ReadOnlySpan<int> pages, ChangeSet changeSet = null)
+    public bool FreePages(ReadOnlySpan<int> pages, int startFrom = 0, ChangeSet changeSet = null)
     {
         lock (_occupancyMap)
         {
-            _occupancyMap.Free(pages, changeSet);
+            _occupancyMap.Free(pages, startFrom, changeSet);
         }
 
         return false;
@@ -97,15 +125,16 @@ public partial class ManagedPagedMMF : PagedMMF
             _occupancySegment = CreateOccupancySegment(OccupancySegmentRootPageIndex, PageBlockType.OccupancyMap, 1, cs);
 
             // ReSharper disable InconsistentlySynchronizedField
-            _occupancyMap = new BitmapL3(1, _occupancySegment);
+            _occupancyMap = new BitmapL3(_occupancySegment);
 
             // The first two pages are already manually allocated (file header and occupancy segment root page)
             _occupancyMap.SetL0(0);
             _occupancyMap.SetL0(1);
             
-            // Reserve a page to use when the occupancy map needs to grow
-            _occupancyNextReservedPage = 2;
-            _occupancyMap.SetL0(_occupancyNextReservedPage);
+            // Reserve a pages to use when the occupancy map needs to grow, we need to reserve because we can't allocate them by the time the map is full
+            _occupancyNextReservedPageIndex = 2;
+            _occupancyNextReservedMapPageIndex = 3;
+            _occupancyMap.SetL0(_occupancyNextReservedPageIndex);
             // ReSharper restore InconsistentlySynchronizedField
             
             cs.SaveChanges();
@@ -138,7 +167,7 @@ public partial class ManagedPagedMMF : PagedMMF
             _occupancySegment = LoadOccupancySegment(h.OccupancyMapSPI, PageBlockType.OccupancyMap);
 
             // ReSharper disable once InconsistentlySynchronizedField
-            _occupancyMap = new BitmapL3(1, _occupancySegment);
+            _occupancyMap = new BitmapL3(_occupancySegment);
         }
     }
     public LogicalSegment GetSegment(int filePageIndex)
@@ -207,7 +236,7 @@ public partial class ManagedPagedMMF : PagedMMF
         }
 
         var pages = (length < 64) ? stackalloc int[length] : new int[length];
-        AllocatePages(ref pages, changeSet);
+        AllocatePages(ref pages, 0, changeSet);
 
         var segment = new LogicalSegment(this);
         if (dic.TryAdd(pages[0], segment) == false)
@@ -220,7 +249,7 @@ public partial class ManagedPagedMMF : PagedMMF
             return null;
         }
 
-        Logger.LogDebug("Create Logical Segment at {StartPageId} using pages {Pages}", segment.Pages[0], segment.Pages.ToArray());
+        //Logger.LogDebug("Create Logical Segment at {StartPageId} using pages {Pages}", segment.Pages[0], segment.Pages.ToArray());
         return segment;
     }
 
@@ -252,7 +281,7 @@ public partial class ManagedPagedMMF : PagedMMF
         }
 
         Span<int> pages = stackalloc int[length];
-        AllocatePages(ref pages, changeSet);
+        AllocatePages(ref pages, 0, changeSet);
 
         var segment = new ChunkBasedSegment(this, stride);
         if (dic.TryAdd(pages[0], segment) == false)
@@ -305,7 +334,7 @@ public partial class ManagedPagedMMF : PagedMMF
             return false;
         }
 
-        FreePages(segment.Pages, changeSet);
+        FreePages(segment.Pages, 0, changeSet);
         return true;
     }
 

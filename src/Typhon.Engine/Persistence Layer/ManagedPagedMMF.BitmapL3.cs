@@ -11,14 +11,14 @@ public partial class ManagedPagedMMF
     public class BitmapL3
     {
         private readonly LogicalSegment _segment;
-        private readonly Memory<long> _l1All;
-        private readonly Memory<long> _l2All;
-        private readonly Memory<long> _l1Any;
+        private Memory<long> _l1All;
+        private Memory<long> _l2All;
+        private Memory<long> _l1Any;
 
-        public BitmapL3(int pageCount, LogicalSegment segment)
+        public BitmapL3(LogicalSegment segment)
         {
             _segment = segment;
-            Capacity = LogicalSegment.GetItemCount<long>(pageCount) * 64;
+            Capacity = LogicalSegment.GetItemCount<long>(segment.Length) * 64;
 
             var length = Math.Max(1, (Capacity + 4095) / 4096);
             _l1All = new long[length];
@@ -27,6 +27,27 @@ public partial class ManagedPagedMMF
 
             _l2All = new long[length];
         }
+
+        public void Grow()
+        {
+            Capacity = LogicalSegment.GetItemCount<long>(_segment.Length) * 64;
+            
+            var length = Math.Max(1, (Capacity + 4095) / 4096);
+            var l1All = new long[length];
+            var l1Any = new long[length];
+            length = Math.Max(1, (length + 63) / 64);
+
+            var l2All = new long[length];
+            
+            _l1All.CopyTo(l1All);
+            _l1Any.CopyTo(l1Any);
+            _l2All.CopyTo(l2All);
+
+            _l1All = l1All;
+            _l1Any = l1Any;
+            _l2All = l2All;
+        }
+        
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         public bool SetL0(int bitIndex, ChangeSet changeSet = null)
@@ -257,6 +278,10 @@ public partial class ManagedPagedMMF
                     }
                 }
 
+                if (c0 >= capacity)
+                {
+                    return false;
+                }
                 var bitPos = BitOperations.TrailingZeroCount(~v0);
                 v0 |= (1L << bitPos);
                 index = (c0 & ~0x3F) + bitPos;
@@ -324,12 +349,14 @@ public partial class ManagedPagedMMF
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public bool Allocate(ref Span<int> result, ChangeSet changeSet = null)
+        public bool Allocate(ref Span<int> result, int startFrom, ChangeSet changeSet = null)
         {
             Debug.Assert(result.IsEmpty==false && result.Length > 0, "A valid span with a length > 0 must be passed");
-            var length = result.Length;
+            Debug.Assert(startFrom>= 0 && startFrom < result.Length, "Start index must be within the valid range of the given result span");
+            
+            var length = result.Length - startFrom;
             var hasL1 = true;
-            var destI = 0;
+            var destI = startFrom;
 
             // Allocate per bulk of 64 pages as long as we can
             while (hasL1 && (length >= 64))
@@ -368,26 +395,29 @@ public partial class ManagedPagedMMF
             // Error during allocation, rollback
             if (length > 0)
             {
-                for (int i = 0; i < destI; i++)
+                for (int i = startFrom; i < destI; i++)
                 {
-                    ClearL0((int)result[i], changeSet);
+                    ClearL0(result[i], changeSet);
                 }
-                result.Clear();
+                result[startFrom..].Clear();
                 return false;
             }
 
             return true;
         }
 
-        public void Free(ReadOnlySpan<int> pages, ChangeSet changeSet = null)
+        public void Free(ReadOnlySpan<int> pages, int startFrom, ChangeSet changeSet = null)
         {
+            Debug.Assert(pages.IsEmpty==false && pages.Length > 0, "A valid span with a length > 0 must be passed");
+            Debug.Assert(startFrom >= 0 && startFrom < pages.Length, "Start index must be within the valid range of the given pages span");
+            
             var length = pages.Length;
-            for (int i = 0; i < length; i++)
+            for (int i = startFrom; i < length; i++)
             {
                 ClearL0(pages[i], changeSet);
             }
         }
 
-        public int Capacity { get; }
+        public int Capacity { get; private set; }
     }
 }
