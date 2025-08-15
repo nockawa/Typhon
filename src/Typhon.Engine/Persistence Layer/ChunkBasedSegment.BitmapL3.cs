@@ -45,6 +45,7 @@ public partial class ChunkBasedSegment
             var pageIndex = -1;
             PageAccessor page = default;
             Span<long> data = default;
+            var allocated = 0;
             
             for (int i = 0; i < Capacity; i += 64)
             {
@@ -65,6 +66,7 @@ public partial class ChunkBasedSegment
                 }
 
                 var mask = data[pageOffset];
+                allocated += BitOperations.PopCount((ulong)mask);
                 
                 if (mask == -1)
                 {
@@ -95,6 +97,7 @@ public partial class ChunkBasedSegment
             {
                 page.Dispose();
             }
+            Allocated = allocated;
         }
 
         private int GetChunkCount(int pageCount) => (pageCount-1) * _otherChunkCount + _rootChunkCount;

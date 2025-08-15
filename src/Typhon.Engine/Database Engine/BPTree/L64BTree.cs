@@ -175,6 +175,7 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
             ref var chunk = ref accessor.GetChunk<Index64Chunk>(node.ChunkId, true);
             chunk.StateFlags = states;
         }
+
         public override int GetNodeCapacity() => Index64Chunk.Capacity;
 
         public override NodeWrapper GetLeftNode(NodeWrapper node, ChunkRandomAccessor accessor)
@@ -670,14 +671,14 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
     protected override BaseNodeStorage GetStorage() => new L64NodeStorage();
     public override bool AllowMultiple => false;
-    protected L64BTree(ChunkBasedSegment segment) : base(segment)
+    protected L64BTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
 
 public class L64MultipleBTree<TKey> : L64BTree<TKey> where TKey : unmanaged
 {
-    public L64MultipleBTree(ChunkBasedSegment segment) : base(segment)
+    public L64MultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 
@@ -708,41 +709,41 @@ public class L64MultipleBTree<TKey> : L64BTree<TKey> where TKey : unmanaged
 
 public class LongSingleBTree : L64BTree<long>
 {
-    public LongSingleBTree(ChunkBasedSegment segment) : base(segment)
+    public LongSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
 
 public class LongMultipleBTree : L64MultipleBTree<long>
 {
-    public LongMultipleBTree(ChunkBasedSegment segment) : base(segment)
+    public LongMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
 public class ULongSingleBTree : L64BTree<long>
 {
-    public ULongSingleBTree(ChunkBasedSegment segment) : base(segment)
+    public ULongSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
 
 public class ULongMultipleBTree : L64MultipleBTree<long>
 {
-    public ULongMultipleBTree(ChunkBasedSegment segment) : base(segment)
+    public ULongMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
 
 public class DoubleSingleBTree : L64BTree<double>
 {
-    public DoubleSingleBTree(ChunkBasedSegment segment) : base(segment)
+    public DoubleSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
 
 public class DoubleMultipleBTree : L64MultipleBTree<double>
 {
-    public DoubleMultipleBTree(ChunkBasedSegment segment) : base(segment)
+    public DoubleMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }

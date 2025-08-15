@@ -27,6 +27,7 @@ public abstract partial class BTree<TKey>
         #region Chunk Properties Access
 
         public abstract void InitializeNode(NodeWrapper node, NodeStates states, ChunkRandomAccessor accessor);
+        public NodeWrapper LoadNode(int nodeId) => new(this, nodeId);
         public abstract int GetNodeCapacity();
         public abstract NodeWrapper GetLeftNode(NodeWrapper node, ChunkRandomAccessor accessor);
         public abstract void SetLeftNode(NodeWrapper node, int leftNodeId, ChunkRandomAccessor accessor);

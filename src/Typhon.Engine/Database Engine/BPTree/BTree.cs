@@ -386,16 +386,24 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     
     public ChunkBasedSegment Segment => _segment;
 
-    protected BTree(ChunkBasedSegment segment)
+    protected BTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load)
     {
         Comparer = Comparer<TKey>.Default;
         _segment = segment;
         // ReSharper disable once VirtualMemberCallInConstructor
         _storage = GetStorage();
         _storage.Initialize(this, _segment);
-        // We make sure the chunk 0 is reserved so we can consider any ChunkId == 0 as a "null pointer".
-        // So any default constructed type declaring ChunkId fields can have this "null" by default.
-        _segment.ReserveChunk(0);
+
+        if (!load)
+        {
+            // We make sure the chunk 0 is reserved so we can consider any ChunkId == 0 as a "null pointer".
+            // So any default constructed type declaring ChunkId fields can have this "null" by default.
+            _segment.ReserveChunk(0);
+        }
+        else
+        {
+            Root = _storage.LoadNode(GetRootChunkId(accessor));
+        }
     }
 
     public unsafe int Add(void* keyAddr, int value, ChunkRandomAccessor accessor) => Add(Unsafe.AsRef<TKey>(keyAddr), value, accessor);

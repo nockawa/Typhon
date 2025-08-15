@@ -194,6 +194,7 @@ public abstract class String64BTree : BTree<String64>
             ref var chunk = ref accessor.GetChunk<IndexString64Chunk>(node.ChunkId, true);
             chunk.StateFlags = states;
         }
+
         public override int GetNodeCapacity() => IndexString64Chunk.Capacity;
 
         public override NodeWrapper GetLeftNode(NodeWrapper node, ChunkRandomAccessor accessor)
@@ -688,14 +689,14 @@ public abstract class String64BTree : BTree<String64>
 
     protected override BaseNodeStorage GetStorage() => new String64NodeStorage();
     public override bool AllowMultiple => false;
-    protected String64BTree(ChunkBasedSegment segment) : base(segment)
+    protected String64BTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
 
 public class String64MultipleBTree : String64BTree
 {
-    public String64MultipleBTree(ChunkBasedSegment segment) : base(segment)
+    public String64MultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 
@@ -726,7 +727,7 @@ public class String64MultipleBTree : String64BTree
 
 public class String64SingleBTree : String64BTree
 {
-    public String64SingleBTree(ChunkBasedSegment segment) : base(segment)
+    public String64SingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
