@@ -175,6 +175,7 @@ public abstract class L16BTree<TKey> : BTree<TKey> where TKey : unmanaged
             ref var chunk = ref accessor.GetChunk<Index16Chunk>(node.ChunkId, true);
             chunk.StateFlags = states;
         }
+
         public override int GetNodeCapacity() => Index16Chunk.Capacity;
 
         public override NodeWrapper GetLeftNode(NodeWrapper node, ChunkRandomAccessor accessor)
@@ -670,14 +671,14 @@ public abstract class L16BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
     protected override BaseNodeStorage GetStorage() => new L16NodeStorage();
     public override bool AllowMultiple => false;
-    protected L16BTree(ChunkBasedSegment segment) : base(segment)
+    protected L16BTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
 
 public class L16MultipleBTree<TKey> : L16BTree<TKey> where TKey : unmanaged
 {
-    public L16MultipleBTree(ChunkBasedSegment segment) : base(segment)
+    public L16MultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 
@@ -707,69 +708,69 @@ public class L16MultipleBTree<TKey> : L16BTree<TKey> where TKey : unmanaged
 
 public class CharSingleBTree : L16BTree<char>
 {
-    public CharSingleBTree(ChunkBasedSegment segment) : base(segment)
+    public CharSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
 
 public class CharMultipleBTree : L16MultipleBTree<char>
 {
-    public CharMultipleBTree(ChunkBasedSegment segment) : base(segment)
+    public CharMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
 
 public class ByteSingleBTree : L16BTree<sbyte>
 {
-    public ByteSingleBTree(ChunkBasedSegment segment) : base(segment)
+    public ByteSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
 
 public class ByteMultipleBTree : L16MultipleBTree<sbyte>
 {
-    public ByteMultipleBTree(ChunkBasedSegment segment) : base(segment)
+    public ByteMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
 
 public class ShortSingleBTree : L16BTree<short>
 {
-    public ShortSingleBTree(ChunkBasedSegment segment) : base(segment)
+    public ShortSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
 
 public class ShortMultipleBTree : L16MultipleBTree<short>
 {
-    public ShortMultipleBTree(ChunkBasedSegment segment) : base(segment)
+    public ShortMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
 public class UByteSingleBTree : L16BTree<byte>
 {
-    public UByteSingleBTree(ChunkBasedSegment segment) : base(segment)
+    public UByteSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
 
 public class UByteMultipleBTree : L16MultipleBTree<byte>
 {
-    public UByteMultipleBTree(ChunkBasedSegment segment) : base(segment)
+    public UByteMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
 
 public class UShortSingleBTree : L16BTree<ushort>
 {
-    public UShortSingleBTree(ChunkBasedSegment segment) : base(segment)
+    public UShortSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
 
 public class UShortMultipleBTree : L16MultipleBTree<ushort>
 {
-    public UShortMultipleBTree(ChunkBasedSegment segment) : base(segment)
+    public UShortMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }

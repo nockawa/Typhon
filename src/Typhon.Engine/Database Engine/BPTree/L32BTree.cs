@@ -175,6 +175,7 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
             ref var chunk = ref accessor.GetChunk<Index32Chunk>(node.ChunkId, true);
             chunk.StateFlags = states;
         }
+        
         public override int GetNodeCapacity() => Index32Chunk.Capacity;
 
         public override NodeWrapper GetLeftNode(NodeWrapper node, ChunkRandomAccessor accessor)
@@ -670,14 +671,14 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
     protected override BaseNodeStorage GetStorage() => new L32NodeStorage();
     public override bool AllowMultiple => false;
-    protected L32BTree(ChunkBasedSegment segment) : base(segment)
+    protected L32BTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load) : base(segment, accessor, load)
     {
     }
 }
 
 public class L32MultipleBTree<TKey> : L32BTree<TKey> where TKey : unmanaged
 {
-    public L32MultipleBTree(ChunkBasedSegment segment) : base(segment)
+    public L32MultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 
@@ -708,21 +709,21 @@ public class L32MultipleBTree<TKey> : L32BTree<TKey> where TKey : unmanaged
 
 public class IntSingleBTree : L32BTree<int>
 {
-    public IntSingleBTree(ChunkBasedSegment segment) : base(segment)
+    public IntSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
 
 public class IntMultipleBTree : L32MultipleBTree<int>
 {
-    public IntMultipleBTree(ChunkBasedSegment segment) : base(segment)
+    public IntMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
 
 public class UIntSingleBTree : L32BTree<uint>
 {
-    public UIntSingleBTree(ChunkBasedSegment segment) : base(segment)
+    public UIntSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 
@@ -730,21 +731,21 @@ public class UIntSingleBTree : L32BTree<uint>
 
 public class UIntMultipleBTree : L32MultipleBTree<uint>
 {
-    public UIntMultipleBTree(ChunkBasedSegment segment) : base(segment)
+    public UIntMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
 
 public class FloatSingleBTree : L32BTree<float>
 {
-    public FloatSingleBTree(ChunkBasedSegment segment) : base(segment)
+    public FloatSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }
 
 public class FloatMultipleBTree : L32MultipleBTree<float>
 {
-    public FloatMultipleBTree(ChunkBasedSegment segment) : base(segment)
+    public FloatMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
     {
     }
 }

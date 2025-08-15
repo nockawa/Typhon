@@ -69,7 +69,7 @@ public unsafe class ComponentTable : IDisposable
         DefaultIndexSegment  = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(Index64Chunk));
         String64IndexSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(IndexString64Chunk));
 
-        PrimaryKeyIndex = new LongSingleBTree(DefaultIndexSegment);
+        PrimaryKeyIndex = new LongSingleBTree(DefaultIndexSegment, ChunkRandomAccessor.GetFromPool(DefaultIndexSegment, 8));
 
         BuildIndexedFieldInfo();
     }
@@ -101,21 +101,21 @@ public unsafe class ComponentTable : IDisposable
     private IBTree CreateIndexForField(DBComponentDefinition.Field field)
     {
         var s = field.Type == FieldType.String64 ? String64IndexSegment : DefaultIndexSegment;
-
+        var a = ChunkRandomAccessor.GetFromPool(s, 8);
         switch (field.Type)
         {
-            case FieldType.Byte:        return field.IndexAllowMultiple ? new ByteMultipleBTree(s)     : new ByteSingleBTree(s);
-            case FieldType.Short:       return field.IndexAllowMultiple ? new ShortMultipleBTree(s)    : new ShortSingleBTree(s);
-            case FieldType.Int:         return field.IndexAllowMultiple ? new IntMultipleBTree(s)      : new IntSingleBTree(s);
-            case FieldType.Long:        return field.IndexAllowMultiple ? new LongMultipleBTree(s)     : new LongSingleBTree(s);
-            case FieldType.UByte:       return field.IndexAllowMultiple ? new UByteMultipleBTree(s)    : new UByteSingleBTree(s);
-            case FieldType.UShort:      return field.IndexAllowMultiple ? new UShortMultipleBTree(s)   : new UShortSingleBTree(s);
-            case FieldType.UInt:        return field.IndexAllowMultiple ? new UIntMultipleBTree(s)     : new UIntSingleBTree(s);
-            case FieldType.ULong:       return field.IndexAllowMultiple ? new ULongMultipleBTree(s)    : new ULongSingleBTree(s);
-            case FieldType.Float:       return field.IndexAllowMultiple ? new FloatMultipleBTree(s)    : new FloatSingleBTree(s);
-            case FieldType.Double:      return field.IndexAllowMultiple ? new DoubleMultipleBTree(s)   : new DoubleSingleBTree(s);
-            case FieldType.Char:        return field.IndexAllowMultiple ? new CharMultipleBTree(s)     : new CharSingleBTree(s);
-            case FieldType.String64:    return field.IndexAllowMultiple ? new String64MultipleBTree(s) : new String64SingleBTree(s);
+            case FieldType.Byte:        return field.IndexAllowMultiple ? new ByteMultipleBTree(s, a)     : new ByteSingleBTree(s, a);
+            case FieldType.Short:       return field.IndexAllowMultiple ? new ShortMultipleBTree(s, a)    : new ShortSingleBTree(s, a);
+            case FieldType.Int:         return field.IndexAllowMultiple ? new IntMultipleBTree(s, a)      : new IntSingleBTree(s, a);
+            case FieldType.Long:        return field.IndexAllowMultiple ? new LongMultipleBTree(s, a)     : new LongSingleBTree(s, a);
+            case FieldType.UByte:       return field.IndexAllowMultiple ? new UByteMultipleBTree(s, a)    : new UByteSingleBTree(s, a);
+            case FieldType.UShort:      return field.IndexAllowMultiple ? new UShortMultipleBTree(s, a)   : new UShortSingleBTree(s, a);
+            case FieldType.UInt:        return field.IndexAllowMultiple ? new UIntMultipleBTree(s, a)     : new UIntSingleBTree(s, a);
+            case FieldType.ULong:       return field.IndexAllowMultiple ? new ULongMultipleBTree(s, a)    : new ULongSingleBTree(s, a);
+            case FieldType.Float:       return field.IndexAllowMultiple ? new FloatMultipleBTree(s, a)    : new FloatSingleBTree(s, a);
+            case FieldType.Double:      return field.IndexAllowMultiple ? new DoubleMultipleBTree(s, a)   : new DoubleSingleBTree(s, a);
+            case FieldType.Char:        return field.IndexAllowMultiple ? new CharMultipleBTree(s, a)     : new CharSingleBTree(s, a);
+            case FieldType.String64:    return field.IndexAllowMultiple ? new String64MultipleBTree(s, a) : new String64SingleBTree(s, a);
             default:                    return null;
         }
     }
