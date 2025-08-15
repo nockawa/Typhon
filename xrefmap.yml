@@ -351,15 +351,15 @@ references:
   fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey)
   nameWithType: BTree<TKey>
   nameWithType.vb: BTree(Of TKey)
-- uid: Typhon.Engine.BPTree.BTree`1.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: BTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.BTree-1.html#Typhon_Engine_BPTree_BTree_1__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.BTree`1.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.BTree<TKey>.BTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: BTree<TKey>.BTree(ChunkBasedSegment)
-  nameWithType.vb: BTree(Of TKey).New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.BTree`1.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: BTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.BTree-1.html#Typhon_Engine_BPTree_BTree_1__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.BTree`1.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.BTree<TKey>.BTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: BTree<TKey>.BTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: BTree(Of TKey).New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.BTree`1.#ctor*
   name: BTree
   href: api/Typhon.Engine.BPTree.BTree-1.html#Typhon_Engine_BPTree_BTree_1__ctor_
@@ -838,6 +838,24 @@ references:
   fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).BaseNodeStorage.IsRotated
   nameWithType: BTree<TKey>.BaseNodeStorage.IsRotated
   nameWithType.vb: BTree(Of TKey).BaseNodeStorage.IsRotated
+- uid: Typhon.Engine.BPTree.BTree`1.BaseNodeStorage.LoadNode(System.Int32)
+  name: LoadNode(int)
+  href: api/Typhon.Engine.BPTree.BTree-1.BaseNodeStorage.html#Typhon_Engine_BPTree_BTree_1_BaseNodeStorage_LoadNode_System_Int32_
+  commentId: M:Typhon.Engine.BPTree.BTree`1.BaseNodeStorage.LoadNode(System.Int32)
+  name.vb: LoadNode(Integer)
+  fullName: Typhon.Engine.BPTree.BTree<TKey>.BaseNodeStorage.LoadNode(int)
+  fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).BaseNodeStorage.LoadNode(Integer)
+  nameWithType: BTree<TKey>.BaseNodeStorage.LoadNode(int)
+  nameWithType.vb: BTree(Of TKey).BaseNodeStorage.LoadNode(Integer)
+- uid: Typhon.Engine.BPTree.BTree`1.BaseNodeStorage.LoadNode*
+  name: LoadNode
+  href: api/Typhon.Engine.BPTree.BTree-1.BaseNodeStorage.html#Typhon_Engine_BPTree_BTree_1_BaseNodeStorage_LoadNode_
+  commentId: Overload:Typhon.Engine.BPTree.BTree`1.BaseNodeStorage.LoadNode
+  isSpec: "True"
+  fullName: Typhon.Engine.BPTree.BTree<TKey>.BaseNodeStorage.LoadNode
+  fullName.vb: Typhon.Engine.BPTree.BTree(Of TKey).BaseNodeStorage.LoadNode
+  nameWithType: BTree<TKey>.BaseNodeStorage.LoadNode
+  nameWithType.vb: BTree(Of TKey).BaseNodeStorage.LoadNode
 - uid: Typhon.Engine.BPTree.BTree`1.BaseNodeStorage.MergeLeft(Typhon.Engine.BPTree.BTree{`0}.NodeWrapper,Typhon.Engine.BPTree.BTree{`0}.NodeWrapper,Typhon.Engine.ChunkRandomAccessor)
   name: MergeLeft(NodeWrapper, NodeWrapper, ChunkRandomAccessor)
   href: api/Typhon.Engine.BPTree.BTree-1.BaseNodeStorage.html#Typhon_Engine_BPTree_BTree_1_BaseNodeStorage_MergeLeft_Typhon_Engine_BPTree_BTree__0__NodeWrapper_Typhon_Engine_BPTree_BTree__0__NodeWrapper_Typhon_Engine_ChunkRandomAccessor_
@@ -2378,15 +2396,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.ByteMultipleBTree
   fullName: Typhon.Engine.BPTree.ByteMultipleBTree
   nameWithType: ByteMultipleBTree
-- uid: Typhon.Engine.BPTree.ByteMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: ByteMultipleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.ByteMultipleBTree.html#Typhon_Engine_BPTree_ByteMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.ByteMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.ByteMultipleBTree.ByteMultipleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.ByteMultipleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: ByteMultipleBTree.ByteMultipleBTree(ChunkBasedSegment)
-  nameWithType.vb: ByteMultipleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.ByteMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: ByteMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.ByteMultipleBTree.html#Typhon_Engine_BPTree_ByteMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.ByteMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.ByteMultipleBTree.ByteMultipleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.ByteMultipleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: ByteMultipleBTree.ByteMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: ByteMultipleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.ByteMultipleBTree.#ctor*
   name: ByteMultipleBTree
   href: api/Typhon.Engine.BPTree.ByteMultipleBTree.html#Typhon_Engine_BPTree_ByteMultipleBTree__ctor_
@@ -2403,15 +2421,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.ByteSingleBTree
   fullName: Typhon.Engine.BPTree.ByteSingleBTree
   nameWithType: ByteSingleBTree
-- uid: Typhon.Engine.BPTree.ByteSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: ByteSingleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.ByteSingleBTree.html#Typhon_Engine_BPTree_ByteSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.ByteSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.ByteSingleBTree.ByteSingleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.ByteSingleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: ByteSingleBTree.ByteSingleBTree(ChunkBasedSegment)
-  nameWithType.vb: ByteSingleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.ByteSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: ByteSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.ByteSingleBTree.html#Typhon_Engine_BPTree_ByteSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.ByteSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.ByteSingleBTree.ByteSingleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.ByteSingleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: ByteSingleBTree.ByteSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: ByteSingleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.ByteSingleBTree.#ctor*
   name: ByteSingleBTree
   href: api/Typhon.Engine.BPTree.ByteSingleBTree.html#Typhon_Engine_BPTree_ByteSingleBTree__ctor_
@@ -2428,15 +2446,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.CharMultipleBTree
   fullName: Typhon.Engine.BPTree.CharMultipleBTree
   nameWithType: CharMultipleBTree
-- uid: Typhon.Engine.BPTree.CharMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: CharMultipleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.CharMultipleBTree.html#Typhon_Engine_BPTree_CharMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.CharMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.CharMultipleBTree.CharMultipleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.CharMultipleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: CharMultipleBTree.CharMultipleBTree(ChunkBasedSegment)
-  nameWithType.vb: CharMultipleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.CharMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: CharMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.CharMultipleBTree.html#Typhon_Engine_BPTree_CharMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.CharMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.CharMultipleBTree.CharMultipleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.CharMultipleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: CharMultipleBTree.CharMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: CharMultipleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.CharMultipleBTree.#ctor*
   name: CharMultipleBTree
   href: api/Typhon.Engine.BPTree.CharMultipleBTree.html#Typhon_Engine_BPTree_CharMultipleBTree__ctor_
@@ -2453,15 +2471,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.CharSingleBTree
   fullName: Typhon.Engine.BPTree.CharSingleBTree
   nameWithType: CharSingleBTree
-- uid: Typhon.Engine.BPTree.CharSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: CharSingleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.CharSingleBTree.html#Typhon_Engine_BPTree_CharSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.CharSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.CharSingleBTree.CharSingleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.CharSingleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: CharSingleBTree.CharSingleBTree(ChunkBasedSegment)
-  nameWithType.vb: CharSingleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.CharSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: CharSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.CharSingleBTree.html#Typhon_Engine_BPTree_CharSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.CharSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.CharSingleBTree.CharSingleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.CharSingleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: CharSingleBTree.CharSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: CharSingleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.CharSingleBTree.#ctor*
   name: CharSingleBTree
   href: api/Typhon.Engine.BPTree.CharSingleBTree.html#Typhon_Engine_BPTree_CharSingleBTree__ctor_
@@ -2478,15 +2496,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.DoubleMultipleBTree
   fullName: Typhon.Engine.BPTree.DoubleMultipleBTree
   nameWithType: DoubleMultipleBTree
-- uid: Typhon.Engine.BPTree.DoubleMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: DoubleMultipleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.DoubleMultipleBTree.html#Typhon_Engine_BPTree_DoubleMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.DoubleMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.DoubleMultipleBTree.DoubleMultipleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.DoubleMultipleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: DoubleMultipleBTree.DoubleMultipleBTree(ChunkBasedSegment)
-  nameWithType.vb: DoubleMultipleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.DoubleMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: DoubleMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.DoubleMultipleBTree.html#Typhon_Engine_BPTree_DoubleMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.DoubleMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.DoubleMultipleBTree.DoubleMultipleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.DoubleMultipleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: DoubleMultipleBTree.DoubleMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: DoubleMultipleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.DoubleMultipleBTree.#ctor*
   name: DoubleMultipleBTree
   href: api/Typhon.Engine.BPTree.DoubleMultipleBTree.html#Typhon_Engine_BPTree_DoubleMultipleBTree__ctor_
@@ -2503,15 +2521,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.DoubleSingleBTree
   fullName: Typhon.Engine.BPTree.DoubleSingleBTree
   nameWithType: DoubleSingleBTree
-- uid: Typhon.Engine.BPTree.DoubleSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: DoubleSingleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.DoubleSingleBTree.html#Typhon_Engine_BPTree_DoubleSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.DoubleSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.DoubleSingleBTree.DoubleSingleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.DoubleSingleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: DoubleSingleBTree.DoubleSingleBTree(ChunkBasedSegment)
-  nameWithType.vb: DoubleSingleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.DoubleSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: DoubleSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.DoubleSingleBTree.html#Typhon_Engine_BPTree_DoubleSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.DoubleSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.DoubleSingleBTree.DoubleSingleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.DoubleSingleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: DoubleSingleBTree.DoubleSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: DoubleSingleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.DoubleSingleBTree.#ctor*
   name: DoubleSingleBTree
   href: api/Typhon.Engine.BPTree.DoubleSingleBTree.html#Typhon_Engine_BPTree_DoubleSingleBTree__ctor_
@@ -2528,15 +2546,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.FloatMultipleBTree
   fullName: Typhon.Engine.BPTree.FloatMultipleBTree
   nameWithType: FloatMultipleBTree
-- uid: Typhon.Engine.BPTree.FloatMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: FloatMultipleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.FloatMultipleBTree.html#Typhon_Engine_BPTree_FloatMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.FloatMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.FloatMultipleBTree.FloatMultipleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.FloatMultipleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: FloatMultipleBTree.FloatMultipleBTree(ChunkBasedSegment)
-  nameWithType.vb: FloatMultipleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.FloatMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: FloatMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.FloatMultipleBTree.html#Typhon_Engine_BPTree_FloatMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.FloatMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.FloatMultipleBTree.FloatMultipleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.FloatMultipleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: FloatMultipleBTree.FloatMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: FloatMultipleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.FloatMultipleBTree.#ctor*
   name: FloatMultipleBTree
   href: api/Typhon.Engine.BPTree.FloatMultipleBTree.html#Typhon_Engine_BPTree_FloatMultipleBTree__ctor_
@@ -2553,15 +2571,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.FloatSingleBTree
   fullName: Typhon.Engine.BPTree.FloatSingleBTree
   nameWithType: FloatSingleBTree
-- uid: Typhon.Engine.BPTree.FloatSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: FloatSingleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.FloatSingleBTree.html#Typhon_Engine_BPTree_FloatSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.FloatSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.FloatSingleBTree.FloatSingleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.FloatSingleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: FloatSingleBTree.FloatSingleBTree(ChunkBasedSegment)
-  nameWithType.vb: FloatSingleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.FloatSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: FloatSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.FloatSingleBTree.html#Typhon_Engine_BPTree_FloatSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.FloatSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.FloatSingleBTree.FloatSingleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.FloatSingleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: FloatSingleBTree.FloatSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: FloatSingleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.FloatSingleBTree.#ctor*
   name: FloatSingleBTree
   href: api/Typhon.Engine.BPTree.FloatSingleBTree.html#Typhon_Engine_BPTree_FloatSingleBTree__ctor_
@@ -3343,15 +3361,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.IntMultipleBTree
   fullName: Typhon.Engine.BPTree.IntMultipleBTree
   nameWithType: IntMultipleBTree
-- uid: Typhon.Engine.BPTree.IntMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: IntMultipleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.IntMultipleBTree.html#Typhon_Engine_BPTree_IntMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.IntMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.IntMultipleBTree.IntMultipleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.IntMultipleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: IntMultipleBTree.IntMultipleBTree(ChunkBasedSegment)
-  nameWithType.vb: IntMultipleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.IntMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: IntMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.IntMultipleBTree.html#Typhon_Engine_BPTree_IntMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.IntMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.IntMultipleBTree.IntMultipleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.IntMultipleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: IntMultipleBTree.IntMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: IntMultipleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.IntMultipleBTree.#ctor*
   name: IntMultipleBTree
   href: api/Typhon.Engine.BPTree.IntMultipleBTree.html#Typhon_Engine_BPTree_IntMultipleBTree__ctor_
@@ -3368,15 +3386,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.IntSingleBTree
   fullName: Typhon.Engine.BPTree.IntSingleBTree
   nameWithType: IntSingleBTree
-- uid: Typhon.Engine.BPTree.IntSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: IntSingleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.IntSingleBTree.html#Typhon_Engine_BPTree_IntSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.IntSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.IntSingleBTree.IntSingleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.IntSingleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: IntSingleBTree.IntSingleBTree(ChunkBasedSegment)
-  nameWithType.vb: IntSingleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.IntSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: IntSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.IntSingleBTree.html#Typhon_Engine_BPTree_IntSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.IntSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.IntSingleBTree.IntSingleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.IntSingleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: IntSingleBTree.IntSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: IntSingleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.IntSingleBTree.#ctor*
   name: IntSingleBTree
   href: api/Typhon.Engine.BPTree.IntSingleBTree.html#Typhon_Engine_BPTree_IntSingleBTree__ctor_
@@ -3396,15 +3414,15 @@ references:
   fullName.vb: Typhon.Engine.BPTree.L16BTree(Of TKey)
   nameWithType: L16BTree<TKey>
   nameWithType.vb: L16BTree(Of TKey)
-- uid: Typhon.Engine.BPTree.L16BTree`1.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: L16BTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.L16BTree-1.html#Typhon_Engine_BPTree_L16BTree_1__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.L16BTree`1.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.L16BTree<TKey>.L16BTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.L16BTree(Of TKey).New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: L16BTree<TKey>.L16BTree(ChunkBasedSegment)
-  nameWithType.vb: L16BTree(Of TKey).New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.L16BTree`1.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: L16BTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.L16BTree-1.html#Typhon_Engine_BPTree_L16BTree_1__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.L16BTree`1.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.L16BTree<TKey>.L16BTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.L16BTree(Of TKey).New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: L16BTree<TKey>.L16BTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: L16BTree(Of TKey).New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.L16BTree`1.#ctor*
   name: L16BTree
   href: api/Typhon.Engine.BPTree.L16BTree-1.html#Typhon_Engine_BPTree_L16BTree_1__ctor_
@@ -4051,15 +4069,15 @@ references:
   fullName.vb: Typhon.Engine.BPTree.L16MultipleBTree(Of TKey)
   nameWithType: L16MultipleBTree<TKey>
   nameWithType.vb: L16MultipleBTree(Of TKey)
-- uid: Typhon.Engine.BPTree.L16MultipleBTree`1.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: L16MultipleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.L16MultipleBTree-1.html#Typhon_Engine_BPTree_L16MultipleBTree_1__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.L16MultipleBTree`1.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.L16MultipleBTree<TKey>.L16MultipleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.L16MultipleBTree(Of TKey).New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: L16MultipleBTree<TKey>.L16MultipleBTree(ChunkBasedSegment)
-  nameWithType.vb: L16MultipleBTree(Of TKey).New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.L16MultipleBTree`1.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: L16MultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.L16MultipleBTree-1.html#Typhon_Engine_BPTree_L16MultipleBTree_1__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.L16MultipleBTree`1.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.L16MultipleBTree<TKey>.L16MultipleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.L16MultipleBTree(Of TKey).New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: L16MultipleBTree<TKey>.L16MultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: L16MultipleBTree(Of TKey).New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.L16MultipleBTree`1.#ctor*
   name: L16MultipleBTree
   href: api/Typhon.Engine.BPTree.L16MultipleBTree-1.html#Typhon_Engine_BPTree_L16MultipleBTree_1__ctor_
@@ -4211,15 +4229,15 @@ references:
   fullName.vb: Typhon.Engine.BPTree.L32BTree(Of TKey)
   nameWithType: L32BTree<TKey>
   nameWithType.vb: L32BTree(Of TKey)
-- uid: Typhon.Engine.BPTree.L32BTree`1.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: L32BTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.L32BTree-1.html#Typhon_Engine_BPTree_L32BTree_1__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.L32BTree`1.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.L32BTree<TKey>.L32BTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.L32BTree(Of TKey).New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: L32BTree<TKey>.L32BTree(ChunkBasedSegment)
-  nameWithType.vb: L32BTree(Of TKey).New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.L32BTree`1.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: L32BTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.L32BTree-1.html#Typhon_Engine_BPTree_L32BTree_1__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.L32BTree`1.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.L32BTree<TKey>.L32BTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.L32BTree(Of TKey).New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: L32BTree<TKey>.L32BTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: L32BTree(Of TKey).New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.L32BTree`1.#ctor*
   name: L32BTree
   href: api/Typhon.Engine.BPTree.L32BTree-1.html#Typhon_Engine_BPTree_L32BTree_1__ctor_
@@ -4866,15 +4884,15 @@ references:
   fullName.vb: Typhon.Engine.BPTree.L32MultipleBTree(Of TKey)
   nameWithType: L32MultipleBTree<TKey>
   nameWithType.vb: L32MultipleBTree(Of TKey)
-- uid: Typhon.Engine.BPTree.L32MultipleBTree`1.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: L32MultipleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.L32MultipleBTree-1.html#Typhon_Engine_BPTree_L32MultipleBTree_1__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.L32MultipleBTree`1.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.L32MultipleBTree<TKey>.L32MultipleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.L32MultipleBTree(Of TKey).New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: L32MultipleBTree<TKey>.L32MultipleBTree(ChunkBasedSegment)
-  nameWithType.vb: L32MultipleBTree(Of TKey).New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.L32MultipleBTree`1.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: L32MultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.L32MultipleBTree-1.html#Typhon_Engine_BPTree_L32MultipleBTree_1__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.L32MultipleBTree`1.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.L32MultipleBTree<TKey>.L32MultipleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.L32MultipleBTree(Of TKey).New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: L32MultipleBTree<TKey>.L32MultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: L32MultipleBTree(Of TKey).New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.L32MultipleBTree`1.#ctor*
   name: L32MultipleBTree
   href: api/Typhon.Engine.BPTree.L32MultipleBTree-1.html#Typhon_Engine_BPTree_L32MultipleBTree_1__ctor_
@@ -5026,15 +5044,15 @@ references:
   fullName.vb: Typhon.Engine.BPTree.L64BTree(Of TKey)
   nameWithType: L64BTree<TKey>
   nameWithType.vb: L64BTree(Of TKey)
-- uid: Typhon.Engine.BPTree.L64BTree`1.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: L64BTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.L64BTree-1.html#Typhon_Engine_BPTree_L64BTree_1__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.L64BTree`1.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.L64BTree<TKey>.L64BTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.L64BTree(Of TKey).New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: L64BTree<TKey>.L64BTree(ChunkBasedSegment)
-  nameWithType.vb: L64BTree(Of TKey).New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.L64BTree`1.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: L64BTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.L64BTree-1.html#Typhon_Engine_BPTree_L64BTree_1__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.L64BTree`1.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.L64BTree<TKey>.L64BTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.L64BTree(Of TKey).New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: L64BTree<TKey>.L64BTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: L64BTree(Of TKey).New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.L64BTree`1.#ctor*
   name: L64BTree
   href: api/Typhon.Engine.BPTree.L64BTree-1.html#Typhon_Engine_BPTree_L64BTree_1__ctor_
@@ -5681,15 +5699,15 @@ references:
   fullName.vb: Typhon.Engine.BPTree.L64MultipleBTree(Of TKey)
   nameWithType: L64MultipleBTree<TKey>
   nameWithType.vb: L64MultipleBTree(Of TKey)
-- uid: Typhon.Engine.BPTree.L64MultipleBTree`1.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: L64MultipleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.L64MultipleBTree-1.html#Typhon_Engine_BPTree_L64MultipleBTree_1__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.L64MultipleBTree`1.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.L64MultipleBTree<TKey>.L64MultipleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.L64MultipleBTree(Of TKey).New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: L64MultipleBTree<TKey>.L64MultipleBTree(ChunkBasedSegment)
-  nameWithType.vb: L64MultipleBTree(Of TKey).New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.L64MultipleBTree`1.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: L64MultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.L64MultipleBTree-1.html#Typhon_Engine_BPTree_L64MultipleBTree_1__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.L64MultipleBTree`1.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.L64MultipleBTree<TKey>.L64MultipleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.L64MultipleBTree(Of TKey).New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: L64MultipleBTree<TKey>.L64MultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: L64MultipleBTree(Of TKey).New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.L64MultipleBTree`1.#ctor*
   name: L64MultipleBTree
   href: api/Typhon.Engine.BPTree.L64MultipleBTree-1.html#Typhon_Engine_BPTree_L64MultipleBTree_1__ctor_
@@ -5838,15 +5856,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.LongMultipleBTree
   fullName: Typhon.Engine.BPTree.LongMultipleBTree
   nameWithType: LongMultipleBTree
-- uid: Typhon.Engine.BPTree.LongMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: LongMultipleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.LongMultipleBTree.html#Typhon_Engine_BPTree_LongMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.LongMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.LongMultipleBTree.LongMultipleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.LongMultipleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: LongMultipleBTree.LongMultipleBTree(ChunkBasedSegment)
-  nameWithType.vb: LongMultipleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.LongMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: LongMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.LongMultipleBTree.html#Typhon_Engine_BPTree_LongMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.LongMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.LongMultipleBTree.LongMultipleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.LongMultipleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: LongMultipleBTree.LongMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: LongMultipleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.LongMultipleBTree.#ctor*
   name: LongMultipleBTree
   href: api/Typhon.Engine.BPTree.LongMultipleBTree.html#Typhon_Engine_BPTree_LongMultipleBTree__ctor_
@@ -5863,15 +5881,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.LongSingleBTree
   fullName: Typhon.Engine.BPTree.LongSingleBTree
   nameWithType: LongSingleBTree
-- uid: Typhon.Engine.BPTree.LongSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: LongSingleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.LongSingleBTree.html#Typhon_Engine_BPTree_LongSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.LongSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.LongSingleBTree.LongSingleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.LongSingleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: LongSingleBTree.LongSingleBTree(ChunkBasedSegment)
-  nameWithType.vb: LongSingleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.LongSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: LongSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.LongSingleBTree.html#Typhon_Engine_BPTree_LongSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.LongSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.LongSingleBTree.LongSingleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.LongSingleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: LongSingleBTree.LongSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: LongSingleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.LongSingleBTree.#ctor*
   name: LongSingleBTree
   href: api/Typhon.Engine.BPTree.LongSingleBTree.html#Typhon_Engine_BPTree_LongSingleBTree__ctor_
@@ -5894,15 +5912,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.ShortMultipleBTree
   fullName: Typhon.Engine.BPTree.ShortMultipleBTree
   nameWithType: ShortMultipleBTree
-- uid: Typhon.Engine.BPTree.ShortMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: ShortMultipleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.ShortMultipleBTree.html#Typhon_Engine_BPTree_ShortMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.ShortMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.ShortMultipleBTree.ShortMultipleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.ShortMultipleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: ShortMultipleBTree.ShortMultipleBTree(ChunkBasedSegment)
-  nameWithType.vb: ShortMultipleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.ShortMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: ShortMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.ShortMultipleBTree.html#Typhon_Engine_BPTree_ShortMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.ShortMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.ShortMultipleBTree.ShortMultipleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.ShortMultipleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: ShortMultipleBTree.ShortMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: ShortMultipleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.ShortMultipleBTree.#ctor*
   name: ShortMultipleBTree
   href: api/Typhon.Engine.BPTree.ShortMultipleBTree.html#Typhon_Engine_BPTree_ShortMultipleBTree__ctor_
@@ -5919,15 +5937,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.ShortSingleBTree
   fullName: Typhon.Engine.BPTree.ShortSingleBTree
   nameWithType: ShortSingleBTree
-- uid: Typhon.Engine.BPTree.ShortSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: ShortSingleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.ShortSingleBTree.html#Typhon_Engine_BPTree_ShortSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.ShortSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.ShortSingleBTree.ShortSingleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.ShortSingleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: ShortSingleBTree.ShortSingleBTree(ChunkBasedSegment)
-  nameWithType.vb: ShortSingleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.ShortSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: ShortSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.ShortSingleBTree.html#Typhon_Engine_BPTree_ShortSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.ShortSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.ShortSingleBTree.ShortSingleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.ShortSingleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: ShortSingleBTree.ShortSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: ShortSingleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.ShortSingleBTree.#ctor*
   name: ShortSingleBTree
   href: api/Typhon.Engine.BPTree.ShortSingleBTree.html#Typhon_Engine_BPTree_ShortSingleBTree__ctor_
@@ -5944,15 +5962,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.String64BTree
   fullName: Typhon.Engine.BPTree.String64BTree
   nameWithType: String64BTree
-- uid: Typhon.Engine.BPTree.String64BTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: String64BTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.String64BTree.html#Typhon_Engine_BPTree_String64BTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.String64BTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.String64BTree.String64BTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.String64BTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: String64BTree.String64BTree(ChunkBasedSegment)
-  nameWithType.vb: String64BTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.String64BTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: String64BTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.String64BTree.html#Typhon_Engine_BPTree_String64BTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.String64BTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.String64BTree.String64BTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.String64BTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: String64BTree.String64BTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: String64BTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.String64BTree.#ctor*
   name: String64BTree
   href: api/Typhon.Engine.BPTree.String64BTree.html#Typhon_Engine_BPTree_String64BTree__ctor_
@@ -6515,15 +6533,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.String64MultipleBTree
   fullName: Typhon.Engine.BPTree.String64MultipleBTree
   nameWithType: String64MultipleBTree
-- uid: Typhon.Engine.BPTree.String64MultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: String64MultipleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.String64MultipleBTree.html#Typhon_Engine_BPTree_String64MultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.String64MultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.String64MultipleBTree.String64MultipleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.String64MultipleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: String64MultipleBTree.String64MultipleBTree(ChunkBasedSegment)
-  nameWithType.vb: String64MultipleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.String64MultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: String64MultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.String64MultipleBTree.html#Typhon_Engine_BPTree_String64MultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.String64MultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.String64MultipleBTree.String64MultipleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.String64MultipleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: String64MultipleBTree.String64MultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: String64MultipleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.String64MultipleBTree.#ctor*
   name: String64MultipleBTree
   href: api/Typhon.Engine.BPTree.String64MultipleBTree.html#Typhon_Engine_BPTree_String64MultipleBTree__ctor_
@@ -6649,15 +6667,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.String64SingleBTree
   fullName: Typhon.Engine.BPTree.String64SingleBTree
   nameWithType: String64SingleBTree
-- uid: Typhon.Engine.BPTree.String64SingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: String64SingleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.String64SingleBTree.html#Typhon_Engine_BPTree_String64SingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.String64SingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.String64SingleBTree.String64SingleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.String64SingleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: String64SingleBTree.String64SingleBTree(ChunkBasedSegment)
-  nameWithType.vb: String64SingleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.String64SingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: String64SingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.String64SingleBTree.html#Typhon_Engine_BPTree_String64SingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.String64SingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.String64SingleBTree.String64SingleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.String64SingleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: String64SingleBTree.String64SingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: String64SingleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.String64SingleBTree.#ctor*
   name: String64SingleBTree
   href: api/Typhon.Engine.BPTree.String64SingleBTree.html#Typhon_Engine_BPTree_String64SingleBTree__ctor_
@@ -6674,15 +6692,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.UByteMultipleBTree
   fullName: Typhon.Engine.BPTree.UByteMultipleBTree
   nameWithType: UByteMultipleBTree
-- uid: Typhon.Engine.BPTree.UByteMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: UByteMultipleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.UByteMultipleBTree.html#Typhon_Engine_BPTree_UByteMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.UByteMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.UByteMultipleBTree.UByteMultipleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.UByteMultipleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: UByteMultipleBTree.UByteMultipleBTree(ChunkBasedSegment)
-  nameWithType.vb: UByteMultipleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.UByteMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: UByteMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.UByteMultipleBTree.html#Typhon_Engine_BPTree_UByteMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.UByteMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.UByteMultipleBTree.UByteMultipleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.UByteMultipleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: UByteMultipleBTree.UByteMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: UByteMultipleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.UByteMultipleBTree.#ctor*
   name: UByteMultipleBTree
   href: api/Typhon.Engine.BPTree.UByteMultipleBTree.html#Typhon_Engine_BPTree_UByteMultipleBTree__ctor_
@@ -6699,15 +6717,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.UByteSingleBTree
   fullName: Typhon.Engine.BPTree.UByteSingleBTree
   nameWithType: UByteSingleBTree
-- uid: Typhon.Engine.BPTree.UByteSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: UByteSingleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.UByteSingleBTree.html#Typhon_Engine_BPTree_UByteSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.UByteSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.UByteSingleBTree.UByteSingleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.UByteSingleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: UByteSingleBTree.UByteSingleBTree(ChunkBasedSegment)
-  nameWithType.vb: UByteSingleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.UByteSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: UByteSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.UByteSingleBTree.html#Typhon_Engine_BPTree_UByteSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.UByteSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.UByteSingleBTree.UByteSingleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.UByteSingleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: UByteSingleBTree.UByteSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: UByteSingleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.UByteSingleBTree.#ctor*
   name: UByteSingleBTree
   href: api/Typhon.Engine.BPTree.UByteSingleBTree.html#Typhon_Engine_BPTree_UByteSingleBTree__ctor_
@@ -6724,15 +6742,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.UIntMultipleBTree
   fullName: Typhon.Engine.BPTree.UIntMultipleBTree
   nameWithType: UIntMultipleBTree
-- uid: Typhon.Engine.BPTree.UIntMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: UIntMultipleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.UIntMultipleBTree.html#Typhon_Engine_BPTree_UIntMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.UIntMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.UIntMultipleBTree.UIntMultipleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.UIntMultipleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: UIntMultipleBTree.UIntMultipleBTree(ChunkBasedSegment)
-  nameWithType.vb: UIntMultipleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.UIntMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: UIntMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.UIntMultipleBTree.html#Typhon_Engine_BPTree_UIntMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.UIntMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.UIntMultipleBTree.UIntMultipleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.UIntMultipleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: UIntMultipleBTree.UIntMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: UIntMultipleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.UIntMultipleBTree.#ctor*
   name: UIntMultipleBTree
   href: api/Typhon.Engine.BPTree.UIntMultipleBTree.html#Typhon_Engine_BPTree_UIntMultipleBTree__ctor_
@@ -6749,15 +6767,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.UIntSingleBTree
   fullName: Typhon.Engine.BPTree.UIntSingleBTree
   nameWithType: UIntSingleBTree
-- uid: Typhon.Engine.BPTree.UIntSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: UIntSingleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.UIntSingleBTree.html#Typhon_Engine_BPTree_UIntSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.UIntSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.UIntSingleBTree.UIntSingleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.UIntSingleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: UIntSingleBTree.UIntSingleBTree(ChunkBasedSegment)
-  nameWithType.vb: UIntSingleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.UIntSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: UIntSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.UIntSingleBTree.html#Typhon_Engine_BPTree_UIntSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.UIntSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.UIntSingleBTree.UIntSingleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.UIntSingleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: UIntSingleBTree.UIntSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: UIntSingleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.UIntSingleBTree.#ctor*
   name: UIntSingleBTree
   href: api/Typhon.Engine.BPTree.UIntSingleBTree.html#Typhon_Engine_BPTree_UIntSingleBTree__ctor_
@@ -6774,15 +6792,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.ULongMultipleBTree
   fullName: Typhon.Engine.BPTree.ULongMultipleBTree
   nameWithType: ULongMultipleBTree
-- uid: Typhon.Engine.BPTree.ULongMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: ULongMultipleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.ULongMultipleBTree.html#Typhon_Engine_BPTree_ULongMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.ULongMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.ULongMultipleBTree.ULongMultipleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.ULongMultipleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: ULongMultipleBTree.ULongMultipleBTree(ChunkBasedSegment)
-  nameWithType.vb: ULongMultipleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.ULongMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: ULongMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.ULongMultipleBTree.html#Typhon_Engine_BPTree_ULongMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.ULongMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.ULongMultipleBTree.ULongMultipleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.ULongMultipleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: ULongMultipleBTree.ULongMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: ULongMultipleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.ULongMultipleBTree.#ctor*
   name: ULongMultipleBTree
   href: api/Typhon.Engine.BPTree.ULongMultipleBTree.html#Typhon_Engine_BPTree_ULongMultipleBTree__ctor_
@@ -6799,15 +6817,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.ULongSingleBTree
   fullName: Typhon.Engine.BPTree.ULongSingleBTree
   nameWithType: ULongSingleBTree
-- uid: Typhon.Engine.BPTree.ULongSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: ULongSingleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.ULongSingleBTree.html#Typhon_Engine_BPTree_ULongSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.ULongSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.ULongSingleBTree.ULongSingleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.ULongSingleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: ULongSingleBTree.ULongSingleBTree(ChunkBasedSegment)
-  nameWithType.vb: ULongSingleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.ULongSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: ULongSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.ULongSingleBTree.html#Typhon_Engine_BPTree_ULongSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.ULongSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.ULongSingleBTree.ULongSingleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.ULongSingleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: ULongSingleBTree.ULongSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: ULongSingleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.ULongSingleBTree.#ctor*
   name: ULongSingleBTree
   href: api/Typhon.Engine.BPTree.ULongSingleBTree.html#Typhon_Engine_BPTree_ULongSingleBTree__ctor_
@@ -6824,15 +6842,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.UShortMultipleBTree
   fullName: Typhon.Engine.BPTree.UShortMultipleBTree
   nameWithType: UShortMultipleBTree
-- uid: Typhon.Engine.BPTree.UShortMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: UShortMultipleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.UShortMultipleBTree.html#Typhon_Engine_BPTree_UShortMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.UShortMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.UShortMultipleBTree.UShortMultipleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.UShortMultipleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: UShortMultipleBTree.UShortMultipleBTree(ChunkBasedSegment)
-  nameWithType.vb: UShortMultipleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.UShortMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: UShortMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.UShortMultipleBTree.html#Typhon_Engine_BPTree_UShortMultipleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.UShortMultipleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.UShortMultipleBTree.UShortMultipleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.UShortMultipleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: UShortMultipleBTree.UShortMultipleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: UShortMultipleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.UShortMultipleBTree.#ctor*
   name: UShortMultipleBTree
   href: api/Typhon.Engine.BPTree.UShortMultipleBTree.html#Typhon_Engine_BPTree_UShortMultipleBTree__ctor_
@@ -6849,15 +6867,15 @@ references:
   commentId: T:Typhon.Engine.BPTree.UShortSingleBTree
   fullName: Typhon.Engine.BPTree.UShortSingleBTree
   nameWithType: UShortSingleBTree
-- uid: Typhon.Engine.BPTree.UShortSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name: UShortSingleBTree(ChunkBasedSegment)
-  href: api/Typhon.Engine.BPTree.UShortSingleBTree.html#Typhon_Engine_BPTree_UShortSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_
-  commentId: M:Typhon.Engine.BPTree.UShortSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment)
-  name.vb: New(ChunkBasedSegment)
-  fullName: Typhon.Engine.BPTree.UShortSingleBTree.UShortSingleBTree(Typhon.Engine.ChunkBasedSegment)
-  fullName.vb: Typhon.Engine.BPTree.UShortSingleBTree.New(Typhon.Engine.ChunkBasedSegment)
-  nameWithType: UShortSingleBTree.UShortSingleBTree(ChunkBasedSegment)
-  nameWithType.vb: UShortSingleBTree.New(ChunkBasedSegment)
+- uid: Typhon.Engine.BPTree.UShortSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name: UShortSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  href: api/Typhon.Engine.BPTree.UShortSingleBTree.html#Typhon_Engine_BPTree_UShortSingleBTree__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_
+  commentId: M:Typhon.Engine.BPTree.UShortSingleBTree.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)
+  name.vb: New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
+  fullName: Typhon.Engine.BPTree.UShortSingleBTree.UShortSingleBTree(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, bool)
+  fullName.vb: Typhon.Engine.BPTree.UShortSingleBTree.New(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChunkRandomAccessor, Boolean)
+  nameWithType: UShortSingleBTree.UShortSingleBTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  nameWithType.vb: UShortSingleBTree.New(ChunkBasedSegment, ChunkRandomAccessor, Boolean)
 - uid: Typhon.Engine.BPTree.UShortSingleBTree.#ctor*
   name: UShortSingleBTree
   href: api/Typhon.Engine.BPTree.UShortSingleBTree.html#Typhon_Engine_BPTree_UShortSingleBTree__ctor_

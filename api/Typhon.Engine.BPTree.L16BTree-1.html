@@ -240,21 +240,25 @@ Class L16BTree&lt;TKey&gt;  <a class="header-action link-secondary" title="View 
 
   <a id="Typhon_Engine_BPTree_L16BTree_1__ctor_" data-uid="Typhon.Engine.BPTree.L16BTree`1.#ctor*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_L16BTree_1__ctor_Typhon_Engine_ChunkBasedSegment_" data-uid="Typhon.Engine.BPTree.L16BTree`1.#ctor(Typhon.Engine.ChunkBasedSegment)">
-  L16BTree(ChunkBasedSegment)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/L16BTree.cs/#L673"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_BPTree_L16BTree_1__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_" data-uid="Typhon.Engine.BPTree.L16BTree`1.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)">
+  L16BTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/L16BTree.cs/#L674"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">protected L16BTree(ChunkBasedSegment segment)</code></pre>
+    <pre><code class="lang-csharp hljs">protected L16BTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>segment</code> <a class="xref" href="Typhon.Engine.ChunkBasedSegment.html">ChunkBasedSegment</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
+    <dd></dd>
+    <dt><code>load</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
     <dd></dd>
   </dl>
 
@@ -277,7 +281,7 @@ Class L16BTree&lt;TKey&gt;  <a class="header-action link-secondary" title="View 
 
   <h3 id="Typhon_Engine_BPTree_L16BTree_1_AllowMultiple" data-uid="Typhon.Engine.BPTree.L16BTree`1.AllowMultiple">
   AllowMultiple
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/L16BTree.cs/#L672"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/L16BTree.cs/#L673"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -312,7 +316,7 @@ Class L16BTree&lt;TKey&gt;  <a class="header-action link-secondary" title="View 
 
   <h3 id="Typhon_Engine_BPTree_L16BTree_1_GetStorage" data-uid="Typhon.Engine.BPTree.L16BTree`1.GetStorage">
   GetStorage()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/L16BTree.cs/#L671"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/L16BTree.cs/#L672"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>

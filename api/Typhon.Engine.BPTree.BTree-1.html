@@ -174,8 +174,8 @@ Class BTree&lt;TKey&gt;  <a class="header-action link-secondary" title="View sou
 
   <a id="Typhon_Engine_BPTree_BTree_1__ctor_" data-uid="Typhon.Engine.BPTree.BTree`1.#ctor*"></a>
 
-  <h3 id="Typhon_Engine_BPTree_BTree_1__ctor_Typhon_Engine_ChunkBasedSegment_" data-uid="Typhon.Engine.BPTree.BTree`1.#ctor(Typhon.Engine.ChunkBasedSegment)">
-  BTree(ChunkBasedSegment)
+  <h3 id="Typhon_Engine_BPTree_BTree_1__ctor_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChunkRandomAccessor_System_Boolean_" data-uid="Typhon.Engine.BPTree.BTree`1.#ctor(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChunkRandomAccessor,System.Boolean)">
+  BTree(ChunkBasedSegment, ChunkRandomAccessor, bool)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L389"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -183,12 +183,16 @@ Class BTree&lt;TKey&gt;  <a class="header-action link-secondary" title="View sou
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">protected BTree(ChunkBasedSegment segment)</code></pre>
+    <pre><code class="lang-csharp hljs">protected BTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>segment</code> <a class="xref" href="Typhon.Engine.ChunkBasedSegment.html">ChunkBasedSegment</a></dt>
+    <dd></dd>
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
+    <dd></dd>
+    <dt><code>load</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
     <dd></dd>
   </dl>
 
@@ -242,7 +246,7 @@ Class BTree&lt;TKey&gt;  <a class="header-action link-secondary" title="View sou
 
   <h3 id="Typhon_Engine_BPTree_BTree_1_Item__0_" data-uid="Typhon.Engine.BPTree.BTree`1.Item(`0)">
   this[TKey]
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L502"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L510"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -313,7 +317,7 @@ Class BTree&lt;TKey&gt;  <a class="header-action link-secondary" title="View sou
 
   <h3 id="Typhon_Engine_BPTree_BTree_1_Add_System_Void__System_Int32_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.BTree`1.Add(System.Void*,System.Int32,Typhon.Engine.ChunkRandomAccessor)">
   Add(void*, int, ChunkRandomAccessor)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L401"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L409"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -353,7 +357,7 @@ Class BTree&lt;TKey&gt;  <a class="header-action link-secondary" title="View sou
 
   <h3 id="Typhon_Engine_BPTree_BTree_1_Add__0_System_Int32_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.BTree`1.Add(`0,System.Int32,Typhon.Engine.ChunkRandomAccessor)">
   Add(TKey, int, ChunkRandomAccessor)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L408"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L416"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -393,7 +397,7 @@ Class BTree&lt;TKey&gt;  <a class="header-action link-secondary" title="View sou
 
   <h3 id="Typhon_Engine_BPTree_BTree_1_AllocNode_Typhon_Engine_BPTree_NodeStates_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.BTree`1.AllocNode(Typhon.Engine.BPTree.NodeStates,Typhon.Engine.ChunkRandomAccessor)">
   AllocNode(NodeStates, ChunkRandomAccessor)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L575"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L583"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -431,7 +435,7 @@ Class BTree&lt;TKey&gt;  <a class="header-action link-secondary" title="View sou
 
   <h3 id="Typhon_Engine_BPTree_BTree_1_CheckConsistency_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.BTree`1.CheckConsistency(Typhon.Engine.ChunkRandomAccessor)">
   CheckConsistency(ChunkRandomAccessor)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L441"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L449"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -709,7 +713,7 @@ Class BTree&lt;TKey&gt;  <a class="header-action link-secondary" title="View sou
 
   <h3 id="Typhon_Engine_BPTree_BTree_1_Remove_System_Void__System_Int32__Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.BTree`1.Remove(System.Void*,System.Int32@,Typhon.Engine.ChunkRandomAccessor)">
   Remove(void*, out int, ChunkRandomAccessor)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L402"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L410"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -749,7 +753,7 @@ Class BTree&lt;TKey&gt;  <a class="header-action link-secondary" title="View sou
 
   <h3 id="Typhon_Engine_BPTree_BTree_1_Remove__0_System_Int32__Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.BTree`1.Remove(`0,System.Int32@,Typhon.Engine.ChunkRandomAccessor)">
   Remove(TKey, out int, ChunkRandomAccessor)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L424"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L432"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -789,7 +793,7 @@ Class BTree&lt;TKey&gt;  <a class="header-action link-secondary" title="View sou
 
   <h3 id="Typhon_Engine_BPTree_BTree_1_RemoveValue_System_Void__System_Int32_System_Int32_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.BTree`1.RemoveValue(System.Void*,System.Int32,System.Int32,Typhon.Engine.ChunkRandomAccessor)">
   RemoveValue(void*, int, int, ChunkRandomAccessor)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L404"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L412"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -831,7 +835,7 @@ Class BTree&lt;TKey&gt;  <a class="header-action link-secondary" title="View sou
 
   <h3 id="Typhon_Engine_BPTree_BTree_1_RemoveValue__0_System_Int32_System_Int32_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.BTree`1.RemoveValue(`0,System.Int32,System.Int32,Typhon.Engine.ChunkRandomAccessor)">
   RemoveValue(TKey, int, int, ChunkRandomAccessor)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L529"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L537"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -906,7 +910,7 @@ Class BTree&lt;TKey&gt;  <a class="header-action link-secondary" title="View sou
 
   <h3 id="Typhon_Engine_BPTree_BTree_1_TryGet_System_Void__System_Int32__Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.BTree`1.TryGet(System.Void*,System.Int32@,Typhon.Engine.ChunkRandomAccessor)">
   TryGet(void*, out int, ChunkRandomAccessor)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L403"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L411"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -946,7 +950,7 @@ Class BTree&lt;TKey&gt;  <a class="header-action link-secondary" title="View sou
 
   <h3 id="Typhon_Engine_BPTree_BTree_1_TryGet__0_System_Int32__Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.BTree`1.TryGet(`0,System.Int32@,Typhon.Engine.ChunkRandomAccessor)">
   TryGet(TKey, out int, ChunkRandomAccessor)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L513"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L521"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -986,7 +990,7 @@ Class BTree&lt;TKey&gt;  <a class="header-action link-secondary" title="View sou
 
   <h3 id="Typhon_Engine_BPTree_BTree_1_TryGetMultiple_System_Void__Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.BTree`1.TryGetMultiple(System.Void*,Typhon.Engine.ChunkRandomAccessor)">
   TryGetMultiple(void*, ChunkRandomAccessor)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L406"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L414"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1024,7 +1028,7 @@ Class BTree&lt;TKey&gt;  <a class="header-action link-secondary" title="View sou
 
   <h3 id="Typhon_Engine_BPTree_BTree_1_TryGetMultiple__0_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.BTree`1.TryGetMultiple(`0,Typhon.Engine.ChunkRandomAccessor)">
   TryGetMultiple(TKey, ChunkRandomAccessor)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L562"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L570"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
