@@ -128,6 +128,12 @@ Class L64BTree&lt;TKey&gt;.L64NodeStorage  <a class="header-action link-secondar
     <dt>Inherited Members</dt>
     <dd>
     <div>
+      <a class="xref" href="Typhon.Engine.BPTree.BTree-1.BaseNodeStorage.html#Typhon_Engine_BPTree_BTree_1_BaseNodeStorage_Owner">BTree&lt;TKey&gt;.BaseNodeStorage.Owner</a>
+    </div>
+    <div>
+      <a class="xref" href="Typhon.Engine.BPTree.BTree-1.BaseNodeStorage.html#Typhon_Engine_BPTree_BTree_1_BaseNodeStorage_Segment">BTree&lt;TKey&gt;.BaseNodeStorage.Segment</a>
+    </div>
+    <div>
       <a class="xref" href="Typhon.Engine.BPTree.BTree-1.BaseNodeStorage.html#Typhon_Engine_BPTree_BTree_1_BaseNodeStorage_CommitChanges_Typhon_Engine_ChunkRandomAccessor_">BTree&lt;TKey&gt;.BaseNodeStorage.CommitChanges(ChunkRandomAccessor)</a>
     </div>
     <div>
@@ -305,6 +311,37 @@ Class L64BTree&lt;TKey&gt;.L64NodeStorage  <a class="header-action link-secondar
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
     <dd></dd>
     <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_L64BTree_1_L64NodeStorage_DecrementStart_" data-uid="Typhon.Engine.BPTree.L64BTree`1.L64NodeStorage.DecrementStart*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_L64BTree_1_L64NodeStorage_DecrementStart_Typhon_Engine_BPTree_Index64Chunk__" data-uid="Typhon.Engine.BPTree.L64BTree`1.L64NodeStorage.DecrementStart(Typhon.Engine.BPTree.Index64Chunk@)">
+  DecrementStart(ref Index64Chunk)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/L64BTree.cs/#L529"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private static void DecrementStart(ref Index64Chunk chunk)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>chunk</code> <a class="xref" href="Typhon.Engine.BPTree.Index64Chunk.html">Index64Chunk</a></dt>
     <dd></dd>
   </dl>
 
@@ -838,6 +875,70 @@ Class L64BTree&lt;TKey&gt;.L64NodeStorage  <a class="header-action link-secondar
 
 
 
+  <a id="Typhon_Engine_BPTree_L64BTree_1_L64NodeStorage_IncrementStart_" data-uid="Typhon.Engine.BPTree.L64BTree`1.L64NodeStorage.IncrementStart*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_L64BTree_1_L64NodeStorage_IncrementStart_Typhon_Engine_BPTree_Index64Chunk__" data-uid="Typhon.Engine.BPTree.L64BTree`1.L64NodeStorage.IncrementStart(Typhon.Engine.BPTree.Index64Chunk@)">
+  IncrementStart(ref Index64Chunk)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/L64BTree.cs/#L541"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private static void IncrementStart(ref Index64Chunk chunk)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>chunk</code> <a class="xref" href="Typhon.Engine.BPTree.Index64Chunk.html">Index64Chunk</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_L64BTree_1_L64NodeStorage_Initialize_" data-uid="Typhon.Engine.BPTree.L64BTree`1.L64NodeStorage.Initialize*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_L64BTree_1_L64NodeStorage_Initialize_Typhon_Engine_BPTree_BTree__0__Typhon_Engine_ChunkBasedSegment_" data-uid="Typhon.Engine.BPTree.L64BTree`1.L64NodeStorage.Initialize(Typhon.Engine.BPTree.BTree{`0},Typhon.Engine.ChunkBasedSegment)">
+  Initialize(BTree&lt;TKey&gt;, ChunkBasedSegment)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/L64BTree.cs/#L165"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal override void Initialize(BTree&lt;TKey&gt; owner, ChunkBasedSegment segment)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>owner</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;</dt>
+    <dd></dd>
+    <dt><code>segment</code> <a class="xref" href="Typhon.Engine.ChunkBasedSegment.html">ChunkBasedSegment</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
   <a id="Typhon_Engine_BPTree_L64BTree_1_L64NodeStorage_InitializeNode_" data-uid="Typhon.Engine.BPTree.L64BTree`1.L64NodeStorage.InitializeNode*"></a>
 
   <h3 id="Typhon_Engine_BPTree_L64BTree_1_L64NodeStorage_InitializeNode_Typhon_Engine_BPTree_BTree__0__NodeWrapper_Typhon_Engine_BPTree_NodeStates_Typhon_Engine_ChunkRandomAccessor_" data-uid="Typhon.Engine.BPTree.L64BTree`1.L64NodeStorage.InitializeNode(Typhon.Engine.BPTree.BTree{`0}.NodeWrapper,Typhon.Engine.BPTree.NodeStates,Typhon.Engine.ChunkRandomAccessor)">
@@ -937,6 +1038,41 @@ Class L64BTree&lt;TKey&gt;.L64NodeStorage  <a class="header-action link-secondar
     <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
     <dd></dd>
   </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_L64BTree_1_L64NodeStorage_LeftShift_" data-uid="Typhon.Engine.BPTree.L64BTree`1.L64NodeStorage.LeftShift*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_L64BTree_1_L64NodeStorage_LeftShift_Typhon_Engine_BPTree_Index64Chunk__System_Int32_System_Int32_" data-uid="Typhon.Engine.BPTree.L64BTree`1.L64NodeStorage.LeftShift(Typhon.Engine.BPTree.Index64Chunk@,System.Int32,System.Int32)">
+  LeftShift(ref Index64Chunk, int, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/L64BTree.cs/#L553"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private void LeftShift(ref Index64Chunk chunk, int index, int length)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>chunk</code> <a class="xref" href="Typhon.Engine.BPTree.Index64Chunk.html">Index64Chunk</a></dt>
+    <dd></dd>
+    <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>length</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
 
 
 
@@ -1124,6 +1260,78 @@ Class L64BTree&lt;TKey&gt;.L64NodeStorage  <a class="header-action link-secondar
     <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>
   </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_L64BTree_1_L64NodeStorage_RightShift_" data-uid="Typhon.Engine.BPTree.L64BTree`1.L64NodeStorage.RightShift*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_L64BTree_1_L64NodeStorage_RightShift_Typhon_Engine_BPTree_Index64Chunk__System_Int32_System_Int32_" data-uid="Typhon.Engine.BPTree.L64BTree`1.L64NodeStorage.RightShift(Typhon.Engine.BPTree.Index64Chunk@,System.Int32,System.Int32)">
+  RightShift(ref Index64Chunk, int, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/L64BTree.cs/#L593"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private void RightShift(ref Index64Chunk chunk, int index, int length)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>chunk</code> <a class="xref" href="Typhon.Engine.BPTree.Index64Chunk.html">Index64Chunk</a></dt>
+    <dd></dd>
+    <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>length</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_L64BTree_1_L64NodeStorage_Set_" data-uid="Typhon.Engine.BPTree.L64BTree`1.L64NodeStorage.Set*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_L64BTree_1_L64NodeStorage_Set_Typhon_Engine_BPTree_Index64Chunk__System_Int32_Typhon_Engine_BPTree_BTree__0__KeyValueItem_System_Boolean_" data-uid="Typhon.Engine.BPTree.L64BTree`1.L64NodeStorage.Set(Typhon.Engine.BPTree.Index64Chunk@,System.Int32,Typhon.Engine.BPTree.BTree{`0}.KeyValueItem,System.Boolean)">
+  Set(ref Index64Chunk, int, KeyValueItem, bool)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/L64BTree.cs/#L522"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private static void Set(ref Index64Chunk chunk, int index, BTree&lt;TKey&gt;.KeyValueItem item, bool adjust)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>chunk</code> <a class="xref" href="Typhon.Engine.BPTree.Index64Chunk.html">Index64Chunk</a></dt>
+    <dd></dd>
+    <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>item</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.KeyValueItem.html">KeyValueItem</a></dt>
+    <dd></dd>
+    <dt><code>adjust</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
 
 
 

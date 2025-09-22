@@ -207,7 +207,28 @@ Class L32MultipleBTree&lt;TKey&gt;.L32MultipleNodeStorage  <a class="header-acti
       <a class="xref" href="Typhon.Engine.BPTree.L32BTree-1.L32NodeStorage.html#Typhon_Engine_BPTree_L32BTree_1_L32NodeStorage_DecrementStart_Typhon_Engine_BPTree_BTree__0__NodeWrapper_Typhon_Engine_ChunkRandomAccessor_">L32BTree&lt;TKey&gt;.L32NodeStorage.DecrementStart(BTree&lt;TKey&gt;.NodeWrapper, ChunkRandomAccessor)</a>
     </div>
     <div>
+      <a class="xref" href="Typhon.Engine.BPTree.L32BTree-1.L32NodeStorage.html#Typhon_Engine_BPTree_L32BTree_1_L32NodeStorage_Set_Typhon_Engine_BPTree_Index32Chunk__System_Int32_Typhon_Engine_BPTree_BTree__0__KeyValueItem_System_Boolean_">L32BTree&lt;TKey&gt;.L32NodeStorage.Set(ref Index32Chunk, int, BTree&lt;TKey&gt;.KeyValueItem, bool)</a>
+    </div>
+    <div>
+      <a class="xref" href="Typhon.Engine.BPTree.L32BTree-1.L32NodeStorage.html#Typhon_Engine_BPTree_L32BTree_1_L32NodeStorage_DecrementStart_Typhon_Engine_BPTree_Index32Chunk__">L32BTree&lt;TKey&gt;.L32NodeStorage.DecrementStart(ref Index32Chunk)</a>
+    </div>
+    <div>
+      <a class="xref" href="Typhon.Engine.BPTree.L32BTree-1.L32NodeStorage.html#Typhon_Engine_BPTree_L32BTree_1_L32NodeStorage_IncrementStart_Typhon_Engine_BPTree_Index32Chunk__">L32BTree&lt;TKey&gt;.L32NodeStorage.IncrementStart(ref Index32Chunk)</a>
+    </div>
+    <div>
+      <a class="xref" href="Typhon.Engine.BPTree.L32BTree-1.L32NodeStorage.html#Typhon_Engine_BPTree_L32BTree_1_L32NodeStorage_LeftShift_Typhon_Engine_BPTree_Index32Chunk__System_Int32_System_Int32_">L32BTree&lt;TKey&gt;.L32NodeStorage.LeftShift(ref Index32Chunk, int, int)</a>
+    </div>
+    <div>
+      <a class="xref" href="Typhon.Engine.BPTree.L32BTree-1.L32NodeStorage.html#Typhon_Engine_BPTree_L32BTree_1_L32NodeStorage_RightShift_Typhon_Engine_BPTree_Index32Chunk__System_Int32_System_Int32_">L32BTree&lt;TKey&gt;.L32NodeStorage.RightShift(ref Index32Chunk, int, int)</a>
+    </div>
+    <div>
       <a class="xref" href="Typhon.Engine.BPTree.L32BTree-1.L32NodeStorage.html#Typhon_Engine_BPTree_L32BTree_1_L32NodeStorage_SplitRight_Typhon_Engine_BPTree_Index32Chunk__Typhon_Engine_BPTree_NodeStates_Typhon_Engine_ChunkRandomAccessor_">L32BTree&lt;TKey&gt;.L32NodeStorage.SplitRight(ref Index32Chunk, NodeStates, ChunkRandomAccessor)</a>
+    </div>
+    <div>
+      <a class="xref" href="Typhon.Engine.BPTree.BTree-1.BaseNodeStorage.html#Typhon_Engine_BPTree_BTree_1_BaseNodeStorage_Owner">BTree&lt;TKey&gt;.BaseNodeStorage.Owner</a>
+    </div>
+    <div>
+      <a class="xref" href="Typhon.Engine.BPTree.BTree-1.BaseNodeStorage.html#Typhon_Engine_BPTree_BTree_1_BaseNodeStorage_Segment">BTree&lt;TKey&gt;.BaseNodeStorage.Segment</a>
     </div>
     <div>
       <a class="xref" href="Typhon.Engine.BPTree.BTree-1.BaseNodeStorage.html#Typhon_Engine_BPTree_BTree_1_BaseNodeStorage_CommitChanges_Typhon_Engine_ChunkRandomAccessor_">BTree&lt;TKey&gt;.BaseNodeStorage.CommitChanges(ChunkRandomAccessor)</a>
@@ -240,6 +261,40 @@ Class L32MultipleBTree&lt;TKey&gt;.L32MultipleNodeStorage  <a class="header-acti
       <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
     </div>
   </dd></dl>
+
+
+
+
+
+
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="Typhon_Engine_BPTree_L32MultipleBTree_1_L32MultipleNodeStorage__valueStore" data-uid="Typhon.Engine.BPTree.L32MultipleBTree`1.L32MultipleNodeStorage._valueStore">
+  _valueStore
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/L32BTree.cs/#L690"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private VariableSizedBufferSegment&lt;int&gt; _valueStore</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.VariableSizedBufferSegment-1.html">VariableSizedBufferSegment</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
 
 
 
@@ -386,6 +441,39 @@ Class L32MultipleBTree&lt;TKey&gt;.L32MultipleNodeStorage  <a class="header-acti
     <dt><a class="xref" href="Typhon.Engine.VariableSizedBufferAccessor-1.html">VariableSizedBufferAccessor</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>&gt;</dt>
     <dd></dd>
   </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_L32MultipleBTree_1_L32MultipleNodeStorage_Initialize_" data-uid="Typhon.Engine.BPTree.L32MultipleBTree`1.L32MultipleNodeStorage.Initialize*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_L32MultipleBTree_1_L32MultipleNodeStorage_Initialize_Typhon_Engine_BPTree_BTree__0__Typhon_Engine_ChunkBasedSegment_" data-uid="Typhon.Engine.BPTree.L32MultipleBTree`1.L32MultipleNodeStorage.Initialize(Typhon.Engine.BPTree.BTree{`0},Typhon.Engine.ChunkBasedSegment)">
+  Initialize(BTree&lt;TKey&gt;, ChunkBasedSegment)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/L32BTree.cs/#L692"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal override void Initialize(BTree&lt;TKey&gt; owner, ChunkBasedSegment segment)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>owner</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;</dt>
+    <dd></dd>
+    <dt><code>segment</code> <a class="xref" href="Typhon.Engine.ChunkBasedSegment.html">ChunkBasedSegment</a></dt>
+    <dd></dd>
+  </dl>
+
 
 
 

@@ -89,7 +89,7 @@
 
 
   <h1 id="Typhon_Engine_DatabaseEngine" data-uid="Typhon.Engine.DatabaseEngine" class="text-break">
-Class DatabaseEngine  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L84"><i class="bi bi-code-slash"></i></a>
+Class DatabaseEngine  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L95"><i class="bi bi-code-slash"></i></a>
   </h1>
 
   <div class="facts text-secondary">
@@ -163,7 +163,7 @@ public class DatabaseEngine : IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_DatabaseEngine__ctor_Typhon_Engine_DatabaseEngineOptions_Typhon_Engine_ManagedPagedMMF_Microsoft_Extensions_Logging_ILogger_Typhon_Engine_DatabaseEngine__" data-uid="Typhon.Engine.DatabaseEngine.#ctor(Typhon.Engine.DatabaseEngineOptions,Typhon.Engine.ManagedPagedMMF,Microsoft.Extensions.Logging.ILogger{Typhon.Engine.DatabaseEngine})">
   DatabaseEngine(DatabaseEngineOptions, ManagedPagedMMF, ILogger&lt;DatabaseEngine&gt;)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L115"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L122"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -194,6 +194,190 @@ public class DatabaseEngine : IDisposable</code></pre>
 
 
 
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="Typhon_Engine_DatabaseEngine__componentTableByType" data-uid="Typhon.Engine.DatabaseEngine._componentTableByType">
+  _componentTableByType
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L103"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private ConcurrentDictionary&lt;Type, ComponentTable&gt; _componentTableByType</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.collections.concurrent.concurrentdictionary-2">ConcurrentDictionary</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.type">Type</a>, <a class="xref" href="Typhon.Engine.ComponentTable.html">ComponentTable</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_DatabaseEngine__componentsTable" data-uid="Typhon.Engine.DatabaseEngine._componentsTable">
+  _componentsTable
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L102"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private ComponentTable _componentsTable</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.ComponentTable.html">ComponentTable</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_DatabaseEngine__curPrimaryKey" data-uid="Typhon.Engine.DatabaseEngine._curPrimaryKey">
+  _curPrimaryKey
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L104"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private long _curPrimaryKey</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int64">long</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_DatabaseEngine__fieldsTable" data-uid="Typhon.Engine.DatabaseEngine._fieldsTable">
+  _fieldsTable
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L101"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private ComponentTable _fieldsTable</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.ComponentTable.html">ComponentTable</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_DatabaseEngine__log" data-uid="Typhon.Engine.DatabaseEngine._log">
+  _log
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L99"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private readonly ILogger&lt;DatabaseEngine&gt; _log</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/microsoft.extensions.logging.ilogger-1">ILogger</a>&lt;<a class="xref" href="Typhon.Engine.DatabaseEngine.html">DatabaseEngine</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_DatabaseEngine__options" data-uid="Typhon.Engine.DatabaseEngine._options">
+  _options
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L98"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private readonly DatabaseEngineOptions _options</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.DatabaseEngineOptions.html">DatabaseEngineOptions</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
   <h2 class="section" id="properties">Properties
 </h2>
 
@@ -202,7 +386,7 @@ public class DatabaseEngine : IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_DatabaseEngine_DBD" data-uid="Typhon.Engine.DatabaseEngine.DBD">
   DBD
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L96"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L106"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -233,14 +417,14 @@ public class DatabaseEngine : IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_DatabaseEngine_IsDisposed" data-uid="Typhon.Engine.DatabaseEngine.IsDisposed">
   IsDisposed
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L138"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L142"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public bool IsDisposed { get; }</code></pre>
+    <pre><code class="lang-csharp hljs">public bool IsDisposed { get; private set; }</code></pre>
   </div>
 
 
@@ -264,7 +448,7 @@ public class DatabaseEngine : IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_DatabaseEngine_MMF" data-uid="Typhon.Engine.DatabaseEngine.MMF">
   MMF
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L97"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L107"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -291,15 +475,136 @@ public class DatabaseEngine : IDisposable</code></pre>
 
 
 
+  <a id="Typhon_Engine_DatabaseEngine_TransactionChain_" data-uid="Typhon.Engine.DatabaseEngine.TransactionChain*"></a>
+
+  <h3 id="Typhon_Engine_DatabaseEngine_TransactionChain" data-uid="Typhon.Engine.DatabaseEngine.TransactionChain">
+  TransactionChain
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L109"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal TransactionChain TransactionChain { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.TransactionChain.html">TransactionChain</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
   <h2 class="section" id="methods">Methods
 </h2>
+
+
+  <a id="Typhon_Engine_DatabaseEngine_ConstructComponentStore_" data-uid="Typhon.Engine.DatabaseEngine.ConstructComponentStore*"></a>
+
+  <h3 id="Typhon_Engine_DatabaseEngine_ConstructComponentStore" data-uid="Typhon.Engine.DatabaseEngine.ConstructComponentStore">
+  ConstructComponentStore()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L157"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private void ConstructComponentStore()</code></pre>
+  </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_DatabaseEngine_CreateSystemSchemaR1_" data-uid="Typhon.Engine.DatabaseEngine.CreateSystemSchemaR1*"></a>
+
+  <h3 id="Typhon_Engine_DatabaseEngine_CreateSystemSchemaR1" data-uid="Typhon.Engine.DatabaseEngine.CreateSystemSchemaR1">
+  CreateSystemSchemaR1()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L166"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private void CreateSystemSchemaR1()</code></pre>
+  </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_DatabaseEngine_CreateTransaction_" data-uid="Typhon.Engine.DatabaseEngine.CreateTransaction*"></a>
+
+  <h3 id="Typhon_Engine_DatabaseEngine_CreateTransaction" data-uid="Typhon.Engine.DatabaseEngine.CreateTransaction">
+  CreateTransaction()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L120"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Create a transaction in order to make Queries and CRUD operation on the database</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Transaction CreateTransaction()</code></pre>
+  </div>
+
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a></dt>
+    <dd><p>The transaction object</p>
+</dd>
+  </dl>
+
+
+
+
+
+
+
+  <h4 class="section" id="Typhon_Engine_DatabaseEngine_CreateTransaction_remarks">Remarks</h4>
+  <div class="markdown level1 remarks"><p>Typhon deals with accesses and changes through transaction only, even for query purpose. When the user creates a transaction, &quot;now&quot; (the
+time when the transaction was created) is used as the reference point, every access will be based on the data that existed up to this point.
+Every change will be isolated from other transactions until the content is committed.</p>
+</div>
+
+
 
 
   <a id="Typhon_Engine_DatabaseEngine_Dispose_" data-uid="Typhon.Engine.DatabaseEngine.Dispose*"></a>
 
   <h3 id="Typhon_Engine_DatabaseEngine_Dispose" data-uid="Typhon.Engine.DatabaseEngine.Dispose">
   Dispose()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L140"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L144"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</p>
@@ -326,7 +631,7 @@ public class DatabaseEngine : IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_DatabaseEngine_GetComponentTable_System_Type_" data-uid="Typhon.Engine.DatabaseEngine.GetComponentTable(System.Type)">
   GetComponentTable(Type)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L188"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L233"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -362,7 +667,7 @@ public class DatabaseEngine : IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_DatabaseEngine_GetComponentTable__1" data-uid="Typhon.Engine.DatabaseEngine.GetComponentTable``1">
   GetComponentTable&lt;T&gt;()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L186"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L231"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -394,65 +699,115 @@ public class DatabaseEngine : IDisposable</code></pre>
 
 
 
-  <a id="Typhon_Engine_DatabaseEngine_NewTransaction_" data-uid="Typhon.Engine.DatabaseEngine.NewTransaction*"></a>
+  <a id="Typhon_Engine_DatabaseEngine_GetNewPrimaryKey_" data-uid="Typhon.Engine.DatabaseEngine.GetNewPrimaryKey*"></a>
 
-  <h3 id="Typhon_Engine_DatabaseEngine_NewTransaction_System_Boolean_" data-uid="Typhon.Engine.DatabaseEngine.NewTransaction(System.Boolean)">
-  NewTransaction(bool)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L113"><i class="bi bi-code-slash"></i></a>
-  </h3>
-
-  <div class="markdown level1 summary"><p>Create a transaction in order to make Queries and CRUD operation on the database</p>
-</div>
-  <div class="markdown level1 conceptual"></div>
-
-  <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public Transaction NewTransaction(bool exclusiveConcurrency)</code></pre>
-  </div>
-
-  <h4 class="section">Parameters</h4>
-  <dl class="parameters">
-    <dt><code>exclusiveConcurrency</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
-    <dd><p>If <code>true</code> the write accesses on the Components will be exclusive: any updated, deleted Components
-will be locked for the rest of the transaction, preventing other transactions in other threads to modify them as well.
-If <code>false</code> the transaction is running in optimistic concurrency mode, allowing concurrent changes across transactions with possible
-conflicts being resolved during commit time.</p>
-</dd>
-  </dl>
-
-  <h4 class="section">Returns</h4>
-  <dl class="parameters">
-    <dt><a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a></dt>
-    <dd><p>The transaction object</p>
-</dd>
-  </dl>
-
-
-
-
-
-
-
-  <h4 class="section" id="Typhon_Engine_DatabaseEngine_NewTransaction_System_Boolean__remarks">Remarks</h4>
-  <div class="markdown level1 remarks"><p>Typhon deals with accesses and changes through transaction only, even for query purpose. When the user creates a transaction, &quot;now&quot; (the
-time when the transaction was created) is used as the reference point, every access will be based on the data that existed up to this point.
-Every change will be isolated from other transactions until the content is committed.</p>
-</div>
-
-
-
-
-  <a id="Typhon_Engine_DatabaseEngine_RegisterComponentFromRowAccessor_" data-uid="Typhon.Engine.DatabaseEngine.RegisterComponentFromRowAccessor*"></a>
-
-  <h3 id="Typhon_Engine_DatabaseEngine_RegisterComponentFromRowAccessor__1" data-uid="Typhon.Engine.DatabaseEngine.RegisterComponentFromRowAccessor``1">
-  RegisterComponentFromRowAccessor&lt;T&gt;()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L174"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_DatabaseEngine_GetNewPrimaryKey" data-uid="Typhon.Engine.DatabaseEngine.GetNewPrimaryKey">
+  GetNewPrimaryKey()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L163"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public bool RegisterComponentFromRowAccessor&lt;T&gt;() where T : unmanaged</code></pre>
+    <pre><code class="lang-csharp hljs">internal long GetNewPrimaryKey()</code></pre>
+  </div>
+
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int64">long</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_DatabaseEngine_OnCreating_" data-uid="Typhon.Engine.DatabaseEngine.OnCreating*"></a>
+
+  <h3 id="Typhon_Engine_DatabaseEngine_OnCreating_System_Object_System_EventArgs_" data-uid="Typhon.Engine.DatabaseEngine.OnCreating(System.Object,System.EventArgs)">
+  OnCreating(object, EventArgs)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L140"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private void OnCreating(object sender, EventArgs args)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>sender</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></dt>
+    <dd></dd>
+    <dt><code>args</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.eventargs">EventArgs</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_DatabaseEngine_OnLoading_" data-uid="Typhon.Engine.DatabaseEngine.OnLoading*"></a>
+
+  <h3 id="Typhon_Engine_DatabaseEngine_OnLoading_System_Object_System_EventArgs_" data-uid="Typhon.Engine.DatabaseEngine.OnLoading(System.Object,System.EventArgs)">
+  OnLoading(object, EventArgs)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L136"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private void OnLoading(object sender, EventArgs args)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>sender</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></dt>
+    <dd></dd>
+    <dt><code>args</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.eventargs">EventArgs</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_DatabaseEngine_RegisterComponentFromAccessor_" data-uid="Typhon.Engine.DatabaseEngine.RegisterComponentFromAccessor*"></a>
+
+  <h3 id="Typhon_Engine_DatabaseEngine_RegisterComponentFromAccessor__1" data-uid="Typhon.Engine.DatabaseEngine.RegisterComponentFromAccessor``1">
+  RegisterComponentFromAccessor&lt;T&gt;()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L216"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool RegisterComponentFromAccessor&lt;T&gt;() where T : unmanaged</code></pre>
   </div>
 
 
@@ -477,11 +832,42 @@ Every change will be isolated from other transactions until the content is commi
 
 
 
+  <a id="Typhon_Engine_DatabaseEngine_SaveInSystemSchema_" data-uid="Typhon.Engine.DatabaseEngine.SaveInSystemSchema*"></a>
+
+  <h3 id="Typhon_Engine_DatabaseEngine_SaveInSystemSchema_Typhon_Engine_ComponentTable_" data-uid="Typhon.Engine.DatabaseEngine.SaveInSystemSchema(Typhon.Engine.ComponentTable)">
+  SaveInSystemSchema(ComponentTable)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L198"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private void SaveInSystemSchema(ComponentTable table)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>table</code> <a class="xref" href="Typhon.Engine.ComponentTable.html">ComponentTable</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
 
 </article>
 
         <div class="contribution d-print-none">
-          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L84" class="edit-link">Edit this page</a>
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L95" class="edit-link">Edit this page</a>
         </div>
 
 

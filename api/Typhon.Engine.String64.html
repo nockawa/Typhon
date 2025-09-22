@@ -89,7 +89,7 @@
 
 
   <h1 id="Typhon_Engine_String64" data-uid="Typhon.Engine.String64" class="text-break">
-Struct String64  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L113"><i class="bi bi-code-slash"></i></a>
+Struct String64  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L123"><i class="bi bi-code-slash"></i></a>
   </h1>
 
   <div class="facts text-secondary">
@@ -101,7 +101,8 @@ Struct String64  <a class="header-action link-secondary" title="View source" hre
   <div class="markdown conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public struct String64 : IComparable&lt;String64&gt;, IEquatable&lt;String64&gt;</code></pre>
+    <pre><code class="lang-csharp hljs">[PublicAPI]
+public struct String64 : IComparable&lt;String64&gt;, IEquatable&lt;String64&gt;</code></pre>
   </div>
 
 
@@ -147,7 +148,7 @@ Struct String64  <a class="header-action link-secondary" title="View source" hre
 
   <h3 id="Typhon_Engine_String64__ctor_System_Byte__System_Int32_" data-uid="Typhon.Engine.String64.#ctor(System.Byte*,System.Int32)">
   String64(byte*, int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L124"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L135"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Construct a String64 instance from a memory area containing the string</p>
@@ -179,6 +180,70 @@ Struct String64  <a class="header-action link-secondary" title="View source" hre
 
 
 
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="Typhon_Engine_String64_Size" data-uid="Typhon.Engine.String64.Size">
+  Size
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L127"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private const int Size = 64</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_String64__data" data-uid="Typhon.Engine.String64._data">
+  _data
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L128"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private byte* _data</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.byte">byte</a>*</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
   <h2 class="section" id="properties">Properties
 </h2>
 
@@ -187,7 +252,7 @@ Struct String64  <a class="header-action link-secondary" title="View source" hre
 
   <h3 id="Typhon_Engine_String64_AsString" data-uid="Typhon.Engine.String64.AsString">
   AsString
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L150"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L177"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -218,11 +283,42 @@ Struct String64  <a class="header-action link-secondary" title="View source" hre
 </h2>
 
 
+  <a id="Typhon_Engine_String64_AsReadOnlySpan_" data-uid="Typhon.Engine.String64.AsReadOnlySpan*"></a>
+
+  <h3 id="Typhon_Engine_String64_AsReadOnlySpan" data-uid="Typhon.Engine.String64.AsReadOnlySpan">
+  AsReadOnlySpan()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L167"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public readonly ReadOnlySpan&lt;byte&gt; AsReadOnlySpan()</code></pre>
+  </div>
+
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.readonlyspan-1">ReadOnlySpan</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.byte">byte</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
   <a id="Typhon_Engine_String64_AsSpan_" data-uid="Typhon.Engine.String64.AsSpan*"></a>
 
   <h3 id="Typhon_Engine_String64_AsSpan" data-uid="Typhon.Engine.String64.AsSpan">
   AsSpan()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L140"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L159"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -253,7 +349,7 @@ Struct String64  <a class="header-action link-secondary" title="View source" hre
 
   <h3 id="Typhon_Engine_String64_CompareTo_Typhon_Engine_String64_" data-uid="Typhon.Engine.String64.CompareTo(Typhon.Engine.String64)">
   CompareTo(String64)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L184"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L318"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Compares the current instance with another object of the same type and returns an integer that indicates whether the current instance precedes, follows, or occurs in the same position in the sort order as the other object.</p>
@@ -293,7 +389,7 @@ Struct String64  <a class="header-action link-secondary" title="View source" hre
 
   <h3 id="Typhon_Engine_String64_Equals_System_Object_" data-uid="Typhon.Engine.String64.Equals(System.Object)">
   Equals(object)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L188"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L322"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Indicates whether this instance and a specified object are equal.</p>
@@ -332,7 +428,7 @@ Struct String64  <a class="header-action link-secondary" title="View source" hre
 
   <h3 id="Typhon_Engine_String64_Equals_Typhon_Engine_String64_" data-uid="Typhon.Engine.String64.Equals(Typhon.Engine.String64)">
   Equals(String64)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L186"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L320"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Indicates whether the current object is equal to another object of the same type.</p>
@@ -371,7 +467,7 @@ Struct String64  <a class="header-action link-secondary" title="View source" hre
 
   <h3 id="Typhon_Engine_String64_GetHashCode" data-uid="Typhon.Engine.String64.GetHashCode">
   GetHashCode()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L190"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L324"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Returns the hash code for this instance.</p>
@@ -404,7 +500,7 @@ Struct String64  <a class="header-action link-secondary" title="View source" hre
 
   <h3 id="Typhon_Engine_String64_GetStringContentAddr" data-uid="Typhon.Engine.String64.GetStringContentAddr">
   GetStringContentAddr()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L132"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L143"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -431,6 +527,225 @@ Struct String64  <a class="header-action link-secondary" title="View source" hre
 
 
 
+  <a id="Typhon_Engine_String64_GetStringContentAddrReaOnly_" data-uid="Typhon.Engine.String64.GetStringContentAddrReaOnly*"></a>
+
+  <h3 id="Typhon_Engine_String64_GetStringContentAddrReaOnly" data-uid="Typhon.Engine.String64.GetStringContentAddrReaOnly">
+  GetStringContentAddrReaOnly()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L151"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public readonly byte* GetStringContentAddrReaOnly()</code></pre>
+  </div>
+
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.byte">byte</a>*</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_String64_SetVariant_" data-uid="Typhon.Engine.String64.SetVariant*"></a>
+
+  <h3 id="Typhon_Engine_String64_SetVariant_System_Boolean_" data-uid="Typhon.Engine.String64.SetVariant(System.Boolean)">
+  SetVariant(bool)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L245"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal void SetVariant(bool value)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_String64_SetVariant_" data-uid="Typhon.Engine.String64.SetVariant*"></a>
+
+  <h3 id="Typhon_Engine_String64_SetVariant_System_Int16_" data-uid="Typhon.Engine.String64.SetVariant(System.Int16)">
+  SetVariant(short)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L270"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal void SetVariant(short value)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int16">short</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_String64_SetVariant_" data-uid="Typhon.Engine.String64.SetVariant*"></a>
+
+  <h3 id="Typhon_Engine_String64_SetVariant_System_Int32_" data-uid="Typhon.Engine.String64.SetVariant(System.Int32)">
+  SetVariant(int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L286"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal void SetVariant(int value)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_String64_SetVariant_" data-uid="Typhon.Engine.String64.SetVariant*"></a>
+
+  <h3 id="Typhon_Engine_String64_SetVariant_System_Int64_" data-uid="Typhon.Engine.String64.SetVariant(System.Int64)">
+  SetVariant(long)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L302"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal void SetVariant(long value)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int64">long</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_String64_SetVariant_" data-uid="Typhon.Engine.String64.SetVariant*"></a>
+
+  <h3 id="Typhon_Engine_String64_SetVariant_System_SByte_" data-uid="Typhon.Engine.String64.SetVariant(System.SByte)">
+  SetVariant(sbyte)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L254"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal void SetVariant(sbyte value)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.sbyte">sbyte</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_String64_SetVariant_" data-uid="Typhon.Engine.String64.SetVariant*"></a>
+
+  <h3 id="Typhon_Engine_String64_SetVariant_System_String_System_Boolean_" data-uid="Typhon.Engine.String64.SetVariant(System.String,System.Boolean)">
+  SetVariant(string, bool)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L211"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal void SetVariant(string value, bool truncate)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>value</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>truncate</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
   <h2 class="section" id="operators">Operators
 </h2>
 
@@ -439,7 +754,7 @@ Struct String64  <a class="header-action link-secondary" title="View source" hre
 
   <h3 id="Typhon_Engine_String64_op_Equality_Typhon_Engine_String64_Typhon_Engine_String64_" data-uid="Typhon.Engine.String64.op_Equality(Typhon.Engine.String64,Typhon.Engine.String64)">
   operator ==(String64, String64)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L192"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L326"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -477,7 +792,7 @@ Struct String64  <a class="header-action link-secondary" title="View source" hre
 
   <h3 id="Typhon_Engine_String64_op_Implicit_System_String__Typhon_Engine_String64" data-uid="Typhon.Engine.String64.op_Implicit(System.String)~Typhon.Engine.String64">
   implicit operator String64(string)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L148"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L175"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -513,7 +828,7 @@ Struct String64  <a class="header-action link-secondary" title="View source" hre
 
   <h3 id="Typhon_Engine_String64_op_Inequality_Typhon_Engine_String64_Typhon_Engine_String64_" data-uid="Typhon.Engine.String64.op_Inequality(Typhon.Engine.String64,Typhon.Engine.String64)">
   operator !=(String64, String64)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L194"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L328"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -551,7 +866,7 @@ Struct String64  <a class="header-action link-secondary" title="View source" hre
 </article>
 
         <div class="contribution d-print-none">
-          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L113" class="edit-link">Edit this page</a>
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/String64.cs/#L123" class="edit-link">Edit this page</a>
         </div>
 
 

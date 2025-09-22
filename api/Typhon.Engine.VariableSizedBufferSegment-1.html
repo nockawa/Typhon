@@ -206,6 +206,130 @@ a linear search into it.</li>
 
 
 
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="Typhon_Engine_VariableSizedBufferSegment_1_ElementCountPerChunk" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.ElementCountPerChunk">
+  ElementCountPerChunk
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L32"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal readonly int ElementCountPerChunk</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_VariableSizedBufferSegment_1_ElementCountRootChunk" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.ElementCountRootChunk">
+  ElementCountRootChunk
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L31"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal readonly int ElementCountRootChunk</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_VariableSizedBufferSegment_1_ElementSize" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.ElementSize">
+  ElementSize
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L30"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal readonly int ElementSize</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_VariableSizedBufferSegment_1_Segment" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.Segment">
+  Segment
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L35"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">protected internal ChunkBasedSegment Segment</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.ChunkBasedSegment.html">ChunkBasedSegment</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
   <h2 class="section" id="methods">Methods
 </h2>
 
@@ -388,6 +512,68 @@ a linear search into it.</li>
     <dt><a class="xref" href="Typhon.Engine.VariableSizedBufferAccessor-1.html">VariableSizedBufferAccessor</a>&lt;T&gt;</dt>
     <dd></dd>
   </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_VariableSizedBufferSegment_1_LockBuffer_" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.LockBuffer*"></a>
+
+  <h3 id="Typhon_Engine_VariableSizedBufferSegment_1_LockBuffer_Typhon_Engine_VariableSizedBufferRootHeader__" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.LockBuffer(Typhon.Engine.VariableSizedBufferRootHeader@)">
+  LockBuffer(ref VariableSizedBufferRootHeader)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L217"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private void LockBuffer(ref VariableSizedBufferRootHeader rh)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>rh</code> <a class="xref" href="Typhon.Engine.VariableSizedBufferRootHeader.html">VariableSizedBufferRootHeader</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_VariableSizedBufferSegment_1_ReleaseLockOnBuffer_" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.ReleaseLockOnBuffer*"></a>
+
+  <h3 id="Typhon_Engine_VariableSizedBufferSegment_1_ReleaseLockOnBuffer_Typhon_Engine_VariableSizedBufferRootHeader__" data-uid="Typhon.Engine.VariableSizedBufferSegment`1.ReleaseLockOnBuffer(Typhon.Engine.VariableSizedBufferRootHeader@)">
+  ReleaseLockOnBuffer(ref VariableSizedBufferRootHeader)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/VariableSizedBufferSegment.cs/#L219"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private void ReleaseLockOnBuffer(ref VariableSizedBufferRootHeader header)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>header</code> <a class="xref" href="Typhon.Engine.VariableSizedBufferRootHeader.html">VariableSizedBufferRootHeader</a></dt>
+    <dd></dd>
+  </dl>
+
 
 
 

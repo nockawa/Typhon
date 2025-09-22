@@ -207,7 +207,28 @@ Class String64MultipleBTree.String64MultipleNodeStorage  <a class="header-action
       <a class="xref" href="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.html#Typhon_Engine_BPTree_String64BTree_String64NodeStorage_DecrementStart_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__NodeWrapper_Typhon_Engine_ChunkRandomAccessor_">String64BTree.String64NodeStorage.DecrementStart(BTree&lt;String64&gt;.NodeWrapper, ChunkRandomAccessor)</a>
     </div>
     <div>
+      <a class="xref" href="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.html#Typhon_Engine_BPTree_String64BTree_String64NodeStorage_Set_Typhon_Engine_BPTree_IndexString64Chunk__System_Int32_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__KeyValueItem_System_Boolean_">String64BTree.String64NodeStorage.Set(ref IndexString64Chunk, int, BTree&lt;String64&gt;.KeyValueItem, bool)</a>
+    </div>
+    <div>
+      <a class="xref" href="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.html#Typhon_Engine_BPTree_String64BTree_String64NodeStorage_DecrementStart_Typhon_Engine_BPTree_IndexString64Chunk__">String64BTree.String64NodeStorage.DecrementStart(ref IndexString64Chunk)</a>
+    </div>
+    <div>
+      <a class="xref" href="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.html#Typhon_Engine_BPTree_String64BTree_String64NodeStorage_IncrementStart_Typhon_Engine_BPTree_IndexString64Chunk__">String64BTree.String64NodeStorage.IncrementStart(ref IndexString64Chunk)</a>
+    </div>
+    <div>
+      <a class="xref" href="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.html#Typhon_Engine_BPTree_String64BTree_String64NodeStorage_LeftShift_Typhon_Engine_BPTree_IndexString64Chunk__System_Int32_System_Int32_">String64BTree.String64NodeStorage.LeftShift(ref IndexString64Chunk, int, int)</a>
+    </div>
+    <div>
+      <a class="xref" href="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.html#Typhon_Engine_BPTree_String64BTree_String64NodeStorage_RightShift_Typhon_Engine_BPTree_IndexString64Chunk__System_Int32_System_Int32_">String64BTree.String64NodeStorage.RightShift(ref IndexString64Chunk, int, int)</a>
+    </div>
+    <div>
       <a class="xref" href="Typhon.Engine.BPTree.String64BTree.String64NodeStorage.html#Typhon_Engine_BPTree_String64BTree_String64NodeStorage_SplitRight_Typhon_Engine_BPTree_IndexString64Chunk__Typhon_Engine_BPTree_NodeStates_Typhon_Engine_ChunkRandomAccessor_">String64BTree.String64NodeStorage.SplitRight(ref IndexString64Chunk, NodeStates, ChunkRandomAccessor)</a>
+    </div>
+    <div>
+      <a class="xref" href="Typhon.Engine.BPTree.BTree-1.BaseNodeStorage.html#Typhon_Engine_BPTree_BTree_1_BaseNodeStorage_Owner">BTree&lt;String64&gt;.BaseNodeStorage.Owner</a>
+    </div>
+    <div>
+      <a class="xref" href="Typhon.Engine.BPTree.BTree-1.BaseNodeStorage.html#Typhon_Engine_BPTree_BTree_1_BaseNodeStorage_Segment">BTree&lt;String64&gt;.BaseNodeStorage.Segment</a>
     </div>
     <div>
       <a class="xref" href="Typhon.Engine.BPTree.BTree-1.BaseNodeStorage.html#Typhon_Engine_BPTree_BTree_1_BaseNodeStorage_CommitChanges_Typhon_Engine_ChunkRandomAccessor_">BTree&lt;String64&gt;.BaseNodeStorage.CommitChanges(ChunkRandomAccessor)</a>
@@ -240,6 +261,40 @@ Class String64MultipleBTree.String64MultipleNodeStorage  <a class="header-action
       <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
     </div>
   </dd></dl>
+
+
+
+
+
+
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="Typhon_Engine_BPTree_String64MultipleBTree_String64MultipleNodeStorage__valueStore" data-uid="Typhon.Engine.BPTree.String64MultipleBTree.String64MultipleNodeStorage._valueStore">
+  _valueStore
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L708"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private VariableSizedBufferSegment&lt;int&gt; _valueStore</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.VariableSizedBufferSegment-1.html">VariableSizedBufferSegment</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
 
 
 
@@ -386,6 +441,39 @@ Class String64MultipleBTree.String64MultipleNodeStorage  <a class="header-action
     <dt><a class="xref" href="Typhon.Engine.VariableSizedBufferAccessor-1.html">VariableSizedBufferAccessor</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>&gt;</dt>
     <dd></dd>
   </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_String64MultipleBTree_String64MultipleNodeStorage_Initialize_" data-uid="Typhon.Engine.BPTree.String64MultipleBTree.String64MultipleNodeStorage.Initialize*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_String64MultipleBTree_String64MultipleNodeStorage_Initialize_Typhon_Engine_BPTree_BTree_Typhon_Engine_String64__Typhon_Engine_ChunkBasedSegment_" data-uid="Typhon.Engine.BPTree.String64MultipleBTree.String64MultipleNodeStorage.Initialize(Typhon.Engine.BPTree.BTree{Typhon.Engine.String64},Typhon.Engine.ChunkBasedSegment)">
+  Initialize(BTree&lt;String64&gt;, ChunkBasedSegment)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/String64BTree.cs/#L710"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal override void Initialize(BTree&lt;String64&gt; owner, ChunkBasedSegment segment)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>owner</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;<a class="xref" href="Typhon.Engine.String64.html">String64</a>&gt;</dt>
+    <dd></dd>
+    <dt><code>segment</code> <a class="xref" href="Typhon.Engine.ChunkBasedSegment.html">ChunkBasedSegment</a></dt>
+    <dd></dd>
+  </dl>
+
 
 
 

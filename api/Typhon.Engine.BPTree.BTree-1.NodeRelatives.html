@@ -140,6 +140,305 @@ this information is used for borrow and spill operations.</p>
 
 
 
+  <h2 class="section" id="constructors">Constructors
+</h2>
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_NodeRelatives__ctor_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeRelatives.#ctor*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeRelatives__ctor_Typhon_Engine_BPTree_BTree__0__NodeWrapper_System_Int32_Typhon_Engine_BPTree_BTree__0__NodeWrapper_System_Boolean_Typhon_Engine_BPTree_BTree__0__NodeWrapper_System_Int32_Typhon_Engine_BPTree_BTree__0__NodeWrapper_System_Boolean_" data-uid="Typhon.Engine.BPTree.BTree`1.NodeRelatives.#ctor(Typhon.Engine.BPTree.BTree{`0}.NodeWrapper,System.Int32,Typhon.Engine.BPTree.BTree{`0}.NodeWrapper,System.Boolean,Typhon.Engine.BPTree.BTree{`0}.NodeWrapper,System.Int32,Typhon.Engine.BPTree.BTree{`0}.NodeWrapper,System.Boolean)">
+  NodeRelatives(NodeWrapper, int, NodeWrapper, bool, NodeWrapper, int, NodeWrapper, bool)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L256"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private NodeRelatives(BTree&lt;TKey&gt;.NodeWrapper leftAncestor, int leftAncestorIndex, BTree&lt;TKey&gt;.NodeWrapper leftSibling, bool hasTrueLeftSibling, BTree&lt;TKey&gt;.NodeWrapper rightAncestor, int rightAncestorIndex, BTree&lt;TKey&gt;.NodeWrapper rightSibling, bool hasTrueRightSibling)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>leftAncestor</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+    <dt><code>leftAncestorIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>leftSibling</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+    <dt><code>hasTrueLeftSibling</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>rightAncestor</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+    <dt><code>rightAncestorIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>rightSibling</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+    <dt><code>hasTrueRightSibling</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeRelatives_HasTrueLeftSibling" data-uid="Typhon.Engine.BPTree.BTree`1.NodeRelatives.HasTrueLeftSibling">
+  HasTrueLeftSibling
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L249"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>if left sibling is sibling and not cousin</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public readonly bool HasTrueLeftSibling</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeRelatives_HasTrueRightSibling" data-uid="Typhon.Engine.BPTree.BTree`1.NodeRelatives.HasTrueRightSibling">
+  HasTrueRightSibling
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L254"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>if right sibling is sibling and not cousin</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public readonly bool HasTrueRightSibling</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeRelatives_LeftAncestor" data-uid="Typhon.Engine.BPTree.BTree`1.NodeRelatives.LeftAncestor">
+  LeftAncestor
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L229"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>nearest ancestor of node and its left sibling.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public readonly BTree&lt;TKey&gt;.NodeWrapper LeftAncestor</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeRelatives_LeftAncestorIndex" data-uid="Typhon.Engine.BPTree.BTree`1.NodeRelatives.LeftAncestorIndex">
+  LeftAncestorIndex
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L239"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>index of item in ancestor that shares left sibling.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public readonly int LeftAncestorIndex</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeRelatives_LeftSibling" data-uid="Typhon.Engine.BPTree.BTree`1.NodeRelatives.LeftSibling">
+  LeftSibling
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L223"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public readonly BTree&lt;TKey&gt;.NodeWrapper LeftSibling</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeRelatives_RightAncestor" data-uid="Typhon.Engine.BPTree.BTree`1.NodeRelatives.RightAncestor">
+  RightAncestor
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L234"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>parent or ancestor used to get right sibling.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public readonly BTree&lt;TKey&gt;.NodeWrapper RightAncestor</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeRelatives_RightAncestorIndex" data-uid="Typhon.Engine.BPTree.BTree`1.NodeRelatives.RightAncestorIndex">
+  RightAncestorIndex
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L244"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>index of item in ancestor that shares right sibling.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public readonly int RightAncestorIndex</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_NodeRelatives_RightSibling" data-uid="Typhon.Engine.BPTree.BTree`1.NodeRelatives.RightSibling">
+  RightSibling
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.cs/#L224"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public readonly BTree&lt;TKey&gt;.NodeWrapper RightSibling</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
   <h2 class="section" id="methods">Methods
 </h2>
 

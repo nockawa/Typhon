@@ -89,7 +89,7 @@
 
 
   <h1 id="Typhon_Engine_DatabaseDefinitions" data-uid="Typhon.Engine.DatabaseDefinitions" class="text-break">
-Class DatabaseDefinitions  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DatabaseDefinitions.cs/#L10"><i class="bi bi-code-slash"></i></a>
+Class DatabaseDefinitions  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DatabaseDefinitions.cs/#L11"><i class="bi bi-code-slash"></i></a>
   </h1>
 
   <div class="facts text-secondary">
@@ -101,7 +101,8 @@ Class DatabaseDefinitions  <a class="header-action link-secondary" title="View s
   <div class="markdown conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public class DatabaseDefinitions</code></pre>
+    <pre><code class="lang-csharp hljs">[PublicAPI]
+public class DatabaseDefinitions</code></pre>
   </div>
 
 
@@ -156,7 +157,7 @@ Class DatabaseDefinitions  <a class="header-action link-secondary" title="View s
 
   <h3 id="Typhon_Engine_DatabaseDefinitions__ctor" data-uid="Typhon.Engine.DatabaseDefinitions.#ctor">
   DatabaseDefinitions()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DatabaseDefinitions.cs/#L15"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DatabaseDefinitions.cs/#L17"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -178,6 +179,70 @@ Class DatabaseDefinitions  <a class="header-action link-secondary" title="View s
 
 
 
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="Typhon_Engine_DatabaseDefinitions__components" data-uid="Typhon.Engine.DatabaseDefinitions._components">
+  _components
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DatabaseDefinitions.cs/#L14"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private readonly Dictionary&lt;string, DBComponentDefinition&gt; _components</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.collections.generic.dictionary-2">Dictionary</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>, <a class="xref" href="Typhon.Engine.DBComponentDefinition.html">DBComponentDefinition</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_DatabaseDefinitions__objects" data-uid="Typhon.Engine.DatabaseDefinitions._objects">
+  _objects
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DatabaseDefinitions.cs/#L15"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private Dictionary&lt;string, DBObjectDefinition&gt; _objects</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.collections.generic.dictionary-2">Dictionary</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a>, <a class="xref" href="Typhon.Engine.DBObjectDefinition.html">DBObjectDefinition</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
   <h2 class="section" id="methods">Methods
 </h2>
 
@@ -186,7 +251,7 @@ Class DatabaseDefinitions  <a class="header-action link-secondary" title="View s
 
   <h3 id="Typhon_Engine_DatabaseDefinitions_AddComponent_Typhon_Engine_DBComponentDefinition_" data-uid="Typhon.Engine.DatabaseDefinitions.AddComponent(Typhon.Engine.DBComponentDefinition)">
   AddComponent(DBComponentDefinition)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DatabaseDefinitions.cs/#L64"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DatabaseDefinitions.cs/#L71"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -215,21 +280,23 @@ Class DatabaseDefinitions  <a class="header-action link-secondary" title="View s
 
   <a id="Typhon_Engine_DatabaseDefinitions_CreateComponentBuilder_" data-uid="Typhon.Engine.DatabaseDefinitions.CreateComponentBuilder*"></a>
 
-  <h3 id="Typhon_Engine_DatabaseDefinitions_CreateComponentBuilder_System_String_" data-uid="Typhon.Engine.DatabaseDefinitions.CreateComponentBuilder(System.String)">
-  CreateComponentBuilder(string)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DatabaseDefinitions.cs/#L21"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_DatabaseDefinitions_CreateComponentBuilder_System_String_System_Int32_" data-uid="Typhon.Engine.DatabaseDefinitions.CreateComponentBuilder(System.String,System.Int32)">
+  CreateComponentBuilder(string, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DatabaseDefinitions.cs/#L23"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public DatabaseDefinitions.IDBComponentDefinitionBuilder CreateComponentBuilder(string name)</code></pre>
+    <pre><code class="lang-csharp hljs">public DatabaseDefinitions.IDBComponentDefinitionBuilder CreateComponentBuilder(string name, int revision)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>name</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>revision</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>
   </dl>
 
@@ -249,18 +316,18 @@ Class DatabaseDefinitions  <a class="header-action link-secondary" title="View s
 
 
 
-  <a id="Typhon_Engine_DatabaseDefinitions_CreateFromRowAccessor_" data-uid="Typhon.Engine.DatabaseDefinitions.CreateFromRowAccessor*"></a>
+  <a id="Typhon_Engine_DatabaseDefinitions_CreateFromAccessor_" data-uid="Typhon.Engine.DatabaseDefinitions.CreateFromAccessor*"></a>
 
-  <h3 id="Typhon_Engine_DatabaseDefinitions_CreateFromRowAccessor__1" data-uid="Typhon.Engine.DatabaseDefinitions.CreateFromRowAccessor``1">
-  CreateFromRowAccessor&lt;T&gt;()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DatabaseDefinitions.cs/#L101"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_DatabaseDefinitions_CreateFromAccessor__1" data-uid="Typhon.Engine.DatabaseDefinitions.CreateFromAccessor``1">
+  CreateFromAccessor&lt;T&gt;()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DatabaseDefinitions.cs/#L107"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public DBComponentDefinition CreateFromRowAccessor&lt;T&gt;() where T : unmanaged</code></pre>
+    <pre><code class="lang-csharp hljs">public DBComponentDefinition CreateFromAccessor&lt;T&gt;() where T : unmanaged</code></pre>
   </div>
 
 
@@ -287,21 +354,23 @@ Class DatabaseDefinitions  <a class="header-action link-secondary" title="View s
 
   <a id="Typhon_Engine_DatabaseDefinitions_GetComponent_" data-uid="Typhon.Engine.DatabaseDefinitions.GetComponent*"></a>
 
-  <h3 id="Typhon_Engine_DatabaseDefinitions_GetComponent_System_String_" data-uid="Typhon.Engine.DatabaseDefinitions.GetComponent(System.String)">
-  GetComponent(string)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DatabaseDefinitions.cs/#L99"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_DatabaseDefinitions_GetComponent_System_String_System_Int32_" data-uid="Typhon.Engine.DatabaseDefinitions.GetComponent(System.String,System.Int32)">
+  GetComponent(string, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DatabaseDefinitions.cs/#L105"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public DBComponentDefinition GetComponent(string componentName)</code></pre>
+    <pre><code class="lang-csharp hljs">public DBComponentDefinition GetComponent(string componentName, int revision)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
   <dl class="parameters">
     <dt><code>componentName</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
+    <dd></dd>
+    <dt><code>revision</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>
   </dl>
 
@@ -325,7 +394,7 @@ Class DatabaseDefinitions  <a class="header-action link-secondary" title="View s
 </article>
 
         <div class="contribution d-print-none">
-          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DatabaseDefinitions.cs/#L10" class="edit-link">Edit this page</a>
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DatabaseDefinitions.cs/#L11" class="edit-link">Edit this page</a>
         </div>
 
 

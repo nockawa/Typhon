@@ -89,7 +89,7 @@
 
 
   <h1 id="Typhon_Engine_ComponentTable" data-uid="Typhon.Engine.ComponentTable" class="text-break">
-Class ComponentTable  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L38"><i class="bi bi-code-slash"></i></a>
+Class ComponentTable  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L120"><i class="bi bi-code-slash"></i></a>
   </h1>
 
   <div class="facts text-secondary">
@@ -101,7 +101,8 @@ Class ComponentTable  <a class="header-action link-secondary" title="View source
   <div class="markdown conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public class ComponentTable : IDisposable</code></pre>
+    <pre><code class="lang-csharp hljs">[PublicAPI]
+public class ComponentTable : IDisposable</code></pre>
   </div>
 
 
@@ -154,22 +155,207 @@ Class ComponentTable  <a class="header-action link-secondary" title="View source
 
 
 
-  <h2 class="section" id="properties">Properties
+  <h2 class="section" id="fields">Fields
 </h2>
 
 
-  <a id="Typhon_Engine_ComponentTable_ComponentRowSize_" data-uid="Typhon.Engine.ComponentTable.ComponentRowSize*"></a>
 
-  <h3 id="Typhon_Engine_ComponentTable_ComponentRowSize" data-uid="Typhon.Engine.ComponentTable.ComponentRowSize">
-  ComponentRowSize
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L51"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_ComponentTable_CompRevChunkSize" data-uid="Typhon.Engine.ComponentTable.CompRevChunkSize">
+  CompRevChunkSize
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L126"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public int ComponentRowSize { get; }</code></pre>
+    <pre><code class="lang-csharp hljs">internal const int CompRevChunkSize = 64</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_ComponentTable_CompRevCountInNext" data-uid="Typhon.Engine.ComponentTable.CompRevCountInNext">
+  CompRevCountInNext
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L128"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal static readonly int CompRevCountInNext</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_ComponentTable_CompRevCountInRoot" data-uid="Typhon.Engine.ComponentTable.CompRevCountInRoot">
+  CompRevCountInRoot
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L127"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal static readonly int CompRevCountInRoot</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_ComponentTable_ComponentSegmentStartingSize" data-uid="Typhon.Engine.ComponentTable.ComponentSegmentStartingSize">
+  ComponentSegmentStartingSize
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L123"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private const int ComponentSegmentStartingSize = 4</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_ComponentTable_MainIndexSegmentStartingSize" data-uid="Typhon.Engine.ComponentTable.MainIndexSegmentStartingSize">
+  MainIndexSegmentStartingSize
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L124"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private const int MainIndexSegmentStartingSize = 4</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="properties">Properties
+</h2>
+
+
+  <a id="Typhon_Engine_ComponentTable_CompRevTableSegment_" data-uid="Typhon.Engine.ComponentTable.CompRevTableSegment*"></a>
+
+  <h3 id="Typhon_Engine_ComponentTable_CompRevTableSegment" data-uid="Typhon.Engine.ComponentTable.CompRevTableSegment">
+  CompRevTableSegment
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L131"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ChunkBasedSegment CompRevTableSegment { get; private set; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.ChunkBasedSegment.html">ChunkBasedSegment</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_ComponentTable_ComponentOverhead_" data-uid="Typhon.Engine.ComponentTable.ComponentOverhead*"></a>
+
+  <h3 id="Typhon_Engine_ComponentTable_ComponentOverhead" data-uid="Typhon.Engine.ComponentTable.ComponentOverhead">
+  ComponentOverhead
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L139"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal int ComponentOverhead { get; }</code></pre>
   </div>
 
 
@@ -193,14 +379,14 @@ Class ComponentTable  <a class="header-action link-secondary" title="View source
 
   <h3 id="Typhon_Engine_ComponentTable_ComponentSegment" data-uid="Typhon.Engine.ComponentTable.ComponentSegment">
   ComponentSegment
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L46"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L130"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public ChunkBasedSegment ComponentSegment { get; }</code></pre>
+    <pre><code class="lang-csharp hljs">public ChunkBasedSegment ComponentSegment { get; private set; }</code></pre>
   </div>
 
 
@@ -210,6 +396,99 @@ Class ComponentTable  <a class="header-action link-secondary" title="View source
   <h4 class="section">Property Value</h4>
   <dl class="parameters">
     <dt><a class="xref" href="Typhon.Engine.ChunkBasedSegment.html">ChunkBasedSegment</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_ComponentTable_ComponentStorageSize_" data-uid="Typhon.Engine.ComponentTable.ComponentStorageSize*"></a>
+
+  <h3 id="Typhon_Engine_ComponentTable_ComponentStorageSize" data-uid="Typhon.Engine.ComponentTable.ComponentStorageSize">
+  ComponentStorageSize
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L135"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public int ComponentStorageSize { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_ComponentTable_ComponentTotalSize_" data-uid="Typhon.Engine.ComponentTable.ComponentTotalSize*"></a>
+
+  <h3 id="Typhon_Engine_ComponentTable_ComponentTotalSize" data-uid="Typhon.Engine.ComponentTable.ComponentTotalSize">
+  ComponentTotalSize
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L140"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal int ComponentTotalSize { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_ComponentTable_DBE_" data-uid="Typhon.Engine.ComponentTable.DBE*"></a>
+
+  <h3 id="Typhon_Engine_ComponentTable_DBE" data-uid="Typhon.Engine.ComponentTable.DBE">
+  DBE
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L138"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal DatabaseEngine DBE { get; private set; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.DatabaseEngine.html">DatabaseEngine</a></dt>
     <dd></dd>
   </dl>
 
@@ -224,14 +503,14 @@ Class ComponentTable  <a class="header-action link-secondary" title="View source
 
   <h3 id="Typhon_Engine_ComponentTable_DefaultIndexSegment" data-uid="Typhon.Engine.ComponentTable.DefaultIndexSegment">
   DefaultIndexSegment
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L48"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L132"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public ChunkBasedSegment DefaultIndexSegment { get; }</code></pre>
+    <pre><code class="lang-csharp hljs">public ChunkBasedSegment DefaultIndexSegment { get; private set; }</code></pre>
   </div>
 
 
@@ -251,18 +530,80 @@ Class ComponentTable  <a class="header-action link-secondary" title="View source
 
 
 
-  <a id="Typhon_Engine_ComponentTable_PrimaryKeyIndex_" data-uid="Typhon.Engine.ComponentTable.PrimaryKeyIndex*"></a>
+  <a id="Typhon_Engine_ComponentTable_Definition_" data-uid="Typhon.Engine.ComponentTable.Definition*"></a>
 
-  <h3 id="Typhon_Engine_ComponentTable_PrimaryKeyIndex" data-uid="Typhon.Engine.ComponentTable.PrimaryKeyIndex">
-  PrimaryKeyIndex
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L50"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_ComponentTable_Definition" data-uid="Typhon.Engine.ComponentTable.Definition">
+  Definition
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L136"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public LongSingleBTree PrimaryKeyIndex { get; }</code></pre>
+    <pre><code class="lang-csharp hljs">public DBComponentDefinition Definition { get; private set; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.DBComponentDefinition.html">DBComponentDefinition</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_ComponentTable_IndexedFieldInfos_" data-uid="Typhon.Engine.ComponentTable.IndexedFieldInfos*"></a>
+
+  <h3 id="Typhon_Engine_ComponentTable_IndexedFieldInfos" data-uid="Typhon.Engine.ComponentTable.IndexedFieldInfos">
+  IndexedFieldInfos
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L141"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal IndexedFieldInfo[] IndexedFieldInfos { get; private set; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.IndexedFieldInfo.html">IndexedFieldInfo</a>[]</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_ComponentTable_PrimaryKeyIndex_" data-uid="Typhon.Engine.ComponentTable.PrimaryKeyIndex*"></a>
+
+  <h3 id="Typhon_Engine_ComponentTable_PrimaryKeyIndex" data-uid="Typhon.Engine.ComponentTable.PrimaryKeyIndex">
+  PrimaryKeyIndex
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L134"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public LongSingleBTree PrimaryKeyIndex { get; private set; }</code></pre>
   </div>
 
 
@@ -286,45 +627,14 @@ Class ComponentTable  <a class="header-action link-secondary" title="View source
 
   <h3 id="Typhon_Engine_ComponentTable_String64IndexSegment" data-uid="Typhon.Engine.ComponentTable.String64IndexSegment">
   String64IndexSegment
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L49"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L133"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public ChunkBasedSegment String64IndexSegment { get; }</code></pre>
-  </div>
-
-
-
-
-
-  <h4 class="section">Property Value</h4>
-  <dl class="parameters">
-    <dt><a class="xref" href="Typhon.Engine.ChunkBasedSegment.html">ChunkBasedSegment</a></dt>
-    <dd></dd>
-  </dl>
-
-
-
-
-
-
-
-
-  <a id="Typhon_Engine_ComponentTable_VersionTableSegment_" data-uid="Typhon.Engine.ComponentTable.VersionTableSegment*"></a>
-
-  <h3 id="Typhon_Engine_ComponentTable_VersionTableSegment" data-uid="Typhon.Engine.ComponentTable.VersionTableSegment">
-  VersionTableSegment
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L47"><i class="bi bi-code-slash"></i></a>
-  </h3>
-
-  <div class="markdown level1 summary"></div>
-  <div class="markdown level1 conceptual"></div>
-
-  <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public ChunkBasedSegment VersionTableSegment { get; }</code></pre>
+    <pre><code class="lang-csharp hljs">public ChunkBasedSegment String64IndexSegment { get; private set; }</code></pre>
   </div>
 
 
@@ -348,11 +658,37 @@ Class ComponentTable  <a class="header-action link-secondary" title="View source
 </h2>
 
 
+  <a id="Typhon_Engine_ComponentTable_BuildIndexedFieldInfo_" data-uid="Typhon.Engine.ComponentTable.BuildIndexedFieldInfo*"></a>
+
+  <h3 id="Typhon_Engine_ComponentTable_BuildIndexedFieldInfo" data-uid="Typhon.Engine.ComponentTable.BuildIndexedFieldInfo">
+  BuildIndexedFieldInfo()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L161"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private void BuildIndexedFieldInfo()</code></pre>
+  </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
   <a id="Typhon_Engine_ComponentTable_Create_" data-uid="Typhon.Engine.ComponentTable.Create*"></a>
 
   <h3 id="Typhon_Engine_ComponentTable_Create_Typhon_Engine_DatabaseEngine_Typhon_Engine_DBComponentDefinition_" data-uid="Typhon.Engine.ComponentTable.Create(Typhon.Engine.DatabaseEngine,Typhon.Engine.DBComponentDefinition)">
   Create(DatabaseEngine, DBComponentDefinition)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L59"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L143"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -381,11 +717,47 @@ Class ComponentTable  <a class="header-action link-secondary" title="View source
 
 
 
+  <a id="Typhon_Engine_ComponentTable_CreateIndexForField_" data-uid="Typhon.Engine.ComponentTable.CreateIndexForField*"></a>
+
+  <h3 id="Typhon_Engine_ComponentTable_CreateIndexForField_Typhon_Engine_DBComponentDefinition_Field_" data-uid="Typhon.Engine.ComponentTable.CreateIndexForField(Typhon.Engine.DBComponentDefinition.Field)">
+  CreateIndexForField(Field)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L188"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private IBTree CreateIndexForField(DBComponentDefinition.Field field)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>field</code> <a class="xref" href="Typhon.Engine.DBComponentDefinition.html">DBComponentDefinition</a>.<a class="xref" href="Typhon.Engine.DBComponentDefinition.Field.html">Field</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.BPTree.IBTree.html">IBTree</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
   <a id="Typhon_Engine_ComponentTable_Dispose_" data-uid="Typhon.Engine.ComponentTable.Dispose*"></a>
 
   <h3 id="Typhon_Engine_ComponentTable_Dispose" data-uid="Typhon.Engine.ComponentTable.Dispose">
   Dispose()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L123"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L210"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</p>
@@ -412,7 +784,7 @@ Class ComponentTable  <a class="header-action link-secondary" title="View source
 </article>
 
         <div class="contribution d-print-none">
-          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L38" class="edit-link">Edit this page</a>
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentTable.cs/#L120" class="edit-link">Edit this page</a>
         </div>
 
 

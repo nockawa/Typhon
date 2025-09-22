@@ -89,7 +89,7 @@
 
 
   <h1 id="Typhon_Engine_ChunkRandomAccessor" data-uid="Typhon.Engine.ChunkRandomAccessor" class="text-break">
-Class ChunkRandomAccessor  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L14"><i class="bi bi-code-slash"></i></a>
+Class ChunkRandomAccessor  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L50"><i class="bi bi-code-slash"></i></a>
   </h1>
 
   <div class="facts text-secondary">
@@ -154,8 +154,254 @@ Class ChunkRandomAccessor  <a class="header-action link-secondary" title="View s
 
 
   <h2 id="Typhon_Engine_ChunkRandomAccessor_remarks">Remarks</h2>
-  <div class="markdown level0 remarks"><p>This class is not thread-safe</p>
+  <div class="markdown level0 remarks"><p>This class is not thread-safe.
+When you access a Chunk, you have the possibility to pin it or not. Pinning is mandatory if you will make other chunk access while you use the first one.
+Accessing another chunk might kick the page of the one you're using, pinning prevent that. But as long as you don't request another chunk, you are safe.</p>
 </div>
+
+
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor_Pool" data-uid="Typhon.Engine.ChunkRandomAccessor.Pool">
+  Pool
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L52"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private static readonly ConcurrentBag&lt;ChunkRandomAccessor&gt; Pool</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.collections.concurrent.concurrentbag-1">ConcurrentBag</a>&lt;<a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor__cachedEntries" data-uid="Typhon.Engine.ChunkRandomAccessor._cachedEntries">
+  _cachedEntries
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L73"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private ChunkRandomAccessor.CachedEntry[] _cachedEntries</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.ChunkRandomAccessor.CachedEntry.html">CachedEntry</a>[]</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor__cachedPages" data-uid="Typhon.Engine.ChunkRandomAccessor._cachedPages">
+  _cachedPages
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L72"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private PageAccessor[] _cachedPages</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.PageAccessor.html">PageAccessor</a>[]</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor__cachedPagesCount" data-uid="Typhon.Engine.ChunkRandomAccessor._cachedPagesCount">
+  _cachedPagesCount
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L71"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private int _cachedPagesCount</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor__changeSet" data-uid="Typhon.Engine.ChunkRandomAccessor._changeSet">
+  _changeSet
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L76"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private ChangeSet _changeSet</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.ChangeSet.html">ChangeSet</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor__owner" data-uid="Typhon.Engine.ChunkRandomAccessor._owner">
+  _owner
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L70"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private ChunkBasedSegment _owner</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.ChunkBasedSegment.html">ChunkBasedSegment</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor__pageIndices" data-uid="Typhon.Engine.ChunkRandomAccessor._pageIndices">
+  _pageIndices
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L74"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private int[] _pageIndices</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>[]</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor__stride" data-uid="Typhon.Engine.ChunkRandomAccessor._stride">
+  _stride
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L75"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private int _stride</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
 
 
   <h2 class="section" id="properties">Properties
@@ -166,7 +412,7 @@ Class ChunkRandomAccessor  <a class="header-action link-secondary" title="View s
 
   <h3 id="Typhon_Engine_ChunkRandomAccessor_ChangeSet" data-uid="Typhon.Engine.ChunkRandomAccessor.ChangeSet">
   ChangeSet
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L57"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L93"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -197,7 +443,7 @@ Class ChunkRandomAccessor  <a class="header-action link-secondary" title="View s
 
   <h3 id="Typhon_Engine_ChunkRandomAccessor_Segment" data-uid="Typhon.Engine.ChunkRandomAccessor.Segment">
   Segment
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L56"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L92"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -228,11 +474,42 @@ Class ChunkRandomAccessor  <a class="header-action link-secondary" title="View s
 </h2>
 
 
+  <a id="Typhon_Engine_ChunkRandomAccessor_ClearChunk_" data-uid="Typhon.Engine.ChunkRandomAccessor.ClearChunk*"></a>
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor_ClearChunk_System_Int32_" data-uid="Typhon.Engine.ChunkRandomAccessor.ClearChunk(System.Int32)">
+  ClearChunk(int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L289"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal void ClearChunk(int index)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
   <a id="Typhon_Engine_ChunkRandomAccessor_CommitChanges_" data-uid="Typhon.Engine.ChunkRandomAccessor.CommitChanges*"></a>
 
   <h3 id="Typhon_Engine_ChunkRandomAccessor_CommitChanges" data-uid="Typhon.Engine.ChunkRandomAccessor.CommitChanges">
   CommitChanges()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L263"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L321"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Commit the dirty state of each page and release the shared access.</p>
@@ -259,11 +536,104 @@ If the page was promoted in exclusive mode, it won't be release, just simply ign
 
 
 
+  <a id="Typhon_Engine_ChunkRandomAccessor_DemoteChunk_" data-uid="Typhon.Engine.ChunkRandomAccessor.DemoteChunk*"></a>
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor_DemoteChunk_System_Int32_" data-uid="Typhon.Engine.ChunkRandomAccessor.DemoteChunk(System.Int32)">
+  DemoteChunk(int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L147"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal void DemoteChunk(int index)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_ChunkRandomAccessor_DirtyChunk_" data-uid="Typhon.Engine.ChunkRandomAccessor.DirtyChunk*"></a>
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor_DirtyChunk_System_Int32_" data-uid="Typhon.Engine.ChunkRandomAccessor.DirtyChunk(System.Int32)">
+  DirtyChunk(int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L167"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal void DirtyChunk(int index)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_ChunkRandomAccessor_DirtyEntry_" data-uid="Typhon.Engine.ChunkRandomAccessor.DirtyEntry*"></a>
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor_DirtyEntry_System_Int32_" data-uid="Typhon.Engine.ChunkRandomAccessor.DirtyEntry(System.Int32)">
+  DirtyEntry(int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L114"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal void DirtyEntry(int entryIndex)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>entryIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
   <a id="Typhon_Engine_ChunkRandomAccessor_Dispose_" data-uid="Typhon.Engine.ChunkRandomAccessor.Dispose*"></a>
 
   <h3 id="Typhon_Engine_ChunkRandomAccessor_Dispose" data-uid="Typhon.Engine.ChunkRandomAccessor.Dispose">
   Dispose()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L323"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L381"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</p>
@@ -290,7 +660,7 @@ If the page was promoted in exclusive mode, it won't be release, just simply ign
 
   <h3 id="Typhon_Engine_ChunkRandomAccessor_DisposePageAccessors" data-uid="Typhon.Engine.ChunkRandomAccessor.DisposePageAccessors">
   DisposePageAccessors()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L289"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L347"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -317,11 +687,51 @@ If the page was promoted in exclusive mode, it won't be release, just simply ign
 
 
 
+  <a id="Typhon_Engine_ChunkRandomAccessor_GetChunkAddress_" data-uid="Typhon.Engine.ChunkRandomAccessor.GetChunkAddress*"></a>
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor_GetChunkAddress_System_Int32_System_Boolean_System_Boolean_" data-uid="Typhon.Engine.ChunkRandomAccessor.GetChunkAddress(System.Int32,System.Boolean,System.Boolean)">
+  GetChunkAddress(int, bool, bool)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L189"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal byte* GetChunkAddress(int index, bool pin = false, bool dirtyPage = false)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>pin</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>dirtyPage</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.byte">byte</a>*</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
   <a id="Typhon_Engine_ChunkRandomAccessor_GetChunkAsReadOnlySpan_" data-uid="Typhon.Engine.ChunkRandomAccessor.GetChunkAsReadOnlySpan*"></a>
 
   <h3 id="Typhon_Engine_ChunkRandomAccessor_GetChunkAsReadOnlySpan_System_Int32_System_Boolean_System_Boolean_" data-uid="Typhon.Engine.ChunkRandomAccessor.GetChunkAsReadOnlySpan(System.Int32,System.Boolean,System.Boolean)">
   GetChunkAsReadOnlySpan(int, bool, bool)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L139"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L186"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -361,7 +771,7 @@ If the page was promoted in exclusive mode, it won't be release, just simply ign
 
   <h3 id="Typhon_Engine_ChunkRandomAccessor_GetChunkAsSpan_System_Int32_System_Boolean_System_Boolean_" data-uid="Typhon.Engine.ChunkRandomAccessor.GetChunkAsSpan(System.Int32,System.Boolean,System.Boolean)">
   GetChunkAsSpan(int, bool, bool)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L136"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L183"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -397,11 +807,94 @@ If the page was promoted in exclusive mode, it won't be release, just simply ign
 
 
 
+  <a id="Typhon_Engine_ChunkRandomAccessor_GetChunkBasedSegmentHeader_" data-uid="Typhon.Engine.ChunkRandomAccessor.GetChunkBasedSegmentHeader*"></a>
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor_GetChunkBasedSegmentHeader__1_System_Int32_System_Boolean_System_Int32__" data-uid="Typhon.Engine.ChunkRandomAccessor.GetChunkBasedSegmentHeader``1(System.Int32,System.Boolean,System.Int32@)">
+  GetChunkBasedSegmentHeader&lt;T&gt;(int, bool, out int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L211"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal ref T GetChunkBasedSegmentHeader&lt;T&gt;(int offset, bool dirtyPage, out int cacheEntryIndex) where T : unmanaged</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>offset</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>dirtyPage</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>cacheEntryIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><span class="xref">T</span></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Type Parameters</h4>
+  <dl class="parameters">
+    <dt><code>T</code></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_ChunkRandomAccessor_GetChunkHandle_" data-uid="Typhon.Engine.ChunkRandomAccessor.GetChunkHandle*"></a>
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor_GetChunkHandle_System_Int32_System_Boolean_" data-uid="Typhon.Engine.ChunkRandomAccessor.GetChunkHandle(System.Int32,System.Boolean)">
+  GetChunkHandle(int, bool)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L198"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public ChunkHandle GetChunkHandle(int index, bool dirty)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>dirty</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.ChunkHandle.html">ChunkHandle</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
   <a id="Typhon_Engine_ChunkRandomAccessor_GetChunkReadOnly_" data-uid="Typhon.Engine.ChunkRandomAccessor.GetChunkReadOnly*"></a>
 
   <h3 id="Typhon_Engine_ChunkRandomAccessor_GetChunkReadOnly__1_System_Int32_" data-uid="Typhon.Engine.ChunkRandomAccessor.GetChunkReadOnly``1(System.Int32)">
   GetChunkReadOnly&lt;T&gt;(int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L53"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L89"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -442,7 +935,7 @@ If the page was promoted in exclusive mode, it won't be release, just simply ign
 
   <h3 id="Typhon_Engine_ChunkRandomAccessor_GetChunk__1_System_Int32_System_Boolean_" data-uid="Typhon.Engine.ChunkRandomAccessor.GetChunk``1(System.Int32,System.Boolean)">
   GetChunk&lt;T&gt;(int, bool)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L54"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L90"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -481,11 +974,257 @@ If the page was promoted in exclusive mode, it won't be release, just simply ign
 
 
 
+  <a id="Typhon_Engine_ChunkRandomAccessor_GetFromPool_" data-uid="Typhon.Engine.ChunkRandomAccessor.GetFromPool*"></a>
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor_GetFromPool_Typhon_Engine_ChunkBasedSegment_System_Int32_Typhon_Engine_ChangeSet_" data-uid="Typhon.Engine.ChunkRandomAccessor.GetFromPool(Typhon.Engine.ChunkBasedSegment,System.Int32,Typhon.Engine.ChangeSet)">
+  GetFromPool(ChunkBasedSegment, int, ChangeSet)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L59"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal static ChunkRandomAccessor GetFromPool(ChunkBasedSegment owner, int cachedPagesCount, ChangeSet changeSet = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>owner</code> <a class="xref" href="Typhon.Engine.ChunkBasedSegment.html">ChunkBasedSegment</a></dt>
+    <dd></dd>
+    <dt><code>cachedPagesCount</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>changeSet</code> <a class="xref" href="Typhon.Engine.ChangeSet.html">ChangeSet</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_ChunkRandomAccessor_GetPageRawDataAddr_" data-uid="Typhon.Engine.ChunkRandomAccessor.GetPageRawDataAddr*"></a>
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor_GetPageRawDataAddr_System_Int32_System_Boolean_System_Boolean_System_Int32__" data-uid="Typhon.Engine.ChunkRandomAccessor.GetPageRawDataAddr(System.Int32,System.Boolean,System.Boolean,System.Int32@)">
+  GetPageRawDataAddr(int, bool, bool, out int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L220"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private byte* GetPageRawDataAddr(int pageIndex, bool pin, bool dirtyPage, out int cacheEntryIndex)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>pageIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>pin</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>dirtyPage</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+    <dt><code>cacheEntryIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.byte">byte</a>*</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_ChunkRandomAccessor_Initialize_" data-uid="Typhon.Engine.ChunkRandomAccessor.Initialize*"></a>
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor_Initialize_Typhon_Engine_ChunkBasedSegment_System_Int32_Typhon_Engine_ChangeSet_" data-uid="Typhon.Engine.ChunkRandomAccessor.Initialize(Typhon.Engine.ChunkBasedSegment,System.Int32,Typhon.Engine.ChangeSet)">
+  Initialize(ChunkBasedSegment, int, ChangeSet)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L295"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private void Initialize(ChunkBasedSegment owner, int cachedPagesCount, ChangeSet changeSet = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>owner</code> <a class="xref" href="Typhon.Engine.ChunkBasedSegment.html">ChunkBasedSegment</a></dt>
+    <dd></dd>
+    <dt><code>cachedPagesCount</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>changeSet</code> <a class="xref" href="Typhon.Engine.ChangeSet.html">ChangeSet</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_ChunkRandomAccessor_TryPromoteChunk_" data-uid="Typhon.Engine.ChunkRandomAccessor.TryPromoteChunk*"></a>
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor_TryPromoteChunk_System_Int32_" data-uid="Typhon.Engine.ChunkRandomAccessor.TryPromoteChunk(System.Int32)">
+  TryPromoteChunk(int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L118"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal bool TryPromoteChunk(int index)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_ChunkRandomAccessor_UnpinChunk_" data-uid="Typhon.Engine.ChunkRandomAccessor.UnpinChunk*"></a>
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor_UnpinChunk_System_Int32_" data-uid="Typhon.Engine.ChunkRandomAccessor.UnpinChunk(System.Int32)">
+  UnpinChunk(int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L95"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal void UnpinChunk(int index)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>index</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_ChunkRandomAccessor_UnpinChunkBasedSegmentHeader_" data-uid="Typhon.Engine.ChunkRandomAccessor.UnpinChunkBasedSegmentHeader*"></a>
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor_UnpinChunkBasedSegmentHeader_System_Int32_" data-uid="Typhon.Engine.ChunkRandomAccessor.UnpinChunkBasedSegmentHeader(System.Int32)">
+  UnpinChunkBasedSegmentHeader(int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L217"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal void UnpinChunkBasedSegmentHeader(int cacheEntryIndex)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>cacheEntryIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_ChunkRandomAccessor_UnpinEntry_" data-uid="Typhon.Engine.ChunkRandomAccessor.UnpinEntry*"></a>
+
+  <h3 id="Typhon_Engine_ChunkRandomAccessor_UnpinEntry_System_Int32_" data-uid="Typhon.Engine.ChunkRandomAccessor.UnpinEntry(System.Int32)">
+  UnpinEntry(int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L111"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal void UnpinEntry(int entryIndex)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>entryIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
 
 </article>
 
         <div class="contribution d-print-none">
-          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L14" class="edit-link">Edit this page</a>
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs/#L50" class="edit-link">Edit this page</a>
         </div>
 
 

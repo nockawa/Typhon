@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+      <title>Component Storage and Versioning | Typhon </title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="title" content="Component Storage and Versioning | Typhon ">
+      
+      
+      <link rel="icon" href="../images/favicon.ico">
+      <link rel="stylesheet" href="../public/docfx.min.css">
+      <link rel="stylesheet" href="../public/main.css">
+      <meta name="docfx:navrel" content="../toc.html">
+      <meta name="docfx:tocrel" content="toc.html">
+      
+      <meta name="docfx:rel" content="../">
+      
+      
+      <meta name="docfx:docurl" content="https://github.com/nockawa/Typhon/blob/new-persistence-layer/doc/design/compstorver.md/#L1">
+      <meta name="loc:inThisArticle" content="In this article">
+      <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
+      <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
+      <meta name="loc:tocFilter" content="Filter by title">
+      <meta name="loc:nextArticle" content="Next">
+      <meta name="loc:prevArticle" content="Previous">
+      <meta name="loc:themeLight" content="Light">
+      <meta name="loc:themeDark" content="Dark">
+      <meta name="loc:themeAuto" content="Auto">
+      <meta name="loc:changeTheme" content="Change theme">
+      <meta name="loc:copy" content="Copy">
+      <meta name="loc:downloadPdf" content="Download PDF">
+
+      <script type="module" src="./../public/docfx.min.js"></script>
+
+      <script>
+        const theme = localStorage.getItem('theme') || 'auto'
+        document.documentElement.setAttribute('data-bs-theme', theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme)
+      </script>
+
+  </head>
+
+  <body class="tex2jax_ignore" data-layout="" data-yaml-mime="">
+    <header class="bg-body border-bottom">
+      <nav id="autocollapse" class="navbar navbar-expand-md" role="navigation">
+        <div class="container-xxl flex-nowrap">
+          <a class="navbar-brand" href="../index.html">
+            <img id="logo" class="svg" src="../images/typhon.svg" alt="Typhon">
+            Typhon
+          </a>
+          <button class="btn btn-lg d-md-none border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navpanel" aria-controls="navpanel" aria-expanded="false" aria-label="Toggle navigation">
+            <i class="bi bi-three-dots"></i>
+          </button>
+          <div class="collapse navbar-collapse" id="navpanel">
+            <div id="navbar">
+              <form class="search" role="search" id="search">
+                <i class="bi bi-search"></i>
+                <input class="form-control" id="search-query" type="search" disabled placeholder="Search" autocomplete="off" aria-label="Search">
+              </form>
+            </div>
+          </div>
+        </div>
+      </nav>
+    </header>
+
+    <main class="container-xxl">
+      <div class="toc-offcanvas">
+        <div class="offcanvas-md offcanvas-start" tabindex="-1" id="tocOffcanvas" aria-labelledby="tocOffcanvasLabel">
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="tocOffcanvasLabel">Table of Contents</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" data-bs-target="#tocOffcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <nav class="toc" id="toc"></nav>
+          </div>
+        </div>
+      </div>
+
+      <div class="content">
+        <div class="actionbar">
+          <button class="btn btn-lg border-0 d-md-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#tocOffcanvas" aria-controls="tocOffcanvas" aria-expanded="false" aria-label="Show table of contents">
+            <i class="bi bi-list"></i>
+          </button>
+
+          <nav id="breadcrumb"></nav>
+        </div>
+
+        <article data-uid="">
+<h1 id="component-storage-and-versioning">Component Storage and Versioning</h1>
+
+<h2 id="entitycomponent-relation">Entity/Component relation</h2>
+<p>So far, it's very simple, an entity is created by giving a list of components. What happens underneath is a unique ID (across the whole database) will be allocated and each component will be created and stored in its own table, identified by this id (acting as the primary key), with an index maintained.</p>
+<p>Later on the user will be able to read all or part of these components by giving the Entity ID.</p>
+<h2 id="storing-components---high-level-view">Storing components - high level view</h2>
+<p>There are two main storage component involved to store a component:</p>
+<ol>
+<li>Component segment: a <a href="datalayers.html#chunkbasedsegment">Chunk Based Segment</a> used to store each revision of a component.</li>
+<li>Row Version segment: a Chunk Based segment that list all the revision of a given component.</li>
+</ol>
+<h3 id="component-segment">Component Segment</h3>
+<p>We compute for each component type:</p>
+<ol>
+<li>The size of the components data (which is the size of the C# <code>struct</code> that defines or wraps it).</li>
+<li>The size taken to store the ElementID of each secondary index that allow multiples value (ElementID being the index of the element in the buffer storing all elements of the same key).</li>
+</ol>
+<h3 id="row-version-segment">Row Version Segment</h3>
+<p>Typhon allows full isolation through Transactions. Each CRUD operation is associated to a transaction and we use the time of creation of this transaction as a reference point to interact with components.
+Which means each mutation of a component's data (including its deletion) leads to the creation of a new revision (following the principle of <a href="https://en.wikipedia.org/wiki/Multiversion_concurrency_control">MVCC</a>).</p>
+<p>A revision is kept as long as there's a transaction that can access it.</p>
+<p>The Row Version Segment stores chunks that each have the following structure</p>
+<ul>
+<li>A header: <a href="xref:Typhon.Engine.RowVersionStorageHeader">RowVersionStorageHeader</a></li>
+<li>Multiple (currently 8) entries of <a href="xref:Typhon.Engine.RowVersionStorageElement">RowVersionStorageElement</a>.</li>
+</ul>
+<p>To store the multiple versions of a given component, there is one or many chunks, organised as a chained list, that store all the revisions for that component.</p>
+<p>The first chunk always exists and is the entry point, it header is used to operate the chain. Subsequent chunks, if any, have their header ignored, only the elements are used.</p>
+<p>As we store new revisions of a components and progressively destroying old ones, the storage is acting as a circular buffer. The first item is given by the <a href="xref:Typhon.Engine.RowVersionStorageHeader.FirstItemRevision">FirstItemRevision</a> field.</p>
+<p>Chunks are added/removed to the chain when needed.</p>
+<h2 id="versioning-components">Versioning components</h2>
+<p>Any access or mutation is made from a Transaction where the changes are isolated from the rest of the database until they are committed.</p>
+<p>The transaction also stores useful information about each component involved.</p>
+<h3 id="creation">Creation</h3>
+<p>A component is created from a transaction, the tick of the component is the one retrieved at creation time (so it's different from the transaction's Tick).</p>
+<p>A Row Version chunk is created as well as a Component chunk for the first revision. A ComponentInfo.RowInfo is created to cache useful data for this revision. The revision is flagged as 'isolated' to be excluded from queries (even though there's no way to retrieve it).
+There's no index yet on the PK or indexed fields, the RowInfo stores the equivalent in the RowInfo.</p>
+<h3 id="read">Read</h3>
+<p>Reading a component will create and setup a corresponding RowInfo.</p>
+<h3 id="update">Update</h3>
+<p>An update can be made after a read or as a first operation on a Component, in any cases a RowInfo is built if not already.</p>
+<p>Then a new revision is created and stores the updated data, subsequent updates can be made, which will made on the same revision, overwritting the previous change.</p>
+<h3 id="delete">Delete</h3>
+<p>Same as update but the RowChunkId field of RowVersionElement is 0, indicating a new revision that is a delete.</p>
+
+</article>
+
+        <div class="contribution d-print-none">
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/doc/design/compstorver.md/#L1" class="edit-link">Edit this page</a>
+        </div>
+
+        <div class="next-article d-print-none border-top" id="nextArticle"></div>
+
+      </div>
+
+      <div class="affix">
+        <nav id="affix"></nav>
+      </div>
+    </main>
+
+    <div class="container-xxl search-results" id="search-results"></div>
+
+    <footer class="border-top text-secondary">
+      <div class="container-xxl">
+        <div class="flex-fill">
+          Copyright (c) Loïc Baumann
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

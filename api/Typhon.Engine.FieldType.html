@@ -90,7 +90,7 @@
 
 
   <h1 id="Typhon_Engine_FieldType" data-uid="Typhon.Engine.FieldType" class="text-break">
-Enum FieldType  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L12"><i class="bi bi-code-slash"></i></a>
+Enum FieldType  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L13"><i class="bi bi-code-slash"></i></a>
   </h1>
 
   <div class="facts text-secondary">
@@ -102,7 +102,9 @@ Enum FieldType  <a class="header-action link-secondary" title="View source" href
   <div class="markdown conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public enum FieldType</code></pre>
+    <pre><code class="lang-csharp hljs">[PublicAPI]
+[Flags]
+public enum FieldType</code></pre>
   </div>
 
 
@@ -116,17 +118,102 @@ Enum FieldType  <a class="header-action link-secondary" title="View source" href
     <dt>Extension Methods</dt>
     <dd>
   <div>
-      <a class="xref" href="Typhon.Engine.DatabaseSchemaExtensions.html#Typhon_Engine_DatabaseSchemaExtensions_SizeInRow_Typhon_Engine_FieldType_">DatabaseSchemaExtensions.SizeInRow(FieldType)</a>
+      <a class="xref" href="Typhon.Engine.DatabaseSchemaExtensions.html#Typhon_Engine_DatabaseSchemaExtensions_SizeInComp_Typhon_Engine_FieldType_">DatabaseSchemaExtensions.SizeInComp(FieldType)</a>
   </div>
   </dd></dl>
 
+  <h2 id="fields">Fields
+</h2>
+  <dl class="parameters">
+    <dt id="Typhon_Engine_FieldType_Boolean"><code>Boolean = 1</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_Byte"><code>Byte = 2</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_Char"><code>Char = Boolean | Float</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_Double"><code>Double = Float | DoubleFloat</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_DoubleFloat"><code>DoubleFloat = 512</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_Float"><code>Float = Byte | Int</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_Int"><code>Int = 4</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_Long"><code>Long = Boolean | Int</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_None"><code>None = 0</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_Point2D"><code>Point2D = Point2F | DoubleFloat</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_Point2F"><code>Point2F = Int | String64</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_Point3D"><code>Point3D = Boolean | Point2D</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_Point3F"><code>Point3F = Boolean | Point2F</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_Point4D"><code>Point4D = Byte | Point2D</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_Point4F"><code>Point4F = Byte | Point2F</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_QuaternionD"><code>QuaternionD = Boolean | Point4D</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_QuaternionF"><code>QuaternionF = Boolean | Point4F</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_Short"><code>Short = Boolean | Byte</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_String"><code>String = Byte | String64</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_String1024"><code>String1024 = Boolean | String64</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_String64"><code>String64 = 8</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_UByte"><code>UByte = Byte | Unsigned</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_UInt"><code>UInt = Int | Unsigned</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_ULong"><code>ULong = Boolean | UInt</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_UShort"><code>UShort = Boolean | UByte</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_Unsigned"><code>Unsigned = 256</code></dt>
+  
+  <dd></dd>
+    <dt id="Typhon_Engine_FieldType_Variant"><code>Variant = Boolean | String</code></dt>
+  
+  <dd></dd>
+  </dl>
 
 
 
 </article>
 
         <div class="contribution d-print-none">
-          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L12" class="edit-link">Edit this page</a>
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L13" class="edit-link">Edit this page</a>
         </div>
 
 

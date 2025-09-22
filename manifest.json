@@ -110,6 +110,34 @@
     },
     {
       "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.BTree-1.NodeWrapper.CheckConsistencyParent.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.BTree-1.NodeWrapper.CheckConsistencyParent.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.BTree<TKey>.NodeWrapper.CheckConsistencyParent",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.BTree-1.NodeWrapper.DebugView.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.BTree-1.NodeWrapper.DebugView.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.BTree<TKey>.NodeWrapper.DebugView",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.BPTree.BTree-1.NodeWrapper.yml",
       "output": {
         ".html": {
@@ -149,6 +177,20 @@
       "IsMRef": true,
       "Title": "Typhon.Engine.BPTree.BTree<TKey>",
       "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.BTreeExtensions.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.BTreeExtensions.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.BTreeExtensions",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.BPTree.BTreeExtensions.yml\" sourcestartlinenumber=\"1\">provides some mathematical and numeric extensions.</p>\n"
     },
     {
       "type": "ManagedReference",
@@ -292,6 +334,20 @@
     },
     {
       "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.Index16Chunk.DebugView.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.Index16Chunk.DebugView.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.Index16Chunk.DebugView",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.BPTree.Index16Chunk.yml",
       "output": {
         ".html": {
@@ -302,6 +358,20 @@
       "Uid": null,
       "IsMRef": true,
       "Title": "Typhon.Engine.BPTree.Index16Chunk",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.Index32Chunk.DebugView.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.Index32Chunk.DebugView.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.Index32Chunk.DebugView",
       "Summary": null
     },
     {
@@ -320,6 +390,20 @@
     },
     {
       "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.Index64Chunk.DebugView.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.Index64Chunk.DebugView.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.Index64Chunk.DebugView",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.BPTree.Index64Chunk.yml",
       "output": {
         ".html": {
@@ -330,6 +414,20 @@
       "Uid": null,
       "IsMRef": true,
       "Title": "Typhon.Engine.BPTree.Index64Chunk",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BPTree.IndexString64Chunk.DebugView.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BPTree.IndexString64Chunk.DebugView.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BPTree.IndexString64Chunk.DebugView",
       "Summary": null
     },
     {
@@ -880,6 +978,20 @@
     },
     {
       "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ChunkBasedSegment.BitmapL3.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ChunkBasedSegment.BitmapL3.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ChunkBasedSegment.BitmapL3",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.ChunkBasedSegment.yml",
       "output": {
         ".html": {
@@ -908,6 +1020,34 @@
     },
     {
       "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ChunkHandle.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ChunkHandle.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ChunkHandle",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ChunkRandomAccessor.CachedEntry.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ChunkRandomAccessor.CachedEntry.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ChunkRandomAccessor.CachedEntry",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.ChunkRandomAccessor.yml",
       "output": {
         ".html": {
@@ -919,6 +1059,34 @@
       "IsMRef": true,
       "Title": "Typhon.Engine.ChunkRandomAccessor",
       "Summary": "<p sourcefile=\"api/Typhon.Engine.ChunkRandomAccessor.yml\" sourcestartlinenumber=\"1\">Allow access to chunks in a Chunk based segment</p>\n"
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.CompRevStorageElement.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.CompRevStorageElement.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.CompRevStorageElement",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.CompRevStorageElement.yml\" sourcestartlinenumber=\"1\">Stores the information of a component revision element</p>\n"
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.CompRevStorageHeader.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.CompRevStorageHeader.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.CompRevStorageHeader",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.CompRevStorageHeader.yml\" sourcestartlinenumber=\"1\">Header structure for a chunk of the Version table</p>\n"
     },
     {
       "type": "ManagedReference",
@@ -950,16 +1118,16 @@
     },
     {
       "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.ComponentRow.yml",
+      "source_relative_path": "api/Typhon.Engine.ComponentR1.yml",
       "output": {
         ".html": {
-          "relative_path": "api/Typhon.Engine.ComponentRow.html"
+          "relative_path": "api/Typhon.Engine.ComponentR1.html"
         }
       },
       "version": "",
       "Uid": null,
       "IsMRef": true,
-      "Title": "Typhon.Engine.ComponentRow",
+      "Title": "Typhon.Engine.ComponentR1",
       "Summary": null
     },
     {
@@ -975,6 +1143,20 @@
       "IsMRef": true,
       "Title": "Typhon.Engine.ComponentTable",
       "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ConcurrentArray-1.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ConcurrentArray-1.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ConcurrentArray<T>",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.ConcurrentArray-1.yml\" sourcestartlinenumber=\"1\">Fixed size array where multiple concurrent threads can process elements in an exclusive fashion.</p>\n"
     },
     {
       "type": "ManagedReference",
@@ -1090,6 +1272,34 @@
     },
     {
       "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.DatabaseDefinitions.DBComponentFieldDefinitionBuilder.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.DatabaseDefinitions.DBComponentFieldDefinitionBuilder.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.DatabaseDefinitions.DBComponentFieldDefinitionBuilder",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.DatabaseDefinitions.IDBComponentDefinitionBuilder.yml",
       "output": {
         ".html": {
@@ -1184,7 +1394,7 @@
       "Uid": null,
       "IsMRef": true,
       "Title": "Typhon.Engine.ExcludeDocFxAttribute",
-      "Summary": null
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.ExcludeDocFxAttribute.yml\" sourcestartlinenumber=\"1\">By default, all internal type are documented, but you can decorate one with this attribute to exclude it from the documentation</p>\n"
     },
     {
       "type": "ManagedReference",
@@ -1202,16 +1412,16 @@
     },
     {
       "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.FieldRow.yml",
+      "source_relative_path": "api/Typhon.Engine.FieldR1.yml",
       "output": {
         ".html": {
-          "relative_path": "api/Typhon.Engine.FieldRow.html"
+          "relative_path": "api/Typhon.Engine.FieldR1.html"
         }
       },
       "version": "",
       "Uid": null,
       "IsMRef": true,
-      "Title": "Typhon.Engine.FieldRow",
+      "Title": "Typhon.Engine.FieldR1",
       "Summary": null
     },
     {
@@ -1254,6 +1464,20 @@
       "Uid": null,
       "IsMRef": true,
       "Title": "Typhon.Engine.IndexAttribute",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.IndexedFieldInfo.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.IndexedFieldInfo.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.IndexedFieldInfo",
       "Summary": null
     },
     {
@@ -1426,6 +1650,48 @@
     },
     {
       "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.PackedDateTime48.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.PackedDateTime48.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.PackedDateTime48",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.PackedTimeSpan32.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.PackedTimeSpan32.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.PackedTimeSpan32",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.PackedTimeSpan48.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.PackedTimeSpan48.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.PackedTimeSpan48",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.PageAccessor.yml",
       "output": {
         ".html": {
@@ -1492,6 +1758,62 @@
       "Uid": null,
       "IsMRef": true,
       "Title": "Typhon.Engine.PageClearMode",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.PagedMMF.Metrics.MemPageExtraInfo.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.PagedMMF.Metrics.MemPageExtraInfo.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.PagedMMF.Metrics.MemPageExtraInfo",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.PagedMMF.Metrics.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.PagedMMF.Metrics.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.PagedMMF.Metrics",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.PagedMMF.Metrics.yml\" sourcestartlinenumber=\"1\">Some real-time metrics.</p>\n"
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.PagedMMF.PageInfo.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.PagedMMF.PageInfo.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.PagedMMF.PageInfo",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.PagedMMF.PageState.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.PagedMMF.PageState.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.PagedMMF.PageState",
       "Summary": null
     },
     {
@@ -1636,6 +1958,20 @@
     },
     {
       "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.RootFileHeader.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.RootFileHeader.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.RootFileHeader",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.ServiceCollectionExtensions.yml",
       "output": {
         ".html": {
@@ -1660,6 +1996,34 @@
       "Uid": null,
       "IsMRef": true,
       "Title": "Typhon.Engine.SmallAccessControl",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.SpanHelpers.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.SpanHelpers.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.SpanHelpers",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.SpanStream.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.SpanStream.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.SpanStream",
       "Summary": null
     },
     {
@@ -1762,6 +2126,146 @@
     },
     {
       "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Transaction.CommitContext.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Transaction.CommitContext.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Transaction.CommitContext",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Transaction.ComponentData.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Transaction.ComponentData.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Transaction.ComponentData",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Transaction.ComponentInfo.CompRevInfo",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Transaction.ComponentInfo.OperationType.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Transaction.ComponentInfo.OperationType.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Transaction.ComponentInfo.OperationType",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Transaction.ComponentInfo.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Transaction.ComponentInfo.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Transaction.ComponentInfo",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Transaction.ConcurrencyConflictHandler.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Transaction.ConcurrencyConflictHandler.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Transaction.ConcurrencyConflictHandler",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Transaction.ConcurrencyConflictSolver.Entry.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Transaction.ConcurrencyConflictSolver.Entry.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Transaction.ConcurrencyConflictSolver.Entry",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Transaction.ConcurrencyConflictSolver.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Transaction.ConcurrencyConflictSolver.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Transaction.ConcurrencyConflictSolver",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Transaction.RevisionEnumerator.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Transaction.RevisionEnumerator.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Transaction.RevisionEnumerator",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Transaction.RevisionWalker.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Transaction.RevisionWalker.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Transaction.RevisionWalker",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.Transaction.TransactionState.yml",
       "output": {
         ".html": {
@@ -1786,6 +2290,20 @@
       "Uid": null,
       "IsMRef": true,
       "Title": "Typhon.Engine.Transaction",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.TransactionChain.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.TransactionChain.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.TransactionChain",
       "Summary": null
     },
     {
@@ -1832,6 +2350,34 @@
     },
     {
       "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.VariableSizedBufferChunkHeader.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.VariableSizedBufferChunkHeader.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.VariableSizedBufferChunkHeader",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.VariableSizedBufferRootHeader.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.VariableSizedBufferRootHeader.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.VariableSizedBufferRootHeader",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.VariableSizedBufferSegment-1.yml",
       "output": {
         ".html": {
@@ -1843,6 +2389,20 @@
       "IsMRef": true,
       "Title": "Typhon.Engine.VariableSizedBufferSegment<T>",
       "Summary": "<p sourcefile=\"api/Typhon.Engine.VariableSizedBufferSegment-1.yml\" sourcestartlinenumber=\"1\">Segment to store variable size buffer of elements</p>\n"
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Variant.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Variant.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Variant",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.Variant.yml\" sourcestartlinenumber=\"1\">Store data of a type determined at construction and formatted as a string</p>\n"
     },
     {
       "type": "ManagedReference",
@@ -1867,6 +2427,16 @@
         },
         ".json": {
           "relative_path": "api/toc.json"
+        }
+      },
+      "version": ""
+    },
+    {
+      "type": "Conceptual",
+      "source_relative_path": "design/compstorver.md",
+      "output": {
+        ".html": {
+          "relative_path": "design/compstorver.html"
         }
       },
       "version": ""

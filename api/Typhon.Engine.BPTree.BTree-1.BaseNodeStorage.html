@@ -157,6 +157,70 @@ Class BTree&lt;TKey&gt;.BaseNodeStorage  <a class="header-action link-secondary"
 
 
 
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_BaseNodeStorage_Owner" data-uid="Typhon.Engine.BPTree.BTree`1.BaseNodeStorage.Owner">
+  Owner
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.BaseNodeStorage.cs/#L12"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">protected internal BTree&lt;TKey&gt; Owner</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_BaseNodeStorage_Segment" data-uid="Typhon.Engine.BPTree.BTree`1.BaseNodeStorage.Segment">
+  Segment
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.BaseNodeStorage.cs/#L14"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">protected internal ChunkBasedSegment Segment</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.ChunkBasedSegment.html">ChunkBasedSegment</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
   <h2 class="section" id="methods">Methods
 </h2>
 
@@ -888,6 +952,39 @@ Class BTree&lt;TKey&gt;.BaseNodeStorage  <a class="header-action link-secondary"
     <dt><code>node</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;.<a class="xref" href="Typhon.Engine.BPTree.BTree-1.NodeWrapper.html">NodeWrapper</a></dt>
     <dd></dd>
     <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_BPTree_BTree_1_BaseNodeStorage_Initialize_" data-uid="Typhon.Engine.BPTree.BTree`1.BaseNodeStorage.Initialize*"></a>
+
+  <h3 id="Typhon_Engine_BPTree_BTree_1_BaseNodeStorage_Initialize_Typhon_Engine_BPTree_BTree__0__Typhon_Engine_ChunkBasedSegment_" data-uid="Typhon.Engine.BPTree.BTree`1.BaseNodeStorage.Initialize(Typhon.Engine.BPTree.BTree{`0},Typhon.Engine.ChunkBasedSegment)">
+  Initialize(BTree&lt;TKey&gt;, ChunkBasedSegment)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/BPTree/BTree.BaseNodeStorage.cs/#L18"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal virtual void Initialize(BTree&lt;TKey&gt; owner, ChunkBasedSegment segment)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>owner</code> <a class="xref" href="Typhon.Engine.BPTree.BTree-1.html">BTree</a>&lt;TKey&gt;</dt>
+    <dd></dd>
+    <dt><code>segment</code> <a class="xref" href="Typhon.Engine.ChunkBasedSegment.html">ChunkBasedSegment</a></dt>
     <dd></dd>
   </dl>
 

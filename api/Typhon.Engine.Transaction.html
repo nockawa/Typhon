@@ -2,9 +2,9 @@
 <html>
   <head>
     <meta charset="utf-8">
-      <title>Struct Transaction | Typhon </title>
+      <title>Class Transaction | Typhon </title>
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <meta name="title" content="Struct Transaction | Typhon ">
+      <meta name="title" content="Class Transaction | Typhon ">
       
       
       <link rel="icon" href="../images/favicon.ico">
@@ -89,7 +89,7 @@
 
 
   <h1 id="Typhon_Engine_Transaction" data-uid="Typhon.Engine.Transaction" class="text-break">
-Struct Transaction  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L13"><i class="bi bi-code-slash"></i></a>
+Class Transaction  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L13"><i class="bi bi-code-slash"></i></a>
   </h1>
 
   <div class="facts text-secondary">
@@ -102,12 +102,19 @@ Struct Transaction  <a class="header-action link-secondary" title="View source" 
 
   <div class="codewrapper">
     <pre><code class="lang-csharp hljs">[PublicAPI]
-public struct Transaction : IDisposable</code></pre>
+public class Transaction : IDisposable</code></pre>
   </div>
 
 
 
 
+  <dl class="typelist inheritance">
+    <dt>Inheritance</dt>
+    <dd>
+      <div><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object">object</a></div>
+      <div><span class="xref">Transaction</span></div>
+    </dd>
+  </dl>
 
   <dl class="typelist implements">
     <dt>Implements</dt>
@@ -121,22 +128,25 @@ public struct Transaction : IDisposable</code></pre>
     <dt>Inherited Members</dt>
     <dd>
     <div>
-      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.valuetype.equals">ValueType.Equals(object)</a>
-    </div>
-    <div>
-      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.valuetype.gethashcode">ValueType.GetHashCode()</a>
-    </div>
-    <div>
-      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.valuetype.tostring">ValueType.ToString()</a>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object)">object.Equals(object)</a>
     </div>
     <div>
       <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.equals#system-object-equals(system-object-system-object)">object.Equals(object, object)</a>
     </div>
     <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gethashcode">object.GetHashCode()</a>
+    </div>
+    <div>
       <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.gettype">object.GetType()</a>
     </div>
     <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.memberwiseclone">object.MemberwiseClone()</a>
+    </div>
+    <div>
       <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.referenceequals">object.ReferenceEquals(object, object)</a>
+    </div>
+    <div>
+      <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.object.tostring">object.ToString()</a>
     </div>
   </dd></dl>
 
@@ -151,28 +161,296 @@ public struct Transaction : IDisposable</code></pre>
 
   <a id="Typhon_Engine_Transaction__ctor_" data-uid="Typhon.Engine.Transaction.#ctor*"></a>
 
-  <h3 id="Typhon_Engine_Transaction__ctor_Typhon_Engine_DatabaseEngine_System_Boolean_" data-uid="Typhon.Engine.Transaction.#ctor(Typhon.Engine.DatabaseEngine,System.Boolean)">
-  Transaction(DatabaseEngine, bool)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L201"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_Transaction__ctor" data-uid="Typhon.Engine.Transaction.#ctor">
+  Transaction()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L119"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public Transaction(DatabaseEngine dbe, bool exclusiveConcurrency)</code></pre>
+    <pre><code class="lang-csharp hljs">public Transaction()</code></pre>
   </div>
 
-  <h4 class="section">Parameters</h4>
+
+
+
+
+
+
+
+
+
+
+
+
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="Typhon_Engine_Transaction_ComponentInfosMaxCapacity" data-uid="Typhon.Engine.Transaction.ComponentInfosMaxCapacity">
+  ComponentInfosMaxCapacity
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L18"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private const int ComponentInfosMaxCapacity = 131</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
   <dl class="parameters">
-    <dt><code>dbe</code> <a class="xref" href="Typhon.Engine.DatabaseEngine.html">DatabaseEngine</a></dt>
-    <dd></dd>
-    <dt><code>exclusiveConcurrency</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>
   </dl>
 
 
 
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_Transaction_RandomAccessCachedPagesCount" data-uid="Typhon.Engine.Transaction.RandomAccessCachedPagesCount">
+  RandomAccessCachedPagesCount
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L17"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private const int RandomAccessCachedPagesCount = 8</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_Transaction_ThreadLocalConflictSolver" data-uid="Typhon.Engine.Transaction.ThreadLocalConflictSolver">
+  ThreadLocalConflictSolver
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1316"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">[ThreadStatic]
+private static Transaction.ConcurrencyConflictSolver ThreadLocalConflictSolver</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.ConcurrencyConflictSolver.html">ConcurrencyConflictSolver</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_Transaction__changeSet" data-uid="Typhon.Engine.Transaction._changeSet">
+  _changeSet
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L95"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private ChangeSet _changeSet</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.ChangeSet.html">ChangeSet</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_Transaction__committedOperationCount" data-uid="Typhon.Engine.Transaction._committedOperationCount">
+  _committedOperationCount
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L93"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private int? _committedOperationCount</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a>?</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_Transaction__componentInfos" data-uid="Typhon.Engine.Transaction._componentInfos">
+  _componentInfos
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L91"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private Dictionary&lt;Type, Transaction.ComponentInfo&gt; _componentInfos</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.collections.generic.dictionary-2">Dictionary</a>&lt;<a class="xref" href="https://learn.microsoft.com/dotnet/api/system.type">Type</a>, <a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfo.html">ComponentInfo</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_Transaction__dbe" data-uid="Typhon.Engine.Transaction._dbe">
+  _dbe
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L89"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private DatabaseEngine _dbe</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.DatabaseEngine.html">DatabaseEngine</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_Transaction__deletedComponentCount" data-uid="Typhon.Engine.Transaction._deletedComponentCount">
+  _deletedComponentCount
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L94"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private int _deletedComponentCount</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_Transaction__isDisposed" data-uid="Typhon.Engine.Transaction._isDisposed">
+  _isDisposed
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L88"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private bool _isDisposed</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
 
 
 
@@ -190,7 +468,7 @@ public struct Transaction : IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_Transaction_CommittedOperationCount" data-uid="Typhon.Engine.Transaction.CommittedOperationCount">
   CommittedOperationCount
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L184"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L100"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -217,49 +495,18 @@ public struct Transaction : IDisposable</code></pre>
 
 
 
-  <a id="Typhon_Engine_Transaction_State_" data-uid="Typhon.Engine.Transaction.State*"></a>
+  <a id="Typhon_Engine_Transaction_Id_" data-uid="Typhon.Engine.Transaction.Id*"></a>
 
-  <h3 id="Typhon_Engine_Transaction_State" data-uid="Typhon.Engine.Transaction.State">
-  State
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L167"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_Transaction_Id" data-uid="Typhon.Engine.Transaction.Id">
+  Id
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L117"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public readonly Transaction.TransactionState State { get; }</code></pre>
-  </div>
-
-
-
-
-
-  <h4 class="section">Property Value</h4>
-  <dl class="parameters">
-    <dt><a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.TransactionState.html">TransactionState</a></dt>
-    <dd></dd>
-  </dl>
-
-
-
-
-
-
-
-
-  <a id="Typhon_Engine_Transaction_TransactionId_" data-uid="Typhon.Engine.Transaction.TransactionId*"></a>
-
-  <h3 id="Typhon_Engine_Transaction_TransactionId" data-uid="Typhon.Engine.Transaction.TransactionId">
-  TransactionId
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L168"><i class="bi bi-code-slash"></i></a>
-  </h3>
-
-  <div class="markdown level1 summary"></div>
-  <div class="markdown level1 conceptual"></div>
-
-  <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public readonly int TransactionId { get; }</code></pre>
+    <pre><code class="lang-csharp hljs">public int Id { get; private set; }</code></pre>
   </div>
 
 
@@ -279,24 +526,307 @@ public struct Transaction : IDisposable</code></pre>
 
 
 
-  <h2 class="section" id="methods">Methods
-</h2>
+  <a id="Typhon_Engine_Transaction_Next_" data-uid="Typhon.Engine.Transaction.Next*"></a>
 
-
-  <a id="Typhon_Engine_Transaction_Commit_" data-uid="Typhon.Engine.Transaction.Commit*"></a>
-
-  <h3 id="Typhon_Engine_Transaction_Commit" data-uid="Typhon.Engine.Transaction.Commit">
-  Commit()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L942"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_Transaction_Next" data-uid="Typhon.Engine.Transaction.Next">
+  Next
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L98"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public bool Commit()</code></pre>
+    <pre><code class="lang-csharp hljs">public Transaction Next { get; internal set; }</code></pre>
   </div>
 
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_Transaction_Previous_" data-uid="Typhon.Engine.Transaction.Previous*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_Previous" data-uid="Typhon.Engine.Transaction.Previous">
+  Previous
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L97"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Transaction Previous { get; internal set; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_Transaction_State_" data-uid="Typhon.Engine.Transaction.State*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_State" data-uid="Typhon.Engine.Transaction.State">
+  State
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L87"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Transaction.TransactionState State { get; private set; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.TransactionState.html">TransactionState</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_Transaction_TransactionDateTime_" data-uid="Typhon.Engine.Transaction.TransactionDateTime*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_TransactionDateTime" data-uid="Typhon.Engine.Transaction.TransactionDateTime">
+  TransactionDateTime
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L85"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public DateTime TransactionDateTime { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.datetime">DateTime</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_Transaction_TransactionTick_" data-uid="Typhon.Engine.Transaction.TransactionTick*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_TransactionTick" data-uid="Typhon.Engine.Transaction.TransactionTick">
+  TransactionTick
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L84"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public long TransactionTick { get; private set; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int64">long</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <h2 class="section" id="methods">Methods
+</h2>
+
+
+  <a id="Typhon_Engine_Transaction_AddCompRev_" data-uid="Typhon.Engine.Transaction.AddCompRev*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_AddCompRev_Typhon_Engine_Transaction_ComponentInfo_Typhon_Engine_Transaction_ComponentInfo_CompRevInfo__System_Int64_System_Boolean_" data-uid="Typhon.Engine.Transaction.AddCompRev(Typhon.Engine.Transaction.ComponentInfo,Typhon.Engine.Transaction.ComponentInfo.CompRevInfo@,System.Int64,System.Boolean)">
+  AddCompRev(ComponentInfo, ref CompRevInfo, long, bool)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L469"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private void AddCompRev(Transaction.ComponentInfo info, ref Transaction.ComponentInfo.CompRevInfo compRevInfo, long tick, bool isDelete)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>info</code> <a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfo.html">ComponentInfo</a></dt>
+    <dd></dd>
+    <dt><code>compRevInfo</code> <a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfo.html">ComponentInfo</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.html">CompRevInfo</a></dt>
+    <dd></dd>
+    <dt><code>tick</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int64">long</a></dt>
+    <dd></dd>
+    <dt><code>isDelete</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_Transaction_AllocCompRevStorage_" data-uid="Typhon.Engine.Transaction.AllocCompRevStorage*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_AllocCompRevStorage_Typhon_Engine_Transaction_ComponentInfo_System_Int64_System_Int32_" data-uid="Typhon.Engine.Transaction.AllocCompRevStorage(Typhon.Engine.Transaction.ComponentInfo,System.Int64,System.Int32)">
+  AllocCompRevStorage(ComponentInfo, long, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L436"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private int AllocCompRevStorage(Transaction.ComponentInfo info, long tick, int firstComponentChunkId)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>info</code> <a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfo.html">ComponentInfo</a></dt>
+    <dd></dd>
+    <dt><code>tick</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int64">long</a></dt>
+    <dd></dd>
+    <dt><code>firstComponentChunkId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_Transaction_CleanUpUnusedEntries_" data-uid="Typhon.Engine.Transaction.CleanUpUnusedEntries*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_CleanUpUnusedEntries_Typhon_Engine_Transaction_ComponentInfo_Typhon_Engine_Transaction_ComponentInfo_CompRevInfo__Typhon_Engine_ChunkRandomAccessor_System_Int64_" data-uid="Typhon.Engine.Transaction.CleanUpUnusedEntries(Typhon.Engine.Transaction.ComponentInfo,Typhon.Engine.Transaction.ComponentInfo.CompRevInfo@,Typhon.Engine.ChunkRandomAccessor,System.Int64)">
+  CleanUpUnusedEntries(ComponentInfo, ref CompRevInfo, ChunkRandomAccessor, long)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1095"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p>Clean up the revisions of a component, removing all the entries older than <code class="paramref">nextMinTick</code>, releasing unused component chunks and
+defragmenting the revisions still being used.</p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private void CleanUpUnusedEntries(Transaction.ComponentInfo info, ref Transaction.ComponentInfo.CompRevInfo compRevInfo, ChunkRandomAccessor compRevTableAccessor, long nextMinTick)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>info</code> <a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfo.html">ComponentInfo</a></dt>
+    <dd><p>ComponentInfo object</p>
+</dd>
+    <dt><code>compRevInfo</code> <a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfo.html">ComponentInfo</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.html">CompRevInfo</a></dt>
+    <dd><p>Component Revision Info object</p>
+</dd>
+    <dt><code>compRevTableAccessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
+    <dd><p>The accessor</p>
+</dd>
+    <dt><code>nextMinTick</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int64">long</a></dt>
+    <dd><p>The minimal tick to keep revisions</p>
+</dd>
+  </dl>
+
+
+
+
+
+
+
+
+  <h4 class="section" id="Typhon_Engine_Transaction_CleanUpUnusedEntries_Typhon_Engine_Transaction_ComponentInfo_Typhon_Engine_Transaction_ComponentInfo_CompRevInfo__Typhon_Engine_ChunkRandomAccessor_System_Int64__remarks">Remarks</h4>
+  <div class="markdown level1 remarks"><p>This method walks through the chain of revision chunks and builds a new one, only the first chunk is kept.</p>
+</div>
+
+
+
+
+  <a id="Typhon_Engine_Transaction_Commit_" data-uid="Typhon.Engine.Transaction.Commit*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_Commit_Typhon_Engine_Transaction_ConcurrencyConflictHandler_" data-uid="Typhon.Engine.Transaction.Commit(Typhon.Engine.Transaction.ConcurrencyConflictHandler)">
+  Commit(ConcurrencyConflictHandler)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1411"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool Commit(Transaction.ConcurrencyConflictHandler handler = null)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>handler</code> <a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.ConcurrencyConflictHandler.html">ConcurrencyConflictHandler</a></dt>
+    <dd></dd>
+  </dl>
 
   <h4 class="section">Returns</h4>
   <dl class="parameters">
@@ -314,11 +844,127 @@ public struct Transaction : IDisposable</code></pre>
 
 
 
+  <a id="Typhon_Engine_Transaction_CommitComponent_" data-uid="Typhon.Engine.Transaction.CommitComponent*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_CommitComponent_Typhon_Engine_Transaction_CommitContext__" data-uid="Typhon.Engine.Transaction.CommitComponent(Typhon.Engine.Transaction.CommitContext@)">
+  CommitComponent(ref CommitContext)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L788"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"><p><b>THE COMPONENT COMMIT METHOD (a big one, bold upper case were mandatory!)</b></p>
+</div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private bool CommitComponent(ref Transaction.CommitContext context)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>context</code> <a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.CommitContext.html">CommitContext</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd><p>Return <code>true</code> if the whole component is deleted (all components versions were deleted/rollbacked)</p>
+</dd>
+  </dl>
+
+
+
+
+
+
+
+  <h4 class="section" id="Typhon_Engine_Transaction_CommitComponent_Typhon_Engine_Transaction_CommitContext___remarks">Remarks</h4>
+  <div class="markdown level1 remarks"><p>
+If <code class="paramref">conflictSolver</code> is given, this method can be called twice, first time to build the conflict list, second time to actually commit
+the changes.
+</p>
+</div>
+
+
+
+
+  <a id="Typhon_Engine_Transaction_ComputeRevElementCount_" data-uid="Typhon.Engine.Transaction.ComputeRevElementCount*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_ComputeRevElementCount_System_Int32_" data-uid="Typhon.Engine.Transaction.ComputeRevElementCount(System.Int32)">
+  ComputeRevElementCount(int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L468"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private static int ComputeRevElementCount(int chainLength)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>chainLength</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_Transaction_CreateEntity_" data-uid="Typhon.Engine.Transaction.CreateEntity*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_CreateEntity_Typhon_Engine_Transaction_ComponentData___" data-uid="Typhon.Engine.Transaction.CreateEntity(Typhon.Engine.Transaction.ComponentData[])">
+  CreateEntity(params ComponentData[])
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L284"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private long CreateEntity(params Transaction.ComponentData[] data)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>data</code> <a class="xref" href="Typhon.Engine.Transaction.ComponentData.html">ComponentData</a>[]</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int64">long</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
   <a id="Typhon_Engine_Transaction_CreateEntity_" data-uid="Typhon.Engine.Transaction.CreateEntity*"></a>
 
   <h3 id="Typhon_Engine_Transaction_CreateEntity__1___0__" data-uid="Typhon.Engine.Transaction.CreateEntity``1(``0@)">
   CreateEntity&lt;T&gt;(ref T)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L230"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L174"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -359,7 +1005,7 @@ public struct Transaction : IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_Transaction_CreateEntity__2___0____1__" data-uid="Typhon.Engine.Transaction.CreateEntity``2(``0@,``1@)">
   CreateEntity&lt;TC1, TC2&gt;(ref TC1, ref TC2)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L232"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L176"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -404,7 +1050,7 @@ public struct Transaction : IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_Transaction_CreateEntity__3___0____1____2__" data-uid="Typhon.Engine.Transaction.CreateEntity``3(``0@,``1@,``2@)">
   CreateEntity&lt;TC1, TC2, TC3&gt;(ref TC1, ref TC2, ref TC3)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L234"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L178"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -453,7 +1099,7 @@ public struct Transaction : IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_Transaction_DeleteEntity__1_System_Int64_" data-uid="Typhon.Engine.Transaction.DeleteEntity``1(System.Int64)">
   DeleteEntity&lt;T&gt;(long)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L267"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L211"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -494,7 +1140,7 @@ public struct Transaction : IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_Transaction_DeleteEntity__2_System_Int64_" data-uid="Typhon.Engine.Transaction.DeleteEntity``2(System.Int64)">
   DeleteEntity&lt;TC1, TC2&gt;(long)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L270"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L214"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -537,7 +1183,7 @@ public struct Transaction : IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_Transaction_DeleteEntity__3_System_Int64_" data-uid="Typhon.Engine.Transaction.DeleteEntity``3(System.Int64)">
   DeleteEntity&lt;TC1, TC2, TC3&gt;(long)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L273"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L217"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -582,7 +1228,7 @@ public struct Transaction : IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_Transaction_Dispose" data-uid="Typhon.Engine.Transaction.Dispose">
   Dispose()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L217"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L158"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</p>
@@ -605,11 +1251,170 @@ public struct Transaction : IDisposable</code></pre>
 
 
 
+  <a id="Typhon_Engine_Transaction_GetCompRevInfoFromIndex_" data-uid="Typhon.Engine.Transaction.GetCompRevInfoFromIndex*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_GetCompRevInfoFromIndex_System_Int64_Typhon_Engine_Transaction_ComponentInfo_System_Int64_Typhon_Engine_Transaction_ComponentInfo_CompRevInfo__" data-uid="Typhon.Engine.Transaction.GetCompRevInfoFromIndex(System.Int64,Typhon.Engine.Transaction.ComponentInfo,System.Int64,Typhon.Engine.Transaction.ComponentInfo.CompRevInfo@)">
+  GetCompRevInfoFromIndex(long, ComponentInfo, long, out CompRevInfo)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L713"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private bool GetCompRevInfoFromIndex(long pk, Transaction.ComponentInfo info, long tick, out Transaction.ComponentInfo.CompRevInfo compRevInfo)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>pk</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int64">long</a></dt>
+    <dd></dd>
+    <dt><code>info</code> <a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfo.html">ComponentInfo</a></dt>
+    <dd></dd>
+    <dt><code>tick</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int64">long</a></dt>
+    <dd></dd>
+    <dt><code>compRevInfo</code> <a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfo.html">ComponentInfo</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.html">CompRevInfo</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_Transaction_GetCompRevStorageHeader_" data-uid="Typhon.Engine.Transaction.GetCompRevStorageHeader*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_GetCompRevStorageHeader__1_System_Int64_" data-uid="Typhon.Engine.Transaction.GetCompRevStorageHeader``1(System.Int64)">
+  GetCompRevStorageHeader&lt;T&gt;(long)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L233"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal ChunkHandle GetCompRevStorageHeader&lt;T&gt;(long entity)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>entity</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int64">long</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.ChunkHandle.html">ChunkHandle</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Type Parameters</h4>
+  <dl class="parameters">
+    <dt><code>T</code></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_Transaction_GetCompRevTableFirstChunkId_" data-uid="Typhon.Engine.Transaction.GetCompRevTableFirstChunkId*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_GetCompRevTableFirstChunkId_System_Int64_Typhon_Engine_Transaction_ComponentInfo_System_Int32__" data-uid="Typhon.Engine.Transaction.GetCompRevTableFirstChunkId(System.Int64,Typhon.Engine.Transaction.ComponentInfo,System.Int32@)">
+  GetCompRevTableFirstChunkId(long, ComponentInfo, out int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L462"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private bool GetCompRevTableFirstChunkId(long pk, Transaction.ComponentInfo info, out int firstChunkId)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>pk</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int64">long</a></dt>
+    <dd></dd>
+    <dt><code>info</code> <a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfo.html">ComponentInfo</a></dt>
+    <dd></dd>
+    <dt><code>firstChunkId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_Transaction_GetComponentInfo_" data-uid="Typhon.Engine.Transaction.GetComponentInfo*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_GetComponentInfo_System_Type_" data-uid="Typhon.Engine.Transaction.GetComponentInfo(System.Type)">
+  GetComponentInfo(Type)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L255"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private Transaction.ComponentInfo GetComponentInfo(Type componentType)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>componentType</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.type">Type</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfo.html">ComponentInfo</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
   <a id="Typhon_Engine_Transaction_GetComponentRevision_" data-uid="Typhon.Engine.Transaction.GetComponentRevision*"></a>
 
   <h3 id="Typhon_Engine_Transaction_GetComponentRevision__1_System_Int64_" data-uid="Typhon.Engine.Transaction.GetComponentRevision``1(System.Int64)">
   GetComponentRevision&lt;T&gt;(long)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L276"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L220"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -646,11 +1451,273 @@ public struct Transaction : IDisposable</code></pre>
 
 
 
+  <a id="Typhon_Engine_Transaction_GetConflictSolver_" data-uid="Typhon.Engine.Transaction.GetConflictSolver*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_GetConflictSolver" data-uid="Typhon.Engine.Transaction.GetConflictSolver">
+  GetConflictSolver()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1318"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private static Transaction.ConcurrencyConflictSolver GetConflictSolver()</code></pre>
+  </div>
+
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.ConcurrencyConflictSolver.html">ConcurrencyConflictSolver</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_Transaction_GetRevisionCount_" data-uid="Typhon.Engine.Transaction.GetRevisionCount*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_GetRevisionCount__1_System_Int64_" data-uid="Typhon.Engine.Transaction.GetRevisionCount``1(System.Int64)">
+  GetRevisionCount&lt;T&gt;(long)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L244"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal int GetRevisionCount&lt;T&gt;(long entity)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>entity</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int64">long</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Type Parameters</h4>
+  <dl class="parameters">
+    <dt><code>T</code></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_Transaction_GetRevisionElement_" data-uid="Typhon.Engine.Transaction.GetRevisionElement*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_GetRevisionElement_Typhon_Engine_ChunkRandomAccessor_System_Int32_System_Int16_System_Span_Typhon_Engine_CompRevStorageElement___" data-uid="Typhon.Engine.Transaction.GetRevisionElement(Typhon.Engine.ChunkRandomAccessor,System.Int32,System.Int16,System.Span{Typhon.Engine.CompRevStorageElement}@)">
+  GetRevisionElement(ChunkRandomAccessor, int, short, out Span&lt;CompRevStorageElement&gt;)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1188"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private ChunkHandle GetRevisionElement(ChunkRandomAccessor accessor, int firstChunkId, short revisionIndex, out Span&lt;CompRevStorageElement&gt; element)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
+    <dd></dd>
+    <dt><code>firstChunkId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>revisionIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int16">short</a></dt>
+    <dd></dd>
+    <dt><code>element</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.span-1">Span</a>&lt;<a class="xref" href="Typhon.Engine.CompRevStorageElement.html">CompRevStorageElement</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.ChunkHandle.html">ChunkHandle</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_Transaction_GetRevisionLocation_" data-uid="Typhon.Engine.Transaction.GetRevisionLocation*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_GetRevisionLocation_Typhon_Engine_ChunkRandomAccessor_System_Int32_System_Int16_System_Int32__" data-uid="Typhon.Engine.Transaction.GetRevisionLocation(Typhon.Engine.ChunkRandomAccessor,System.Int32,System.Int16,System.Int32@)">
+  GetRevisionLocation(ChunkRandomAccessor, int, short, out int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1226"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private short GetRevisionLocation(ChunkRandomAccessor accessor, int firstChunkId, short revisionIndex, out int resChunkId)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>accessor</code> <a class="xref" href="Typhon.Engine.ChunkRandomAccessor.html">ChunkRandomAccessor</a></dt>
+    <dd></dd>
+    <dt><code>firstChunkId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>revisionIndex</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int16">short</a></dt>
+    <dd></dd>
+    <dt><code>resChunkId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int16">short</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_Transaction_GrowChain_" data-uid="Typhon.Engine.Transaction.GrowChain*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_GrowChain_Typhon_Engine_Transaction_ComponentInfo_Typhon_Engine_Transaction_ComponentInfo_CompRevInfo__Typhon_Engine_CompRevStorageHeader__" data-uid="Typhon.Engine.Transaction.GrowChain(Typhon.Engine.Transaction.ComponentInfo,Typhon.Engine.Transaction.ComponentInfo.CompRevInfo@,Typhon.Engine.CompRevStorageHeader@)">
+  GrowChain(ComponentInfo, ref CompRevInfo, ref CompRevStorageHeader)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L531"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private void GrowChain(Transaction.ComponentInfo info, ref Transaction.ComponentInfo.CompRevInfo compRevInfo, ref CompRevStorageHeader firstHeader)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>info</code> <a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfo.html">ComponentInfo</a></dt>
+    <dd></dd>
+    <dt><code>compRevInfo</code> <a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfo.html">ComponentInfo</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.html">CompRevInfo</a></dt>
+    <dd></dd>
+    <dt><code>firstHeader</code> <a class="xref" href="Typhon.Engine.CompRevStorageHeader.html">CompRevStorageHeader</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_Transaction_Init_" data-uid="Typhon.Engine.Transaction.Init*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_Init_Typhon_Engine_DatabaseEngine_System_Int32_" data-uid="Typhon.Engine.Transaction.Init(Typhon.Engine.DatabaseEngine,System.Int32)">
+  Init(DatabaseEngine, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L124"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void Init(DatabaseEngine dbe, int id)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>dbe</code> <a class="xref" href="Typhon.Engine.DatabaseEngine.html">DatabaseEngine</a></dt>
+    <dd></dd>
+    <dt><code>id</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_Transaction_ReadEntity_" data-uid="Typhon.Engine.Transaction.ReadEntity*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_ReadEntity_System_Int64_Typhon_Engine_Transaction_ComponentData___" data-uid="Typhon.Engine.Transaction.ReadEntity(System.Int64,Typhon.Engine.Transaction.ComponentData[])">
+  ReadEntity(long, params ComponentData[])
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L328"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private bool ReadEntity(long pk, params Transaction.ComponentData[] data)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>pk</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int64">long</a></dt>
+    <dd></dd>
+    <dt><code>data</code> <a class="xref" href="Typhon.Engine.Transaction.ComponentData.html">ComponentData</a>[]</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
   <a id="Typhon_Engine_Transaction_ReadEntity_" data-uid="Typhon.Engine.Transaction.ReadEntity*"></a>
 
   <h3 id="Typhon_Engine_Transaction_ReadEntity__1_System_Int64___0__" data-uid="Typhon.Engine.Transaction.ReadEntity``1(System.Int64,``0@)">
   ReadEntity&lt;T&gt;(long, out T)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L237"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L181"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -693,7 +1760,7 @@ public struct Transaction : IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_Transaction_ReadEntity__2_System_Int64___0____1__" data-uid="Typhon.Engine.Transaction.ReadEntity``2(System.Int64,``0@,``1@)">
   ReadEntity&lt;TC1, TC2&gt;(long, out TC1, out TC2)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L243"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L187"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -740,7 +1807,7 @@ public struct Transaction : IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_Transaction_ReadEntity__3_System_Int64___0____1____2__" data-uid="Typhon.Engine.Transaction.ReadEntity``3(System.Int64,``0@,``1@,``2@)">
   ReadEntity&lt;TC1, TC2, TC3&gt;(long, out TC1, out TC2, out TC3)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L250"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L194"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -787,11 +1854,37 @@ public struct Transaction : IDisposable</code></pre>
 
 
 
+  <a id="Typhon_Engine_Transaction_Reset_" data-uid="Typhon.Engine.Transaction.Reset*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_Reset" data-uid="Typhon.Engine.Transaction.Reset">
+  Reset()
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L138"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal void Reset()</code></pre>
+  </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
   <a id="Typhon_Engine_Transaction_Rollback_" data-uid="Typhon.Engine.Transaction.Rollback*"></a>
 
   <h3 id="Typhon_Engine_Transaction_Rollback" data-uid="Typhon.Engine.Transaction.Rollback">
   Rollback()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L899"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1259"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -820,9 +1913,47 @@ public struct Transaction : IDisposable</code></pre>
 
   <a id="Typhon_Engine_Transaction_UpdateEntity_" data-uid="Typhon.Engine.Transaction.UpdateEntity*"></a>
 
+  <h3 id="Typhon_Engine_Transaction_UpdateEntity_System_Int64_Typhon_Engine_Transaction_ComponentData___" data-uid="Typhon.Engine.Transaction.UpdateEntity(System.Int64,Typhon.Engine.Transaction.ComponentData[])">
+  UpdateEntity(long, params ComponentData[])
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L367"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private bool UpdateEntity(long pk, params Transaction.ComponentData[] data)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>pk</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int64">long</a></dt>
+    <dd></dd>
+    <dt><code>data</code> <a class="xref" href="Typhon.Engine.Transaction.ComponentData.html">ComponentData</a>[]</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_Transaction_UpdateEntity_" data-uid="Typhon.Engine.Transaction.UpdateEntity*"></a>
+
   <h3 id="Typhon_Engine_Transaction_UpdateEntity__1_System_Int64___0__" data-uid="Typhon.Engine.Transaction.UpdateEntity``1(System.Int64,``0@)">
   UpdateEntity&lt;T&gt;(long, ref T)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L258"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L202"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -865,7 +1996,7 @@ public struct Transaction : IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_Transaction_UpdateEntity__2_System_Int64___0____1__" data-uid="Typhon.Engine.Transaction.UpdateEntity``2(System.Int64,``0@,``1@)">
   UpdateEntity&lt;TC1, TC2&gt;(long, ref TC1, ref TC2)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L261"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L205"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -912,7 +2043,7 @@ public struct Transaction : IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_Transaction_UpdateEntity__3_System_Int64___0____1____2__" data-uid="Typhon.Engine.Transaction.UpdateEntity``3(System.Int64,``0@,``1@,``2@)">
   UpdateEntity&lt;TC1, TC2, TC3&gt;(long, ref TC1, ref TC2, ref TC3)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L264"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L208"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -949,6 +2080,43 @@ public struct Transaction : IDisposable</code></pre>
     <dt><code>TC3</code></dt>
     <dd></dd>
   </dl>
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_Transaction_UpdateIndices_" data-uid="Typhon.Engine.Transaction.UpdateIndices*"></a>
+
+  <h3 id="Typhon_Engine_Transaction_UpdateIndices_System_Int64_Typhon_Engine_Transaction_ComponentInfo_Typhon_Engine_Transaction_ComponentInfo_CompRevInfo_System_Int32_" data-uid="Typhon.Engine.Transaction.UpdateIndices(System.Int64,Typhon.Engine.Transaction.ComponentInfo,Typhon.Engine.Transaction.ComponentInfo.CompRevInfo,System.Int32)">
+  UpdateIndices(long, ComponentInfo, CompRevInfo, int)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L956"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private void UpdateIndices(long pk, Transaction.ComponentInfo info, Transaction.ComponentInfo.CompRevInfo compRevInfo, int prevCompChunkId)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>pk</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int64">long</a></dt>
+    <dd></dd>
+    <dt><code>info</code> <a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfo.html">ComponentInfo</a></dt>
+    <dd></dd>
+    <dt><code>compRevInfo</code> <a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfo.html">ComponentInfo</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.html">CompRevInfo</a></dt>
+    <dd></dd>
+    <dt><code>prevCompChunkId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
 
 
 

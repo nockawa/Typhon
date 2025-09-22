@@ -89,7 +89,7 @@
 
 
   <h1 id="Typhon_Engine_AccessControl" data-uid="Typhon.Engine.AccessControl" class="text-break">
-Struct AccessControl  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L13"><i class="bi bi-code-slash"></i></a>
+Struct AccessControl  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L14"><i class="bi bi-code-slash"></i></a>
   </h1>
 
   <div class="facts text-secondary">
@@ -104,7 +104,8 @@ Costs 8 bytes of data.</p>
   <div class="markdown conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public struct AccessControl</code></pre>
+    <pre><code class="lang-csharp hljs">[PublicAPI]
+public struct AccessControl</code></pre>
   </div>
 
 
@@ -141,6 +142,70 @@ Costs 8 bytes of data.</p>
 
 
 
+  <h2 class="section" id="fields">Fields
+</h2>
+
+
+
+  <h3 id="Typhon_Engine_AccessControl__lockedByThreadId" data-uid="Typhon.Engine.AccessControl._lockedByThreadId">
+  _lockedByThreadId
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L24"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private volatile int _lockedByThreadId</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <h3 id="Typhon_Engine_AccessControl__sharedUsedCounter" data-uid="Typhon.Engine.AccessControl._sharedUsedCounter">
+  _sharedUsedCounter
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L25"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private volatile int _sharedUsedCounter</code></pre>
+  </div>
+
+
+
+
+  <h4 class="section">Field Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
   <h2 class="section" id="properties">Properties
 </h2>
 
@@ -149,7 +214,7 @@ Costs 8 bytes of data.</p>
 
   <h3 id="Typhon_Engine_AccessControl_LockedByThreadId" data-uid="Typhon.Engine.AccessControl.LockedByThreadId">
   LockedByThreadId
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L25"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L27"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -180,7 +245,7 @@ Costs 8 bytes of data.</p>
 
   <h3 id="Typhon_Engine_AccessControl_SharedUsedCounter" data-uid="Typhon.Engine.AccessControl.SharedUsedCounter">
   SharedUsedCounter
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L26"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L28"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -215,7 +280,7 @@ Costs 8 bytes of data.</p>
 
   <h3 id="Typhon_Engine_AccessControl_DemoteFromExclusiveAccess" data-uid="Typhon.Engine.AccessControl.DemoteFromExclusiveAccess">
   DemoteFromExclusiveAccess()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L152"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L154"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -241,7 +306,7 @@ Costs 8 bytes of data.</p>
 
   <h3 id="Typhon_Engine_AccessControl_EnterExclusiveAccess" data-uid="Typhon.Engine.AccessControl.EnterExclusiveAccess">
   EnterExclusiveAccess()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L59"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L61"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -267,7 +332,7 @@ Costs 8 bytes of data.</p>
 
   <h3 id="Typhon_Engine_AccessControl_EnterSharedAccess" data-uid="Typhon.Engine.AccessControl.EnterSharedAccess">
   EnterSharedAccess()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L28"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L30"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -293,7 +358,7 @@ Costs 8 bytes of data.</p>
 
   <h3 id="Typhon_Engine_AccessControl_ExitExclusiveAccess" data-uid="Typhon.Engine.AccessControl.ExitExclusiveAccess">
   ExitExclusiveAccess()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L154"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L156"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -319,7 +384,7 @@ Costs 8 bytes of data.</p>
 
   <h3 id="Typhon_Engine_AccessControl_ExitSharedAccess" data-uid="Typhon.Engine.AccessControl.ExitSharedAccess">
   ExitSharedAccess()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L57"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L59"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -345,7 +410,7 @@ Costs 8 bytes of data.</p>
 
   <h3 id="Typhon_Engine_AccessControl_Reset" data-uid="Typhon.Engine.AccessControl.Reset">
   Reset()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L16"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L18"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -371,7 +436,7 @@ Costs 8 bytes of data.</p>
 
   <h3 id="Typhon_Engine_AccessControl_TryEnterExclusiveAccess" data-uid="Typhon.Engine.AccessControl.TryEnterExclusiveAccess">
   TryEnterExclusiveAccess()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L104"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L106"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -402,7 +467,7 @@ Costs 8 bytes of data.</p>
 
   <h3 id="Typhon_Engine_AccessControl_TryPromoteToExclusiveAccess" data-uid="Typhon.Engine.AccessControl.TryPromoteToExclusiveAccess">
   TryPromoteToExclusiveAccess()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L125"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L127"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -433,7 +498,7 @@ Costs 8 bytes of data.</p>
 </article>
 
         <div class="contribution d-print-none">
-          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L13" class="edit-link">Edit this page</a>
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Misc/AccessControl.cs/#L14" class="edit-link">Edit this page</a>
         </div>
 
 

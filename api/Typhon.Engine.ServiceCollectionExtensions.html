@@ -155,6 +155,46 @@ public static class ServiceCollectionExtensions</code></pre>
 
   <a id="Typhon_Engine_ServiceCollectionExtensions_AddDatabaseEngine_" data-uid="Typhon.Engine.ServiceCollectionExtensions.AddDatabaseEngine*"></a>
 
+  <h3 id="Typhon_Engine_ServiceCollectionExtensions_AddDatabaseEngine_Microsoft_Extensions_DependencyInjection_IServiceCollection_Microsoft_Extensions_DependencyInjection_ServiceLifetime_System_Action_Typhon_Engine_DatabaseEngineOptions__" data-uid="Typhon.Engine.ServiceCollectionExtensions.AddDatabaseEngine(Microsoft.Extensions.DependencyInjection.IServiceCollection,Microsoft.Extensions.DependencyInjection.ServiceLifetime,System.Action{Typhon.Engine.DatabaseEngineOptions})">
+  AddDatabaseEngine(IServiceCollection, ServiceLifetime, Action&lt;DatabaseEngineOptions&gt;)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Hosting/TyphonBuilderExtensions.cs/#L109"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private static IServiceCollection AddDatabaseEngine(IServiceCollection services, ServiceLifetime lifetime, Action&lt;DatabaseEngineOptions&gt; configure)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>services</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/microsoft.extensions.dependencyinjection.iservicecollection">IServiceCollection</a></dt>
+    <dd></dd>
+    <dt><code>lifetime</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/microsoft.extensions.dependencyinjection.servicelifetime">ServiceLifetime</a></dt>
+    <dd></dd>
+    <dt><code>configure</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-1">Action</a>&lt;<a class="xref" href="Typhon.Engine.DatabaseEngineOptions.html">DatabaseEngineOptions</a>&gt;</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/microsoft.extensions.dependencyinjection.iservicecollection">IServiceCollection</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_ServiceCollectionExtensions_AddDatabaseEngine_" data-uid="Typhon.Engine.ServiceCollectionExtensions.AddDatabaseEngine*"></a>
+
   <h3 id="Typhon_Engine_ServiceCollectionExtensions_AddDatabaseEngine_Microsoft_Extensions_DependencyInjection_IServiceCollection_System_Action_Typhon_Engine_DatabaseEngineOptions__" data-uid="Typhon.Engine.ServiceCollectionExtensions.AddDatabaseEngine(Microsoft.Extensions.DependencyInjection.IServiceCollection,System.Action{Typhon.Engine.DatabaseEngineOptions})">
   AddDatabaseEngine(IServiceCollection, Action&lt;DatabaseEngineOptions&gt;)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Hosting/TyphonBuilderExtensions.cs/#L43"><i class="bi bi-code-slash"></i></a>
@@ -257,6 +297,53 @@ public static class ServiceCollectionExtensions</code></pre>
     <dd></dd>
   </dl>
 
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_ServiceCollectionExtensions_AddPagedMMF_" data-uid="Typhon.Engine.ServiceCollectionExtensions.AddPagedMMF*"></a>
+
+  <h3 id="Typhon_Engine_ServiceCollectionExtensions_AddPagedMMF__2_Microsoft_Extensions_DependencyInjection_IServiceCollection_Microsoft_Extensions_DependencyInjection_ServiceLifetime_System_Action___1__" data-uid="Typhon.Engine.ServiceCollectionExtensions.AddPagedMMF``2(Microsoft.Extensions.DependencyInjection.IServiceCollection,Microsoft.Extensions.DependencyInjection.ServiceLifetime,System.Action{``1})">
+  AddPagedMMF&lt;TS, TO&gt;(IServiceCollection, ServiceLifetime, Action&lt;TO&gt;)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Hosting/TyphonBuilderExtensions.cs/#L58"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private static IServiceCollection AddPagedMMF&lt;TS, TO&gt;(this IServiceCollection services, ServiceLifetime lifetime, Action&lt;TO&gt; configure = null) where TS : PagedMMF where TO : PagedMMFOptions</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>services</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/microsoft.extensions.dependencyinjection.iservicecollection">IServiceCollection</a></dt>
+    <dd></dd>
+    <dt><code>lifetime</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/microsoft.extensions.dependencyinjection.servicelifetime">ServiceLifetime</a></dt>
+    <dd></dd>
+    <dt><code>configure</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.action-1">Action</a>&lt;TO&gt;</dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/microsoft.extensions.dependencyinjection.iservicecollection">IServiceCollection</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Type Parameters</h4>
+  <dl class="parameters">
+    <dt><code>TS</code></dt>
+    <dd></dd>
+    <dt><code>TO</code></dt>
+    <dd></dd>
+  </dl>
 
 
 
@@ -485,6 +572,121 @@ public static class ServiceCollectionExtensions</code></pre>
     <dd></dd>
   </dl>
 
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_ServiceCollectionExtensions_CreateDatabaseEngine_" data-uid="Typhon.Engine.ServiceCollectionExtensions.CreateDatabaseEngine*"></a>
+
+  <h3 id="Typhon_Engine_ServiceCollectionExtensions_CreateDatabaseEngine_System_IServiceProvider_" data-uid="Typhon.Engine.ServiceCollectionExtensions.CreateDatabaseEngine(System.IServiceProvider)">
+  CreateDatabaseEngine(IServiceProvider)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Hosting/TyphonBuilderExtensions.cs/#L137"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private static DatabaseEngine CreateDatabaseEngine(IServiceProvider serviceProvider)</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>serviceProvider</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.iserviceprovider">IServiceProvider</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="Typhon.Engine.DatabaseEngine.html">DatabaseEngine</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_ServiceCollectionExtensions_CreatePagedMemoryMappedFile_" data-uid="Typhon.Engine.ServiceCollectionExtensions.CreatePagedMemoryMappedFile*"></a>
+
+  <h3 id="Typhon_Engine_ServiceCollectionExtensions_CreatePagedMemoryMappedFile__2_System_IServiceProvider_" data-uid="Typhon.Engine.ServiceCollectionExtensions.CreatePagedMemoryMappedFile``2(System.IServiceProvider)">
+  CreatePagedMemoryMappedFile&lt;TS, TO&gt;(IServiceProvider)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Hosting/TyphonBuilderExtensions.cs/#L92"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">private static TS CreatePagedMemoryMappedFile&lt;TS, TO&gt;(IServiceProvider serviceProvider) where TS : PagedMMF where TO : PagedMMFOptions</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>serviceProvider</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.iserviceprovider">IServiceProvider</a></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Returns</h4>
+  <dl class="parameters">
+    <dt><span class="xref">TS</span></dt>
+    <dd></dd>
+  </dl>
+
+  <h4 class="section">Type Parameters</h4>
+  <dl class="parameters">
+    <dt><code>TS</code></dt>
+    <dd></dd>
+    <dt><code>TO</code></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
+
+
+  <a id="Typhon_Engine_ServiceCollectionExtensions_EnsureFileDeleted_" data-uid="Typhon.Engine.ServiceCollectionExtensions.EnsureFileDeleted*"></a>
+
+  <h3 id="Typhon_Engine_ServiceCollectionExtensions_EnsureFileDeleted__1_System_IServiceProvider_" data-uid="Typhon.Engine.ServiceCollectionExtensions.EnsureFileDeleted``1(System.IServiceProvider)">
+  EnsureFileDeleted&lt;TO&gt;(IServiceProvider)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Hosting/TyphonBuilderExtensions.cs/#L154"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">internal static void EnsureFileDeleted&lt;TO&gt;(this IServiceProvider provider) where TO : PagedMMFOptions</code></pre>
+  </div>
+
+  <h4 class="section">Parameters</h4>
+  <dl class="parameters">
+    <dt><code>provider</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.iserviceprovider">IServiceProvider</a></dt>
+    <dd></dd>
+  </dl>
+
+
+  <h4 class="section">Type Parameters</h4>
+  <dl class="parameters">
+    <dt><code>TO</code></dt>
+    <dd></dd>
+  </dl>
 
 
 

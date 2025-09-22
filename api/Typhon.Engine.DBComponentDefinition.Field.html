@@ -89,7 +89,7 @@
 
 
   <h1 id="Typhon_Engine_DBComponentDefinition_Field" data-uid="Typhon.Engine.DBComponentDefinition.Field" class="text-break">
-Class DBComponentDefinition.Field  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L63"><i class="bi bi-code-slash"></i></a>
+Class DBComponentDefinition.Field  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L82"><i class="bi bi-code-slash"></i></a>
   </h1>
 
   <div class="facts text-secondary">
@@ -101,7 +101,8 @@ Class DBComponentDefinition.Field  <a class="header-action link-secondary" title
   <div class="markdown conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public class DBComponentDefinition.Field</code></pre>
+    <pre><code class="lang-csharp hljs">[PublicAPI]
+public class DBComponentDefinition.Field</code></pre>
   </div>
 
 
@@ -156,14 +157,14 @@ Class DBComponentDefinition.Field  <a class="header-action link-secondary" title
 
   <h3 id="Typhon_Engine_DBComponentDefinition_Field__ctor_System_Int32_System_String_Typhon_Engine_FieldType_System_Int32_" data-uid="Typhon.Engine.DBComponentDefinition.Field.#ctor(System.Int32,System.String,Typhon.Engine.FieldType,System.Int32)">
   Field(int, string, FieldType, int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L66"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L86"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public Field(int fieldId, string name, FieldType type, int offsetInRow)</code></pre>
+    <pre><code class="lang-csharp hljs">public Field(int fieldId, string name, FieldType type, int offsetInComponentStorage)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -174,7 +175,7 @@ Class DBComponentDefinition.Field  <a class="header-action link-secondary" title
     <dd></dd>
     <dt><code>type</code> <a class="xref" href="Typhon.Engine.FieldType.html">FieldType</a></dt>
     <dd></dd>
-    <dt><code>offsetInRow</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dt><code>offsetInComponentStorage</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>
   </dl>
 
@@ -197,7 +198,7 @@ Class DBComponentDefinition.Field  <a class="header-action link-secondary" title
 
   <h3 id="Typhon_Engine_DBComponentDefinition_Field_ArrayLength" data-uid="Typhon.Engine.DBComponentDefinition.Field.ArrayLength">
   ArrayLength
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L92"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L112"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -228,7 +229,7 @@ Class DBComponentDefinition.Field  <a class="header-action link-secondary" title
 
   <h3 id="Typhon_Engine_DBComponentDefinition_Field_FieldId" data-uid="Typhon.Engine.DBComponentDefinition.Field.FieldId">
   FieldId
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L74"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L94"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -259,7 +260,7 @@ Class DBComponentDefinition.Field  <a class="header-action link-secondary" title
 
   <h3 id="Typhon_Engine_DBComponentDefinition_Field_HasIndex" data-uid="Typhon.Engine.DBComponentDefinition.Field.HasIndex">
   HasIndex
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L84"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L104"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -290,7 +291,7 @@ Class DBComponentDefinition.Field  <a class="header-action link-secondary" title
 
   <h3 id="Typhon_Engine_DBComponentDefinition_Field_IndexAllowMultiple" data-uid="Typhon.Engine.DBComponentDefinition.Field.IndexAllowMultiple">
   IndexAllowMultiple
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L86"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L106"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -321,7 +322,7 @@ Class DBComponentDefinition.Field  <a class="header-action link-secondary" title
 
   <h3 id="Typhon_Engine_DBComponentDefinition_Field_IsArray" data-uid="Typhon.Engine.DBComponentDefinition.Field.IsArray">
   IsArray
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L90"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L110"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -352,7 +353,7 @@ Class DBComponentDefinition.Field  <a class="header-action link-secondary" title
 
   <h3 id="Typhon_Engine_DBComponentDefinition_Field_IsIndexAuto" data-uid="Typhon.Engine.DBComponentDefinition.Field.IsIndexAuto">
   IsIndexAuto
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L88"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L108"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -383,7 +384,7 @@ Class DBComponentDefinition.Field  <a class="header-action link-secondary" title
 
   <h3 id="Typhon_Engine_DBComponentDefinition_Field_IsStatic" data-uid="Typhon.Engine.DBComponentDefinition.Field.IsStatic">
   IsStatic
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L82"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L102"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -414,7 +415,7 @@ Class DBComponentDefinition.Field  <a class="header-action link-secondary" title
 
   <h3 id="Typhon_Engine_DBComponentDefinition_Field_Name" data-uid="Typhon.Engine.DBComponentDefinition.Field.Name">
   Name
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L76"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L96"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -441,18 +442,18 @@ Class DBComponentDefinition.Field  <a class="header-action link-secondary" title
 
 
 
-  <a id="Typhon_Engine_DBComponentDefinition_Field_OffsetInRow_" data-uid="Typhon.Engine.DBComponentDefinition.Field.OffsetInRow*"></a>
+  <a id="Typhon_Engine_DBComponentDefinition_Field_OffsetInComponentStorage_" data-uid="Typhon.Engine.DBComponentDefinition.Field.OffsetInComponentStorage*"></a>
 
-  <h3 id="Typhon_Engine_DBComponentDefinition_Field_OffsetInRow" data-uid="Typhon.Engine.DBComponentDefinition.Field.OffsetInRow">
-  OffsetInRow
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L80"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_DBComponentDefinition_Field_OffsetInComponentStorage" data-uid="Typhon.Engine.DBComponentDefinition.Field.OffsetInComponentStorage">
+  OffsetInComponentStorage
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L100"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public int OffsetInRow { get; }</code></pre>
+    <pre><code class="lang-csharp hljs">public int OffsetInComponentStorage { get; }</code></pre>
   </div>
 
 
@@ -472,18 +473,18 @@ Class DBComponentDefinition.Field  <a class="header-action link-secondary" title
 
 
 
-  <a id="Typhon_Engine_DBComponentDefinition_Field_SizeInRow_" data-uid="Typhon.Engine.DBComponentDefinition.Field.SizeInRow*"></a>
+  <a id="Typhon_Engine_DBComponentDefinition_Field_SizeInComponentStorage_" data-uid="Typhon.Engine.DBComponentDefinition.Field.SizeInComponentStorage*"></a>
 
-  <h3 id="Typhon_Engine_DBComponentDefinition_Field_SizeInRow" data-uid="Typhon.Engine.DBComponentDefinition.Field.SizeInRow">
-  SizeInRow
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L114"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_DBComponentDefinition_Field_SizeInComponentStorage" data-uid="Typhon.Engine.DBComponentDefinition.Field.SizeInComponentStorage">
+  SizeInComponentStorage
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L134"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public int SizeInRow { get; }</code></pre>
+    <pre><code class="lang-csharp hljs">public int SizeInComponentStorage { get; }</code></pre>
   </div>
 
 
@@ -507,7 +508,7 @@ Class DBComponentDefinition.Field  <a class="header-action link-secondary" title
 
   <h3 id="Typhon_Engine_DBComponentDefinition_Field_Type" data-uid="Typhon.Engine.DBComponentDefinition.Field.Type">
   Type
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L78"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L98"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -542,7 +543,7 @@ Class DBComponentDefinition.Field  <a class="header-action link-secondary" title
 
   <h3 id="Typhon_Engine_DBComponentDefinition_Field_CheckName_System_String_" data-uid="Typhon.Engine.DBComponentDefinition.Field.CheckName(System.String)">
   CheckName(string)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L94"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L114"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -573,7 +574,7 @@ Class DBComponentDefinition.Field  <a class="header-action link-secondary" title
 
   <h3 id="Typhon_Engine_DBComponentDefinition_Field_CheckType_Typhon_Engine_FieldType_" data-uid="Typhon.Engine.DBComponentDefinition.Field.CheckType(Typhon.Engine.FieldType)">
   CheckType(FieldType)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L106"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L126"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -604,7 +605,7 @@ Class DBComponentDefinition.Field  <a class="header-action link-secondary" title
 
   <h3 id="Typhon_Engine_DBComponentDefinition_Field_DoesFieldTypeSupportIndex" data-uid="Typhon.Engine.DBComponentDefinition.Field.DoesFieldTypeSupportIndex">
   DoesFieldTypeSupportIndex()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L115"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L135"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -635,7 +636,7 @@ Class DBComponentDefinition.Field  <a class="header-action link-secondary" title
 </article>
 
         <div class="contribution d-print-none">
-          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L63" class="edit-link">Edit this page</a>
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DBComponentDefinition.cs/#L82" class="edit-link">Edit this page</a>
         </div>
 
 
