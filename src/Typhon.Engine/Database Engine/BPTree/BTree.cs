@@ -335,7 +335,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public bool IsEmpty(ChunkRandomAccessor accessor)
     {
-        ref var header = ref accessor.GetChunkBaseSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false, out var entry);
+        ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false, out var entry);
         var res = header.Count == 0;
         accessor.UnpinChunkBasedSegmentHeader(entry);
         return res;
@@ -343,7 +343,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public int IncCount(ChunkRandomAccessor accessor)
     {
-        ref var header = ref accessor.GetChunkBaseSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false, out var entry);
+        ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false, out var entry);
         var res = ++header.Count;
         accessor.UnpinChunkBasedSegmentHeader(entry);
         return res;
@@ -351,7 +351,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public int DecCount(ChunkRandomAccessor accessor)
     {
-        ref var header = ref accessor.GetChunkBaseSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false, out var entry);
+        ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false, out var entry);
         var res = --header.Count;
         accessor.UnpinChunkBasedSegmentHeader(entry);
         return res;
@@ -359,14 +359,14 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public void SetRootChunkId(ChunkRandomAccessor accessor, int rootChunkId)
     {
-        ref var header = ref accessor.GetChunkBaseSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false, out var entry);
+        ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false, out var entry);
         header.RootChunkId = rootChunkId;
         accessor.UnpinChunkBasedSegmentHeader(entry);
     }    
 
     public int GetRootChunkId(ChunkRandomAccessor accessor)
     {
-        ref var header = ref accessor.GetChunkBaseSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false, out var entry);
+        ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false, out var entry);
         var res = header.RootChunkId;
         accessor.UnpinChunkBasedSegmentHeader(entry);
         return res;

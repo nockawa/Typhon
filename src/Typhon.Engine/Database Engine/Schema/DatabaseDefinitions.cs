@@ -1,5 +1,6 @@
 ﻿// unset
 
+using JetBrains.Annotations;
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -7,9 +8,10 @@ using System.Runtime.InteropServices;
 
 namespace Typhon.Engine;
 
+[PublicAPI]
 public class DatabaseDefinitions
 {
-    private Dictionary<string, DBComponentDefinition> _components;
+    private readonly Dictionary<string, DBComponentDefinition> _components;
     private Dictionary<string, DBObjectDefinition> _objects;
 
     public DatabaseDefinitions()
@@ -18,12 +20,13 @@ public class DatabaseDefinitions
         _objects = new Dictionary<string, DBObjectDefinition>();
     }
 
-    public IDBComponentDefinitionBuilder CreateComponentBuilder(string name) => new DBComponentDefinitionBuilder(this, name);
+    public IDBComponentDefinitionBuilder CreateComponentBuilder(string name, int revision) => new DBComponentDefinitionBuilder(this, name, revision);
 
     public interface IDBComponentDefinitionBuilder
     {
         IDbComponentFieldDefinitionBuilder WithField(int fieldId, string name, FieldType type, int offset);
         void Build();
+        IDBComponentDefinitionBuilder WithPOCO<T>();
     }
 
     public interface IDbComponentFieldDefinitionBuilder : IDBComponentDefinitionBuilder
@@ -35,44 +38,47 @@ public class DatabaseDefinitions
     class DBComponentDefinitionBuilder : IDBComponentDefinitionBuilder
     {
         private readonly DatabaseDefinitions _owner;
-        protected readonly DBComponentDefinition _component;
+        protected readonly DBComponentDefinition Component;
 
-        public DBComponentDefinitionBuilder(DatabaseDefinitions owner, string name)
+        public DBComponentDefinitionBuilder(DatabaseDefinitions owner, string name, int revision)
         {
             _owner = owner;
-            _component = new DBComponentDefinition(name);
+            Component = new DBComponentDefinition(name, revision);
         }
 
         protected DBComponentDefinitionBuilder(DatabaseDefinitions owner, DBComponentDefinition component)
         {
             _owner = owner;
-            _component = component;
+            Component = component;
         }
 
-        public IDbComponentFieldDefinitionBuilder WithField(int fieldId, string name, FieldType type, int offset)
+        public IDBComponentDefinitionBuilder WithPOCO<T>()
         {
-            return new DBComponentFieldDefinitionBuilder(_owner, _component, fieldId, name, type, offset);
+            Component.POCOType = typeof(T);
+            return this;
         }
+
+        public IDbComponentFieldDefinitionBuilder WithField(int fieldId, string name, FieldType type, int offset) 
+            => new DBComponentFieldDefinitionBuilder(_owner, Component, fieldId, name, type, offset);
 
         public void Build()
         {
-            _component.Build();
-            _owner.AddComponent(_component);
+            Component.Build();
+            _owner.AddComponent(Component);
         }
     }
 
     public void AddComponent(DBComponentDefinition component)
     {
-        if (_components.ContainsKey(component.Name))
+        if (!_components.TryAdd(component.FullName, component))
         {
             throw new ArgumentException($"The component name '{component.Name}' is already taken", nameof(component));
         }
-        _components.Add(component.Name, component);
     }
 
     class DBComponentFieldDefinitionBuilder : DBComponentDefinitionBuilder, IDbComponentFieldDefinitionBuilder
     {
-        private DBComponentDefinition.Field _field;
+        private readonly DBComponentDefinition.Field _field;
 
         public IDbComponentFieldDefinitionBuilder IsStatic()
         {
@@ -91,55 +97,68 @@ public class DatabaseDefinitions
         {
             DBComponentDefinition.Field.CheckName(fieldName);
             DBComponentDefinition.Field.CheckType(fieldType);
-            _field = _component.CreateField(fieldId, fieldName, fieldType, offset);
+            _field = Component.CreateField(fieldId, fieldName, fieldType, offset);
         }
 
     }
 
-    public DBComponentDefinition GetComponent(string componentName) => _components.TryGetValue(componentName, out var res) == false ? null : res;
+    public DBComponentDefinition GetComponent(string componentName, int revision) => _components.GetValueOrDefault(DBComponentDefinition.FormatFullName(componentName, revision));
 
-    public DBComponentDefinition CreateFromRowAccessor<T>() where T : unmanaged
+    public DBComponentDefinition CreateFromAccessor<T>() where T : unmanaged
     {
         var t = typeof(T);
 
         var ca = t.GetCustomAttribute<ComponentAttribute>();
-        var dbc = new DBComponentDefinition((ca != null) ? ca.Name : t.Name);
+        if (ca == null)
+        {
+            throw new InvalidOperationException($"Missing the ComponentAttribute on the type {t} declaration");
+        }
+        
+        var compDef = new DBComponentDefinition(ca.Name ?? t.Name, ca.Revision) { POCOType = t };
 
-        if (_components.TryGetValue(dbc.Name, out _)) return null;
+        if (_components.TryGetValue(compDef.FullName, out _))
+        {
+            return null;
+        }
 
         var members = t.GetFields();
         var fieldId = 0;
-        for (int i = 0; i < members.Length; i++)
+        foreach (var fieldInfo in members)
         {
-            var fieldInfo = members[i];
-
-            if (fieldInfo.IsStatic) continue;
+            if (fieldInfo.IsStatic)
+            {
+                continue;
+            }
 
             var fa = fieldInfo.GetCustomAttribute<FieldAttribute>();
             var ia = fieldInfo.GetCustomAttribute<IndexAttribute>();
 
             var fieldType = DatabaseSchemaExtensions.FromType(fieldInfo.FieldType);
-            if (fieldType != FieldType.None)
+            if (fieldType == FieldType.None)
             {
-                // Name of the field is by default the C# member name, or the one specified by the FieldAttribute
-                var fieldName = fa?.Name ?? fieldInfo.Name;
-                var fieldOffset = Marshal.OffsetOf(t, fieldInfo.Name).ToInt32();
-
-                var field = dbc.CreateField(fa?.FieldId ?? fieldId++, fieldName, fieldType, fieldOffset);
-
-                // Index related data
-                if (ia != null)
-                {
-                    field.HasIndex = true;
-                    field.IndexAllowMultiple = ia.AllowMultiple;
-                    field.IsIndexAuto = false;
-                }
+                continue;
             }
+
+            // Name of the field is by default the C# member name, or the one specified by the FieldAttribute
+            var fieldName = fa?.Name ?? fieldInfo.Name;
+            var fieldOffset = Marshal.OffsetOf(t, fieldInfo.Name).ToInt32();
+
+            var field = compDef.CreateField(fa?.FieldId ?? fieldId++, fieldName, fieldType, fieldOffset);
+
+            // Index related data
+            if (ia == null)
+            {
+                continue;
+            }
+
+            field.HasIndex = true;
+            field.IndexAllowMultiple = ia.AllowMultiple;
+            field.IsIndexAuto = false;
         }
 
-        dbc.Build();
+        compDef.Build();
 
-        _components.Add(dbc.Name, dbc);
-        return dbc;
+        _components.Add(compDef.FullName, compDef);
+        return compDef;
     }
 }

@@ -1,5 +1,6 @@
 ﻿// unset
 
+using JetBrains.Annotations;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -9,6 +10,8 @@ using System.Text.RegularExpressions;
 
 namespace Typhon.Engine;
 
+[PublicAPI]
+[Flags]
 public enum FieldType
 {
     None        = 0,
@@ -17,29 +20,39 @@ public enum FieldType
     Short       = 3,
     Int         = 4,
     Long        = 5,
-    UByte       = 256 + 2,
-    UShort      = 256 + 3,
-    UInt        = 256 + 4,
-    ULong       = 256 + 5,
+    UByte       = Unsigned | Byte,
+    UShort      = Unsigned | Short,
+    UInt        = Unsigned | Int,
+    ULong       = Unsigned | Long,
     Float       = 6,
-    Double      = 7,
-    Char        = 8,
-    String64    = 9,
-    String1024  = 10,
-    String      = 11,
+    Double      = DoubleFloat | Float,
+    Char        = 7,
+    String64    = 8,
+    String1024  = 9,
+    String      = 10,
+    Variant     = String64 | 11,            // Use the Variant type, a String64 of the form "tt:data" storing data of a given type
     Point2F     = 12,
     Point3F     = 13,
     Point4F     = 14,
-    Point2D     = 512 + 12,
-    Point3D     = 512 + 13,
-    Point4D     = 512 + 14,
+    Point2D     = DoubleFloat | Point2F,
+    Point3D     = DoubleFloat | Point3F,
+    Point4D     = DoubleFloat | Point4F,
     QuaternionF = 15,
-    QuaternionD = 512 + 15,
+    QuaternionD = DoubleFloat |  15,
+    
+    Unsigned    = 256,
+    DoubleFloat = 512
 }
 
+[PublicAPI]
 public class DBComponentDefinition
 {
-    public string Name { get; set; }
+    public string Name { get; private set; }
+    public int Revision { get; private set; }
+    public Type POCOType { get; internal set; }
+    public string FullName => FormatFullName(Name, Revision);
+    
+    internal static string FormatFullName(string componentName, int revision) => $"{componentName}:R{revision}";
 
     private readonly Dictionary<string, Field> _fieldsByName;
     private Field[] _fieldsById;
@@ -51,24 +64,31 @@ public class DBComponentDefinition
 
     public int GetFieldId(string fieldName)
     {
-        if (!_fieldsByName.TryGetValue(fieldName, out var field)) return -1;
+        if (!_fieldsByName.TryGetValue(fieldName, out var field))
+        {
+            return -1;
+        }
+
         return field.FieldId;
     }
 
-    public int RowSize { get; private set; }
+    public int ComponentStorageSize { get; private set; }
+    public int ComponentStorageOverhead => MultipleIndicesCount * sizeof(int);
+    public int ComponentStorageTotalSize => ComponentStorageSize + ComponentStorageOverhead;
 
     public int IndicesCount { get; private set; }
     public int MultipleIndicesCount { get; private set; }
 
-    [DebuggerDisplay("Id: {FieldId}, Name: {Name}, Type: {Type}, OffsetInRow: {OffsetInRow}")]
+    [DebuggerDisplay("Id: {FieldId}, Name: {Name}, Type: {Type}, OffsetInComponentStorage: {OffsetInComponentStorage}")]
+    [PublicAPI]
     public class Field
     {
-        public Field(int fieldId, string name, FieldType type, int offsetInRow)
+        public Field(int fieldId, string name, FieldType type, int offsetInComponentStorage)
         {
             FieldId = fieldId;
             Name = name;
             Type = type;
-            OffsetInRow = offsetInRow;
+            OffsetInComponentStorage = offsetInComponentStorage;
         }
 
         public int FieldId { get; }
@@ -77,7 +97,7 @@ public class DBComponentDefinition
 
         public FieldType Type { get; }
 
-        public int OffsetInRow { get; }
+        public int OffsetInComponentStorage { get; }
 
         public bool IsStatic { get; set; }
 
@@ -111,13 +131,14 @@ public class DBComponentDefinition
             }
         }
 
-        public int SizeInRow => Type.SizeInRow() * (IsArray ? ArrayLength : 1);
+        public int SizeInComponentStorage => Type.SizeInComp() * (IsArray ? ArrayLength : 1);
         public bool DoesFieldTypeSupportIndex() => (Type >= FieldType.Byte) && ((FieldType)((int)Type&0xFF) <= FieldType.String64);
     }
 
-    internal DBComponentDefinition(string name)
+    internal DBComponentDefinition(string name, int revision)
     {
         Name = name;
+        Revision = revision;
         _fieldsByName = new Dictionary<string, Field>();
     }
 
@@ -159,11 +180,11 @@ public class DBComponentDefinition
                 throw new Exception($"Duplicate Field's name {field.Name}. Each field must have a unique name.");
             }
 
-            if (offsets.ContainsKey(field.OffsetInRow))
+            if (offsets.TryGetValue(field.OffsetInComponentStorage, out Field offset))
             {
-                throw new Exception($"Duplicate Field's offset {field.OffsetInRow}, declare in both {field.Name} and {offsets[field.OffsetInRow].Name}. Each field must have a different.");
+                throw new Exception($"Duplicate Field's offset {field.OffsetInComponentStorage}, declare in both {field.Name} and {offset.Name}. Each field must have a different.");
             }
-            offsets.Add(field.OffsetInRow, field);
+            offsets.Add(field.OffsetInComponentStorage, field);
 
             _fieldsById[field.FieldId] = field;
 
@@ -180,15 +201,18 @@ public class DBComponentDefinition
                 }
             }
 
-            if (lastField == null || lastField.OffsetInRow < field.OffsetInRow)
+            if (lastField == null || lastField.OffsetInComponentStorage < field.OffsetInComponentStorage)
             {
                 lastField = field;
             }
         }
 
-        if (lastField == null) throw new Exception("We didn't detect at least one field... Fields must be public field (not property), not static and of a compatible data type.");
+        if (lastField == null)
+        {
+            throw new Exception("We didn't detect at least one field... Fields must be public field (not property), not static and of a compatible data type.");
+        }
 
-        RowSize = lastField.OffsetInRow + lastField.SizeInRow;
+        ComponentStorageSize = lastField.OffsetInComponentStorage + lastField.SizeInComponentStorage;
     }
 }
 
@@ -236,7 +260,7 @@ public static class DatabaseSchemaExtensions
 
     }
 
-    public static int SizeInRow(this FieldType field)
+    public static int SizeInComp(this FieldType field)
     {
         switch (field)
         {

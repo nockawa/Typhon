@@ -51,14 +51,6 @@ public struct LogicalSegmentHeader
 [PublicAPI]
 public class LogicalSegment : IDisposable
 {
-    /*
-    internal struct SerializationData
-    {
-        public int RootPageId;
-    }
-    internal SerializationData SerializeSettings() => new() { RootPageId = RootPageIndex };
-    */
-
     internal const int RootHeaderIndexSectionCount = 500;
     internal const int RootHeaderIndexSectionLength = RootHeaderIndexSectionCount * sizeof(int);
     internal const int NextHeadersIndexSectionCount = PagedMMF.PageRawDataSize / sizeof(int);

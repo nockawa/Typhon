@@ -1,28 +1,110 @@
 ﻿// unset
 
+using JetBrains.Annotations;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Typhon.Engine.BPTree;
 
 namespace Typhon.Engine;
 
-internal struct RowVersionStorageHeader
+/// <summary>
+/// Header structure for a chunk of the Version table
+/// </summary>
+/// <remarks>
+/// <p>
+/// The <see cref="ComponentTable.CompRevTableSegment"/> is a <see cref="ChunkBasedSegment"/> with chunks of <see cref="ComponentTable.CompRevChunkSize"/> bytes.
+/// Data is stored as a chain of chunks, the first one contains this header and is followed by <see cref="ComponentTable.CompRevCountInRoot"/> number
+/// of <see cref="CompRevStorageElement"/> elements.
+/// The following chunks in the chain have just an integer as header (giving the next chunk in the chain) and can
+/// store <see cref="ComponentTable.CompRevCountInNext"/> number of <see cref="CompRevStorageElement"/> elements.
+/// </p>
+/// <p>
+/// The chain is a circular buffer, location of the first item is given through <see cref="FirstItemIndex"/> 
+/// </p>
+/// 
+/// </remarks>
+internal struct CompRevStorageHeader
 {
+    /// ID of the next chunk in the chain. MUST BE THE FIRST FIELD OF THIS STRUCTURE !
     public int NextChunkId;
+    
+    /// Access control to be thread-safe
     public AccessControlSmall Control;
-    public int Revision;
+    
+    /// Revision of the first item, the revision of the following ones is computed from this revision + the position of the item in the chain
+    public int FirstItemRevision;
+    
+    /// The whole chain is a circular buffer because we remove the oldest revisions and add the new ones in chronological order. This is the index
+    /// of the first item in the chain (e.g. 18 would be 3rd chunk, 2nd entry for 8 entries per chunk)
     public short FirstItemIndex;
+    
+    /// Number of items in the chain
     public short ItemCount;
-    public int ChainLength;
+    
+    /// Total length of the chain
+    public short ChainLength;
+
+    /// Index in the chain of the last committed revision, allows us to detect concurrency conflicts
+    public short LastCommitRevisionIndex;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+    public static (int chunkIndex, int indexInChunk) GetRevisionLocation(int revisionIndex)
+    {
+        if (revisionIndex < ComponentTable.CompRevCountInRoot)
+        {
+            return (0, revisionIndex);
+        }
+        var chunkIndex = Math.DivRem(revisionIndex-ComponentTable.CompRevCountInRoot, ComponentTable.CompRevCountInNext, out var indexInChunk) + 1;
+        return (chunkIndex, indexInChunk);
+    }
 }
 
-[StructLayout(LayoutKind.Sequential, Pack = 4)]
-internal struct RowVersionStorageElement
+/// <summary>
+/// Stores the information of a component revision element
+/// </summary>
+/// <remarks>
+/// This structure is 10 bytes long, so we can store 6 of them in a 64 bytes chunk with a 4 bytes header.
+/// </remarks>
+[PublicAPI]
+[StructLayout(LayoutKind.Sequential, Pack = 2)]
+internal struct CompRevStorageElement
 {
-    public long Tick;
-    public int RowChunkId;
+    private const ushort CompRevTransactionIsolatedFlag = 1;
+    private const ushort CompRevTransactionIsolatedMask = 0xFFFE;
+
+    public int ComponentChunkId;
+    private uint _packedTickHigh;
+    private ushort _packedTickLow;
+
+    public bool IsolationFlag
+    {
+        get
+        {
+            return (_packedTickLow & CompRevTransactionIsolatedFlag) != 0;
+        }
+        set
+        {
+            _packedTickLow = (ushort)((_packedTickLow & CompRevTransactionIsolatedMask) | (value ? CompRevTransactionIsolatedFlag : 0));
+        }
+    }
+
+    public PackedDateTime48 DateTime
+    {
+        get
+        {
+            var packed = (ulong)_packedTickHigh << 16 | (uint)(_packedTickLow & CompRevTransactionIsolatedMask);
+            return new PackedDateTime48((long)packed, true);
+        }
+        set
+        {
+            var ticks = value.PackedTicks;
+            _packedTickHigh = (uint)(ticks >> 16);
+            _packedTickLow = (ushort)((ticks & CompRevTransactionIsolatedMask) | (uint)(_packedTickLow & CompRevTransactionIsolatedFlag));
+        }
+    }
 }
 
 [DebuggerDisplay("Offset: {OffsetToField} Size: {Size}")]
@@ -35,35 +117,37 @@ internal struct IndexedFieldInfo
     public IBTree Index;
 }
 
+[PublicAPI]
 public unsafe class ComponentTable : IDisposable
 {
     private const int ComponentSegmentStartingSize = 4;
     private const int MainIndexSegmentStartingSize = 4;
 
-    internal const int RowVersionCountPerChunk = 8;
-    internal static readonly int RowVersionDataChunkSize = sizeof(RowVersionStorageHeader) + (RowVersionCountPerChunk * sizeof(RowVersionStorageElement));
+    internal const int CompRevChunkSize = 64;
+    internal static readonly int CompRevCountInRoot = (CompRevChunkSize - sizeof(CompRevStorageHeader)) / sizeof(CompRevStorageElement);
+    internal static readonly int CompRevCountInNext = (CompRevChunkSize / sizeof(CompRevStorageElement));
 
     public ChunkBasedSegment ComponentSegment { get; private set; }
-    public ChunkBasedSegment VersionTableSegment { get; private set; }
+    public ChunkBasedSegment CompRevTableSegment { get; private set; }
     public ChunkBasedSegment DefaultIndexSegment { get; private set; }
     public ChunkBasedSegment String64IndexSegment { get; private set; }
     public LongSingleBTree PrimaryKeyIndex { get; private set; }
-    public int ComponentRowSize => _definition.RowSize;
+    public int ComponentStorageSize => Definition.ComponentStorageSize;
+    public DBComponentDefinition Definition { get; private set; }
 
     internal DatabaseEngine DBE { get; private set; }
-    private DBComponentDefinition _definition;
-    internal int RowOverhead => _definition.MultipleIndicesCount * sizeof(int);
-    internal int RowTotalSize => _definition.RowSize + RowOverhead;
+    internal int ComponentOverhead => Definition.MultipleIndicesCount * sizeof(int);
+    internal int ComponentTotalSize => Definition.ComponentStorageTotalSize;
     internal IndexedFieldInfo[] IndexedFieldInfos { get; private set; }
 
     public void Create(DatabaseEngine dbe, DBComponentDefinition definition)
     {
         DBE = dbe;
-        _definition = definition;
+        Definition = definition;
 
         var mmf = DBE.MMF;
-        ComponentSegment    = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, RowTotalSize);
-        VersionTableSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, RowVersionDataChunkSize);
+        ComponentSegment    = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, ComponentTotalSize);
+        CompRevTableSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, CompRevChunkSize);
             
         // This segment will be used for all kind of index types except String64 which needs a dedicated one because its chunk size is different (all others are 64 bytes)
         DefaultIndexSegment  = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(Index64Chunk));
@@ -78,17 +162,20 @@ public unsafe class ComponentTable : IDisposable
     {
         var l = new List<IndexedFieldInfo>();
 
-        var ro = RowOverhead;
+        var ro = ComponentOverhead;
 
-        for (int i = 0, j = 0; i < _definition.MaxFieldId; i++)
+        for (int i = 0, j = 0; i < Definition.MaxFieldId; i++)
         {
-            var f = _definition[i];
-            if (f == null || !f.HasIndex) continue;
+            var f = Definition[i];
+            if (f == null || !f.HasIndex)
+            {
+                continue;
+            }
 
             var fi = new IndexedFieldInfo
             {
-                OffsetToField = ro + f.OffsetInRow, 
-                Size          = f.SizeInRow, 
+                OffsetToField = ro + f.OffsetInComponentStorage, 
+                Size          = f.SizeInComponentStorage, 
                 Index         = CreateIndexForField(f),
             };
             fi.OffsetToIndexElementId = fi.Index.AllowMultiple ? (j++ * sizeof(int)) : 0;
@@ -126,27 +213,9 @@ public unsafe class ComponentTable : IDisposable
 
         String64IndexSegment?.Dispose();
         DefaultIndexSegment.Dispose();
-        VersionTableSegment.Dispose();
+        CompRevTableSegment.Dispose();
         ComponentSegment.Dispose();
 
         ComponentSegment = null;
     }
-
-    /*
-    internal struct SerializationData
-    {
-        public LogicalSegment.SerializationData ComponentSegment;
-        public LogicalSegment.SerializationData VersionTableSegment;
-        public LogicalSegment.SerializationData DefaultIndexSegment;
-        public LogicalSegment.SerializationData String64IndexSegment;
-    }
-    internal SerializationData SerializeSettings() =>
-        new()
-        {
-            ComponentSegment     = ComponentSegment.SerializeSettings(),
-            VersionTableSegment  = VersionTableSegment.SerializeSettings(),
-            DefaultIndexSegment  = DefaultIndexSegment.SerializeSettings(),
-            String64IndexSegment = String64IndexSegment.SerializeSettings()
-        };
-*/
 }

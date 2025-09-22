@@ -1,6 +1,9 @@
 ﻿### YamlMime:ManagedReference
 
 apiRules:
+- exclude:
+    hasAttribute:
+      uid: Typhon.Engine.ExcludeDocFxAttribute
 - include:
     type: Type
 - include:
@@ -9,5 +12,3 @@ apiRules:
     type: Event
 - include:
     type: Property
-- exclude:
-    type: Field

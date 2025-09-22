@@ -31,82 +31,20 @@ public partial class PagedMMF : IDisposable
 
     #region Constants
 
-    internal const int PageHeaderSize = 192;                                    // Base Header + Metadata
-    internal const int PageBaseHeaderSize = 64;
-    internal const int PageMetadataSize = 128;
-    internal const int PageSize = 8192;                                         // Base Header + Metadata + RawData
-    internal const int PageRawDataSize = PageSize - PageHeaderSize;
-    internal const int PageSizePow2 = 13;                                       // 2^( PageSizePow2 = PageSize
-    internal const int DatabaseFormatRevision = 1;
-    internal const ulong MinimumCacheSize = DefaultMemPageCount * PageSize;
-    internal const int WriteCachePageSize = 1024 * 1024;
+    internal const int PageHeaderSize           = 192;                                  // Base Header + Metadata
+    internal const int PageBaseHeaderSize       = 64;
+    internal const int PageMetadataSize         = 128;
+    internal const int PageSize                 = 8192;                                 // Base Header + Metadata + RawData
+    internal const int PageRawDataSize          = PageSize - PageHeaderSize;
+    internal const int PageSizePow2             = 13;                                   // 2^( PageSizePow2 = PageSize
+    internal const int DatabaseFormatRevision   = 1;
+    internal const ulong MinimumCacheSize       = DefaultMemPageCount * PageSize;
+    internal const int WriteCachePageSize       = 1024 * 1024;
 
     #endregion
 
     #region Debug Info
 
-    /// <summary>
-    /// Some real-time metrics.
-    /// </summary>
-    /// <remarks>
-    /// Some fields are documented as "approximately" because they are not updated atomically, so in rare case of read/modify/write by concurrent threads
-    ///  some updates will be missed.
-    /// </remarks>
-    [PublicAPI]
-    internal class Metrics
-    {
-        /// Approximately the number of page requests that successfully hit the cache 
-        public int MemPageCacheHit;
-        
-        /// Approximately the number of page requests that missed the cache and had to be allocated again
-        public int MemPageCacheMiss;
-        
-        /// Approximately the number of pages that were read from disk
-        public int ReadFromDiskCount;
-        
-        /// Approximately the number of pages that were written to disk
-        public int PageWrittenToDiskCount;
-
-        /// Approximately the number of IO write operations executed
-        public int WrittenOperationCount;
-        
-        /// The exact number of Memory Pages that are currently free (and can be used to allocate new file pages).
-        public int FreeMemPageCount;
-        
-        /// 
-        public int TotalMemPageAllocatedCount;
-
-        private readonly PagedMMF _owner;
-
-        [PublicAPI]
-        public struct MemPageExtraInfo
-        {
-            public int FreeMemPageCount         { get; internal set; }
-            public int AllocatingMemPageCount   { get; internal set; }
-            public int IdleMemPageCount         { get; internal set; }
-            public int SharedMemPageCount       { get; internal set; }
-            public int ExclusiveMemPageCount    { get; internal set; }
-            public int IdleAndDirtyMemPageCount { get; internal set; }
-            public int LockedByThreadCount      { get; internal set; }
-            public int PendingIOReadCount       { get; internal set; }
-            public int MinClockSweepCounter     { get; internal set; }
-            public int MaxClockSweepCounter     { get; internal set; }
-            
-            public override string ToString() =>
-                $"Free: {FreeMemPageCount}, Allocating: {AllocatingMemPageCount}, Idle: {IdleMemPageCount}, " +
-                $"Shared: {SharedMemPageCount}, Exclusive: {ExclusiveMemPageCount}, IdleAndDirty: {IdleAndDirtyMemPageCount}, " +
-                $"LockedByThread: {LockedByThreadCount}, PendingIORead: {PendingIOReadCount}, " +
-                $"MinClockSweepCounter: {MinClockSweepCounter}, MaxClockSweepCounter: {MaxClockSweepCounter}";
-        }
-        
-        public Metrics(PagedMMF owner, int freePageCount)
-        {
-            _owner = owner;
-            FreeMemPageCount = freePageCount;
-        }
-
-        public void GetMemPageExtraInfo(out MemPageExtraInfo res) => _owner.GetMemPageExtraInfo(out res);
-    }
 
     private void GetMemPageExtraInfo(out Metrics.MemPageExtraInfo res)
     {
@@ -214,7 +152,7 @@ public partial class PagedMMF : IDisposable
 
     unsafe public PagedMMF(IServiceProvider serviceProvider, PagedMMFOptions options, TimeManager timeManager, ILogger<PagedMMF> logger)
     {
-        if (options.Validate(true, out var errors) == false)
+        if (!options.Validate(true, out var errors))
         {
             throw new ArgumentException("Invalid PagedMMF options", nameof(options), new AggregateException(errors));
         }

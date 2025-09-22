@@ -9,6 +9,8 @@ namespace Typhon.Engine;
 [PublicAPI]
 public class PagedMMFOptions
 {
+    public const int DatabaseNameMaxUtf8Size = 63;
+    
     private string _databaseFileName;
     public string DatabaseName { get; set; } = "TyphonDB";
     public string DatabaseAbsoluteDirectory
@@ -56,9 +58,9 @@ public class PagedMMFOptions
             success = false;
         }
 
-        if (Encoding.UTF8.GetByteCount(DatabaseName) > 63)
+        if (Encoding.UTF8.GetByteCount(DatabaseName) > DatabaseNameMaxUtf8Size)
         {
-            sb.AppendLine($"Database Name '{DatabaseName}' is too long, must not exceed 63 bytes of its UTF8 version.");
+            sb.AppendLine($"Database Name '{DatabaseName}' is too long, must not exceed {DatabaseNameMaxUtf8Size} bytes of its UTF8 version.");
             success = false;
         }
 
