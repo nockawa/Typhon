@@ -3,15 +3,51 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace Typhon.Engine;
+
+[StructLayout(LayoutKind.Sequential)]
+unsafe internal struct RootFileHeader
+{
+    public fixed byte HeaderSignature[32];
+    public int DatabaseFormatRevision;
+    public ulong DatabaseFilesChunkSize;
+    public fixed byte DatabaseName[64];
+    public int OccupancyMapSPI;
+    public int SystemSchemaRevision;
+    public int ComponentTableSPI;
+    public int FieldTableSPI;
+
+    public string HeaderSignatureString
+    {
+        get
+        {
+            fixed (byte* s = HeaderSignature)
+            {
+                return StringExtensions.LoadString(s);
+            }
+        }
+    }
+    public string DatabaseNameString
+    {
+        get
+        {
+            fixed (byte* s = DatabaseName)
+            {
+                return StringExtensions.LoadString(s);
+            }
+        }
+    }
+}
 
 [PublicAPI]
 public class ManagedPagedMMFOptions : PagedMMFOptions
 {
     
-} 
+}
+
 // ============================================================================================================================================================
 // Pages of an empty file
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------

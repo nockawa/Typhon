@@ -13,17 +13,21 @@ using System.Threading;
 namespace Typhon.Engine;
 
 [AttributeUsage(AttributeTargets.Struct)]
+[PublicAPI]
 public sealed class ComponentAttribute : Attribute
 {
     public string Name { get; }
+    public int Revision { get; }
 
-    public ComponentAttribute(string name)
+    public ComponentAttribute(string name, int revision)
     {
         Name = name;
+        Revision = revision;
     }
 }
 
 [AttributeUsage(AttributeTargets.Field)]
+[PublicAPI]
 public sealed class FieldAttribute : Attribute
 {
     public int? FieldId { get; set; }
@@ -31,14 +35,16 @@ public sealed class FieldAttribute : Attribute
 }
 
 [AttributeUsage(AttributeTargets.Field)]
+[PublicAPI]
 public sealed class IndexAttribute : Attribute
 {
     public bool AllowMultiple { get; set; }
 }
 
-[Component(SchemaName)]
+[Component(SchemaName, 1)]
 [StructLayout(LayoutKind.Sequential)]
-public struct FieldRow
+[PublicAPI]
+public struct FieldR1
 {
     public const string SchemaName = "Typhon.Schema.Field";
 
@@ -57,24 +63,29 @@ public struct FieldRow
     public bool IsArray => ArrayLength > 0;
 }
 
-[Component(SchemaName)]
+[Component(SchemaName, 1)]
 [StructLayout(LayoutKind.Sequential)]
-public struct ComponentRow
+[PublicAPI]
+public struct ComponentR1
 {
     public const string SchemaName = "Typhon.Schema.Component";
 
     public String64 Name;
     public String64 POCOType;
-    public int RowSize;
+    public int CompSize;
+    public int CompOverhead;
 
-    public uint TableSPI;
+    public int ComponentSPI;
+    public int VersionSPI;
+    public int DefaultIndexSPI;
+    public int String64IndexSPI;
 
-    public ComponentCollection<FieldRow> Fields;
+    public ComponentCollection<FieldR1> Fields;
 }
 
+[PublicAPI]
 public struct ComponentCollection<T> where T : unmanaged
 {
-
 }
 
 public class DatabaseEngineOptions
@@ -85,7 +96,6 @@ public class DatabaseEngineOptions
 public class DatabaseEngine : IDisposable
 {
     private readonly DatabaseEngineOptions      _options;
-    private readonly ManagedPagedMMF            _mmf;
     private readonly ILogger<DatabaseEngine>    _log;
 
     private ComponentTable _fieldsTable;
@@ -94,46 +104,40 @@ public class DatabaseEngine : IDisposable
     private long _curPrimaryKey;
 
     public DatabaseDefinitions DBD { get; }
-    public ManagedPagedMMF MMF => _mmf;
-    
+    public ManagedPagedMMF MMF { get; }
+
+    internal TransactionChain TransactionChain { get; }
+
     /// <summary>
     /// Create a transaction in order to make Queries and CRUD operation on the database
     /// </summary>
-    /// <param name="exclusiveConcurrency">If <c>true</c> the write accesses on the Components will be exclusive: any updated, deleted Components
-    /// will be locked for the rest of the transaction, preventing other transactions in other threads to modify them as well.
-    /// If <c>false</c> the transaction is running in optimistic concurrency mode, allowing concurrent changes across transactions with possible
-    /// conflicts being resolved during commit time.
-    /// </param>
     /// <returns>The transaction object</returns>
     /// <remarks>
     /// Typhon deals with accesses and changes through transaction only, even for query purpose. When the user creates a transaction, "now" (the
     /// time when the transaction was created) is used as the reference point, every access will be based on the data that existed up to this point.
     /// Every change will be isolated from other transactions until the content is committed.
     /// </remarks>
-    public Transaction NewTransaction(bool exclusiveConcurrency) => new(this, exclusiveConcurrency);
+    public Transaction CreateTransaction() => TransactionChain.CreateTransaction(this);
 
     public DatabaseEngine(DatabaseEngineOptions options, ManagedPagedMMF mmf, ILogger<DatabaseEngine> log)
     {
-        _mmf = mmf;
+        MMF = mmf;
         _log = log;
         _options = options;
+        TransactionChain = new TransactionChain();
 
         DBD = new DatabaseDefinitions();
         ConstructComponentStore();
 
-        _mmf.CreatingEvent += OnCreating;
-        _mmf.LoadingEvent += OnLoading;
+        MMF.CreatingEvent += OnCreating;
+        MMF.LoadingEvent += OnLoading;
     }
 
     private void OnLoading(object sender, EventArgs args)
     {
     }
 
-    unsafe private void OnCreating(object sender, EventArgs args)
-    {
-        // TOFIX
-        // CreateComponentStore(e.Header);
-    }
+    private void OnCreating(object sender, EventArgs args) => CreateSystemSchemaR1();
 
     public bool IsDisposed { get; private set; }
 
@@ -144,11 +148,11 @@ public class DatabaseEngine : IDisposable
             return;
         }
 
-        GC.SuppressFinalize(this);
-        
-        _mmf.Dispose();
+        TransactionChain.Dispose();
+        MMF.Dispose();
 
         IsDisposed = true;
+        GC.SuppressFinalize(this);
     }
     private void ConstructComponentStore()
     {
@@ -158,26 +162,67 @@ public class DatabaseEngine : IDisposable
 
     internal long GetNewPrimaryKey() => Interlocked.Increment(ref _curPrimaryKey);
 
-    private unsafe void CreateComponentStore(RootFileHeader* rootFileHeader)
+    // Create the first revision of the system schema
+    private void CreateSystemSchemaR1()
     {
-        RegisterComponentFromRowAccessor<FieldRow>();
-        RegisterComponentFromRowAccessor<ComponentRow>();
+        const int revision = 1;
+        
+        // Register the system components
+        RegisterComponentFromAccessor<FieldR1>();
+        RegisterComponentFromAccessor<ComponentR1>();
 
-        _fieldsTable = GetComponentTable<FieldRow>();
-        _componentsTable = GetComponentTable<ComponentRow>();
+        // Get their table
+        _fieldsTable = GetComponentTable<FieldR1>();
+        _componentsTable = GetComponentTable<ComponentR1>();
 
-        /*
-        rootFileHeader->DatabaseEngine = SerializeSettings();
-    */
+        MMF.RequestPage(0, true, out var pa);
+        using (pa)
+        {
+            // Save the entry points in the file header
+            var cs = MMF.CreateChangeSet();
+            cs.Add(pa);
+            ref var rootFileHeader = ref pa.PageHeader.Cast<byte, RootFileHeader>()[0];
+
+            rootFileHeader.SystemSchemaRevision = 1;
+            rootFileHeader.FieldTableSPI = _fieldsTable.ComponentSegment.RootPageIndex;
+            rootFileHeader.ComponentTableSPI = _componentsTable.ComponentSegment.RootPageIndex;
+            
+            cs.SaveChanges();
+        }
+        
+        // Now save the system components schema in the database (to load them next time we open the database)
+        SaveInSystemSchema(_fieldsTable);
+        SaveInSystemSchema(_componentsTable);
     }
 
-    public bool RegisterComponentFromRowAccessor<T>() where T : unmanaged
+    private void SaveInSystemSchema(ComponentTable table)
     {
-        var dcd = DBD.CreateFromRowAccessor<T>();
-        if (dcd == null) return false;
+        var definition = table.Definition;
+        using var t = CreateTransaction();
+
+        var comp = new ComponentR1
+        {
+            Name                = (String64)definition.Name, 
+            POCOType            = (String64)definition.POCOType.FullName,
+            CompSize             = definition.ComponentStorageSize,
+            CompOverhead         = definition.ComponentStorageOverhead,
+            ComponentSPI        = table.ComponentSegment.RootPageIndex,
+            VersionSPI          = table.CompRevTableSegment.RootPageIndex,
+            DefaultIndexSPI     = table.DefaultIndexSegment.RootPageIndex,
+            String64IndexSPI    = table.String64IndexSegment.RootPageIndex,
+        };
+    }
+
+    public bool RegisterComponentFromAccessor<T>() where T : unmanaged
+    {
+        var definition = DBD.CreateFromAccessor<T>();
+        if (definition == null)
+        {
+            return false;
+        }
 
         var componentTable = new ComponentTable();
-        componentTable.Create(this, DBD.GetComponent(dcd.Name));
+        componentTable.Create(this, definition);
         _componentTableByType.TryAdd(typeof(T), componentTable);
 
         return true;
@@ -186,19 +231,4 @@ public class DatabaseEngine : IDisposable
     public ComponentTable GetComponentTable<T>() where T : unmanaged => GetComponentTable(typeof(T));
 
     public ComponentTable GetComponentTable(Type type) => _componentTableByType.GetValueOrDefault(type);
-
-    /*
-    internal struct SerializationData
-    {
-        public ComponentTable.SerializationData FieldsTable;
-        public ComponentTable.SerializationData ComponentsTable;
-    }
-
-    internal SerializationData SerializeSettings() =>
-        new()
-        {
-            FieldsTable = _fieldsTable.SerializeSettings(),
-            ComponentsTable = _componentsTable.SerializeSettings()
-        };
-*/
 }

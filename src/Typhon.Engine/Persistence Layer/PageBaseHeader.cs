@@ -4,41 +4,6 @@ using System.Runtime.InteropServices;
 
 namespace Typhon.Engine;
 
-[StructLayout(LayoutKind.Sequential)]
-unsafe internal struct RootFileHeader
-{
-    public fixed byte HeaderSignature[32];
-    public int DatabaseFormatRevision;
-    public ulong DatabaseFilesChunkSize;
-    public fixed byte DatabaseName[64];
-    public int OccupancyMapSPI;
-
-    /*
-    public DatabaseEngine.SerializationData DatabaseEngine;
-    */
-
-    public string HeaderSignatureString
-    {
-        get
-        {
-            fixed (byte* s = HeaderSignature)
-            {
-                return StringExtensions.LoadString(s);
-            }
-        }
-    }
-    public string DatabaseNameString
-    {
-        get
-        {
-            fixed (byte* s = DatabaseName)
-            {
-                return StringExtensions.LoadString(s);
-            }
-        }
-    }
-}
-
 [Flags]
 public enum PageBlockFlags : byte
 {

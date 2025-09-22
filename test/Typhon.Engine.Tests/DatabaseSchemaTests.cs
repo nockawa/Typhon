@@ -45,14 +45,19 @@ public class DatabaseSchemaTests
         _serviceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
     }
 
+    public struct DBObject
+    {
+        
+    }
     [Test]
     public void TestDatabaseSchema()
     {
         var dc = new DatabaseDefinitions();
 
-        dc.CreateFromRowAccessor<FieldRow>();
+        dc.CreateFromAccessor<FieldR1>();
 
-        dc.CreateComponentBuilder("DBObject")
+        dc.CreateComponentBuilder("DBObject", 1)
+            .WithPOCO<DBObject>()
             .WithField(-1, "DBObjectTypeName", FieldType.String64, 0).IsStatic()
             .WithField(0, "ID", FieldType.Long, 0)
             .Build();

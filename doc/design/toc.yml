@@ -5,3 +5,5 @@
   href: datalayers.md
 - name: Data access pattern
   href: dataaccess.md
+- name: Component storage and versioning
+  href: compstorver.md  

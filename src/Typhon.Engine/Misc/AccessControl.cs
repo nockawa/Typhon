@@ -1,5 +1,6 @@
 ﻿// unset
 
+using JetBrains.Annotations;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -10,6 +11,7 @@ namespace Typhon.Engine;
 /// Doesn't allow re-entrant calls, burn CPU cycle on wait, using <see cref="SpinWait"/>
 /// Costs 8 bytes of data.
 /// </summary>
+[PublicAPI]
 [StructLayout(LayoutKind.Sequential)]
 public struct AccessControl
 {

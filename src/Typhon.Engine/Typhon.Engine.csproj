@@ -61,6 +61,9 @@
     <Compile Update="Persistence Layer\ChunkRandomAccessor.cs">
       <DependentUpon>ChunkBasedSegment.cs</DependentUpon>
     </Compile>
+    <Compile Update="Persistence Layer\PagedMMF.Metrics.cs">
+      <DependentUpon>PagedMMF.cs</DependentUpon>
+    </Compile>
   </ItemGroup>
 
 </Project>

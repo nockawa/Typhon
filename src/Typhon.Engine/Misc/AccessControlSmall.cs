@@ -1,5 +1,6 @@
 ﻿// unset
 
+using JetBrains.Annotations;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -11,16 +12,14 @@ namespace Typhon.Engine;
 /// Costs 4 bytes of data.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
+[PublicAPI]
 public struct AccessControlSmall
 {
     // 12bits for reference counter, 20bits for ThreadId
     private const int ThreadIdShift = 12;
     private const int SharedUsedCounterMask = (1 << ThreadIdShift) - 1;
 
-    public void Reset()
-    {
-        _data = 0;
-    }
+    public void Reset() => _data = 0;
 
     private volatile int _data;
 
@@ -60,6 +59,30 @@ public struct AccessControlSmall
 
     public void ExitSharedAccess() => Interlocked.Decrement(ref _data);
 
+    public void Enter(bool exclusive)
+    {
+        if (exclusive)
+        {
+            EnterExclusiveAccess();
+        }
+        else
+        {
+            EnterSharedAccess();
+        }
+    }
+    
+    public void Exit(bool exclusive)
+    {
+        if (exclusive)
+        {
+            ExitExclusiveAccess();
+        }
+        else
+        {
+            ExitSharedAccess();
+        }
+    }
+    
     public void EnterExclusiveAccess()
     {
         var ct = System.Environment.CurrentManagedThreadId << ThreadIdShift;
