@@ -1,40 +1,8 @@
-﻿using System;
+﻿using JetBrains.Annotations;
+using System;
 using System.Runtime.InteropServices;
 
 namespace Typhon.Engine;
-
-[StructLayout(LayoutKind.Sequential)]
-unsafe internal struct RootFileHeader
-{
-    public fixed byte HeaderSignature[32];
-    public int DatabaseFormatRevision;
-    public ulong DatabaseFilesChunkSize;
-    public fixed byte DatabaseName[64];
-    public uint OccupancyMapSPI;
-
-    public DatabaseEngine.SerializationData DatabaseEngine;
-
-    public string HeaderSignatureString
-    {
-        get
-        {
-            fixed (byte* s = HeaderSignature)
-            {
-                return StringExtensions.LoadString(s);
-            }
-        }
-    }
-    public string DatabaseNameString
-    {
-        get
-        {
-            fixed (byte* s = DatabaseName)
-            {
-                return StringExtensions.LoadString(s);
-            }
-        }
-    }
-}
 
 [Flags]
 public enum PageBlockFlags : byte
@@ -51,9 +19,13 @@ public enum PageBlockType : byte
     OccupancyMap,
 }
 
-[StructLayout(LayoutKind.Sequential)]
+[PublicAPI]
+[StructLayout(LayoutKind.Sequential, Pack = 4)]
 public struct PageBaseHeader
 {
+    public static readonly int Offset = 0;
+    unsafe public static readonly int Size = sizeof(PageBaseHeader);
+    
     /// <summary>
     /// Combination of one to many flags
     /// </summary>
@@ -67,15 +39,7 @@ public struct PageBaseHeader
     /// </summary>
     public short FormatRevision;
     /// <summary>
-    /// If the Page Block is a Logical Segment, will store the index to the next block storing Map Data, 0 if there's none.
-    /// </summary>
-    public uint LogicalSegmentNextMapPBID;
-    /// <summary>
     /// The Change Revision is incremented every time the Page is written to disk.
     /// </summary>
-    public long ChangeRevision;
-    /// <summary>
-    /// If the Page Block is a Logical Segment, will store the index to the next block storing Raw Data, 0 if there's none.
-    /// </summary>
-    public uint LogicalSegmentNextRawDataPBID;
+    public int ChangeRevision;
 }

@@ -1,124 +1,160 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using JetBrains.Annotations;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using System;
-using System.Collections.Generic;
 
 namespace Typhon.Engine;
 
-public static class TyphonBuilderExtensions
+[PublicAPI]
+public static class ServiceCollectionExtensions
 {
-    public static ITyphonBuilder AddProvider(this ITyphonBuilder builder, IConfigurationProvider<DatabaseConfiguration> provider) => ((ITyphonBuilderImplementation)builder).ConfigureServices(services => services.AddSingleton(provider));
-    public static ITyphonBuilder ConfigureDatabase(this ITyphonBuilder builder, Action<DatabaseConfiguration> configure) => builder.AddProvider(new DelegateConfigurationProvider<DatabaseConfiguration>(configure));
+    public static IServiceCollection AddPagedMMF(
+        this IServiceCollection services,
+        Action<PagedMMFOptions> configure = null) =>
+        AddPagedMMF<PagedMMF, PagedMMFOptions>(services, ServiceLifetime.Singleton, configure);
 
-    private sealed class DelegateConfigurationProvider<TOptions> : IConfigurationProvider<TOptions>
+    public static IServiceCollection AddScopedPagedMemoryMappedFile(
+        this IServiceCollection services,
+        Action<PagedMMFOptions> configure = null) =>
+        AddPagedMMF<PagedMMF, PagedMMFOptions>(services, ServiceLifetime.Scoped, configure);
+
+    public static IServiceCollection AddTransientPagedMemoryMappedFile(
+        this IServiceCollection services,
+        Action<PagedMMFOptions> configure = null) =>
+        AddPagedMMF<PagedMMF, PagedMMFOptions>(services, ServiceLifetime.Transient, configure);
+
+    public static IServiceCollection AddManagedPagedMMF(
+        this IServiceCollection services,
+        Action<ManagedPagedMMFOptions> configure = null) =>
+        AddPagedMMF<ManagedPagedMMF, ManagedPagedMMFOptions>(services, ServiceLifetime.Singleton, configure);
+
+    public static IServiceCollection AddScopedManagedPagedMemoryMappedFile(
+        this IServiceCollection services,
+        Action<ManagedPagedMMFOptions> configure = null) =>
+        AddPagedMMF<ManagedPagedMMF, ManagedPagedMMFOptions>(services, ServiceLifetime.Scoped, configure);
+
+    public static IServiceCollection AddTransientManagedPagedMemoryMappedFile(
+        this IServiceCollection services,
+        Action<ManagedPagedMMFOptions> configure = null) =>
+        AddPagedMMF<ManagedPagedMMF, ManagedPagedMMFOptions>(services, ServiceLifetime.Transient, configure);
+
+    public static IServiceCollection AddDatabaseEngine(
+        this IServiceCollection services,
+        Action<DatabaseEngineOptions> configure = null) =>
+        AddDatabaseEngine(services, ServiceLifetime.Singleton, configure);
+
+    public static IServiceCollection AddScopedDatabaseEngine(
+        this IServiceCollection services,
+        Action<DatabaseEngineOptions> configure = null) =>
+        AddDatabaseEngine(services, ServiceLifetime.Scoped, configure);
+
+    public static IServiceCollection AddTransientDatabaseEngine(
+        this IServiceCollection services,
+        Action<DatabaseEngineOptions> configure = null) =>
+        AddDatabaseEngine(services, ServiceLifetime.Transient, configure);
+
+    private static IServiceCollection AddPagedMMF<TS, TO>(
+        this IServiceCollection services,
+        ServiceLifetime lifetime,
+        Action<TO> configure = null) where TS : PagedMMF where TO : PagedMMFOptions
     {
-        private readonly Action<TOptions> _configure;
+        services.AddOptions<TO>();
+        services.TryAddSingleton<TimeManager>();
 
-        public DelegateConfigurationProvider(Action<TOptions> configure)
+        var optionsBuilder = services.AddOptions<TO>();
+
+        if (configure != null)
         {
-            _configure = configure;
+            optionsBuilder.Configure(configure);
+
+            optionsBuilder.Validate(options =>
+            {
+                
+                // TODO Add validation logic for PagedMemoryMappedFileOptions
+                return true;
+            });
         }
 
-        public void Configure(TOptions configuration) => _configure(configuration);
-    }
-}
-
-/// <summary>
-/// Holds configuration of the specified type.
-/// </summary>
-/// <typeparam name="TConfiguration">The configuration  type.</typeparam>
-// ReSharper disable once TypeParameterCanBeVariant
-public interface IConfiguration<TConfiguration> where TConfiguration : class, new()
-{
-    /// <summary>
-    /// Gets the configuration value.
-    /// </summary>
-    TConfiguration Value { get; }
-}
-
-/// <inheritdoc />
-internal class ConfigurationHolder<TConfiguration> : IConfiguration<TConfiguration> where TConfiguration : class, new()
-{
-    /// <inheritdoc />
-    public ConfigurationHolder(IEnumerable<IConfigurationProvider<TConfiguration>> providers)
-    {
-        Value = new TConfiguration();
-        foreach (var provider in providers)
+        var serviceDescriptor = lifetime switch
         {
-            provider.Configure(Value);
-        }
-    }
+            ServiceLifetime.Singleton => ServiceDescriptor.Singleton(CreatePagedMemoryMappedFile<TS, TO>),
+            ServiceLifetime.Scoped => ServiceDescriptor.Scoped(CreatePagedMemoryMappedFile<TS, TO>),
+            ServiceLifetime.Transient => ServiceDescriptor.Transient(CreatePagedMemoryMappedFile<TS, TO>),
+            _ => throw new ArgumentOutOfRangeException(nameof(lifetime), lifetime, "Invalid service lifetime specified.")
+        };
 
-    /// <inheritdoc />
-    public TConfiguration Value { get; }
-}
-
-public interface ITyphonBuilder
-{
-
-}
-
-public interface ITyphonBuilderImplementation : ITyphonBuilder
-{
-    ITyphonBuilderImplementation ConfigureServices(Action<IServiceCollection> configureDelegate);
-}
-
-public static class ServiceProviderExtensions
-{
-    public static IServiceCollection AddTyphon(this IServiceCollection services, Action<ITyphonBuilder> configure = null)
-    {
-        // Only add the services once.
-        var context = GetFromServices<TyphonConfigurationContext>(services);
-        if (context is null)
-        {
-            context = new TyphonConfigurationContext(services);
-            services.Add(context.CreateServiceDescriptor());
-
-            services.AddSingleton<IConfigurationProvider<DatabaseConfiguration>, DefaultDatabaseConfiguration>();
-            services.TryAddSingleton(typeof(IConfiguration<>), typeof(ConfigurationHolder<>));
-            services.AddSingleton<PagedMemoryMappedFile>();
-            services.AddSingleton<LogicalSegmentManager>();
-            services.AddSingleton<TimeManager>();
-            services.TryAddSingleton<DatabaseEngine>();
-        }
-
-        configure?.Invoke(context.Builder);
-
+        services.Add(serviceDescriptor);
         return services;
     }
 
-    private static T GetFromServices<T>(IServiceCollection services)
+    private static TS CreatePagedMemoryMappedFile<TS, TO>(IServiceProvider serviceProvider) where TS : PagedMMF where TO : PagedMMFOptions
     {
-        foreach (var service in services)
+        try
         {
-            if (service.ServiceType == typeof(T))
+            var options = serviceProvider.GetRequiredService<IOptions<TO>>();
+            var timeManager = serviceProvider.GetRequiredService<TimeManager>();
+            var logger = serviceProvider.GetRequiredService<ILogger<TS>>();
+            
+            return (TS)Activator.CreateInstance(typeof(TS), serviceProvider, options.Value, timeManager, logger);
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine(e);
+            throw;
+        }
+    }
+
+    private static IServiceCollection AddDatabaseEngine(IServiceCollection services, ServiceLifetime lifetime, Action<DatabaseEngineOptions> configure)
+    {
+        var optionsBuilder = services.AddOptions<DatabaseEngineOptions>();
+
+        if (configure != null)
+        {
+            optionsBuilder.Configure(configure);
+
+            optionsBuilder.Validate(options =>
             {
-                return (T)service.ImplementationInstance;
-            }
+                
+                // TODO Add validation logic for PagedMemoryMappedFileOptions
+                return true;
+            });
         }
 
-        return default;
-    }
-
-    private sealed class TyphonConfigurationContext
-    {
-        public TyphonConfigurationContext(IServiceCollection services) => Builder = new TyphonBuilder(services);
-
-        public ServiceDescriptor CreateServiceDescriptor() => new ServiceDescriptor(typeof(TyphonConfigurationContext), this);
-
-        public ITyphonBuilder Builder { get; }
-    }
-
-    private class TyphonBuilder : ITyphonBuilderImplementation
-    {
-        private readonly IServiceCollection _services;
-
-        public TyphonBuilder(IServiceCollection services) => _services = services;
-
-        public ITyphonBuilderImplementation ConfigureServices(Action<IServiceCollection> configureDelegate)
+        var serviceDescriptor = lifetime switch
         {
-            configureDelegate(_services);
-            return this;
+            ServiceLifetime.Singleton => ServiceDescriptor.Singleton(CreateDatabaseEngine),
+            ServiceLifetime.Scoped => ServiceDescriptor.Scoped(CreateDatabaseEngine),
+            ServiceLifetime.Transient => ServiceDescriptor.Transient(CreateDatabaseEngine),
+            _ => throw new ArgumentOutOfRangeException(nameof(lifetime), lifetime, "Invalid service lifetime specified.")
+        };
+
+        services.Add(serviceDescriptor);
+        return services;
+    }
+
+    private static DatabaseEngine CreateDatabaseEngine(IServiceProvider serviceProvider)
+    {
+        try
+        {
+            var options = serviceProvider.GetRequiredService<IOptions<DatabaseEngineOptions>>();
+            var mpmmf = serviceProvider.GetRequiredService<ManagedPagedMMF>();
+            var logger = serviceProvider.GetRequiredService<ILogger<DatabaseEngine>>();
+
+            return new DatabaseEngine(options.Value, mpmmf, logger);
         }
+        catch (Exception e)
+        {
+            Console.WriteLine(e);
+            throw;
+        }
+    }
+    
+    internal static void EnsureFileDeleted<TO>(this IServiceProvider provider) where TO : PagedMMFOptions
+    {
+        using var scope = provider.CreateScope();
+        var options = scope.ServiceProvider.GetRequiredService<IOptions<TO>>().Value;
+        options.EnsureFileDeleted();
     }
 }

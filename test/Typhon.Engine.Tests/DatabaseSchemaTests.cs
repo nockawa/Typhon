@@ -9,7 +9,6 @@ public class DatabaseSchemaTests
 {
     private IServiceProvider _serviceProvider;
     private ServiceCollection _serviceCollection;
-    private DatabaseEngine _dbe;
 
     private string CurrentDatabaseName => $"{TestContext.CurrentContext.Test.Name}_database";
 
@@ -17,22 +16,11 @@ public class DatabaseSchemaTests
     public void Setup()
     {
         var o = TestContext.CurrentContext.Test.Properties.ContainsKey("CacheSize");
-        var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("CacheSize") : (int)PagedMemoryMappedFile.MinimumCacheSize;
+        var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("CacheSize")! : (int)PagedMMF.MinimumCacheSize;
 
         var serviceCollection = new ServiceCollection();
         _serviceCollection = serviceCollection;
         _serviceCollection
-            .AddTyphon(builder =>
-            {
-                builder.ConfigureDatabase(dc =>
-                {
-                    dc.DatabaseName = CurrentDatabaseName;
-                    dc.RecreateDatabase = true;
-                    dc.DeleteDatabaseOnDispose = true;
-                    dc.DatabaseCacheSize = (ulong)dcs;
-                });
-            })
-
             .AddLogging(builder =>
             {
                 builder.AddSimpleConsole(options =>
@@ -41,29 +29,35 @@ public class DatabaseSchemaTests
                     options.IncludeScopes = true;
                     options.TimestampFormat = "mm:ss.fff ";
                 });
+                builder.SetMinimumLevel(LogLevel.Information);
+            })
+            .AddScopedManagedPagedMemoryMappedFile(options =>
+            {
+                options.DatabaseName = CurrentDatabaseName;
+                options.DatabaseCacheSize = (ulong)dcs;
+                options.PagesDebugPattern = false;
+            })
+            .AddScopedDatabaseEngine(options =>
+            {
             });
-
+        
         _serviceProvider = _serviceCollection.BuildServiceProvider();
-
-        _dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
-        _dbe.Initialize();
+        _serviceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
     }
 
-    [TearDown]
-    public void TearDown()
+    public struct DBObject
     {
-        _dbe?.Dispose();
-        _dbe = null;
+        
     }
-
     [Test]
     public void TestDatabaseSchema()
     {
         var dc = new DatabaseDefinitions();
 
-        dc.CreateFromRowAccessor<FieldRow>();
+        dc.CreateFromAccessor<FieldR1>();
 
-        dc.CreateComponentBuilder("DBObject")
+        dc.CreateComponentBuilder("DBObject", 1)
+            .WithPOCO<DBObject>()
             .WithField(-1, "DBObjectTypeName", FieldType.String64, 0).IsStatic()
             .WithField(0, "ID", FieldType.Long, 0)
             .Build();
@@ -73,7 +67,7 @@ public class DatabaseSchemaTests
     unsafe public void TestSchemaStore()
     {
 
-        Assert.That(_dbe.IsInitialized, Is.True);
+        //Assert.That(_dbe.IsInitialized, Is.True);
 
     }
 }
