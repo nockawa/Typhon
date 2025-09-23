@@ -1,17 +1,11 @@
-﻿using BenchmarkDotNet.Configs;
-using BenchmarkDotNet.Running;
+﻿using BenchmarkDotNet.Running;
 using Microsoft.Win32.SafeHandles;
 using System;
-using System.Collections;
-using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
-using System.Threading;
 using System.Threading.Tasks;
+using Typhon.Engine.Tests;
 
 namespace Typhon.Benchmark;
 
@@ -23,8 +17,8 @@ class Program
     {
         return RandomAccess.WriteAsync(handle, data, offset);
     }
-    
-    public static void CombineBenchmarkResults(
+
+    private static void CombineBenchmarkResults(
         string resultsDir = "./BenchmarkDotNet.Artifacts/results",
         string resultsFile = "Combined.Benchmarks",
         string searchPattern = "*full.json")
@@ -70,18 +64,16 @@ class Program
     
     static void Main(string[] args)
     {
-        var summary = BenchmarkRunner.Run<PagedVirtualMemoryFile_RandomAccess>();
-        BenchmarkRunner.Run<FibTest>();
-
+        /*
+        var summary = BenchmarkRunner.Run<PagedMemoryFileBenchmarks>();
         var path = summary.ResultsDirectoryPath;
         CombineBenchmarkResults(path);
+        */
         
-        /*
-        var pvmmft = new PagedVirtualMemoryFile_RandomAccess();
+        var pvmmft = new PagedMemoryFileBenchmarks();
         pvmmft.GlobalSetup();
         pvmmft.TestRandomAccess();
         pvmmft.GlobalCleanup();
-        */
 
         /*
         {

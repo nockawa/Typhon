@@ -1,4 +1,7 @@
-# This is the **HOMEPAGE**.
-Refer to [Markdown](http://daringfireball.net/projects/markdown/) for how to write markdown files.
-## Quick Start Notes:
-1. Add images to the *images* folder if the file is referencing an image.
+# 🐍 Typhon documentation 🐍 
+
+(Please refer to the main sections on the top of this page for further info.)
+
+The GitHub repository can be found [here](https://github.com/nockawa/Typhon).
+
+Your entry point will be the [overview](overview/index.md).

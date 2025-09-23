@@ -31,24 +31,25 @@ public class VariableSizedBufferSegment<T> where T : unmanaged
     internal readonly int ElementCountRootChunk;
     internal readonly int ElementCountPerChunk;
 
-    protected ChunkRandomAccessor ChunkAccessor;
-    protected internal ChunkBasedSegment Segment => ChunkAccessor.Segment;
+    // protected ChunkRandomAccessor ChunkAccessor;
+    protected internal ChunkBasedSegment Segment;
 
-    unsafe public VariableSizedBufferSegment(ChunkBasedSegment segment, ChunkRandomAccessor accessor = null)
+    unsafe public VariableSizedBufferSegment(ChunkBasedSegment segment)
     {
         ElementSize = sizeof(T);
         var stride = segment.Stride;
         ElementCountRootChunk = (stride - sizeof(VariableSizedBufferRootHeader)) / ElementSize;
         ElementCountPerChunk = (stride - sizeof(VariableSizedBufferChunkHeader)) / ElementSize;
-        ChunkAccessor = accessor ?? segment.CreateChunkRandomAccessor(4);
+        Segment = segment;
+        // ChunkAccessor = accessor ?? segment.CreateChunkRandomAccessor(4);
     }
 
-    unsafe public int AllocateBuffer()
+    unsafe public int AllocateBuffer(ChunkRandomAccessor accessor)
     {
         // Allocate and initialize the first chunk of the Buffer
-        var segment = Segment;
+        var segment = accessor.Segment;
         var chunkId = segment.AllocateChunk(false);
-        ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(ChunkAccessor.GetChunkAddress(chunkId, dirtyPage: true));
+        ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(accessor.GetChunkAddress(chunkId, dirtyPage: true));
         rh.Lock.Reset();
         rh.FirstFreeChunkId = 0;
         rh.FirstStoredChunkId = chunkId;
@@ -59,10 +60,10 @@ public class VariableSizedBufferSegment<T> where T : unmanaged
         return chunkId;
     }
 
-    unsafe public void DeleteBuffer(int bufferId)
+    unsafe public void DeleteBuffer(int bufferId, ChunkRandomAccessor accessor)
     {
         // Fetch the root chunk, pin it to prevent its page to be discarded by subsequent chunk accesses
-        ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(ChunkAccessor.GetChunkAddress(bufferId, true, true));
+        ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(accessor.GetChunkAddress(bufferId, true, true));
         try
         {
             // Lock the whole buffer as we are going to update it
@@ -73,7 +74,7 @@ public class VariableSizedBufferSegment<T> where T : unmanaged
 
             while (curChunkId != 0)
             {
-                var curChunkAddr = ChunkAccessor.GetChunkAddress(curChunkId, dirtyPage: true);
+                var curChunkAddr = accessor.GetChunkAddress(curChunkId, dirtyPage: true);
                 ref var curChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(curChunkAddr);
 
                 var toDeleteChunkId = curChunkId;
@@ -81,22 +82,22 @@ public class VariableSizedBufferSegment<T> where T : unmanaged
 
                 if (toDeleteChunkId != bufferId)
                 {
-                    Segment.FreeChunk(toDeleteChunkId);
+                    accessor.Segment.FreeChunk(toDeleteChunkId);
                 }
             }
         }
         finally
         {
             ReleaseLockOnBuffer(ref rh);
-            Segment.FreeChunk(bufferId);
-            ChunkAccessor.UnpinChunk(bufferId);
+            accessor.Segment.FreeChunk(bufferId);
+            accessor.UnpinChunk(bufferId);
         }
     }
 
-    unsafe public int AddElement(int bufferId, T value)
+    unsafe public int AddElement(int bufferId, T value, ChunkRandomAccessor accessor)
     {
         // Fetch the root chunk, pin it to prevent its page to be discarded by subsequent chunk accesses
-        ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(ChunkAccessor.GetChunkAddress(bufferId, true, true));
+        ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(accessor.GetChunkAddress(bufferId, true, true));
         try
         {
             // Lock the whole buffer as we are going to update it
@@ -105,7 +106,7 @@ public class VariableSizedBufferSegment<T> where T : unmanaged
             // Get the first chunk containing free space
             int curChunkId = rh.FirstStoredChunkId;
 
-            var curChunkAddr = ChunkAccessor.GetChunkAddress(curChunkId);
+            var curChunkAddr = accessor.GetChunkAddress(curChunkId);
             ref var curChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(curChunkAddr);
                 
             var isRoot = bufferId == curChunkId;
@@ -125,11 +126,11 @@ public class VariableSizedBufferSegment<T> where T : unmanaged
                 }
                 else
                 {
-                    curChunkId = Segment.AllocateChunk(false);
+                    curChunkId = accessor.Segment.AllocateChunk(false);
                 }
 
                 // Fetch the new chunk
-                curChunkAddr = ChunkAccessor.GetChunkAddress(curChunkId, dirtyPage: true);
+                curChunkAddr = accessor.GetChunkAddress(curChunkId, dirtyPage: true);
                 curChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(curChunkAddr);
 
                 // If we've allocated a new chunk, initialize it
@@ -162,21 +163,21 @@ public class VariableSizedBufferSegment<T> where T : unmanaged
         finally
         {
             ReleaseLockOnBuffer(ref rh);
-            ChunkAccessor.UnpinChunk(bufferId);
+            accessor.UnpinChunk(bufferId);
         }
     }
 
-    unsafe public int DeleteElement(int bufferId, int elementId, T element)
+    unsafe public int DeleteElement(int bufferId, int elementId, T element, ChunkRandomAccessor accessor)
     {
         // Fetch the chunk, pin it to prevent its page to be discarded by subsequent chunk accesses
-        ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(ChunkAccessor.GetChunkAddress(bufferId, true, true));
+        ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(accessor.GetChunkAddress(bufferId, true, true));
         try
         {
             // Lock the whole buffer as we are going to update it
             LockBuffer(ref rh);
 
             // Fetch the chunk storing the element
-            var elementChunk = ChunkAccessor.GetChunkAddress(elementId, dirtyPage: true);
+            var elementChunk = accessor.GetChunkAddress(elementId, dirtyPage: true);
             ref var elementChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(elementChunk);
             var isRoot = bufferId == elementId;
             var baseElementAddr = (T*)(elementChunk + (isRoot ? sizeof(VariableSizedBufferRootHeader) : sizeof(VariableSizedBufferChunkHeader)));
@@ -207,11 +208,11 @@ public class VariableSizedBufferSegment<T> where T : unmanaged
         finally
         {
             ReleaseLockOnBuffer(ref rh);
-            ChunkAccessor.UnpinChunk(bufferId);
+            accessor.UnpinChunk(bufferId);
         }
     }
 
-    public VariableSizedBufferAccessor<T> GetReadOnlyAccessor(int bufferId) => new(this, bufferId);
+    public VariableSizedBufferAccessor<T> GetReadOnlyAccessor(int bufferId, ChangeSet changeSet) => new(this, bufferId, changeSet);
 
     private void LockBuffer(ref VariableSizedBufferRootHeader rh) => rh.Lock.EnterExclusiveAccess();
 
@@ -257,13 +258,13 @@ public struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanaged
     public unsafe Span<T> Elements => new(_elementAddr, _elementCount);
     public void DirtyChunk() => _accessor.DirtyChunk(_curChunkId);
 
-    unsafe public VariableSizedBufferAccessor(VariableSizedBufferSegment<T> owner, int rootChunkId)
+    unsafe public VariableSizedBufferAccessor(VariableSizedBufferSegment<T> owner, int rootChunkId, ChangeSet changeSet = null)
     {
         _owner = owner;
         _segment = owner.Segment;
         _rootChunkId = rootChunkId;
 
-        _accessor = ChunkRandomAccessor.GetFromPool(_segment, 8);
+        _accessor = ChunkRandomAccessor.GetFromPool(_segment, 8, changeSet);
 
         _rootChunkAddr = _accessor.GetChunkAddress(_rootChunkId);
         ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(_rootChunkAddr);

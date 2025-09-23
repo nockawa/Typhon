@@ -6,5 +6,6 @@
 /**/packages/
 /**/bin/
 /**/obj/
-_site
+api
+live
 log.txt

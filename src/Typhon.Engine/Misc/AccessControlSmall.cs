@@ -1,5 +1,6 @@
 ﻿// unset
 
+using JetBrains.Annotations;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -11,20 +12,18 @@ namespace Typhon.Engine;
 /// Costs 4 bytes of data.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
+[PublicAPI]
 public struct AccessControlSmall
 {
     // 12bits for reference counter, 20bits for ThreadId
     private const int ThreadIdShift = 12;
     private const int SharedUsedCounterMask = (1 << ThreadIdShift) - 1;
 
-    public void Reset()
-    {
-        _data = 0;
-    }
+    public void Reset() => _data = 0;
 
     private volatile int _data;
 
-    public bool IsLockedByCurrentThread => Thread.CurrentThread.ManagedThreadId == LockedByThreadId;
+    public bool IsLockedByCurrentThread => System.Environment.CurrentManagedThreadId == LockedByThreadId;
 
     public int LockedByThreadId => _data >> ThreadIdShift;
     public int SharedUsedCounter => _data & SharedUsedCounterMask;
@@ -60,9 +59,33 @@ public struct AccessControlSmall
 
     public void ExitSharedAccess() => Interlocked.Decrement(ref _data);
 
+    public void Enter(bool exclusive)
+    {
+        if (exclusive)
+        {
+            EnterExclusiveAccess();
+        }
+        else
+        {
+            EnterSharedAccess();
+        }
+    }
+    
+    public void Exit(bool exclusive)
+    {
+        if (exclusive)
+        {
+            ExitExclusiveAccess();
+        }
+        else
+        {
+            ExitSharedAccess();
+        }
+    }
+    
     public void EnterExclusiveAccess()
     {
-        var ct = Thread.CurrentThread.ManagedThreadId << ThreadIdShift;
+        var ct = System.Environment.CurrentManagedThreadId << ThreadIdShift;
 
         // Fast path: exclusive lock works immediately
         var suc = SharedUsedCounter;
@@ -110,7 +133,7 @@ public struct AccessControlSmall
 
     public bool TryPromoteToExclusiveAccess()
     {
-        var ct = Thread.CurrentThread.ManagedThreadId << ThreadIdShift;
+        var ct = System.Environment.CurrentManagedThreadId << ThreadIdShift;
 
         // We can enter only if we are the only user (counter == 1)
         if (SharedUsedCounter != 1)

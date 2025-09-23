@@ -1,5 +1,6 @@
 ﻿// unset
 
+using JetBrains.Annotations;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -10,6 +11,7 @@ namespace Typhon.Engine;
 /// Doesn't allow re-entrant calls, burn CPU cycle on wait, using <see cref="SpinWait"/>
 /// Costs 8 bytes of data.
 /// </summary>
+[PublicAPI]
 [StructLayout(LayoutKind.Sequential)]
 public struct AccessControl
 {
@@ -58,7 +60,7 @@ public struct AccessControl
 
     public void EnterExclusiveAccess()
     {
-        var ct = Thread.CurrentThread.ManagedThreadId;
+        var ct = System.Environment.CurrentManagedThreadId;
 
         // Fast path: exclusive lock works immediately
         if (Interlocked.CompareExchange(ref _lockedByThreadId, ct, 0) == 0)
@@ -101,9 +103,30 @@ public struct AccessControl
         }
     }
 
+    public bool TryEnterExclusiveAccess()
+    {
+        var ct = System.Environment.CurrentManagedThreadId;
+
+        // Fast path: exclusive lock works immediately
+        if (Interlocked.CompareExchange(ref _lockedByThreadId, ct, 0) == 0)
+        {
+            // No shared use: we're good to go
+            if (_sharedUsedCounter == 0)
+            {
+                return true;
+            }
+            else
+            {
+                _lockedByThreadId = 0;
+            }
+        }
+
+        return false;
+    }
+
     public bool TryPromoteToExclusiveAccess()
     {
-        var ct = Thread.CurrentThread.ManagedThreadId;
+        var ct = System.Environment.CurrentManagedThreadId;
 
         // We can enter only if we are the only user (_sharedUsedCounter == 1)
         if (_sharedUsedCounter != 1)
