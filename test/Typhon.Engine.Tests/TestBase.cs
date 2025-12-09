@@ -146,7 +146,7 @@ public abstract class TestBase{
             }
         }
     }    
-    protected static void RegisterComponents(DatabaseEngine dbe)
+    protected virtual void RegisterComponents(DatabaseEngine dbe)
     {
         dbe.RegisterComponentFromAccessor<CompA>();
         dbe.RegisterComponentFromAccessor<CompB>();
