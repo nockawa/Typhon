@@ -118,6 +118,14 @@ internal struct IndexedFieldInfo
 }
 
 [PublicAPI]
+[Flags]
+public enum ComponentTableFlags
+{
+    None                = 0x00,
+    HasCollections      = 0x01
+}
+
+[PublicAPI]
 public unsafe class ComponentTable : IDisposable
 {
     private const int ComponentSegmentStartingSize = 4;
@@ -135,11 +143,17 @@ public unsafe class ComponentTable : IDisposable
     public int ComponentStorageSize => Definition.ComponentStorageSize;
     public DBComponentDefinition Definition { get; private set; }
 
+    public ComponentTableFlags Flags => _flags;
+    public bool HasCollections => (_flags & ComponentTableFlags.HasCollections) != 0;
+    
     internal DatabaseEngine DBE { get; private set; }
     internal int ComponentOverhead => Definition.MultipleIndicesCount * sizeof(int);
     internal int ComponentTotalSize => Definition.ComponentStorageTotalSize;
     internal IndexedFieldInfo[] IndexedFieldInfos { get; private set; }
+    internal Dictionary<int, (VariableSizedBufferSegmentBase, ChunkRandomAccessor)> ComponentCollectionVSBSByOffset { get; private set; }
 
+    private ComponentTableFlags _flags;
+    
     public void Create(DatabaseEngine dbe, DBComponentDefinition definition)
     {
         DBE = dbe;
@@ -156,6 +170,7 @@ public unsafe class ComponentTable : IDisposable
         PrimaryKeyIndex = new LongSingleBTree(DefaultIndexSegment, ChunkRandomAccessor.GetFromPool(DefaultIndexSegment, 8));
 
         BuildIndexedFieldInfo();
+        BuildComponentCollectionInfo();
     }
 
     private void BuildIndexedFieldInfo()
@@ -183,6 +198,22 @@ public unsafe class ComponentTable : IDisposable
         }
 
         IndexedFieldInfos = l.ToArray();
+    }
+
+    private void BuildComponentCollectionInfo()
+    {
+        ComponentCollectionVSBSByOffset = new Dictionary<int, (VariableSizedBufferSegmentBase, ChunkRandomAccessor)>();
+        foreach (var field in Definition.FieldsByName.Values)
+        {
+            if (field.Type != FieldType.Collection)
+            {
+                continue;
+            }
+
+            var vsbs = DBE.GetComponentCollectionVSBS(field.DotNetUnderlyingType);
+            ComponentCollectionVSBSByOffset.Add(field.OffsetInComponentStorage, (vsbs, vsbs.Segment.CreateChunkRandomAccessor(8)));
+            _flags |= ComponentTableFlags.HasCollections;
+        }
     }
 
     private IBTree CreateIndexForField(DBComponentDefinition.Field field)

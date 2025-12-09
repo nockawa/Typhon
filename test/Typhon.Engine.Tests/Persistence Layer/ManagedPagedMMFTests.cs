@@ -353,7 +353,6 @@ public class ManagedPagedMMFTests
 
         var vsb = new VariableSizedBufferSegment<long>(s);
 
-
         var id0 = vsb.AllocateBuffer(accessor);
 
         for (int i = 0; i < itemCount; i++)
@@ -362,7 +361,7 @@ public class ManagedPagedMMFTests
         }
 
         var loopCount = 0;
-        var ba = vsb.GetReadOnlyAccessor(id0, accessor.ChangeSet);
+        var ba = vsb.GetReadOnlyAccessor(id0);
         do
         {
             var elements = ba.ReadOnlyElements;
@@ -376,6 +375,105 @@ public class ManagedPagedMMFTests
         Assert.That(loopCount, Is.EqualTo(itemCount));
     }
 
+    [Test]
+    public void VariableSizedBuffer_CloneBuffer([Values(1, 34, 67, 129)] int seeds)
+    {
+        var rand = new Random(seeds);
+        const int itemCount = 1024;
+
+        // Services
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var s = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 64);
+        using var accessor = s.CreateChunkRandomAccessor(8);
+
+        // VSBS
+        var vsb = new VariableSizedBufferSegment<int>(s);
+
+        // Buffer
+        var id0 = vsb.AllocateBuffer(accessor);
+
+        // Add the items, record their location and value
+        var ids = new List<(int, int)>(itemCount);
+        var co = 0;
+        for (int i = 0; i < itemCount; i++)
+        {
+            co++;
+            var value = rand.Next();
+            ids.Add((vsb.AddElement(id0, value, accessor), value));
+        }
+
+        // Delete 1/16 of the items to create fragmentation
+        const int deleteCount = itemCount >> 4;
+        for (int i = 0; i < deleteCount; i++)
+        {
+            var itemIndex = rand.Next(0, itemCount - i);
+            var record = ids[itemIndex];
+            ids.RemoveAt(itemIndex);
+            vsb.DeleteElement(id0, record.Item1, record.Item2, accessor);
+        }
+        
+        // Clone the buffer
+        var id1 = vsb.CloneBuffer(id0, accessor);
+        
+        var hashset = new HashSet<int>();
+        hashset.EnsureCapacity(itemCount);
+        hashset.UnionWith(ids.Select(item => item.Item2));
+        
+        var loopCount = 0;
+        var ba = vsb.GetReadOnlyAccessor(id1);
+        do
+        {
+            var elements = ba.ReadOnlyElements;
+            var c = elements.Length;
+            for (int i = 0; i < c; i++)
+            {
+                Assert.That(hashset.Contains(elements[i]), Is.True);
+                ++loopCount;
+            }
+        } while (ba.NextChunk());
+        Assert.That(loopCount, Is.EqualTo(itemCount - deleteCount));
+    }
+    
+    [Test]
+    public void VariableSizedBufferSegmentDeleteTest()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var s = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 64);
+        using var accessor = s.CreateChunkRandomAccessor(8);
+
+        var vsb = new VariableSizedBufferSegment<long>(s);
+
+        var id0 = vsb.AllocateBuffer(accessor);
+        var elIdList = new int[15];
+
+        // 15 is spread into 3 chunks: 4, 7, 4
+        for (int i = 0; i < 15; i++)
+        {
+            elIdList[i] = vsb.AddElement(id0, i, accessor);
+        }
+
+        // Delete all the elements of the second chunk
+        for (int i = 4; i < 11; i++)
+        {
+            Assert.That(vsb.DeleteElement(id0, elIdList[i], i, accessor), Is.Not.EqualTo(-1));
+        }
+
+        // Trigger an enumeration that will remove the second chunk from the stored list and put it in the free list
+        {
+            int count = 0;
+            int hops = 0;
+            using var ba = vsb.GetReadOnlyAccessor(id0);
+            do
+            {
+                count += ba.ReadOnlyElements.Length;
+                ++hops;
+            } while (ba.NextChunk());
+
+            Assert.That(count, Is.EqualTo(8));
+            Assert.That(hops, Is.EqualTo(2));
+        }
+    }
+    
     private const string Muse =
         @"Home, It's becoming a killing field
 There's a cross hair locked on my heart
@@ -429,48 +527,6 @@ Here come the drones!";
         Assert.That(ns, Is.EqualTo(Muse));
 
         st.DeleteString(id);
-    }
-
-
-    [Test]
-    public void VariableSizedBufferSegmentDeleteTest()
-    {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var s = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 64);
-        using var accessor = s.CreateChunkRandomAccessor(8);
-
-        var vsb = new VariableSizedBufferSegment<long>(s);
-
-
-        var id0 = vsb.AllocateBuffer(accessor);
-        var elIdList = new int[15];
-
-        // 15 is spread into 3 chunks: 4, 7, 4
-        for (int i = 0; i < 15; i++)
-        {
-            elIdList[i] = vsb.AddElement(id0, i, accessor);
-        }
-
-        // Delete all the elements of the second chunk
-        for (int i = 4; i < 11; i++)
-        {
-            Assert.That(vsb.DeleteElement(id0, elIdList[i], i, accessor), Is.Not.EqualTo(-1));
-        }
-
-        // Trigger an enumeration that will remove the second chunk from the stored list and put it in the free list
-        {
-            int count = 0;
-            int hops = 0;
-            using var ba = vsb.GetReadOnlyAccessor(id0, accessor.ChangeSet);
-            do
-            {
-                count += ba.ReadOnlyElements.Length;
-                ++hops;
-            } while (ba.NextChunk());
-
-            Assert.That(count, Is.EqualTo(8));
-            Assert.That(hops, Is.EqualTo(2));
-        }
     }
 
     public class LockStore

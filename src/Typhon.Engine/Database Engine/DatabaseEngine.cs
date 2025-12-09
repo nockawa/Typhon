@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -83,11 +84,6 @@ public struct ComponentR1
     public ComponentCollection<FieldR1> Fields;
 }
 
-[PublicAPI]
-public struct ComponentCollection<T> where T : unmanaged
-{
-}
-
 public class DatabaseEngineOptions
 {
 }
@@ -102,6 +98,8 @@ public class DatabaseEngine : IDisposable
     private ComponentTable _componentsTable;
     private ConcurrentDictionary<Type, ComponentTable> _componentTableByType;
     private long _curPrimaryKey;
+    private ConcurrentDictionary<int, ChunkBasedSegment> _componentCollectionSegmentByStride;
+    private ConcurrentDictionary<Type, VariableSizedBufferSegmentBase> _componentCollectionVSBSByType;
 
     public DatabaseDefinitions DBD { get; }
     public ManagedPagedMMF MMF { get; }
@@ -124,6 +122,8 @@ public class DatabaseEngine : IDisposable
         MMF = mmf;
         _log = log;
         _options = options;
+        _componentCollectionSegmentByStride = new ConcurrentDictionary<int, ChunkBasedSegment>();
+        _componentCollectionVSBSByType = new ConcurrentDictionary<Type, VariableSizedBufferSegmentBase>();
         TransactionChain = new TransactionChain();
 
         DBD = new DatabaseDefinitions();
@@ -159,6 +159,41 @@ public class DatabaseEngine : IDisposable
         _componentTableByType = new ConcurrentDictionary<Type, ComponentTable>();
         _curPrimaryKey = 0;
     }
+
+    private static int RoundToStandardStride(int size) =>
+        size switch
+        {
+            <= 16 => 16,
+            <= 32 => 32,
+            <= 64 => 64,
+            _ => (int)BitOperations.RoundUpToPowerOf2((uint)size)
+        };
+
+    private const int ComponentCollectionItemCountPerChunk      = 8;
+    private const int ComponentCollectionSegmentStartingSize    = 8;
+
+    internal VariableSizedBufferSegment<T> GetComponentCollectionVSBS<T>() where T : unmanaged =>
+        (VariableSizedBufferSegment<T>)_componentCollectionVSBSByType.GetOrAdd(typeof(T),
+            stride => new VariableSizedBufferSegment<T>(GetComponentCollectionSegment<T>()));
+
+    internal VariableSizedBufferSegmentBase GetComponentCollectionVSBS(Type itemType) =>
+        _componentCollectionVSBSByType.GetOrAdd(itemType,
+            type =>
+            {
+                // Create the type for ComponentCollection<T>
+                var ctType = typeof(VariableSizedBufferSegment<>).MakeGenericType(type);
+                var fieldSize = DatabaseSchemaExtensions.FromType(type).field.SizeInComp();
+                var segment = GetComponentCollectionSegment(fieldSize);
+                return (VariableSizedBufferSegmentBase)Activator.CreateInstance(ctType, segment);
+            });
+
+    unsafe internal ChunkBasedSegment GetComponentCollectionSegment<T>() where T : unmanaged =>
+        _componentCollectionSegmentByStride.GetOrAdd(RoundToStandardStride(sizeof(T) * 8),
+            stride => MMF.AllocateChunkBasedSegment(PageBlockType.None, ComponentCollectionSegmentStartingSize, stride));
+
+    internal ChunkBasedSegment GetComponentCollectionSegment(int itemSize) =>
+        _componentCollectionSegmentByStride.GetOrAdd(RoundToStandardStride(itemSize * 8),
+            stride => MMF.AllocateChunkBasedSegment(PageBlockType.None, ComponentCollectionSegmentStartingSize, stride));
 
     internal long GetNewPrimaryKey() => Interlocked.Increment(ref _curPrimaryKey);
 

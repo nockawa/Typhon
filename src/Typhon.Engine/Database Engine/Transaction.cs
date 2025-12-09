@@ -230,6 +230,42 @@ public unsafe class Transaction : IDisposable
         return header.FirstItemRevision + (compRevInfo.CurRevisionIndex - header.FirstItemIndex);
     }
 
+    public ComponentCollectionAccessor<T> CreateComponentCollectionAccessor<T>(ref ComponentCollection<T> field) where T : unmanaged 
+        => new(_changeSet, _dbe.GetComponentCollectionVSBS<T>(), ref field);
+
+    public ReadOnlyCollectionEnumerator<T> GetReadOnlyCollectionEnumerator<T>(ref ComponentCollection<T> field) where T : unmanaged =>
+        new(_dbe.GetComponentCollectionVSBS<T>(), field._bufferId);
+
+    public int GetComponentCollectionRefCounter<T>(ref ComponentCollection<T> field) where T : unmanaged
+    {
+        var vsbs = _dbe.GetComponentCollectionVSBS<T>();
+        using var a = new VariableSizedBufferAccessor<T>(vsbs, field._bufferId);
+
+        return a.RefCounter;
+    }
+    
+    [PublicAPI]
+    public ref struct ReadOnlyCollectionEnumerator<T> where T : unmanaged
+    {
+        private BufferEnumerator<T> _enumerator;
+
+        public ReadOnlyCollectionEnumerator(VariableSizedBufferSegment<T> vsbs, int bufferId)
+        {
+            _enumerator = vsbs.EnumerateBuffer(bufferId);
+        }
+
+        public ReadOnlyCollectionEnumerator<T> GetEnumerator() => this;
+
+        public ref readonly T Current
+        {
+            get => ref _enumerator.Current;
+        }
+        
+        public bool MoveNext() => _enumerator.MoveNext();
+
+        public void Dispose() => _enumerator.Dispose();
+    }
+
     internal ChunkHandle GetCompRevStorageHeader<T>(long entity)
     {
         var ci = GetComponentInfo(typeof(T));
@@ -426,7 +462,25 @@ public unsafe class Transaction : IDisposable
                 // Copy the component data
                 using var handle = info.CompContentAccessor.GetChunkHandle(compRevInfo.CurCompContentChunkId, true);
                 int componentSize = info.ComponentTable.ComponentStorageSize;
-                new Span<byte>(data[i].Data, componentSize).CopyTo(handle.AsSpan().Slice(info.ComponentTable.ComponentOverhead));
+                var src = new Span<byte>(data[i].Data, componentSize);
+                var dst = handle.AsSpan().Slice(info.ComponentTable.ComponentOverhead);
+                src.CopyTo(dst);
+                
+                // If the component has collections, update the RefCounter of unchanged ones
+                var ct = info.ComponentTable;
+                if (ct.HasCollections)
+                {
+                    foreach (var kvp in ct.ComponentCollectionVSBSByOffset)
+                    {
+                        var offsetToCollectionField = kvp.Key;
+                        var srcBufferId = src.Slice(offsetToCollectionField).Cast<byte, int>()[0];
+                        var dstBufferId = dst.Slice(offsetToCollectionField).Cast<byte, int>()[0];
+                        if (srcBufferId == dstBufferId)
+                        {
+                            kvp.Value.Item1.BufferAddRef(srcBufferId, kvp.Value.Item2);
+                        }
+                    }
+                }
             }
         }
 
@@ -900,7 +954,7 @@ public unsafe class Transaction : IDisposable
         long nextMinTick = isTail ? _dbe.TransactionChain.Tail.Next?.TransactionTick ?? DateTime.UtcNow.Ticks : 0;
         _dbe.TransactionChain.Control.ExitSharedAccess();
         
-        if (isTail && firstChunkHeader.ItemCount > ComponentTable.CompRevCountInRoot)
+        if (isTail)
         {
             CleanUpUnusedEntries(info, ref compRevInfo, compRevTableAccessor, nextMinTick);
             dirtyFirstChunk = true;
@@ -1109,72 +1163,95 @@ public unsafe class Transaction : IDisposable
         var curDestIndex = 0;
         var curDestIndexInChunk = 0;
         var skipCount = 0;
-        
-        var enumerator = new RevisionEnumerator(compRevTableAccessor, firstChunkId, false, true);
-        var prevChunkId = enumerator.IndexInChunk == 0 ? enumerator.CurChunkId : 0;
-        var maxSkipCount = firstChunkHeader.ItemCount;
-        var skipping = true;
-        ChunkHandle newChunkHandle = default;
-        while (enumerator.MoveNext())
-        {
-            bool changedChunk = (enumerator.CurChunkId != prevChunkId) && (prevChunkId != 0);
-            if (changedChunk)
-            {
-                // Remove the previous chunk, if we can
-                if (prevChunkId != 0 && !enumerator.IsFirstChunk)
-                {
-                    info.CompContentSegment.FreeChunk(prevChunkId);
-                }
-                prevChunkId = enumerator.CurChunkId;
-            }
+        var ct = info.ComponentTable;
+        var hasCollections = ct.HasCollections;
 
-            if (skipping)
+        ChunkHandle newChunkHandle = default;
+        {
+            using var enumerator = new RevisionEnumerator(compRevTableAccessor, firstChunkId, false, true);
+            var prevChunkId = enumerator.IndexInChunk == 0 ? enumerator.CurChunkId : 0;
+            var maxSkipCount = firstChunkHeader.ItemCount;
+            var skipping = true;
+            while (enumerator.MoveNext())
             {
-                // If the entry is older than the minimum tick, or we reached the maximum number of entries we can skip
-                //  we can remove it and skip to the next one
-                if ((--maxSkipCount > 0) && (enumerator.Current.DateTime.Ticks < nextMinTick))
+                bool changedChunk = (enumerator.CurChunkId != prevChunkId) && (prevChunkId != 0);
+                if (changedChunk)
                 {
-                    // Check if there's a component chunk to free
-                    if (enumerator.Current.ComponentChunkId != 0)
+                    // Remove the previous chunk if we can
+                    if (prevChunkId != 0 && !enumerator.IsFirstChunk)
                     {
-                        info.CompContentSegment.FreeChunk(enumerator.Current.ComponentChunkId);
+                        if (hasCollections)
+                        {
+                            foreach (var kvp in ct.ComponentCollectionVSBSByOffset)
+                            {
+                                var bufferId = info.CompContentAccessor.GetChunkAsReadOnlySpan(prevChunkId).Slice(kvp.Key).Cast<byte, int>()[0];
+                                kvp.Value.Item1.BufferRelease(bufferId, kvp.Value.Item2);
+                            }
+                        }
+
+                        info.CompContentSegment.FreeChunk(prevChunkId);
                     }
-            
-                    // Clear the entry
-                    enumerator.CurrentAsSpan.Clear();
-                    
-                    skipCount++;
-                    continue;
+                    prevChunkId = enumerator.CurChunkId;
                 }
-                
-                // We stop skipping at the first valid entry
-                skipping = false;
-            }
-            
-            curDestElements[curDestIndexInChunk++] = enumerator.Current;            // Copy the revision to the destination
-            tempFirstHeader[0].ItemCount++;                                         // Update the item count
-            if (!enumerator.Current.IsolationFlag)                                  // Update the last committed revision index if this is not an isolated entry
-            {
-                tempFirstHeader[0].LastCommitRevisionIndex = (short)curDestIndex;
-            }
-            curDestIndex++;                                                         // One more item in the destination
-            
-            // If the current chunk is full, allocate a new one
-            if (curDestIndex == curDestElements.Length)
-            {
-                curDestIndexInChunk = 0;                                            // Reset the index in chunk
-                tempFirstHeader[0].ChainLength++;                                   // One more chunk in the chain
-                var newChunkId = info.CompContentSegment.AllocateChunk(false);  // Allocate a new chunk
-                curNextChunkId[0] = newChunkId;                                     // Set the next chunk ID of the current chunk
-                if (!newChunkHandle.IsDefault)                                      // Release the handle on the previous chunk, if any
+
+                if (skipping)
                 {
-                    newChunkHandle.Dispose();
+                    // If the entry is older than the minimum tick, or we reached the maximum number of entries we can skip,
+                    //  we can remove it and skip to the next one
+                    if ((--maxSkipCount > 0) && (enumerator.Current.DateTime.Ticks < nextMinTick))
+                    {
+                        // Check if there's a component chunk to free
+                        var revChunkId = enumerator.Current.ComponentChunkId;
+                        if (revChunkId != 0)
+                        {
+                            if (hasCollections)
+                            {
+                                foreach (var kvp in ct.ComponentCollectionVSBSByOffset)
+                                {
+                                    var bufferId = info.CompContentAccessor.GetChunkAsReadOnlySpan(revChunkId).Slice(kvp.Key).Cast<byte, int>()[0];
+                                    kvp.Value.Item1.BufferRelease(bufferId, kvp.Value.Item2);
+                                }
+                            }
+
+                            info.CompContentSegment.FreeChunk(revChunkId);
+                        }
+            
+                        // Clear the entry
+                        enumerator.CurrentAsSpan.Clear();
+                    
+                        skipCount++;
+                        continue;
+                    }
+                
+                    // We stop skipping at the first valid entry
+                    skipping = false;
                 }
-                newChunkHandle = compRevTableAccessor.GetChunkHandle(newChunkId, true);     // Get the handle of the new chunk
-                newChunkHandle.AsSpan().Split(out curNextChunkId, out curDestElements);     // Update our "cur" variables
+            
+                curDestElements[curDestIndexInChunk++] = enumerator.Current;            // Copy the revision to the destination
+                tempFirstHeader[0].ItemCount++;                                         // Update the item count
+                if (!enumerator.Current.IsolationFlag)                                  // Update the last committed revision index if this is not an isolated entry
+                {
+                    tempFirstHeader[0].LastCommitRevisionIndex = (short)curDestIndex;
+                }
+                curDestIndex++;                                                         // One more item in the destination
+            
+                // If the current chunk is full, allocate a new one
+                if (curDestIndex == curDestElements.Length)
+                {
+                    curDestIndexInChunk = 0;                                            // Reset the index in chunk
+                    tempFirstHeader[0].ChainLength++;                                   // One more chunk in the chain
+                    var newChunkId = info.CompContentSegment.AllocateChunk(false);  // Allocate a new chunk
+                    curNextChunkId[0] = newChunkId;                                     // Set the next chunk ID of the current chunk
+                    if (!newChunkHandle.IsDefault)                                      // Release the handle on the previous chunk, if any
+                    {
+                        newChunkHandle.Dispose();
+                    }
+                    newChunkHandle = compRevTableAccessor.GetChunkHandle(newChunkId, true);     // Get the handle of the new chunk
+                    newChunkHandle.AsSpan().Split(out curNextChunkId, out curDestElements);     // Update our "cur" variables
+                }
             }
         }
-
+        
         tempFirstHeader[0].FirstItemRevision = firstChunkHeader.FirstItemRevision + skipCount;
         if (!newChunkHandle.IsDefault)
         {
@@ -1183,6 +1260,8 @@ public unsafe class Transaction : IDisposable
         var tempControl = firstChunkHeader.Control;
         tempChunk.CopyTo(firstChunkHandle.AsSpan());
         firstChunkHeader.Control = tempControl;
+
+        compRevInfo.CurRevisionIndex = 0;   // As we defrag and move everything to the beginning of the chunk, the first revision is always at 0
     }
 
     private ChunkHandle GetRevisionElement(ChunkRandomAccessor accessor, int firstChunkId, short revisionIndex, out Span<CompRevStorageElement> element)
