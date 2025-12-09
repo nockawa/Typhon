@@ -78,6 +78,19 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.AccessControl.ExitSharedAccess
   nameWithType: AccessControl.ExitSharedAccess
+- uid: Typhon.Engine.AccessControl.IsLockedByCurrentThread
+  name: IsLockedByCurrentThread
+  href: api/Typhon.Engine.AccessControl.html#Typhon_Engine_AccessControl_IsLockedByCurrentThread
+  commentId: P:Typhon.Engine.AccessControl.IsLockedByCurrentThread
+  fullName: Typhon.Engine.AccessControl.IsLockedByCurrentThread
+  nameWithType: AccessControl.IsLockedByCurrentThread
+- uid: Typhon.Engine.AccessControl.IsLockedByCurrentThread*
+  name: IsLockedByCurrentThread
+  href: api/Typhon.Engine.AccessControl.html#Typhon_Engine_AccessControl_IsLockedByCurrentThread_
+  commentId: Overload:Typhon.Engine.AccessControl.IsLockedByCurrentThread
+  isSpec: "True"
+  fullName: Typhon.Engine.AccessControl.IsLockedByCurrentThread
+  nameWithType: AccessControl.IsLockedByCurrentThread
 - uid: Typhon.Engine.AccessControl.LockedByThreadId
   name: LockedByThreadId
   href: api/Typhon.Engine.AccessControl.html#Typhon_Engine_AccessControl_LockedByThreadId
@@ -9161,6 +9174,134 @@ references:
   commentId: F:Typhon.Engine.BlockAllocatorBase._stride
   fullName: Typhon.Engine.BlockAllocatorBase._stride
   nameWithType: BlockAllocatorBase._stride
+- uid: Typhon.Engine.BufferEnumerator`1
+  name: BufferEnumerator<T>
+  href: api/Typhon.Engine.BufferEnumerator-1.html
+  commentId: T:Typhon.Engine.BufferEnumerator`1
+  name.vb: BufferEnumerator(Of T)
+  fullName: Typhon.Engine.BufferEnumerator<T>
+  fullName.vb: Typhon.Engine.BufferEnumerator(Of T)
+  nameWithType: BufferEnumerator<T>
+  nameWithType.vb: BufferEnumerator(Of T)
+- uid: Typhon.Engine.BufferEnumerator`1.#ctor(Typhon.Engine.VariableSizedBufferSegment{`0},System.Int32)
+  name: BufferEnumerator(VariableSizedBufferSegment<T>, int)
+  href: api/Typhon.Engine.BufferEnumerator-1.html#Typhon_Engine_BufferEnumerator_1__ctor_Typhon_Engine_VariableSizedBufferSegment__0__System_Int32_
+  commentId: M:Typhon.Engine.BufferEnumerator`1.#ctor(Typhon.Engine.VariableSizedBufferSegment{`0},System.Int32)
+  name.vb: New(VariableSizedBufferSegment(Of T), Integer)
+  fullName: Typhon.Engine.BufferEnumerator<T>.BufferEnumerator(Typhon.Engine.VariableSizedBufferSegment<T>, int)
+  fullName.vb: Typhon.Engine.BufferEnumerator(Of T).New(Typhon.Engine.VariableSizedBufferSegment(Of T), Integer)
+  nameWithType: BufferEnumerator<T>.BufferEnumerator(VariableSizedBufferSegment<T>, int)
+  nameWithType.vb: BufferEnumerator(Of T).New(VariableSizedBufferSegment(Of T), Integer)
+- uid: Typhon.Engine.BufferEnumerator`1.#ctor*
+  name: BufferEnumerator
+  href: api/Typhon.Engine.BufferEnumerator-1.html#Typhon_Engine_BufferEnumerator_1__ctor_
+  commentId: Overload:Typhon.Engine.BufferEnumerator`1.#ctor
+  isSpec: "True"
+  name.vb: New
+  fullName: Typhon.Engine.BufferEnumerator<T>.BufferEnumerator
+  fullName.vb: Typhon.Engine.BufferEnumerator(Of T).New
+  nameWithType: BufferEnumerator<T>.BufferEnumerator
+  nameWithType.vb: BufferEnumerator(Of T).New
+- uid: Typhon.Engine.BufferEnumerator`1.Current
+  name: Current
+  href: api/Typhon.Engine.BufferEnumerator-1.html#Typhon_Engine_BufferEnumerator_1_Current
+  commentId: P:Typhon.Engine.BufferEnumerator`1.Current
+  fullName: Typhon.Engine.BufferEnumerator<T>.Current
+  fullName.vb: Typhon.Engine.BufferEnumerator(Of T).Current
+  nameWithType: BufferEnumerator<T>.Current
+  nameWithType.vb: BufferEnumerator(Of T).Current
+- uid: Typhon.Engine.BufferEnumerator`1.Current*
+  name: Current
+  href: api/Typhon.Engine.BufferEnumerator-1.html#Typhon_Engine_BufferEnumerator_1_Current_
+  commentId: Overload:Typhon.Engine.BufferEnumerator`1.Current
+  isSpec: "True"
+  fullName: Typhon.Engine.BufferEnumerator<T>.Current
+  fullName.vb: Typhon.Engine.BufferEnumerator(Of T).Current
+  nameWithType: BufferEnumerator<T>.Current
+  nameWithType.vb: BufferEnumerator(Of T).Current
+- uid: Typhon.Engine.BufferEnumerator`1.Dispose
+  name: Dispose()
+  href: api/Typhon.Engine.BufferEnumerator-1.html#Typhon_Engine_BufferEnumerator_1_Dispose
+  commentId: M:Typhon.Engine.BufferEnumerator`1.Dispose
+  fullName: Typhon.Engine.BufferEnumerator<T>.Dispose()
+  fullName.vb: Typhon.Engine.BufferEnumerator(Of T).Dispose()
+  nameWithType: BufferEnumerator<T>.Dispose()
+  nameWithType.vb: BufferEnumerator(Of T).Dispose()
+- uid: Typhon.Engine.BufferEnumerator`1.Dispose*
+  name: Dispose
+  href: api/Typhon.Engine.BufferEnumerator-1.html#Typhon_Engine_BufferEnumerator_1_Dispose_
+  commentId: Overload:Typhon.Engine.BufferEnumerator`1.Dispose
+  isSpec: "True"
+  fullName: Typhon.Engine.BufferEnumerator<T>.Dispose
+  fullName.vb: Typhon.Engine.BufferEnumerator(Of T).Dispose
+  nameWithType: BufferEnumerator<T>.Dispose
+  nameWithType.vb: BufferEnumerator(Of T).Dispose
+- uid: Typhon.Engine.BufferEnumerator`1.GetEnumerator
+  name: GetEnumerator()
+  href: api/Typhon.Engine.BufferEnumerator-1.html#Typhon_Engine_BufferEnumerator_1_GetEnumerator
+  commentId: M:Typhon.Engine.BufferEnumerator`1.GetEnumerator
+  fullName: Typhon.Engine.BufferEnumerator<T>.GetEnumerator()
+  fullName.vb: Typhon.Engine.BufferEnumerator(Of T).GetEnumerator()
+  nameWithType: BufferEnumerator<T>.GetEnumerator()
+  nameWithType.vb: BufferEnumerator(Of T).GetEnumerator()
+- uid: Typhon.Engine.BufferEnumerator`1.GetEnumerator*
+  name: GetEnumerator
+  href: api/Typhon.Engine.BufferEnumerator-1.html#Typhon_Engine_BufferEnumerator_1_GetEnumerator_
+  commentId: Overload:Typhon.Engine.BufferEnumerator`1.GetEnumerator
+  isSpec: "True"
+  fullName: Typhon.Engine.BufferEnumerator<T>.GetEnumerator
+  fullName.vb: Typhon.Engine.BufferEnumerator(Of T).GetEnumerator
+  nameWithType: BufferEnumerator<T>.GetEnumerator
+  nameWithType.vb: BufferEnumerator(Of T).GetEnumerator
+- uid: Typhon.Engine.BufferEnumerator`1.MoveNext
+  name: MoveNext()
+  href: api/Typhon.Engine.BufferEnumerator-1.html#Typhon_Engine_BufferEnumerator_1_MoveNext
+  commentId: M:Typhon.Engine.BufferEnumerator`1.MoveNext
+  fullName: Typhon.Engine.BufferEnumerator<T>.MoveNext()
+  fullName.vb: Typhon.Engine.BufferEnumerator(Of T).MoveNext()
+  nameWithType: BufferEnumerator<T>.MoveNext()
+  nameWithType.vb: BufferEnumerator(Of T).MoveNext()
+- uid: Typhon.Engine.BufferEnumerator`1.MoveNext*
+  name: MoveNext
+  href: api/Typhon.Engine.BufferEnumerator-1.html#Typhon_Engine_BufferEnumerator_1_MoveNext_
+  commentId: Overload:Typhon.Engine.BufferEnumerator`1.MoveNext
+  isSpec: "True"
+  fullName: Typhon.Engine.BufferEnumerator<T>.MoveNext
+  fullName.vb: Typhon.Engine.BufferEnumerator(Of T).MoveNext
+  nameWithType: BufferEnumerator<T>.MoveNext
+  nameWithType.vb: BufferEnumerator(Of T).MoveNext
+- uid: Typhon.Engine.BufferEnumerator`1._accessor
+  name: _accessor
+  href: api/Typhon.Engine.BufferEnumerator-1.html#Typhon_Engine_BufferEnumerator_1__accessor
+  commentId: F:Typhon.Engine.BufferEnumerator`1._accessor
+  fullName: Typhon.Engine.BufferEnumerator<T>._accessor
+  fullName.vb: Typhon.Engine.BufferEnumerator(Of T)._accessor
+  nameWithType: BufferEnumerator<T>._accessor
+  nameWithType.vb: BufferEnumerator(Of T)._accessor
+- uid: Typhon.Engine.BufferEnumerator`1._currentChunkLength
+  name: _currentChunkLength
+  href: api/Typhon.Engine.BufferEnumerator-1.html#Typhon_Engine_BufferEnumerator_1__currentChunkLength
+  commentId: F:Typhon.Engine.BufferEnumerator`1._currentChunkLength
+  fullName: Typhon.Engine.BufferEnumerator<T>._currentChunkLength
+  fullName.vb: Typhon.Engine.BufferEnumerator(Of T)._currentChunkLength
+  nameWithType: BufferEnumerator<T>._currentChunkLength
+  nameWithType.vb: BufferEnumerator(Of T)._currentChunkLength
+- uid: Typhon.Engine.BufferEnumerator`1._currentIndex
+  name: _currentIndex
+  href: api/Typhon.Engine.BufferEnumerator-1.html#Typhon_Engine_BufferEnumerator_1__currentIndex
+  commentId: F:Typhon.Engine.BufferEnumerator`1._currentIndex
+  fullName: Typhon.Engine.BufferEnumerator<T>._currentIndex
+  fullName.vb: Typhon.Engine.BufferEnumerator(Of T)._currentIndex
+  nameWithType: BufferEnumerator<T>._currentIndex
+  nameWithType.vb: BufferEnumerator(Of T)._currentIndex
+- uid: Typhon.Engine.BufferEnumerator`1._isValid
+  name: _isValid
+  href: api/Typhon.Engine.BufferEnumerator-1.html#Typhon_Engine_BufferEnumerator_1__isValid
+  commentId: F:Typhon.Engine.BufferEnumerator`1._isValid
+  fullName: Typhon.Engine.BufferEnumerator<T>._isValid
+  fullName.vb: Typhon.Engine.BufferEnumerator(Of T)._isValid
+  nameWithType: BufferEnumerator<T>._isValid
+  nameWithType.vb: BufferEnumerator(Of T)._isValid
 - uid: Typhon.Engine.ChangeSet
   name: ChangeSet
   href: api/Typhon.Engine.ChangeSet.html
@@ -10606,6 +10747,151 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.ComponentAttribute.Revision
   nameWithType: ComponentAttribute.Revision
+- uid: Typhon.Engine.ComponentCollectionAccessor`1
+  name: ComponentCollectionAccessor<T>
+  href: api/Typhon.Engine.ComponentCollectionAccessor-1.html
+  commentId: T:Typhon.Engine.ComponentCollectionAccessor`1
+  name.vb: ComponentCollectionAccessor(Of T)
+  fullName: Typhon.Engine.ComponentCollectionAccessor<T>
+  fullName.vb: Typhon.Engine.ComponentCollectionAccessor(Of T)
+  nameWithType: ComponentCollectionAccessor<T>
+  nameWithType.vb: ComponentCollectionAccessor(Of T)
+- uid: Typhon.Engine.ComponentCollectionAccessor`1.#ctor(Typhon.Engine.ChangeSet,Typhon.Engine.VariableSizedBufferSegment{`0},Typhon.Engine.ComponentCollection{`0}@)
+  name: ComponentCollectionAccessor(ChangeSet, VariableSizedBufferSegment<T>, ref ComponentCollection<T>)
+  href: api/Typhon.Engine.ComponentCollectionAccessor-1.html#Typhon_Engine_ComponentCollectionAccessor_1__ctor_Typhon_Engine_ChangeSet_Typhon_Engine_VariableSizedBufferSegment__0__Typhon_Engine_ComponentCollection__0___
+  commentId: M:Typhon.Engine.ComponentCollectionAccessor`1.#ctor(Typhon.Engine.ChangeSet,Typhon.Engine.VariableSizedBufferSegment{`0},Typhon.Engine.ComponentCollection{`0}@)
+  name.vb: New(ChangeSet, VariableSizedBufferSegment(Of T), ComponentCollection(Of T))
+  fullName: Typhon.Engine.ComponentCollectionAccessor<T>.ComponentCollectionAccessor(Typhon.Engine.ChangeSet, Typhon.Engine.VariableSizedBufferSegment<T>, ref Typhon.Engine.ComponentCollection<T>)
+  fullName.vb: Typhon.Engine.ComponentCollectionAccessor(Of T).New(Typhon.Engine.ChangeSet, Typhon.Engine.VariableSizedBufferSegment(Of T), Typhon.Engine.ComponentCollection(Of T))
+  nameWithType: ComponentCollectionAccessor<T>.ComponentCollectionAccessor(ChangeSet, VariableSizedBufferSegment<T>, ref ComponentCollection<T>)
+  nameWithType.vb: ComponentCollectionAccessor(Of T).New(ChangeSet, VariableSizedBufferSegment(Of T), ComponentCollection(Of T))
+- uid: Typhon.Engine.ComponentCollectionAccessor`1.#ctor*
+  name: ComponentCollectionAccessor
+  href: api/Typhon.Engine.ComponentCollectionAccessor-1.html#Typhon_Engine_ComponentCollectionAccessor_1__ctor_
+  commentId: Overload:Typhon.Engine.ComponentCollectionAccessor`1.#ctor
+  isSpec: "True"
+  name.vb: New
+  fullName: Typhon.Engine.ComponentCollectionAccessor<T>.ComponentCollectionAccessor
+  fullName.vb: Typhon.Engine.ComponentCollectionAccessor(Of T).New
+  nameWithType: ComponentCollectionAccessor<T>.ComponentCollectionAccessor
+  nameWithType.vb: ComponentCollectionAccessor(Of T).New
+- uid: Typhon.Engine.ComponentCollectionAccessor`1.Add(`0)
+  name: Add(T)
+  href: api/Typhon.Engine.ComponentCollectionAccessor-1.html#Typhon_Engine_ComponentCollectionAccessor_1_Add__0_
+  commentId: M:Typhon.Engine.ComponentCollectionAccessor`1.Add(`0)
+  fullName: Typhon.Engine.ComponentCollectionAccessor<T>.Add(T)
+  fullName.vb: Typhon.Engine.ComponentCollectionAccessor(Of T).Add(T)
+  nameWithType: ComponentCollectionAccessor<T>.Add(T)
+  nameWithType.vb: ComponentCollectionAccessor(Of T).Add(T)
+- uid: Typhon.Engine.ComponentCollectionAccessor`1.Add*
+  name: Add
+  href: api/Typhon.Engine.ComponentCollectionAccessor-1.html#Typhon_Engine_ComponentCollectionAccessor_1_Add_
+  commentId: Overload:Typhon.Engine.ComponentCollectionAccessor`1.Add
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentCollectionAccessor<T>.Add
+  fullName.vb: Typhon.Engine.ComponentCollectionAccessor(Of T).Add
+  nameWithType: ComponentCollectionAccessor<T>.Add
+  nameWithType.vb: ComponentCollectionAccessor(Of T).Add
+- uid: Typhon.Engine.ComponentCollectionAccessor`1.Dispose
+  name: Dispose()
+  href: api/Typhon.Engine.ComponentCollectionAccessor-1.html#Typhon_Engine_ComponentCollectionAccessor_1_Dispose
+  commentId: M:Typhon.Engine.ComponentCollectionAccessor`1.Dispose
+  fullName: Typhon.Engine.ComponentCollectionAccessor<T>.Dispose()
+  fullName.vb: Typhon.Engine.ComponentCollectionAccessor(Of T).Dispose()
+  nameWithType: ComponentCollectionAccessor<T>.Dispose()
+  nameWithType.vb: ComponentCollectionAccessor(Of T).Dispose()
+- uid: Typhon.Engine.ComponentCollectionAccessor`1.Dispose*
+  name: Dispose
+  href: api/Typhon.Engine.ComponentCollectionAccessor-1.html#Typhon_Engine_ComponentCollectionAccessor_1_Dispose_
+  commentId: Overload:Typhon.Engine.ComponentCollectionAccessor`1.Dispose
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentCollectionAccessor<T>.Dispose
+  fullName.vb: Typhon.Engine.ComponentCollectionAccessor(Of T).Dispose
+  nameWithType: ComponentCollectionAccessor<T>.Dispose
+  nameWithType.vb: ComponentCollectionAccessor(Of T).Dispose
+- uid: Typhon.Engine.ComponentCollectionAccessor`1.ElementCount
+  name: ElementCount
+  href: api/Typhon.Engine.ComponentCollectionAccessor-1.html#Typhon_Engine_ComponentCollectionAccessor_1_ElementCount
+  commentId: P:Typhon.Engine.ComponentCollectionAccessor`1.ElementCount
+  fullName: Typhon.Engine.ComponentCollectionAccessor<T>.ElementCount
+  fullName.vb: Typhon.Engine.ComponentCollectionAccessor(Of T).ElementCount
+  nameWithType: ComponentCollectionAccessor<T>.ElementCount
+  nameWithType.vb: ComponentCollectionAccessor(Of T).ElementCount
+- uid: Typhon.Engine.ComponentCollectionAccessor`1.ElementCount*
+  name: ElementCount
+  href: api/Typhon.Engine.ComponentCollectionAccessor-1.html#Typhon_Engine_ComponentCollectionAccessor_1_ElementCount_
+  commentId: Overload:Typhon.Engine.ComponentCollectionAccessor`1.ElementCount
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentCollectionAccessor<T>.ElementCount
+  fullName.vb: Typhon.Engine.ComponentCollectionAccessor(Of T).ElementCount
+  nameWithType: ComponentCollectionAccessor<T>.ElementCount
+  nameWithType.vb: ComponentCollectionAccessor(Of T).ElementCount
+- uid: Typhon.Engine.ComponentCollectionAccessor`1.GetAllElements
+  name: GetAllElements()
+  href: api/Typhon.Engine.ComponentCollectionAccessor-1.html#Typhon_Engine_ComponentCollectionAccessor_1_GetAllElements
+  commentId: M:Typhon.Engine.ComponentCollectionAccessor`1.GetAllElements
+  fullName: Typhon.Engine.ComponentCollectionAccessor<T>.GetAllElements()
+  fullName.vb: Typhon.Engine.ComponentCollectionAccessor(Of T).GetAllElements()
+  nameWithType: ComponentCollectionAccessor<T>.GetAllElements()
+  nameWithType.vb: ComponentCollectionAccessor(Of T).GetAllElements()
+- uid: Typhon.Engine.ComponentCollectionAccessor`1.GetAllElements(System.Span{`0})
+  name: GetAllElements(Span<T>)
+  href: api/Typhon.Engine.ComponentCollectionAccessor-1.html#Typhon_Engine_ComponentCollectionAccessor_1_GetAllElements_System_Span__0__
+  commentId: M:Typhon.Engine.ComponentCollectionAccessor`1.GetAllElements(System.Span{`0})
+  name.vb: GetAllElements(Span(Of T))
+  fullName: Typhon.Engine.ComponentCollectionAccessor<T>.GetAllElements(System.Span<T>)
+  fullName.vb: Typhon.Engine.ComponentCollectionAccessor(Of T).GetAllElements(System.Span(Of T))
+  nameWithType: ComponentCollectionAccessor<T>.GetAllElements(Span<T>)
+  nameWithType.vb: ComponentCollectionAccessor(Of T).GetAllElements(Span(Of T))
+- uid: Typhon.Engine.ComponentCollectionAccessor`1.GetAllElements*
+  name: GetAllElements
+  href: api/Typhon.Engine.ComponentCollectionAccessor-1.html#Typhon_Engine_ComponentCollectionAccessor_1_GetAllElements_
+  commentId: Overload:Typhon.Engine.ComponentCollectionAccessor`1.GetAllElements
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentCollectionAccessor<T>.GetAllElements
+  fullName.vb: Typhon.Engine.ComponentCollectionAccessor(Of T).GetAllElements
+  nameWithType: ComponentCollectionAccessor<T>.GetAllElements
+  nameWithType.vb: ComponentCollectionAccessor(Of T).GetAllElements
+- uid: Typhon.Engine.ComponentCollectionAccessor`1._cbsa
+  name: _cbsa
+  href: api/Typhon.Engine.ComponentCollectionAccessor-1.html#Typhon_Engine_ComponentCollectionAccessor_1__cbsa
+  commentId: F:Typhon.Engine.ComponentCollectionAccessor`1._cbsa
+  fullName: Typhon.Engine.ComponentCollectionAccessor<T>._cbsa
+  fullName.vb: Typhon.Engine.ComponentCollectionAccessor(Of T)._cbsa
+  nameWithType: ComponentCollectionAccessor<T>._cbsa
+  nameWithType.vb: ComponentCollectionAccessor(Of T)._cbsa
+- uid: Typhon.Engine.ComponentCollectionAccessor`1._changeSet
+  name: _changeSet
+  href: api/Typhon.Engine.ComponentCollectionAccessor-1.html#Typhon_Engine_ComponentCollectionAccessor_1__changeSet
+  commentId: F:Typhon.Engine.ComponentCollectionAccessor`1._changeSet
+  fullName: Typhon.Engine.ComponentCollectionAccessor<T>._changeSet
+  fullName.vb: Typhon.Engine.ComponentCollectionAccessor(Of T)._changeSet
+  nameWithType: ComponentCollectionAccessor<T>._changeSet
+  nameWithType.vb: ComponentCollectionAccessor(Of T)._changeSet
+- uid: Typhon.Engine.ComponentCollectionAccessor`1._field
+  name: _field
+  href: api/Typhon.Engine.ComponentCollectionAccessor-1.html#Typhon_Engine_ComponentCollectionAccessor_1__field
+  commentId: F:Typhon.Engine.ComponentCollectionAccessor`1._field
+  fullName: Typhon.Engine.ComponentCollectionAccessor<T>._field
+  fullName.vb: Typhon.Engine.ComponentCollectionAccessor(Of T)._field
+  nameWithType: ComponentCollectionAccessor<T>._field
+  nameWithType.vb: ComponentCollectionAccessor(Of T)._field
+- uid: Typhon.Engine.ComponentCollectionAccessor`1._initialBufferId
+  name: _initialBufferId
+  href: api/Typhon.Engine.ComponentCollectionAccessor-1.html#Typhon_Engine_ComponentCollectionAccessor_1__initialBufferId
+  commentId: F:Typhon.Engine.ComponentCollectionAccessor`1._initialBufferId
+  fullName: Typhon.Engine.ComponentCollectionAccessor<T>._initialBufferId
+  fullName.vb: Typhon.Engine.ComponentCollectionAccessor(Of T)._initialBufferId
+  nameWithType: ComponentCollectionAccessor<T>._initialBufferId
+  nameWithType.vb: ComponentCollectionAccessor(Of T)._initialBufferId
+- uid: Typhon.Engine.ComponentCollectionAccessor`1._vsbs
+  name: _vsbs
+  href: api/Typhon.Engine.ComponentCollectionAccessor-1.html#Typhon_Engine_ComponentCollectionAccessor_1__vsbs
+  commentId: F:Typhon.Engine.ComponentCollectionAccessor`1._vsbs
+  fullName: Typhon.Engine.ComponentCollectionAccessor<T>._vsbs
+  fullName.vb: Typhon.Engine.ComponentCollectionAccessor(Of T)._vsbs
+  nameWithType: ComponentCollectionAccessor<T>._vsbs
+  nameWithType.vb: ComponentCollectionAccessor(Of T)._vsbs
 - uid: Typhon.Engine.ComponentCollection`1
   name: ComponentCollection<T>
   href: api/Typhon.Engine.ComponentCollection-1.html
@@ -10615,6 +10901,14 @@ references:
   fullName.vb: Typhon.Engine.ComponentCollection(Of T)
   nameWithType: ComponentCollection<T>
   nameWithType.vb: ComponentCollection(Of T)
+- uid: Typhon.Engine.ComponentCollection`1._bufferId
+  name: _bufferId
+  href: api/Typhon.Engine.ComponentCollection-1.html#Typhon_Engine_ComponentCollection_1__bufferId
+  commentId: F:Typhon.Engine.ComponentCollection`1._bufferId
+  fullName: Typhon.Engine.ComponentCollection<T>._bufferId
+  fullName.vb: Typhon.Engine.ComponentCollection(Of T)._bufferId
+  nameWithType: ComponentCollection<T>._bufferId
+  nameWithType.vb: ComponentCollection(Of T)._bufferId
 - uid: Typhon.Engine.ComponentR1
   name: ComponentR1
   href: api/Typhon.Engine.ComponentR1.html
@@ -10687,6 +10981,19 @@ references:
   commentId: T:Typhon.Engine.ComponentTable
   fullName: Typhon.Engine.ComponentTable
   nameWithType: ComponentTable
+- uid: Typhon.Engine.ComponentTable.BuildComponentCollectionInfo
+  name: BuildComponentCollectionInfo()
+  href: api/Typhon.Engine.ComponentTable.html#Typhon_Engine_ComponentTable_BuildComponentCollectionInfo
+  commentId: M:Typhon.Engine.ComponentTable.BuildComponentCollectionInfo
+  fullName: Typhon.Engine.ComponentTable.BuildComponentCollectionInfo()
+  nameWithType: ComponentTable.BuildComponentCollectionInfo()
+- uid: Typhon.Engine.ComponentTable.BuildComponentCollectionInfo*
+  name: BuildComponentCollectionInfo
+  href: api/Typhon.Engine.ComponentTable.html#Typhon_Engine_ComponentTable_BuildComponentCollectionInfo_
+  commentId: Overload:Typhon.Engine.ComponentTable.BuildComponentCollectionInfo
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentTable.BuildComponentCollectionInfo
+  nameWithType: ComponentTable.BuildComponentCollectionInfo
 - uid: Typhon.Engine.ComponentTable.BuildIndexedFieldInfo
   name: BuildIndexedFieldInfo()
   href: api/Typhon.Engine.ComponentTable.html#Typhon_Engine_ComponentTable_BuildIndexedFieldInfo
@@ -10731,6 +11038,19 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.ComponentTable.CompRevTableSegment
   nameWithType: ComponentTable.CompRevTableSegment
+- uid: Typhon.Engine.ComponentTable.ComponentCollectionVSBSByOffset
+  name: ComponentCollectionVSBSByOffset
+  href: api/Typhon.Engine.ComponentTable.html#Typhon_Engine_ComponentTable_ComponentCollectionVSBSByOffset
+  commentId: P:Typhon.Engine.ComponentTable.ComponentCollectionVSBSByOffset
+  fullName: Typhon.Engine.ComponentTable.ComponentCollectionVSBSByOffset
+  nameWithType: ComponentTable.ComponentCollectionVSBSByOffset
+- uid: Typhon.Engine.ComponentTable.ComponentCollectionVSBSByOffset*
+  name: ComponentCollectionVSBSByOffset
+  href: api/Typhon.Engine.ComponentTable.html#Typhon_Engine_ComponentTable_ComponentCollectionVSBSByOffset_
+  commentId: Overload:Typhon.Engine.ComponentTable.ComponentCollectionVSBSByOffset
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentTable.ComponentCollectionVSBSByOffset
+  nameWithType: ComponentTable.ComponentCollectionVSBSByOffset
 - uid: Typhon.Engine.ComponentTable.ComponentOverhead
   name: ComponentOverhead
   href: api/Typhon.Engine.ComponentTable.html#Typhon_Engine_ComponentTable_ComponentOverhead
@@ -10867,6 +11187,32 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.ComponentTable.Dispose
   nameWithType: ComponentTable.Dispose
+- uid: Typhon.Engine.ComponentTable.Flags
+  name: Flags
+  href: api/Typhon.Engine.ComponentTable.html#Typhon_Engine_ComponentTable_Flags
+  commentId: P:Typhon.Engine.ComponentTable.Flags
+  fullName: Typhon.Engine.ComponentTable.Flags
+  nameWithType: ComponentTable.Flags
+- uid: Typhon.Engine.ComponentTable.Flags*
+  name: Flags
+  href: api/Typhon.Engine.ComponentTable.html#Typhon_Engine_ComponentTable_Flags_
+  commentId: Overload:Typhon.Engine.ComponentTable.Flags
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentTable.Flags
+  nameWithType: ComponentTable.Flags
+- uid: Typhon.Engine.ComponentTable.HasCollections
+  name: HasCollections
+  href: api/Typhon.Engine.ComponentTable.html#Typhon_Engine_ComponentTable_HasCollections
+  commentId: P:Typhon.Engine.ComponentTable.HasCollections
+  fullName: Typhon.Engine.ComponentTable.HasCollections
+  nameWithType: ComponentTable.HasCollections
+- uid: Typhon.Engine.ComponentTable.HasCollections*
+  name: HasCollections
+  href: api/Typhon.Engine.ComponentTable.html#Typhon_Engine_ComponentTable_HasCollections_
+  commentId: Overload:Typhon.Engine.ComponentTable.HasCollections
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentTable.HasCollections
+  nameWithType: ComponentTable.HasCollections
 - uid: Typhon.Engine.ComponentTable.IndexedFieldInfos
   name: IndexedFieldInfos
   href: api/Typhon.Engine.ComponentTable.html#Typhon_Engine_ComponentTable_IndexedFieldInfos
@@ -10912,6 +11258,30 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.ComponentTable.String64IndexSegment
   nameWithType: ComponentTable.String64IndexSegment
+- uid: Typhon.Engine.ComponentTable._flags
+  name: _flags
+  href: api/Typhon.Engine.ComponentTable.html#Typhon_Engine_ComponentTable__flags
+  commentId: F:Typhon.Engine.ComponentTable._flags
+  fullName: Typhon.Engine.ComponentTable._flags
+  nameWithType: ComponentTable._flags
+- uid: Typhon.Engine.ComponentTableFlags
+  name: ComponentTableFlags
+  href: api/Typhon.Engine.ComponentTableFlags.html
+  commentId: T:Typhon.Engine.ComponentTableFlags
+  fullName: Typhon.Engine.ComponentTableFlags
+  nameWithType: ComponentTableFlags
+- uid: Typhon.Engine.ComponentTableFlags.HasCollections
+  name: HasCollections
+  href: api/Typhon.Engine.ComponentTableFlags.html#Typhon_Engine_ComponentTableFlags_HasCollections
+  commentId: F:Typhon.Engine.ComponentTableFlags.HasCollections
+  fullName: Typhon.Engine.ComponentTableFlags.HasCollections
+  nameWithType: ComponentTableFlags.HasCollections
+- uid: Typhon.Engine.ComponentTableFlags.None
+  name: None
+  href: api/Typhon.Engine.ComponentTableFlags.html#Typhon_Engine_ComponentTableFlags_None
+  commentId: F:Typhon.Engine.ComponentTableFlags.None
+  fullName: Typhon.Engine.ComponentTableFlags.None
+  nameWithType: ComponentTableFlags.None
 - uid: Typhon.Engine.ConcurrentArray`1
   name: ConcurrentArray<T>
   href: api/Typhon.Engine.ConcurrentArray-1.html
@@ -11919,15 +12289,15 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.DBComponentDefinition.ComponentStorageTotalSize
   nameWithType: DBComponentDefinition.ComponentStorageTotalSize
-- uid: Typhon.Engine.DBComponentDefinition.CreateField(System.Int32,System.String,Typhon.Engine.FieldType,System.Int32)
-  name: CreateField(int, string, FieldType, int)
-  href: api/Typhon.Engine.DBComponentDefinition.html#Typhon_Engine_DBComponentDefinition_CreateField_System_Int32_System_String_Typhon_Engine_FieldType_System_Int32_
-  commentId: M:Typhon.Engine.DBComponentDefinition.CreateField(System.Int32,System.String,Typhon.Engine.FieldType,System.Int32)
-  name.vb: CreateField(Integer, String, FieldType, Integer)
-  fullName: Typhon.Engine.DBComponentDefinition.CreateField(int, string, Typhon.Engine.FieldType, int)
-  fullName.vb: Typhon.Engine.DBComponentDefinition.CreateField(Integer, String, Typhon.Engine.FieldType, Integer)
-  nameWithType: DBComponentDefinition.CreateField(int, string, FieldType, int)
-  nameWithType.vb: DBComponentDefinition.CreateField(Integer, String, FieldType, Integer)
+- uid: Typhon.Engine.DBComponentDefinition.CreateField(System.Int32,System.String,Typhon.Engine.FieldType,Typhon.Engine.FieldType,System.Int32,System.Type)
+  name: CreateField(int, string, FieldType, FieldType, int, Type)
+  href: api/Typhon.Engine.DBComponentDefinition.html#Typhon_Engine_DBComponentDefinition_CreateField_System_Int32_System_String_Typhon_Engine_FieldType_Typhon_Engine_FieldType_System_Int32_System_Type_
+  commentId: M:Typhon.Engine.DBComponentDefinition.CreateField(System.Int32,System.String,Typhon.Engine.FieldType,Typhon.Engine.FieldType,System.Int32,System.Type)
+  name.vb: CreateField(Integer, String, FieldType, FieldType, Integer, Type)
+  fullName: Typhon.Engine.DBComponentDefinition.CreateField(int, string, Typhon.Engine.FieldType, Typhon.Engine.FieldType, int, System.Type)
+  fullName.vb: Typhon.Engine.DBComponentDefinition.CreateField(Integer, String, Typhon.Engine.FieldType, Typhon.Engine.FieldType, Integer, System.Type)
+  nameWithType: DBComponentDefinition.CreateField(int, string, FieldType, FieldType, int, Type)
+  nameWithType.vb: DBComponentDefinition.CreateField(Integer, String, FieldType, FieldType, Integer, Type)
 - uid: Typhon.Engine.DBComponentDefinition.CreateField*
   name: CreateField
   href: api/Typhon.Engine.DBComponentDefinition.html#Typhon_Engine_DBComponentDefinition_CreateField_
@@ -11941,15 +12311,15 @@ references:
   commentId: T:Typhon.Engine.DBComponentDefinition.Field
   fullName: Typhon.Engine.DBComponentDefinition.Field
   nameWithType: DBComponentDefinition.Field
-- uid: Typhon.Engine.DBComponentDefinition.Field.#ctor(System.Int32,System.String,Typhon.Engine.FieldType,System.Int32)
-  name: Field(int, string, FieldType, int)
-  href: api/Typhon.Engine.DBComponentDefinition.Field.html#Typhon_Engine_DBComponentDefinition_Field__ctor_System_Int32_System_String_Typhon_Engine_FieldType_System_Int32_
-  commentId: M:Typhon.Engine.DBComponentDefinition.Field.#ctor(System.Int32,System.String,Typhon.Engine.FieldType,System.Int32)
-  name.vb: New(Integer, String, FieldType, Integer)
-  fullName: Typhon.Engine.DBComponentDefinition.Field.Field(int, string, Typhon.Engine.FieldType, int)
-  fullName.vb: Typhon.Engine.DBComponentDefinition.Field.New(Integer, String, Typhon.Engine.FieldType, Integer)
-  nameWithType: DBComponentDefinition.Field.Field(int, string, FieldType, int)
-  nameWithType.vb: DBComponentDefinition.Field.New(Integer, String, FieldType, Integer)
+- uid: Typhon.Engine.DBComponentDefinition.Field.#ctor(System.Int32,System.String,Typhon.Engine.FieldType,Typhon.Engine.FieldType,System.Int32,System.Type)
+  name: Field(int, string, FieldType, FieldType, int, Type)
+  href: api/Typhon.Engine.DBComponentDefinition.Field.html#Typhon_Engine_DBComponentDefinition_Field__ctor_System_Int32_System_String_Typhon_Engine_FieldType_Typhon_Engine_FieldType_System_Int32_System_Type_
+  commentId: M:Typhon.Engine.DBComponentDefinition.Field.#ctor(System.Int32,System.String,Typhon.Engine.FieldType,Typhon.Engine.FieldType,System.Int32,System.Type)
+  name.vb: New(Integer, String, FieldType, FieldType, Integer, Type)
+  fullName: Typhon.Engine.DBComponentDefinition.Field.Field(int, string, Typhon.Engine.FieldType, Typhon.Engine.FieldType, int, System.Type)
+  fullName.vb: Typhon.Engine.DBComponentDefinition.Field.New(Integer, String, Typhon.Engine.FieldType, Typhon.Engine.FieldType, Integer, System.Type)
+  nameWithType: DBComponentDefinition.Field.Field(int, string, FieldType, FieldType, int, Type)
+  nameWithType.vb: DBComponentDefinition.Field.New(Integer, String, FieldType, FieldType, Integer, Type)
 - uid: Typhon.Engine.DBComponentDefinition.Field.#ctor*
   name: Field
   href: api/Typhon.Engine.DBComponentDefinition.Field.html#Typhon_Engine_DBComponentDefinition_Field__ctor_
@@ -12015,6 +12385,32 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.DBComponentDefinition.Field.DoesFieldTypeSupportIndex
   nameWithType: DBComponentDefinition.Field.DoesFieldTypeSupportIndex
+- uid: Typhon.Engine.DBComponentDefinition.Field.DotNetType
+  name: DotNetType
+  href: api/Typhon.Engine.DBComponentDefinition.Field.html#Typhon_Engine_DBComponentDefinition_Field_DotNetType
+  commentId: P:Typhon.Engine.DBComponentDefinition.Field.DotNetType
+  fullName: Typhon.Engine.DBComponentDefinition.Field.DotNetType
+  nameWithType: DBComponentDefinition.Field.DotNetType
+- uid: Typhon.Engine.DBComponentDefinition.Field.DotNetType*
+  name: DotNetType
+  href: api/Typhon.Engine.DBComponentDefinition.Field.html#Typhon_Engine_DBComponentDefinition_Field_DotNetType_
+  commentId: Overload:Typhon.Engine.DBComponentDefinition.Field.DotNetType
+  isSpec: "True"
+  fullName: Typhon.Engine.DBComponentDefinition.Field.DotNetType
+  nameWithType: DBComponentDefinition.Field.DotNetType
+- uid: Typhon.Engine.DBComponentDefinition.Field.DotNetUnderlyingType
+  name: DotNetUnderlyingType
+  href: api/Typhon.Engine.DBComponentDefinition.Field.html#Typhon_Engine_DBComponentDefinition_Field_DotNetUnderlyingType
+  commentId: P:Typhon.Engine.DBComponentDefinition.Field.DotNetUnderlyingType
+  fullName: Typhon.Engine.DBComponentDefinition.Field.DotNetUnderlyingType
+  nameWithType: DBComponentDefinition.Field.DotNetUnderlyingType
+- uid: Typhon.Engine.DBComponentDefinition.Field.DotNetUnderlyingType*
+  name: DotNetUnderlyingType
+  href: api/Typhon.Engine.DBComponentDefinition.Field.html#Typhon_Engine_DBComponentDefinition_Field_DotNetUnderlyingType_
+  commentId: Overload:Typhon.Engine.DBComponentDefinition.Field.DotNetUnderlyingType
+  isSpec: "True"
+  fullName: Typhon.Engine.DBComponentDefinition.Field.DotNetUnderlyingType
+  nameWithType: DBComponentDefinition.Field.DotNetUnderlyingType
 - uid: Typhon.Engine.DBComponentDefinition.Field.FieldId
   name: FieldId
   href: api/Typhon.Engine.DBComponentDefinition.Field.html#Typhon_Engine_DBComponentDefinition_Field_FieldId
@@ -12028,6 +12424,19 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.DBComponentDefinition.Field.FieldId
   nameWithType: DBComponentDefinition.Field.FieldId
+- uid: Typhon.Engine.DBComponentDefinition.Field.FieldSize
+  name: FieldSize
+  href: api/Typhon.Engine.DBComponentDefinition.Field.html#Typhon_Engine_DBComponentDefinition_Field_FieldSize
+  commentId: P:Typhon.Engine.DBComponentDefinition.Field.FieldSize
+  fullName: Typhon.Engine.DBComponentDefinition.Field.FieldSize
+  nameWithType: DBComponentDefinition.Field.FieldSize
+- uid: Typhon.Engine.DBComponentDefinition.Field.FieldSize*
+  name: FieldSize
+  href: api/Typhon.Engine.DBComponentDefinition.Field.html#Typhon_Engine_DBComponentDefinition_Field_FieldSize_
+  commentId: Overload:Typhon.Engine.DBComponentDefinition.Field.FieldSize
+  isSpec: "True"
+  fullName: Typhon.Engine.DBComponentDefinition.Field.FieldSize
+  nameWithType: DBComponentDefinition.Field.FieldSize
 - uid: Typhon.Engine.DBComponentDefinition.Field.HasIndex
   name: HasIndex
   href: api/Typhon.Engine.DBComponentDefinition.Field.html#Typhon_Engine_DBComponentDefinition_Field_HasIndex
@@ -12145,6 +12554,19 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.DBComponentDefinition.Field.Type
   nameWithType: DBComponentDefinition.Field.Type
+- uid: Typhon.Engine.DBComponentDefinition.Field.UnderlyingType
+  name: UnderlyingType
+  href: api/Typhon.Engine.DBComponentDefinition.Field.html#Typhon_Engine_DBComponentDefinition_Field_UnderlyingType
+  commentId: P:Typhon.Engine.DBComponentDefinition.Field.UnderlyingType
+  fullName: Typhon.Engine.DBComponentDefinition.Field.UnderlyingType
+  nameWithType: DBComponentDefinition.Field.UnderlyingType
+- uid: Typhon.Engine.DBComponentDefinition.Field.UnderlyingType*
+  name: UnderlyingType
+  href: api/Typhon.Engine.DBComponentDefinition.Field.html#Typhon_Engine_DBComponentDefinition_Field_UnderlyingType_
+  commentId: Overload:Typhon.Engine.DBComponentDefinition.Field.UnderlyingType
+  isSpec: "True"
+  fullName: Typhon.Engine.DBComponentDefinition.Field.UnderlyingType
+  nameWithType: DBComponentDefinition.Field.UnderlyingType
 - uid: Typhon.Engine.DBComponentDefinition.FieldsByName
   name: FieldsByName
   href: api/Typhon.Engine.DBComponentDefinition.html#Typhon_Engine_DBComponentDefinition_FieldsByName
@@ -12486,15 +12908,6 @@ references:
   commentId: F:Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.Component
   fullName: Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.Component
   nameWithType: DatabaseDefinitions.DBComponentDefinitionBuilder.Component
-- uid: Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.WithField(System.Int32,System.String,Typhon.Engine.FieldType,System.Int32)
-  name: WithField(int, string, FieldType, int)
-  href: api/Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.html#Typhon_Engine_DatabaseDefinitions_DBComponentDefinitionBuilder_WithField_System_Int32_System_String_Typhon_Engine_FieldType_System_Int32_
-  commentId: M:Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.WithField(System.Int32,System.String,Typhon.Engine.FieldType,System.Int32)
-  name.vb: WithField(Integer, String, FieldType, Integer)
-  fullName: Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.WithField(int, string, Typhon.Engine.FieldType, int)
-  fullName.vb: Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.WithField(Integer, String, Typhon.Engine.FieldType, Integer)
-  nameWithType: DatabaseDefinitions.DBComponentDefinitionBuilder.WithField(int, string, FieldType, int)
-  nameWithType.vb: DatabaseDefinitions.DBComponentDefinitionBuilder.WithField(Integer, String, FieldType, Integer)
 - uid: Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.WithField*
   name: WithField
   href: api/Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.html#Typhon_Engine_DatabaseDefinitions_DBComponentDefinitionBuilder_WithField_
@@ -12502,6 +12915,15 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.WithField
   nameWithType: DatabaseDefinitions.DBComponentDefinitionBuilder.WithField
+- uid: Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.WithField``1(System.Int32,System.String,System.Int32)
+  name: WithField<T>(int, string, int)
+  href: api/Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.html#Typhon_Engine_DatabaseDefinitions_DBComponentDefinitionBuilder_WithField__1_System_Int32_System_String_System_Int32_
+  commentId: M:Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.WithField``1(System.Int32,System.String,System.Int32)
+  name.vb: WithField(Of T)(Integer, String, Integer)
+  fullName: Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.WithField<T>(int, string, int)
+  fullName.vb: Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.WithField(Of T)(Integer, String, Integer)
+  nameWithType: DatabaseDefinitions.DBComponentDefinitionBuilder.WithField<T>(int, string, int)
+  nameWithType.vb: DatabaseDefinitions.DBComponentDefinitionBuilder.WithField(Of T)(Integer, String, Integer)
 - uid: Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.WithPOCO*
   name: WithPOCO
   href: api/Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.html#Typhon_Engine_DatabaseDefinitions_DBComponentDefinitionBuilder_WithPOCO_
@@ -12530,15 +12952,15 @@ references:
   commentId: T:Typhon.Engine.DatabaseDefinitions.DBComponentFieldDefinitionBuilder
   fullName: Typhon.Engine.DatabaseDefinitions.DBComponentFieldDefinitionBuilder
   nameWithType: DatabaseDefinitions.DBComponentFieldDefinitionBuilder
-- uid: Typhon.Engine.DatabaseDefinitions.DBComponentFieldDefinitionBuilder.#ctor(Typhon.Engine.DatabaseDefinitions,Typhon.Engine.DBComponentDefinition,System.Int32,System.String,Typhon.Engine.FieldType,System.Int32)
-  name: DBComponentFieldDefinitionBuilder(DatabaseDefinitions, DBComponentDefinition, int, string, FieldType, int)
-  href: api/Typhon.Engine.DatabaseDefinitions.DBComponentFieldDefinitionBuilder.html#Typhon_Engine_DatabaseDefinitions_DBComponentFieldDefinitionBuilder__ctor_Typhon_Engine_DatabaseDefinitions_Typhon_Engine_DBComponentDefinition_System_Int32_System_String_Typhon_Engine_FieldType_System_Int32_
-  commentId: M:Typhon.Engine.DatabaseDefinitions.DBComponentFieldDefinitionBuilder.#ctor(Typhon.Engine.DatabaseDefinitions,Typhon.Engine.DBComponentDefinition,System.Int32,System.String,Typhon.Engine.FieldType,System.Int32)
-  name.vb: New(DatabaseDefinitions, DBComponentDefinition, Integer, String, FieldType, Integer)
-  fullName: Typhon.Engine.DatabaseDefinitions.DBComponentFieldDefinitionBuilder.DBComponentFieldDefinitionBuilder(Typhon.Engine.DatabaseDefinitions, Typhon.Engine.DBComponentDefinition, int, string, Typhon.Engine.FieldType, int)
-  fullName.vb: Typhon.Engine.DatabaseDefinitions.DBComponentFieldDefinitionBuilder.New(Typhon.Engine.DatabaseDefinitions, Typhon.Engine.DBComponentDefinition, Integer, String, Typhon.Engine.FieldType, Integer)
-  nameWithType: DatabaseDefinitions.DBComponentFieldDefinitionBuilder.DBComponentFieldDefinitionBuilder(DatabaseDefinitions, DBComponentDefinition, int, string, FieldType, int)
-  nameWithType.vb: DatabaseDefinitions.DBComponentFieldDefinitionBuilder.New(DatabaseDefinitions, DBComponentDefinition, Integer, String, FieldType, Integer)
+- uid: Typhon.Engine.DatabaseDefinitions.DBComponentFieldDefinitionBuilder.#ctor(Typhon.Engine.DatabaseDefinitions,Typhon.Engine.DBComponentDefinition,System.Int32,System.String,System.Type,System.Int32)
+  name: DBComponentFieldDefinitionBuilder(DatabaseDefinitions, DBComponentDefinition, int, string, Type, int)
+  href: api/Typhon.Engine.DatabaseDefinitions.DBComponentFieldDefinitionBuilder.html#Typhon_Engine_DatabaseDefinitions_DBComponentFieldDefinitionBuilder__ctor_Typhon_Engine_DatabaseDefinitions_Typhon_Engine_DBComponentDefinition_System_Int32_System_String_System_Type_System_Int32_
+  commentId: M:Typhon.Engine.DatabaseDefinitions.DBComponentFieldDefinitionBuilder.#ctor(Typhon.Engine.DatabaseDefinitions,Typhon.Engine.DBComponentDefinition,System.Int32,System.String,System.Type,System.Int32)
+  name.vb: New(DatabaseDefinitions, DBComponentDefinition, Integer, String, Type, Integer)
+  fullName: Typhon.Engine.DatabaseDefinitions.DBComponentFieldDefinitionBuilder.DBComponentFieldDefinitionBuilder(Typhon.Engine.DatabaseDefinitions, Typhon.Engine.DBComponentDefinition, int, string, System.Type, int)
+  fullName.vb: Typhon.Engine.DatabaseDefinitions.DBComponentFieldDefinitionBuilder.New(Typhon.Engine.DatabaseDefinitions, Typhon.Engine.DBComponentDefinition, Integer, String, System.Type, Integer)
+  nameWithType: DatabaseDefinitions.DBComponentFieldDefinitionBuilder.DBComponentFieldDefinitionBuilder(DatabaseDefinitions, DBComponentDefinition, int, string, Type, int)
+  nameWithType.vb: DatabaseDefinitions.DBComponentFieldDefinitionBuilder.New(DatabaseDefinitions, DBComponentDefinition, Integer, String, Type, Integer)
 - uid: Typhon.Engine.DatabaseDefinitions.DBComponentFieldDefinitionBuilder.#ctor*
   name: DBComponentFieldDefinitionBuilder
   href: api/Typhon.Engine.DatabaseDefinitions.DBComponentFieldDefinitionBuilder.html#Typhon_Engine_DatabaseDefinitions_DBComponentFieldDefinitionBuilder__ctor_
@@ -12619,15 +13041,6 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.DatabaseDefinitions.IDBComponentDefinitionBuilder.Build
   nameWithType: DatabaseDefinitions.IDBComponentDefinitionBuilder.Build
-- uid: Typhon.Engine.DatabaseDefinitions.IDBComponentDefinitionBuilder.WithField(System.Int32,System.String,Typhon.Engine.FieldType,System.Int32)
-  name: WithField(int, string, FieldType, int)
-  href: api/Typhon.Engine.DatabaseDefinitions.IDBComponentDefinitionBuilder.html#Typhon_Engine_DatabaseDefinitions_IDBComponentDefinitionBuilder_WithField_System_Int32_System_String_Typhon_Engine_FieldType_System_Int32_
-  commentId: M:Typhon.Engine.DatabaseDefinitions.IDBComponentDefinitionBuilder.WithField(System.Int32,System.String,Typhon.Engine.FieldType,System.Int32)
-  name.vb: WithField(Integer, String, FieldType, Integer)
-  fullName: Typhon.Engine.DatabaseDefinitions.IDBComponentDefinitionBuilder.WithField(int, string, Typhon.Engine.FieldType, int)
-  fullName.vb: Typhon.Engine.DatabaseDefinitions.IDBComponentDefinitionBuilder.WithField(Integer, String, Typhon.Engine.FieldType, Integer)
-  nameWithType: DatabaseDefinitions.IDBComponentDefinitionBuilder.WithField(int, string, FieldType, int)
-  nameWithType.vb: DatabaseDefinitions.IDBComponentDefinitionBuilder.WithField(Integer, String, FieldType, Integer)
 - uid: Typhon.Engine.DatabaseDefinitions.IDBComponentDefinitionBuilder.WithField*
   name: WithField
   href: api/Typhon.Engine.DatabaseDefinitions.IDBComponentDefinitionBuilder.html#Typhon_Engine_DatabaseDefinitions_IDBComponentDefinitionBuilder_WithField_
@@ -12635,6 +13048,15 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.DatabaseDefinitions.IDBComponentDefinitionBuilder.WithField
   nameWithType: DatabaseDefinitions.IDBComponentDefinitionBuilder.WithField
+- uid: Typhon.Engine.DatabaseDefinitions.IDBComponentDefinitionBuilder.WithField``1(System.Int32,System.String,System.Int32)
+  name: WithField<T>(int, string, int)
+  href: api/Typhon.Engine.DatabaseDefinitions.IDBComponentDefinitionBuilder.html#Typhon_Engine_DatabaseDefinitions_IDBComponentDefinitionBuilder_WithField__1_System_Int32_System_String_System_Int32_
+  commentId: M:Typhon.Engine.DatabaseDefinitions.IDBComponentDefinitionBuilder.WithField``1(System.Int32,System.String,System.Int32)
+  name.vb: WithField(Of T)(Integer, String, Integer)
+  fullName: Typhon.Engine.DatabaseDefinitions.IDBComponentDefinitionBuilder.WithField<T>(int, string, int)
+  fullName.vb: Typhon.Engine.DatabaseDefinitions.IDBComponentDefinitionBuilder.WithField(Of T)(Integer, String, Integer)
+  nameWithType: DatabaseDefinitions.IDBComponentDefinitionBuilder.WithField<T>(int, string, int)
+  nameWithType.vb: DatabaseDefinitions.IDBComponentDefinitionBuilder.WithField(Of T)(Integer, String, Integer)
 - uid: Typhon.Engine.DatabaseDefinitions.IDBComponentDefinitionBuilder.WithPOCO*
   name: WithPOCO
   href: api/Typhon.Engine.DatabaseDefinitions.IDBComponentDefinitionBuilder.html#Typhon_Engine_DatabaseDefinitions_IDBComponentDefinitionBuilder_WithPOCO_
@@ -12723,6 +13145,18 @@ references:
   fullName.vb: Typhon.Engine.DatabaseEngine.New
   nameWithType: DatabaseEngine.DatabaseEngine
   nameWithType.vb: DatabaseEngine.New
+- uid: Typhon.Engine.DatabaseEngine.ComponentCollectionItemCountPerChunk
+  name: ComponentCollectionItemCountPerChunk
+  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_ComponentCollectionItemCountPerChunk
+  commentId: F:Typhon.Engine.DatabaseEngine.ComponentCollectionItemCountPerChunk
+  fullName: Typhon.Engine.DatabaseEngine.ComponentCollectionItemCountPerChunk
+  nameWithType: DatabaseEngine.ComponentCollectionItemCountPerChunk
+- uid: Typhon.Engine.DatabaseEngine.ComponentCollectionSegmentStartingSize
+  name: ComponentCollectionSegmentStartingSize
+  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_ComponentCollectionSegmentStartingSize
+  commentId: F:Typhon.Engine.DatabaseEngine.ComponentCollectionSegmentStartingSize
+  fullName: Typhon.Engine.DatabaseEngine.ComponentCollectionSegmentStartingSize
+  nameWithType: DatabaseEngine.ComponentCollectionSegmentStartingSize
 - uid: Typhon.Engine.DatabaseEngine.ConstructComponentStore
   name: ConstructComponentStore()
   href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_ConstructComponentStore
@@ -12788,6 +13222,53 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.DatabaseEngine.Dispose
   nameWithType: DatabaseEngine.Dispose
+- uid: Typhon.Engine.DatabaseEngine.GetComponentCollectionSegment(System.Int32)
+  name: GetComponentCollectionSegment(int)
+  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_GetComponentCollectionSegment_System_Int32_
+  commentId: M:Typhon.Engine.DatabaseEngine.GetComponentCollectionSegment(System.Int32)
+  name.vb: GetComponentCollectionSegment(Integer)
+  fullName: Typhon.Engine.DatabaseEngine.GetComponentCollectionSegment(int)
+  fullName.vb: Typhon.Engine.DatabaseEngine.GetComponentCollectionSegment(Integer)
+  nameWithType: DatabaseEngine.GetComponentCollectionSegment(int)
+  nameWithType.vb: DatabaseEngine.GetComponentCollectionSegment(Integer)
+- uid: Typhon.Engine.DatabaseEngine.GetComponentCollectionSegment*
+  name: GetComponentCollectionSegment
+  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_GetComponentCollectionSegment_
+  commentId: Overload:Typhon.Engine.DatabaseEngine.GetComponentCollectionSegment
+  isSpec: "True"
+  fullName: Typhon.Engine.DatabaseEngine.GetComponentCollectionSegment
+  nameWithType: DatabaseEngine.GetComponentCollectionSegment
+- uid: Typhon.Engine.DatabaseEngine.GetComponentCollectionSegment``1
+  name: GetComponentCollectionSegment<T>()
+  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_GetComponentCollectionSegment__1
+  commentId: M:Typhon.Engine.DatabaseEngine.GetComponentCollectionSegment``1
+  name.vb: GetComponentCollectionSegment(Of T)()
+  fullName: Typhon.Engine.DatabaseEngine.GetComponentCollectionSegment<T>()
+  fullName.vb: Typhon.Engine.DatabaseEngine.GetComponentCollectionSegment(Of T)()
+  nameWithType: DatabaseEngine.GetComponentCollectionSegment<T>()
+  nameWithType.vb: DatabaseEngine.GetComponentCollectionSegment(Of T)()
+- uid: Typhon.Engine.DatabaseEngine.GetComponentCollectionVSBS(System.Type)
+  name: GetComponentCollectionVSBS(Type)
+  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_GetComponentCollectionVSBS_System_Type_
+  commentId: M:Typhon.Engine.DatabaseEngine.GetComponentCollectionVSBS(System.Type)
+  fullName: Typhon.Engine.DatabaseEngine.GetComponentCollectionVSBS(System.Type)
+  nameWithType: DatabaseEngine.GetComponentCollectionVSBS(Type)
+- uid: Typhon.Engine.DatabaseEngine.GetComponentCollectionVSBS*
+  name: GetComponentCollectionVSBS
+  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_GetComponentCollectionVSBS_
+  commentId: Overload:Typhon.Engine.DatabaseEngine.GetComponentCollectionVSBS
+  isSpec: "True"
+  fullName: Typhon.Engine.DatabaseEngine.GetComponentCollectionVSBS
+  nameWithType: DatabaseEngine.GetComponentCollectionVSBS
+- uid: Typhon.Engine.DatabaseEngine.GetComponentCollectionVSBS``1
+  name: GetComponentCollectionVSBS<T>()
+  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_GetComponentCollectionVSBS__1
+  commentId: M:Typhon.Engine.DatabaseEngine.GetComponentCollectionVSBS``1
+  name.vb: GetComponentCollectionVSBS(Of T)()
+  fullName: Typhon.Engine.DatabaseEngine.GetComponentCollectionVSBS<T>()
+  fullName.vb: Typhon.Engine.DatabaseEngine.GetComponentCollectionVSBS(Of T)()
+  nameWithType: DatabaseEngine.GetComponentCollectionVSBS<T>()
+  nameWithType.vb: DatabaseEngine.GetComponentCollectionVSBS(Of T)()
 - uid: Typhon.Engine.DatabaseEngine.GetComponentTable(System.Type)
   name: GetComponentTable(Type)
   href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_GetComponentTable_System_Type_
@@ -12897,6 +13378,22 @@ references:
   fullName.vb: Typhon.Engine.DatabaseEngine.RegisterComponentFromAccessor(Of T)()
   nameWithType: DatabaseEngine.RegisterComponentFromAccessor<T>()
   nameWithType.vb: DatabaseEngine.RegisterComponentFromAccessor(Of T)()
+- uid: Typhon.Engine.DatabaseEngine.RoundToStandardStride(System.Int32)
+  name: RoundToStandardStride(int)
+  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_RoundToStandardStride_System_Int32_
+  commentId: M:Typhon.Engine.DatabaseEngine.RoundToStandardStride(System.Int32)
+  name.vb: RoundToStandardStride(Integer)
+  fullName: Typhon.Engine.DatabaseEngine.RoundToStandardStride(int)
+  fullName.vb: Typhon.Engine.DatabaseEngine.RoundToStandardStride(Integer)
+  nameWithType: DatabaseEngine.RoundToStandardStride(int)
+  nameWithType.vb: DatabaseEngine.RoundToStandardStride(Integer)
+- uid: Typhon.Engine.DatabaseEngine.RoundToStandardStride*
+  name: RoundToStandardStride
+  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_RoundToStandardStride_
+  commentId: Overload:Typhon.Engine.DatabaseEngine.RoundToStandardStride
+  isSpec: "True"
+  fullName: Typhon.Engine.DatabaseEngine.RoundToStandardStride
+  nameWithType: DatabaseEngine.RoundToStandardStride
 - uid: Typhon.Engine.DatabaseEngine.SaveInSystemSchema(Typhon.Engine.ComponentTable)
   name: SaveInSystemSchema(ComponentTable)
   href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_SaveInSystemSchema_Typhon_Engine_ComponentTable_
@@ -12923,6 +13420,18 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.DatabaseEngine.TransactionChain
   nameWithType: DatabaseEngine.TransactionChain
+- uid: Typhon.Engine.DatabaseEngine._componentCollectionSegmentByStride
+  name: _componentCollectionSegmentByStride
+  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine__componentCollectionSegmentByStride
+  commentId: F:Typhon.Engine.DatabaseEngine._componentCollectionSegmentByStride
+  fullName: Typhon.Engine.DatabaseEngine._componentCollectionSegmentByStride
+  nameWithType: DatabaseEngine._componentCollectionSegmentByStride
+- uid: Typhon.Engine.DatabaseEngine._componentCollectionVSBSByType
+  name: _componentCollectionVSBSByType
+  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine__componentCollectionVSBSByType
+  commentId: F:Typhon.Engine.DatabaseEngine._componentCollectionVSBSByType
+  fullName: Typhon.Engine.DatabaseEngine._componentCollectionVSBSByType
+  nameWithType: DatabaseEngine._componentCollectionVSBSByType
 - uid: Typhon.Engine.DatabaseEngine._componentTableByType
   name: _componentTableByType
   href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine__componentTableByType
@@ -13147,6 +13656,12 @@ references:
   commentId: F:Typhon.Engine.FieldType.Char
   fullName: Typhon.Engine.FieldType.Char
   nameWithType: FieldType.Char
+- uid: Typhon.Engine.FieldType.Collection
+  name: Collection
+  href: api/Typhon.Engine.FieldType.html#Typhon_Engine_FieldType_Collection
+  commentId: F:Typhon.Engine.FieldType.Collection
+  fullName: Typhon.Engine.FieldType.Collection
+  nameWithType: FieldType.Collection
 - uid: Typhon.Engine.FieldType.Double
   name: Double
   href: api/Typhon.Engine.FieldType.html#Typhon_Engine_FieldType_Double
@@ -18786,6 +19301,22 @@ references:
   commentId: F:Typhon.Engine.Transaction.ConcurrencyConflictSolver._entries
   fullName: Typhon.Engine.Transaction.ConcurrencyConflictSolver._entries
   nameWithType: Transaction.ConcurrencyConflictSolver._entries
+- uid: Typhon.Engine.Transaction.CreateComponentCollectionAccessor*
+  name: CreateComponentCollectionAccessor
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CreateComponentCollectionAccessor_
+  commentId: Overload:Typhon.Engine.Transaction.CreateComponentCollectionAccessor
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.CreateComponentCollectionAccessor
+  nameWithType: Transaction.CreateComponentCollectionAccessor
+- uid: Typhon.Engine.Transaction.CreateComponentCollectionAccessor``1(Typhon.Engine.ComponentCollection{``0}@)
+  name: CreateComponentCollectionAccessor<T>(ref ComponentCollection<T>)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CreateComponentCollectionAccessor__1_Typhon_Engine_ComponentCollection___0___
+  commentId: M:Typhon.Engine.Transaction.CreateComponentCollectionAccessor``1(Typhon.Engine.ComponentCollection{``0}@)
+  name.vb: CreateComponentCollectionAccessor(Of T)(ComponentCollection(Of T))
+  fullName: Typhon.Engine.Transaction.CreateComponentCollectionAccessor<T>(ref Typhon.Engine.ComponentCollection<T>)
+  fullName.vb: Typhon.Engine.Transaction.CreateComponentCollectionAccessor(Of T)(Typhon.Engine.ComponentCollection(Of T))
+  nameWithType: Transaction.CreateComponentCollectionAccessor<T>(ref ComponentCollection<T>)
+  nameWithType.vb: Transaction.CreateComponentCollectionAccessor(Of T)(ComponentCollection(Of T))
 - uid: Typhon.Engine.Transaction.CreateEntity(Typhon.Engine.Transaction.ComponentData[])
   name: CreateEntity(params ComponentData[])
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CreateEntity_Typhon_Engine_Transaction_ComponentData___
@@ -18924,6 +19455,22 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.Transaction.GetCompRevTableFirstChunkId
   nameWithType: Transaction.GetCompRevTableFirstChunkId
+- uid: Typhon.Engine.Transaction.GetComponentCollectionRefCounter*
+  name: GetComponentCollectionRefCounter
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetComponentCollectionRefCounter_
+  commentId: Overload:Typhon.Engine.Transaction.GetComponentCollectionRefCounter
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.GetComponentCollectionRefCounter
+  nameWithType: Transaction.GetComponentCollectionRefCounter
+- uid: Typhon.Engine.Transaction.GetComponentCollectionRefCounter``1(Typhon.Engine.ComponentCollection{``0}@)
+  name: GetComponentCollectionRefCounter<T>(ref ComponentCollection<T>)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetComponentCollectionRefCounter__1_Typhon_Engine_ComponentCollection___0___
+  commentId: M:Typhon.Engine.Transaction.GetComponentCollectionRefCounter``1(Typhon.Engine.ComponentCollection{``0}@)
+  name.vb: GetComponentCollectionRefCounter(Of T)(ComponentCollection(Of T))
+  fullName: Typhon.Engine.Transaction.GetComponentCollectionRefCounter<T>(ref Typhon.Engine.ComponentCollection<T>)
+  fullName.vb: Typhon.Engine.Transaction.GetComponentCollectionRefCounter(Of T)(Typhon.Engine.ComponentCollection(Of T))
+  nameWithType: Transaction.GetComponentCollectionRefCounter<T>(ref ComponentCollection<T>)
+  nameWithType.vb: Transaction.GetComponentCollectionRefCounter(Of T)(ComponentCollection(Of T))
 - uid: Typhon.Engine.Transaction.GetComponentInfo(System.Type)
   name: GetComponentInfo(Type)
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetComponentInfo_System_Type_
@@ -18966,6 +19513,22 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.Transaction.GetConflictSolver
   nameWithType: Transaction.GetConflictSolver
+- uid: Typhon.Engine.Transaction.GetReadOnlyCollectionEnumerator*
+  name: GetReadOnlyCollectionEnumerator
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetReadOnlyCollectionEnumerator_
+  commentId: Overload:Typhon.Engine.Transaction.GetReadOnlyCollectionEnumerator
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.GetReadOnlyCollectionEnumerator
+  nameWithType: Transaction.GetReadOnlyCollectionEnumerator
+- uid: Typhon.Engine.Transaction.GetReadOnlyCollectionEnumerator``1(Typhon.Engine.ComponentCollection{``0}@)
+  name: GetReadOnlyCollectionEnumerator<T>(ref ComponentCollection<T>)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetReadOnlyCollectionEnumerator__1_Typhon_Engine_ComponentCollection___0___
+  commentId: M:Typhon.Engine.Transaction.GetReadOnlyCollectionEnumerator``1(Typhon.Engine.ComponentCollection{``0}@)
+  name.vb: GetReadOnlyCollectionEnumerator(Of T)(ComponentCollection(Of T))
+  fullName: Typhon.Engine.Transaction.GetReadOnlyCollectionEnumerator<T>(ref Typhon.Engine.ComponentCollection<T>)
+  fullName.vb: Typhon.Engine.Transaction.GetReadOnlyCollectionEnumerator(Of T)(Typhon.Engine.ComponentCollection(Of T))
+  nameWithType: Transaction.GetReadOnlyCollectionEnumerator<T>(ref ComponentCollection<T>)
+  nameWithType.vb: Transaction.GetReadOnlyCollectionEnumerator(Of T)(ComponentCollection(Of T))
 - uid: Typhon.Engine.Transaction.GetRevisionCount*
   name: GetRevisionCount
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetRevisionCount_
@@ -19134,6 +19697,110 @@ references:
   fullName.vb: Typhon.Engine.Transaction.ReadEntity(Of TC1, TC2, TC3)(Long, TC1, TC2, TC3)
   nameWithType: Transaction.ReadEntity<TC1, TC2, TC3>(long, out TC1, out TC2, out TC3)
   nameWithType.vb: Transaction.ReadEntity(Of TC1, TC2, TC3)(Long, TC1, TC2, TC3)
+- uid: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1
+  name: Transaction.ReadOnlyCollectionEnumerator<T>
+  href: api/Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator-1.html
+  commentId: T:Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1
+  name.vb: Transaction.ReadOnlyCollectionEnumerator(Of T)
+  fullName: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator<T>
+  fullName.vb: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator(Of T)
+  nameWithType: Transaction.ReadOnlyCollectionEnumerator<T>
+  nameWithType.vb: Transaction.ReadOnlyCollectionEnumerator(Of T)
+- uid: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1.#ctor(Typhon.Engine.VariableSizedBufferSegment{`0},System.Int32)
+  name: ReadOnlyCollectionEnumerator(VariableSizedBufferSegment<T>, int)
+  href: api/Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator-1.html#Typhon_Engine_Transaction_ReadOnlyCollectionEnumerator_1__ctor_Typhon_Engine_VariableSizedBufferSegment__0__System_Int32_
+  commentId: M:Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1.#ctor(Typhon.Engine.VariableSizedBufferSegment{`0},System.Int32)
+  name.vb: New(VariableSizedBufferSegment(Of T), Integer)
+  fullName: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator<T>.ReadOnlyCollectionEnumerator(Typhon.Engine.VariableSizedBufferSegment<T>, int)
+  fullName.vb: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator(Of T).New(Typhon.Engine.VariableSizedBufferSegment(Of T), Integer)
+  nameWithType: Transaction.ReadOnlyCollectionEnumerator<T>.ReadOnlyCollectionEnumerator(VariableSizedBufferSegment<T>, int)
+  nameWithType.vb: Transaction.ReadOnlyCollectionEnumerator(Of T).New(VariableSizedBufferSegment(Of T), Integer)
+- uid: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1.#ctor*
+  name: ReadOnlyCollectionEnumerator
+  href: api/Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator-1.html#Typhon_Engine_Transaction_ReadOnlyCollectionEnumerator_1__ctor_
+  commentId: Overload:Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1.#ctor
+  isSpec: "True"
+  name.vb: New
+  fullName: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator<T>.ReadOnlyCollectionEnumerator
+  fullName.vb: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator(Of T).New
+  nameWithType: Transaction.ReadOnlyCollectionEnumerator<T>.ReadOnlyCollectionEnumerator
+  nameWithType.vb: Transaction.ReadOnlyCollectionEnumerator(Of T).New
+- uid: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1.Current
+  name: Current
+  href: api/Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator-1.html#Typhon_Engine_Transaction_ReadOnlyCollectionEnumerator_1_Current
+  commentId: P:Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1.Current
+  fullName: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator<T>.Current
+  fullName.vb: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator(Of T).Current
+  nameWithType: Transaction.ReadOnlyCollectionEnumerator<T>.Current
+  nameWithType.vb: Transaction.ReadOnlyCollectionEnumerator(Of T).Current
+- uid: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1.Current*
+  name: Current
+  href: api/Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator-1.html#Typhon_Engine_Transaction_ReadOnlyCollectionEnumerator_1_Current_
+  commentId: Overload:Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1.Current
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator<T>.Current
+  fullName.vb: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator(Of T).Current
+  nameWithType: Transaction.ReadOnlyCollectionEnumerator<T>.Current
+  nameWithType.vb: Transaction.ReadOnlyCollectionEnumerator(Of T).Current
+- uid: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1.Dispose
+  name: Dispose()
+  href: api/Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator-1.html#Typhon_Engine_Transaction_ReadOnlyCollectionEnumerator_1_Dispose
+  commentId: M:Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1.Dispose
+  fullName: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator<T>.Dispose()
+  fullName.vb: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator(Of T).Dispose()
+  nameWithType: Transaction.ReadOnlyCollectionEnumerator<T>.Dispose()
+  nameWithType.vb: Transaction.ReadOnlyCollectionEnumerator(Of T).Dispose()
+- uid: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1.Dispose*
+  name: Dispose
+  href: api/Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator-1.html#Typhon_Engine_Transaction_ReadOnlyCollectionEnumerator_1_Dispose_
+  commentId: Overload:Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1.Dispose
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator<T>.Dispose
+  fullName.vb: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator(Of T).Dispose
+  nameWithType: Transaction.ReadOnlyCollectionEnumerator<T>.Dispose
+  nameWithType.vb: Transaction.ReadOnlyCollectionEnumerator(Of T).Dispose
+- uid: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1.GetEnumerator
+  name: GetEnumerator()
+  href: api/Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator-1.html#Typhon_Engine_Transaction_ReadOnlyCollectionEnumerator_1_GetEnumerator
+  commentId: M:Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1.GetEnumerator
+  fullName: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator<T>.GetEnumerator()
+  fullName.vb: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator(Of T).GetEnumerator()
+  nameWithType: Transaction.ReadOnlyCollectionEnumerator<T>.GetEnumerator()
+  nameWithType.vb: Transaction.ReadOnlyCollectionEnumerator(Of T).GetEnumerator()
+- uid: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1.GetEnumerator*
+  name: GetEnumerator
+  href: api/Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator-1.html#Typhon_Engine_Transaction_ReadOnlyCollectionEnumerator_1_GetEnumerator_
+  commentId: Overload:Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1.GetEnumerator
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator<T>.GetEnumerator
+  fullName.vb: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator(Of T).GetEnumerator
+  nameWithType: Transaction.ReadOnlyCollectionEnumerator<T>.GetEnumerator
+  nameWithType.vb: Transaction.ReadOnlyCollectionEnumerator(Of T).GetEnumerator
+- uid: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1.MoveNext
+  name: MoveNext()
+  href: api/Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator-1.html#Typhon_Engine_Transaction_ReadOnlyCollectionEnumerator_1_MoveNext
+  commentId: M:Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1.MoveNext
+  fullName: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator<T>.MoveNext()
+  fullName.vb: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator(Of T).MoveNext()
+  nameWithType: Transaction.ReadOnlyCollectionEnumerator<T>.MoveNext()
+  nameWithType.vb: Transaction.ReadOnlyCollectionEnumerator(Of T).MoveNext()
+- uid: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1.MoveNext*
+  name: MoveNext
+  href: api/Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator-1.html#Typhon_Engine_Transaction_ReadOnlyCollectionEnumerator_1_MoveNext_
+  commentId: Overload:Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1.MoveNext
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator<T>.MoveNext
+  fullName.vb: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator(Of T).MoveNext
+  nameWithType: Transaction.ReadOnlyCollectionEnumerator<T>.MoveNext
+  nameWithType.vb: Transaction.ReadOnlyCollectionEnumerator(Of T).MoveNext
+- uid: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1._enumerator
+  name: _enumerator
+  href: api/Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator-1.html#Typhon_Engine_Transaction_ReadOnlyCollectionEnumerator_1__enumerator
+  commentId: F:Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator`1._enumerator
+  fullName: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator<T>._enumerator
+  fullName.vb: Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator(Of T)._enumerator
+  nameWithType: Transaction.ReadOnlyCollectionEnumerator<T>._enumerator
+  nameWithType.vb: Transaction.ReadOnlyCollectionEnumerator(Of T)._enumerator
 - uid: Typhon.Engine.Transaction.Reset
   name: Reset()
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_Reset
@@ -20159,6 +20826,40 @@ references:
   fullName.vb: Typhon.Engine.VariableSizedBufferAccessor(Of T).ReadOnlyElements
   nameWithType: VariableSizedBufferAccessor<T>.ReadOnlyElements
   nameWithType.vb: VariableSizedBufferAccessor(Of T).ReadOnlyElements
+- uid: Typhon.Engine.VariableSizedBufferAccessor`1.RefCounter
+  name: RefCounter
+  href: api/Typhon.Engine.VariableSizedBufferAccessor-1.html#Typhon_Engine_VariableSizedBufferAccessor_1_RefCounter
+  commentId: P:Typhon.Engine.VariableSizedBufferAccessor`1.RefCounter
+  fullName: Typhon.Engine.VariableSizedBufferAccessor<T>.RefCounter
+  fullName.vb: Typhon.Engine.VariableSizedBufferAccessor(Of T).RefCounter
+  nameWithType: VariableSizedBufferAccessor<T>.RefCounter
+  nameWithType.vb: VariableSizedBufferAccessor(Of T).RefCounter
+- uid: Typhon.Engine.VariableSizedBufferAccessor`1.RefCounter*
+  name: RefCounter
+  href: api/Typhon.Engine.VariableSizedBufferAccessor-1.html#Typhon_Engine_VariableSizedBufferAccessor_1_RefCounter_
+  commentId: Overload:Typhon.Engine.VariableSizedBufferAccessor`1.RefCounter
+  isSpec: "True"
+  fullName: Typhon.Engine.VariableSizedBufferAccessor<T>.RefCounter
+  fullName.vb: Typhon.Engine.VariableSizedBufferAccessor(Of T).RefCounter
+  nameWithType: VariableSizedBufferAccessor<T>.RefCounter
+  nameWithType.vb: VariableSizedBufferAccessor(Of T).RefCounter
+- uid: Typhon.Engine.VariableSizedBufferAccessor`1.TotalCount
+  name: TotalCount
+  href: api/Typhon.Engine.VariableSizedBufferAccessor-1.html#Typhon_Engine_VariableSizedBufferAccessor_1_TotalCount
+  commentId: P:Typhon.Engine.VariableSizedBufferAccessor`1.TotalCount
+  fullName: Typhon.Engine.VariableSizedBufferAccessor<T>.TotalCount
+  fullName.vb: Typhon.Engine.VariableSizedBufferAccessor(Of T).TotalCount
+  nameWithType: VariableSizedBufferAccessor<T>.TotalCount
+  nameWithType.vb: VariableSizedBufferAccessor(Of T).TotalCount
+- uid: Typhon.Engine.VariableSizedBufferAccessor`1.TotalCount*
+  name: TotalCount
+  href: api/Typhon.Engine.VariableSizedBufferAccessor-1.html#Typhon_Engine_VariableSizedBufferAccessor_1_TotalCount_
+  commentId: Overload:Typhon.Engine.VariableSizedBufferAccessor`1.TotalCount
+  isSpec: "True"
+  fullName: Typhon.Engine.VariableSizedBufferAccessor<T>.TotalCount
+  fullName.vb: Typhon.Engine.VariableSizedBufferAccessor(Of T).TotalCount
+  nameWithType: VariableSizedBufferAccessor<T>.TotalCount
+  nameWithType.vb: VariableSizedBufferAccessor(Of T).TotalCount
 - uid: Typhon.Engine.VariableSizedBufferAccessor`1._accessor
   name: _accessor
   href: api/Typhon.Engine.VariableSizedBufferAccessor-1.html#Typhon_Engine_VariableSizedBufferAccessor_1__accessor
@@ -20279,6 +20980,12 @@ references:
   commentId: F:Typhon.Engine.VariableSizedBufferRootHeader.Lock
   fullName: Typhon.Engine.VariableSizedBufferRootHeader.Lock
   nameWithType: VariableSizedBufferRootHeader.Lock
+- uid: Typhon.Engine.VariableSizedBufferRootHeader.RefCounter
+  name: RefCounter
+  href: api/Typhon.Engine.VariableSizedBufferRootHeader.html#Typhon_Engine_VariableSizedBufferRootHeader_RefCounter
+  commentId: F:Typhon.Engine.VariableSizedBufferRootHeader.RefCounter
+  fullName: Typhon.Engine.VariableSizedBufferRootHeader.RefCounter
+  nameWithType: VariableSizedBufferRootHeader.RefCounter
 - uid: Typhon.Engine.VariableSizedBufferRootHeader.TotalCount
   name: TotalCount
   href: api/Typhon.Engine.VariableSizedBufferRootHeader.html#Typhon_Engine_VariableSizedBufferRootHeader_TotalCount
@@ -20291,6 +20998,148 @@ references:
   commentId: F:Typhon.Engine.VariableSizedBufferRootHeader.TotalFreeChunk
   fullName: Typhon.Engine.VariableSizedBufferRootHeader.TotalFreeChunk
   nameWithType: VariableSizedBufferRootHeader.TotalFreeChunk
+- uid: Typhon.Engine.VariableSizedBufferSegmentBase
+  name: VariableSizedBufferSegmentBase
+  href: api/Typhon.Engine.VariableSizedBufferSegmentBase.html
+  commentId: T:Typhon.Engine.VariableSizedBufferSegmentBase
+  fullName: Typhon.Engine.VariableSizedBufferSegmentBase
+  nameWithType: VariableSizedBufferSegmentBase
+- uid: Typhon.Engine.VariableSizedBufferSegmentBase.#ctor(Typhon.Engine.ChunkBasedSegment,System.Int32)
+  name: VariableSizedBufferSegmentBase(ChunkBasedSegment, int)
+  href: api/Typhon.Engine.VariableSizedBufferSegmentBase.html#Typhon_Engine_VariableSizedBufferSegmentBase__ctor_Typhon_Engine_ChunkBasedSegment_System_Int32_
+  commentId: M:Typhon.Engine.VariableSizedBufferSegmentBase.#ctor(Typhon.Engine.ChunkBasedSegment,System.Int32)
+  name.vb: New(ChunkBasedSegment, Integer)
+  fullName: Typhon.Engine.VariableSizedBufferSegmentBase.VariableSizedBufferSegmentBase(Typhon.Engine.ChunkBasedSegment, int)
+  fullName.vb: Typhon.Engine.VariableSizedBufferSegmentBase.New(Typhon.Engine.ChunkBasedSegment, Integer)
+  nameWithType: VariableSizedBufferSegmentBase.VariableSizedBufferSegmentBase(ChunkBasedSegment, int)
+  nameWithType.vb: VariableSizedBufferSegmentBase.New(ChunkBasedSegment, Integer)
+- uid: Typhon.Engine.VariableSizedBufferSegmentBase.#ctor*
+  name: VariableSizedBufferSegmentBase
+  href: api/Typhon.Engine.VariableSizedBufferSegmentBase.html#Typhon_Engine_VariableSizedBufferSegmentBase__ctor_
+  commentId: Overload:Typhon.Engine.VariableSizedBufferSegmentBase.#ctor
+  isSpec: "True"
+  name.vb: New
+  fullName: Typhon.Engine.VariableSizedBufferSegmentBase.VariableSizedBufferSegmentBase
+  fullName.vb: Typhon.Engine.VariableSizedBufferSegmentBase.New
+  nameWithType: VariableSizedBufferSegmentBase.VariableSizedBufferSegmentBase
+  nameWithType.vb: VariableSizedBufferSegmentBase.New
+- uid: Typhon.Engine.VariableSizedBufferSegmentBase.AllocateBuffer(Typhon.Engine.ChunkRandomAccessor)
+  name: AllocateBuffer(ChunkRandomAccessor)
+  href: api/Typhon.Engine.VariableSizedBufferSegmentBase.html#Typhon_Engine_VariableSizedBufferSegmentBase_AllocateBuffer_Typhon_Engine_ChunkRandomAccessor_
+  commentId: M:Typhon.Engine.VariableSizedBufferSegmentBase.AllocateBuffer(Typhon.Engine.ChunkRandomAccessor)
+  fullName: Typhon.Engine.VariableSizedBufferSegmentBase.AllocateBuffer(Typhon.Engine.ChunkRandomAccessor)
+  nameWithType: VariableSizedBufferSegmentBase.AllocateBuffer(ChunkRandomAccessor)
+- uid: Typhon.Engine.VariableSizedBufferSegmentBase.AllocateBuffer*
+  name: AllocateBuffer
+  href: api/Typhon.Engine.VariableSizedBufferSegmentBase.html#Typhon_Engine_VariableSizedBufferSegmentBase_AllocateBuffer_
+  commentId: Overload:Typhon.Engine.VariableSizedBufferSegmentBase.AllocateBuffer
+  isSpec: "True"
+  fullName: Typhon.Engine.VariableSizedBufferSegmentBase.AllocateBuffer
+  nameWithType: VariableSizedBufferSegmentBase.AllocateBuffer
+- uid: Typhon.Engine.VariableSizedBufferSegmentBase.BufferAddRef(System.Int32,Typhon.Engine.ChunkRandomAccessor)
+  name: BufferAddRef(int, ChunkRandomAccessor)
+  href: api/Typhon.Engine.VariableSizedBufferSegmentBase.html#Typhon_Engine_VariableSizedBufferSegmentBase_BufferAddRef_System_Int32_Typhon_Engine_ChunkRandomAccessor_
+  commentId: M:Typhon.Engine.VariableSizedBufferSegmentBase.BufferAddRef(System.Int32,Typhon.Engine.ChunkRandomAccessor)
+  name.vb: BufferAddRef(Integer, ChunkRandomAccessor)
+  fullName: Typhon.Engine.VariableSizedBufferSegmentBase.BufferAddRef(int, Typhon.Engine.ChunkRandomAccessor)
+  fullName.vb: Typhon.Engine.VariableSizedBufferSegmentBase.BufferAddRef(Integer, Typhon.Engine.ChunkRandomAccessor)
+  nameWithType: VariableSizedBufferSegmentBase.BufferAddRef(int, ChunkRandomAccessor)
+  nameWithType.vb: VariableSizedBufferSegmentBase.BufferAddRef(Integer, ChunkRandomAccessor)
+- uid: Typhon.Engine.VariableSizedBufferSegmentBase.BufferAddRef*
+  name: BufferAddRef
+  href: api/Typhon.Engine.VariableSizedBufferSegmentBase.html#Typhon_Engine_VariableSizedBufferSegmentBase_BufferAddRef_
+  commentId: Overload:Typhon.Engine.VariableSizedBufferSegmentBase.BufferAddRef
+  isSpec: "True"
+  fullName: Typhon.Engine.VariableSizedBufferSegmentBase.BufferAddRef
+  nameWithType: VariableSizedBufferSegmentBase.BufferAddRef
+- uid: Typhon.Engine.VariableSizedBufferSegmentBase.BufferRelease(System.Int32,Typhon.Engine.ChunkRandomAccessor)
+  name: BufferRelease(int, ChunkRandomAccessor)
+  href: api/Typhon.Engine.VariableSizedBufferSegmentBase.html#Typhon_Engine_VariableSizedBufferSegmentBase_BufferRelease_System_Int32_Typhon_Engine_ChunkRandomAccessor_
+  commentId: M:Typhon.Engine.VariableSizedBufferSegmentBase.BufferRelease(System.Int32,Typhon.Engine.ChunkRandomAccessor)
+  name.vb: BufferRelease(Integer, ChunkRandomAccessor)
+  fullName: Typhon.Engine.VariableSizedBufferSegmentBase.BufferRelease(int, Typhon.Engine.ChunkRandomAccessor)
+  fullName.vb: Typhon.Engine.VariableSizedBufferSegmentBase.BufferRelease(Integer, Typhon.Engine.ChunkRandomAccessor)
+  nameWithType: VariableSizedBufferSegmentBase.BufferRelease(int, ChunkRandomAccessor)
+  nameWithType.vb: VariableSizedBufferSegmentBase.BufferRelease(Integer, ChunkRandomAccessor)
+- uid: Typhon.Engine.VariableSizedBufferSegmentBase.BufferRelease*
+  name: BufferRelease
+  href: api/Typhon.Engine.VariableSizedBufferSegmentBase.html#Typhon_Engine_VariableSizedBufferSegmentBase_BufferRelease_
+  commentId: Overload:Typhon.Engine.VariableSizedBufferSegmentBase.BufferRelease
+  isSpec: "True"
+  fullName: Typhon.Engine.VariableSizedBufferSegmentBase.BufferRelease
+  nameWithType: VariableSizedBufferSegmentBase.BufferRelease
+- uid: Typhon.Engine.VariableSizedBufferSegmentBase.DeleteBuffer(System.Int32,Typhon.Engine.ChunkRandomAccessor)
+  name: DeleteBuffer(int, ChunkRandomAccessor)
+  href: api/Typhon.Engine.VariableSizedBufferSegmentBase.html#Typhon_Engine_VariableSizedBufferSegmentBase_DeleteBuffer_System_Int32_Typhon_Engine_ChunkRandomAccessor_
+  commentId: M:Typhon.Engine.VariableSizedBufferSegmentBase.DeleteBuffer(System.Int32,Typhon.Engine.ChunkRandomAccessor)
+  name.vb: DeleteBuffer(Integer, ChunkRandomAccessor)
+  fullName: Typhon.Engine.VariableSizedBufferSegmentBase.DeleteBuffer(int, Typhon.Engine.ChunkRandomAccessor)
+  fullName.vb: Typhon.Engine.VariableSizedBufferSegmentBase.DeleteBuffer(Integer, Typhon.Engine.ChunkRandomAccessor)
+  nameWithType: VariableSizedBufferSegmentBase.DeleteBuffer(int, ChunkRandomAccessor)
+  nameWithType.vb: VariableSizedBufferSegmentBase.DeleteBuffer(Integer, ChunkRandomAccessor)
+- uid: Typhon.Engine.VariableSizedBufferSegmentBase.DeleteBuffer*
+  name: DeleteBuffer
+  href: api/Typhon.Engine.VariableSizedBufferSegmentBase.html#Typhon_Engine_VariableSizedBufferSegmentBase_DeleteBuffer_
+  commentId: Overload:Typhon.Engine.VariableSizedBufferSegmentBase.DeleteBuffer
+  isSpec: "True"
+  fullName: Typhon.Engine.VariableSizedBufferSegmentBase.DeleteBuffer
+  nameWithType: VariableSizedBufferSegmentBase.DeleteBuffer
+- uid: Typhon.Engine.VariableSizedBufferSegmentBase.ElementCountPerChunk
+  name: ElementCountPerChunk
+  href: api/Typhon.Engine.VariableSizedBufferSegmentBase.html#Typhon_Engine_VariableSizedBufferSegmentBase_ElementCountPerChunk
+  commentId: F:Typhon.Engine.VariableSizedBufferSegmentBase.ElementCountPerChunk
+  fullName: Typhon.Engine.VariableSizedBufferSegmentBase.ElementCountPerChunk
+  nameWithType: VariableSizedBufferSegmentBase.ElementCountPerChunk
+- uid: Typhon.Engine.VariableSizedBufferSegmentBase.ElementCountRootChunk
+  name: ElementCountRootChunk
+  href: api/Typhon.Engine.VariableSizedBufferSegmentBase.html#Typhon_Engine_VariableSizedBufferSegmentBase_ElementCountRootChunk
+  commentId: F:Typhon.Engine.VariableSizedBufferSegmentBase.ElementCountRootChunk
+  fullName: Typhon.Engine.VariableSizedBufferSegmentBase.ElementCountRootChunk
+  nameWithType: VariableSizedBufferSegmentBase.ElementCountRootChunk
+- uid: Typhon.Engine.VariableSizedBufferSegmentBase.LockBuffer(Typhon.Engine.VariableSizedBufferRootHeader@)
+  name: LockBuffer(ref VariableSizedBufferRootHeader)
+  href: api/Typhon.Engine.VariableSizedBufferSegmentBase.html#Typhon_Engine_VariableSizedBufferSegmentBase_LockBuffer_Typhon_Engine_VariableSizedBufferRootHeader__
+  commentId: M:Typhon.Engine.VariableSizedBufferSegmentBase.LockBuffer(Typhon.Engine.VariableSizedBufferRootHeader@)
+  name.vb: LockBuffer(VariableSizedBufferRootHeader)
+  fullName: Typhon.Engine.VariableSizedBufferSegmentBase.LockBuffer(ref Typhon.Engine.VariableSizedBufferRootHeader)
+  fullName.vb: Typhon.Engine.VariableSizedBufferSegmentBase.LockBuffer(Typhon.Engine.VariableSizedBufferRootHeader)
+  nameWithType: VariableSizedBufferSegmentBase.LockBuffer(ref VariableSizedBufferRootHeader)
+  nameWithType.vb: VariableSizedBufferSegmentBase.LockBuffer(VariableSizedBufferRootHeader)
+- uid: Typhon.Engine.VariableSizedBufferSegmentBase.LockBuffer*
+  name: LockBuffer
+  href: api/Typhon.Engine.VariableSizedBufferSegmentBase.html#Typhon_Engine_VariableSizedBufferSegmentBase_LockBuffer_
+  commentId: Overload:Typhon.Engine.VariableSizedBufferSegmentBase.LockBuffer
+  isSpec: "True"
+  fullName: Typhon.Engine.VariableSizedBufferSegmentBase.LockBuffer
+  nameWithType: VariableSizedBufferSegmentBase.LockBuffer
+- uid: Typhon.Engine.VariableSizedBufferSegmentBase.ReleaseLockOnBuffer(Typhon.Engine.VariableSizedBufferRootHeader@)
+  name: ReleaseLockOnBuffer(ref VariableSizedBufferRootHeader)
+  href: api/Typhon.Engine.VariableSizedBufferSegmentBase.html#Typhon_Engine_VariableSizedBufferSegmentBase_ReleaseLockOnBuffer_Typhon_Engine_VariableSizedBufferRootHeader__
+  commentId: M:Typhon.Engine.VariableSizedBufferSegmentBase.ReleaseLockOnBuffer(Typhon.Engine.VariableSizedBufferRootHeader@)
+  name.vb: ReleaseLockOnBuffer(VariableSizedBufferRootHeader)
+  fullName: Typhon.Engine.VariableSizedBufferSegmentBase.ReleaseLockOnBuffer(ref Typhon.Engine.VariableSizedBufferRootHeader)
+  fullName.vb: Typhon.Engine.VariableSizedBufferSegmentBase.ReleaseLockOnBuffer(Typhon.Engine.VariableSizedBufferRootHeader)
+  nameWithType: VariableSizedBufferSegmentBase.ReleaseLockOnBuffer(ref VariableSizedBufferRootHeader)
+  nameWithType.vb: VariableSizedBufferSegmentBase.ReleaseLockOnBuffer(VariableSizedBufferRootHeader)
+- uid: Typhon.Engine.VariableSizedBufferSegmentBase.ReleaseLockOnBuffer*
+  name: ReleaseLockOnBuffer
+  href: api/Typhon.Engine.VariableSizedBufferSegmentBase.html#Typhon_Engine_VariableSizedBufferSegmentBase_ReleaseLockOnBuffer_
+  commentId: Overload:Typhon.Engine.VariableSizedBufferSegmentBase.ReleaseLockOnBuffer
+  isSpec: "True"
+  fullName: Typhon.Engine.VariableSizedBufferSegmentBase.ReleaseLockOnBuffer
+  nameWithType: VariableSizedBufferSegmentBase.ReleaseLockOnBuffer
+- uid: Typhon.Engine.VariableSizedBufferSegmentBase.Segment
+  name: Segment
+  href: api/Typhon.Engine.VariableSizedBufferSegmentBase.html#Typhon_Engine_VariableSizedBufferSegmentBase_Segment
+  commentId: F:Typhon.Engine.VariableSizedBufferSegmentBase.Segment
+  fullName: Typhon.Engine.VariableSizedBufferSegmentBase.Segment
+  nameWithType: VariableSizedBufferSegmentBase.Segment
+- uid: Typhon.Engine.VariableSizedBufferSegmentBase._elementSize
+  name: _elementSize
+  href: api/Typhon.Engine.VariableSizedBufferSegmentBase.html#Typhon_Engine_VariableSizedBufferSegmentBase__elementSize
+  commentId: F:Typhon.Engine.VariableSizedBufferSegmentBase._elementSize
+  fullName: Typhon.Engine.VariableSizedBufferSegmentBase._elementSize
+  nameWithType: VariableSizedBufferSegmentBase._elementSize
 - uid: Typhon.Engine.VariableSizedBufferSegment`1
   name: VariableSizedBufferSegment<T>
   href: api/Typhon.Engine.VariableSizedBufferSegment-1.html
@@ -20337,41 +21186,42 @@ references:
   fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).AddElement
   nameWithType: VariableSizedBufferSegment<T>.AddElement
   nameWithType.vb: VariableSizedBufferSegment(Of T).AddElement
-- uid: Typhon.Engine.VariableSizedBufferSegment`1.AllocateBuffer(Typhon.Engine.ChunkRandomAccessor)
-  name: AllocateBuffer(ChunkRandomAccessor)
-  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_AllocateBuffer_Typhon_Engine_ChunkRandomAccessor_
-  commentId: M:Typhon.Engine.VariableSizedBufferSegment`1.AllocateBuffer(Typhon.Engine.ChunkRandomAccessor)
-  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.AllocateBuffer(Typhon.Engine.ChunkRandomAccessor)
-  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).AllocateBuffer(Typhon.Engine.ChunkRandomAccessor)
-  nameWithType: VariableSizedBufferSegment<T>.AllocateBuffer(ChunkRandomAccessor)
-  nameWithType.vb: VariableSizedBufferSegment(Of T).AllocateBuffer(ChunkRandomAccessor)
-- uid: Typhon.Engine.VariableSizedBufferSegment`1.AllocateBuffer*
-  name: AllocateBuffer
-  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_AllocateBuffer_
-  commentId: Overload:Typhon.Engine.VariableSizedBufferSegment`1.AllocateBuffer
+- uid: Typhon.Engine.VariableSizedBufferSegment`1.AddElements(System.Int32,System.ReadOnlySpan{`0},Typhon.Engine.ChunkRandomAccessor)
+  name: AddElements(int, ReadOnlySpan<T>, ChunkRandomAccessor)
+  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_AddElements_System_Int32_System_ReadOnlySpan__0__Typhon_Engine_ChunkRandomAccessor_
+  commentId: M:Typhon.Engine.VariableSizedBufferSegment`1.AddElements(System.Int32,System.ReadOnlySpan{`0},Typhon.Engine.ChunkRandomAccessor)
+  name.vb: AddElements(Integer, ReadOnlySpan(Of T), ChunkRandomAccessor)
+  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.AddElements(int, System.ReadOnlySpan<T>, Typhon.Engine.ChunkRandomAccessor)
+  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).AddElements(Integer, System.ReadOnlySpan(Of T), Typhon.Engine.ChunkRandomAccessor)
+  nameWithType: VariableSizedBufferSegment<T>.AddElements(int, ReadOnlySpan<T>, ChunkRandomAccessor)
+  nameWithType.vb: VariableSizedBufferSegment(Of T).AddElements(Integer, ReadOnlySpan(Of T), ChunkRandomAccessor)
+- uid: Typhon.Engine.VariableSizedBufferSegment`1.AddElements*
+  name: AddElements
+  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_AddElements_
+  commentId: Overload:Typhon.Engine.VariableSizedBufferSegment`1.AddElements
   isSpec: "True"
-  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.AllocateBuffer
-  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).AllocateBuffer
-  nameWithType: VariableSizedBufferSegment<T>.AllocateBuffer
-  nameWithType.vb: VariableSizedBufferSegment(Of T).AllocateBuffer
-- uid: Typhon.Engine.VariableSizedBufferSegment`1.DeleteBuffer(System.Int32,Typhon.Engine.ChunkRandomAccessor)
-  name: DeleteBuffer(int, ChunkRandomAccessor)
-  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_DeleteBuffer_System_Int32_Typhon_Engine_ChunkRandomAccessor_
-  commentId: M:Typhon.Engine.VariableSizedBufferSegment`1.DeleteBuffer(System.Int32,Typhon.Engine.ChunkRandomAccessor)
-  name.vb: DeleteBuffer(Integer, ChunkRandomAccessor)
-  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.DeleteBuffer(int, Typhon.Engine.ChunkRandomAccessor)
-  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).DeleteBuffer(Integer, Typhon.Engine.ChunkRandomAccessor)
-  nameWithType: VariableSizedBufferSegment<T>.DeleteBuffer(int, ChunkRandomAccessor)
-  nameWithType.vb: VariableSizedBufferSegment(Of T).DeleteBuffer(Integer, ChunkRandomAccessor)
-- uid: Typhon.Engine.VariableSizedBufferSegment`1.DeleteBuffer*
-  name: DeleteBuffer
-  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_DeleteBuffer_
-  commentId: Overload:Typhon.Engine.VariableSizedBufferSegment`1.DeleteBuffer
+  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.AddElements
+  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).AddElements
+  nameWithType: VariableSizedBufferSegment<T>.AddElements
+  nameWithType.vb: VariableSizedBufferSegment(Of T).AddElements
+- uid: Typhon.Engine.VariableSizedBufferSegment`1.CloneBuffer(System.Int32,Typhon.Engine.ChunkRandomAccessor)
+  name: CloneBuffer(int, ChunkRandomAccessor)
+  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_CloneBuffer_System_Int32_Typhon_Engine_ChunkRandomAccessor_
+  commentId: M:Typhon.Engine.VariableSizedBufferSegment`1.CloneBuffer(System.Int32,Typhon.Engine.ChunkRandomAccessor)
+  name.vb: CloneBuffer(Integer, ChunkRandomAccessor)
+  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.CloneBuffer(int, Typhon.Engine.ChunkRandomAccessor)
+  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).CloneBuffer(Integer, Typhon.Engine.ChunkRandomAccessor)
+  nameWithType: VariableSizedBufferSegment<T>.CloneBuffer(int, ChunkRandomAccessor)
+  nameWithType.vb: VariableSizedBufferSegment(Of T).CloneBuffer(Integer, ChunkRandomAccessor)
+- uid: Typhon.Engine.VariableSizedBufferSegment`1.CloneBuffer*
+  name: CloneBuffer
+  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_CloneBuffer_
+  commentId: Overload:Typhon.Engine.VariableSizedBufferSegment`1.CloneBuffer
   isSpec: "True"
-  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.DeleteBuffer
-  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).DeleteBuffer
-  nameWithType: VariableSizedBufferSegment<T>.DeleteBuffer
-  nameWithType.vb: VariableSizedBufferSegment(Of T).DeleteBuffer
+  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.CloneBuffer
+  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).CloneBuffer
+  nameWithType: VariableSizedBufferSegment<T>.CloneBuffer
+  nameWithType.vb: VariableSizedBufferSegment(Of T).CloneBuffer
 - uid: Typhon.Engine.VariableSizedBufferSegment`1.DeleteElement(System.Int32,System.Int32,`0,Typhon.Engine.ChunkRandomAccessor)
   name: DeleteElement(int, int, T, ChunkRandomAccessor)
   href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_DeleteElement_System_Int32_System_Int32__0_Typhon_Engine_ChunkRandomAccessor_
@@ -20390,39 +21240,51 @@ references:
   fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).DeleteElement
   nameWithType: VariableSizedBufferSegment<T>.DeleteElement
   nameWithType.vb: VariableSizedBufferSegment(Of T).DeleteElement
-- uid: Typhon.Engine.VariableSizedBufferSegment`1.ElementCountPerChunk
-  name: ElementCountPerChunk
-  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_ElementCountPerChunk
-  commentId: F:Typhon.Engine.VariableSizedBufferSegment`1.ElementCountPerChunk
-  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.ElementCountPerChunk
-  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).ElementCountPerChunk
-  nameWithType: VariableSizedBufferSegment<T>.ElementCountPerChunk
-  nameWithType.vb: VariableSizedBufferSegment(Of T).ElementCountPerChunk
-- uid: Typhon.Engine.VariableSizedBufferSegment`1.ElementCountRootChunk
-  name: ElementCountRootChunk
-  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_ElementCountRootChunk
-  commentId: F:Typhon.Engine.VariableSizedBufferSegment`1.ElementCountRootChunk
-  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.ElementCountRootChunk
-  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).ElementCountRootChunk
-  nameWithType: VariableSizedBufferSegment<T>.ElementCountRootChunk
-  nameWithType.vb: VariableSizedBufferSegment(Of T).ElementCountRootChunk
-- uid: Typhon.Engine.VariableSizedBufferSegment`1.ElementSize
-  name: ElementSize
-  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_ElementSize
-  commentId: F:Typhon.Engine.VariableSizedBufferSegment`1.ElementSize
-  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.ElementSize
-  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).ElementSize
-  nameWithType: VariableSizedBufferSegment<T>.ElementSize
-  nameWithType.vb: VariableSizedBufferSegment(Of T).ElementSize
-- uid: Typhon.Engine.VariableSizedBufferSegment`1.GetReadOnlyAccessor(System.Int32,Typhon.Engine.ChangeSet)
-  name: GetReadOnlyAccessor(int, ChangeSet)
-  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_GetReadOnlyAccessor_System_Int32_Typhon_Engine_ChangeSet_
-  commentId: M:Typhon.Engine.VariableSizedBufferSegment`1.GetReadOnlyAccessor(System.Int32,Typhon.Engine.ChangeSet)
-  name.vb: GetReadOnlyAccessor(Integer, ChangeSet)
-  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.GetReadOnlyAccessor(int, Typhon.Engine.ChangeSet)
-  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).GetReadOnlyAccessor(Integer, Typhon.Engine.ChangeSet)
-  nameWithType: VariableSizedBufferSegment<T>.GetReadOnlyAccessor(int, ChangeSet)
-  nameWithType.vb: VariableSizedBufferSegment(Of T).GetReadOnlyAccessor(Integer, ChangeSet)
+- uid: Typhon.Engine.VariableSizedBufferSegment`1.EnumerateBuffer(System.Int32)
+  name: EnumerateBuffer(int)
+  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_EnumerateBuffer_System_Int32_
+  commentId: M:Typhon.Engine.VariableSizedBufferSegment`1.EnumerateBuffer(System.Int32)
+  name.vb: EnumerateBuffer(Integer)
+  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.EnumerateBuffer(int)
+  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).EnumerateBuffer(Integer)
+  nameWithType: VariableSizedBufferSegment<T>.EnumerateBuffer(int)
+  nameWithType.vb: VariableSizedBufferSegment(Of T).EnumerateBuffer(Integer)
+- uid: Typhon.Engine.VariableSizedBufferSegment`1.EnumerateBuffer*
+  name: EnumerateBuffer
+  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_EnumerateBuffer_
+  commentId: Overload:Typhon.Engine.VariableSizedBufferSegment`1.EnumerateBuffer
+  isSpec: "True"
+  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.EnumerateBuffer
+  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).EnumerateBuffer
+  nameWithType: VariableSizedBufferSegment<T>.EnumerateBuffer
+  nameWithType.vb: VariableSizedBufferSegment(Of T).EnumerateBuffer
+- uid: Typhon.Engine.VariableSizedBufferSegment`1.GetAccessor(System.Int32,Typhon.Engine.ChangeSet)
+  name: GetAccessor(int, ChangeSet)
+  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_GetAccessor_System_Int32_Typhon_Engine_ChangeSet_
+  commentId: M:Typhon.Engine.VariableSizedBufferSegment`1.GetAccessor(System.Int32,Typhon.Engine.ChangeSet)
+  name.vb: GetAccessor(Integer, ChangeSet)
+  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.GetAccessor(int, Typhon.Engine.ChangeSet)
+  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).GetAccessor(Integer, Typhon.Engine.ChangeSet)
+  nameWithType: VariableSizedBufferSegment<T>.GetAccessor(int, ChangeSet)
+  nameWithType.vb: VariableSizedBufferSegment(Of T).GetAccessor(Integer, ChangeSet)
+- uid: Typhon.Engine.VariableSizedBufferSegment`1.GetAccessor*
+  name: GetAccessor
+  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_GetAccessor_
+  commentId: Overload:Typhon.Engine.VariableSizedBufferSegment`1.GetAccessor
+  isSpec: "True"
+  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.GetAccessor
+  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).GetAccessor
+  nameWithType: VariableSizedBufferSegment<T>.GetAccessor
+  nameWithType.vb: VariableSizedBufferSegment(Of T).GetAccessor
+- uid: Typhon.Engine.VariableSizedBufferSegment`1.GetReadOnlyAccessor(System.Int32)
+  name: GetReadOnlyAccessor(int)
+  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_GetReadOnlyAccessor_System_Int32_
+  commentId: M:Typhon.Engine.VariableSizedBufferSegment`1.GetReadOnlyAccessor(System.Int32)
+  name.vb: GetReadOnlyAccessor(Integer)
+  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.GetReadOnlyAccessor(int)
+  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).GetReadOnlyAccessor(Integer)
+  nameWithType: VariableSizedBufferSegment<T>.GetReadOnlyAccessor(int)
+  nameWithType.vb: VariableSizedBufferSegment(Of T).GetReadOnlyAccessor(Integer)
 - uid: Typhon.Engine.VariableSizedBufferSegment`1.GetReadOnlyAccessor*
   name: GetReadOnlyAccessor
   href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_GetReadOnlyAccessor_
@@ -20432,50 +21294,6 @@ references:
   fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).GetReadOnlyAccessor
   nameWithType: VariableSizedBufferSegment<T>.GetReadOnlyAccessor
   nameWithType.vb: VariableSizedBufferSegment(Of T).GetReadOnlyAccessor
-- uid: Typhon.Engine.VariableSizedBufferSegment`1.LockBuffer(Typhon.Engine.VariableSizedBufferRootHeader@)
-  name: LockBuffer(ref VariableSizedBufferRootHeader)
-  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_LockBuffer_Typhon_Engine_VariableSizedBufferRootHeader__
-  commentId: M:Typhon.Engine.VariableSizedBufferSegment`1.LockBuffer(Typhon.Engine.VariableSizedBufferRootHeader@)
-  name.vb: LockBuffer(VariableSizedBufferRootHeader)
-  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.LockBuffer(ref Typhon.Engine.VariableSizedBufferRootHeader)
-  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).LockBuffer(Typhon.Engine.VariableSizedBufferRootHeader)
-  nameWithType: VariableSizedBufferSegment<T>.LockBuffer(ref VariableSizedBufferRootHeader)
-  nameWithType.vb: VariableSizedBufferSegment(Of T).LockBuffer(VariableSizedBufferRootHeader)
-- uid: Typhon.Engine.VariableSizedBufferSegment`1.LockBuffer*
-  name: LockBuffer
-  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_LockBuffer_
-  commentId: Overload:Typhon.Engine.VariableSizedBufferSegment`1.LockBuffer
-  isSpec: "True"
-  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.LockBuffer
-  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).LockBuffer
-  nameWithType: VariableSizedBufferSegment<T>.LockBuffer
-  nameWithType.vb: VariableSizedBufferSegment(Of T).LockBuffer
-- uid: Typhon.Engine.VariableSizedBufferSegment`1.ReleaseLockOnBuffer(Typhon.Engine.VariableSizedBufferRootHeader@)
-  name: ReleaseLockOnBuffer(ref VariableSizedBufferRootHeader)
-  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_ReleaseLockOnBuffer_Typhon_Engine_VariableSizedBufferRootHeader__
-  commentId: M:Typhon.Engine.VariableSizedBufferSegment`1.ReleaseLockOnBuffer(Typhon.Engine.VariableSizedBufferRootHeader@)
-  name.vb: ReleaseLockOnBuffer(VariableSizedBufferRootHeader)
-  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.ReleaseLockOnBuffer(ref Typhon.Engine.VariableSizedBufferRootHeader)
-  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).ReleaseLockOnBuffer(Typhon.Engine.VariableSizedBufferRootHeader)
-  nameWithType: VariableSizedBufferSegment<T>.ReleaseLockOnBuffer(ref VariableSizedBufferRootHeader)
-  nameWithType.vb: VariableSizedBufferSegment(Of T).ReleaseLockOnBuffer(VariableSizedBufferRootHeader)
-- uid: Typhon.Engine.VariableSizedBufferSegment`1.ReleaseLockOnBuffer*
-  name: ReleaseLockOnBuffer
-  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_ReleaseLockOnBuffer_
-  commentId: Overload:Typhon.Engine.VariableSizedBufferSegment`1.ReleaseLockOnBuffer
-  isSpec: "True"
-  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.ReleaseLockOnBuffer
-  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).ReleaseLockOnBuffer
-  nameWithType: VariableSizedBufferSegment<T>.ReleaseLockOnBuffer
-  nameWithType.vb: VariableSizedBufferSegment(Of T).ReleaseLockOnBuffer
-- uid: Typhon.Engine.VariableSizedBufferSegment`1.Segment
-  name: Segment
-  href: api/Typhon.Engine.VariableSizedBufferSegment-1.html#Typhon_Engine_VariableSizedBufferSegment_1_Segment
-  commentId: F:Typhon.Engine.VariableSizedBufferSegment`1.Segment
-  fullName: Typhon.Engine.VariableSizedBufferSegment<T>.Segment
-  fullName.vb: Typhon.Engine.VariableSizedBufferSegment(Of T).Segment
-  nameWithType: VariableSizedBufferSegment<T>.Segment
-  nameWithType.vb: VariableSizedBufferSegment(Of T).Segment
 - uid: Typhon.Engine.Variant
   name: Variant
   href: api/Typhon.Engine.Variant.html

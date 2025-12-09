@@ -328,8 +328,8 @@ Class DatabaseDefinitions.DBComponentDefinitionBuilder  <a class="header-action 
 
   <a id="Typhon_Engine_DatabaseDefinitions_DBComponentDefinitionBuilder_WithField_" data-uid="Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.WithField*"></a>
 
-  <h3 id="Typhon_Engine_DatabaseDefinitions_DBComponentDefinitionBuilder_WithField_System_Int32_System_String_Typhon_Engine_FieldType_System_Int32_" data-uid="Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.WithField(System.Int32,System.String,Typhon.Engine.FieldType,System.Int32)">
-  WithField(int, string, FieldType, int)
+  <h3 id="Typhon_Engine_DatabaseDefinitions_DBComponentDefinitionBuilder_WithField__1_System_Int32_System_String_System_Int32_" data-uid="Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.WithField``1(System.Int32,System.String,System.Int32)">
+  WithField&lt;T&gt;(int, string, int)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DatabaseDefinitions.cs/#L61"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -337,7 +337,7 @@ Class DatabaseDefinitions.DBComponentDefinitionBuilder  <a class="header-action 
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public DatabaseDefinitions.IDbComponentFieldDefinitionBuilder WithField(int fieldId, string name, FieldType type, int offset)</code></pre>
+    <pre><code class="lang-csharp hljs">public DatabaseDefinitions.IDbComponentFieldDefinitionBuilder WithField&lt;T&gt;(int fieldId, string name, int offset) where T : unmanaged</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -345,8 +345,6 @@ Class DatabaseDefinitions.DBComponentDefinitionBuilder  <a class="header-action 
     <dt><code>fieldId</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>
     <dt><code>name</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
-    <dd></dd>
-    <dt><code>type</code> <a class="xref" href="Typhon.Engine.FieldType.html">FieldType</a></dt>
     <dd></dd>
     <dt><code>offset</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>
@@ -358,6 +356,11 @@ Class DatabaseDefinitions.DBComponentDefinitionBuilder  <a class="header-action 
     <dd></dd>
   </dl>
 
+  <h4 class="section">Type Parameters</h4>
+  <dl class="parameters">
+    <dt><code>T</code></dt>
+    <dd></dd>
+  </dl>
 
 
 

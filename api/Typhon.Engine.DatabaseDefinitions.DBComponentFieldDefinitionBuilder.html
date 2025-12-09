@@ -138,7 +138,7 @@ Class DatabaseDefinitions.DBComponentFieldDefinitionBuilder  <a class="header-ac
       <a class="xref" href="Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.html#Typhon_Engine_DatabaseDefinitions_DBComponentDefinitionBuilder_WithPOCO__1">DatabaseDefinitions.DBComponentDefinitionBuilder.WithPOCO&lt;T&gt;()</a>
     </div>
     <div>
-      <a class="xref" href="Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.html#Typhon_Engine_DatabaseDefinitions_DBComponentDefinitionBuilder_WithField_System_Int32_System_String_Typhon_Engine_FieldType_System_Int32_">DatabaseDefinitions.DBComponentDefinitionBuilder.WithField(int, string, FieldType, int)</a>
+      <a class="xref" href="Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.html#Typhon_Engine_DatabaseDefinitions_DBComponentDefinitionBuilder_WithField__1_System_Int32_System_String_System_Int32_">DatabaseDefinitions.DBComponentDefinitionBuilder.WithField&lt;T&gt;(int, string, int)</a>
     </div>
     <div>
       <a class="xref" href="Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.html#Typhon_Engine_DatabaseDefinitions_DBComponentDefinitionBuilder_Build">DatabaseDefinitions.DBComponentDefinitionBuilder.Build()</a>
@@ -177,8 +177,8 @@ Class DatabaseDefinitions.DBComponentFieldDefinitionBuilder  <a class="header-ac
 
   <a id="Typhon_Engine_DatabaseDefinitions_DBComponentFieldDefinitionBuilder__ctor_" data-uid="Typhon.Engine.DatabaseDefinitions.DBComponentFieldDefinitionBuilder.#ctor*"></a>
 
-  <h3 id="Typhon_Engine_DatabaseDefinitions_DBComponentFieldDefinitionBuilder__ctor_Typhon_Engine_DatabaseDefinitions_Typhon_Engine_DBComponentDefinition_System_Int32_System_String_Typhon_Engine_FieldType_System_Int32_" data-uid="Typhon.Engine.DatabaseDefinitions.DBComponentFieldDefinitionBuilder.#ctor(Typhon.Engine.DatabaseDefinitions,Typhon.Engine.DBComponentDefinition,System.Int32,System.String,Typhon.Engine.FieldType,System.Int32)">
-  DBComponentFieldDefinitionBuilder(DatabaseDefinitions, DBComponentDefinition, int, string, FieldType, int)
+  <h3 id="Typhon_Engine_DatabaseDefinitions_DBComponentFieldDefinitionBuilder__ctor_Typhon_Engine_DatabaseDefinitions_Typhon_Engine_DBComponentDefinition_System_Int32_System_String_System_Type_System_Int32_" data-uid="Typhon.Engine.DatabaseDefinitions.DBComponentFieldDefinitionBuilder.#ctor(Typhon.Engine.DatabaseDefinitions,Typhon.Engine.DBComponentDefinition,System.Int32,System.String,System.Type,System.Int32)">
+  DBComponentFieldDefinitionBuilder(DatabaseDefinitions, DBComponentDefinition, int, string, Type, int)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DatabaseDefinitions.cs/#L95"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -186,7 +186,7 @@ Class DatabaseDefinitions.DBComponentFieldDefinitionBuilder  <a class="header-ac
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">internal DBComponentFieldDefinitionBuilder(DatabaseDefinitions owner, DBComponentDefinition component, int fieldId, string fieldName, FieldType fieldType, int offset)</code></pre>
+    <pre><code class="lang-csharp hljs">internal DBComponentFieldDefinitionBuilder(DatabaseDefinitions owner, DBComponentDefinition component, int fieldId, string fieldName, Type type, int offset)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -199,7 +199,7 @@ Class DatabaseDefinitions.DBComponentFieldDefinitionBuilder  <a class="header-ac
     <dd></dd>
     <dt><code>fieldName</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
     <dd></dd>
-    <dt><code>fieldType</code> <a class="xref" href="Typhon.Engine.FieldType.html">FieldType</a></dt>
+    <dt><code>type</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.type">Type</a></dt>
     <dd></dd>
     <dt><code>offset</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
     <dd></dd>

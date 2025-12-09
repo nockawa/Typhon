@@ -964,6 +964,20 @@
     },
     {
       "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.BufferEnumerator-1.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.BufferEnumerator-1.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.BufferEnumerator<T>",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.BufferEnumerator-1.yml\" sourcestartlinenumber=\"1\">Zero-allocation enumerator for iterating over all elements in a variable-sized buffer.\nThis is a ref struct to ensure stack allocation and zero GC pressure.</p>\n"
+    },
+    {
+      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.ChangeSet.yml",
       "output": {
         ".html": {
@@ -1118,6 +1132,20 @@
     },
     {
       "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ComponentCollectionAccessor-1.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ComponentCollectionAccessor-1.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ComponentCollectionAccessor<T>",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.ComponentR1.yml",
       "output": {
         ".html": {
@@ -1142,6 +1170,20 @@
       "Uid": null,
       "IsMRef": true,
       "Title": "Typhon.Engine.ComponentTable",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ComponentTableFlags.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ComponentTableFlags.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ComponentTableFlags",
       "Summary": null
     },
     {
@@ -2238,6 +2280,20 @@
     },
     {
       "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator-1.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator-1.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator<T>",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.Transaction.RevisionEnumerator.yml",
       "output": {
         ".html": {
@@ -2389,6 +2445,20 @@
       "IsMRef": true,
       "Title": "Typhon.Engine.VariableSizedBufferSegment<T>",
       "Summary": "<p sourcefile=\"api/Typhon.Engine.VariableSizedBufferSegment-1.yml\" sourcestartlinenumber=\"1\">Segment to store variable size buffer of elements</p>\n"
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.VariableSizedBufferSegmentBase.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.VariableSizedBufferSegmentBase.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.VariableSizedBufferSegmentBase",
+      "Summary": null
     },
     {
       "type": "ManagedReference",
