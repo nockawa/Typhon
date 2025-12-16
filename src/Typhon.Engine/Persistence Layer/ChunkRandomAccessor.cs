@@ -305,6 +305,10 @@ public unsafe class ChunkRandomAccessor : IDisposable
             _cachedEntries = new CachedEntry[cachedPagesCount];
             _pageIndices = new int[cachedPagesCount];
         }
+        else
+        {
+            _cachedPages.AsSpan().Clear();
+        }
 
         _stride = _owner.Stride;
         _cachedEntries.AsSpan().Clear();
@@ -370,6 +374,7 @@ public unsafe class ChunkRandomAccessor : IDisposable
             }
                 
             cachedPage.Dispose();
+            cachedPages[i] = default;
             cachedEntry.CurrentPageState = PagedMMF.PageState.Idle;
             cachedEntry.HitCount = 0;
             _pageIndices[i] = -1;

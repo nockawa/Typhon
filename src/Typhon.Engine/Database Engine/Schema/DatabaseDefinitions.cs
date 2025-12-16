@@ -40,10 +40,10 @@ public class DatabaseDefinitions
         private readonly DatabaseDefinitions _owner;
         protected readonly DBComponentDefinition Component;
 
-        public DBComponentDefinitionBuilder(DatabaseDefinitions owner, string name, int revision)
+        public DBComponentDefinitionBuilder(DatabaseDefinitions owner, string name, int revision, bool allowMultiple = false)
         {
             _owner = owner;
-            Component = new DBComponentDefinition(name, revision);
+            Component = new DBComponentDefinition(name, revision, allowMultiple);
         }
 
         protected DBComponentDefinitionBuilder(DatabaseDefinitions owner, DBComponentDefinition component)
@@ -115,7 +115,7 @@ public class DatabaseDefinitions
             throw new InvalidOperationException($"Missing the ComponentAttribute on the type {t} declaration");
         }
         
-        var compDef = new DBComponentDefinition(ca.Name ?? t.Name, ca.Revision) { POCOType = t };
+        var compDef = new DBComponentDefinition(ca.Name ?? t.Name, ca.Revision, ca.AllowMultiple) { POCOType = t };
 
         if (_components.TryGetValue(compDef.FullName, out _))
         {

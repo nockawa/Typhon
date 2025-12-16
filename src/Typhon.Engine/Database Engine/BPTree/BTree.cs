@@ -569,7 +569,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public VariableSizedBufferAccessor<int> TryGetMultiple(TKey key, ChunkRandomAccessor accessor)
     {
-        if (TryGet(key, out var bufferId, accessor) == false)
+        if (!TryGet(key, out var bufferId, accessor))
         {
             return default;
         }

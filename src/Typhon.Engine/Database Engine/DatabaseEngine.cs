@@ -19,11 +19,13 @@ public sealed class ComponentAttribute : Attribute
 {
     public string Name { get; }
     public int Revision { get; }
+    public bool AllowMultiple { get; }
 
-    public ComponentAttribute(string name, int revision)
+    public ComponentAttribute(string name, int revision, bool allowMultiple = false)
     {
         Name = name;
         Revision = revision;
+        AllowMultiple = allowMultiple;
     }
 }
 
@@ -42,7 +44,7 @@ public sealed class IndexAttribute : Attribute
     public bool AllowMultiple { get; set; }
 }
 
-[Component(SchemaName, 1)]
+[Component(SchemaName, 1, true)]
 [StructLayout(LayoutKind.Sequential)]
 [PublicAPI]
 public struct FieldR1
@@ -50,9 +52,6 @@ public struct FieldR1
     public const string SchemaName = "Typhon.Schema.Field";
 
     public String64 Name;
-
-    [Index(AllowMultiple = true)]
-    public int ComponentFK;
 
     public int FieldId;
     public FieldType Type;
@@ -129,15 +128,16 @@ public class DatabaseEngine : IDisposable
         DBD = new DatabaseDefinitions();
         ConstructComponentStore();
 
-        MMF.CreatingEvent += OnCreating;
-        MMF.LoadingEvent += OnLoading;
+        if (MMF.IsDatabaseFileCreating)
+        {
+            CreateSystemSchemaR1();
+        }
+        else
+        {
+            
+        }
+        
     }
-
-    private void OnLoading(object sender, EventArgs args)
-    {
-    }
-
-    private void OnCreating(object sender, EventArgs args) => CreateSystemSchemaR1();
 
     public bool IsDisposed { get; private set; }
 
@@ -200,8 +200,6 @@ public class DatabaseEngine : IDisposable
     // Create the first revision of the system schema
     private void CreateSystemSchemaR1()
     {
-        const int revision = 1;
-        
         // Register the system components
         RegisterComponentFromAccessor<FieldR1>();
         RegisterComponentFromAccessor<ComponentR1>();
@@ -246,6 +244,26 @@ public class DatabaseEngine : IDisposable
             DefaultIndexSPI     = table.DefaultIndexSegment.RootPageIndex,
             String64IndexSPI    = table.String64IndexSegment.RootPageIndex,
         };
+
+        {
+            using var a = t.CreateComponentCollectionAccessor(ref comp.Fields);
+
+            foreach (var kvp in table.Definition.FieldsByName)
+            {
+                var field = kvp.Value;
+                var f = new FieldR1
+                {
+                    Name = (String64)field.Name,
+                    FieldId = field.FieldId,
+                    Type = field.Type,
+                    ArrayLength = field.ArrayLength
+                };
+            
+                a.Add(f);
+            }
+        }
+        
+        t.Commit();
     }
 
     public bool RegisterComponentFromAccessor<T>() where T : unmanaged
