@@ -10594,19 +10594,6 @@ references:
   commentId: F:Typhon.Engine.CompRevStorageElement.ComponentChunkId
   fullName: Typhon.Engine.CompRevStorageElement.ComponentChunkId
   nameWithType: CompRevStorageElement.ComponentChunkId
-- uid: Typhon.Engine.CompRevStorageElement.DateTime
-  name: DateTime
-  href: api/Typhon.Engine.CompRevStorageElement.html#Typhon_Engine_CompRevStorageElement_DateTime
-  commentId: P:Typhon.Engine.CompRevStorageElement.DateTime
-  fullName: Typhon.Engine.CompRevStorageElement.DateTime
-  nameWithType: CompRevStorageElement.DateTime
-- uid: Typhon.Engine.CompRevStorageElement.DateTime*
-  name: DateTime
-  href: api/Typhon.Engine.CompRevStorageElement.html#Typhon_Engine_CompRevStorageElement_DateTime_
-  commentId: Overload:Typhon.Engine.CompRevStorageElement.DateTime
-  isSpec: "True"
-  fullName: Typhon.Engine.CompRevStorageElement.DateTime
-  nameWithType: CompRevStorageElement.DateTime
 - uid: Typhon.Engine.CompRevStorageElement.IsVoid
   name: IsVoid
   href: api/Typhon.Engine.CompRevStorageElement.html#Typhon_Engine_CompRevStorageElement_IsVoid
@@ -10633,6 +10620,19 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.CompRevStorageElement.IsolationFlag
   nameWithType: CompRevStorageElement.IsolationFlag
+- uid: Typhon.Engine.CompRevStorageElement.TSN
+  name: TSN
+  href: api/Typhon.Engine.CompRevStorageElement.html#Typhon_Engine_CompRevStorageElement_TSN
+  commentId: P:Typhon.Engine.CompRevStorageElement.TSN
+  fullName: Typhon.Engine.CompRevStorageElement.TSN
+  nameWithType: CompRevStorageElement.TSN
+- uid: Typhon.Engine.CompRevStorageElement.TSN*
+  name: TSN
+  href: api/Typhon.Engine.CompRevStorageElement.html#Typhon_Engine_CompRevStorageElement_TSN_
+  commentId: Overload:Typhon.Engine.CompRevStorageElement.TSN
+  isSpec: "True"
+  fullName: Typhon.Engine.CompRevStorageElement.TSN
+  nameWithType: CompRevStorageElement.TSN
 - uid: Typhon.Engine.CompRevStorageElement.Void
   name: Void()
   href: api/Typhon.Engine.CompRevStorageElement.html#Typhon_Engine_CompRevStorageElement_Void
@@ -15091,420 +15091,6 @@ references:
   commentId: F:Typhon.Engine.MurmurHash2.R
   fullName: Typhon.Engine.MurmurHash2.R
   nameWithType: MurmurHash2.R
-- uid: Typhon.Engine.PackedDateTime48
-  name: PackedDateTime48
-  href: api/Typhon.Engine.PackedDateTime48.html
-  commentId: T:Typhon.Engine.PackedDateTime48
-  fullName: Typhon.Engine.PackedDateTime48
-  nameWithType: PackedDateTime48
-- uid: Typhon.Engine.PackedDateTime48.#ctor(System.DateTime)
-  name: PackedDateTime48(DateTime)
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48__ctor_System_DateTime_
-  commentId: M:Typhon.Engine.PackedDateTime48.#ctor(System.DateTime)
-  name.vb: New(Date)
-  fullName: Typhon.Engine.PackedDateTime48.PackedDateTime48(System.DateTime)
-  fullName.vb: Typhon.Engine.PackedDateTime48.New(Date)
-  nameWithType: PackedDateTime48.PackedDateTime48(DateTime)
-  nameWithType.vb: PackedDateTime48.New(Date)
-- uid: Typhon.Engine.PackedDateTime48.#ctor(System.Int64,System.Boolean)
-  name: PackedDateTime48(long, bool)
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48__ctor_System_Int64_System_Boolean_
-  commentId: M:Typhon.Engine.PackedDateTime48.#ctor(System.Int64,System.Boolean)
-  name.vb: New(Long, Boolean)
-  fullName: Typhon.Engine.PackedDateTime48.PackedDateTime48(long, bool)
-  fullName.vb: Typhon.Engine.PackedDateTime48.New(Long, Boolean)
-  nameWithType: PackedDateTime48.PackedDateTime48(long, bool)
-  nameWithType.vb: PackedDateTime48.New(Long, Boolean)
-- uid: Typhon.Engine.PackedDateTime48.#ctor*
-  name: PackedDateTime48
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48__ctor_
-  commentId: Overload:Typhon.Engine.PackedDateTime48.#ctor
-  isSpec: "True"
-  name.vb: New
-  fullName: Typhon.Engine.PackedDateTime48.PackedDateTime48
-  fullName.vb: Typhon.Engine.PackedDateTime48.New
-  nameWithType: PackedDateTime48.PackedDateTime48
-  nameWithType.vb: PackedDateTime48.New
-- uid: Typhon.Engine.PackedDateTime48.BaseTicks
-  name: BaseTicks
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_BaseTicks
-  commentId: F:Typhon.Engine.PackedDateTime48.BaseTicks
-  fullName: Typhon.Engine.PackedDateTime48.BaseTicks
-  nameWithType: PackedDateTime48.BaseTicks
-- uid: Typhon.Engine.PackedDateTime48.FromDateTimeTicks(System.Int64)
-  name: FromDateTimeTicks(long)
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_FromDateTimeTicks_System_Int64_
-  commentId: M:Typhon.Engine.PackedDateTime48.FromDateTimeTicks(System.Int64)
-  name.vb: FromDateTimeTicks(Long)
-  fullName: Typhon.Engine.PackedDateTime48.FromDateTimeTicks(long)
-  fullName.vb: Typhon.Engine.PackedDateTime48.FromDateTimeTicks(Long)
-  nameWithType: PackedDateTime48.FromDateTimeTicks(long)
-  nameWithType.vb: PackedDateTime48.FromDateTimeTicks(Long)
-- uid: Typhon.Engine.PackedDateTime48.FromDateTimeTicks*
-  name: FromDateTimeTicks
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_FromDateTimeTicks_
-  commentId: Overload:Typhon.Engine.PackedDateTime48.FromDateTimeTicks
-  isSpec: "True"
-  fullName: Typhon.Engine.PackedDateTime48.FromDateTimeTicks
-  nameWithType: PackedDateTime48.FromDateTimeTicks
-- uid: Typhon.Engine.PackedDateTime48.FromPackedDateTimeTicks(System.Int64)
-  name: FromPackedDateTimeTicks(long)
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_FromPackedDateTimeTicks_System_Int64_
-  commentId: M:Typhon.Engine.PackedDateTime48.FromPackedDateTimeTicks(System.Int64)
-  name.vb: FromPackedDateTimeTicks(Long)
-  fullName: Typhon.Engine.PackedDateTime48.FromPackedDateTimeTicks(long)
-  fullName.vb: Typhon.Engine.PackedDateTime48.FromPackedDateTimeTicks(Long)
-  nameWithType: PackedDateTime48.FromPackedDateTimeTicks(long)
-  nameWithType.vb: PackedDateTime48.FromPackedDateTimeTicks(Long)
-- uid: Typhon.Engine.PackedDateTime48.FromPackedDateTimeTicks*
-  name: FromPackedDateTimeTicks
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_FromPackedDateTimeTicks_
-  commentId: Overload:Typhon.Engine.PackedDateTime48.FromPackedDateTimeTicks
-  isSpec: "True"
-  fullName: Typhon.Engine.PackedDateTime48.FromPackedDateTimeTicks
-  nameWithType: PackedDateTime48.FromPackedDateTimeTicks
-- uid: Typhon.Engine.PackedDateTime48.MinValue
-  name: MinValue
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_MinValue
-  commentId: F:Typhon.Engine.PackedDateTime48.MinValue
-  fullName: Typhon.Engine.PackedDateTime48.MinValue
-  nameWithType: PackedDateTime48.MinValue
-- uid: Typhon.Engine.PackedDateTime48.PackedShift
-  name: PackedShift
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_PackedShift
-  commentId: F:Typhon.Engine.PackedDateTime48.PackedShift
-  fullName: Typhon.Engine.PackedDateTime48.PackedShift
-  nameWithType: PackedDateTime48.PackedShift
-- uid: Typhon.Engine.PackedDateTime48.PackedTickResolution
-  name: PackedTickResolution
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_PackedTickResolution
-  commentId: F:Typhon.Engine.PackedDateTime48.PackedTickResolution
-  fullName: Typhon.Engine.PackedDateTime48.PackedTickResolution
-  nameWithType: PackedDateTime48.PackedTickResolution
-- uid: Typhon.Engine.PackedDateTime48.PackedTicks
-  name: PackedTicks
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_PackedTicks
-  commentId: P:Typhon.Engine.PackedDateTime48.PackedTicks
-  fullName: Typhon.Engine.PackedDateTime48.PackedTicks
-  nameWithType: PackedDateTime48.PackedTicks
-- uid: Typhon.Engine.PackedDateTime48.PackedTicks*
-  name: PackedTicks
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_PackedTicks_
-  commentId: Overload:Typhon.Engine.PackedDateTime48.PackedTicks
-  isSpec: "True"
-  fullName: Typhon.Engine.PackedDateTime48.PackedTicks
-  nameWithType: PackedDateTime48.PackedTicks
-- uid: Typhon.Engine.PackedDateTime48.Ticks
-  name: Ticks
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_Ticks
-  commentId: P:Typhon.Engine.PackedDateTime48.Ticks
-  fullName: Typhon.Engine.PackedDateTime48.Ticks
-  nameWithType: PackedDateTime48.Ticks
-- uid: Typhon.Engine.PackedDateTime48.Ticks*
-  name: Ticks
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_Ticks_
-  commentId: Overload:Typhon.Engine.PackedDateTime48.Ticks
-  isSpec: "True"
-  fullName: Typhon.Engine.PackedDateTime48.Ticks
-  nameWithType: PackedDateTime48.Ticks
-- uid: Typhon.Engine.PackedDateTime48.ToDateTimeTicks(System.Int64)
-  name: ToDateTimeTicks(long)
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_ToDateTimeTicks_System_Int64_
-  commentId: M:Typhon.Engine.PackedDateTime48.ToDateTimeTicks(System.Int64)
-  name.vb: ToDateTimeTicks(Long)
-  fullName: Typhon.Engine.PackedDateTime48.ToDateTimeTicks(long)
-  fullName.vb: Typhon.Engine.PackedDateTime48.ToDateTimeTicks(Long)
-  nameWithType: PackedDateTime48.ToDateTimeTicks(long)
-  nameWithType.vb: PackedDateTime48.ToDateTimeTicks(Long)
-- uid: Typhon.Engine.PackedDateTime48.ToDateTimeTicks*
-  name: ToDateTimeTicks
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_ToDateTimeTicks_
-  commentId: Overload:Typhon.Engine.PackedDateTime48.ToDateTimeTicks
-  isSpec: "True"
-  fullName: Typhon.Engine.PackedDateTime48.ToDateTimeTicks
-  nameWithType: PackedDateTime48.ToDateTimeTicks
-- uid: Typhon.Engine.PackedDateTime48.ToPackedTicks(System.Int64)
-  name: ToPackedTicks(long)
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_ToPackedTicks_System_Int64_
-  commentId: M:Typhon.Engine.PackedDateTime48.ToPackedTicks(System.Int64)
-  name.vb: ToPackedTicks(Long)
-  fullName: Typhon.Engine.PackedDateTime48.ToPackedTicks(long)
-  fullName.vb: Typhon.Engine.PackedDateTime48.ToPackedTicks(Long)
-  nameWithType: PackedDateTime48.ToPackedTicks(long)
-  nameWithType.vb: PackedDateTime48.ToPackedTicks(Long)
-- uid: Typhon.Engine.PackedDateTime48.ToPackedTicks*
-  name: ToPackedTicks
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_ToPackedTicks_
-  commentId: Overload:Typhon.Engine.PackedDateTime48.ToPackedTicks
-  isSpec: "True"
-  fullName: Typhon.Engine.PackedDateTime48.ToPackedTicks
-  nameWithType: PackedDateTime48.ToPackedTicks
-- uid: Typhon.Engine.PackedDateTime48.ToString
-  name: ToString()
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_ToString
-  commentId: M:Typhon.Engine.PackedDateTime48.ToString
-  fullName: Typhon.Engine.PackedDateTime48.ToString()
-  nameWithType: PackedDateTime48.ToString()
-- uid: Typhon.Engine.PackedDateTime48.ToString*
-  name: ToString
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_ToString_
-  commentId: Overload:Typhon.Engine.PackedDateTime48.ToString
-  isSpec: "True"
-  fullName: Typhon.Engine.PackedDateTime48.ToString
-  nameWithType: PackedDateTime48.ToString
-- uid: Typhon.Engine.PackedDateTime48.UtcNow
-  name: UtcNow
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_UtcNow
-  commentId: P:Typhon.Engine.PackedDateTime48.UtcNow
-  fullName: Typhon.Engine.PackedDateTime48.UtcNow
-  nameWithType: PackedDateTime48.UtcNow
-- uid: Typhon.Engine.PackedDateTime48.UtcNow*
-  name: UtcNow
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_UtcNow_
-  commentId: Overload:Typhon.Engine.PackedDateTime48.UtcNow
-  isSpec: "True"
-  fullName: Typhon.Engine.PackedDateTime48.UtcNow
-  nameWithType: PackedDateTime48.UtcNow
-- uid: Typhon.Engine.PackedDateTime48._high
-  name: _high
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48__high
-  commentId: F:Typhon.Engine.PackedDateTime48._high
-  fullName: Typhon.Engine.PackedDateTime48._high
-  nameWithType: PackedDateTime48._high
-- uid: Typhon.Engine.PackedDateTime48._low
-  name: _low
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48__low
-  commentId: F:Typhon.Engine.PackedDateTime48._low
-  fullName: Typhon.Engine.PackedDateTime48._low
-  nameWithType: PackedDateTime48._low
-- uid: Typhon.Engine.PackedDateTime48.op_Explicit(System.DateTime)~Typhon.Engine.PackedDateTime48
-  name: explicit operator PackedDateTime48(DateTime)
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_op_Explicit_System_DateTime__Typhon_Engine_PackedDateTime48
-  commentId: M:Typhon.Engine.PackedDateTime48.op_Explicit(System.DateTime)~Typhon.Engine.PackedDateTime48
-  name.vb: CType(Date)
-  fullName: Typhon.Engine.PackedDateTime48.explicit operator Typhon.Engine.PackedDateTime48(System.DateTime)
-  fullName.vb: Typhon.Engine.PackedDateTime48.CType(Date)
-  nameWithType: PackedDateTime48.explicit operator PackedDateTime48(DateTime)
-  nameWithType.vb: PackedDateTime48.CType(Date)
-- uid: Typhon.Engine.PackedDateTime48.op_Explicit(Typhon.Engine.PackedDateTime48)~System.DateTime
-  name: explicit operator DateTime(PackedDateTime48)
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_op_Explicit_Typhon_Engine_PackedDateTime48__System_DateTime
-  commentId: M:Typhon.Engine.PackedDateTime48.op_Explicit(Typhon.Engine.PackedDateTime48)~System.DateTime
-  name.vb: CType(PackedDateTime48)
-  fullName: Typhon.Engine.PackedDateTime48.explicit operator System.DateTime(Typhon.Engine.PackedDateTime48)
-  fullName.vb: Typhon.Engine.PackedDateTime48.CType(Typhon.Engine.PackedDateTime48)
-  nameWithType: PackedDateTime48.explicit operator DateTime(PackedDateTime48)
-  nameWithType.vb: PackedDateTime48.CType(PackedDateTime48)
-- uid: Typhon.Engine.PackedDateTime48.op_Explicit*
-  name: explicit operator
-  href: api/Typhon.Engine.PackedDateTime48.html#Typhon_Engine_PackedDateTime48_op_Explicit_
-  commentId: Overload:Typhon.Engine.PackedDateTime48.op_Explicit
-  isSpec: "True"
-  name.vb: CType
-  fullName: Typhon.Engine.PackedDateTime48.explicit operator
-  fullName.vb: Typhon.Engine.PackedDateTime48.CType
-  nameWithType: PackedDateTime48.explicit operator
-  nameWithType.vb: PackedDateTime48.CType
-- uid: Typhon.Engine.PackedTimeSpan32
-  name: PackedTimeSpan32
-  href: api/Typhon.Engine.PackedTimeSpan32.html
-  commentId: T:Typhon.Engine.PackedTimeSpan32
-  fullName: Typhon.Engine.PackedTimeSpan32
-  nameWithType: PackedTimeSpan32
-- uid: Typhon.Engine.PackedTimeSpan32.#ctor(System.Int64,System.Boolean)
-  name: PackedTimeSpan32(long, bool)
-  href: api/Typhon.Engine.PackedTimeSpan32.html#Typhon_Engine_PackedTimeSpan32__ctor_System_Int64_System_Boolean_
-  commentId: M:Typhon.Engine.PackedTimeSpan32.#ctor(System.Int64,System.Boolean)
-  name.vb: New(Long, Boolean)
-  fullName: Typhon.Engine.PackedTimeSpan32.PackedTimeSpan32(long, bool)
-  fullName.vb: Typhon.Engine.PackedTimeSpan32.New(Long, Boolean)
-  nameWithType: PackedTimeSpan32.PackedTimeSpan32(long, bool)
-  nameWithType.vb: PackedTimeSpan32.New(Long, Boolean)
-- uid: Typhon.Engine.PackedTimeSpan32.#ctor(System.TimeSpan)
-  name: PackedTimeSpan32(TimeSpan)
-  href: api/Typhon.Engine.PackedTimeSpan32.html#Typhon_Engine_PackedTimeSpan32__ctor_System_TimeSpan_
-  commentId: M:Typhon.Engine.PackedTimeSpan32.#ctor(System.TimeSpan)
-  name.vb: New(TimeSpan)
-  fullName: Typhon.Engine.PackedTimeSpan32.PackedTimeSpan32(System.TimeSpan)
-  fullName.vb: Typhon.Engine.PackedTimeSpan32.New(System.TimeSpan)
-  nameWithType: PackedTimeSpan32.PackedTimeSpan32(TimeSpan)
-  nameWithType.vb: PackedTimeSpan32.New(TimeSpan)
-- uid: Typhon.Engine.PackedTimeSpan32.#ctor*
-  name: PackedTimeSpan32
-  href: api/Typhon.Engine.PackedTimeSpan32.html#Typhon_Engine_PackedTimeSpan32__ctor_
-  commentId: Overload:Typhon.Engine.PackedTimeSpan32.#ctor
-  isSpec: "True"
-  name.vb: New
-  fullName: Typhon.Engine.PackedTimeSpan32.PackedTimeSpan32
-  fullName.vb: Typhon.Engine.PackedTimeSpan32.New
-  nameWithType: PackedTimeSpan32.PackedTimeSpan32
-  nameWithType.vb: PackedTimeSpan32.New
-- uid: Typhon.Engine.PackedTimeSpan32.MaxValue
-  name: MaxValue
-  href: api/Typhon.Engine.PackedTimeSpan32.html#Typhon_Engine_PackedTimeSpan32_MaxValue
-  commentId: F:Typhon.Engine.PackedTimeSpan32.MaxValue
-  fullName: Typhon.Engine.PackedTimeSpan32.MaxValue
-  nameWithType: PackedTimeSpan32.MaxValue
-- uid: Typhon.Engine.PackedTimeSpan32.MinValue
-  name: MinValue
-  href: api/Typhon.Engine.PackedTimeSpan32.html#Typhon_Engine_PackedTimeSpan32_MinValue
-  commentId: F:Typhon.Engine.PackedTimeSpan32.MinValue
-  fullName: Typhon.Engine.PackedTimeSpan32.MinValue
-  nameWithType: PackedTimeSpan32.MinValue
-- uid: Typhon.Engine.PackedTimeSpan32.Ticks
-  name: Ticks
-  href: api/Typhon.Engine.PackedTimeSpan32.html#Typhon_Engine_PackedTimeSpan32_Ticks
-  commentId: P:Typhon.Engine.PackedTimeSpan32.Ticks
-  fullName: Typhon.Engine.PackedTimeSpan32.Ticks
-  nameWithType: PackedTimeSpan32.Ticks
-- uid: Typhon.Engine.PackedTimeSpan32.Ticks*
-  name: Ticks
-  href: api/Typhon.Engine.PackedTimeSpan32.html#Typhon_Engine_PackedTimeSpan32_Ticks_
-  commentId: Overload:Typhon.Engine.PackedTimeSpan32.Ticks
-  isSpec: "True"
-  fullName: Typhon.Engine.PackedTimeSpan32.Ticks
-  nameWithType: PackedTimeSpan32.Ticks
-- uid: Typhon.Engine.PackedTimeSpan32.ToString
-  name: ToString()
-  href: api/Typhon.Engine.PackedTimeSpan32.html#Typhon_Engine_PackedTimeSpan32_ToString
-  commentId: M:Typhon.Engine.PackedTimeSpan32.ToString
-  fullName: Typhon.Engine.PackedTimeSpan32.ToString()
-  nameWithType: PackedTimeSpan32.ToString()
-- uid: Typhon.Engine.PackedTimeSpan32.ToString*
-  name: ToString
-  href: api/Typhon.Engine.PackedTimeSpan32.html#Typhon_Engine_PackedTimeSpan32_ToString_
-  commentId: Overload:Typhon.Engine.PackedTimeSpan32.ToString
-  isSpec: "True"
-  fullName: Typhon.Engine.PackedTimeSpan32.ToString
-  nameWithType: PackedTimeSpan32.ToString
-- uid: Typhon.Engine.PackedTimeSpan32._packedTicks
-  name: _packedTicks
-  href: api/Typhon.Engine.PackedTimeSpan32.html#Typhon_Engine_PackedTimeSpan32__packedTicks
-  commentId: F:Typhon.Engine.PackedTimeSpan32._packedTicks
-  fullName: Typhon.Engine.PackedTimeSpan32._packedTicks
-  nameWithType: PackedTimeSpan32._packedTicks
-- uid: Typhon.Engine.PackedTimeSpan32.op_Explicit(Typhon.Engine.PackedTimeSpan32)~System.TimeSpan
-  name: explicit operator TimeSpan(PackedTimeSpan32)
-  href: api/Typhon.Engine.PackedTimeSpan32.html#Typhon_Engine_PackedTimeSpan32_op_Explicit_Typhon_Engine_PackedTimeSpan32__System_TimeSpan
-  commentId: M:Typhon.Engine.PackedTimeSpan32.op_Explicit(Typhon.Engine.PackedTimeSpan32)~System.TimeSpan
-  name.vb: CType(PackedTimeSpan32)
-  fullName: Typhon.Engine.PackedTimeSpan32.explicit operator System.TimeSpan(Typhon.Engine.PackedTimeSpan32)
-  fullName.vb: Typhon.Engine.PackedTimeSpan32.CType(Typhon.Engine.PackedTimeSpan32)
-  nameWithType: PackedTimeSpan32.explicit operator TimeSpan(PackedTimeSpan32)
-  nameWithType.vb: PackedTimeSpan32.CType(PackedTimeSpan32)
-- uid: Typhon.Engine.PackedTimeSpan32.op_Explicit*
-  name: explicit operator
-  href: api/Typhon.Engine.PackedTimeSpan32.html#Typhon_Engine_PackedTimeSpan32_op_Explicit_
-  commentId: Overload:Typhon.Engine.PackedTimeSpan32.op_Explicit
-  isSpec: "True"
-  name.vb: CType
-  fullName: Typhon.Engine.PackedTimeSpan32.explicit operator
-  fullName.vb: Typhon.Engine.PackedTimeSpan32.CType
-  nameWithType: PackedTimeSpan32.explicit operator
-  nameWithType.vb: PackedTimeSpan32.CType
-- uid: Typhon.Engine.PackedTimeSpan48
-  name: PackedTimeSpan48
-  href: api/Typhon.Engine.PackedTimeSpan48.html
-  commentId: T:Typhon.Engine.PackedTimeSpan48
-  fullName: Typhon.Engine.PackedTimeSpan48
-  nameWithType: PackedTimeSpan48
-- uid: Typhon.Engine.PackedTimeSpan48.#ctor(System.Int64,System.Boolean)
-  name: PackedTimeSpan48(long, bool)
-  href: api/Typhon.Engine.PackedTimeSpan48.html#Typhon_Engine_PackedTimeSpan48__ctor_System_Int64_System_Boolean_
-  commentId: M:Typhon.Engine.PackedTimeSpan48.#ctor(System.Int64,System.Boolean)
-  name.vb: New(Long, Boolean)
-  fullName: Typhon.Engine.PackedTimeSpan48.PackedTimeSpan48(long, bool)
-  fullName.vb: Typhon.Engine.PackedTimeSpan48.New(Long, Boolean)
-  nameWithType: PackedTimeSpan48.PackedTimeSpan48(long, bool)
-  nameWithType.vb: PackedTimeSpan48.New(Long, Boolean)
-- uid: Typhon.Engine.PackedTimeSpan48.#ctor(System.TimeSpan)
-  name: PackedTimeSpan48(TimeSpan)
-  href: api/Typhon.Engine.PackedTimeSpan48.html#Typhon_Engine_PackedTimeSpan48__ctor_System_TimeSpan_
-  commentId: M:Typhon.Engine.PackedTimeSpan48.#ctor(System.TimeSpan)
-  name.vb: New(TimeSpan)
-  fullName: Typhon.Engine.PackedTimeSpan48.PackedTimeSpan48(System.TimeSpan)
-  fullName.vb: Typhon.Engine.PackedTimeSpan48.New(System.TimeSpan)
-  nameWithType: PackedTimeSpan48.PackedTimeSpan48(TimeSpan)
-  nameWithType.vb: PackedTimeSpan48.New(TimeSpan)
-- uid: Typhon.Engine.PackedTimeSpan48.#ctor*
-  name: PackedTimeSpan48
-  href: api/Typhon.Engine.PackedTimeSpan48.html#Typhon_Engine_PackedTimeSpan48__ctor_
-  commentId: Overload:Typhon.Engine.PackedTimeSpan48.#ctor
-  isSpec: "True"
-  name.vb: New
-  fullName: Typhon.Engine.PackedTimeSpan48.PackedTimeSpan48
-  fullName.vb: Typhon.Engine.PackedTimeSpan48.New
-  nameWithType: PackedTimeSpan48.PackedTimeSpan48
-  nameWithType.vb: PackedTimeSpan48.New
-- uid: Typhon.Engine.PackedTimeSpan48.MaxValue
-  name: MaxValue
-  href: api/Typhon.Engine.PackedTimeSpan48.html#Typhon_Engine_PackedTimeSpan48_MaxValue
-  commentId: F:Typhon.Engine.PackedTimeSpan48.MaxValue
-  fullName: Typhon.Engine.PackedTimeSpan48.MaxValue
-  nameWithType: PackedTimeSpan48.MaxValue
-- uid: Typhon.Engine.PackedTimeSpan48.MinValue
-  name: MinValue
-  href: api/Typhon.Engine.PackedTimeSpan48.html#Typhon_Engine_PackedTimeSpan48_MinValue
-  commentId: F:Typhon.Engine.PackedTimeSpan48.MinValue
-  fullName: Typhon.Engine.PackedTimeSpan48.MinValue
-  nameWithType: PackedTimeSpan48.MinValue
-- uid: Typhon.Engine.PackedTimeSpan48.Ticks
-  name: Ticks
-  href: api/Typhon.Engine.PackedTimeSpan48.html#Typhon_Engine_PackedTimeSpan48_Ticks
-  commentId: P:Typhon.Engine.PackedTimeSpan48.Ticks
-  fullName: Typhon.Engine.PackedTimeSpan48.Ticks
-  nameWithType: PackedTimeSpan48.Ticks
-- uid: Typhon.Engine.PackedTimeSpan48.Ticks*
-  name: Ticks
-  href: api/Typhon.Engine.PackedTimeSpan48.html#Typhon_Engine_PackedTimeSpan48_Ticks_
-  commentId: Overload:Typhon.Engine.PackedTimeSpan48.Ticks
-  isSpec: "True"
-  fullName: Typhon.Engine.PackedTimeSpan48.Ticks
-  nameWithType: PackedTimeSpan48.Ticks
-- uid: Typhon.Engine.PackedTimeSpan48.ToString
-  name: ToString()
-  href: api/Typhon.Engine.PackedTimeSpan48.html#Typhon_Engine_PackedTimeSpan48_ToString
-  commentId: M:Typhon.Engine.PackedTimeSpan48.ToString
-  fullName: Typhon.Engine.PackedTimeSpan48.ToString()
-  nameWithType: PackedTimeSpan48.ToString()
-- uid: Typhon.Engine.PackedTimeSpan48.ToString*
-  name: ToString
-  href: api/Typhon.Engine.PackedTimeSpan48.html#Typhon_Engine_PackedTimeSpan48_ToString_
-  commentId: Overload:Typhon.Engine.PackedTimeSpan48.ToString
-  isSpec: "True"
-  fullName: Typhon.Engine.PackedTimeSpan48.ToString
-  nameWithType: PackedTimeSpan48.ToString
-- uid: Typhon.Engine.PackedTimeSpan48._high
-  name: _high
-  href: api/Typhon.Engine.PackedTimeSpan48.html#Typhon_Engine_PackedTimeSpan48__high
-  commentId: F:Typhon.Engine.PackedTimeSpan48._high
-  fullName: Typhon.Engine.PackedTimeSpan48._high
-  nameWithType: PackedTimeSpan48._high
-- uid: Typhon.Engine.PackedTimeSpan48._low
-  name: _low
-  href: api/Typhon.Engine.PackedTimeSpan48.html#Typhon_Engine_PackedTimeSpan48__low
-  commentId: F:Typhon.Engine.PackedTimeSpan48._low
-  fullName: Typhon.Engine.PackedTimeSpan48._low
-  nameWithType: PackedTimeSpan48._low
-- uid: Typhon.Engine.PackedTimeSpan48.op_Explicit(Typhon.Engine.PackedTimeSpan48)~System.TimeSpan
-  name: explicit operator TimeSpan(PackedTimeSpan48)
-  href: api/Typhon.Engine.PackedTimeSpan48.html#Typhon_Engine_PackedTimeSpan48_op_Explicit_Typhon_Engine_PackedTimeSpan48__System_TimeSpan
-  commentId: M:Typhon.Engine.PackedTimeSpan48.op_Explicit(Typhon.Engine.PackedTimeSpan48)~System.TimeSpan
-  name.vb: CType(PackedTimeSpan48)
-  fullName: Typhon.Engine.PackedTimeSpan48.explicit operator System.TimeSpan(Typhon.Engine.PackedTimeSpan48)
-  fullName.vb: Typhon.Engine.PackedTimeSpan48.CType(Typhon.Engine.PackedTimeSpan48)
-  nameWithType: PackedTimeSpan48.explicit operator TimeSpan(PackedTimeSpan48)
-  nameWithType.vb: PackedTimeSpan48.CType(PackedTimeSpan48)
-- uid: Typhon.Engine.PackedTimeSpan48.op_Explicit*
-  name: explicit operator
-  href: api/Typhon.Engine.PackedTimeSpan48.html#Typhon_Engine_PackedTimeSpan48_op_Explicit_
-  commentId: Overload:Typhon.Engine.PackedTimeSpan48.op_Explicit
-  isSpec: "True"
-  name.vb: CType
-  fullName: Typhon.Engine.PackedTimeSpan48.explicit operator
-  fullName.vb: Typhon.Engine.PackedTimeSpan48.CType
-  nameWithType: PackedTimeSpan48.explicit operator
-  nameWithType.vb: PackedTimeSpan48.CType
 - uid: Typhon.Engine.PageAccessor
   name: PageAccessor
   href: api/Typhon.Engine.PageAccessor.html
@@ -18777,12 +18363,6 @@ references:
   commentId: T:Typhon.Engine.Transaction.CommitContext
   fullName: Typhon.Engine.Transaction.CommitContext
   nameWithType: Transaction.CommitContext
-- uid: Typhon.Engine.Transaction.CommitContext.CommitTime
-  name: CommitTime
-  href: api/Typhon.Engine.Transaction.CommitContext.html#Typhon_Engine_Transaction_CommitContext_CommitTime
-  commentId: F:Typhon.Engine.Transaction.CommitContext.CommitTime
-  fullName: Typhon.Engine.Transaction.CommitContext.CommitTime
-  nameWithType: Transaction.CommitContext.CommitTime
 - uid: Typhon.Engine.Transaction.CommitContext.CompRevInfo
   name: CompRevInfo
   href: api/Typhon.Engine.Transaction.CommitContext.html#Typhon_Engine_Transaction_CommitContext_CompRevInfo
@@ -19816,28 +19396,15 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.Transaction.GrowChain
   nameWithType: Transaction.GrowChain
-- uid: Typhon.Engine.Transaction.Id
-  name: Id
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_Id
-  commentId: P:Typhon.Engine.Transaction.Id
-  fullName: Typhon.Engine.Transaction.Id
-  nameWithType: Transaction.Id
-- uid: Typhon.Engine.Transaction.Id*
-  name: Id
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_Id_
-  commentId: Overload:Typhon.Engine.Transaction.Id
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.Id
-  nameWithType: Transaction.Id
-- uid: Typhon.Engine.Transaction.Init(Typhon.Engine.DatabaseEngine,System.Int32)
-  name: Init(DatabaseEngine, int)
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_Init_Typhon_Engine_DatabaseEngine_System_Int32_
-  commentId: M:Typhon.Engine.Transaction.Init(Typhon.Engine.DatabaseEngine,System.Int32)
-  name.vb: Init(DatabaseEngine, Integer)
-  fullName: Typhon.Engine.Transaction.Init(Typhon.Engine.DatabaseEngine, int)
-  fullName.vb: Typhon.Engine.Transaction.Init(Typhon.Engine.DatabaseEngine, Integer)
-  nameWithType: Transaction.Init(DatabaseEngine, int)
-  nameWithType.vb: Transaction.Init(DatabaseEngine, Integer)
+- uid: Typhon.Engine.Transaction.Init(Typhon.Engine.DatabaseEngine,System.Int64)
+  name: Init(DatabaseEngine, long)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_Init_Typhon_Engine_DatabaseEngine_System_Int64_
+  commentId: M:Typhon.Engine.Transaction.Init(Typhon.Engine.DatabaseEngine,System.Int64)
+  name.vb: Init(DatabaseEngine, Long)
+  fullName: Typhon.Engine.Transaction.Init(Typhon.Engine.DatabaseEngine, long)
+  fullName.vb: Typhon.Engine.Transaction.Init(Typhon.Engine.DatabaseEngine, Long)
+  nameWithType: Transaction.Init(DatabaseEngine, long)
+  nameWithType.vb: Transaction.Init(DatabaseEngine, Long)
 - uid: Typhon.Engine.Transaction.Init*
   name: Init
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_Init_
@@ -20518,25 +20085,25 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.Transaction.State
   nameWithType: Transaction.State
+- uid: Typhon.Engine.Transaction.TSN
+  name: TSN
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_TSN
+  commentId: P:Typhon.Engine.Transaction.TSN
+  fullName: Typhon.Engine.Transaction.TSN
+  nameWithType: Transaction.TSN
+- uid: Typhon.Engine.Transaction.TSN*
+  name: TSN
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_TSN_
+  commentId: Overload:Typhon.Engine.Transaction.TSN
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.TSN
+  nameWithType: Transaction.TSN
 - uid: Typhon.Engine.Transaction.ThreadLocalConflictSolver
   name: ThreadLocalConflictSolver
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_ThreadLocalConflictSolver
   commentId: F:Typhon.Engine.Transaction.ThreadLocalConflictSolver
   fullName: Typhon.Engine.Transaction.ThreadLocalConflictSolver
   nameWithType: Transaction.ThreadLocalConflictSolver
-- uid: Typhon.Engine.Transaction.TransactionDateTime
-  name: TransactionDateTime
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_TransactionDateTime
-  commentId: P:Typhon.Engine.Transaction.TransactionDateTime
-  fullName: Typhon.Engine.Transaction.TransactionDateTime
-  nameWithType: Transaction.TransactionDateTime
-- uid: Typhon.Engine.Transaction.TransactionDateTime*
-  name: TransactionDateTime
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_TransactionDateTime_
-  commentId: Overload:Typhon.Engine.Transaction.TransactionDateTime
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.TransactionDateTime
-  nameWithType: Transaction.TransactionDateTime
 - uid: Typhon.Engine.Transaction.TransactionState
   name: Transaction.TransactionState
   href: api/Typhon.Engine.Transaction.TransactionState.html
@@ -20573,19 +20140,6 @@ references:
   commentId: F:Typhon.Engine.Transaction.TransactionState.Rollbacked
   fullName: Typhon.Engine.Transaction.TransactionState.Rollbacked
   nameWithType: Transaction.TransactionState.Rollbacked
-- uid: Typhon.Engine.Transaction.TransactionTick
-  name: TransactionTick
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_TransactionTick
-  commentId: P:Typhon.Engine.Transaction.TransactionTick
-  fullName: Typhon.Engine.Transaction.TransactionTick
-  nameWithType: Transaction.TransactionTick
-- uid: Typhon.Engine.Transaction.TransactionTick*
-  name: TransactionTick
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_TransactionTick_
-  commentId: Overload:Typhon.Engine.Transaction.TransactionTick
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.TransactionTick
-  nameWithType: Transaction.TransactionTick
 - uid: Typhon.Engine.Transaction.UpdateComponent*
   name: UpdateComponent
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_UpdateComponent_
@@ -20803,19 +20357,19 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.TransactionChain.IsDisposed
   nameWithType: TransactionChain.IsDisposed
-- uid: Typhon.Engine.TransactionChain.MinTick
-  name: MinTick
-  href: api/Typhon.Engine.TransactionChain.html#Typhon_Engine_TransactionChain_MinTick
-  commentId: P:Typhon.Engine.TransactionChain.MinTick
-  fullName: Typhon.Engine.TransactionChain.MinTick
-  nameWithType: TransactionChain.MinTick
-- uid: Typhon.Engine.TransactionChain.MinTick*
-  name: MinTick
-  href: api/Typhon.Engine.TransactionChain.html#Typhon_Engine_TransactionChain_MinTick_
-  commentId: Overload:Typhon.Engine.TransactionChain.MinTick
+- uid: Typhon.Engine.TransactionChain.MinTSN
+  name: MinTSN
+  href: api/Typhon.Engine.TransactionChain.html#Typhon_Engine_TransactionChain_MinTSN
+  commentId: P:Typhon.Engine.TransactionChain.MinTSN
+  fullName: Typhon.Engine.TransactionChain.MinTSN
+  nameWithType: TransactionChain.MinTSN
+- uid: Typhon.Engine.TransactionChain.MinTSN*
+  name: MinTSN
+  href: api/Typhon.Engine.TransactionChain.html#Typhon_Engine_TransactionChain_MinTSN_
+  commentId: Overload:Typhon.Engine.TransactionChain.MinTSN
   isSpec: "True"
-  fullName: Typhon.Engine.TransactionChain.MinTick
-  nameWithType: TransactionChain.MinTick
+  fullName: Typhon.Engine.TransactionChain.MinTSN
+  nameWithType: TransactionChain.MinTSN
 - uid: Typhon.Engine.TransactionChain.PoolMaxSize
   name: PoolMaxSize
   href: api/Typhon.Engine.TransactionChain.html#Typhon_Engine_TransactionChain_PoolMaxSize

@@ -1692,48 +1692,6 @@
     },
     {
       "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.PackedDateTime48.yml",
-      "output": {
-        ".html": {
-          "relative_path": "api/Typhon.Engine.PackedDateTime48.html"
-        }
-      },
-      "version": "",
-      "Uid": null,
-      "IsMRef": true,
-      "Title": "Typhon.Engine.PackedDateTime48",
-      "Summary": null
-    },
-    {
-      "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.PackedTimeSpan32.yml",
-      "output": {
-        ".html": {
-          "relative_path": "api/Typhon.Engine.PackedTimeSpan32.html"
-        }
-      },
-      "version": "",
-      "Uid": null,
-      "IsMRef": true,
-      "Title": "Typhon.Engine.PackedTimeSpan32",
-      "Summary": null
-    },
-    {
-      "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.PackedTimeSpan48.yml",
-      "output": {
-        ".html": {
-          "relative_path": "api/Typhon.Engine.PackedTimeSpan48.html"
-        }
-      },
-      "version": "",
-      "Uid": null,
-      "IsMRef": true,
-      "Title": "Typhon.Engine.PackedTimeSpan48",
-      "Summary": null
-    },
-    {
-      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.PageAccessor.yml",
       "output": {
         ".html": {
