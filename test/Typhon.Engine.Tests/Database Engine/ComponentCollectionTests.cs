@@ -11,16 +11,16 @@ namespace Typhon.Engine.Tests.Database_Engine;
 [Component(SchemaName, 1)]
 [StructLayout(LayoutKind.Sequential)]
 [PublicAPI]
-public struct CompE
+public struct CompE_Eng
 {
     private const string SchemaName = "Typhon.Schema.UnitTest.CompE";
     
     public int A;
     public ComponentCollection<int> Collection;
 
-    public static CompE Create(Random rand) => new(rand.Next());
+    public static CompE_Eng Create(Random rand) => new(rand.Next());
 
-    public CompE(int a)
+    public CompE_Eng(int a)
     {
         A = a;
         Collection = default;
@@ -38,7 +38,7 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
 {
     protected override void RegisterComponents(DatabaseEngine dbe)
     {
-        dbe.RegisterComponentFromAccessor<CompE>();
+        dbe.RegisterComponentFromAccessor<CompE_Eng>();
         base.RegisterComponents(dbe);
     }
 
@@ -53,7 +53,7 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
             using var t = dbe.CreateTransaction();
 
             var a = new CompA(2);
-            var e = new CompE(1);
+            var e = new CompE_Eng(1);
 
             {
                 using var cca = t.CreateComponentCollectionAccessor(ref e.Collection);
@@ -75,7 +75,7 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
         {
             using var t = dbe.CreateTransaction();
 
-            var res = t.ReadEntity(e1, out CompE e2);
+            var res = t.ReadEntity(e1, out CompE_Eng e2);
             Assert.That(res, Is.True);
             
             using var cca = t.CreateComponentCollectionAccessor(ref e2.Collection);
@@ -93,7 +93,7 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
         {
             using var t = dbe.CreateTransaction();
 
-            var res = t.ReadEntity(e1, out CompE e2);
+            var res = t.ReadEntity(e1, out CompE_Eng e2);
             Assert.That(res, Is.True);
 
             {
@@ -115,7 +115,7 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
         {
             using var t = dbe.CreateTransaction();
 
-            var res = t.ReadEntity(e1, out CompE e2);
+            var res = t.ReadEntity(e1, out CompE_Eng e2);
             Assert.That(res, Is.True);
 
             using var cca = t.CreateComponentCollectionAccessor(ref e2.Collection);
@@ -139,7 +139,7 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
             using var t = dbe.CreateTransaction();
 
             var a = new CompA(2);
-            var e = new CompE(1);
+            var e = new CompE_Eng(1);
 
             {
                 using var cca = t.CreateComponentCollectionAccessor(ref e.Collection);
@@ -161,7 +161,7 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
         {
             using var t = dbe.CreateTransaction();
 
-            var res = t.ReadEntity(e1, out CompE e2);
+            var res = t.ReadEntity(e1, out CompE_Eng e2);
             Assert.That(res, Is.True);
 
             // Change A to trigger the creation of a new revision during the Update call below
@@ -181,7 +181,7 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
         {
             using var t = dbe.CreateTransaction();
 
-            var res = t.ReadEntity(e1, out CompE e2);
+            var res = t.ReadEntity(e1, out CompE_Eng e2);
             Assert.That(res, Is.True);
 
             Assert.That(t.GetComponentCollectionRefCounter(ref e2.Collection), Is.EqualTo(1), "RefCounter should be 1, because there is now only one revision for this component");

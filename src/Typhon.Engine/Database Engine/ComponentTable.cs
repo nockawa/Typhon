@@ -79,6 +79,15 @@ internal struct CompRevStorageElement
     private uint _packedTickHigh;
     private ushort _packedTickLow;
 
+    public void Void()
+    {
+        ComponentChunkId = 0;
+        _packedTickHigh = 0;
+        _packedTickLow = 0;
+    }
+    
+    public bool IsVoid => ComponentChunkId == 0 &&  _packedTickHigh == 0 && _packedTickLow == 0;
+    
     public bool IsolationFlag
     {
         get
@@ -139,7 +148,7 @@ public unsafe class ComponentTable : IDisposable
     public ChunkBasedSegment CompRevTableSegment { get; private set; }
     public ChunkBasedSegment DefaultIndexSegment { get; private set; }
     public ChunkBasedSegment String64IndexSegment { get; private set; }
-    public LongSingleBTree PrimaryKeyIndex { get; private set; }
+    public BTree<long> PrimaryKeyIndex { get; private set; }
     public int ComponentStorageSize => Definition.ComponentStorageSize;
     public DBComponentDefinition Definition { get; private set; }
 
@@ -163,11 +172,18 @@ public unsafe class ComponentTable : IDisposable
         ComponentSegment    = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, ComponentTotalSize);
         CompRevTableSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, CompRevChunkSize);
             
-        // This segment will be used for all kind of index types except String64 which needs a dedicated one because its chunk size is different (all others are 64 bytes)
+        // This segment will be used for all kinds of index types except String64 which needs a dedicated one because its chunk size is different (all others are 64 bytes)
         DefaultIndexSegment  = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(Index64Chunk));
         String64IndexSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(IndexString64Chunk));
 
-        PrimaryKeyIndex = new LongSingleBTree(DefaultIndexSegment, ChunkRandomAccessor.GetFromPool(DefaultIndexSegment, 8));
+        if (definition.AllowMultiple)
+        {
+            PrimaryKeyIndex = new LongMultipleBTree(DefaultIndexSegment, ChunkRandomAccessor.GetFromPool(DefaultIndexSegment, 8));
+        }
+        else
+        {
+            PrimaryKeyIndex = new LongSingleBTree(DefaultIndexSegment, ChunkRandomAccessor.GetFromPool(DefaultIndexSegment, 8));
+        }
 
         BuildIndexedFieldInfo();
         BuildComponentCollectionInfo();

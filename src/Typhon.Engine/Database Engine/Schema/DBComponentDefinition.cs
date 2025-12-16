@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -41,6 +42,7 @@ public enum FieldType
     QuaternionD = DoubleFloat |  15,
     
     Collection  = 16,
+    Component   = 17,
     
     Unsigned    = 256,
     DoubleFloat = 512
@@ -51,6 +53,7 @@ public class DBComponentDefinition
 {
     public string Name { get; private set; }
     public int Revision { get; private set; }
+    public bool AllowMultiple { get; private set; }
     public Type POCOType { get; internal set; }
     public string FullName => FormatFullName(Name, Revision);
     
@@ -148,10 +151,11 @@ public class DBComponentDefinition
         public bool DoesFieldTypeSupportIndex() => (Type >= FieldType.Byte) && ((FieldType)((int)Type&0xFF) <= FieldType.String64);
     }
 
-    internal DBComponentDefinition(string name, int revision)
+    internal DBComponentDefinition(string name, int revision, bool allowMultiple)
     {
         Name = name;
         Revision = revision;
+        AllowMultiple = allowMultiple;
         _fieldsByName = new Dictionary<string, Field>();
     }
 
@@ -252,6 +256,12 @@ public static class DatabaseSchemaExtensions
             case TypeCode.UInt32: return (FieldType.UInt, FieldType.None);
             case TypeCode.UInt64: return (FieldType.ULong, FieldType.None);
         }
+        
+        var ca = t.GetCustomAttribute<ComponentAttribute>();
+        if (ca != null)
+        {
+            return (FieldType.Component, FieldType.None);
+        }
 
         if (t == typeof(float)) return (FieldType.Float, FieldType.None);
         if (t == typeof(String64)) return (FieldType.String64, FieldType.None);
@@ -313,6 +323,7 @@ public static class DatabaseSchemaExtensions
             case FieldType.QuaternionD: return 32;
             
             case FieldType.Collection: return 4;
+            case FieldType.Component: return 8;
 
             default: return 0;
         }

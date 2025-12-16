@@ -87,6 +87,24 @@ public struct CompD
     }
 }
 
+[Component(SchemaName, 1, true)]
+[StructLayout(LayoutKind.Sequential)]
+public struct CompE
+{
+    private const string SchemaName = "Typhon.Schema.UnitTest.CompE";
+
+    public float A;
+    public int B;
+    public double C;
+
+    public CompE(float a, int b, double c)
+    {
+        A = a;
+        B = b;
+        C = c;
+    }
+}
+
 [PublicAPI]
 public abstract class TestBase{
     protected readonly Random Rand;
@@ -152,6 +170,7 @@ public abstract class TestBase{
         dbe.RegisterComponentFromAccessor<CompB>();
         dbe.RegisterComponentFromAccessor<CompC>();
         dbe.RegisterComponentFromAccessor<CompD>();
+        dbe.RegisterComponentFromAccessor<CompE>();
     }
     
     protected long[] CreateNoiseCompA(DatabaseEngine dbe, Transaction t = null, int count = 10)

@@ -188,8 +188,8 @@ public partial class PagedMMF : IDisposable
             // Init or load the file
             var filePathName = Options.BuildDatabasePathFileName();
             var fi = new FileInfo(filePathName);
-            var isCreationMode = fi.Exists == false;
-            if (isCreationMode)
+            IsDatabaseFileCreating = fi.Exists == false;
+            if (IsDatabaseFileCreating)
             {
                 CreateFile();
             }
@@ -254,6 +254,8 @@ public partial class PagedMMF : IDisposable
         handler?.Invoke(this, null!);
     }
     
+    public bool IsDatabaseFileCreating { get; }
+
     public bool IsDisposed { get; private set; }
 
     public void Dispose()
