@@ -989,8 +989,6 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         // Start a long-running transaction
         using var earlyTxn = dbe.CreateTransaction();
 
-        Thread.Sleep(20);
-        
         // Update in another transaction
         using (var t = dbe.CreateTransaction())
         {
@@ -1033,8 +1031,6 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         // Start a long-running transaction
         using var earlyTxn = dbe.CreateTransaction();
 
-        Thread.Sleep(20);
-        
         // Delete in another transaction
         using (var t = dbe.CreateTransaction())
         {
@@ -1076,8 +1072,6 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         // Start a long-running transaction
         using var longRunningTxn = dbe.CreateTransaction();
 
-        Thread.Sleep(20);
-        
         // Perform multiple updates
         for (int i = 1; i <= 5; i++)
         {

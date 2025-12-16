@@ -1053,7 +1053,7 @@ class TransactionTests : TestBase<TransactionTests>
         // Create the entity e1, revision R1
         {
             using var t1 = dbe.CreateTransaction();
-            Logger.LogInformation("T1 creation time {tick}", t1.TransactionTick);
+            Logger.LogInformation("T1 creation time {tick}", t1.TSN);
 
             e1 = t1.CreateEntity(ref aR1, ref bR1, ref cR1);
 
@@ -1069,7 +1069,7 @@ class TransactionTests : TestBase<TransactionTests>
         {
             // ReSharper disable once AccessToDisposedClosure
             t2 = dbe.CreateTransaction();
-            Logger.LogInformation("T2 creation time {tick}", t2.TransactionTick);
+            Logger.LogInformation("T2 creation time {tick}", t2.TSN);
         });
 
         // Change the entity to create a new revision
@@ -1077,7 +1077,7 @@ class TransactionTests : TestBase<TransactionTests>
         {
             // ReSharper disable once AccessToDisposedClosure
             using var t3 = dbe.CreateTransaction();
-            Logger.LogInformation("T3 creation time {tick}", t3.TransactionTick);
+            Logger.LogInformation("T3 creation time {tick}", t3.TSN);
             t3.ReadEntity<CompB>(e1, out var lbR2);
 
             lbR2 = bR2;

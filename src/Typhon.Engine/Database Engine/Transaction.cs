@@ -100,10 +100,6 @@ public unsafe class Transaction : IDisposable
         Committed           // Was committed by the user
     }
 
-    // Transaction acts as a single point in time for queries, this point in time is the construction datetime.
-    public long TransactionTick { get; private set; }
-    public DateTime TransactionDateTime => new DateTime(TransactionTick);
-
     public TransactionState State { get; private set; }
     private bool _isDisposed;
     private DatabaseEngine _dbe;
@@ -134,23 +130,22 @@ public unsafe class Transaction : IDisposable
         }
     }
     
-    public int Id { get; private set; }
+    public long TSN { get; private set; }
 
     public Transaction()
     {
         _componentInfos = new Dictionary<Type, ComponentInfoBase>(ComponentInfosMaxCapacity);
     }
 
-    public void Init(DatabaseEngine dbe, int id)
+    public void Init(DatabaseEngine dbe, long tsn)
     {
         _dbe = dbe;
         _isDisposed = false;
-        TransactionTick = PackedDateTime48.FromDateTimeTicks(DateTime.UtcNow.Ticks).Ticks;
         _committedOperationCount = null;
         _deletedComponentCount = 0;
         _changeSet = _dbe.MMF.CreateChangeSet();
         State = TransactionState.Created;
-        Id = id;
+        TSN = tsn;
 
         _dbe.TransactionChain.PushHead(this);
     }
@@ -167,8 +162,8 @@ public unsafe class Transaction : IDisposable
             _componentInfos = new Dictionary<Type, ComponentInfoBase>(ComponentInfosMaxCapacity);
         }
         // Don't touch _isDisposed on purpose
-        
-        TransactionTick = 0;
+
+        TSN = 0;
         _committedOperationCount = null;
         _deletedComponentCount = 0;
         _changeSet = null;
@@ -660,7 +655,7 @@ public unsafe class Transaction : IDisposable
         if (!exists)
         {
             // Couldn't find in the cache, get it from the index
-            if (!GetCompRevInfoFromIndex(pk, info, TransactionTick, out compRevInfo))
+            if (!GetCompRevInfoFromIndex(pk, info, TSN, out compRevInfo))
             {
                 t = default;
                 return false;
@@ -694,7 +689,7 @@ public unsafe class Transaction : IDisposable
         if (!info.CompRevInfoCache.TryGetValue(pk, out var compRevInfoList))
         {
             // Couldn't find in the cache, get it from the index
-            if (!GetCompRevInfoFromIndex(pk, info, TransactionTick, out compRevInfoList))
+            if (!GetCompRevInfoFromIndex(pk, info, TSN, out compRevInfoList))
             {
                 t = null;
                 return false;
@@ -773,7 +768,7 @@ public unsafe class Transaction : IDisposable
         {
             // Fetch the cache by getting the revision closest to the transaction tick, if we fail it means there's no revision, so no component for this
             //  PK, we return false
-            if (!GetCompRevInfoFromIndex(pk, info, TransactionTick, out compRevInfo))
+            if (!GetCompRevInfoFromIndex(pk, info, TSN, out compRevInfo))
             {
                 return false;
             }
@@ -834,7 +829,7 @@ public unsafe class Transaction : IDisposable
         {
             // Fetch the cache by getting the revision closest to the transaction tick, if we fail it means there's no revision, so no component for this
             //  PK, we return false
-            if (!GetCompRevInfoFromIndex(pk, info, TransactionTick, out compRevInfoList))
+            if (!GetCompRevInfoFromIndex(pk, info, TSN, out compRevInfoList))
             {
                 return false;
             }
@@ -947,7 +942,7 @@ public unsafe class Transaction : IDisposable
 
         // Initialize the first element
         ref var chunkElements = ref stream.PopRef<CompRevStorageElement>();
-        chunkElements.DateTime = PackedDateTime48.FromDateTimeTicks(tick);
+        chunkElements.TSN = TSN;
         chunkElements.IsolationFlag = true;                                  // Isolate this revision from the rest of the database (other transactions)
         chunkElements.ComponentChunkId = firstComponentChunkId;
 
@@ -1005,7 +1000,7 @@ public unsafe class Transaction : IDisposable
         var componentChunkId = isDelete ? 0 : compContent.AllocateChunk(false);
 
         // Add our new entry
-        curChunkElements[indexInChunk].DateTime = PackedDateTime48.FromDateTimeTicks(tick);
+        curChunkElements[indexInChunk].TSN = TSN;
         curChunkElements[indexInChunk].IsolationFlag = true;
         curChunkElements[indexInChunk].ComponentChunkId = componentChunkId;
 
@@ -1233,13 +1228,13 @@ public unsafe class Transaction : IDisposable
                     continue;
                 }
                 
-                if (element.DateTime.Ticks > tick)
+                if (element.TSN > TSN)
                 {
                     break;
                 }
             
                 // Update the current revision (and the previous) if a valid entry (tick == 0 means a rollbacked entry) and it's not an isolated one
-                if ((element.DateTime.Ticks > 0) && !element.IsolationFlag)
+                if ((element.TSN > 0) && !element.IsolationFlag)
                 {
                     prevCompRevisionIndex = curCompRevisionIndex;
                     prevCompChunkId = curCompChunkId;
@@ -1298,13 +1293,13 @@ public unsafe class Transaction : IDisposable
                     while (enumerator.MoveNext())
                     {
                         ref var element = ref enumerator.Current;
-                        if (element.DateTime.Ticks > tick)
+                        if (element.TSN > TSN)
                         {
                             break;
                         }
             
                         // Update the current revision (and the previous) if a valid entry (tick == 0 means a rollbacked entry) and it's not an isolated one
-                        if ((element.DateTime.Ticks > 0) && !element.IsolationFlag)
+                        if ((element.TSN > 0) && !element.IsolationFlag)
                         {
                             prevCompRevisionIndex = curCompRevisionIndex;
                             prevCompChunkId = curCompChunkId;
@@ -1410,7 +1405,7 @@ public unsafe class Transaction : IDisposable
             if (hasConflict)
             {
                 // Create a new revision
-                AddCompRev(info, ref compRevInfo, context.CommitTime.Ticks, false);
+                AddCompRev(info, ref compRevInfo, TSN, false);
                 
                 // Copy the revision we are dealing with to the new one (the whole data, indices + content)
                 var dstChunk = info.CompContentAccessor.GetChunkAddress(compRevInfo.CurCompContentChunkId, dirtyPage: true);
@@ -1451,7 +1446,7 @@ public unsafe class Transaction : IDisposable
                 }
 
                 // Set the DateTime of the revision to the commit time, removing the Isolation flag
-                curElement[0].DateTime = (PackedDateTime48)context.CommitTime;
+                curElement[0].TSN = TSN;
                 curElement[0].IsolationFlag = false;
 
                 // Update Last Commit Revision Index
@@ -1465,12 +1460,12 @@ public unsafe class Transaction : IDisposable
         //  revisions (the entry of a rolled back commit)
         _dbe.TransactionChain.Control.EnterSharedAccess();
         var isTail = _dbe.TransactionChain.Tail == this;
-        long nextMinTick = isTail ? _dbe.TransactionChain.Tail.Next?.TransactionTick ?? DateTime.UtcNow.Ticks : 0;
+        long nextMinTSN = isTail ? _dbe.TransactionChain.Tail.Next?.TSN ?? DateTime.UtcNow.Ticks : 0;
         _dbe.TransactionChain.Control.ExitSharedAccess();
         
         if (isTail)
         {
-            var isDeleted = CleanUpUnusedEntries(info, ref compRevInfo, compRevTableAccessor, nextMinTick);
+            var isDeleted = CleanUpUnusedEntries(info, ref compRevInfo, compRevTableAccessor, nextMinTSN);
             dirtyFirstChunk = true;
 
             if (isDeleted)
@@ -1641,18 +1636,18 @@ public unsafe class Transaction : IDisposable
     }
 
     /// <summary>
-    /// Clean up the revisions of a component, removing all the entries older than <paramref name="nextMinTick"/>, releasing unused component chunks and
+    /// Clean up the revisions of a component, removing all the entries older than <paramref name="nextMinTSN"/>, releasing unused component chunks and
     ///  defragmenting the revisions still being used.
     /// </summary>
     /// <param name="info">ComponentInfo object</param>
     /// <param name="compRevInfo">Component Revision Info object</param>
     /// <param name="compRevTableAccessor">The accessor</param>
-    /// <param name="nextMinTick">The minimal tick to keep revisions</param>
+    /// <param name="nextMinTSN">The minimal tick to keep revisions</param>
     /// <remarks>
     /// This method walks through the chain of revision chunks and builds a new one, only the first chunk is kept.
     /// </remarks>
     private bool CleanUpUnusedEntries(ComponentInfoBase info, ref ComponentInfoBase.CompRevInfo compRevInfo, ChunkRandomAccessor compRevTableAccessor,
-        long nextMinTick)
+        long nextMinTSN)
     {
         var firstChunkId = compRevInfo.CompRevTableFirstChunkId;
         using var firstChunkHandle = compRevTableAccessor.GetChunkHandle(firstChunkId, false);
@@ -1703,7 +1698,7 @@ public unsafe class Transaction : IDisposable
                 {
                     // If the entry is older than the minimum tick, or we reached the maximum number of entries we can skip,
                     //  we can remove it and skip to the next one
-                    if ((--maxSkipCount > 0) && (enumerator.Current.DateTime.Ticks < nextMinTick))
+                    if ((--maxSkipCount > 0) && (enumerator.Current.TSN < nextMinTSN))
                     {
                         // Check if there's a component chunk to free
                         var revChunkId = enumerator.Current.ComponentChunkId;
@@ -1858,7 +1853,7 @@ public unsafe class Transaction : IDisposable
         }
 
         // Get the minimum tick of all transactions because we'll remove component versions that are older
-        var context = new CommitContext { IsRollback = true, CommitTime = DateTime.UtcNow};
+        var context = new CommitContext { IsRollback = true };
 
         var deletedComponentSingles = new List<long>();
         // Process every Component Type and their components
@@ -2022,7 +2017,6 @@ public unsafe class Transaction : IDisposable
         public ref ComponentInfoBase.CompRevInfo CompRevInfo;
         public ConcurrencyConflictSolver Solver;
         public bool IsRollback;
-        public DateTime CommitTime;
     }
     
     public bool Commit(ConcurrencyConflictHandler handler = null)
@@ -2040,7 +2034,7 @@ public unsafe class Transaction : IDisposable
         }
 
         var conflictSolver = handler != null ? GetConflictSolver() : null;
-        var context = new CommitContext { IsRollback = false, CommitTime = DateTime.UtcNow, Solver = conflictSolver };
+        var context = new CommitContext { IsRollback = false, Solver = conflictSolver };
         
         // Process every Component Type and their components
         foreach (var componentInfo in _componentInfos.Values)
