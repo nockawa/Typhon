@@ -100,18 +100,16 @@ internal struct CompRevStorageElement
         }
     }
 
-    public PackedDateTime48 DateTime
+    public long TSN
     {
         get
         {
-            var packed = (ulong)_packedTickHigh << 16 | (uint)(_packedTickLow & CompRevTransactionIsolatedMask);
-            return new PackedDateTime48((long)packed, true);
+            return (long)((ulong)_packedTickHigh << 16 | (uint)(_packedTickLow & CompRevTransactionIsolatedMask));
         }
         set
         {
-            var ticks = value.PackedTicks;
-            _packedTickHigh = (uint)(ticks >> 16);
-            _packedTickLow = (ushort)((ticks & CompRevTransactionIsolatedMask) | (uint)(_packedTickLow & CompRevTransactionIsolatedFlag));
+            _packedTickHigh = (uint)(value >> 16);
+            _packedTickLow = (ushort)((value & CompRevTransactionIsolatedMask) | (uint)(_packedTickLow & CompRevTransactionIsolatedFlag));
         }
     }
 }
