@@ -930,11 +930,42 @@ public class PagedMMF : IDisposable</code></pre>
 </h2>
 
 
+  <a id="Typhon_Engine_PagedMMF_IsDatabaseFileCreating_" data-uid="Typhon.Engine.PagedMMF.IsDatabaseFileCreating*"></a>
+
+  <h3 id="Typhon_Engine_PagedMMF_IsDatabaseFileCreating" data-uid="Typhon.Engine.PagedMMF.IsDatabaseFileCreating">
+  IsDatabaseFileCreating
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L257"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool IsDatabaseFileCreating { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
+
+
   <a id="Typhon_Engine_PagedMMF_IsDisposed_" data-uid="Typhon.Engine.PagedMMF.IsDisposed*"></a>
 
   <h3 id="Typhon_Engine_PagedMMF_IsDisposed" data-uid="Typhon.Engine.PagedMMF.IsDisposed">
   IsDisposed
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L257"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L259"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -969,7 +1000,7 @@ public class PagedMMF : IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_PagedMMF_AdvanceClockHand" data-uid="Typhon.Engine.PagedMMF.AdvanceClockHand">
   AdvanceClockHand()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L395"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L397"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1000,7 +1031,7 @@ public class PagedMMF : IDisposable</code></pre>
 
   <h3 id="Typhon_Engine_PagedMMF_AllocateMemoryPage_System_Int32_System_Int32__System_Int64_System_Threading_CancellationToken_" data-uid="Typhon.Engine.PagedMMF.AllocateMemoryPage(System.Int32,System.Int32@,System.Int64,System.Threading.CancellationToken)">
   AllocateMemoryPage(int, out int, long, CancellationToken)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L421"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L423"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Allocate a Memory Page for the given File Page Index.</p>
@@ -1053,7 +1084,7 @@ Use the clock-sweep algorithm to find a free Memory Page.</p>
 
   <h3 id="Typhon_Engine_PagedMMF_CreateChangeSet" data-uid="Typhon.Engine.PagedMMF.CreateChangeSet">
   CreateChangeSet()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L786"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L788"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1110,7 +1141,7 @@ Use the clock-sweep algorithm to find a free Memory Page.</p>
 
   <h3 id="Typhon_Engine_PagedMMF_DecrementDirty_System_Int32_" data-uid="Typhon.Engine.PagedMMF.DecrementDirty(System.Int32)">
   DecrementDirty(int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L854"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L856"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1167,7 +1198,7 @@ Use the clock-sweep algorithm to find a free Memory Page.</p>
 
   <h3 id="Typhon_Engine_PagedMMF_DemoteExclusive_Typhon_Engine_PagedMMF_PageInfo_Typhon_Engine_PagedMMF_PageState_" data-uid="Typhon.Engine.PagedMMF.DemoteExclusive(Typhon.Engine.PagedMMF.PageInfo,Typhon.Engine.PagedMMF.PageState)">
   DemoteExclusive(PageInfo, PageState)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L830"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L832"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1200,7 +1231,7 @@ Use the clock-sweep algorithm to find a free Memory Page.</p>
 
   <h3 id="Typhon_Engine_PagedMMF_Dispose" data-uid="Typhon.Engine.PagedMMF.Dispose">
   Dispose()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L259"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L261"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</p>
@@ -1227,7 +1258,7 @@ Use the clock-sweep algorithm to find a free Memory Page.</p>
 
   <h3 id="Typhon_Engine_PagedMMF_FetchPageToMemory_System_Int32_System_Int32__System_Int64_System_Threading_CancellationToken_" data-uid="Typhon.Engine.PagedMMF.FetchPageToMemory(System.Int32,System.Int32@,System.Int64,System.Threading.CancellationToken)">
   FetchPageToMemory(int, out int, long, CancellationToken)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L354"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L356"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Fetch the requested File Page to memory, allocating a Memory Page if needed.</p>
@@ -1278,7 +1309,7 @@ Use the clock-sweep algorithm to find a free Memory Page.</p>
 
   <h3 id="Typhon_Engine_PagedMMF_GetMemPageAddress_System_Int32_" data-uid="Typhon.Engine.PagedMMF.GetMemPageAddress(System.Int32)">
   GetMemPageAddress(int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L980"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L982"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1376,7 +1407,7 @@ Use the clock-sweep algorithm to find a free Memory Page.</p>
 
   <h3 id="Typhon_Engine_PagedMMF_IncrementDirty_System_Int32_" data-uid="Typhon.Engine.PagedMMF.IncrementDirty(System.Int32)">
   IncrementDirty(int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L844"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L846"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1433,7 +1464,7 @@ Use the clock-sweep algorithm to find a free Memory Page.</p>
 
   <h3 id="Typhon_Engine_PagedMMF_LogAllocatePageEnter" data-uid="Typhon.Engine.PagedMMF.LogAllocatePageEnter">
   LogAllocatePageEnter()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L999"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L1001"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1460,7 +1491,7 @@ private void LogAllocatePageEnter()</code></pre>
 
   <h3 id="Typhon_Engine_PagedMMF_LogAllocatePageFound_System_Int32_" data-uid="Typhon.Engine.PagedMMF.LogAllocatePageFound(System.Int32)">
   LogAllocatePageFound(int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L1005"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L1007"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1492,7 +1523,7 @@ private void LogAllocatePageFound(int memPageIndex)</code></pre>
 
   <h3 id="Typhon_Engine_PagedMMF_LogAllocatePageLoad" data-uid="Typhon.Engine.PagedMMF.LogAllocatePageLoad">
   LogAllocatePageLoad()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L1008"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L1010"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1519,7 +1550,7 @@ private void LogAllocatePageLoad()</code></pre>
 
   <h3 id="Typhon_Engine_PagedMMF_LogAllocatePageSequential" data-uid="Typhon.Engine.PagedMMF.LogAllocatePageSequential">
   LogAllocatePageSequential()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L1002"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L1004"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1546,7 +1577,7 @@ private void LogAllocatePageSequential()</code></pre>
 
   <h3 id="Typhon_Engine_PagedMMF_LogMemPageCacheHit" data-uid="Typhon.Engine.PagedMMF.LogMemPageCacheHit">
   LogMemPageCacheHit()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L987"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L989"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1573,7 +1604,7 @@ private void LogMemPageCacheHit()</code></pre>
 
   <h3 id="Typhon_Engine_PagedMMF_LogMemPageCacheMiss" data-uid="Typhon.Engine.PagedMMF.LogMemPageCacheMiss">
   LogMemPageCacheMiss()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L990"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L992"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1600,7 +1631,7 @@ private void LogMemPageCacheMiss()</code></pre>
 
   <h3 id="Typhon_Engine_PagedMMF_LogPendingPageAllocation_System_Int32_System_Int32_System_TimeSpan_" data-uid="Typhon.Engine.PagedMMF.LogPendingPageAllocation(System.Int32,System.Int32,System.TimeSpan)">
   LogPendingPageAllocation(int, int, TimeSpan)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L1025"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L1027"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1636,7 +1667,7 @@ private void LogPendingPageAllocation(int filePageIndex, int loopCount, TimeSpan
 
   <h3 id="Typhon_Engine_PagedMMF_LogRequestPage_System_Int32_System_Boolean_" data-uid="Typhon.Engine.PagedMMF.LogRequestPage(System.Int32,System.Boolean)">
   LogRequestPage(int, bool)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L984"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L986"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1670,7 +1701,7 @@ private void LogRequestPage(int pageId, bool doesWrite)</code></pre>
 
   <h3 id="Typhon_Engine_PagedMMF_LogRequestPageFound" data-uid="Typhon.Engine.PagedMMF.LogRequestPageFound">
   LogRequestPageFound()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L993"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L995"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1697,7 +1728,7 @@ private void LogRequestPageFound()</code></pre>
 
   <h3 id="Typhon_Engine_PagedMMF_LogRequestPageRace" data-uid="Typhon.Engine.PagedMMF.LogRequestPageRace">
   LogRequestPageRace()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L996"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L998"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1724,7 +1755,7 @@ private void LogRequestPageRace()</code></pre>
 
   <h3 id="Typhon_Engine_PagedMMF_LogReset" data-uid="Typhon.Engine.PagedMMF.LogReset">
   LogReset()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L1030"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L1032"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1751,7 +1782,7 @@ private void LogReset()</code></pre>
 
   <h3 id="Typhon_Engine_PagedMMF_LogTransitionFailed_Typhon_Engine_PagedMMF_PageState_" data-uid="Typhon.Engine.PagedMMF.LogTransitionFailed(Typhon.Engine.PagedMMF.PageState)">
   LogTransitionFailed(PageState)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L1015"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L1017"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1783,7 +1814,7 @@ private void LogTransitionFailed(PagedMMF.PageState newMode)</code></pre>
 
   <h3 id="Typhon_Engine_PagedMMF_LogTransitionSuccessful_Typhon_Engine_PagedMMF_PageState_Typhon_Engine_PagedMMF_PageState_" data-uid="Typhon.Engine.PagedMMF.LogTransitionSuccessful(Typhon.Engine.PagedMMF.PageState,Typhon.Engine.PagedMMF.PageState)">
   LogTransitionSuccessful(PageState, PageState)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L1011"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L1013"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1817,7 +1848,7 @@ private void LogTransitionSuccessful(PagedMMF.PageState prevMode, PagedMMF.PageS
 
   <h3 id="Typhon_Engine_PagedMMF_LogTransitionWaitAndLoop_Typhon_Engine_PagedMMF_PageState_Typhon_Engine_PagedMMF_PageState_System_Int32_System_TimeSpan_" data-uid="Typhon.Engine.PagedMMF.LogTransitionWaitAndLoop(Typhon.Engine.PagedMMF.PageState,Typhon.Engine.PagedMMF.PageState,System.Int32,System.TimeSpan)">
   LogTransitionWaitAndLoop(PageState, PageState, int, TimeSpan)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L1020"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L1022"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1855,7 +1886,7 @@ private void LogTransitionWaitAndLoop(PagedMMF.PageState prevMode, PagedMMF.Page
 
   <h3 id="Typhon_Engine_PagedMMF_OnDispose" data-uid="Typhon.Engine.PagedMMF.OnDispose">
   OnDispose()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L265"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L267"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -1933,7 +1964,7 @@ private void LogTransitionWaitAndLoop(PagedMMF.PageState prevMode, PagedMMF.Page
 
   <h3 id="Typhon_Engine_PagedMMF_RequestPage_System_Int32_System_Boolean_Typhon_Engine_PageAccessor__System_Int64_System_Threading_CancellationToken_" data-uid="Typhon.Engine.PagedMMF.RequestPage(System.Int32,System.Boolean,Typhon.Engine.PageAccessor@,System.Int64,System.Threading.CancellationToken)">
   RequestPage(int, bool, out PageAccessor, long, CancellationToken)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L308"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L310"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Request access to a File Page, either Shared or Exclusive.</p>
@@ -1993,7 +2024,7 @@ If the File Page is being loading from disk to memory, the read is completely in
 
   <h3 id="Typhon_Engine_PagedMMF_SavePageInternal_System_Int32_System_Int32_" data-uid="Typhon.Engine.PagedMMF.SavePageInternal(System.Int32,System.Int32)">
   SavePageInternal(int, int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L926"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L928"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -2031,7 +2062,7 @@ If the File Page is being loading from disk to memory, the read is completely in
 
   <h3 id="Typhon_Engine_PagedMMF_SavePages_System_Int32___" data-uid="Typhon.Engine.PagedMMF.SavePages(System.Int32[])">
   SavePages(int[])
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L866"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L868"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -2067,7 +2098,7 @@ If the File Page is being loading from disk to memory, the read is completely in
 
   <h3 id="Typhon_Engine_PagedMMF_TransitionPageFromAccessToIdle_Typhon_Engine_PagedMMF_PageInfo_" data-uid="Typhon.Engine.PagedMMF.TransitionPageFromAccessToIdle(Typhon.Engine.PagedMMF.PageInfo)">
   TransitionPageFromAccessToIdle(PageInfo)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L943"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L945"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -2098,7 +2129,7 @@ If the File Page is being loading from disk to memory, the read is completely in
 
   <h3 id="Typhon_Engine_PagedMMF_TransitionPageToAccess_System_Int32_Typhon_Engine_PagedMMF_PageInfo_System_Boolean_System_Int64_System_Threading_CancellationToken_" data-uid="Typhon.Engine.PagedMMF.TransitionPageToAccess(System.Int32,Typhon.Engine.PagedMMF.PageInfo,System.Boolean,System.Int64,System.Threading.CancellationToken)">
   TransitionPageToAccess(int, PageInfo, bool, long, CancellationToken)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L654"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L656"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Transition the page from its current mode to Access (either shared or exclusive), blocking the call if needed.</p>
@@ -2176,7 +2207,7 @@ instead of a single field.</li>
 
   <h3 id="Typhon_Engine_PagedMMF_TryAcquire_Typhon_Engine_PagedMMF_PageInfo_" data-uid="Typhon.Engine.PagedMMF.TryAcquire(Typhon.Engine.PagedMMF.PageInfo)">
   TryAcquire(PageInfo)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L578"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L580"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -2212,7 +2243,7 @@ instead of a single field.</li>
 
   <h3 id="Typhon_Engine_PagedMMF_TryPromoteToExclusive_System_Int32_Typhon_Engine_PagedMMF_PageInfo_Typhon_Engine_PagedMMF_PageState__" data-uid="Typhon.Engine.PagedMMF.TryPromoteToExclusive(System.Int32,Typhon.Engine.PagedMMF.PageInfo,Typhon.Engine.PagedMMF.PageState@)">
   TryPromoteToExclusive(int, PageInfo, out PageState)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L788"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/PagedMMF.cs/#L790"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>

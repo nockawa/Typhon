@@ -10607,6 +10607,19 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.CompRevStorageElement.DateTime
   nameWithType: CompRevStorageElement.DateTime
+- uid: Typhon.Engine.CompRevStorageElement.IsVoid
+  name: IsVoid
+  href: api/Typhon.Engine.CompRevStorageElement.html#Typhon_Engine_CompRevStorageElement_IsVoid
+  commentId: P:Typhon.Engine.CompRevStorageElement.IsVoid
+  fullName: Typhon.Engine.CompRevStorageElement.IsVoid
+  nameWithType: CompRevStorageElement.IsVoid
+- uid: Typhon.Engine.CompRevStorageElement.IsVoid*
+  name: IsVoid
+  href: api/Typhon.Engine.CompRevStorageElement.html#Typhon_Engine_CompRevStorageElement_IsVoid_
+  commentId: Overload:Typhon.Engine.CompRevStorageElement.IsVoid
+  isSpec: "True"
+  fullName: Typhon.Engine.CompRevStorageElement.IsVoid
+  nameWithType: CompRevStorageElement.IsVoid
 - uid: Typhon.Engine.CompRevStorageElement.IsolationFlag
   name: IsolationFlag
   href: api/Typhon.Engine.CompRevStorageElement.html#Typhon_Engine_CompRevStorageElement_IsolationFlag
@@ -10620,6 +10633,19 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.CompRevStorageElement.IsolationFlag
   nameWithType: CompRevStorageElement.IsolationFlag
+- uid: Typhon.Engine.CompRevStorageElement.Void
+  name: Void()
+  href: api/Typhon.Engine.CompRevStorageElement.html#Typhon_Engine_CompRevStorageElement_Void
+  commentId: M:Typhon.Engine.CompRevStorageElement.Void
+  fullName: Typhon.Engine.CompRevStorageElement.Void()
+  nameWithType: CompRevStorageElement.Void()
+- uid: Typhon.Engine.CompRevStorageElement.Void*
+  name: Void
+  href: api/Typhon.Engine.CompRevStorageElement.html#Typhon_Engine_CompRevStorageElement_Void_
+  commentId: Overload:Typhon.Engine.CompRevStorageElement.Void
+  isSpec: "True"
+  fullName: Typhon.Engine.CompRevStorageElement.Void
+  nameWithType: CompRevStorageElement.Void
 - uid: Typhon.Engine.CompRevStorageElement._packedTickHigh
   name: _packedTickHigh
   href: api/Typhon.Engine.CompRevStorageElement.html#Typhon_Engine_CompRevStorageElement__packedTickHigh
@@ -10702,15 +10728,15 @@ references:
   commentId: T:Typhon.Engine.ComponentAttribute
   fullName: Typhon.Engine.ComponentAttribute
   nameWithType: ComponentAttribute
-- uid: Typhon.Engine.ComponentAttribute.#ctor(System.String,System.Int32)
-  name: ComponentAttribute(string, int)
-  href: api/Typhon.Engine.ComponentAttribute.html#Typhon_Engine_ComponentAttribute__ctor_System_String_System_Int32_
-  commentId: M:Typhon.Engine.ComponentAttribute.#ctor(System.String,System.Int32)
-  name.vb: New(String, Integer)
-  fullName: Typhon.Engine.ComponentAttribute.ComponentAttribute(string, int)
-  fullName.vb: Typhon.Engine.ComponentAttribute.New(String, Integer)
-  nameWithType: ComponentAttribute.ComponentAttribute(string, int)
-  nameWithType.vb: ComponentAttribute.New(String, Integer)
+- uid: Typhon.Engine.ComponentAttribute.#ctor(System.String,System.Int32,System.Boolean)
+  name: ComponentAttribute(string, int, bool)
+  href: api/Typhon.Engine.ComponentAttribute.html#Typhon_Engine_ComponentAttribute__ctor_System_String_System_Int32_System_Boolean_
+  commentId: M:Typhon.Engine.ComponentAttribute.#ctor(System.String,System.Int32,System.Boolean)
+  name.vb: New(String, Integer, Boolean)
+  fullName: Typhon.Engine.ComponentAttribute.ComponentAttribute(string, int, bool)
+  fullName.vb: Typhon.Engine.ComponentAttribute.New(String, Integer, Boolean)
+  nameWithType: ComponentAttribute.ComponentAttribute(string, int, bool)
+  nameWithType.vb: ComponentAttribute.New(String, Integer, Boolean)
 - uid: Typhon.Engine.ComponentAttribute.#ctor*
   name: ComponentAttribute
   href: api/Typhon.Engine.ComponentAttribute.html#Typhon_Engine_ComponentAttribute__ctor_
@@ -10721,6 +10747,19 @@ references:
   fullName.vb: Typhon.Engine.ComponentAttribute.New
   nameWithType: ComponentAttribute.ComponentAttribute
   nameWithType.vb: ComponentAttribute.New
+- uid: Typhon.Engine.ComponentAttribute.AllowMultiple
+  name: AllowMultiple
+  href: api/Typhon.Engine.ComponentAttribute.html#Typhon_Engine_ComponentAttribute_AllowMultiple
+  commentId: P:Typhon.Engine.ComponentAttribute.AllowMultiple
+  fullName: Typhon.Engine.ComponentAttribute.AllowMultiple
+  nameWithType: ComponentAttribute.AllowMultiple
+- uid: Typhon.Engine.ComponentAttribute.AllowMultiple*
+  name: AllowMultiple
+  href: api/Typhon.Engine.ComponentAttribute.html#Typhon_Engine_ComponentAttribute_AllowMultiple_
+  commentId: Overload:Typhon.Engine.ComponentAttribute.AllowMultiple
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentAttribute.AllowMultiple
+  nameWithType: ComponentAttribute.AllowMultiple
 - uid: Typhon.Engine.ComponentAttribute.Name
   name: Name
   href: api/Typhon.Engine.ComponentAttribute.html#Typhon_Engine_ComponentAttribute_Name
@@ -12218,15 +12257,15 @@ references:
   commentId: T:Typhon.Engine.DBComponentDefinition
   fullName: Typhon.Engine.DBComponentDefinition
   nameWithType: DBComponentDefinition
-- uid: Typhon.Engine.DBComponentDefinition.#ctor(System.String,System.Int32)
-  name: DBComponentDefinition(string, int)
-  href: api/Typhon.Engine.DBComponentDefinition.html#Typhon_Engine_DBComponentDefinition__ctor_System_String_System_Int32_
-  commentId: M:Typhon.Engine.DBComponentDefinition.#ctor(System.String,System.Int32)
-  name.vb: New(String, Integer)
-  fullName: Typhon.Engine.DBComponentDefinition.DBComponentDefinition(string, int)
-  fullName.vb: Typhon.Engine.DBComponentDefinition.New(String, Integer)
-  nameWithType: DBComponentDefinition.DBComponentDefinition(string, int)
-  nameWithType.vb: DBComponentDefinition.New(String, Integer)
+- uid: Typhon.Engine.DBComponentDefinition.#ctor(System.String,System.Int32,System.Boolean)
+  name: DBComponentDefinition(string, int, bool)
+  href: api/Typhon.Engine.DBComponentDefinition.html#Typhon_Engine_DBComponentDefinition__ctor_System_String_System_Int32_System_Boolean_
+  commentId: M:Typhon.Engine.DBComponentDefinition.#ctor(System.String,System.Int32,System.Boolean)
+  name.vb: New(String, Integer, Boolean)
+  fullName: Typhon.Engine.DBComponentDefinition.DBComponentDefinition(string, int, bool)
+  fullName.vb: Typhon.Engine.DBComponentDefinition.New(String, Integer, Boolean)
+  nameWithType: DBComponentDefinition.DBComponentDefinition(string, int, bool)
+  nameWithType.vb: DBComponentDefinition.New(String, Integer, Boolean)
 - uid: Typhon.Engine.DBComponentDefinition.#ctor*
   name: DBComponentDefinition
   href: api/Typhon.Engine.DBComponentDefinition.html#Typhon_Engine_DBComponentDefinition__ctor_
@@ -12237,6 +12276,19 @@ references:
   fullName.vb: Typhon.Engine.DBComponentDefinition.New
   nameWithType: DBComponentDefinition.DBComponentDefinition
   nameWithType.vb: DBComponentDefinition.New
+- uid: Typhon.Engine.DBComponentDefinition.AllowMultiple
+  name: AllowMultiple
+  href: api/Typhon.Engine.DBComponentDefinition.html#Typhon_Engine_DBComponentDefinition_AllowMultiple
+  commentId: P:Typhon.Engine.DBComponentDefinition.AllowMultiple
+  fullName: Typhon.Engine.DBComponentDefinition.AllowMultiple
+  nameWithType: DBComponentDefinition.AllowMultiple
+- uid: Typhon.Engine.DBComponentDefinition.AllowMultiple*
+  name: AllowMultiple
+  href: api/Typhon.Engine.DBComponentDefinition.html#Typhon_Engine_DBComponentDefinition_AllowMultiple_
+  commentId: Overload:Typhon.Engine.DBComponentDefinition.AllowMultiple
+  isSpec: "True"
+  fullName: Typhon.Engine.DBComponentDefinition.AllowMultiple
+  nameWithType: DBComponentDefinition.AllowMultiple
 - uid: Typhon.Engine.DBComponentDefinition.Build
   name: Build()
   href: api/Typhon.Engine.DBComponentDefinition.html#Typhon_Engine_DBComponentDefinition_Build
@@ -12861,15 +12913,15 @@ references:
   commentId: T:Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder
   fullName: Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder
   nameWithType: DatabaseDefinitions.DBComponentDefinitionBuilder
-- uid: Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.#ctor(Typhon.Engine.DatabaseDefinitions,System.String,System.Int32)
-  name: DBComponentDefinitionBuilder(DatabaseDefinitions, string, int)
-  href: api/Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.html#Typhon_Engine_DatabaseDefinitions_DBComponentDefinitionBuilder__ctor_Typhon_Engine_DatabaseDefinitions_System_String_System_Int32_
-  commentId: M:Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.#ctor(Typhon.Engine.DatabaseDefinitions,System.String,System.Int32)
-  name.vb: New(DatabaseDefinitions, String, Integer)
-  fullName: Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.DBComponentDefinitionBuilder(Typhon.Engine.DatabaseDefinitions, string, int)
-  fullName.vb: Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.New(Typhon.Engine.DatabaseDefinitions, String, Integer)
-  nameWithType: DatabaseDefinitions.DBComponentDefinitionBuilder.DBComponentDefinitionBuilder(DatabaseDefinitions, string, int)
-  nameWithType.vb: DatabaseDefinitions.DBComponentDefinitionBuilder.New(DatabaseDefinitions, String, Integer)
+- uid: Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.#ctor(Typhon.Engine.DatabaseDefinitions,System.String,System.Int32,System.Boolean)
+  name: DBComponentDefinitionBuilder(DatabaseDefinitions, string, int, bool)
+  href: api/Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.html#Typhon_Engine_DatabaseDefinitions_DBComponentDefinitionBuilder__ctor_Typhon_Engine_DatabaseDefinitions_System_String_System_Int32_System_Boolean_
+  commentId: M:Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.#ctor(Typhon.Engine.DatabaseDefinitions,System.String,System.Int32,System.Boolean)
+  name.vb: New(DatabaseDefinitions, String, Integer, Boolean)
+  fullName: Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.DBComponentDefinitionBuilder(Typhon.Engine.DatabaseDefinitions, string, int, bool)
+  fullName.vb: Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.New(Typhon.Engine.DatabaseDefinitions, String, Integer, Boolean)
+  nameWithType: DatabaseDefinitions.DBComponentDefinitionBuilder.DBComponentDefinitionBuilder(DatabaseDefinitions, string, int, bool)
+  nameWithType.vb: DatabaseDefinitions.DBComponentDefinitionBuilder.New(DatabaseDefinitions, String, Integer, Boolean)
 - uid: Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.#ctor(Typhon.Engine.DatabaseDefinitions,Typhon.Engine.DBComponentDefinition)
   name: DBComponentDefinitionBuilder(DatabaseDefinitions, DBComponentDefinition)
   href: api/Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.html#Typhon_Engine_DatabaseDefinitions_DBComponentDefinitionBuilder__ctor_Typhon_Engine_DatabaseDefinitions_Typhon_Engine_DBComponentDefinition_
@@ -13330,38 +13382,6 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.DatabaseEngine.MMF
   nameWithType: DatabaseEngine.MMF
-- uid: Typhon.Engine.DatabaseEngine.OnCreating(System.Object,System.EventArgs)
-  name: OnCreating(object, EventArgs)
-  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_OnCreating_System_Object_System_EventArgs_
-  commentId: M:Typhon.Engine.DatabaseEngine.OnCreating(System.Object,System.EventArgs)
-  name.vb: OnCreating(Object, EventArgs)
-  fullName: Typhon.Engine.DatabaseEngine.OnCreating(object, System.EventArgs)
-  fullName.vb: Typhon.Engine.DatabaseEngine.OnCreating(Object, System.EventArgs)
-  nameWithType: DatabaseEngine.OnCreating(object, EventArgs)
-  nameWithType.vb: DatabaseEngine.OnCreating(Object, EventArgs)
-- uid: Typhon.Engine.DatabaseEngine.OnCreating*
-  name: OnCreating
-  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_OnCreating_
-  commentId: Overload:Typhon.Engine.DatabaseEngine.OnCreating
-  isSpec: "True"
-  fullName: Typhon.Engine.DatabaseEngine.OnCreating
-  nameWithType: DatabaseEngine.OnCreating
-- uid: Typhon.Engine.DatabaseEngine.OnLoading(System.Object,System.EventArgs)
-  name: OnLoading(object, EventArgs)
-  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_OnLoading_System_Object_System_EventArgs_
-  commentId: M:Typhon.Engine.DatabaseEngine.OnLoading(System.Object,System.EventArgs)
-  name.vb: OnLoading(Object, EventArgs)
-  fullName: Typhon.Engine.DatabaseEngine.OnLoading(object, System.EventArgs)
-  fullName.vb: Typhon.Engine.DatabaseEngine.OnLoading(Object, System.EventArgs)
-  nameWithType: DatabaseEngine.OnLoading(object, EventArgs)
-  nameWithType.vb: DatabaseEngine.OnLoading(Object, EventArgs)
-- uid: Typhon.Engine.DatabaseEngine.OnLoading*
-  name: OnLoading
-  href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_OnLoading_
-  commentId: Overload:Typhon.Engine.DatabaseEngine.OnLoading
-  isSpec: "True"
-  fullName: Typhon.Engine.DatabaseEngine.OnLoading
-  nameWithType: DatabaseEngine.OnLoading
 - uid: Typhon.Engine.DatabaseEngine.RegisterComponentFromAccessor*
   name: RegisterComponentFromAccessor
   href: api/Typhon.Engine.DatabaseEngine.html#Typhon_Engine_DatabaseEngine_RegisterComponentFromAccessor_
@@ -13565,12 +13585,6 @@ references:
   commentId: F:Typhon.Engine.FieldR1.ArrayLength
   fullName: Typhon.Engine.FieldR1.ArrayLength
   nameWithType: FieldR1.ArrayLength
-- uid: Typhon.Engine.FieldR1.ComponentFK
-  name: ComponentFK
-  href: api/Typhon.Engine.FieldR1.html#Typhon_Engine_FieldR1_ComponentFK
-  commentId: F:Typhon.Engine.FieldR1.ComponentFK
-  fullName: Typhon.Engine.FieldR1.ComponentFK
-  nameWithType: FieldR1.ComponentFK
 - uid: Typhon.Engine.FieldR1.FieldId
   name: FieldId
   href: api/Typhon.Engine.FieldR1.html#Typhon_Engine_FieldR1_FieldId
@@ -13662,6 +13676,12 @@ references:
   commentId: F:Typhon.Engine.FieldType.Collection
   fullName: Typhon.Engine.FieldType.Collection
   nameWithType: FieldType.Collection
+- uid: Typhon.Engine.FieldType.Component
+  name: Component
+  href: api/Typhon.Engine.FieldType.html#Typhon_Engine_FieldType_Component
+  commentId: F:Typhon.Engine.FieldType.Component
+  fullName: Typhon.Engine.FieldType.Component
+  nameWithType: FieldType.Component
 - uid: Typhon.Engine.FieldType.Double
   name: Double
   href: api/Typhon.Engine.FieldType.html#Typhon_Engine_FieldType_Double
@@ -16217,6 +16237,19 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.PagedMMF.IncrementDirty
   nameWithType: PagedMMF.IncrementDirty
+- uid: Typhon.Engine.PagedMMF.IsDatabaseFileCreating
+  name: IsDatabaseFileCreating
+  href: api/Typhon.Engine.PagedMMF.html#Typhon_Engine_PagedMMF_IsDatabaseFileCreating
+  commentId: P:Typhon.Engine.PagedMMF.IsDatabaseFileCreating
+  fullName: Typhon.Engine.PagedMMF.IsDatabaseFileCreating
+  nameWithType: PagedMMF.IsDatabaseFileCreating
+- uid: Typhon.Engine.PagedMMF.IsDatabaseFileCreating*
+  name: IsDatabaseFileCreating
+  href: api/Typhon.Engine.PagedMMF.html#Typhon_Engine_PagedMMF_IsDatabaseFileCreating_
+  commentId: Overload:Typhon.Engine.PagedMMF.IsDatabaseFileCreating
+  isSpec: "True"
+  fullName: Typhon.Engine.PagedMMF.IsDatabaseFileCreating
+  nameWithType: PagedMMF.IsDatabaseFileCreating
 - uid: Typhon.Engine.PagedMMF.IsDisposed
   name: IsDisposed
   href: api/Typhon.Engine.PagedMMF.html#Typhon_Engine_PagedMMF_IsDisposed
@@ -18661,15 +18694,15 @@ references:
   fullName.vb: Typhon.Engine.Transaction.New
   nameWithType: Transaction.Transaction
   nameWithType.vb: Transaction.New
-- uid: Typhon.Engine.Transaction.AddCompRev(Typhon.Engine.Transaction.ComponentInfo,Typhon.Engine.Transaction.ComponentInfo.CompRevInfo@,System.Int64,System.Boolean)
-  name: AddCompRev(ComponentInfo, ref CompRevInfo, long, bool)
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_AddCompRev_Typhon_Engine_Transaction_ComponentInfo_Typhon_Engine_Transaction_ComponentInfo_CompRevInfo__System_Int64_System_Boolean_
-  commentId: M:Typhon.Engine.Transaction.AddCompRev(Typhon.Engine.Transaction.ComponentInfo,Typhon.Engine.Transaction.ComponentInfo.CompRevInfo@,System.Int64,System.Boolean)
-  name.vb: AddCompRev(ComponentInfo, CompRevInfo, Long, Boolean)
-  fullName: Typhon.Engine.Transaction.AddCompRev(Typhon.Engine.Transaction.ComponentInfo, ref Typhon.Engine.Transaction.ComponentInfo.CompRevInfo, long, bool)
-  fullName.vb: Typhon.Engine.Transaction.AddCompRev(Typhon.Engine.Transaction.ComponentInfo, Typhon.Engine.Transaction.ComponentInfo.CompRevInfo, Long, Boolean)
-  nameWithType: Transaction.AddCompRev(Transaction.ComponentInfo, ref Transaction.ComponentInfo.CompRevInfo, long, bool)
-  nameWithType.vb: Transaction.AddCompRev(Transaction.ComponentInfo, Transaction.ComponentInfo.CompRevInfo, Long, Boolean)
+- uid: Typhon.Engine.Transaction.AddCompRev(Typhon.Engine.Transaction.ComponentInfoBase,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo@,System.Int64,System.Boolean)
+  name: AddCompRev(ComponentInfoBase, ref CompRevInfo, long, bool)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_AddCompRev_Typhon_Engine_Transaction_ComponentInfoBase_Typhon_Engine_Transaction_ComponentInfoBase_CompRevInfo__System_Int64_System_Boolean_
+  commentId: M:Typhon.Engine.Transaction.AddCompRev(Typhon.Engine.Transaction.ComponentInfoBase,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo@,System.Int64,System.Boolean)
+  name.vb: AddCompRev(ComponentInfoBase, CompRevInfo, Long, Boolean)
+  fullName: Typhon.Engine.Transaction.AddCompRev(Typhon.Engine.Transaction.ComponentInfoBase, ref Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo, long, bool)
+  fullName.vb: Typhon.Engine.Transaction.AddCompRev(Typhon.Engine.Transaction.ComponentInfoBase, Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo, Long, Boolean)
+  nameWithType: Transaction.AddCompRev(Transaction.ComponentInfoBase, ref Transaction.ComponentInfoBase.CompRevInfo, long, bool)
+  nameWithType.vb: Transaction.AddCompRev(Transaction.ComponentInfoBase, Transaction.ComponentInfoBase.CompRevInfo, Long, Boolean)
 - uid: Typhon.Engine.Transaction.AddCompRev*
   name: AddCompRev
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_AddCompRev_
@@ -18677,15 +18710,15 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.Transaction.AddCompRev
   nameWithType: Transaction.AddCompRev
-- uid: Typhon.Engine.Transaction.AllocCompRevStorage(Typhon.Engine.Transaction.ComponentInfo,System.Int64,System.Int32)
-  name: AllocCompRevStorage(ComponentInfo, long, int)
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_AllocCompRevStorage_Typhon_Engine_Transaction_ComponentInfo_System_Int64_System_Int32_
-  commentId: M:Typhon.Engine.Transaction.AllocCompRevStorage(Typhon.Engine.Transaction.ComponentInfo,System.Int64,System.Int32)
-  name.vb: AllocCompRevStorage(ComponentInfo, Long, Integer)
-  fullName: Typhon.Engine.Transaction.AllocCompRevStorage(Typhon.Engine.Transaction.ComponentInfo, long, int)
-  fullName.vb: Typhon.Engine.Transaction.AllocCompRevStorage(Typhon.Engine.Transaction.ComponentInfo, Long, Integer)
-  nameWithType: Transaction.AllocCompRevStorage(Transaction.ComponentInfo, long, int)
-  nameWithType.vb: Transaction.AllocCompRevStorage(Transaction.ComponentInfo, Long, Integer)
+- uid: Typhon.Engine.Transaction.AllocCompRevStorage(Typhon.Engine.Transaction.ComponentInfoBase,System.Int64,System.Int32)
+  name: AllocCompRevStorage(ComponentInfoBase, long, int)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_AllocCompRevStorage_Typhon_Engine_Transaction_ComponentInfoBase_System_Int64_System_Int32_
+  commentId: M:Typhon.Engine.Transaction.AllocCompRevStorage(Typhon.Engine.Transaction.ComponentInfoBase,System.Int64,System.Int32)
+  name.vb: AllocCompRevStorage(ComponentInfoBase, Long, Integer)
+  fullName: Typhon.Engine.Transaction.AllocCompRevStorage(Typhon.Engine.Transaction.ComponentInfoBase, long, int)
+  fullName.vb: Typhon.Engine.Transaction.AllocCompRevStorage(Typhon.Engine.Transaction.ComponentInfoBase, Long, Integer)
+  nameWithType: Transaction.AllocCompRevStorage(Transaction.ComponentInfoBase, long, int)
+  nameWithType.vb: Transaction.AllocCompRevStorage(Transaction.ComponentInfoBase, Long, Integer)
 - uid: Typhon.Engine.Transaction.AllocCompRevStorage*
   name: AllocCompRevStorage
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_AllocCompRevStorage_
@@ -18693,15 +18726,15 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.Transaction.AllocCompRevStorage
   nameWithType: Transaction.AllocCompRevStorage
-- uid: Typhon.Engine.Transaction.CleanUpUnusedEntries(Typhon.Engine.Transaction.ComponentInfo,Typhon.Engine.Transaction.ComponentInfo.CompRevInfo@,Typhon.Engine.ChunkRandomAccessor,System.Int64)
-  name: CleanUpUnusedEntries(ComponentInfo, ref CompRevInfo, ChunkRandomAccessor, long)
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CleanUpUnusedEntries_Typhon_Engine_Transaction_ComponentInfo_Typhon_Engine_Transaction_ComponentInfo_CompRevInfo__Typhon_Engine_ChunkRandomAccessor_System_Int64_
-  commentId: M:Typhon.Engine.Transaction.CleanUpUnusedEntries(Typhon.Engine.Transaction.ComponentInfo,Typhon.Engine.Transaction.ComponentInfo.CompRevInfo@,Typhon.Engine.ChunkRandomAccessor,System.Int64)
-  name.vb: CleanUpUnusedEntries(ComponentInfo, CompRevInfo, ChunkRandomAccessor, Long)
-  fullName: Typhon.Engine.Transaction.CleanUpUnusedEntries(Typhon.Engine.Transaction.ComponentInfo, ref Typhon.Engine.Transaction.ComponentInfo.CompRevInfo, Typhon.Engine.ChunkRandomAccessor, long)
-  fullName.vb: Typhon.Engine.Transaction.CleanUpUnusedEntries(Typhon.Engine.Transaction.ComponentInfo, Typhon.Engine.Transaction.ComponentInfo.CompRevInfo, Typhon.Engine.ChunkRandomAccessor, Long)
-  nameWithType: Transaction.CleanUpUnusedEntries(Transaction.ComponentInfo, ref Transaction.ComponentInfo.CompRevInfo, ChunkRandomAccessor, long)
-  nameWithType.vb: Transaction.CleanUpUnusedEntries(Transaction.ComponentInfo, Transaction.ComponentInfo.CompRevInfo, ChunkRandomAccessor, Long)
+- uid: Typhon.Engine.Transaction.CleanUpUnusedEntries(Typhon.Engine.Transaction.ComponentInfoBase,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo@,Typhon.Engine.ChunkRandomAccessor,System.Int64)
+  name: CleanUpUnusedEntries(ComponentInfoBase, ref CompRevInfo, ChunkRandomAccessor, long)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CleanUpUnusedEntries_Typhon_Engine_Transaction_ComponentInfoBase_Typhon_Engine_Transaction_ComponentInfoBase_CompRevInfo__Typhon_Engine_ChunkRandomAccessor_System_Int64_
+  commentId: M:Typhon.Engine.Transaction.CleanUpUnusedEntries(Typhon.Engine.Transaction.ComponentInfoBase,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo@,Typhon.Engine.ChunkRandomAccessor,System.Int64)
+  name.vb: CleanUpUnusedEntries(ComponentInfoBase, CompRevInfo, ChunkRandomAccessor, Long)
+  fullName: Typhon.Engine.Transaction.CleanUpUnusedEntries(Typhon.Engine.Transaction.ComponentInfoBase, ref Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo, Typhon.Engine.ChunkRandomAccessor, long)
+  fullName.vb: Typhon.Engine.Transaction.CleanUpUnusedEntries(Typhon.Engine.Transaction.ComponentInfoBase, Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo, Typhon.Engine.ChunkRandomAccessor, Long)
+  nameWithType: Transaction.CleanUpUnusedEntries(Transaction.ComponentInfoBase, ref Transaction.ComponentInfoBase.CompRevInfo, ChunkRandomAccessor, long)
+  nameWithType.vb: Transaction.CleanUpUnusedEntries(Transaction.ComponentInfoBase, Transaction.ComponentInfoBase.CompRevInfo, ChunkRandomAccessor, Long)
 - uid: Typhon.Engine.Transaction.CleanUpUnusedEntries*
   name: CleanUpUnusedEntries
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CleanUpUnusedEntries_
@@ -18793,169 +18826,276 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.Transaction.CommittedOperationCount
   nameWithType: Transaction.CommittedOperationCount
-- uid: Typhon.Engine.Transaction.ComponentData
-  name: Transaction.ComponentData
-  href: api/Typhon.Engine.Transaction.ComponentData.html
-  commentId: T:Typhon.Engine.Transaction.ComponentData
-  fullName: Typhon.Engine.Transaction.ComponentData
-  nameWithType: Transaction.ComponentData
-- uid: Typhon.Engine.Transaction.ComponentData.#ctor(System.Type,System.Void*)
-  name: ComponentData(Type, void*)
-  href: api/Typhon.Engine.Transaction.ComponentData.html#Typhon_Engine_Transaction_ComponentData__ctor_System_Type_System_Void__
-  commentId: M:Typhon.Engine.Transaction.ComponentData.#ctor(System.Type,System.Void*)
-  name.vb: New(Type, Void*)
-  fullName: Typhon.Engine.Transaction.ComponentData.ComponentData(System.Type, void*)
-  fullName.vb: Typhon.Engine.Transaction.ComponentData.New(System.Type, Void*)
-  nameWithType: Transaction.ComponentData.ComponentData(Type, void*)
-  nameWithType.vb: Transaction.ComponentData.New(Type, Void*)
-- uid: Typhon.Engine.Transaction.ComponentData.#ctor*
-  name: ComponentData
-  href: api/Typhon.Engine.Transaction.ComponentData.html#Typhon_Engine_Transaction_ComponentData__ctor_
-  commentId: Overload:Typhon.Engine.Transaction.ComponentData.#ctor
+- uid: Typhon.Engine.Transaction.ComponentInfoBase
+  name: Transaction.ComponentInfoBase
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.html
+  commentId: T:Typhon.Engine.Transaction.ComponentInfoBase
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase
+  nameWithType: Transaction.ComponentInfoBase
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.AddNew(System.Int64,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo)
+  name: AddNew(long, CompRevInfo)
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.html#Typhon_Engine_Transaction_ComponentInfoBase_AddNew_System_Int64_Typhon_Engine_Transaction_ComponentInfoBase_CompRevInfo_
+  commentId: M:Typhon.Engine.Transaction.ComponentInfoBase.AddNew(System.Int64,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo)
+  name.vb: AddNew(Long, CompRevInfo)
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.AddNew(long, Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo)
+  fullName.vb: Typhon.Engine.Transaction.ComponentInfoBase.AddNew(Long, Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo)
+  nameWithType: Transaction.ComponentInfoBase.AddNew(long, Transaction.ComponentInfoBase.CompRevInfo)
+  nameWithType.vb: Transaction.ComponentInfoBase.AddNew(Long, Transaction.ComponentInfoBase.CompRevInfo)
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.AddNew*
+  name: AddNew
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.html#Typhon_Engine_Transaction_ComponentInfoBase_AddNew_
+  commentId: Overload:Typhon.Engine.Transaction.ComponentInfoBase.AddNew
   isSpec: "True"
-  name.vb: New
-  fullName: Typhon.Engine.Transaction.ComponentData.ComponentData
-  fullName.vb: Typhon.Engine.Transaction.ComponentData.New
-  nameWithType: Transaction.ComponentData.ComponentData
-  nameWithType.vb: Transaction.ComponentData.New
-- uid: Typhon.Engine.Transaction.ComponentData.Data
-  name: Data
-  href: api/Typhon.Engine.Transaction.ComponentData.html#Typhon_Engine_Transaction_ComponentData_Data
-  commentId: F:Typhon.Engine.Transaction.ComponentData.Data
-  fullName: Typhon.Engine.Transaction.ComponentData.Data
-  nameWithType: Transaction.ComponentData.Data
-- uid: Typhon.Engine.Transaction.ComponentData.Type
-  name: Type
-  href: api/Typhon.Engine.Transaction.ComponentData.html#Typhon_Engine_Transaction_ComponentData_Type
-  commentId: F:Typhon.Engine.Transaction.ComponentData.Type
-  fullName: Typhon.Engine.Transaction.ComponentData.Type
-  nameWithType: Transaction.ComponentData.Type
-- uid: Typhon.Engine.Transaction.ComponentInfo
-  name: Transaction.ComponentInfo
-  href: api/Typhon.Engine.Transaction.ComponentInfo.html
-  commentId: T:Typhon.Engine.Transaction.ComponentInfo
-  fullName: Typhon.Engine.Transaction.ComponentInfo
-  nameWithType: Transaction.ComponentInfo
-- uid: Typhon.Engine.Transaction.ComponentInfo.CompContentAccessor
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.AddNew
+  nameWithType: Transaction.ComponentInfoBase.AddNew
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.CompContentAccessor
   name: CompContentAccessor
-  href: api/Typhon.Engine.Transaction.ComponentInfo.html#Typhon_Engine_Transaction_ComponentInfo_CompContentAccessor
-  commentId: F:Typhon.Engine.Transaction.ComponentInfo.CompContentAccessor
-  fullName: Typhon.Engine.Transaction.ComponentInfo.CompContentAccessor
-  nameWithType: Transaction.ComponentInfo.CompContentAccessor
-- uid: Typhon.Engine.Transaction.ComponentInfo.CompContentSegment
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.html#Typhon_Engine_Transaction_ComponentInfoBase_CompContentAccessor
+  commentId: F:Typhon.Engine.Transaction.ComponentInfoBase.CompContentAccessor
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.CompContentAccessor
+  nameWithType: Transaction.ComponentInfoBase.CompContentAccessor
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.CompContentSegment
   name: CompContentSegment
-  href: api/Typhon.Engine.Transaction.ComponentInfo.html#Typhon_Engine_Transaction_ComponentInfo_CompContentSegment
-  commentId: F:Typhon.Engine.Transaction.ComponentInfo.CompContentSegment
-  fullName: Typhon.Engine.Transaction.ComponentInfo.CompContentSegment
-  nameWithType: Transaction.ComponentInfo.CompContentSegment
-- uid: Typhon.Engine.Transaction.ComponentInfo.CompRevInfo
-  name: Transaction.ComponentInfo.CompRevInfo
-  href: api/Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.html
-  commentId: T:Typhon.Engine.Transaction.ComponentInfo.CompRevInfo
-  fullName: Typhon.Engine.Transaction.ComponentInfo.CompRevInfo
-  nameWithType: Transaction.ComponentInfo.CompRevInfo
-- uid: Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.CompRevTableFirstChunkId
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.html#Typhon_Engine_Transaction_ComponentInfoBase_CompContentSegment
+  commentId: F:Typhon.Engine.Transaction.ComponentInfoBase.CompContentSegment
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.CompContentSegment
+  nameWithType: Transaction.ComponentInfoBase.CompContentSegment
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo
+  name: Transaction.ComponentInfoBase.CompRevInfo
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.html
+  commentId: T:Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo
+  nameWithType: Transaction.ComponentInfoBase.CompRevInfo
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.CompRevTableFirstChunkId
   name: CompRevTableFirstChunkId
-  href: api/Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.html#Typhon_Engine_Transaction_ComponentInfo_CompRevInfo_CompRevTableFirstChunkId
-  commentId: F:Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.CompRevTableFirstChunkId
-  fullName: Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.CompRevTableFirstChunkId
-  nameWithType: Transaction.ComponentInfo.CompRevInfo.CompRevTableFirstChunkId
-- uid: Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.CurCompContentChunkId
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.html#Typhon_Engine_Transaction_ComponentInfoBase_CompRevInfo_CompRevTableFirstChunkId
+  commentId: F:Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.CompRevTableFirstChunkId
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.CompRevTableFirstChunkId
+  nameWithType: Transaction.ComponentInfoBase.CompRevInfo.CompRevTableFirstChunkId
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.CurCompContentChunkId
   name: CurCompContentChunkId
-  href: api/Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.html#Typhon_Engine_Transaction_ComponentInfo_CompRevInfo_CurCompContentChunkId
-  commentId: F:Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.CurCompContentChunkId
-  fullName: Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.CurCompContentChunkId
-  nameWithType: Transaction.ComponentInfo.CompRevInfo.CurCompContentChunkId
-- uid: Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.CurRevisionIndex
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.html#Typhon_Engine_Transaction_ComponentInfoBase_CompRevInfo_CurCompContentChunkId
+  commentId: F:Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.CurCompContentChunkId
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.CurCompContentChunkId
+  nameWithType: Transaction.ComponentInfoBase.CompRevInfo.CurCompContentChunkId
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.CurRevisionIndex
   name: CurRevisionIndex
-  href: api/Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.html#Typhon_Engine_Transaction_ComponentInfo_CompRevInfo_CurRevisionIndex
-  commentId: F:Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.CurRevisionIndex
-  fullName: Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.CurRevisionIndex
-  nameWithType: Transaction.ComponentInfo.CompRevInfo.CurRevisionIndex
-- uid: Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.Operations
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.html#Typhon_Engine_Transaction_ComponentInfoBase_CompRevInfo_CurRevisionIndex
+  commentId: F:Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.CurRevisionIndex
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.CurRevisionIndex
+  nameWithType: Transaction.ComponentInfoBase.CompRevInfo.CurRevisionIndex
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.Operations
   name: Operations
-  href: api/Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.html#Typhon_Engine_Transaction_ComponentInfo_CompRevInfo_Operations
-  commentId: F:Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.Operations
-  fullName: Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.Operations
-  nameWithType: Transaction.ComponentInfo.CompRevInfo.Operations
-- uid: Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.PrevCompContentChunkId
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.html#Typhon_Engine_Transaction_ComponentInfoBase_CompRevInfo_Operations
+  commentId: F:Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.Operations
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.Operations
+  nameWithType: Transaction.ComponentInfoBase.CompRevInfo.Operations
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.PrevCompContentChunkId
   name: PrevCompContentChunkId
-  href: api/Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.html#Typhon_Engine_Transaction_ComponentInfo_CompRevInfo_PrevCompContentChunkId
-  commentId: F:Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.PrevCompContentChunkId
-  fullName: Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.PrevCompContentChunkId
-  nameWithType: Transaction.ComponentInfo.CompRevInfo.PrevCompContentChunkId
-- uid: Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.PrevRevisionIndex
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.html#Typhon_Engine_Transaction_ComponentInfoBase_CompRevInfo_PrevCompContentChunkId
+  commentId: F:Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.PrevCompContentChunkId
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.PrevCompContentChunkId
+  nameWithType: Transaction.ComponentInfoBase.CompRevInfo.PrevCompContentChunkId
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.PrevRevisionIndex
   name: PrevRevisionIndex
-  href: api/Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.html#Typhon_Engine_Transaction_ComponentInfo_CompRevInfo_PrevRevisionIndex
-  commentId: F:Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.PrevRevisionIndex
-  fullName: Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.PrevRevisionIndex
-  nameWithType: Transaction.ComponentInfo.CompRevInfo.PrevRevisionIndex
-- uid: Typhon.Engine.Transaction.ComponentInfo.CompRevInfoCache
-  name: CompRevInfoCache
-  href: api/Typhon.Engine.Transaction.ComponentInfo.html#Typhon_Engine_Transaction_ComponentInfo_CompRevInfoCache
-  commentId: F:Typhon.Engine.Transaction.ComponentInfo.CompRevInfoCache
-  fullName: Typhon.Engine.Transaction.ComponentInfo.CompRevInfoCache
-  nameWithType: Transaction.ComponentInfo.CompRevInfoCache
-- uid: Typhon.Engine.Transaction.ComponentInfo.CompRevTableAccessor
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.html#Typhon_Engine_Transaction_ComponentInfoBase_CompRevInfo_PrevRevisionIndex
+  commentId: F:Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.PrevRevisionIndex
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.PrevRevisionIndex
+  nameWithType: Transaction.ComponentInfoBase.CompRevInfo.PrevRevisionIndex
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.CompRevTableAccessor
   name: CompRevTableAccessor
-  href: api/Typhon.Engine.Transaction.ComponentInfo.html#Typhon_Engine_Transaction_ComponentInfo_CompRevTableAccessor
-  commentId: F:Typhon.Engine.Transaction.ComponentInfo.CompRevTableAccessor
-  fullName: Typhon.Engine.Transaction.ComponentInfo.CompRevTableAccessor
-  nameWithType: Transaction.ComponentInfo.CompRevTableAccessor
-- uid: Typhon.Engine.Transaction.ComponentInfo.CompRevTableSegment
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.html#Typhon_Engine_Transaction_ComponentInfoBase_CompRevTableAccessor
+  commentId: F:Typhon.Engine.Transaction.ComponentInfoBase.CompRevTableAccessor
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.CompRevTableAccessor
+  nameWithType: Transaction.ComponentInfoBase.CompRevTableAccessor
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.CompRevTableSegment
   name: CompRevTableSegment
-  href: api/Typhon.Engine.Transaction.ComponentInfo.html#Typhon_Engine_Transaction_ComponentInfo_CompRevTableSegment
-  commentId: F:Typhon.Engine.Transaction.ComponentInfo.CompRevTableSegment
-  fullName: Typhon.Engine.Transaction.ComponentInfo.CompRevTableSegment
-  nameWithType: Transaction.ComponentInfo.CompRevTableSegment
-- uid: Typhon.Engine.Transaction.ComponentInfo.ComponentTable
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.html#Typhon_Engine_Transaction_ComponentInfoBase_CompRevTableSegment
+  commentId: F:Typhon.Engine.Transaction.ComponentInfoBase.CompRevTableSegment
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.CompRevTableSegment
+  nameWithType: Transaction.ComponentInfoBase.CompRevTableSegment
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.ComponentTable
   name: ComponentTable
-  href: api/Typhon.Engine.Transaction.ComponentInfo.html#Typhon_Engine_Transaction_ComponentInfo_ComponentTable
-  commentId: F:Typhon.Engine.Transaction.ComponentInfo.ComponentTable
-  fullName: Typhon.Engine.Transaction.ComponentInfo.ComponentTable
-  nameWithType: Transaction.ComponentInfo.ComponentTable
-- uid: Typhon.Engine.Transaction.ComponentInfo.OperationType
-  name: Transaction.ComponentInfo.OperationType
-  href: api/Typhon.Engine.Transaction.ComponentInfo.OperationType.html
-  commentId: T:Typhon.Engine.Transaction.ComponentInfo.OperationType
-  fullName: Typhon.Engine.Transaction.ComponentInfo.OperationType
-  nameWithType: Transaction.ComponentInfo.OperationType
-- uid: Typhon.Engine.Transaction.ComponentInfo.OperationType.Created
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.html#Typhon_Engine_Transaction_ComponentInfoBase_ComponentTable
+  commentId: F:Typhon.Engine.Transaction.ComponentInfoBase.ComponentTable
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.ComponentTable
+  nameWithType: Transaction.ComponentInfoBase.ComponentTable
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.EntryCount
+  name: EntryCount
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.html#Typhon_Engine_Transaction_ComponentInfoBase_EntryCount
+  commentId: P:Typhon.Engine.Transaction.ComponentInfoBase.EntryCount
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.EntryCount
+  nameWithType: Transaction.ComponentInfoBase.EntryCount
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.EntryCount*
+  name: EntryCount
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.html#Typhon_Engine_Transaction_ComponentInfoBase_EntryCount_
+  commentId: Overload:Typhon.Engine.Transaction.ComponentInfoBase.EntryCount
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.EntryCount
+  nameWithType: Transaction.ComponentInfoBase.EntryCount
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.IsMultiple
+  name: IsMultiple
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.html#Typhon_Engine_Transaction_ComponentInfoBase_IsMultiple
+  commentId: P:Typhon.Engine.Transaction.ComponentInfoBase.IsMultiple
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.IsMultiple
+  nameWithType: Transaction.ComponentInfoBase.IsMultiple
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.IsMultiple*
+  name: IsMultiple
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.html#Typhon_Engine_Transaction_ComponentInfoBase_IsMultiple_
+  commentId: Overload:Typhon.Engine.Transaction.ComponentInfoBase.IsMultiple
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.IsMultiple
+  nameWithType: Transaction.ComponentInfoBase.IsMultiple
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.OperationType
+  name: Transaction.ComponentInfoBase.OperationType
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.OperationType.html
+  commentId: T:Typhon.Engine.Transaction.ComponentInfoBase.OperationType
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.OperationType
+  nameWithType: Transaction.ComponentInfoBase.OperationType
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.OperationType.Created
   name: Created
-  href: api/Typhon.Engine.Transaction.ComponentInfo.OperationType.html#Typhon_Engine_Transaction_ComponentInfo_OperationType_Created
-  commentId: F:Typhon.Engine.Transaction.ComponentInfo.OperationType.Created
-  fullName: Typhon.Engine.Transaction.ComponentInfo.OperationType.Created
-  nameWithType: Transaction.ComponentInfo.OperationType.Created
-- uid: Typhon.Engine.Transaction.ComponentInfo.OperationType.Deleted
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.OperationType.html#Typhon_Engine_Transaction_ComponentInfoBase_OperationType_Created
+  commentId: F:Typhon.Engine.Transaction.ComponentInfoBase.OperationType.Created
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.OperationType.Created
+  nameWithType: Transaction.ComponentInfoBase.OperationType.Created
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.OperationType.Deleted
   name: Deleted
-  href: api/Typhon.Engine.Transaction.ComponentInfo.OperationType.html#Typhon_Engine_Transaction_ComponentInfo_OperationType_Deleted
-  commentId: F:Typhon.Engine.Transaction.ComponentInfo.OperationType.Deleted
-  fullName: Typhon.Engine.Transaction.ComponentInfo.OperationType.Deleted
-  nameWithType: Transaction.ComponentInfo.OperationType.Deleted
-- uid: Typhon.Engine.Transaction.ComponentInfo.OperationType.Read
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.OperationType.html#Typhon_Engine_Transaction_ComponentInfoBase_OperationType_Deleted
+  commentId: F:Typhon.Engine.Transaction.ComponentInfoBase.OperationType.Deleted
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.OperationType.Deleted
+  nameWithType: Transaction.ComponentInfoBase.OperationType.Deleted
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.OperationType.Read
   name: Read
-  href: api/Typhon.Engine.Transaction.ComponentInfo.OperationType.html#Typhon_Engine_Transaction_ComponentInfo_OperationType_Read
-  commentId: F:Typhon.Engine.Transaction.ComponentInfo.OperationType.Read
-  fullName: Typhon.Engine.Transaction.ComponentInfo.OperationType.Read
-  nameWithType: Transaction.ComponentInfo.OperationType.Read
-- uid: Typhon.Engine.Transaction.ComponentInfo.OperationType.Undefined
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.OperationType.html#Typhon_Engine_Transaction_ComponentInfoBase_OperationType_Read
+  commentId: F:Typhon.Engine.Transaction.ComponentInfoBase.OperationType.Read
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.OperationType.Read
+  nameWithType: Transaction.ComponentInfoBase.OperationType.Read
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.OperationType.Undefined
   name: Undefined
-  href: api/Typhon.Engine.Transaction.ComponentInfo.OperationType.html#Typhon_Engine_Transaction_ComponentInfo_OperationType_Undefined
-  commentId: F:Typhon.Engine.Transaction.ComponentInfo.OperationType.Undefined
-  fullName: Typhon.Engine.Transaction.ComponentInfo.OperationType.Undefined
-  nameWithType: Transaction.ComponentInfo.OperationType.Undefined
-- uid: Typhon.Engine.Transaction.ComponentInfo.OperationType.Updated
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.OperationType.html#Typhon_Engine_Transaction_ComponentInfoBase_OperationType_Undefined
+  commentId: F:Typhon.Engine.Transaction.ComponentInfoBase.OperationType.Undefined
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.OperationType.Undefined
+  nameWithType: Transaction.ComponentInfoBase.OperationType.Undefined
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.OperationType.Updated
   name: Updated
-  href: api/Typhon.Engine.Transaction.ComponentInfo.OperationType.html#Typhon_Engine_Transaction_ComponentInfo_OperationType_Updated
-  commentId: F:Typhon.Engine.Transaction.ComponentInfo.OperationType.Updated
-  fullName: Typhon.Engine.Transaction.ComponentInfo.OperationType.Updated
-  nameWithType: Transaction.ComponentInfo.OperationType.Updated
-- uid: Typhon.Engine.Transaction.ComponentInfo.PrimaryKeyIndex
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.OperationType.html#Typhon_Engine_Transaction_ComponentInfoBase_OperationType_Updated
+  commentId: F:Typhon.Engine.Transaction.ComponentInfoBase.OperationType.Updated
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.OperationType.Updated
+  nameWithType: Transaction.ComponentInfoBase.OperationType.Updated
+- uid: Typhon.Engine.Transaction.ComponentInfoBase.PrimaryKeyIndex
   name: PrimaryKeyIndex
-  href: api/Typhon.Engine.Transaction.ComponentInfo.html#Typhon_Engine_Transaction_ComponentInfo_PrimaryKeyIndex
-  commentId: F:Typhon.Engine.Transaction.ComponentInfo.PrimaryKeyIndex
-  fullName: Typhon.Engine.Transaction.ComponentInfo.PrimaryKeyIndex
-  nameWithType: Transaction.ComponentInfo.PrimaryKeyIndex
+  href: api/Typhon.Engine.Transaction.ComponentInfoBase.html#Typhon_Engine_Transaction_ComponentInfoBase_PrimaryKeyIndex
+  commentId: F:Typhon.Engine.Transaction.ComponentInfoBase.PrimaryKeyIndex
+  fullName: Typhon.Engine.Transaction.ComponentInfoBase.PrimaryKeyIndex
+  nameWithType: Transaction.ComponentInfoBase.PrimaryKeyIndex
+- uid: Typhon.Engine.Transaction.ComponentInfoMultiple
+  name: Transaction.ComponentInfoMultiple
+  href: api/Typhon.Engine.Transaction.ComponentInfoMultiple.html
+  commentId: T:Typhon.Engine.Transaction.ComponentInfoMultiple
+  fullName: Typhon.Engine.Transaction.ComponentInfoMultiple
+  nameWithType: Transaction.ComponentInfoMultiple
+- uid: Typhon.Engine.Transaction.ComponentInfoMultiple.AddNew(System.Int64,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo)
+  name: AddNew(long, CompRevInfo)
+  href: api/Typhon.Engine.Transaction.ComponentInfoMultiple.html#Typhon_Engine_Transaction_ComponentInfoMultiple_AddNew_System_Int64_Typhon_Engine_Transaction_ComponentInfoBase_CompRevInfo_
+  commentId: M:Typhon.Engine.Transaction.ComponentInfoMultiple.AddNew(System.Int64,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo)
+  name.vb: AddNew(Long, CompRevInfo)
+  fullName: Typhon.Engine.Transaction.ComponentInfoMultiple.AddNew(long, Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo)
+  fullName.vb: Typhon.Engine.Transaction.ComponentInfoMultiple.AddNew(Long, Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo)
+  nameWithType: Transaction.ComponentInfoMultiple.AddNew(long, Transaction.ComponentInfoBase.CompRevInfo)
+  nameWithType.vb: Transaction.ComponentInfoMultiple.AddNew(Long, Transaction.ComponentInfoBase.CompRevInfo)
+- uid: Typhon.Engine.Transaction.ComponentInfoMultiple.AddNew*
+  name: AddNew
+  href: api/Typhon.Engine.Transaction.ComponentInfoMultiple.html#Typhon_Engine_Transaction_ComponentInfoMultiple_AddNew_
+  commentId: Overload:Typhon.Engine.Transaction.ComponentInfoMultiple.AddNew
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.ComponentInfoMultiple.AddNew
+  nameWithType: Transaction.ComponentInfoMultiple.AddNew
+- uid: Typhon.Engine.Transaction.ComponentInfoMultiple.CompRevInfoCache
+  name: CompRevInfoCache
+  href: api/Typhon.Engine.Transaction.ComponentInfoMultiple.html#Typhon_Engine_Transaction_ComponentInfoMultiple_CompRevInfoCache
+  commentId: F:Typhon.Engine.Transaction.ComponentInfoMultiple.CompRevInfoCache
+  fullName: Typhon.Engine.Transaction.ComponentInfoMultiple.CompRevInfoCache
+  nameWithType: Transaction.ComponentInfoMultiple.CompRevInfoCache
+- uid: Typhon.Engine.Transaction.ComponentInfoMultiple.EntryCount
+  name: EntryCount
+  href: api/Typhon.Engine.Transaction.ComponentInfoMultiple.html#Typhon_Engine_Transaction_ComponentInfoMultiple_EntryCount
+  commentId: P:Typhon.Engine.Transaction.ComponentInfoMultiple.EntryCount
+  fullName: Typhon.Engine.Transaction.ComponentInfoMultiple.EntryCount
+  nameWithType: Transaction.ComponentInfoMultiple.EntryCount
+- uid: Typhon.Engine.Transaction.ComponentInfoMultiple.EntryCount*
+  name: EntryCount
+  href: api/Typhon.Engine.Transaction.ComponentInfoMultiple.html#Typhon_Engine_Transaction_ComponentInfoMultiple_EntryCount_
+  commentId: Overload:Typhon.Engine.Transaction.ComponentInfoMultiple.EntryCount
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.ComponentInfoMultiple.EntryCount
+  nameWithType: Transaction.ComponentInfoMultiple.EntryCount
+- uid: Typhon.Engine.Transaction.ComponentInfoMultiple.IsMultiple
+  name: IsMultiple
+  href: api/Typhon.Engine.Transaction.ComponentInfoMultiple.html#Typhon_Engine_Transaction_ComponentInfoMultiple_IsMultiple
+  commentId: P:Typhon.Engine.Transaction.ComponentInfoMultiple.IsMultiple
+  fullName: Typhon.Engine.Transaction.ComponentInfoMultiple.IsMultiple
+  nameWithType: Transaction.ComponentInfoMultiple.IsMultiple
+- uid: Typhon.Engine.Transaction.ComponentInfoMultiple.IsMultiple*
+  name: IsMultiple
+  href: api/Typhon.Engine.Transaction.ComponentInfoMultiple.html#Typhon_Engine_Transaction_ComponentInfoMultiple_IsMultiple_
+  commentId: Overload:Typhon.Engine.Transaction.ComponentInfoMultiple.IsMultiple
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.ComponentInfoMultiple.IsMultiple
+  nameWithType: Transaction.ComponentInfoMultiple.IsMultiple
+- uid: Typhon.Engine.Transaction.ComponentInfoSingle
+  name: Transaction.ComponentInfoSingle
+  href: api/Typhon.Engine.Transaction.ComponentInfoSingle.html
+  commentId: T:Typhon.Engine.Transaction.ComponentInfoSingle
+  fullName: Typhon.Engine.Transaction.ComponentInfoSingle
+  nameWithType: Transaction.ComponentInfoSingle
+- uid: Typhon.Engine.Transaction.ComponentInfoSingle.AddNew(System.Int64,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo)
+  name: AddNew(long, CompRevInfo)
+  href: api/Typhon.Engine.Transaction.ComponentInfoSingle.html#Typhon_Engine_Transaction_ComponentInfoSingle_AddNew_System_Int64_Typhon_Engine_Transaction_ComponentInfoBase_CompRevInfo_
+  commentId: M:Typhon.Engine.Transaction.ComponentInfoSingle.AddNew(System.Int64,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo)
+  name.vb: AddNew(Long, CompRevInfo)
+  fullName: Typhon.Engine.Transaction.ComponentInfoSingle.AddNew(long, Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo)
+  fullName.vb: Typhon.Engine.Transaction.ComponentInfoSingle.AddNew(Long, Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo)
+  nameWithType: Transaction.ComponentInfoSingle.AddNew(long, Transaction.ComponentInfoBase.CompRevInfo)
+  nameWithType.vb: Transaction.ComponentInfoSingle.AddNew(Long, Transaction.ComponentInfoBase.CompRevInfo)
+- uid: Typhon.Engine.Transaction.ComponentInfoSingle.AddNew*
+  name: AddNew
+  href: api/Typhon.Engine.Transaction.ComponentInfoSingle.html#Typhon_Engine_Transaction_ComponentInfoSingle_AddNew_
+  commentId: Overload:Typhon.Engine.Transaction.ComponentInfoSingle.AddNew
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.ComponentInfoSingle.AddNew
+  nameWithType: Transaction.ComponentInfoSingle.AddNew
+- uid: Typhon.Engine.Transaction.ComponentInfoSingle.CompRevInfoCache
+  name: CompRevInfoCache
+  href: api/Typhon.Engine.Transaction.ComponentInfoSingle.html#Typhon_Engine_Transaction_ComponentInfoSingle_CompRevInfoCache
+  commentId: F:Typhon.Engine.Transaction.ComponentInfoSingle.CompRevInfoCache
+  fullName: Typhon.Engine.Transaction.ComponentInfoSingle.CompRevInfoCache
+  nameWithType: Transaction.ComponentInfoSingle.CompRevInfoCache
+- uid: Typhon.Engine.Transaction.ComponentInfoSingle.EntryCount
+  name: EntryCount
+  href: api/Typhon.Engine.Transaction.ComponentInfoSingle.html#Typhon_Engine_Transaction_ComponentInfoSingle_EntryCount
+  commentId: P:Typhon.Engine.Transaction.ComponentInfoSingle.EntryCount
+  fullName: Typhon.Engine.Transaction.ComponentInfoSingle.EntryCount
+  nameWithType: Transaction.ComponentInfoSingle.EntryCount
+- uid: Typhon.Engine.Transaction.ComponentInfoSingle.EntryCount*
+  name: EntryCount
+  href: api/Typhon.Engine.Transaction.ComponentInfoSingle.html#Typhon_Engine_Transaction_ComponentInfoSingle_EntryCount_
+  commentId: Overload:Typhon.Engine.Transaction.ComponentInfoSingle.EntryCount
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.ComponentInfoSingle.EntryCount
+  nameWithType: Transaction.ComponentInfoSingle.EntryCount
+- uid: Typhon.Engine.Transaction.ComponentInfoSingle.IsMultiple
+  name: IsMultiple
+  href: api/Typhon.Engine.Transaction.ComponentInfoSingle.html#Typhon_Engine_Transaction_ComponentInfoSingle_IsMultiple
+  commentId: P:Typhon.Engine.Transaction.ComponentInfoSingle.IsMultiple
+  fullName: Typhon.Engine.Transaction.ComponentInfoSingle.IsMultiple
+  nameWithType: Transaction.ComponentInfoSingle.IsMultiple
+- uid: Typhon.Engine.Transaction.ComponentInfoSingle.IsMultiple*
+  name: IsMultiple
+  href: api/Typhon.Engine.Transaction.ComponentInfoSingle.html#Typhon_Engine_Transaction_ComponentInfoSingle_IsMultiple_
+  commentId: Overload:Typhon.Engine.Transaction.ComponentInfoSingle.IsMultiple
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.ComponentInfoSingle.IsMultiple
+  nameWithType: Transaction.ComponentInfoSingle.IsMultiple
 - uid: Typhon.Engine.Transaction.ComponentInfosMaxCapacity
   name: ComponentInfosMaxCapacity
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_ComponentInfosMaxCapacity
@@ -19009,15 +19149,15 @@ references:
   fullName.vb: Typhon.Engine.Transaction.ConcurrencyConflictSolver.New
   nameWithType: Transaction.ConcurrencyConflictSolver.ConcurrencyConflictSolver
   nameWithType.vb: Transaction.ConcurrencyConflictSolver.New
-- uid: Typhon.Engine.Transaction.ConcurrencyConflictSolver.AddEntry(System.Int64,Typhon.Engine.Transaction.ComponentInfo,System.Byte*,System.Byte*,System.Byte*,System.Byte*)
-  name: AddEntry(long, ComponentInfo, byte*, byte*, byte*, byte*)
-  href: api/Typhon.Engine.Transaction.ConcurrencyConflictSolver.html#Typhon_Engine_Transaction_ConcurrencyConflictSolver_AddEntry_System_Int64_Typhon_Engine_Transaction_ComponentInfo_System_Byte__System_Byte__System_Byte__System_Byte__
-  commentId: M:Typhon.Engine.Transaction.ConcurrencyConflictSolver.AddEntry(System.Int64,Typhon.Engine.Transaction.ComponentInfo,System.Byte*,System.Byte*,System.Byte*,System.Byte*)
-  name.vb: AddEntry(Long, ComponentInfo, Byte*, Byte*, Byte*, Byte*)
-  fullName: Typhon.Engine.Transaction.ConcurrencyConflictSolver.AddEntry(long, Typhon.Engine.Transaction.ComponentInfo, byte*, byte*, byte*, byte*)
-  fullName.vb: Typhon.Engine.Transaction.ConcurrencyConflictSolver.AddEntry(Long, Typhon.Engine.Transaction.ComponentInfo, Byte*, Byte*, Byte*, Byte*)
-  nameWithType: Transaction.ConcurrencyConflictSolver.AddEntry(long, Transaction.ComponentInfo, byte*, byte*, byte*, byte*)
-  nameWithType.vb: Transaction.ConcurrencyConflictSolver.AddEntry(Long, Transaction.ComponentInfo, Byte*, Byte*, Byte*, Byte*)
+- uid: Typhon.Engine.Transaction.ConcurrencyConflictSolver.AddEntry(System.Int64,Typhon.Engine.Transaction.ComponentInfoBase,System.Byte*,System.Byte*,System.Byte*,System.Byte*)
+  name: AddEntry(long, ComponentInfoBase, byte*, byte*, byte*, byte*)
+  href: api/Typhon.Engine.Transaction.ConcurrencyConflictSolver.html#Typhon_Engine_Transaction_ConcurrencyConflictSolver_AddEntry_System_Int64_Typhon_Engine_Transaction_ComponentInfoBase_System_Byte__System_Byte__System_Byte__System_Byte__
+  commentId: M:Typhon.Engine.Transaction.ConcurrencyConflictSolver.AddEntry(System.Int64,Typhon.Engine.Transaction.ComponentInfoBase,System.Byte*,System.Byte*,System.Byte*,System.Byte*)
+  name.vb: AddEntry(Long, ComponentInfoBase, Byte*, Byte*, Byte*, Byte*)
+  fullName: Typhon.Engine.Transaction.ConcurrencyConflictSolver.AddEntry(long, Typhon.Engine.Transaction.ComponentInfoBase, byte*, byte*, byte*, byte*)
+  fullName.vb: Typhon.Engine.Transaction.ConcurrencyConflictSolver.AddEntry(Long, Typhon.Engine.Transaction.ComponentInfoBase, Byte*, Byte*, Byte*, Byte*)
+  nameWithType: Transaction.ConcurrencyConflictSolver.AddEntry(long, Transaction.ComponentInfoBase, byte*, byte*, byte*, byte*)
+  nameWithType.vb: Transaction.ConcurrencyConflictSolver.AddEntry(Long, Transaction.ComponentInfoBase, Byte*, Byte*, Byte*, Byte*)
 - uid: Typhon.Engine.Transaction.ConcurrencyConflictSolver.AddEntry*
   name: AddEntry
   href: api/Typhon.Engine.Transaction.ConcurrencyConflictSolver.html#Typhon_Engine_Transaction_ConcurrencyConflictSolver_AddEntry_
@@ -19031,15 +19171,15 @@ references:
   commentId: T:Typhon.Engine.Transaction.ConcurrencyConflictSolver.Entry
   fullName: Typhon.Engine.Transaction.ConcurrencyConflictSolver.Entry
   nameWithType: Transaction.ConcurrencyConflictSolver.Entry
-- uid: Typhon.Engine.Transaction.ConcurrencyConflictSolver.Entry.#ctor(System.Int64,Typhon.Engine.Transaction.ComponentInfo,System.Byte*,System.Byte*,System.Byte*,System.Byte*)
-  name: Entry(long, ComponentInfo, byte*, byte*, byte*, byte*)
-  href: api/Typhon.Engine.Transaction.ConcurrencyConflictSolver.Entry.html#Typhon_Engine_Transaction_ConcurrencyConflictSolver_Entry__ctor_System_Int64_Typhon_Engine_Transaction_ComponentInfo_System_Byte__System_Byte__System_Byte__System_Byte__
-  commentId: M:Typhon.Engine.Transaction.ConcurrencyConflictSolver.Entry.#ctor(System.Int64,Typhon.Engine.Transaction.ComponentInfo,System.Byte*,System.Byte*,System.Byte*,System.Byte*)
-  name.vb: New(Long, ComponentInfo, Byte*, Byte*, Byte*, Byte*)
-  fullName: Typhon.Engine.Transaction.ConcurrencyConflictSolver.Entry.Entry(long, Typhon.Engine.Transaction.ComponentInfo, byte*, byte*, byte*, byte*)
-  fullName.vb: Typhon.Engine.Transaction.ConcurrencyConflictSolver.Entry.New(Long, Typhon.Engine.Transaction.ComponentInfo, Byte*, Byte*, Byte*, Byte*)
-  nameWithType: Transaction.ConcurrencyConflictSolver.Entry.Entry(long, Transaction.ComponentInfo, byte*, byte*, byte*, byte*)
-  nameWithType.vb: Transaction.ConcurrencyConflictSolver.Entry.New(Long, Transaction.ComponentInfo, Byte*, Byte*, Byte*, Byte*)
+- uid: Typhon.Engine.Transaction.ConcurrencyConflictSolver.Entry.#ctor(System.Int64,Typhon.Engine.Transaction.ComponentInfoBase,System.Byte*,System.Byte*,System.Byte*,System.Byte*)
+  name: Entry(long, ComponentInfoBase, byte*, byte*, byte*, byte*)
+  href: api/Typhon.Engine.Transaction.ConcurrencyConflictSolver.Entry.html#Typhon_Engine_Transaction_ConcurrencyConflictSolver_Entry__ctor_System_Int64_Typhon_Engine_Transaction_ComponentInfoBase_System_Byte__System_Byte__System_Byte__System_Byte__
+  commentId: M:Typhon.Engine.Transaction.ConcurrencyConflictSolver.Entry.#ctor(System.Int64,Typhon.Engine.Transaction.ComponentInfoBase,System.Byte*,System.Byte*,System.Byte*,System.Byte*)
+  name.vb: New(Long, ComponentInfoBase, Byte*, Byte*, Byte*, Byte*)
+  fullName: Typhon.Engine.Transaction.ConcurrencyConflictSolver.Entry.Entry(long, Typhon.Engine.Transaction.ComponentInfoBase, byte*, byte*, byte*, byte*)
+  fullName.vb: Typhon.Engine.Transaction.ConcurrencyConflictSolver.Entry.New(Long, Typhon.Engine.Transaction.ComponentInfoBase, Byte*, Byte*, Byte*, Byte*)
+  nameWithType: Transaction.ConcurrencyConflictSolver.Entry.Entry(long, Transaction.ComponentInfoBase, byte*, byte*, byte*, byte*)
+  nameWithType.vb: Transaction.ConcurrencyConflictSolver.Entry.New(Long, Transaction.ComponentInfoBase, Byte*, Byte*, Byte*, Byte*)
 - uid: Typhon.Engine.Transaction.ConcurrencyConflictSolver.Entry.#ctor*
   name: Entry
   href: api/Typhon.Engine.Transaction.ConcurrencyConflictSolver.Entry.html#Typhon_Engine_Transaction_ConcurrencyConflictSolver_Entry__ctor_
@@ -19301,6 +19441,13 @@ references:
   commentId: F:Typhon.Engine.Transaction.ConcurrencyConflictSolver._entries
   fullName: Typhon.Engine.Transaction.ConcurrencyConflictSolver._entries
   nameWithType: Transaction.ConcurrencyConflictSolver._entries
+- uid: Typhon.Engine.Transaction.CreateComponent*
+  name: CreateComponent
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CreateComponent_
+  commentId: Overload:Typhon.Engine.Transaction.CreateComponent
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.CreateComponent
+  nameWithType: Transaction.CreateComponent
 - uid: Typhon.Engine.Transaction.CreateComponentCollectionAccessor*
   name: CreateComponentCollectionAccessor
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CreateComponentCollectionAccessor_
@@ -19317,15 +19464,31 @@ references:
   fullName.vb: Typhon.Engine.Transaction.CreateComponentCollectionAccessor(Of T)(Typhon.Engine.ComponentCollection(Of T))
   nameWithType: Transaction.CreateComponentCollectionAccessor<T>(ref ComponentCollection<T>)
   nameWithType.vb: Transaction.CreateComponentCollectionAccessor(Of T)(ComponentCollection(Of T))
-- uid: Typhon.Engine.Transaction.CreateEntity(Typhon.Engine.Transaction.ComponentData[])
-  name: CreateEntity(params ComponentData[])
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CreateEntity_Typhon_Engine_Transaction_ComponentData___
-  commentId: M:Typhon.Engine.Transaction.CreateEntity(Typhon.Engine.Transaction.ComponentData[])
-  name.vb: CreateEntity(ParamArray ComponentData())
-  fullName: Typhon.Engine.Transaction.CreateEntity(params Typhon.Engine.Transaction.ComponentData[])
-  fullName.vb: Typhon.Engine.Transaction.CreateEntity(ParamArray Typhon.Engine.Transaction.ComponentData())
-  nameWithType: Transaction.CreateEntity(params Transaction.ComponentData[])
-  nameWithType.vb: Transaction.CreateEntity(ParamArray Transaction.ComponentData())
+- uid: Typhon.Engine.Transaction.CreateComponent``1(System.Int64,System.Int64,``0@)
+  name: CreateComponent<T>(long, long, ref T)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CreateComponent__1_System_Int64_System_Int64___0__
+  commentId: M:Typhon.Engine.Transaction.CreateComponent``1(System.Int64,System.Int64,``0@)
+  name.vb: CreateComponent(Of T)(Long, Long, T)
+  fullName: Typhon.Engine.Transaction.CreateComponent<T>(long, long, ref T)
+  fullName.vb: Typhon.Engine.Transaction.CreateComponent(Of T)(Long, Long, T)
+  nameWithType: Transaction.CreateComponent<T>(long, long, ref T)
+  nameWithType.vb: Transaction.CreateComponent(Of T)(Long, Long, T)
+- uid: Typhon.Engine.Transaction.CreateComponents*
+  name: CreateComponents
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CreateComponents_
+  commentId: Overload:Typhon.Engine.Transaction.CreateComponents
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.CreateComponents
+  nameWithType: Transaction.CreateComponents
+- uid: Typhon.Engine.Transaction.CreateComponents``1(System.Int64,System.Int64,System.ReadOnlySpan{``0})
+  name: CreateComponents<T>(long, long, ReadOnlySpan<T>)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CreateComponents__1_System_Int64_System_Int64_System_ReadOnlySpan___0__
+  commentId: M:Typhon.Engine.Transaction.CreateComponents``1(System.Int64,System.Int64,System.ReadOnlySpan{``0})
+  name.vb: CreateComponents(Of T)(Long, Long, ReadOnlySpan(Of T))
+  fullName: Typhon.Engine.Transaction.CreateComponents<T>(long, long, System.ReadOnlySpan<T>)
+  fullName.vb: Typhon.Engine.Transaction.CreateComponents(Of T)(Long, Long, System.ReadOnlySpan(Of T))
+  nameWithType: Transaction.CreateComponents<T>(long, long, ReadOnlySpan<T>)
+  nameWithType.vb: Transaction.CreateComponents(Of T)(Long, Long, ReadOnlySpan(Of T))
 - uid: Typhon.Engine.Transaction.CreateEntity*
   name: CreateEntity
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CreateEntity_
@@ -19342,6 +19505,15 @@ references:
   fullName.vb: Typhon.Engine.Transaction.CreateEntity(Of T)(T)
   nameWithType: Transaction.CreateEntity<T>(ref T)
   nameWithType.vb: Transaction.CreateEntity(Of T)(T)
+- uid: Typhon.Engine.Transaction.CreateEntity``2(``0@,System.Span{``1})
+  name: CreateEntity<TC1, TC2>(ref TC1, Span<TC2>)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CreateEntity__2___0__System_Span___1__
+  commentId: M:Typhon.Engine.Transaction.CreateEntity``2(``0@,System.Span{``1})
+  name.vb: CreateEntity(Of TC1, TC2)(TC1, Span(Of TC2))
+  fullName: Typhon.Engine.Transaction.CreateEntity<TC1, TC2>(ref TC1, System.Span<TC2>)
+  fullName.vb: Typhon.Engine.Transaction.CreateEntity(Of TC1, TC2)(TC1, System.Span(Of TC2))
+  nameWithType: Transaction.CreateEntity<TC1, TC2>(ref TC1, Span<TC2>)
+  nameWithType.vb: Transaction.CreateEntity(Of TC1, TC2)(TC1, Span(Of TC2))
 - uid: Typhon.Engine.Transaction.CreateEntity``2(``0@,``1@)
   name: CreateEntity<TC1, TC2>(ref TC1, ref TC2)
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CreateEntity__2___0____1__
@@ -19360,6 +19532,22 @@ references:
   fullName.vb: Typhon.Engine.Transaction.CreateEntity(Of TC1, TC2, TC3)(TC1, TC2, TC3)
   nameWithType: Transaction.CreateEntity<TC1, TC2, TC3>(ref TC1, ref TC2, ref TC3)
   nameWithType.vb: Transaction.CreateEntity(Of TC1, TC2, TC3)(TC1, TC2, TC3)
+- uid: Typhon.Engine.Transaction.DeleteEntities*
+  name: DeleteEntities
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_DeleteEntities_
+  commentId: Overload:Typhon.Engine.Transaction.DeleteEntities
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.DeleteEntities
+  nameWithType: Transaction.DeleteEntities
+- uid: Typhon.Engine.Transaction.DeleteEntities``1(System.Int64)
+  name: DeleteEntities<T>(long)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_DeleteEntities__1_System_Int64_
+  commentId: M:Typhon.Engine.Transaction.DeleteEntities``1(System.Int64)
+  name.vb: DeleteEntities(Of T)(Long)
+  fullName: Typhon.Engine.Transaction.DeleteEntities<T>(long)
+  fullName.vb: Typhon.Engine.Transaction.DeleteEntities(Of T)(Long)
+  nameWithType: Transaction.DeleteEntities<T>(long)
+  nameWithType.vb: Transaction.DeleteEntities(Of T)(Long)
 - uid: Typhon.Engine.Transaction.DeleteEntity*
   name: DeleteEntity
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_DeleteEntity_
@@ -19407,15 +19595,24 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.Transaction.Dispose
   nameWithType: Transaction.Dispose
-- uid: Typhon.Engine.Transaction.GetCompRevInfoFromIndex(System.Int64,Typhon.Engine.Transaction.ComponentInfo,System.Int64,Typhon.Engine.Transaction.ComponentInfo.CompRevInfo@)
-  name: GetCompRevInfoFromIndex(long, ComponentInfo, long, out CompRevInfo)
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetCompRevInfoFromIndex_System_Int64_Typhon_Engine_Transaction_ComponentInfo_System_Int64_Typhon_Engine_Transaction_ComponentInfo_CompRevInfo__
-  commentId: M:Typhon.Engine.Transaction.GetCompRevInfoFromIndex(System.Int64,Typhon.Engine.Transaction.ComponentInfo,System.Int64,Typhon.Engine.Transaction.ComponentInfo.CompRevInfo@)
-  name.vb: GetCompRevInfoFromIndex(Long, ComponentInfo, Long, CompRevInfo)
-  fullName: Typhon.Engine.Transaction.GetCompRevInfoFromIndex(long, Typhon.Engine.Transaction.ComponentInfo, long, out Typhon.Engine.Transaction.ComponentInfo.CompRevInfo)
-  fullName.vb: Typhon.Engine.Transaction.GetCompRevInfoFromIndex(Long, Typhon.Engine.Transaction.ComponentInfo, Long, Typhon.Engine.Transaction.ComponentInfo.CompRevInfo)
-  nameWithType: Transaction.GetCompRevInfoFromIndex(long, Transaction.ComponentInfo, long, out Transaction.ComponentInfo.CompRevInfo)
-  nameWithType.vb: Transaction.GetCompRevInfoFromIndex(Long, Transaction.ComponentInfo, Long, Transaction.ComponentInfo.CompRevInfo)
+- uid: Typhon.Engine.Transaction.GetCompRevInfoFromIndex(System.Int64,Typhon.Engine.Transaction.ComponentInfoMultiple,System.Int64,System.Collections.Generic.List{Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo}@)
+  name: GetCompRevInfoFromIndex(long, ComponentInfoMultiple, long, out List<CompRevInfo>)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetCompRevInfoFromIndex_System_Int64_Typhon_Engine_Transaction_ComponentInfoMultiple_System_Int64_System_Collections_Generic_List_Typhon_Engine_Transaction_ComponentInfoBase_CompRevInfo___
+  commentId: M:Typhon.Engine.Transaction.GetCompRevInfoFromIndex(System.Int64,Typhon.Engine.Transaction.ComponentInfoMultiple,System.Int64,System.Collections.Generic.List{Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo}@)
+  name.vb: GetCompRevInfoFromIndex(Long, ComponentInfoMultiple, Long, List(Of CompRevInfo))
+  fullName: Typhon.Engine.Transaction.GetCompRevInfoFromIndex(long, Typhon.Engine.Transaction.ComponentInfoMultiple, long, out System.Collections.Generic.List<Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo>)
+  fullName.vb: Typhon.Engine.Transaction.GetCompRevInfoFromIndex(Long, Typhon.Engine.Transaction.ComponentInfoMultiple, Long, System.Collections.Generic.List(Of Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo))
+  nameWithType: Transaction.GetCompRevInfoFromIndex(long, Transaction.ComponentInfoMultiple, long, out List<Transaction.ComponentInfoBase.CompRevInfo>)
+  nameWithType.vb: Transaction.GetCompRevInfoFromIndex(Long, Transaction.ComponentInfoMultiple, Long, List(Of Transaction.ComponentInfoBase.CompRevInfo))
+- uid: Typhon.Engine.Transaction.GetCompRevInfoFromIndex(System.Int64,Typhon.Engine.Transaction.ComponentInfoSingle,System.Int64,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo@)
+  name: GetCompRevInfoFromIndex(long, ComponentInfoSingle, long, out CompRevInfo)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetCompRevInfoFromIndex_System_Int64_Typhon_Engine_Transaction_ComponentInfoSingle_System_Int64_Typhon_Engine_Transaction_ComponentInfoBase_CompRevInfo__
+  commentId: M:Typhon.Engine.Transaction.GetCompRevInfoFromIndex(System.Int64,Typhon.Engine.Transaction.ComponentInfoSingle,System.Int64,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo@)
+  name.vb: GetCompRevInfoFromIndex(Long, ComponentInfoSingle, Long, CompRevInfo)
+  fullName: Typhon.Engine.Transaction.GetCompRevInfoFromIndex(long, Typhon.Engine.Transaction.ComponentInfoSingle, long, out Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo)
+  fullName.vb: Typhon.Engine.Transaction.GetCompRevInfoFromIndex(Long, Typhon.Engine.Transaction.ComponentInfoSingle, Long, Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo)
+  nameWithType: Transaction.GetCompRevInfoFromIndex(long, Transaction.ComponentInfoSingle, long, out Transaction.ComponentInfoBase.CompRevInfo)
+  nameWithType.vb: Transaction.GetCompRevInfoFromIndex(Long, Transaction.ComponentInfoSingle, Long, Transaction.ComponentInfoBase.CompRevInfo)
 - uid: Typhon.Engine.Transaction.GetCompRevInfoFromIndex*
   name: GetCompRevInfoFromIndex
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetCompRevInfoFromIndex_
@@ -19439,15 +19636,15 @@ references:
   fullName.vb: Typhon.Engine.Transaction.GetCompRevStorageHeader(Of T)(Long)
   nameWithType: Transaction.GetCompRevStorageHeader<T>(long)
   nameWithType.vb: Transaction.GetCompRevStorageHeader(Of T)(Long)
-- uid: Typhon.Engine.Transaction.GetCompRevTableFirstChunkId(System.Int64,Typhon.Engine.Transaction.ComponentInfo,System.Int32@)
-  name: GetCompRevTableFirstChunkId(long, ComponentInfo, out int)
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetCompRevTableFirstChunkId_System_Int64_Typhon_Engine_Transaction_ComponentInfo_System_Int32__
-  commentId: M:Typhon.Engine.Transaction.GetCompRevTableFirstChunkId(System.Int64,Typhon.Engine.Transaction.ComponentInfo,System.Int32@)
-  name.vb: GetCompRevTableFirstChunkId(Long, ComponentInfo, Integer)
-  fullName: Typhon.Engine.Transaction.GetCompRevTableFirstChunkId(long, Typhon.Engine.Transaction.ComponentInfo, out int)
-  fullName.vb: Typhon.Engine.Transaction.GetCompRevTableFirstChunkId(Long, Typhon.Engine.Transaction.ComponentInfo, Integer)
-  nameWithType: Transaction.GetCompRevTableFirstChunkId(long, Transaction.ComponentInfo, out int)
-  nameWithType.vb: Transaction.GetCompRevTableFirstChunkId(Long, Transaction.ComponentInfo, Integer)
+- uid: Typhon.Engine.Transaction.GetCompRevTableFirstChunkId(System.Int64,Typhon.Engine.Transaction.ComponentInfoSingle,System.Int32@)
+  name: GetCompRevTableFirstChunkId(long, ComponentInfoSingle, out int)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetCompRevTableFirstChunkId_System_Int64_Typhon_Engine_Transaction_ComponentInfoSingle_System_Int32__
+  commentId: M:Typhon.Engine.Transaction.GetCompRevTableFirstChunkId(System.Int64,Typhon.Engine.Transaction.ComponentInfoSingle,System.Int32@)
+  name.vb: GetCompRevTableFirstChunkId(Long, ComponentInfoSingle, Integer)
+  fullName: Typhon.Engine.Transaction.GetCompRevTableFirstChunkId(long, Typhon.Engine.Transaction.ComponentInfoSingle, out int)
+  fullName.vb: Typhon.Engine.Transaction.GetCompRevTableFirstChunkId(Long, Typhon.Engine.Transaction.ComponentInfoSingle, Integer)
+  nameWithType: Transaction.GetCompRevTableFirstChunkId(long, Transaction.ComponentInfoSingle, out int)
+  nameWithType.vb: Transaction.GetCompRevTableFirstChunkId(Long, Transaction.ComponentInfoSingle, Integer)
 - uid: Typhon.Engine.Transaction.GetCompRevTableFirstChunkId*
   name: GetCompRevTableFirstChunkId
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetCompRevTableFirstChunkId_
@@ -19484,6 +19681,32 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.Transaction.GetComponentInfo
   nameWithType: Transaction.GetComponentInfo
+- uid: Typhon.Engine.Transaction.GetComponentInfoMultiple(System.Type)
+  name: GetComponentInfoMultiple(Type)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetComponentInfoMultiple_System_Type_
+  commentId: M:Typhon.Engine.Transaction.GetComponentInfoMultiple(System.Type)
+  fullName: Typhon.Engine.Transaction.GetComponentInfoMultiple(System.Type)
+  nameWithType: Transaction.GetComponentInfoMultiple(Type)
+- uid: Typhon.Engine.Transaction.GetComponentInfoMultiple*
+  name: GetComponentInfoMultiple
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetComponentInfoMultiple_
+  commentId: Overload:Typhon.Engine.Transaction.GetComponentInfoMultiple
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.GetComponentInfoMultiple
+  nameWithType: Transaction.GetComponentInfoMultiple
+- uid: Typhon.Engine.Transaction.GetComponentInfoSingle(System.Type)
+  name: GetComponentInfoSingle(Type)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetComponentInfoSingle_System_Type_
+  commentId: M:Typhon.Engine.Transaction.GetComponentInfoSingle(System.Type)
+  fullName: Typhon.Engine.Transaction.GetComponentInfoSingle(System.Type)
+  nameWithType: Transaction.GetComponentInfoSingle(Type)
+- uid: Typhon.Engine.Transaction.GetComponentInfoSingle*
+  name: GetComponentInfoSingle
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetComponentInfoSingle_
+  commentId: Overload:Typhon.Engine.Transaction.GetComponentInfoSingle
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.GetComponentInfoSingle
+  nameWithType: Transaction.GetComponentInfoSingle
 - uid: Typhon.Engine.Transaction.GetComponentRevision*
   name: GetComponentRevision
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetComponentRevision_
@@ -19577,15 +19800,15 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.Transaction.GetRevisionLocation
   nameWithType: Transaction.GetRevisionLocation
-- uid: Typhon.Engine.Transaction.GrowChain(Typhon.Engine.Transaction.ComponentInfo,Typhon.Engine.Transaction.ComponentInfo.CompRevInfo@,Typhon.Engine.CompRevStorageHeader@)
-  name: GrowChain(ComponentInfo, ref CompRevInfo, ref CompRevStorageHeader)
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GrowChain_Typhon_Engine_Transaction_ComponentInfo_Typhon_Engine_Transaction_ComponentInfo_CompRevInfo__Typhon_Engine_CompRevStorageHeader__
-  commentId: M:Typhon.Engine.Transaction.GrowChain(Typhon.Engine.Transaction.ComponentInfo,Typhon.Engine.Transaction.ComponentInfo.CompRevInfo@,Typhon.Engine.CompRevStorageHeader@)
-  name.vb: GrowChain(ComponentInfo, CompRevInfo, CompRevStorageHeader)
-  fullName: Typhon.Engine.Transaction.GrowChain(Typhon.Engine.Transaction.ComponentInfo, ref Typhon.Engine.Transaction.ComponentInfo.CompRevInfo, ref Typhon.Engine.CompRevStorageHeader)
-  fullName.vb: Typhon.Engine.Transaction.GrowChain(Typhon.Engine.Transaction.ComponentInfo, Typhon.Engine.Transaction.ComponentInfo.CompRevInfo, Typhon.Engine.CompRevStorageHeader)
-  nameWithType: Transaction.GrowChain(Transaction.ComponentInfo, ref Transaction.ComponentInfo.CompRevInfo, ref CompRevStorageHeader)
-  nameWithType.vb: Transaction.GrowChain(Transaction.ComponentInfo, Transaction.ComponentInfo.CompRevInfo, CompRevStorageHeader)
+- uid: Typhon.Engine.Transaction.GrowChain(Typhon.Engine.Transaction.ComponentInfoBase,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo@,Typhon.Engine.CompRevStorageHeader@)
+  name: GrowChain(ComponentInfoBase, ref CompRevInfo, ref CompRevStorageHeader)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GrowChain_Typhon_Engine_Transaction_ComponentInfoBase_Typhon_Engine_Transaction_ComponentInfoBase_CompRevInfo__Typhon_Engine_CompRevStorageHeader__
+  commentId: M:Typhon.Engine.Transaction.GrowChain(Typhon.Engine.Transaction.ComponentInfoBase,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo@,Typhon.Engine.CompRevStorageHeader@)
+  name.vb: GrowChain(ComponentInfoBase, CompRevInfo, CompRevStorageHeader)
+  fullName: Typhon.Engine.Transaction.GrowChain(Typhon.Engine.Transaction.ComponentInfoBase, ref Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo, ref Typhon.Engine.CompRevStorageHeader)
+  fullName.vb: Typhon.Engine.Transaction.GrowChain(Typhon.Engine.Transaction.ComponentInfoBase, Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo, Typhon.Engine.CompRevStorageHeader)
+  nameWithType: Transaction.GrowChain(Transaction.ComponentInfoBase, ref Transaction.ComponentInfoBase.CompRevInfo, ref CompRevStorageHeader)
+  nameWithType.vb: Transaction.GrowChain(Transaction.ComponentInfoBase, Transaction.ComponentInfoBase.CompRevInfo, CompRevStorageHeader)
 - uid: Typhon.Engine.Transaction.GrowChain*
   name: GrowChain
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GrowChain_
@@ -19654,15 +19877,38 @@ references:
   commentId: F:Typhon.Engine.Transaction.RandomAccessCachedPagesCount
   fullName: Typhon.Engine.Transaction.RandomAccessCachedPagesCount
   nameWithType: Transaction.RandomAccessCachedPagesCount
-- uid: Typhon.Engine.Transaction.ReadEntity(System.Int64,Typhon.Engine.Transaction.ComponentData[])
-  name: ReadEntity(long, params ComponentData[])
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_ReadEntity_System_Int64_Typhon_Engine_Transaction_ComponentData___
-  commentId: M:Typhon.Engine.Transaction.ReadEntity(System.Int64,Typhon.Engine.Transaction.ComponentData[])
-  name.vb: ReadEntity(Long, ParamArray ComponentData())
-  fullName: Typhon.Engine.Transaction.ReadEntity(long, params Typhon.Engine.Transaction.ComponentData[])
-  fullName.vb: Typhon.Engine.Transaction.ReadEntity(Long, ParamArray Typhon.Engine.Transaction.ComponentData())
-  nameWithType: Transaction.ReadEntity(long, params Transaction.ComponentData[])
-  nameWithType.vb: Transaction.ReadEntity(Long, ParamArray Transaction.ComponentData())
+- uid: Typhon.Engine.Transaction.ReadComponent*
+  name: ReadComponent
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_ReadComponent_
+  commentId: Overload:Typhon.Engine.Transaction.ReadComponent
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.ReadComponent
+  nameWithType: Transaction.ReadComponent
+- uid: Typhon.Engine.Transaction.ReadComponent``1(System.Int64,``0@)
+  name: ReadComponent<T>(long, out T)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_ReadComponent__1_System_Int64___0__
+  commentId: M:Typhon.Engine.Transaction.ReadComponent``1(System.Int64,``0@)
+  name.vb: ReadComponent(Of T)(Long, T)
+  fullName: Typhon.Engine.Transaction.ReadComponent<T>(long, out T)
+  fullName.vb: Typhon.Engine.Transaction.ReadComponent(Of T)(Long, T)
+  nameWithType: Transaction.ReadComponent<T>(long, out T)
+  nameWithType.vb: Transaction.ReadComponent(Of T)(Long, T)
+- uid: Typhon.Engine.Transaction.ReadComponents*
+  name: ReadComponents
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_ReadComponents_
+  commentId: Overload:Typhon.Engine.Transaction.ReadComponents
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.ReadComponents
+  nameWithType: Transaction.ReadComponents
+- uid: Typhon.Engine.Transaction.ReadComponents``1(System.Int64,``0[]@)
+  name: ReadComponents<T>(long, out T[])
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_ReadComponents__1_System_Int64___0____
+  commentId: M:Typhon.Engine.Transaction.ReadComponents``1(System.Int64,``0[]@)
+  name.vb: ReadComponents(Of T)(Long, T())
+  fullName: Typhon.Engine.Transaction.ReadComponents<T>(long, out T[])
+  fullName.vb: Typhon.Engine.Transaction.ReadComponents(Of T)(Long, T())
+  nameWithType: Transaction.ReadComponents<T>(long, out T[])
+  nameWithType.vb: Transaction.ReadComponents(Of T)(Long, T())
 - uid: Typhon.Engine.Transaction.ReadEntity*
   name: ReadEntity
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_ReadEntity_
@@ -19688,6 +19934,15 @@ references:
   fullName.vb: Typhon.Engine.Transaction.ReadEntity(Of TC1, TC2)(Long, TC1, TC2)
   nameWithType: Transaction.ReadEntity<TC1, TC2>(long, out TC1, out TC2)
   nameWithType.vb: Transaction.ReadEntity(Of TC1, TC2)(Long, TC1, TC2)
+- uid: Typhon.Engine.Transaction.ReadEntity``2(System.Int64,``0@,``1[]@)
+  name: ReadEntity<TC1, TC2>(long, out TC1, out TC2[])
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_ReadEntity__2_System_Int64___0____1____
+  commentId: M:Typhon.Engine.Transaction.ReadEntity``2(System.Int64,``0@,``1[]@)
+  name.vb: ReadEntity(Of TC1, TC2)(Long, TC1, TC2())
+  fullName: Typhon.Engine.Transaction.ReadEntity<TC1, TC2>(long, out TC1, out TC2[])
+  fullName.vb: Typhon.Engine.Transaction.ReadEntity(Of TC1, TC2)(Long, TC1, TC2())
+  nameWithType: Transaction.ReadEntity<TC1, TC2>(long, out TC1, out TC2[])
+  nameWithType.vb: Transaction.ReadEntity(Of TC1, TC2)(Long, TC1, TC2())
 - uid: Typhon.Engine.Transaction.ReadEntity``3(System.Int64,``0@,``1@,``2@)
   name: ReadEntity<TC1, TC2, TC3>(long, out TC1, out TC2, out TC3)
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_ReadEntity__3_System_Int64___0____1____2__
@@ -20331,15 +20586,38 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.Transaction.TransactionTick
   nameWithType: Transaction.TransactionTick
-- uid: Typhon.Engine.Transaction.UpdateEntity(System.Int64,Typhon.Engine.Transaction.ComponentData[])
-  name: UpdateEntity(long, params ComponentData[])
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_UpdateEntity_System_Int64_Typhon_Engine_Transaction_ComponentData___
-  commentId: M:Typhon.Engine.Transaction.UpdateEntity(System.Int64,Typhon.Engine.Transaction.ComponentData[])
-  name.vb: UpdateEntity(Long, ParamArray ComponentData())
-  fullName: Typhon.Engine.Transaction.UpdateEntity(long, params Typhon.Engine.Transaction.ComponentData[])
-  fullName.vb: Typhon.Engine.Transaction.UpdateEntity(Long, ParamArray Typhon.Engine.Transaction.ComponentData())
-  nameWithType: Transaction.UpdateEntity(long, params Transaction.ComponentData[])
-  nameWithType.vb: Transaction.UpdateEntity(Long, ParamArray Transaction.ComponentData())
+- uid: Typhon.Engine.Transaction.UpdateComponent*
+  name: UpdateComponent
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_UpdateComponent_
+  commentId: Overload:Typhon.Engine.Transaction.UpdateComponent
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.UpdateComponent
+  nameWithType: Transaction.UpdateComponent
+- uid: Typhon.Engine.Transaction.UpdateComponent``1(System.Int64,System.Int64,``0@)
+  name: UpdateComponent<T>(long, long, ref T)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_UpdateComponent__1_System_Int64_System_Int64___0__
+  commentId: M:Typhon.Engine.Transaction.UpdateComponent``1(System.Int64,System.Int64,``0@)
+  name.vb: UpdateComponent(Of T)(Long, Long, T)
+  fullName: Typhon.Engine.Transaction.UpdateComponent<T>(long, long, ref T)
+  fullName.vb: Typhon.Engine.Transaction.UpdateComponent(Of T)(Long, Long, T)
+  nameWithType: Transaction.UpdateComponent<T>(long, long, ref T)
+  nameWithType.vb: Transaction.UpdateComponent(Of T)(Long, Long, T)
+- uid: Typhon.Engine.Transaction.UpdateComponents*
+  name: UpdateComponents
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_UpdateComponents_
+  commentId: Overload:Typhon.Engine.Transaction.UpdateComponents
+  isSpec: "True"
+  fullName: Typhon.Engine.Transaction.UpdateComponents
+  nameWithType: Transaction.UpdateComponents
+- uid: Typhon.Engine.Transaction.UpdateComponents``1(System.Int64,System.Int64,System.ReadOnlySpan{``0})
+  name: UpdateComponents<T>(long, long, ReadOnlySpan<T>)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_UpdateComponents__1_System_Int64_System_Int64_System_ReadOnlySpan___0__
+  commentId: M:Typhon.Engine.Transaction.UpdateComponents``1(System.Int64,System.Int64,System.ReadOnlySpan{``0})
+  name.vb: UpdateComponents(Of T)(Long, Long, ReadOnlySpan(Of T))
+  fullName: Typhon.Engine.Transaction.UpdateComponents<T>(long, long, System.ReadOnlySpan<T>)
+  fullName.vb: Typhon.Engine.Transaction.UpdateComponents(Of T)(Long, Long, System.ReadOnlySpan(Of T))
+  nameWithType: Transaction.UpdateComponents<T>(long, long, ReadOnlySpan<T>)
+  nameWithType.vb: Transaction.UpdateComponents(Of T)(Long, Long, ReadOnlySpan(Of T))
 - uid: Typhon.Engine.Transaction.UpdateEntity*
   name: UpdateEntity
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_UpdateEntity_
@@ -20356,6 +20634,15 @@ references:
   fullName.vb: Typhon.Engine.Transaction.UpdateEntity(Of T)(Long, T)
   nameWithType: Transaction.UpdateEntity<T>(long, ref T)
   nameWithType.vb: Transaction.UpdateEntity(Of T)(Long, T)
+- uid: Typhon.Engine.Transaction.UpdateEntity``2(System.Int64,``0@,System.ReadOnlySpan{``1})
+  name: UpdateEntity<TC1, TC2>(long, ref TC1, ReadOnlySpan<TC2>)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_UpdateEntity__2_System_Int64___0__System_ReadOnlySpan___1__
+  commentId: M:Typhon.Engine.Transaction.UpdateEntity``2(System.Int64,``0@,System.ReadOnlySpan{``1})
+  name.vb: UpdateEntity(Of TC1, TC2)(Long, TC1, ReadOnlySpan(Of TC2))
+  fullName: Typhon.Engine.Transaction.UpdateEntity<TC1, TC2>(long, ref TC1, System.ReadOnlySpan<TC2>)
+  fullName.vb: Typhon.Engine.Transaction.UpdateEntity(Of TC1, TC2)(Long, TC1, System.ReadOnlySpan(Of TC2))
+  nameWithType: Transaction.UpdateEntity<TC1, TC2>(long, ref TC1, ReadOnlySpan<TC2>)
+  nameWithType.vb: Transaction.UpdateEntity(Of TC1, TC2)(Long, TC1, ReadOnlySpan(Of TC2))
 - uid: Typhon.Engine.Transaction.UpdateEntity``2(System.Int64,``0@,``1@)
   name: UpdateEntity<TC1, TC2>(long, ref TC1, ref TC2)
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_UpdateEntity__2_System_Int64___0____1__
@@ -20374,15 +20661,15 @@ references:
   fullName.vb: Typhon.Engine.Transaction.UpdateEntity(Of TC1, TC2, TC3)(Long, TC1, TC2, TC3)
   nameWithType: Transaction.UpdateEntity<TC1, TC2, TC3>(long, ref TC1, ref TC2, ref TC3)
   nameWithType.vb: Transaction.UpdateEntity(Of TC1, TC2, TC3)(Long, TC1, TC2, TC3)
-- uid: Typhon.Engine.Transaction.UpdateIndices(System.Int64,Typhon.Engine.Transaction.ComponentInfo,Typhon.Engine.Transaction.ComponentInfo.CompRevInfo,System.Int32)
-  name: UpdateIndices(long, ComponentInfo, CompRevInfo, int)
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_UpdateIndices_System_Int64_Typhon_Engine_Transaction_ComponentInfo_Typhon_Engine_Transaction_ComponentInfo_CompRevInfo_System_Int32_
-  commentId: M:Typhon.Engine.Transaction.UpdateIndices(System.Int64,Typhon.Engine.Transaction.ComponentInfo,Typhon.Engine.Transaction.ComponentInfo.CompRevInfo,System.Int32)
-  name.vb: UpdateIndices(Long, ComponentInfo, CompRevInfo, Integer)
-  fullName: Typhon.Engine.Transaction.UpdateIndices(long, Typhon.Engine.Transaction.ComponentInfo, Typhon.Engine.Transaction.ComponentInfo.CompRevInfo, int)
-  fullName.vb: Typhon.Engine.Transaction.UpdateIndices(Long, Typhon.Engine.Transaction.ComponentInfo, Typhon.Engine.Transaction.ComponentInfo.CompRevInfo, Integer)
-  nameWithType: Transaction.UpdateIndices(long, Transaction.ComponentInfo, Transaction.ComponentInfo.CompRevInfo, int)
-  nameWithType.vb: Transaction.UpdateIndices(Long, Transaction.ComponentInfo, Transaction.ComponentInfo.CompRevInfo, Integer)
+- uid: Typhon.Engine.Transaction.UpdateIndices(System.Int64,Typhon.Engine.Transaction.ComponentInfoBase,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo,System.Int32)
+  name: UpdateIndices(long, ComponentInfoBase, CompRevInfo, int)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_UpdateIndices_System_Int64_Typhon_Engine_Transaction_ComponentInfoBase_Typhon_Engine_Transaction_ComponentInfoBase_CompRevInfo_System_Int32_
+  commentId: M:Typhon.Engine.Transaction.UpdateIndices(System.Int64,Typhon.Engine.Transaction.ComponentInfoBase,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo,System.Int32)
+  name.vb: UpdateIndices(Long, ComponentInfoBase, CompRevInfo, Integer)
+  fullName: Typhon.Engine.Transaction.UpdateIndices(long, Typhon.Engine.Transaction.ComponentInfoBase, Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo, int)
+  fullName.vb: Typhon.Engine.Transaction.UpdateIndices(Long, Typhon.Engine.Transaction.ComponentInfoBase, Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo, Integer)
+  nameWithType: Transaction.UpdateIndices(long, Transaction.ComponentInfoBase, Transaction.ComponentInfoBase.CompRevInfo, int)
+  nameWithType.vb: Transaction.UpdateIndices(Long, Transaction.ComponentInfoBase, Transaction.ComponentInfoBase.CompRevInfo, Integer)
 - uid: Typhon.Engine.Transaction.UpdateIndices*
   name: UpdateIndices
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_UpdateIndices_

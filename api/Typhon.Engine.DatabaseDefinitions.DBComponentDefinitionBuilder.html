@@ -166,8 +166,8 @@ Class DatabaseDefinitions.DBComponentDefinitionBuilder  <a class="header-action 
 
   <a id="Typhon_Engine_DatabaseDefinitions_DBComponentDefinitionBuilder__ctor_" data-uid="Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.#ctor*"></a>
 
-  <h3 id="Typhon_Engine_DatabaseDefinitions_DBComponentDefinitionBuilder__ctor_Typhon_Engine_DatabaseDefinitions_System_String_System_Int32_" data-uid="Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.#ctor(Typhon.Engine.DatabaseDefinitions,System.String,System.Int32)">
-  DBComponentDefinitionBuilder(DatabaseDefinitions, string, int)
+  <h3 id="Typhon_Engine_DatabaseDefinitions_DBComponentDefinitionBuilder__ctor_Typhon_Engine_DatabaseDefinitions_System_String_System_Int32_System_Boolean_" data-uid="Typhon.Engine.DatabaseDefinitions.DBComponentDefinitionBuilder.#ctor(Typhon.Engine.DatabaseDefinitions,System.String,System.Int32,System.Boolean)">
+  DBComponentDefinitionBuilder(DatabaseDefinitions, string, int, bool)
   <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Schema/DatabaseDefinitions.cs/#L43"><i class="bi bi-code-slash"></i></a>
   </h3>
 
@@ -175,7 +175,7 @@ Class DatabaseDefinitions.DBComponentDefinitionBuilder  <a class="header-action 
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public DBComponentDefinitionBuilder(DatabaseDefinitions owner, string name, int revision)</code></pre>
+    <pre><code class="lang-csharp hljs">public DBComponentDefinitionBuilder(DatabaseDefinitions owner, string name, int revision, bool allowMultiple = false)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -185,6 +185,8 @@ Class DatabaseDefinitions.DBComponentDefinitionBuilder  <a class="header-action 
     <dt><code>name</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
     <dd></dd>
     <dt><code>revision</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>allowMultiple</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
     <dd></dd>
   </dl>
 

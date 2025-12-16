@@ -2182,58 +2182,72 @@
     },
     {
       "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.Transaction.ComponentData.yml",
+      "source_relative_path": "api/Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.yml",
       "output": {
         ".html": {
-          "relative_path": "api/Typhon.Engine.Transaction.ComponentData.html"
+          "relative_path": "api/Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.html"
         }
       },
       "version": "",
       "Uid": null,
       "IsMRef": true,
-      "Title": "Typhon.Engine.Transaction.ComponentData",
+      "Title": "Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo",
       "Summary": null
     },
     {
       "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.yml",
+      "source_relative_path": "api/Typhon.Engine.Transaction.ComponentInfoBase.OperationType.yml",
       "output": {
         ".html": {
-          "relative_path": "api/Typhon.Engine.Transaction.ComponentInfo.CompRevInfo.html"
+          "relative_path": "api/Typhon.Engine.Transaction.ComponentInfoBase.OperationType.html"
         }
       },
       "version": "",
       "Uid": null,
       "IsMRef": true,
-      "Title": "Typhon.Engine.Transaction.ComponentInfo.CompRevInfo",
+      "Title": "Typhon.Engine.Transaction.ComponentInfoBase.OperationType",
       "Summary": null
     },
     {
       "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.Transaction.ComponentInfo.OperationType.yml",
+      "source_relative_path": "api/Typhon.Engine.Transaction.ComponentInfoBase.yml",
       "output": {
         ".html": {
-          "relative_path": "api/Typhon.Engine.Transaction.ComponentInfo.OperationType.html"
+          "relative_path": "api/Typhon.Engine.Transaction.ComponentInfoBase.html"
         }
       },
       "version": "",
       "Uid": null,
       "IsMRef": true,
-      "Title": "Typhon.Engine.Transaction.ComponentInfo.OperationType",
+      "Title": "Typhon.Engine.Transaction.ComponentInfoBase",
       "Summary": null
     },
     {
       "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.Transaction.ComponentInfo.yml",
+      "source_relative_path": "api/Typhon.Engine.Transaction.ComponentInfoMultiple.yml",
       "output": {
         ".html": {
-          "relative_path": "api/Typhon.Engine.Transaction.ComponentInfo.html"
+          "relative_path": "api/Typhon.Engine.Transaction.ComponentInfoMultiple.html"
         }
       },
       "version": "",
       "Uid": null,
       "IsMRef": true,
-      "Title": "Typhon.Engine.Transaction.ComponentInfo",
+      "Title": "Typhon.Engine.Transaction.ComponentInfoMultiple",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.Transaction.ComponentInfoSingle.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.Transaction.ComponentInfoSingle.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.Transaction.ComponentInfoSingle",
       "Summary": null
     },
     {

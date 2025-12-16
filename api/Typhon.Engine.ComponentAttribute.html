@@ -259,16 +259,16 @@ public sealed class ComponentAttribute : Attribute</code></pre>
 
   <a id="Typhon_Engine_ComponentAttribute__ctor_" data-uid="Typhon.Engine.ComponentAttribute.#ctor*"></a>
 
-  <h3 id="Typhon_Engine_ComponentAttribute__ctor_System_String_System_Int32_" data-uid="Typhon.Engine.ComponentAttribute.#ctor(System.String,System.Int32)">
-  ComponentAttribute(string, int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L23"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_ComponentAttribute__ctor_System_String_System_Int32_System_Boolean_" data-uid="Typhon.Engine.ComponentAttribute.#ctor(System.String,System.Int32,System.Boolean)">
+  ComponentAttribute(string, int, bool)
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L24"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public ComponentAttribute(string name, int revision)</code></pre>
+    <pre><code class="lang-csharp hljs">public ComponentAttribute(string name, int revision, bool allowMultiple = false)</code></pre>
   </div>
 
   <h4 class="section">Parameters</h4>
@@ -276,6 +276,8 @@ public sealed class ComponentAttribute : Attribute</code></pre>
     <dt><code>name</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.string">string</a></dt>
     <dd></dd>
     <dt><code>revision</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int32">int</a></dt>
+    <dd></dd>
+    <dt><code>allowMultiple</code> <a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
     <dd></dd>
   </dl>
 
@@ -292,6 +294,37 @@ public sealed class ComponentAttribute : Attribute</code></pre>
 
   <h2 class="section" id="properties">Properties
 </h2>
+
+
+  <a id="Typhon_Engine_ComponentAttribute_AllowMultiple_" data-uid="Typhon.Engine.ComponentAttribute.AllowMultiple*"></a>
+
+  <h3 id="Typhon_Engine_ComponentAttribute_AllowMultiple" data-uid="Typhon.Engine.ComponentAttribute.AllowMultiple">
+  AllowMultiple
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/DatabaseEngine.cs/#L22"><i class="bi bi-code-slash"></i></a>
+  </h3>
+
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool AllowMultiple { get; }</code></pre>
+  </div>
+
+
+
+
+
+  <h4 class="section">Property Value</h4>
+  <dl class="parameters">
+    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
+    <dd></dd>
+  </dl>
+
+
+
+
+
+
 
 
   <a id="Typhon_Engine_ComponentAttribute_Name_" data-uid="Typhon.Engine.ComponentAttribute.Name*"></a>
