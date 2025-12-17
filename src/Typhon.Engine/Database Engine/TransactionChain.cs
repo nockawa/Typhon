@@ -15,6 +15,7 @@ internal class TransactionChain : IDisposable
     internal Transaction Tail { get; private set; }
 
     internal long MinTSN { get; private set; }
+    internal long NextFreeId => _nextFreeId;
 
     private AccessControl _control;
     private readonly Queue<Transaction> _pool;
