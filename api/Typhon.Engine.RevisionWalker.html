@@ -2,9 +2,9 @@
 <html>
   <head>
     <meta charset="utf-8">
-      <title>Struct Transaction.RevisionWalker | Typhon </title>
+      <title>Struct RevisionWalker | Typhon </title>
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <meta name="title" content="Struct Transaction.RevisionWalker | Typhon ">
+      <meta name="title" content="Struct RevisionWalker | Typhon ">
       
       
       <link rel="icon" href="../images/favicon.ico">
@@ -16,7 +16,7 @@
       <meta name="docfx:rel" content="../">
       
       
-      <meta name="docfx:docurl" content="https://github.com/nockawa/Typhon/new/new-persistence-layer/apiSpec/new?filename=Typhon_Engine_Transaction_RevisionWalker.md&amp;value=---%0Auid%3A%20Typhon.Engine.Transaction.RevisionWalker%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="docfx:docurl" content="https://github.com/nockawa/Typhon/new/new-persistence-layer/apiSpec/new?filename=Typhon_Engine_RevisionWalker.md&amp;value=---%0Auid%3A%20Typhon.Engine.RevisionWalker%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
       <meta name="loc:inThisArticle" content="In this article">
       <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
       <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
@@ -84,12 +84,12 @@
           <nav id="breadcrumb"></nav>
         </div>
 
-        <article data-uid="Typhon.Engine.Transaction.RevisionWalker">
+        <article data-uid="Typhon.Engine.RevisionWalker">
 
 
 
-  <h1 id="Typhon_Engine_Transaction_RevisionWalker" data-uid="Typhon.Engine.Transaction.RevisionWalker" class="text-break">
-Struct Transaction.RevisionWalker  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1576"><i class="bi bi-code-slash"></i></a>
+  <h1 id="Typhon_Engine_RevisionWalker" data-uid="Typhon.Engine.RevisionWalker" class="text-break">
+Struct RevisionWalker  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentRevision/RevisionWalker.cs/#L6"><i class="bi bi-code-slash"></i></a>
   </h1>
 
   <div class="facts text-secondary">
@@ -101,7 +101,8 @@ Struct Transaction.RevisionWalker  <a class="header-action link-secondary" title
   <div class="markdown conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">internal ref struct Transaction.RevisionWalker : IDisposable</code></pre>
+    <pre><code class="lang-csharp hljs">[PublicAPI]
+internal ref struct RevisionWalker : IDisposable</code></pre>
   </div>
 
 
@@ -148,11 +149,11 @@ Struct Transaction.RevisionWalker  <a class="header-action link-secondary" title
 </h2>
 
 
-  <a id="Typhon_Engine_Transaction_RevisionWalker__ctor_" data-uid="Typhon.Engine.Transaction.RevisionWalker.#ctor*"></a>
+  <a id="Typhon_Engine_RevisionWalker__ctor_" data-uid="Typhon.Engine.RevisionWalker.#ctor*"></a>
 
-  <h3 id="Typhon_Engine_Transaction_RevisionWalker__ctor_Typhon_Engine_ChunkRandomAccessor_System_Int32_" data-uid="Typhon.Engine.Transaction.RevisionWalker.#ctor(Typhon.Engine.ChunkRandomAccessor,System.Int32)">
+  <h3 id="Typhon_Engine_RevisionWalker__ctor_Typhon_Engine_ChunkRandomAccessor_System_Int32_" data-uid="Typhon.Engine.RevisionWalker.#ctor(Typhon.Engine.ChunkRandomAccessor,System.Int32)">
   RevisionWalker(ChunkRandomAccessor, int)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1592"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentRevision/RevisionWalker.cs/#L23"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -186,9 +187,9 @@ Struct Transaction.RevisionWalker  <a class="header-action link-secondary" title
 
 
 
-  <h3 id="Typhon_Engine_Transaction_RevisionWalker__accessor" data-uid="Typhon.Engine.Transaction.RevisionWalker._accessor">
+  <h3 id="Typhon_Engine_RevisionWalker__accessor" data-uid="Typhon.Engine.RevisionWalker._accessor">
   _accessor
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1578"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentRevision/RevisionWalker.cs/#L9"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -216,9 +217,9 @@ Struct Transaction.RevisionWalker  <a class="header-action link-secondary" title
 
 
 
-  <h3 id="Typhon_Engine_Transaction_RevisionWalker__curChunkHandle" data-uid="Typhon.Engine.Transaction.RevisionWalker._curChunkHandle">
+  <h3 id="Typhon_Engine_RevisionWalker__curChunkHandle" data-uid="Typhon.Engine.RevisionWalker._curChunkHandle">
   _curChunkHandle
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1581"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentRevision/RevisionWalker.cs/#L12"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -246,9 +247,9 @@ Struct Transaction.RevisionWalker  <a class="header-action link-secondary" title
 
 
 
-  <h3 id="Typhon_Engine_Transaction_RevisionWalker__curChunkId" data-uid="Typhon.Engine.Transaction.RevisionWalker._curChunkId">
+  <h3 id="Typhon_Engine_RevisionWalker__curChunkId" data-uid="Typhon.Engine.RevisionWalker._curChunkId">
   _curChunkId
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1585"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentRevision/RevisionWalker.cs/#L16"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -276,9 +277,9 @@ Struct Transaction.RevisionWalker  <a class="header-action link-secondary" title
 
 
 
-  <h3 id="Typhon_Engine_Transaction_RevisionWalker__elements" data-uid="Typhon.Engine.Transaction.RevisionWalker._elements">
+  <h3 id="Typhon_Engine_RevisionWalker__elements" data-uid="Typhon.Engine.RevisionWalker._elements">
   _elements
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1583"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentRevision/RevisionWalker.cs/#L14"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -306,9 +307,9 @@ Struct Transaction.RevisionWalker  <a class="header-action link-secondary" title
 
 
 
-  <h3 id="Typhon_Engine_Transaction_RevisionWalker__firstChunkHandle" data-uid="Typhon.Engine.Transaction.RevisionWalker._firstChunkHandle">
+  <h3 id="Typhon_Engine_RevisionWalker__firstChunkHandle" data-uid="Typhon.Engine.RevisionWalker._firstChunkHandle">
   _firstChunkHandle
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1580"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentRevision/RevisionWalker.cs/#L11"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -336,9 +337,9 @@ Struct Transaction.RevisionWalker  <a class="header-action link-secondary" title
 
 
 
-  <h3 id="Typhon_Engine_Transaction_RevisionWalker__firstChunkId" data-uid="Typhon.Engine.Transaction.RevisionWalker._firstChunkId">
+  <h3 id="Typhon_Engine_RevisionWalker__firstChunkId" data-uid="Typhon.Engine.RevisionWalker._firstChunkId">
   _firstChunkId
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1579"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentRevision/RevisionWalker.cs/#L10"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -366,9 +367,9 @@ Struct Transaction.RevisionWalker  <a class="header-action link-secondary" title
 
 
 
-  <h3 id="Typhon_Engine_Transaction_RevisionWalker__header" data-uid="Typhon.Engine.Transaction.RevisionWalker._header">
+  <h3 id="Typhon_Engine_RevisionWalker__header" data-uid="Typhon.Engine.RevisionWalker._header">
   _header
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1582"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentRevision/RevisionWalker.cs/#L13"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -396,9 +397,9 @@ Struct Transaction.RevisionWalker  <a class="header-action link-secondary" title
 
 
 
-  <h3 id="Typhon_Engine_Transaction_RevisionWalker__nextChunkId" data-uid="Typhon.Engine.Transaction.RevisionWalker._nextChunkId">
+  <h3 id="Typhon_Engine_RevisionWalker__nextChunkId" data-uid="Typhon.Engine.RevisionWalker._nextChunkId">
   _nextChunkId
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1584"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentRevision/RevisionWalker.cs/#L15"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -429,11 +430,11 @@ Struct Transaction.RevisionWalker  <a class="header-action link-secondary" title
 </h2>
 
 
-  <a id="Typhon_Engine_Transaction_RevisionWalker_CurChunkId_" data-uid="Typhon.Engine.Transaction.RevisionWalker.CurChunkId*"></a>
+  <a id="Typhon_Engine_RevisionWalker_CurChunkId_" data-uid="Typhon.Engine.RevisionWalker.CurChunkId*"></a>
 
-  <h3 id="Typhon_Engine_Transaction_RevisionWalker_CurChunkId" data-uid="Typhon.Engine.Transaction.RevisionWalker.CurChunkId">
+  <h3 id="Typhon_Engine_RevisionWalker_CurChunkId" data-uid="Typhon.Engine.RevisionWalker.CurChunkId">
   CurChunkId
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1588"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentRevision/RevisionWalker.cs/#L19"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -460,11 +461,11 @@ Struct Transaction.RevisionWalker  <a class="header-action link-secondary" title
 
 
 
-  <a id="Typhon_Engine_Transaction_RevisionWalker_Elements_" data-uid="Typhon.Engine.Transaction.RevisionWalker.Elements*"></a>
+  <a id="Typhon_Engine_RevisionWalker_Elements_" data-uid="Typhon.Engine.RevisionWalker.Elements*"></a>
 
-  <h3 id="Typhon_Engine_Transaction_RevisionWalker_Elements" data-uid="Typhon.Engine.Transaction.RevisionWalker.Elements">
+  <h3 id="Typhon_Engine_RevisionWalker_Elements" data-uid="Typhon.Engine.RevisionWalker.Elements">
   Elements
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1590"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentRevision/RevisionWalker.cs/#L21"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -491,11 +492,11 @@ Struct Transaction.RevisionWalker  <a class="header-action link-secondary" title
 
 
 
-  <a id="Typhon_Engine_Transaction_RevisionWalker_Header_" data-uid="Typhon.Engine.Transaction.RevisionWalker.Header*"></a>
+  <a id="Typhon_Engine_RevisionWalker_Header_" data-uid="Typhon.Engine.RevisionWalker.Header*"></a>
 
-  <h3 id="Typhon_Engine_Transaction_RevisionWalker_Header" data-uid="Typhon.Engine.Transaction.RevisionWalker.Header">
+  <h3 id="Typhon_Engine_RevisionWalker_Header" data-uid="Typhon.Engine.RevisionWalker.Header">
   Header
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1587"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentRevision/RevisionWalker.cs/#L18"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -522,11 +523,11 @@ Struct Transaction.RevisionWalker  <a class="header-action link-secondary" title
 
 
 
-  <a id="Typhon_Engine_Transaction_RevisionWalker_NextChunkId_" data-uid="Typhon.Engine.Transaction.RevisionWalker.NextChunkId*"></a>
+  <a id="Typhon_Engine_RevisionWalker_NextChunkId_" data-uid="Typhon.Engine.RevisionWalker.NextChunkId*"></a>
 
-  <h3 id="Typhon_Engine_Transaction_RevisionWalker_NextChunkId" data-uid="Typhon.Engine.Transaction.RevisionWalker.NextChunkId">
+  <h3 id="Typhon_Engine_RevisionWalker_NextChunkId" data-uid="Typhon.Engine.RevisionWalker.NextChunkId">
   NextChunkId
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1589"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentRevision/RevisionWalker.cs/#L20"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -557,11 +558,11 @@ Struct Transaction.RevisionWalker  <a class="header-action link-secondary" title
 </h2>
 
 
-  <a id="Typhon_Engine_Transaction_RevisionWalker_Dispose_" data-uid="Typhon.Engine.Transaction.RevisionWalker.Dispose*"></a>
+  <a id="Typhon_Engine_RevisionWalker_Dispose_" data-uid="Typhon.Engine.RevisionWalker.Dispose*"></a>
 
-  <h3 id="Typhon_Engine_Transaction_RevisionWalker_Dispose" data-uid="Typhon.Engine.Transaction.RevisionWalker.Dispose">
+  <h3 id="Typhon_Engine_RevisionWalker_Dispose" data-uid="Typhon.Engine.RevisionWalker.Dispose">
   Dispose()
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1631"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentRevision/RevisionWalker.cs/#L62"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"><p>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</p>
@@ -584,11 +585,11 @@ Struct Transaction.RevisionWalker  <a class="header-action link-secondary" title
 
 
 
-  <a id="Typhon_Engine_Transaction_RevisionWalker_Step_" data-uid="Typhon.Engine.Transaction.RevisionWalker.Step*"></a>
+  <a id="Typhon_Engine_RevisionWalker_Step_" data-uid="Typhon.Engine.RevisionWalker.Step*"></a>
 
-  <h3 id="Typhon_Engine_Transaction_RevisionWalker_Step_System_Int32_System_Boolean_System_Boolean__" data-uid="Typhon.Engine.Transaction.RevisionWalker.Step(System.Int32,System.Boolean,System.Boolean@)">
+  <h3 id="Typhon_Engine_RevisionWalker_Step_System_Int32_System_Boolean_System_Boolean__" data-uid="Typhon.Engine.RevisionWalker.Step(System.Int32,System.Boolean,System.Boolean@)">
   Step(int, bool, out bool)
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1605"><i class="bi bi-code-slash"></i></a>
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentRevision/RevisionWalker.cs/#L36"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
@@ -628,7 +629,7 @@ Struct Transaction.RevisionWalker  <a class="header-action link-secondary" title
 </article>
 
         <div class="contribution d-print-none">
-          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1576" class="edit-link">Edit this page</a>
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/ComponentRevision/RevisionWalker.cs/#L6" class="edit-link">Edit this page</a>
         </div>
 
 

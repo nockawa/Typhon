@@ -11014,6 +11014,401 @@ references:
   commentId: F:Typhon.Engine.ComponentR1.VersionSPI
   fullName: Typhon.Engine.ComponentR1.VersionSPI
   nameWithType: ComponentR1.VersionSPI
+- uid: Typhon.Engine.ComponentRevision
+  name: ComponentRevision
+  href: api/Typhon.Engine.ComponentRevision.html
+  commentId: T:Typhon.Engine.ComponentRevision
+  fullName: Typhon.Engine.ComponentRevision
+  nameWithType: ComponentRevision
+- uid: Typhon.Engine.ComponentRevision.#ctor(Typhon.Engine.Transaction.ComponentInfoBase,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo@,System.Int32,Typhon.Engine.ChunkRandomAccessor)
+  name: ComponentRevision(ComponentInfoBase, ref CompRevInfo, int, ChunkRandomAccessor)
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision__ctor_Typhon_Engine_Transaction_ComponentInfoBase_Typhon_Engine_Transaction_ComponentInfoBase_CompRevInfo__System_Int32_Typhon_Engine_ChunkRandomAccessor_
+  commentId: M:Typhon.Engine.ComponentRevision.#ctor(Typhon.Engine.Transaction.ComponentInfoBase,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo@,System.Int32,Typhon.Engine.ChunkRandomAccessor)
+  name.vb: New(ComponentInfoBase, CompRevInfo, Integer, ChunkRandomAccessor)
+  fullName: Typhon.Engine.ComponentRevision.ComponentRevision(Typhon.Engine.Transaction.ComponentInfoBase, ref Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo, int, Typhon.Engine.ChunkRandomAccessor)
+  fullName.vb: Typhon.Engine.ComponentRevision.New(Typhon.Engine.Transaction.ComponentInfoBase, Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo, Integer, Typhon.Engine.ChunkRandomAccessor)
+  nameWithType: ComponentRevision.ComponentRevision(Transaction.ComponentInfoBase, ref Transaction.ComponentInfoBase.CompRevInfo, int, ChunkRandomAccessor)
+  nameWithType.vb: ComponentRevision.New(Transaction.ComponentInfoBase, Transaction.ComponentInfoBase.CompRevInfo, Integer, ChunkRandomAccessor)
+- uid: Typhon.Engine.ComponentRevision.#ctor*
+  name: ComponentRevision
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision__ctor_
+  commentId: Overload:Typhon.Engine.ComponentRevision.#ctor
+  isSpec: "True"
+  name.vb: New
+  fullName: Typhon.Engine.ComponentRevision.ComponentRevision
+  fullName.vb: Typhon.Engine.ComponentRevision.New
+  nameWithType: ComponentRevision.ComponentRevision
+  nameWithType.vb: ComponentRevision.New
+- uid: Typhon.Engine.ComponentRevision.AddCompRev(System.Int64,System.Boolean)
+  name: AddCompRev(long, bool)
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision_AddCompRev_System_Int64_System_Boolean_
+  commentId: M:Typhon.Engine.ComponentRevision.AddCompRev(System.Int64,System.Boolean)
+  name.vb: AddCompRev(Long, Boolean)
+  fullName: Typhon.Engine.ComponentRevision.AddCompRev(long, bool)
+  fullName.vb: Typhon.Engine.ComponentRevision.AddCompRev(Long, Boolean)
+  nameWithType: ComponentRevision.AddCompRev(long, bool)
+  nameWithType.vb: ComponentRevision.AddCompRev(Long, Boolean)
+- uid: Typhon.Engine.ComponentRevision.AddCompRev*
+  name: AddCompRev
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision_AddCompRev_
+  commentId: Overload:Typhon.Engine.ComponentRevision.AddCompRev
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentRevision.AddCompRev
+  nameWithType: ComponentRevision.AddCompRev
+- uid: Typhon.Engine.ComponentRevision.AllocCompRevStorage(System.Int64)
+  name: AllocCompRevStorage(long)
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision_AllocCompRevStorage_System_Int64_
+  commentId: M:Typhon.Engine.ComponentRevision.AllocCompRevStorage(System.Int64)
+  name.vb: AllocCompRevStorage(Long)
+  fullName: Typhon.Engine.ComponentRevision.AllocCompRevStorage(long)
+  fullName.vb: Typhon.Engine.ComponentRevision.AllocCompRevStorage(Long)
+  nameWithType: ComponentRevision.AllocCompRevStorage(long)
+  nameWithType.vb: ComponentRevision.AllocCompRevStorage(Long)
+- uid: Typhon.Engine.ComponentRevision.AllocCompRevStorage*
+  name: AllocCompRevStorage
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision_AllocCompRevStorage_
+  commentId: Overload:Typhon.Engine.ComponentRevision.AllocCompRevStorage
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentRevision.AllocCompRevStorage
+  nameWithType: ComponentRevision.AllocCompRevStorage
+- uid: Typhon.Engine.ComponentRevision.CleanUpUnusedEntries(System.Int64)
+  name: CleanUpUnusedEntries(long)
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision_CleanUpUnusedEntries_System_Int64_
+  commentId: M:Typhon.Engine.ComponentRevision.CleanUpUnusedEntries(System.Int64)
+  name.vb: CleanUpUnusedEntries(Long)
+  fullName: Typhon.Engine.ComponentRevision.CleanUpUnusedEntries(long)
+  fullName.vb: Typhon.Engine.ComponentRevision.CleanUpUnusedEntries(Long)
+  nameWithType: ComponentRevision.CleanUpUnusedEntries(long)
+  nameWithType.vb: ComponentRevision.CleanUpUnusedEntries(Long)
+- uid: Typhon.Engine.ComponentRevision.CleanUpUnusedEntries*
+  name: CleanUpUnusedEntries
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision_CleanUpUnusedEntries_
+  commentId: Overload:Typhon.Engine.ComponentRevision.CleanUpUnusedEntries
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentRevision.CleanUpUnusedEntries
+  nameWithType: ComponentRevision.CleanUpUnusedEntries
+- uid: Typhon.Engine.ComponentRevision.Dispose
+  name: Dispose()
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision_Dispose
+  commentId: M:Typhon.Engine.ComponentRevision.Dispose
+  fullName: Typhon.Engine.ComponentRevision.Dispose()
+  nameWithType: ComponentRevision.Dispose()
+- uid: Typhon.Engine.ComponentRevision.Dispose*
+  name: Dispose
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision_Dispose_
+  commentId: Overload:Typhon.Engine.ComponentRevision.Dispose
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentRevision.Dispose
+  nameWithType: ComponentRevision.Dispose
+- uid: Typhon.Engine.ComponentRevision.GetRevisionElement(System.Int16)
+  name: GetRevisionElement(short)
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision_GetRevisionElement_System_Int16_
+  commentId: M:Typhon.Engine.ComponentRevision.GetRevisionElement(System.Int16)
+  name.vb: GetRevisionElement(Short)
+  fullName: Typhon.Engine.ComponentRevision.GetRevisionElement(short)
+  fullName.vb: Typhon.Engine.ComponentRevision.GetRevisionElement(Short)
+  nameWithType: ComponentRevision.GetRevisionElement(short)
+  nameWithType.vb: ComponentRevision.GetRevisionElement(Short)
+- uid: Typhon.Engine.ComponentRevision.GetRevisionElement*
+  name: GetRevisionElement
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision_GetRevisionElement_
+  commentId: Overload:Typhon.Engine.ComponentRevision.GetRevisionElement
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentRevision.GetRevisionElement
+  nameWithType: ComponentRevision.GetRevisionElement
+- uid: Typhon.Engine.ComponentRevision.LastCommitRevisionIndex
+  name: LastCommitRevisionIndex
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision_LastCommitRevisionIndex
+  commentId: P:Typhon.Engine.ComponentRevision.LastCommitRevisionIndex
+  fullName: Typhon.Engine.ComponentRevision.LastCommitRevisionIndex
+  nameWithType: ComponentRevision.LastCommitRevisionIndex
+- uid: Typhon.Engine.ComponentRevision.LastCommitRevisionIndex*
+  name: LastCommitRevisionIndex
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision_LastCommitRevisionIndex_
+  commentId: Overload:Typhon.Engine.ComponentRevision.LastCommitRevisionIndex
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentRevision.LastCommitRevisionIndex
+  nameWithType: ComponentRevision.LastCommitRevisionIndex
+- uid: Typhon.Engine.ComponentRevision.SetLastCommitRevisionIndex(System.Int16)
+  name: SetLastCommitRevisionIndex(short)
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision_SetLastCommitRevisionIndex_System_Int16_
+  commentId: M:Typhon.Engine.ComponentRevision.SetLastCommitRevisionIndex(System.Int16)
+  name.vb: SetLastCommitRevisionIndex(Short)
+  fullName: Typhon.Engine.ComponentRevision.SetLastCommitRevisionIndex(short)
+  fullName.vb: Typhon.Engine.ComponentRevision.SetLastCommitRevisionIndex(Short)
+  nameWithType: ComponentRevision.SetLastCommitRevisionIndex(short)
+  nameWithType.vb: ComponentRevision.SetLastCommitRevisionIndex(Short)
+- uid: Typhon.Engine.ComponentRevision.SetLastCommitRevisionIndex*
+  name: SetLastCommitRevisionIndex
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision_SetLastCommitRevisionIndex_
+  commentId: Overload:Typhon.Engine.ComponentRevision.SetLastCommitRevisionIndex
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentRevision.SetLastCommitRevisionIndex
+  nameWithType: ComponentRevision.SetLastCommitRevisionIndex
+- uid: Typhon.Engine.ComponentRevision.VoidElement(Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle)
+  name: VoidElement(ElementRevisionHandle)
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision_VoidElement_Typhon_Engine_ComponentRevisionManager_ElementRevisionHandle_
+  commentId: M:Typhon.Engine.ComponentRevision.VoidElement(Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle)
+  fullName: Typhon.Engine.ComponentRevision.VoidElement(Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle)
+  nameWithType: ComponentRevision.VoidElement(ComponentRevisionManager.ElementRevisionHandle)
+- uid: Typhon.Engine.ComponentRevision.VoidElement*
+  name: VoidElement
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision_VoidElement_
+  commentId: Overload:Typhon.Engine.ComponentRevision.VoidElement
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentRevision.VoidElement
+  nameWithType: ComponentRevision.VoidElement
+- uid: Typhon.Engine.ComponentRevision._accessor
+  name: _accessor
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision__accessor
+  commentId: F:Typhon.Engine.ComponentRevision._accessor
+  fullName: Typhon.Engine.ComponentRevision._accessor
+  nameWithType: ComponentRevision._accessor
+- uid: Typhon.Engine.ComponentRevision._compRevInfo
+  name: _compRevInfo
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision__compRevInfo
+  commentId: F:Typhon.Engine.ComponentRevision._compRevInfo
+  fullName: Typhon.Engine.ComponentRevision._compRevInfo
+  nameWithType: ComponentRevision._compRevInfo
+- uid: Typhon.Engine.ComponentRevision._firstChunkId
+  name: _firstChunkId
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision__firstChunkId
+  commentId: F:Typhon.Engine.ComponentRevision._firstChunkId
+  fullName: Typhon.Engine.ComponentRevision._firstChunkId
+  nameWithType: ComponentRevision._firstChunkId
+- uid: Typhon.Engine.ComponentRevision._firstHandle
+  name: _firstHandle
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision__firstHandle
+  commentId: F:Typhon.Engine.ComponentRevision._firstHandle
+  fullName: Typhon.Engine.ComponentRevision._firstHandle
+  nameWithType: ComponentRevision._firstHandle
+- uid: Typhon.Engine.ComponentRevision._info
+  name: _info
+  href: api/Typhon.Engine.ComponentRevision.html#Typhon_Engine_ComponentRevision__info
+  commentId: F:Typhon.Engine.ComponentRevision._info
+  fullName: Typhon.Engine.ComponentRevision._info
+  nameWithType: ComponentRevision._info
+- uid: Typhon.Engine.ComponentRevisionManager
+  name: ComponentRevisionManager
+  href: api/Typhon.Engine.ComponentRevisionManager.html
+  commentId: T:Typhon.Engine.ComponentRevisionManager
+  fullName: Typhon.Engine.ComponentRevisionManager
+  nameWithType: ComponentRevisionManager
+- uid: Typhon.Engine.ComponentRevisionManager.AddCompRev(Typhon.Engine.Transaction.ComponentInfoBase,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo@,System.Int64,System.Boolean)
+  name: AddCompRev(ComponentInfoBase, ref CompRevInfo, long, bool)
+  href: api/Typhon.Engine.ComponentRevisionManager.html#Typhon_Engine_ComponentRevisionManager_AddCompRev_Typhon_Engine_Transaction_ComponentInfoBase_Typhon_Engine_Transaction_ComponentInfoBase_CompRevInfo__System_Int64_System_Boolean_
+  commentId: M:Typhon.Engine.ComponentRevisionManager.AddCompRev(Typhon.Engine.Transaction.ComponentInfoBase,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo@,System.Int64,System.Boolean)
+  name.vb: AddCompRev(ComponentInfoBase, CompRevInfo, Long, Boolean)
+  fullName: Typhon.Engine.ComponentRevisionManager.AddCompRev(Typhon.Engine.Transaction.ComponentInfoBase, ref Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo, long, bool)
+  fullName.vb: Typhon.Engine.ComponentRevisionManager.AddCompRev(Typhon.Engine.Transaction.ComponentInfoBase, Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo, Long, Boolean)
+  nameWithType: ComponentRevisionManager.AddCompRev(Transaction.ComponentInfoBase, ref Transaction.ComponentInfoBase.CompRevInfo, long, bool)
+  nameWithType.vb: ComponentRevisionManager.AddCompRev(Transaction.ComponentInfoBase, Transaction.ComponentInfoBase.CompRevInfo, Long, Boolean)
+- uid: Typhon.Engine.ComponentRevisionManager.AddCompRev*
+  name: AddCompRev
+  href: api/Typhon.Engine.ComponentRevisionManager.html#Typhon_Engine_ComponentRevisionManager_AddCompRev_
+  commentId: Overload:Typhon.Engine.ComponentRevisionManager.AddCompRev
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentRevisionManager.AddCompRev
+  nameWithType: ComponentRevisionManager.AddCompRev
+- uid: Typhon.Engine.ComponentRevisionManager.AllocCompRevStorage(Typhon.Engine.Transaction.ComponentInfoBase,System.Int64,System.Int32)
+  name: AllocCompRevStorage(ComponentInfoBase, long, int)
+  href: api/Typhon.Engine.ComponentRevisionManager.html#Typhon_Engine_ComponentRevisionManager_AllocCompRevStorage_Typhon_Engine_Transaction_ComponentInfoBase_System_Int64_System_Int32_
+  commentId: M:Typhon.Engine.ComponentRevisionManager.AllocCompRevStorage(Typhon.Engine.Transaction.ComponentInfoBase,System.Int64,System.Int32)
+  name.vb: AllocCompRevStorage(ComponentInfoBase, Long, Integer)
+  fullName: Typhon.Engine.ComponentRevisionManager.AllocCompRevStorage(Typhon.Engine.Transaction.ComponentInfoBase, long, int)
+  fullName.vb: Typhon.Engine.ComponentRevisionManager.AllocCompRevStorage(Typhon.Engine.Transaction.ComponentInfoBase, Long, Integer)
+  nameWithType: ComponentRevisionManager.AllocCompRevStorage(Transaction.ComponentInfoBase, long, int)
+  nameWithType.vb: ComponentRevisionManager.AllocCompRevStorage(Transaction.ComponentInfoBase, Long, Integer)
+- uid: Typhon.Engine.ComponentRevisionManager.AllocCompRevStorage*
+  name: AllocCompRevStorage
+  href: api/Typhon.Engine.ComponentRevisionManager.html#Typhon_Engine_ComponentRevisionManager_AllocCompRevStorage_
+  commentId: Overload:Typhon.Engine.ComponentRevisionManager.AllocCompRevStorage
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentRevisionManager.AllocCompRevStorage
+  nameWithType: ComponentRevisionManager.AllocCompRevStorage
+- uid: Typhon.Engine.ComponentRevisionManager.CleanUpUnusedEntries(Typhon.Engine.Transaction.ComponentInfoBase,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo@,Typhon.Engine.ChunkRandomAccessor,System.Int64)
+  name: CleanUpUnusedEntries(ComponentInfoBase, ref CompRevInfo, ChunkRandomAccessor, long)
+  href: api/Typhon.Engine.ComponentRevisionManager.html#Typhon_Engine_ComponentRevisionManager_CleanUpUnusedEntries_Typhon_Engine_Transaction_ComponentInfoBase_Typhon_Engine_Transaction_ComponentInfoBase_CompRevInfo__Typhon_Engine_ChunkRandomAccessor_System_Int64_
+  commentId: M:Typhon.Engine.ComponentRevisionManager.CleanUpUnusedEntries(Typhon.Engine.Transaction.ComponentInfoBase,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo@,Typhon.Engine.ChunkRandomAccessor,System.Int64)
+  name.vb: CleanUpUnusedEntries(ComponentInfoBase, CompRevInfo, ChunkRandomAccessor, Long)
+  fullName: Typhon.Engine.ComponentRevisionManager.CleanUpUnusedEntries(Typhon.Engine.Transaction.ComponentInfoBase, ref Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo, Typhon.Engine.ChunkRandomAccessor, long)
+  fullName.vb: Typhon.Engine.ComponentRevisionManager.CleanUpUnusedEntries(Typhon.Engine.Transaction.ComponentInfoBase, Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo, Typhon.Engine.ChunkRandomAccessor, Long)
+  nameWithType: ComponentRevisionManager.CleanUpUnusedEntries(Transaction.ComponentInfoBase, ref Transaction.ComponentInfoBase.CompRevInfo, ChunkRandomAccessor, long)
+  nameWithType.vb: ComponentRevisionManager.CleanUpUnusedEntries(Transaction.ComponentInfoBase, Transaction.ComponentInfoBase.CompRevInfo, ChunkRandomAccessor, Long)
+- uid: Typhon.Engine.ComponentRevisionManager.CleanUpUnusedEntries*
+  name: CleanUpUnusedEntries
+  href: api/Typhon.Engine.ComponentRevisionManager.html#Typhon_Engine_ComponentRevisionManager_CleanUpUnusedEntries_
+  commentId: Overload:Typhon.Engine.ComponentRevisionManager.CleanUpUnusedEntries
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentRevisionManager.CleanUpUnusedEntries
+  nameWithType: ComponentRevisionManager.CleanUpUnusedEntries
+- uid: Typhon.Engine.ComponentRevisionManager.CompRevChunkSize
+  name: CompRevChunkSize
+  href: api/Typhon.Engine.ComponentRevisionManager.html#Typhon_Engine_ComponentRevisionManager_CompRevChunkSize
+  commentId: F:Typhon.Engine.ComponentRevisionManager.CompRevChunkSize
+  fullName: Typhon.Engine.ComponentRevisionManager.CompRevChunkSize
+  nameWithType: ComponentRevisionManager.CompRevChunkSize
+- uid: Typhon.Engine.ComponentRevisionManager.CompRevCountInNext
+  name: CompRevCountInNext
+  href: api/Typhon.Engine.ComponentRevisionManager.html#Typhon_Engine_ComponentRevisionManager_CompRevCountInNext
+  commentId: F:Typhon.Engine.ComponentRevisionManager.CompRevCountInNext
+  fullName: Typhon.Engine.ComponentRevisionManager.CompRevCountInNext
+  nameWithType: ComponentRevisionManager.CompRevCountInNext
+- uid: Typhon.Engine.ComponentRevisionManager.CompRevCountInRoot
+  name: CompRevCountInRoot
+  href: api/Typhon.Engine.ComponentRevisionManager.html#Typhon_Engine_ComponentRevisionManager_CompRevCountInRoot
+  commentId: F:Typhon.Engine.ComponentRevisionManager.CompRevCountInRoot
+  fullName: Typhon.Engine.ComponentRevisionManager.CompRevCountInRoot
+  nameWithType: ComponentRevisionManager.CompRevCountInRoot
+- uid: Typhon.Engine.ComponentRevisionManager.ComputeRevElementCount(System.Int32)
+  name: ComputeRevElementCount(int)
+  href: api/Typhon.Engine.ComponentRevisionManager.html#Typhon_Engine_ComponentRevisionManager_ComputeRevElementCount_System_Int32_
+  commentId: M:Typhon.Engine.ComponentRevisionManager.ComputeRevElementCount(System.Int32)
+  name.vb: ComputeRevElementCount(Integer)
+  fullName: Typhon.Engine.ComponentRevisionManager.ComputeRevElementCount(int)
+  fullName.vb: Typhon.Engine.ComponentRevisionManager.ComputeRevElementCount(Integer)
+  nameWithType: ComponentRevisionManager.ComputeRevElementCount(int)
+  nameWithType.vb: ComponentRevisionManager.ComputeRevElementCount(Integer)
+- uid: Typhon.Engine.ComponentRevisionManager.ComputeRevElementCount*
+  name: ComputeRevElementCount
+  href: api/Typhon.Engine.ComponentRevisionManager.html#Typhon_Engine_ComponentRevisionManager_ComputeRevElementCount_
+  commentId: Overload:Typhon.Engine.ComponentRevisionManager.ComputeRevElementCount
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentRevisionManager.ComputeRevElementCount
+  nameWithType: ComponentRevisionManager.ComputeRevElementCount
+- uid: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle
+  name: ComponentRevisionManager.ElementRevisionHandle
+  href: api/Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.html
+  commentId: T:Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle
+  fullName: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle
+  nameWithType: ComponentRevisionManager.ElementRevisionHandle
+- uid: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.#ctor(Typhon.Engine.ChunkHandle,System.Boolean,System.Int16)
+  name: ElementRevisionHandle(ChunkHandle, bool, short)
+  href: api/Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.html#Typhon_Engine_ComponentRevisionManager_ElementRevisionHandle__ctor_Typhon_Engine_ChunkHandle_System_Boolean_System_Int16_
+  commentId: M:Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.#ctor(Typhon.Engine.ChunkHandle,System.Boolean,System.Int16)
+  name.vb: New(ChunkHandle, Boolean, Short)
+  fullName: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.ElementRevisionHandle(Typhon.Engine.ChunkHandle, bool, short)
+  fullName.vb: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.New(Typhon.Engine.ChunkHandle, Boolean, Short)
+  nameWithType: ComponentRevisionManager.ElementRevisionHandle.ElementRevisionHandle(ChunkHandle, bool, short)
+  nameWithType.vb: ComponentRevisionManager.ElementRevisionHandle.New(ChunkHandle, Boolean, Short)
+- uid: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.#ctor*
+  name: ElementRevisionHandle
+  href: api/Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.html#Typhon_Engine_ComponentRevisionManager_ElementRevisionHandle__ctor_
+  commentId: Overload:Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.#ctor
+  isSpec: "True"
+  name.vb: New
+  fullName: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.ElementRevisionHandle
+  fullName.vb: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.New
+  nameWithType: ComponentRevisionManager.ElementRevisionHandle.ElementRevisionHandle
+  nameWithType.vb: ComponentRevisionManager.ElementRevisionHandle.New
+- uid: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.Commit(System.Int64)
+  name: Commit(long)
+  href: api/Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.html#Typhon_Engine_ComponentRevisionManager_ElementRevisionHandle_Commit_System_Int64_
+  commentId: M:Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.Commit(System.Int64)
+  name.vb: Commit(Long)
+  fullName: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.Commit(long)
+  fullName.vb: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.Commit(Long)
+  nameWithType: ComponentRevisionManager.ElementRevisionHandle.Commit(long)
+  nameWithType.vb: ComponentRevisionManager.ElementRevisionHandle.Commit(Long)
+- uid: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.Commit*
+  name: Commit
+  href: api/Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.html#Typhon_Engine_ComponentRevisionManager_ElementRevisionHandle_Commit_
+  commentId: Overload:Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.Commit
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.Commit
+  nameWithType: ComponentRevisionManager.ElementRevisionHandle.Commit
+- uid: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.Dispose
+  name: Dispose()
+  href: api/Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.html#Typhon_Engine_ComponentRevisionManager_ElementRevisionHandle_Dispose
+  commentId: M:Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.Dispose
+  fullName: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.Dispose()
+  nameWithType: ComponentRevisionManager.ElementRevisionHandle.Dispose()
+- uid: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.Dispose*
+  name: Dispose
+  href: api/Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.html#Typhon_Engine_ComponentRevisionManager_ElementRevisionHandle_Dispose_
+  commentId: Overload:Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.Dispose
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.Dispose
+  nameWithType: ComponentRevisionManager.ElementRevisionHandle.Dispose
+- uid: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.Element
+  name: Element
+  href: api/Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.html#Typhon_Engine_ComponentRevisionManager_ElementRevisionHandle_Element
+  commentId: P:Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.Element
+  fullName: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.Element
+  nameWithType: ComponentRevisionManager.ElementRevisionHandle.Element
+- uid: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.Element*
+  name: Element
+  href: api/Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.html#Typhon_Engine_ComponentRevisionManager_ElementRevisionHandle_Element_
+  commentId: Overload:Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.Element
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.Element
+  nameWithType: ComponentRevisionManager.ElementRevisionHandle.Element
+- uid: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle._elementIndex
+  name: _elementIndex
+  href: api/Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.html#Typhon_Engine_ComponentRevisionManager_ElementRevisionHandle__elementIndex
+  commentId: F:Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle._elementIndex
+  fullName: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle._elementIndex
+  nameWithType: ComponentRevisionManager.ElementRevisionHandle._elementIndex
+- uid: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle._handle
+  name: _handle
+  href: api/Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.html#Typhon_Engine_ComponentRevisionManager_ElementRevisionHandle__handle
+  commentId: F:Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle._handle
+  fullName: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle._handle
+  nameWithType: ComponentRevisionManager.ElementRevisionHandle._handle
+- uid: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle._isFirst
+  name: _isFirst
+  href: api/Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.html#Typhon_Engine_ComponentRevisionManager_ElementRevisionHandle__isFirst
+  commentId: F:Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle._isFirst
+  fullName: Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle._isFirst
+  nameWithType: ComponentRevisionManager.ElementRevisionHandle._isFirst
+- uid: Typhon.Engine.ComponentRevisionManager.GetRevisionElement(Typhon.Engine.ChunkRandomAccessor,System.Int32,System.Int16)
+  name: GetRevisionElement(ChunkRandomAccessor, int, short)
+  href: api/Typhon.Engine.ComponentRevisionManager.html#Typhon_Engine_ComponentRevisionManager_GetRevisionElement_Typhon_Engine_ChunkRandomAccessor_System_Int32_System_Int16_
+  commentId: M:Typhon.Engine.ComponentRevisionManager.GetRevisionElement(Typhon.Engine.ChunkRandomAccessor,System.Int32,System.Int16)
+  name.vb: GetRevisionElement(ChunkRandomAccessor, Integer, Short)
+  fullName: Typhon.Engine.ComponentRevisionManager.GetRevisionElement(Typhon.Engine.ChunkRandomAccessor, int, short)
+  fullName.vb: Typhon.Engine.ComponentRevisionManager.GetRevisionElement(Typhon.Engine.ChunkRandomAccessor, Integer, Short)
+  nameWithType: ComponentRevisionManager.GetRevisionElement(ChunkRandomAccessor, int, short)
+  nameWithType.vb: ComponentRevisionManager.GetRevisionElement(ChunkRandomAccessor, Integer, Short)
+- uid: Typhon.Engine.ComponentRevisionManager.GetRevisionElement*
+  name: GetRevisionElement
+  href: api/Typhon.Engine.ComponentRevisionManager.html#Typhon_Engine_ComponentRevisionManager_GetRevisionElement_
+  commentId: Overload:Typhon.Engine.ComponentRevisionManager.GetRevisionElement
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentRevisionManager.GetRevisionElement
+  nameWithType: ComponentRevisionManager.GetRevisionElement
+- uid: Typhon.Engine.ComponentRevisionManager.GetRevisionLocation(Typhon.Engine.ChunkRandomAccessor,System.Int32,System.Int16,System.Int32@)
+  name: GetRevisionLocation(ChunkRandomAccessor, int, short, out int)
+  href: api/Typhon.Engine.ComponentRevisionManager.html#Typhon_Engine_ComponentRevisionManager_GetRevisionLocation_Typhon_Engine_ChunkRandomAccessor_System_Int32_System_Int16_System_Int32__
+  commentId: M:Typhon.Engine.ComponentRevisionManager.GetRevisionLocation(Typhon.Engine.ChunkRandomAccessor,System.Int32,System.Int16,System.Int32@)
+  name.vb: GetRevisionLocation(ChunkRandomAccessor, Integer, Short, Integer)
+  fullName: Typhon.Engine.ComponentRevisionManager.GetRevisionLocation(Typhon.Engine.ChunkRandomAccessor, int, short, out int)
+  fullName.vb: Typhon.Engine.ComponentRevisionManager.GetRevisionLocation(Typhon.Engine.ChunkRandomAccessor, Integer, Short, Integer)
+  nameWithType: ComponentRevisionManager.GetRevisionLocation(ChunkRandomAccessor, int, short, out int)
+  nameWithType.vb: ComponentRevisionManager.GetRevisionLocation(ChunkRandomAccessor, Integer, Short, Integer)
+- uid: Typhon.Engine.ComponentRevisionManager.GetRevisionLocation*
+  name: GetRevisionLocation
+  href: api/Typhon.Engine.ComponentRevisionManager.html#Typhon_Engine_ComponentRevisionManager_GetRevisionLocation_
+  commentId: Overload:Typhon.Engine.ComponentRevisionManager.GetRevisionLocation
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentRevisionManager.GetRevisionLocation
+  nameWithType: ComponentRevisionManager.GetRevisionLocation
+- uid: Typhon.Engine.ComponentRevisionManager.GrowChain(Typhon.Engine.Transaction.ComponentInfoBase,System.Int32,Typhon.Engine.CompRevStorageHeader@)
+  name: GrowChain(ComponentInfoBase, int, ref CompRevStorageHeader)
+  href: api/Typhon.Engine.ComponentRevisionManager.html#Typhon_Engine_ComponentRevisionManager_GrowChain_Typhon_Engine_Transaction_ComponentInfoBase_System_Int32_Typhon_Engine_CompRevStorageHeader__
+  commentId: M:Typhon.Engine.ComponentRevisionManager.GrowChain(Typhon.Engine.Transaction.ComponentInfoBase,System.Int32,Typhon.Engine.CompRevStorageHeader@)
+  name.vb: GrowChain(ComponentInfoBase, Integer, CompRevStorageHeader)
+  fullName: Typhon.Engine.ComponentRevisionManager.GrowChain(Typhon.Engine.Transaction.ComponentInfoBase, int, ref Typhon.Engine.CompRevStorageHeader)
+  fullName.vb: Typhon.Engine.ComponentRevisionManager.GrowChain(Typhon.Engine.Transaction.ComponentInfoBase, Integer, Typhon.Engine.CompRevStorageHeader)
+  nameWithType: ComponentRevisionManager.GrowChain(Transaction.ComponentInfoBase, int, ref CompRevStorageHeader)
+  nameWithType.vb: ComponentRevisionManager.GrowChain(Transaction.ComponentInfoBase, Integer, CompRevStorageHeader)
+- uid: Typhon.Engine.ComponentRevisionManager.GrowChain*
+  name: GrowChain
+  href: api/Typhon.Engine.ComponentRevisionManager.html#Typhon_Engine_ComponentRevisionManager_GrowChain_
+  commentId: Overload:Typhon.Engine.ComponentRevisionManager.GrowChain
+  isSpec: "True"
+  fullName: Typhon.Engine.ComponentRevisionManager.GrowChain
+  nameWithType: ComponentRevisionManager.GrowChain
 - uid: Typhon.Engine.ComponentTable
   name: ComponentTable
   href: api/Typhon.Engine.ComponentTable.html
@@ -11046,24 +11441,6 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.ComponentTable.BuildIndexedFieldInfo
   nameWithType: ComponentTable.BuildIndexedFieldInfo
-- uid: Typhon.Engine.ComponentTable.CompRevChunkSize
-  name: CompRevChunkSize
-  href: api/Typhon.Engine.ComponentTable.html#Typhon_Engine_ComponentTable_CompRevChunkSize
-  commentId: F:Typhon.Engine.ComponentTable.CompRevChunkSize
-  fullName: Typhon.Engine.ComponentTable.CompRevChunkSize
-  nameWithType: ComponentTable.CompRevChunkSize
-- uid: Typhon.Engine.ComponentTable.CompRevCountInNext
-  name: CompRevCountInNext
-  href: api/Typhon.Engine.ComponentTable.html#Typhon_Engine_ComponentTable_CompRevCountInNext
-  commentId: F:Typhon.Engine.ComponentTable.CompRevCountInNext
-  fullName: Typhon.Engine.ComponentTable.CompRevCountInNext
-  nameWithType: ComponentTable.CompRevCountInNext
-- uid: Typhon.Engine.ComponentTable.CompRevCountInRoot
-  name: CompRevCountInRoot
-  href: api/Typhon.Engine.ComponentTable.html#Typhon_Engine_ComponentTable_CompRevCountInRoot
-  commentId: F:Typhon.Engine.ComponentTable.CompRevCountInRoot
-  fullName: Typhon.Engine.ComponentTable.CompRevCountInRoot
-  nameWithType: ComponentTable.CompRevCountInRoot
 - uid: Typhon.Engine.ComponentTable.CompRevTableSegment
   name: CompRevTableSegment
   href: api/Typhon.Engine.ComponentTable.html#Typhon_Engine_ComponentTable_CompRevTableSegment
@@ -17179,6 +17556,429 @@ references:
   commentId: F:Typhon.Engine.QuaternionF.Z
   fullName: Typhon.Engine.QuaternionF.Z
   nameWithType: QuaternionF.Z
+- uid: Typhon.Engine.RevisionEnumerator
+  name: RevisionEnumerator
+  href: api/Typhon.Engine.RevisionEnumerator.html
+  commentId: T:Typhon.Engine.RevisionEnumerator
+  fullName: Typhon.Engine.RevisionEnumerator
+  nameWithType: RevisionEnumerator
+- uid: Typhon.Engine.RevisionEnumerator.#ctor(Typhon.Engine.ChunkRandomAccessor,System.Int32,System.Boolean,System.Boolean)
+  name: RevisionEnumerator(ChunkRandomAccessor, int, bool, bool)
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator__ctor_Typhon_Engine_ChunkRandomAccessor_System_Int32_System_Boolean_System_Boolean_
+  commentId: M:Typhon.Engine.RevisionEnumerator.#ctor(Typhon.Engine.ChunkRandomAccessor,System.Int32,System.Boolean,System.Boolean)
+  name.vb: New(ChunkRandomAccessor, Integer, Boolean, Boolean)
+  fullName: Typhon.Engine.RevisionEnumerator.RevisionEnumerator(Typhon.Engine.ChunkRandomAccessor, int, bool, bool)
+  fullName.vb: Typhon.Engine.RevisionEnumerator.New(Typhon.Engine.ChunkRandomAccessor, Integer, Boolean, Boolean)
+  nameWithType: RevisionEnumerator.RevisionEnumerator(ChunkRandomAccessor, int, bool, bool)
+  nameWithType.vb: RevisionEnumerator.New(ChunkRandomAccessor, Integer, Boolean, Boolean)
+- uid: Typhon.Engine.RevisionEnumerator.#ctor*
+  name: RevisionEnumerator
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator__ctor_
+  commentId: Overload:Typhon.Engine.RevisionEnumerator.#ctor
+  isSpec: "True"
+  name.vb: New
+  fullName: Typhon.Engine.RevisionEnumerator.RevisionEnumerator
+  fullName.vb: Typhon.Engine.RevisionEnumerator.New
+  nameWithType: RevisionEnumerator.RevisionEnumerator
+  nameWithType.vb: RevisionEnumerator.New
+- uid: Typhon.Engine.RevisionEnumerator.CurChunkId
+  name: CurChunkId
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_CurChunkId
+  commentId: P:Typhon.Engine.RevisionEnumerator.CurChunkId
+  fullName: Typhon.Engine.RevisionEnumerator.CurChunkId
+  nameWithType: RevisionEnumerator.CurChunkId
+- uid: Typhon.Engine.RevisionEnumerator.CurChunkId*
+  name: CurChunkId
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_CurChunkId_
+  commentId: Overload:Typhon.Engine.RevisionEnumerator.CurChunkId
+  isSpec: "True"
+  fullName: Typhon.Engine.RevisionEnumerator.CurChunkId
+  nameWithType: RevisionEnumerator.CurChunkId
+- uid: Typhon.Engine.RevisionEnumerator.Current
+  name: Current
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_Current
+  commentId: P:Typhon.Engine.RevisionEnumerator.Current
+  fullName: Typhon.Engine.RevisionEnumerator.Current
+  nameWithType: RevisionEnumerator.Current
+- uid: Typhon.Engine.RevisionEnumerator.Current*
+  name: Current
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_Current_
+  commentId: Overload:Typhon.Engine.RevisionEnumerator.Current
+  isSpec: "True"
+  fullName: Typhon.Engine.RevisionEnumerator.Current
+  nameWithType: RevisionEnumerator.Current
+- uid: Typhon.Engine.RevisionEnumerator.CurrentAsSpan
+  name: CurrentAsSpan
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_CurrentAsSpan
+  commentId: P:Typhon.Engine.RevisionEnumerator.CurrentAsSpan
+  fullName: Typhon.Engine.RevisionEnumerator.CurrentAsSpan
+  nameWithType: RevisionEnumerator.CurrentAsSpan
+- uid: Typhon.Engine.RevisionEnumerator.CurrentAsSpan*
+  name: CurrentAsSpan
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_CurrentAsSpan_
+  commentId: Overload:Typhon.Engine.RevisionEnumerator.CurrentAsSpan
+  isSpec: "True"
+  fullName: Typhon.Engine.RevisionEnumerator.CurrentAsSpan
+  nameWithType: RevisionEnumerator.CurrentAsSpan
+- uid: Typhon.Engine.RevisionEnumerator.Dispose
+  name: Dispose()
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_Dispose
+  commentId: M:Typhon.Engine.RevisionEnumerator.Dispose
+  fullName: Typhon.Engine.RevisionEnumerator.Dispose()
+  nameWithType: RevisionEnumerator.Dispose()
+- uid: Typhon.Engine.RevisionEnumerator.Dispose*
+  name: Dispose
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_Dispose_
+  commentId: Overload:Typhon.Engine.RevisionEnumerator.Dispose
+  isSpec: "True"
+  fullName: Typhon.Engine.RevisionEnumerator.Dispose
+  nameWithType: RevisionEnumerator.Dispose
+- uid: Typhon.Engine.RevisionEnumerator.Elements
+  name: Elements
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_Elements
+  commentId: P:Typhon.Engine.RevisionEnumerator.Elements
+  fullName: Typhon.Engine.RevisionEnumerator.Elements
+  nameWithType: RevisionEnumerator.Elements
+- uid: Typhon.Engine.RevisionEnumerator.Elements*
+  name: Elements
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_Elements_
+  commentId: Overload:Typhon.Engine.RevisionEnumerator.Elements
+  isSpec: "True"
+  fullName: Typhon.Engine.RevisionEnumerator.Elements
+  nameWithType: RevisionEnumerator.Elements
+- uid: Typhon.Engine.RevisionEnumerator.HasLopped
+  name: HasLopped
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_HasLopped
+  commentId: P:Typhon.Engine.RevisionEnumerator.HasLopped
+  fullName: Typhon.Engine.RevisionEnumerator.HasLopped
+  nameWithType: RevisionEnumerator.HasLopped
+- uid: Typhon.Engine.RevisionEnumerator.HasLopped*
+  name: HasLopped
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_HasLopped_
+  commentId: Overload:Typhon.Engine.RevisionEnumerator.HasLopped
+  isSpec: "True"
+  fullName: Typhon.Engine.RevisionEnumerator.HasLopped
+  nameWithType: RevisionEnumerator.HasLopped
+- uid: Typhon.Engine.RevisionEnumerator.Header
+  name: Header
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_Header
+  commentId: P:Typhon.Engine.RevisionEnumerator.Header
+  fullName: Typhon.Engine.RevisionEnumerator.Header
+  nameWithType: RevisionEnumerator.Header
+- uid: Typhon.Engine.RevisionEnumerator.Header*
+  name: Header
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_Header_
+  commentId: Overload:Typhon.Engine.RevisionEnumerator.Header
+  isSpec: "True"
+  fullName: Typhon.Engine.RevisionEnumerator.Header
+  nameWithType: RevisionEnumerator.Header
+- uid: Typhon.Engine.RevisionEnumerator.IndexInChunk
+  name: IndexInChunk
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_IndexInChunk
+  commentId: P:Typhon.Engine.RevisionEnumerator.IndexInChunk
+  fullName: Typhon.Engine.RevisionEnumerator.IndexInChunk
+  nameWithType: RevisionEnumerator.IndexInChunk
+- uid: Typhon.Engine.RevisionEnumerator.IndexInChunk*
+  name: IndexInChunk
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_IndexInChunk_
+  commentId: Overload:Typhon.Engine.RevisionEnumerator.IndexInChunk
+  isSpec: "True"
+  fullName: Typhon.Engine.RevisionEnumerator.IndexInChunk
+  nameWithType: RevisionEnumerator.IndexInChunk
+- uid: Typhon.Engine.RevisionEnumerator.IsFirstChunk
+  name: IsFirstChunk
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_IsFirstChunk
+  commentId: P:Typhon.Engine.RevisionEnumerator.IsFirstChunk
+  fullName: Typhon.Engine.RevisionEnumerator.IsFirstChunk
+  nameWithType: RevisionEnumerator.IsFirstChunk
+- uid: Typhon.Engine.RevisionEnumerator.IsFirstChunk*
+  name: IsFirstChunk
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_IsFirstChunk_
+  commentId: Overload:Typhon.Engine.RevisionEnumerator.IsFirstChunk
+  isSpec: "True"
+  fullName: Typhon.Engine.RevisionEnumerator.IsFirstChunk
+  nameWithType: RevisionEnumerator.IsFirstChunk
+- uid: Typhon.Engine.RevisionEnumerator.MoveNext
+  name: MoveNext()
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_MoveNext
+  commentId: M:Typhon.Engine.RevisionEnumerator.MoveNext
+  fullName: Typhon.Engine.RevisionEnumerator.MoveNext()
+  nameWithType: RevisionEnumerator.MoveNext()
+- uid: Typhon.Engine.RevisionEnumerator.MoveNext*
+  name: MoveNext
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_MoveNext_
+  commentId: Overload:Typhon.Engine.RevisionEnumerator.MoveNext
+  isSpec: "True"
+  fullName: Typhon.Engine.RevisionEnumerator.MoveNext
+  nameWithType: RevisionEnumerator.MoveNext
+- uid: Typhon.Engine.RevisionEnumerator.NextChunkId
+  name: NextChunkId
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_NextChunkId
+  commentId: P:Typhon.Engine.RevisionEnumerator.NextChunkId
+  fullName: Typhon.Engine.RevisionEnumerator.NextChunkId
+  nameWithType: RevisionEnumerator.NextChunkId
+- uid: Typhon.Engine.RevisionEnumerator.NextChunkId*
+  name: NextChunkId
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_NextChunkId_
+  commentId: Overload:Typhon.Engine.RevisionEnumerator.NextChunkId
+  isSpec: "True"
+  fullName: Typhon.Engine.RevisionEnumerator.NextChunkId
+  nameWithType: RevisionEnumerator.NextChunkId
+- uid: Typhon.Engine.RevisionEnumerator.RevisionIndex
+  name: RevisionIndex
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_RevisionIndex
+  commentId: P:Typhon.Engine.RevisionEnumerator.RevisionIndex
+  fullName: Typhon.Engine.RevisionEnumerator.RevisionIndex
+  nameWithType: RevisionEnumerator.RevisionIndex
+- uid: Typhon.Engine.RevisionEnumerator.RevisionIndex*
+  name: RevisionIndex
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_RevisionIndex_
+  commentId: Overload:Typhon.Engine.RevisionEnumerator.RevisionIndex
+  isSpec: "True"
+  fullName: Typhon.Engine.RevisionEnumerator.RevisionIndex
+  nameWithType: RevisionEnumerator.RevisionIndex
+- uid: Typhon.Engine.RevisionEnumerator.StepToChunk(System.Int32,System.Boolean)
+  name: StepToChunk(int, bool)
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_StepToChunk_System_Int32_System_Boolean_
+  commentId: M:Typhon.Engine.RevisionEnumerator.StepToChunk(System.Int32,System.Boolean)
+  name.vb: StepToChunk(Integer, Boolean)
+  fullName: Typhon.Engine.RevisionEnumerator.StepToChunk(int, bool)
+  fullName.vb: Typhon.Engine.RevisionEnumerator.StepToChunk(Integer, Boolean)
+  nameWithType: RevisionEnumerator.StepToChunk(int, bool)
+  nameWithType.vb: RevisionEnumerator.StepToChunk(Integer, Boolean)
+- uid: Typhon.Engine.RevisionEnumerator.StepToChunk*
+  name: StepToChunk
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator_StepToChunk_
+  commentId: Overload:Typhon.Engine.RevisionEnumerator.StepToChunk
+  isSpec: "True"
+  fullName: Typhon.Engine.RevisionEnumerator.StepToChunk
+  nameWithType: RevisionEnumerator.StepToChunk
+- uid: Typhon.Engine.RevisionEnumerator._compRevTableAccessor
+  name: _compRevTableAccessor
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator__compRevTableAccessor
+  commentId: F:Typhon.Engine.RevisionEnumerator._compRevTableAccessor
+  fullName: Typhon.Engine.RevisionEnumerator._compRevTableAccessor
+  nameWithType: RevisionEnumerator._compRevTableAccessor
+- uid: Typhon.Engine.RevisionEnumerator._curChunkHandle
+  name: _curChunkHandle
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator__curChunkHandle
+  commentId: F:Typhon.Engine.RevisionEnumerator._curChunkHandle
+  fullName: Typhon.Engine.RevisionEnumerator._curChunkHandle
+  nameWithType: RevisionEnumerator._curChunkHandle
+- uid: Typhon.Engine.RevisionEnumerator._elements
+  name: _elements
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator__elements
+  commentId: F:Typhon.Engine.RevisionEnumerator._elements
+  fullName: Typhon.Engine.RevisionEnumerator._elements
+  nameWithType: RevisionEnumerator._elements
+- uid: Typhon.Engine.RevisionEnumerator._exclusiveAccess
+  name: _exclusiveAccess
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator__exclusiveAccess
+  commentId: F:Typhon.Engine.RevisionEnumerator._exclusiveAccess
+  fullName: Typhon.Engine.RevisionEnumerator._exclusiveAccess
+  nameWithType: RevisionEnumerator._exclusiveAccess
+- uid: Typhon.Engine.RevisionEnumerator._firstChunkHandle
+  name: _firstChunkHandle
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator__firstChunkHandle
+  commentId: F:Typhon.Engine.RevisionEnumerator._firstChunkHandle
+  fullName: Typhon.Engine.RevisionEnumerator._firstChunkHandle
+  nameWithType: RevisionEnumerator._firstChunkHandle
+- uid: Typhon.Engine.RevisionEnumerator._firstChunkId
+  name: _firstChunkId
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator__firstChunkId
+  commentId: F:Typhon.Engine.RevisionEnumerator._firstChunkId
+  fullName: Typhon.Engine.RevisionEnumerator._firstChunkId
+  nameWithType: RevisionEnumerator._firstChunkId
+- uid: Typhon.Engine.RevisionEnumerator._hasLopped
+  name: _hasLopped
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator__hasLopped
+  commentId: F:Typhon.Engine.RevisionEnumerator._hasLopped
+  fullName: Typhon.Engine.RevisionEnumerator._hasLopped
+  nameWithType: RevisionEnumerator._hasLopped
+- uid: Typhon.Engine.RevisionEnumerator._header
+  name: _header
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator__header
+  commentId: F:Typhon.Engine.RevisionEnumerator._header
+  fullName: Typhon.Engine.RevisionEnumerator._header
+  nameWithType: RevisionEnumerator._header
+- uid: Typhon.Engine.RevisionEnumerator._indexInChunk
+  name: _indexInChunk
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator__indexInChunk
+  commentId: F:Typhon.Engine.RevisionEnumerator._indexInChunk
+  fullName: Typhon.Engine.RevisionEnumerator._indexInChunk
+  nameWithType: RevisionEnumerator._indexInChunk
+- uid: Typhon.Engine.RevisionEnumerator._itemCountLeft
+  name: _itemCountLeft
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator__itemCountLeft
+  commentId: F:Typhon.Engine.RevisionEnumerator._itemCountLeft
+  fullName: Typhon.Engine.RevisionEnumerator._itemCountLeft
+  nameWithType: RevisionEnumerator._itemCountLeft
+- uid: Typhon.Engine.RevisionEnumerator._nextChunkId
+  name: _nextChunkId
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator__nextChunkId
+  commentId: F:Typhon.Engine.RevisionEnumerator._nextChunkId
+  fullName: Typhon.Engine.RevisionEnumerator._nextChunkId
+  nameWithType: RevisionEnumerator._nextChunkId
+- uid: Typhon.Engine.RevisionEnumerator._revisionIndex
+  name: _revisionIndex
+  href: api/Typhon.Engine.RevisionEnumerator.html#Typhon_Engine_RevisionEnumerator__revisionIndex
+  commentId: F:Typhon.Engine.RevisionEnumerator._revisionIndex
+  fullName: Typhon.Engine.RevisionEnumerator._revisionIndex
+  nameWithType: RevisionEnumerator._revisionIndex
+- uid: Typhon.Engine.RevisionWalker
+  name: RevisionWalker
+  href: api/Typhon.Engine.RevisionWalker.html
+  commentId: T:Typhon.Engine.RevisionWalker
+  fullName: Typhon.Engine.RevisionWalker
+  nameWithType: RevisionWalker
+- uid: Typhon.Engine.RevisionWalker.#ctor(Typhon.Engine.ChunkRandomAccessor,System.Int32)
+  name: RevisionWalker(ChunkRandomAccessor, int)
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker__ctor_Typhon_Engine_ChunkRandomAccessor_System_Int32_
+  commentId: M:Typhon.Engine.RevisionWalker.#ctor(Typhon.Engine.ChunkRandomAccessor,System.Int32)
+  name.vb: New(ChunkRandomAccessor, Integer)
+  fullName: Typhon.Engine.RevisionWalker.RevisionWalker(Typhon.Engine.ChunkRandomAccessor, int)
+  fullName.vb: Typhon.Engine.RevisionWalker.New(Typhon.Engine.ChunkRandomAccessor, Integer)
+  nameWithType: RevisionWalker.RevisionWalker(ChunkRandomAccessor, int)
+  nameWithType.vb: RevisionWalker.New(ChunkRandomAccessor, Integer)
+- uid: Typhon.Engine.RevisionWalker.#ctor*
+  name: RevisionWalker
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker__ctor_
+  commentId: Overload:Typhon.Engine.RevisionWalker.#ctor
+  isSpec: "True"
+  name.vb: New
+  fullName: Typhon.Engine.RevisionWalker.RevisionWalker
+  fullName.vb: Typhon.Engine.RevisionWalker.New
+  nameWithType: RevisionWalker.RevisionWalker
+  nameWithType.vb: RevisionWalker.New
+- uid: Typhon.Engine.RevisionWalker.CurChunkId
+  name: CurChunkId
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker_CurChunkId
+  commentId: P:Typhon.Engine.RevisionWalker.CurChunkId
+  fullName: Typhon.Engine.RevisionWalker.CurChunkId
+  nameWithType: RevisionWalker.CurChunkId
+- uid: Typhon.Engine.RevisionWalker.CurChunkId*
+  name: CurChunkId
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker_CurChunkId_
+  commentId: Overload:Typhon.Engine.RevisionWalker.CurChunkId
+  isSpec: "True"
+  fullName: Typhon.Engine.RevisionWalker.CurChunkId
+  nameWithType: RevisionWalker.CurChunkId
+- uid: Typhon.Engine.RevisionWalker.Dispose
+  name: Dispose()
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker_Dispose
+  commentId: M:Typhon.Engine.RevisionWalker.Dispose
+  fullName: Typhon.Engine.RevisionWalker.Dispose()
+  nameWithType: RevisionWalker.Dispose()
+- uid: Typhon.Engine.RevisionWalker.Dispose*
+  name: Dispose
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker_Dispose_
+  commentId: Overload:Typhon.Engine.RevisionWalker.Dispose
+  isSpec: "True"
+  fullName: Typhon.Engine.RevisionWalker.Dispose
+  nameWithType: RevisionWalker.Dispose
+- uid: Typhon.Engine.RevisionWalker.Elements
+  name: Elements
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker_Elements
+  commentId: P:Typhon.Engine.RevisionWalker.Elements
+  fullName: Typhon.Engine.RevisionWalker.Elements
+  nameWithType: RevisionWalker.Elements
+- uid: Typhon.Engine.RevisionWalker.Elements*
+  name: Elements
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker_Elements_
+  commentId: Overload:Typhon.Engine.RevisionWalker.Elements
+  isSpec: "True"
+  fullName: Typhon.Engine.RevisionWalker.Elements
+  nameWithType: RevisionWalker.Elements
+- uid: Typhon.Engine.RevisionWalker.Header
+  name: Header
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker_Header
+  commentId: P:Typhon.Engine.RevisionWalker.Header
+  fullName: Typhon.Engine.RevisionWalker.Header
+  nameWithType: RevisionWalker.Header
+- uid: Typhon.Engine.RevisionWalker.Header*
+  name: Header
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker_Header_
+  commentId: Overload:Typhon.Engine.RevisionWalker.Header
+  isSpec: "True"
+  fullName: Typhon.Engine.RevisionWalker.Header
+  nameWithType: RevisionWalker.Header
+- uid: Typhon.Engine.RevisionWalker.NextChunkId
+  name: NextChunkId
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker_NextChunkId
+  commentId: P:Typhon.Engine.RevisionWalker.NextChunkId
+  fullName: Typhon.Engine.RevisionWalker.NextChunkId
+  nameWithType: RevisionWalker.NextChunkId
+- uid: Typhon.Engine.RevisionWalker.NextChunkId*
+  name: NextChunkId
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker_NextChunkId_
+  commentId: Overload:Typhon.Engine.RevisionWalker.NextChunkId
+  isSpec: "True"
+  fullName: Typhon.Engine.RevisionWalker.NextChunkId
+  nameWithType: RevisionWalker.NextChunkId
+- uid: Typhon.Engine.RevisionWalker.Step(System.Int32,System.Boolean,System.Boolean@)
+  name: Step(int, bool, out bool)
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker_Step_System_Int32_System_Boolean_System_Boolean__
+  commentId: M:Typhon.Engine.RevisionWalker.Step(System.Int32,System.Boolean,System.Boolean@)
+  name.vb: Step(Integer, Boolean, Boolean)
+  fullName: Typhon.Engine.RevisionWalker.Step(int, bool, out bool)
+  fullName.vb: Typhon.Engine.RevisionWalker.Step(Integer, Boolean, Boolean)
+  nameWithType: RevisionWalker.Step(int, bool, out bool)
+  nameWithType.vb: RevisionWalker.Step(Integer, Boolean, Boolean)
+- uid: Typhon.Engine.RevisionWalker.Step*
+  name: Step
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker_Step_
+  commentId: Overload:Typhon.Engine.RevisionWalker.Step
+  isSpec: "True"
+  fullName: Typhon.Engine.RevisionWalker.Step
+  nameWithType: RevisionWalker.Step
+- uid: Typhon.Engine.RevisionWalker._accessor
+  name: _accessor
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker__accessor
+  commentId: F:Typhon.Engine.RevisionWalker._accessor
+  fullName: Typhon.Engine.RevisionWalker._accessor
+  nameWithType: RevisionWalker._accessor
+- uid: Typhon.Engine.RevisionWalker._curChunkHandle
+  name: _curChunkHandle
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker__curChunkHandle
+  commentId: F:Typhon.Engine.RevisionWalker._curChunkHandle
+  fullName: Typhon.Engine.RevisionWalker._curChunkHandle
+  nameWithType: RevisionWalker._curChunkHandle
+- uid: Typhon.Engine.RevisionWalker._curChunkId
+  name: _curChunkId
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker__curChunkId
+  commentId: F:Typhon.Engine.RevisionWalker._curChunkId
+  fullName: Typhon.Engine.RevisionWalker._curChunkId
+  nameWithType: RevisionWalker._curChunkId
+- uid: Typhon.Engine.RevisionWalker._elements
+  name: _elements
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker__elements
+  commentId: F:Typhon.Engine.RevisionWalker._elements
+  fullName: Typhon.Engine.RevisionWalker._elements
+  nameWithType: RevisionWalker._elements
+- uid: Typhon.Engine.RevisionWalker._firstChunkHandle
+  name: _firstChunkHandle
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker__firstChunkHandle
+  commentId: F:Typhon.Engine.RevisionWalker._firstChunkHandle
+  fullName: Typhon.Engine.RevisionWalker._firstChunkHandle
+  nameWithType: RevisionWalker._firstChunkHandle
+- uid: Typhon.Engine.RevisionWalker._firstChunkId
+  name: _firstChunkId
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker__firstChunkId
+  commentId: F:Typhon.Engine.RevisionWalker._firstChunkId
+  fullName: Typhon.Engine.RevisionWalker._firstChunkId
+  nameWithType: RevisionWalker._firstChunkId
+- uid: Typhon.Engine.RevisionWalker._header
+  name: _header
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker__header
+  commentId: F:Typhon.Engine.RevisionWalker._header
+  fullName: Typhon.Engine.RevisionWalker._header
+  nameWithType: RevisionWalker._header
+- uid: Typhon.Engine.RevisionWalker._nextChunkId
+  name: _nextChunkId
+  href: api/Typhon.Engine.RevisionWalker.html#Typhon_Engine_RevisionWalker__nextChunkId
+  commentId: F:Typhon.Engine.RevisionWalker._nextChunkId
+  fullName: Typhon.Engine.RevisionWalker._nextChunkId
+  nameWithType: RevisionWalker._nextChunkId
 - uid: Typhon.Engine.RootFileHeader
   name: RootFileHeader
   href: api/Typhon.Engine.RootFileHeader.html
@@ -18280,54 +19080,6 @@ references:
   fullName.vb: Typhon.Engine.Transaction.New
   nameWithType: Transaction.Transaction
   nameWithType.vb: Transaction.New
-- uid: Typhon.Engine.Transaction.AddCompRev(Typhon.Engine.Transaction.ComponentInfoBase,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo@,System.Int64,System.Boolean)
-  name: AddCompRev(ComponentInfoBase, ref CompRevInfo, long, bool)
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_AddCompRev_Typhon_Engine_Transaction_ComponentInfoBase_Typhon_Engine_Transaction_ComponentInfoBase_CompRevInfo__System_Int64_System_Boolean_
-  commentId: M:Typhon.Engine.Transaction.AddCompRev(Typhon.Engine.Transaction.ComponentInfoBase,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo@,System.Int64,System.Boolean)
-  name.vb: AddCompRev(ComponentInfoBase, CompRevInfo, Long, Boolean)
-  fullName: Typhon.Engine.Transaction.AddCompRev(Typhon.Engine.Transaction.ComponentInfoBase, ref Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo, long, bool)
-  fullName.vb: Typhon.Engine.Transaction.AddCompRev(Typhon.Engine.Transaction.ComponentInfoBase, Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo, Long, Boolean)
-  nameWithType: Transaction.AddCompRev(Transaction.ComponentInfoBase, ref Transaction.ComponentInfoBase.CompRevInfo, long, bool)
-  nameWithType.vb: Transaction.AddCompRev(Transaction.ComponentInfoBase, Transaction.ComponentInfoBase.CompRevInfo, Long, Boolean)
-- uid: Typhon.Engine.Transaction.AddCompRev*
-  name: AddCompRev
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_AddCompRev_
-  commentId: Overload:Typhon.Engine.Transaction.AddCompRev
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.AddCompRev
-  nameWithType: Transaction.AddCompRev
-- uid: Typhon.Engine.Transaction.AllocCompRevStorage(Typhon.Engine.Transaction.ComponentInfoBase,System.Int64,System.Int32)
-  name: AllocCompRevStorage(ComponentInfoBase, long, int)
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_AllocCompRevStorage_Typhon_Engine_Transaction_ComponentInfoBase_System_Int64_System_Int32_
-  commentId: M:Typhon.Engine.Transaction.AllocCompRevStorage(Typhon.Engine.Transaction.ComponentInfoBase,System.Int64,System.Int32)
-  name.vb: AllocCompRevStorage(ComponentInfoBase, Long, Integer)
-  fullName: Typhon.Engine.Transaction.AllocCompRevStorage(Typhon.Engine.Transaction.ComponentInfoBase, long, int)
-  fullName.vb: Typhon.Engine.Transaction.AllocCompRevStorage(Typhon.Engine.Transaction.ComponentInfoBase, Long, Integer)
-  nameWithType: Transaction.AllocCompRevStorage(Transaction.ComponentInfoBase, long, int)
-  nameWithType.vb: Transaction.AllocCompRevStorage(Transaction.ComponentInfoBase, Long, Integer)
-- uid: Typhon.Engine.Transaction.AllocCompRevStorage*
-  name: AllocCompRevStorage
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_AllocCompRevStorage_
-  commentId: Overload:Typhon.Engine.Transaction.AllocCompRevStorage
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.AllocCompRevStorage
-  nameWithType: Transaction.AllocCompRevStorage
-- uid: Typhon.Engine.Transaction.CleanUpUnusedEntries(Typhon.Engine.Transaction.ComponentInfoBase,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo@,Typhon.Engine.ChunkRandomAccessor,System.Int64)
-  name: CleanUpUnusedEntries(ComponentInfoBase, ref CompRevInfo, ChunkRandomAccessor, long)
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CleanUpUnusedEntries_Typhon_Engine_Transaction_ComponentInfoBase_Typhon_Engine_Transaction_ComponentInfoBase_CompRevInfo__Typhon_Engine_ChunkRandomAccessor_System_Int64_
-  commentId: M:Typhon.Engine.Transaction.CleanUpUnusedEntries(Typhon.Engine.Transaction.ComponentInfoBase,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo@,Typhon.Engine.ChunkRandomAccessor,System.Int64)
-  name.vb: CleanUpUnusedEntries(ComponentInfoBase, CompRevInfo, ChunkRandomAccessor, Long)
-  fullName: Typhon.Engine.Transaction.CleanUpUnusedEntries(Typhon.Engine.Transaction.ComponentInfoBase, ref Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo, Typhon.Engine.ChunkRandomAccessor, long)
-  fullName.vb: Typhon.Engine.Transaction.CleanUpUnusedEntries(Typhon.Engine.Transaction.ComponentInfoBase, Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo, Typhon.Engine.ChunkRandomAccessor, Long)
-  nameWithType: Transaction.CleanUpUnusedEntries(Transaction.ComponentInfoBase, ref Transaction.ComponentInfoBase.CompRevInfo, ChunkRandomAccessor, long)
-  nameWithType.vb: Transaction.CleanUpUnusedEntries(Transaction.ComponentInfoBase, Transaction.ComponentInfoBase.CompRevInfo, ChunkRandomAccessor, Long)
-- uid: Typhon.Engine.Transaction.CleanUpUnusedEntries*
-  name: CleanUpUnusedEntries
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CleanUpUnusedEntries_
-  commentId: Overload:Typhon.Engine.Transaction.CleanUpUnusedEntries
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.CleanUpUnusedEntries
-  nameWithType: Transaction.CleanUpUnusedEntries
 - uid: Typhon.Engine.Transaction.Commit(Typhon.Engine.Transaction.ConcurrencyConflictHandler)
   name: Commit(ConcurrencyConflictHandler)
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_Commit_Typhon_Engine_Transaction_ConcurrencyConflictHandler_
@@ -18682,22 +19434,6 @@ references:
   commentId: F:Typhon.Engine.Transaction.ComponentInfosMaxCapacity
   fullName: Typhon.Engine.Transaction.ComponentInfosMaxCapacity
   nameWithType: Transaction.ComponentInfosMaxCapacity
-- uid: Typhon.Engine.Transaction.ComputeRevElementCount(System.Int32)
-  name: ComputeRevElementCount(int)
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_ComputeRevElementCount_System_Int32_
-  commentId: M:Typhon.Engine.Transaction.ComputeRevElementCount(System.Int32)
-  name.vb: ComputeRevElementCount(Integer)
-  fullName: Typhon.Engine.Transaction.ComputeRevElementCount(int)
-  fullName.vb: Typhon.Engine.Transaction.ComputeRevElementCount(Integer)
-  nameWithType: Transaction.ComputeRevElementCount(int)
-  nameWithType.vb: Transaction.ComputeRevElementCount(Integer)
-- uid: Typhon.Engine.Transaction.ComputeRevElementCount*
-  name: ComputeRevElementCount
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_ComputeRevElementCount_
-  commentId: Overload:Typhon.Engine.Transaction.ComputeRevElementCount
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.ComputeRevElementCount
-  nameWithType: Transaction.ComputeRevElementCount
 - uid: Typhon.Engine.Transaction.ConcurrencyConflictHandler
   name: Transaction.ConcurrencyConflictHandler
   href: api/Typhon.Engine.Transaction.ConcurrencyConflictHandler.html
@@ -19044,15 +19780,15 @@ references:
   fullName.vb: Typhon.Engine.Transaction.CreateComponentCollectionAccessor(Of T)(Typhon.Engine.ComponentCollection(Of T))
   nameWithType: Transaction.CreateComponentCollectionAccessor<T>(ref ComponentCollection<T>)
   nameWithType.vb: Transaction.CreateComponentCollectionAccessor(Of T)(ComponentCollection(Of T))
-- uid: Typhon.Engine.Transaction.CreateComponent``1(System.Int64,System.Int64,``0@)
-  name: CreateComponent<T>(long, long, ref T)
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CreateComponent__1_System_Int64_System_Int64___0__
-  commentId: M:Typhon.Engine.Transaction.CreateComponent``1(System.Int64,System.Int64,``0@)
-  name.vb: CreateComponent(Of T)(Long, Long, T)
-  fullName: Typhon.Engine.Transaction.CreateComponent<T>(long, long, ref T)
-  fullName.vb: Typhon.Engine.Transaction.CreateComponent(Of T)(Long, Long, T)
-  nameWithType: Transaction.CreateComponent<T>(long, long, ref T)
-  nameWithType.vb: Transaction.CreateComponent(Of T)(Long, Long, T)
+- uid: Typhon.Engine.Transaction.CreateComponent``1(System.Int64,``0@)
+  name: CreateComponent<T>(long, ref T)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CreateComponent__1_System_Int64___0__
+  commentId: M:Typhon.Engine.Transaction.CreateComponent``1(System.Int64,``0@)
+  name.vb: CreateComponent(Of T)(Long, T)
+  fullName: Typhon.Engine.Transaction.CreateComponent<T>(long, ref T)
+  fullName.vb: Typhon.Engine.Transaction.CreateComponent(Of T)(Long, T)
+  nameWithType: Transaction.CreateComponent<T>(long, ref T)
+  nameWithType.vb: Transaction.CreateComponent(Of T)(Long, T)
 - uid: Typhon.Engine.Transaction.CreateComponents*
   name: CreateComponents
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CreateComponents_
@@ -19060,15 +19796,15 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.Transaction.CreateComponents
   nameWithType: Transaction.CreateComponents
-- uid: Typhon.Engine.Transaction.CreateComponents``1(System.Int64,System.Int64,System.ReadOnlySpan{``0})
-  name: CreateComponents<T>(long, long, ReadOnlySpan<T>)
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CreateComponents__1_System_Int64_System_Int64_System_ReadOnlySpan___0__
-  commentId: M:Typhon.Engine.Transaction.CreateComponents``1(System.Int64,System.Int64,System.ReadOnlySpan{``0})
-  name.vb: CreateComponents(Of T)(Long, Long, ReadOnlySpan(Of T))
-  fullName: Typhon.Engine.Transaction.CreateComponents<T>(long, long, System.ReadOnlySpan<T>)
-  fullName.vb: Typhon.Engine.Transaction.CreateComponents(Of T)(Long, Long, System.ReadOnlySpan(Of T))
-  nameWithType: Transaction.CreateComponents<T>(long, long, ReadOnlySpan<T>)
-  nameWithType.vb: Transaction.CreateComponents(Of T)(Long, Long, ReadOnlySpan(Of T))
+- uid: Typhon.Engine.Transaction.CreateComponents``1(System.Int64,System.ReadOnlySpan{``0})
+  name: CreateComponents<T>(long, ReadOnlySpan<T>)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CreateComponents__1_System_Int64_System_ReadOnlySpan___0__
+  commentId: M:Typhon.Engine.Transaction.CreateComponents``1(System.Int64,System.ReadOnlySpan{``0})
+  name.vb: CreateComponents(Of T)(Long, ReadOnlySpan(Of T))
+  fullName: Typhon.Engine.Transaction.CreateComponents<T>(long, System.ReadOnlySpan<T>)
+  fullName.vb: Typhon.Engine.Transaction.CreateComponents(Of T)(Long, System.ReadOnlySpan(Of T))
+  nameWithType: Transaction.CreateComponents<T>(long, ReadOnlySpan<T>)
+  nameWithType.vb: Transaction.CreateComponents(Of T)(Long, ReadOnlySpan(Of T))
 - uid: Typhon.Engine.Transaction.CreateEntity*
   name: CreateEntity
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_CreateEntity_
@@ -19348,54 +20084,6 @@ references:
   fullName.vb: Typhon.Engine.Transaction.GetRevisionCount(Of T)(Long)
   nameWithType: Transaction.GetRevisionCount<T>(long)
   nameWithType.vb: Transaction.GetRevisionCount(Of T)(Long)
-- uid: Typhon.Engine.Transaction.GetRevisionElement(Typhon.Engine.ChunkRandomAccessor,System.Int32,System.Int16,System.Span{Typhon.Engine.CompRevStorageElement}@)
-  name: GetRevisionElement(ChunkRandomAccessor, int, short, out Span<CompRevStorageElement>)
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetRevisionElement_Typhon_Engine_ChunkRandomAccessor_System_Int32_System_Int16_System_Span_Typhon_Engine_CompRevStorageElement___
-  commentId: M:Typhon.Engine.Transaction.GetRevisionElement(Typhon.Engine.ChunkRandomAccessor,System.Int32,System.Int16,System.Span{Typhon.Engine.CompRevStorageElement}@)
-  name.vb: GetRevisionElement(ChunkRandomAccessor, Integer, Short, Span(Of CompRevStorageElement))
-  fullName: Typhon.Engine.Transaction.GetRevisionElement(Typhon.Engine.ChunkRandomAccessor, int, short, out System.Span<Typhon.Engine.CompRevStorageElement>)
-  fullName.vb: Typhon.Engine.Transaction.GetRevisionElement(Typhon.Engine.ChunkRandomAccessor, Integer, Short, System.Span(Of Typhon.Engine.CompRevStorageElement))
-  nameWithType: Transaction.GetRevisionElement(ChunkRandomAccessor, int, short, out Span<CompRevStorageElement>)
-  nameWithType.vb: Transaction.GetRevisionElement(ChunkRandomAccessor, Integer, Short, Span(Of CompRevStorageElement))
-- uid: Typhon.Engine.Transaction.GetRevisionElement*
-  name: GetRevisionElement
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetRevisionElement_
-  commentId: Overload:Typhon.Engine.Transaction.GetRevisionElement
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.GetRevisionElement
-  nameWithType: Transaction.GetRevisionElement
-- uid: Typhon.Engine.Transaction.GetRevisionLocation(Typhon.Engine.ChunkRandomAccessor,System.Int32,System.Int16,System.Int32@)
-  name: GetRevisionLocation(ChunkRandomAccessor, int, short, out int)
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetRevisionLocation_Typhon_Engine_ChunkRandomAccessor_System_Int32_System_Int16_System_Int32__
-  commentId: M:Typhon.Engine.Transaction.GetRevisionLocation(Typhon.Engine.ChunkRandomAccessor,System.Int32,System.Int16,System.Int32@)
-  name.vb: GetRevisionLocation(ChunkRandomAccessor, Integer, Short, Integer)
-  fullName: Typhon.Engine.Transaction.GetRevisionLocation(Typhon.Engine.ChunkRandomAccessor, int, short, out int)
-  fullName.vb: Typhon.Engine.Transaction.GetRevisionLocation(Typhon.Engine.ChunkRandomAccessor, Integer, Short, Integer)
-  nameWithType: Transaction.GetRevisionLocation(ChunkRandomAccessor, int, short, out int)
-  nameWithType.vb: Transaction.GetRevisionLocation(ChunkRandomAccessor, Integer, Short, Integer)
-- uid: Typhon.Engine.Transaction.GetRevisionLocation*
-  name: GetRevisionLocation
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GetRevisionLocation_
-  commentId: Overload:Typhon.Engine.Transaction.GetRevisionLocation
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.GetRevisionLocation
-  nameWithType: Transaction.GetRevisionLocation
-- uid: Typhon.Engine.Transaction.GrowChain(Typhon.Engine.Transaction.ComponentInfoBase,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo@,Typhon.Engine.CompRevStorageHeader@)
-  name: GrowChain(ComponentInfoBase, ref CompRevInfo, ref CompRevStorageHeader)
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GrowChain_Typhon_Engine_Transaction_ComponentInfoBase_Typhon_Engine_Transaction_ComponentInfoBase_CompRevInfo__Typhon_Engine_CompRevStorageHeader__
-  commentId: M:Typhon.Engine.Transaction.GrowChain(Typhon.Engine.Transaction.ComponentInfoBase,Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo@,Typhon.Engine.CompRevStorageHeader@)
-  name.vb: GrowChain(ComponentInfoBase, CompRevInfo, CompRevStorageHeader)
-  fullName: Typhon.Engine.Transaction.GrowChain(Typhon.Engine.Transaction.ComponentInfoBase, ref Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo, ref Typhon.Engine.CompRevStorageHeader)
-  fullName.vb: Typhon.Engine.Transaction.GrowChain(Typhon.Engine.Transaction.ComponentInfoBase, Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo, Typhon.Engine.CompRevStorageHeader)
-  nameWithType: Transaction.GrowChain(Transaction.ComponentInfoBase, ref Transaction.ComponentInfoBase.CompRevInfo, ref CompRevStorageHeader)
-  nameWithType.vb: Transaction.GrowChain(Transaction.ComponentInfoBase, Transaction.ComponentInfoBase.CompRevInfo, CompRevStorageHeader)
-- uid: Typhon.Engine.Transaction.GrowChain*
-  name: GrowChain
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_GrowChain_
-  commentId: Overload:Typhon.Engine.Transaction.GrowChain
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.GrowChain
-  nameWithType: Transaction.GrowChain
 - uid: Typhon.Engine.Transaction.Init(Typhon.Engine.DatabaseEngine,System.Int64)
   name: Init(DatabaseEngine, long)
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_Init_Typhon_Engine_DatabaseEngine_System_Int64_
@@ -19636,429 +20324,6 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.Transaction.Reset
   nameWithType: Transaction.Reset
-- uid: Typhon.Engine.Transaction.RevisionEnumerator
-  name: Transaction.RevisionEnumerator
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html
-  commentId: T:Typhon.Engine.Transaction.RevisionEnumerator
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator
-  nameWithType: Transaction.RevisionEnumerator
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.#ctor(Typhon.Engine.ChunkRandomAccessor,System.Int32,System.Boolean,System.Boolean)
-  name: RevisionEnumerator(ChunkRandomAccessor, int, bool, bool)
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator__ctor_Typhon_Engine_ChunkRandomAccessor_System_Int32_System_Boolean_System_Boolean_
-  commentId: M:Typhon.Engine.Transaction.RevisionEnumerator.#ctor(Typhon.Engine.ChunkRandomAccessor,System.Int32,System.Boolean,System.Boolean)
-  name.vb: New(ChunkRandomAccessor, Integer, Boolean, Boolean)
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.RevisionEnumerator(Typhon.Engine.ChunkRandomAccessor, int, bool, bool)
-  fullName.vb: Typhon.Engine.Transaction.RevisionEnumerator.New(Typhon.Engine.ChunkRandomAccessor, Integer, Boolean, Boolean)
-  nameWithType: Transaction.RevisionEnumerator.RevisionEnumerator(ChunkRandomAccessor, int, bool, bool)
-  nameWithType.vb: Transaction.RevisionEnumerator.New(ChunkRandomAccessor, Integer, Boolean, Boolean)
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.#ctor*
-  name: RevisionEnumerator
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator__ctor_
-  commentId: Overload:Typhon.Engine.Transaction.RevisionEnumerator.#ctor
-  isSpec: "True"
-  name.vb: New
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.RevisionEnumerator
-  fullName.vb: Typhon.Engine.Transaction.RevisionEnumerator.New
-  nameWithType: Transaction.RevisionEnumerator.RevisionEnumerator
-  nameWithType.vb: Transaction.RevisionEnumerator.New
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.CurChunkId
-  name: CurChunkId
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_CurChunkId
-  commentId: P:Typhon.Engine.Transaction.RevisionEnumerator.CurChunkId
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.CurChunkId
-  nameWithType: Transaction.RevisionEnumerator.CurChunkId
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.CurChunkId*
-  name: CurChunkId
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_CurChunkId_
-  commentId: Overload:Typhon.Engine.Transaction.RevisionEnumerator.CurChunkId
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.CurChunkId
-  nameWithType: Transaction.RevisionEnumerator.CurChunkId
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.Current
-  name: Current
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_Current
-  commentId: P:Typhon.Engine.Transaction.RevisionEnumerator.Current
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.Current
-  nameWithType: Transaction.RevisionEnumerator.Current
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.Current*
-  name: Current
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_Current_
-  commentId: Overload:Typhon.Engine.Transaction.RevisionEnumerator.Current
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.Current
-  nameWithType: Transaction.RevisionEnumerator.Current
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.CurrentAsSpan
-  name: CurrentAsSpan
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_CurrentAsSpan
-  commentId: P:Typhon.Engine.Transaction.RevisionEnumerator.CurrentAsSpan
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.CurrentAsSpan
-  nameWithType: Transaction.RevisionEnumerator.CurrentAsSpan
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.CurrentAsSpan*
-  name: CurrentAsSpan
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_CurrentAsSpan_
-  commentId: Overload:Typhon.Engine.Transaction.RevisionEnumerator.CurrentAsSpan
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.CurrentAsSpan
-  nameWithType: Transaction.RevisionEnumerator.CurrentAsSpan
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.Dispose
-  name: Dispose()
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_Dispose
-  commentId: M:Typhon.Engine.Transaction.RevisionEnumerator.Dispose
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.Dispose()
-  nameWithType: Transaction.RevisionEnumerator.Dispose()
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.Dispose*
-  name: Dispose
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_Dispose_
-  commentId: Overload:Typhon.Engine.Transaction.RevisionEnumerator.Dispose
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.Dispose
-  nameWithType: Transaction.RevisionEnumerator.Dispose
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.Elements
-  name: Elements
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_Elements
-  commentId: P:Typhon.Engine.Transaction.RevisionEnumerator.Elements
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.Elements
-  nameWithType: Transaction.RevisionEnumerator.Elements
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.Elements*
-  name: Elements
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_Elements_
-  commentId: Overload:Typhon.Engine.Transaction.RevisionEnumerator.Elements
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.Elements
-  nameWithType: Transaction.RevisionEnumerator.Elements
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.HasLopped
-  name: HasLopped
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_HasLopped
-  commentId: P:Typhon.Engine.Transaction.RevisionEnumerator.HasLopped
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.HasLopped
-  nameWithType: Transaction.RevisionEnumerator.HasLopped
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.HasLopped*
-  name: HasLopped
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_HasLopped_
-  commentId: Overload:Typhon.Engine.Transaction.RevisionEnumerator.HasLopped
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.HasLopped
-  nameWithType: Transaction.RevisionEnumerator.HasLopped
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.Header
-  name: Header
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_Header
-  commentId: P:Typhon.Engine.Transaction.RevisionEnumerator.Header
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.Header
-  nameWithType: Transaction.RevisionEnumerator.Header
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.Header*
-  name: Header
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_Header_
-  commentId: Overload:Typhon.Engine.Transaction.RevisionEnumerator.Header
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.Header
-  nameWithType: Transaction.RevisionEnumerator.Header
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.IndexInChunk
-  name: IndexInChunk
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_IndexInChunk
-  commentId: P:Typhon.Engine.Transaction.RevisionEnumerator.IndexInChunk
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.IndexInChunk
-  nameWithType: Transaction.RevisionEnumerator.IndexInChunk
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.IndexInChunk*
-  name: IndexInChunk
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_IndexInChunk_
-  commentId: Overload:Typhon.Engine.Transaction.RevisionEnumerator.IndexInChunk
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.IndexInChunk
-  nameWithType: Transaction.RevisionEnumerator.IndexInChunk
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.IsFirstChunk
-  name: IsFirstChunk
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_IsFirstChunk
-  commentId: P:Typhon.Engine.Transaction.RevisionEnumerator.IsFirstChunk
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.IsFirstChunk
-  nameWithType: Transaction.RevisionEnumerator.IsFirstChunk
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.IsFirstChunk*
-  name: IsFirstChunk
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_IsFirstChunk_
-  commentId: Overload:Typhon.Engine.Transaction.RevisionEnumerator.IsFirstChunk
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.IsFirstChunk
-  nameWithType: Transaction.RevisionEnumerator.IsFirstChunk
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.MoveNext
-  name: MoveNext()
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_MoveNext
-  commentId: M:Typhon.Engine.Transaction.RevisionEnumerator.MoveNext
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.MoveNext()
-  nameWithType: Transaction.RevisionEnumerator.MoveNext()
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.MoveNext*
-  name: MoveNext
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_MoveNext_
-  commentId: Overload:Typhon.Engine.Transaction.RevisionEnumerator.MoveNext
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.MoveNext
-  nameWithType: Transaction.RevisionEnumerator.MoveNext
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.NextChunkId
-  name: NextChunkId
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_NextChunkId
-  commentId: P:Typhon.Engine.Transaction.RevisionEnumerator.NextChunkId
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.NextChunkId
-  nameWithType: Transaction.RevisionEnumerator.NextChunkId
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.NextChunkId*
-  name: NextChunkId
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_NextChunkId_
-  commentId: Overload:Typhon.Engine.Transaction.RevisionEnumerator.NextChunkId
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.NextChunkId
-  nameWithType: Transaction.RevisionEnumerator.NextChunkId
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.RevisionIndex
-  name: RevisionIndex
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_RevisionIndex
-  commentId: P:Typhon.Engine.Transaction.RevisionEnumerator.RevisionIndex
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.RevisionIndex
-  nameWithType: Transaction.RevisionEnumerator.RevisionIndex
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.RevisionIndex*
-  name: RevisionIndex
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_RevisionIndex_
-  commentId: Overload:Typhon.Engine.Transaction.RevisionEnumerator.RevisionIndex
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.RevisionIndex
-  nameWithType: Transaction.RevisionEnumerator.RevisionIndex
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.StepToChunk(System.Int32,System.Boolean)
-  name: StepToChunk(int, bool)
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_StepToChunk_System_Int32_System_Boolean_
-  commentId: M:Typhon.Engine.Transaction.RevisionEnumerator.StepToChunk(System.Int32,System.Boolean)
-  name.vb: StepToChunk(Integer, Boolean)
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.StepToChunk(int, bool)
-  fullName.vb: Typhon.Engine.Transaction.RevisionEnumerator.StepToChunk(Integer, Boolean)
-  nameWithType: Transaction.RevisionEnumerator.StepToChunk(int, bool)
-  nameWithType.vb: Transaction.RevisionEnumerator.StepToChunk(Integer, Boolean)
-- uid: Typhon.Engine.Transaction.RevisionEnumerator.StepToChunk*
-  name: StepToChunk
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator_StepToChunk_
-  commentId: Overload:Typhon.Engine.Transaction.RevisionEnumerator.StepToChunk
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator.StepToChunk
-  nameWithType: Transaction.RevisionEnumerator.StepToChunk
-- uid: Typhon.Engine.Transaction.RevisionEnumerator._compRevTableAccessor
-  name: _compRevTableAccessor
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator__compRevTableAccessor
-  commentId: F:Typhon.Engine.Transaction.RevisionEnumerator._compRevTableAccessor
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator._compRevTableAccessor
-  nameWithType: Transaction.RevisionEnumerator._compRevTableAccessor
-- uid: Typhon.Engine.Transaction.RevisionEnumerator._curChunkHandle
-  name: _curChunkHandle
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator__curChunkHandle
-  commentId: F:Typhon.Engine.Transaction.RevisionEnumerator._curChunkHandle
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator._curChunkHandle
-  nameWithType: Transaction.RevisionEnumerator._curChunkHandle
-- uid: Typhon.Engine.Transaction.RevisionEnumerator._elements
-  name: _elements
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator__elements
-  commentId: F:Typhon.Engine.Transaction.RevisionEnumerator._elements
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator._elements
-  nameWithType: Transaction.RevisionEnumerator._elements
-- uid: Typhon.Engine.Transaction.RevisionEnumerator._exclusiveAccess
-  name: _exclusiveAccess
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator__exclusiveAccess
-  commentId: F:Typhon.Engine.Transaction.RevisionEnumerator._exclusiveAccess
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator._exclusiveAccess
-  nameWithType: Transaction.RevisionEnumerator._exclusiveAccess
-- uid: Typhon.Engine.Transaction.RevisionEnumerator._firstChunkHandle
-  name: _firstChunkHandle
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator__firstChunkHandle
-  commentId: F:Typhon.Engine.Transaction.RevisionEnumerator._firstChunkHandle
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator._firstChunkHandle
-  nameWithType: Transaction.RevisionEnumerator._firstChunkHandle
-- uid: Typhon.Engine.Transaction.RevisionEnumerator._firstChunkId
-  name: _firstChunkId
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator__firstChunkId
-  commentId: F:Typhon.Engine.Transaction.RevisionEnumerator._firstChunkId
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator._firstChunkId
-  nameWithType: Transaction.RevisionEnumerator._firstChunkId
-- uid: Typhon.Engine.Transaction.RevisionEnumerator._hasLopped
-  name: _hasLopped
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator__hasLopped
-  commentId: F:Typhon.Engine.Transaction.RevisionEnumerator._hasLopped
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator._hasLopped
-  nameWithType: Transaction.RevisionEnumerator._hasLopped
-- uid: Typhon.Engine.Transaction.RevisionEnumerator._header
-  name: _header
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator__header
-  commentId: F:Typhon.Engine.Transaction.RevisionEnumerator._header
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator._header
-  nameWithType: Transaction.RevisionEnumerator._header
-- uid: Typhon.Engine.Transaction.RevisionEnumerator._indexInChunk
-  name: _indexInChunk
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator__indexInChunk
-  commentId: F:Typhon.Engine.Transaction.RevisionEnumerator._indexInChunk
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator._indexInChunk
-  nameWithType: Transaction.RevisionEnumerator._indexInChunk
-- uid: Typhon.Engine.Transaction.RevisionEnumerator._itemCountLeft
-  name: _itemCountLeft
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator__itemCountLeft
-  commentId: F:Typhon.Engine.Transaction.RevisionEnumerator._itemCountLeft
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator._itemCountLeft
-  nameWithType: Transaction.RevisionEnumerator._itemCountLeft
-- uid: Typhon.Engine.Transaction.RevisionEnumerator._nextChunkId
-  name: _nextChunkId
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator__nextChunkId
-  commentId: F:Typhon.Engine.Transaction.RevisionEnumerator._nextChunkId
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator._nextChunkId
-  nameWithType: Transaction.RevisionEnumerator._nextChunkId
-- uid: Typhon.Engine.Transaction.RevisionEnumerator._revisionIndex
-  name: _revisionIndex
-  href: api/Typhon.Engine.Transaction.RevisionEnumerator.html#Typhon_Engine_Transaction_RevisionEnumerator__revisionIndex
-  commentId: F:Typhon.Engine.Transaction.RevisionEnumerator._revisionIndex
-  fullName: Typhon.Engine.Transaction.RevisionEnumerator._revisionIndex
-  nameWithType: Transaction.RevisionEnumerator._revisionIndex
-- uid: Typhon.Engine.Transaction.RevisionWalker
-  name: Transaction.RevisionWalker
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html
-  commentId: T:Typhon.Engine.Transaction.RevisionWalker
-  fullName: Typhon.Engine.Transaction.RevisionWalker
-  nameWithType: Transaction.RevisionWalker
-- uid: Typhon.Engine.Transaction.RevisionWalker.#ctor(Typhon.Engine.ChunkRandomAccessor,System.Int32)
-  name: RevisionWalker(ChunkRandomAccessor, int)
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker__ctor_Typhon_Engine_ChunkRandomAccessor_System_Int32_
-  commentId: M:Typhon.Engine.Transaction.RevisionWalker.#ctor(Typhon.Engine.ChunkRandomAccessor,System.Int32)
-  name.vb: New(ChunkRandomAccessor, Integer)
-  fullName: Typhon.Engine.Transaction.RevisionWalker.RevisionWalker(Typhon.Engine.ChunkRandomAccessor, int)
-  fullName.vb: Typhon.Engine.Transaction.RevisionWalker.New(Typhon.Engine.ChunkRandomAccessor, Integer)
-  nameWithType: Transaction.RevisionWalker.RevisionWalker(ChunkRandomAccessor, int)
-  nameWithType.vb: Transaction.RevisionWalker.New(ChunkRandomAccessor, Integer)
-- uid: Typhon.Engine.Transaction.RevisionWalker.#ctor*
-  name: RevisionWalker
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker__ctor_
-  commentId: Overload:Typhon.Engine.Transaction.RevisionWalker.#ctor
-  isSpec: "True"
-  name.vb: New
-  fullName: Typhon.Engine.Transaction.RevisionWalker.RevisionWalker
-  fullName.vb: Typhon.Engine.Transaction.RevisionWalker.New
-  nameWithType: Transaction.RevisionWalker.RevisionWalker
-  nameWithType.vb: Transaction.RevisionWalker.New
-- uid: Typhon.Engine.Transaction.RevisionWalker.CurChunkId
-  name: CurChunkId
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker_CurChunkId
-  commentId: P:Typhon.Engine.Transaction.RevisionWalker.CurChunkId
-  fullName: Typhon.Engine.Transaction.RevisionWalker.CurChunkId
-  nameWithType: Transaction.RevisionWalker.CurChunkId
-- uid: Typhon.Engine.Transaction.RevisionWalker.CurChunkId*
-  name: CurChunkId
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker_CurChunkId_
-  commentId: Overload:Typhon.Engine.Transaction.RevisionWalker.CurChunkId
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.RevisionWalker.CurChunkId
-  nameWithType: Transaction.RevisionWalker.CurChunkId
-- uid: Typhon.Engine.Transaction.RevisionWalker.Dispose
-  name: Dispose()
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker_Dispose
-  commentId: M:Typhon.Engine.Transaction.RevisionWalker.Dispose
-  fullName: Typhon.Engine.Transaction.RevisionWalker.Dispose()
-  nameWithType: Transaction.RevisionWalker.Dispose()
-- uid: Typhon.Engine.Transaction.RevisionWalker.Dispose*
-  name: Dispose
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker_Dispose_
-  commentId: Overload:Typhon.Engine.Transaction.RevisionWalker.Dispose
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.RevisionWalker.Dispose
-  nameWithType: Transaction.RevisionWalker.Dispose
-- uid: Typhon.Engine.Transaction.RevisionWalker.Elements
-  name: Elements
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker_Elements
-  commentId: P:Typhon.Engine.Transaction.RevisionWalker.Elements
-  fullName: Typhon.Engine.Transaction.RevisionWalker.Elements
-  nameWithType: Transaction.RevisionWalker.Elements
-- uid: Typhon.Engine.Transaction.RevisionWalker.Elements*
-  name: Elements
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker_Elements_
-  commentId: Overload:Typhon.Engine.Transaction.RevisionWalker.Elements
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.RevisionWalker.Elements
-  nameWithType: Transaction.RevisionWalker.Elements
-- uid: Typhon.Engine.Transaction.RevisionWalker.Header
-  name: Header
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker_Header
-  commentId: P:Typhon.Engine.Transaction.RevisionWalker.Header
-  fullName: Typhon.Engine.Transaction.RevisionWalker.Header
-  nameWithType: Transaction.RevisionWalker.Header
-- uid: Typhon.Engine.Transaction.RevisionWalker.Header*
-  name: Header
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker_Header_
-  commentId: Overload:Typhon.Engine.Transaction.RevisionWalker.Header
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.RevisionWalker.Header
-  nameWithType: Transaction.RevisionWalker.Header
-- uid: Typhon.Engine.Transaction.RevisionWalker.NextChunkId
-  name: NextChunkId
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker_NextChunkId
-  commentId: P:Typhon.Engine.Transaction.RevisionWalker.NextChunkId
-  fullName: Typhon.Engine.Transaction.RevisionWalker.NextChunkId
-  nameWithType: Transaction.RevisionWalker.NextChunkId
-- uid: Typhon.Engine.Transaction.RevisionWalker.NextChunkId*
-  name: NextChunkId
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker_NextChunkId_
-  commentId: Overload:Typhon.Engine.Transaction.RevisionWalker.NextChunkId
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.RevisionWalker.NextChunkId
-  nameWithType: Transaction.RevisionWalker.NextChunkId
-- uid: Typhon.Engine.Transaction.RevisionWalker.Step(System.Int32,System.Boolean,System.Boolean@)
-  name: Step(int, bool, out bool)
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker_Step_System_Int32_System_Boolean_System_Boolean__
-  commentId: M:Typhon.Engine.Transaction.RevisionWalker.Step(System.Int32,System.Boolean,System.Boolean@)
-  name.vb: Step(Integer, Boolean, Boolean)
-  fullName: Typhon.Engine.Transaction.RevisionWalker.Step(int, bool, out bool)
-  fullName.vb: Typhon.Engine.Transaction.RevisionWalker.Step(Integer, Boolean, Boolean)
-  nameWithType: Transaction.RevisionWalker.Step(int, bool, out bool)
-  nameWithType.vb: Transaction.RevisionWalker.Step(Integer, Boolean, Boolean)
-- uid: Typhon.Engine.Transaction.RevisionWalker.Step*
-  name: Step
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker_Step_
-  commentId: Overload:Typhon.Engine.Transaction.RevisionWalker.Step
-  isSpec: "True"
-  fullName: Typhon.Engine.Transaction.RevisionWalker.Step
-  nameWithType: Transaction.RevisionWalker.Step
-- uid: Typhon.Engine.Transaction.RevisionWalker._accessor
-  name: _accessor
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker__accessor
-  commentId: F:Typhon.Engine.Transaction.RevisionWalker._accessor
-  fullName: Typhon.Engine.Transaction.RevisionWalker._accessor
-  nameWithType: Transaction.RevisionWalker._accessor
-- uid: Typhon.Engine.Transaction.RevisionWalker._curChunkHandle
-  name: _curChunkHandle
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker__curChunkHandle
-  commentId: F:Typhon.Engine.Transaction.RevisionWalker._curChunkHandle
-  fullName: Typhon.Engine.Transaction.RevisionWalker._curChunkHandle
-  nameWithType: Transaction.RevisionWalker._curChunkHandle
-- uid: Typhon.Engine.Transaction.RevisionWalker._curChunkId
-  name: _curChunkId
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker__curChunkId
-  commentId: F:Typhon.Engine.Transaction.RevisionWalker._curChunkId
-  fullName: Typhon.Engine.Transaction.RevisionWalker._curChunkId
-  nameWithType: Transaction.RevisionWalker._curChunkId
-- uid: Typhon.Engine.Transaction.RevisionWalker._elements
-  name: _elements
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker__elements
-  commentId: F:Typhon.Engine.Transaction.RevisionWalker._elements
-  fullName: Typhon.Engine.Transaction.RevisionWalker._elements
-  nameWithType: Transaction.RevisionWalker._elements
-- uid: Typhon.Engine.Transaction.RevisionWalker._firstChunkHandle
-  name: _firstChunkHandle
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker__firstChunkHandle
-  commentId: F:Typhon.Engine.Transaction.RevisionWalker._firstChunkHandle
-  fullName: Typhon.Engine.Transaction.RevisionWalker._firstChunkHandle
-  nameWithType: Transaction.RevisionWalker._firstChunkHandle
-- uid: Typhon.Engine.Transaction.RevisionWalker._firstChunkId
-  name: _firstChunkId
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker__firstChunkId
-  commentId: F:Typhon.Engine.Transaction.RevisionWalker._firstChunkId
-  fullName: Typhon.Engine.Transaction.RevisionWalker._firstChunkId
-  nameWithType: Transaction.RevisionWalker._firstChunkId
-- uid: Typhon.Engine.Transaction.RevisionWalker._header
-  name: _header
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker__header
-  commentId: F:Typhon.Engine.Transaction.RevisionWalker._header
-  fullName: Typhon.Engine.Transaction.RevisionWalker._header
-  nameWithType: Transaction.RevisionWalker._header
-- uid: Typhon.Engine.Transaction.RevisionWalker._nextChunkId
-  name: _nextChunkId
-  href: api/Typhon.Engine.Transaction.RevisionWalker.html#Typhon_Engine_Transaction_RevisionWalker__nextChunkId
-  commentId: F:Typhon.Engine.Transaction.RevisionWalker._nextChunkId
-  fullName: Typhon.Engine.Transaction.RevisionWalker._nextChunkId
-  nameWithType: Transaction.RevisionWalker._nextChunkId
 - uid: Typhon.Engine.Transaction.Rollback
   name: Rollback()
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_Rollback
@@ -20147,15 +20412,15 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.Transaction.UpdateComponent
   nameWithType: Transaction.UpdateComponent
-- uid: Typhon.Engine.Transaction.UpdateComponent``1(System.Int64,System.Int64,``0@)
-  name: UpdateComponent<T>(long, long, ref T)
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_UpdateComponent__1_System_Int64_System_Int64___0__
-  commentId: M:Typhon.Engine.Transaction.UpdateComponent``1(System.Int64,System.Int64,``0@)
-  name.vb: UpdateComponent(Of T)(Long, Long, T)
-  fullName: Typhon.Engine.Transaction.UpdateComponent<T>(long, long, ref T)
-  fullName.vb: Typhon.Engine.Transaction.UpdateComponent(Of T)(Long, Long, T)
-  nameWithType: Transaction.UpdateComponent<T>(long, long, ref T)
-  nameWithType.vb: Transaction.UpdateComponent(Of T)(Long, Long, T)
+- uid: Typhon.Engine.Transaction.UpdateComponent``1(System.Int64,``0@)
+  name: UpdateComponent<T>(long, ref T)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_UpdateComponent__1_System_Int64___0__
+  commentId: M:Typhon.Engine.Transaction.UpdateComponent``1(System.Int64,``0@)
+  name.vb: UpdateComponent(Of T)(Long, T)
+  fullName: Typhon.Engine.Transaction.UpdateComponent<T>(long, ref T)
+  fullName.vb: Typhon.Engine.Transaction.UpdateComponent(Of T)(Long, T)
+  nameWithType: Transaction.UpdateComponent<T>(long, ref T)
+  nameWithType.vb: Transaction.UpdateComponent(Of T)(Long, T)
 - uid: Typhon.Engine.Transaction.UpdateComponents*
   name: UpdateComponents
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_UpdateComponents_
@@ -20163,15 +20428,15 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.Transaction.UpdateComponents
   nameWithType: Transaction.UpdateComponents
-- uid: Typhon.Engine.Transaction.UpdateComponents``1(System.Int64,System.Int64,System.ReadOnlySpan{``0})
-  name: UpdateComponents<T>(long, long, ReadOnlySpan<T>)
-  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_UpdateComponents__1_System_Int64_System_Int64_System_ReadOnlySpan___0__
-  commentId: M:Typhon.Engine.Transaction.UpdateComponents``1(System.Int64,System.Int64,System.ReadOnlySpan{``0})
-  name.vb: UpdateComponents(Of T)(Long, Long, ReadOnlySpan(Of T))
-  fullName: Typhon.Engine.Transaction.UpdateComponents<T>(long, long, System.ReadOnlySpan<T>)
-  fullName.vb: Typhon.Engine.Transaction.UpdateComponents(Of T)(Long, Long, System.ReadOnlySpan(Of T))
-  nameWithType: Transaction.UpdateComponents<T>(long, long, ReadOnlySpan<T>)
-  nameWithType.vb: Transaction.UpdateComponents(Of T)(Long, Long, ReadOnlySpan(Of T))
+- uid: Typhon.Engine.Transaction.UpdateComponents``1(System.Int64,System.ReadOnlySpan{``0})
+  name: UpdateComponents<T>(long, ReadOnlySpan<T>)
+  href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_UpdateComponents__1_System_Int64_System_ReadOnlySpan___0__
+  commentId: M:Typhon.Engine.Transaction.UpdateComponents``1(System.Int64,System.ReadOnlySpan{``0})
+  name.vb: UpdateComponents(Of T)(Long, ReadOnlySpan(Of T))
+  fullName: Typhon.Engine.Transaction.UpdateComponents<T>(long, System.ReadOnlySpan<T>)
+  fullName.vb: Typhon.Engine.Transaction.UpdateComponents(Of T)(Long, System.ReadOnlySpan(Of T))
+  nameWithType: Transaction.UpdateComponents<T>(long, ReadOnlySpan<T>)
+  nameWithType.vb: Transaction.UpdateComponents(Of T)(Long, ReadOnlySpan(Of T))
 - uid: Typhon.Engine.Transaction.UpdateEntity*
   name: UpdateEntity
   href: api/Typhon.Engine.Transaction.html#Typhon_Engine_Transaction_UpdateEntity_
@@ -20370,6 +20635,19 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.TransactionChain.MinTSN
   nameWithType: TransactionChain.MinTSN
+- uid: Typhon.Engine.TransactionChain.NextFreeId
+  name: NextFreeId
+  href: api/Typhon.Engine.TransactionChain.html#Typhon_Engine_TransactionChain_NextFreeId
+  commentId: P:Typhon.Engine.TransactionChain.NextFreeId
+  fullName: Typhon.Engine.TransactionChain.NextFreeId
+  nameWithType: TransactionChain.NextFreeId
+- uid: Typhon.Engine.TransactionChain.NextFreeId*
+  name: NextFreeId
+  href: api/Typhon.Engine.TransactionChain.html#Typhon_Engine_TransactionChain_NextFreeId_
+  commentId: Overload:Typhon.Engine.TransactionChain.NextFreeId
+  isSpec: "True"
+  fullName: Typhon.Engine.TransactionChain.NextFreeId
+  nameWithType: TransactionChain.NextFreeId
 - uid: Typhon.Engine.TransactionChain.PoolMaxSize
   name: PoolMaxSize
   href: api/Typhon.Engine.TransactionChain.html#Typhon_Engine_TransactionChain_PoolMaxSize

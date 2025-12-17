@@ -139,11 +139,11 @@ Struct CompRevStorageHeader  <a class="header-action link-secondary" title="View
 
   <h2 id="Typhon_Engine_CompRevStorageHeader_remarks">Remarks</h2>
   <div class="markdown level0 remarks"><p>
-The <a class="xref" href="Typhon.Engine.ComponentTable.html#Typhon_Engine_ComponentTable_CompRevTableSegment">CompRevTableSegment</a> is a <a class="xref" href="Typhon.Engine.ChunkBasedSegment.html">ChunkBasedSegment</a> with chunks of <a class="xref" href="Typhon.Engine.ComponentTable.html#Typhon_Engine_ComponentTable_CompRevChunkSize">CompRevChunkSize</a> bytes.
-Data is stored as a chain of chunks, the first one contains this header and is followed by <a class="xref" href="Typhon.Engine.ComponentTable.html#Typhon_Engine_ComponentTable_CompRevCountInRoot">CompRevCountInRoot</a> number
+The <a class="xref" href="Typhon.Engine.ComponentTable.html#Typhon_Engine_ComponentTable_CompRevTableSegment">CompRevTableSegment</a> is a <a class="xref" href="Typhon.Engine.ChunkBasedSegment.html">ChunkBasedSegment</a> with chunks of <a class="xref" href="Typhon.Engine.ComponentRevisionManager.html#Typhon_Engine_ComponentRevisionManager_CompRevChunkSize">CompRevChunkSize</a> bytes.
+Data is stored as a chain of chunks, the first one contains this header and is followed by <a class="xref" href="Typhon.Engine.ComponentRevisionManager.html#Typhon_Engine_ComponentRevisionManager_CompRevCountInRoot">CompRevCountInRoot</a> number
 of <a class="xref" href="Typhon.Engine.CompRevStorageElement.html">CompRevStorageElement</a> elements.
 The following chunks in the chain have just an integer as header (giving the next chunk in the chain) and can
-store <a class="xref" href="Typhon.Engine.ComponentTable.html#Typhon_Engine_ComponentTable_CompRevCountInNext">CompRevCountInNext</a> number of <a class="xref" href="Typhon.Engine.CompRevStorageElement.html">CompRevStorageElement</a> elements.
+store <a class="xref" href="Typhon.Engine.ComponentRevisionManager.html#Typhon_Engine_ComponentRevisionManager_CompRevCountInNext">CompRevCountInNext</a> number of <a class="xref" href="Typhon.Engine.CompRevStorageElement.html">CompRevStorageElement</a> elements.
 </p>
 <p>
 The chain is a circular buffer, location of the first item is given through <a class="xref" href="Typhon.Engine.CompRevStorageHeader.html#Typhon_Engine_CompRevStorageHeader_FirstItemIndex">FirstItemIndex</a> 

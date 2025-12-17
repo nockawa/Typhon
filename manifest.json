@@ -1160,6 +1160,48 @@
     },
     {
       "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ComponentRevision.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ComponentRevision.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ComponentRevision",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ComponentRevisionManager.ElementRevisionHandle",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ComponentRevisionManager.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ComponentRevisionManager.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ComponentRevisionManager",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.ComponentTable.yml",
       "output": {
         ".html": {
@@ -1958,6 +2000,34 @@
     },
     {
       "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.RevisionEnumerator.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.RevisionEnumerator.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.RevisionEnumerator",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.RevisionWalker.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.RevisionWalker.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.RevisionWalker",
+      "Summary": null
+    },
+    {
+      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.RootFileHeader.yml",
       "output": {
         ".html": {
@@ -2262,34 +2332,6 @@
       "Uid": null,
       "IsMRef": true,
       "Title": "Typhon.Engine.Transaction.ReadOnlyCollectionEnumerator<T>",
-      "Summary": null
-    },
-    {
-      "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.Transaction.RevisionEnumerator.yml",
-      "output": {
-        ".html": {
-          "relative_path": "api/Typhon.Engine.Transaction.RevisionEnumerator.html"
-        }
-      },
-      "version": "",
-      "Uid": null,
-      "IsMRef": true,
-      "Title": "Typhon.Engine.Transaction.RevisionEnumerator",
-      "Summary": null
-    },
-    {
-      "type": "ManagedReference",
-      "source_relative_path": "api/Typhon.Engine.Transaction.RevisionWalker.yml",
-      "output": {
-        ".html": {
-          "relative_path": "api/Typhon.Engine.Transaction.RevisionWalker.html"
-        }
-      },
-      "version": "",
-      "Uid": null,
-      "IsMRef": true,
-      "Title": "Typhon.Engine.Transaction.RevisionWalker",
       "Summary": null
     },
     {
