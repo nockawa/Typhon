@@ -1,6 +1,7 @@
 using JetBrains.Annotations;
 using System;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine;
 
@@ -17,15 +18,9 @@ public static class MathExtensions
 
     #region Methods
 
-    public static string Bandwidth(int size, double elapsed)
-    {
-        return string.Create(DefaultCulture, $"{(size / elapsed).FriendlySize()}/sec");
-    }
+    public static string Bandwidth(int size, double elapsed) => string.Create(DefaultCulture, $"{(size / elapsed).FriendlySize()}/sec");
 
-    public static string Bandwidth(long size, double elapsed)
-    {
-        return string.Create(DefaultCulture, $"{(size / elapsed).FriendlySize()}/sec");
-    }
+    public static string Bandwidth(long size, double elapsed) => string.Create(DefaultCulture, $"{(size / elapsed).FriendlySize()}/sec");
 
     public static string FriendlySize(this long val)
     {
@@ -112,10 +107,10 @@ public static class MathExtensions
         return string.Create(DefaultCulture, $"{f:0.###}{scalesF[iF]}");
     }
 
-    public static string FriendlyTime(this double elapsed, bool displayRate = true)
+    public static string FriendlyTime(this double val, bool displayRate = true)
     {
         var scalesE = new[] { "sec", "ms", "µs", "ns" };
-        var e = elapsed;
+        var e = val;
         var iE = 0;
         for (; iE < 3; iE++)
         {
@@ -130,7 +125,7 @@ public static class MathExtensions
         if (displayRate)
         {
             var scalesF = new[] { "", "K", "M", "B" };
-            var f = 1 / elapsed;
+            var f = 1 / val;
             var iF = 0;
             for (; iF < 3; iF++)
             {

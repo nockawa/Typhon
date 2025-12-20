@@ -58,8 +58,8 @@ public class DatabaseSchemaTests
 
         dc.CreateComponentBuilder("DBObject", 1)
             .WithPOCO<DBObject>()
-            .WithField(-1, "DBObjectTypeName", FieldType.String64, 0).IsStatic()
-            .WithField(0, "ID", FieldType.Long, 0)
+            .WithField<String64>(-1, "DBObjectTypeName", 0).IsStatic()
+            .WithField<long>(0, "ID", 0)
             .Build();
     }
 

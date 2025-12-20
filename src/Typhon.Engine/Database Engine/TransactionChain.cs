@@ -1,6 +1,7 @@
 ﻿using JetBrains.Annotations;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 
 namespace Typhon.Engine;
 
@@ -13,11 +14,12 @@ internal class TransactionChain : IDisposable
 
     internal Transaction Tail { get; private set; }
 
-    internal long MinTick { get; private set; }
+    internal long MinTSN { get; private set; }
+    internal long NextFreeId => _nextFreeId;
 
     private AccessControl _control;
     private readonly Queue<Transaction> _pool;
-    private int _nextFreeId;
+    private long _nextFreeId;
     
     public TransactionChain()
     {
@@ -41,7 +43,7 @@ internal class TransactionChain : IDisposable
         if (curHead == null)
         {
             Tail = transaction;
-            MinTick = transaction.TransactionTick;
+            MinTSN = transaction.TSN;
         }
     }
 
@@ -80,7 +82,7 @@ internal class TransactionChain : IDisposable
         if (Tail == transaction)
         {
             Tail = transaction.Previous;
-            MinTick = Tail?.TransactionTick ?? 0;
+            MinTSN = Tail?.TSN ?? 0;
         }
 
         if (Head == transaction)
@@ -104,10 +106,16 @@ internal class TransactionChain : IDisposable
         {
             t = new Transaction();
         }
-            
-        t.Init(dbe, _nextFreeId++);
+
+        t.Init(dbe, Interlocked.Increment(ref _nextFreeId));
         _control.ExitExclusiveAccess();
 
+        // Are we getting short on Ids? The max is 1 << 47
+        if (_nextFreeId > (1L << 46))
+        {
+            // TODO Log some warning
+        }
+        
         return t;
     }
 

@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -18,11 +19,13 @@ public sealed class ComponentAttribute : Attribute
 {
     public string Name { get; }
     public int Revision { get; }
+    public bool AllowMultiple { get; }
 
-    public ComponentAttribute(string name, int revision)
+    public ComponentAttribute(string name, int revision, bool allowMultiple = false)
     {
         Name = name;
         Revision = revision;
+        AllowMultiple = allowMultiple;
     }
 }
 
@@ -41,7 +44,7 @@ public sealed class IndexAttribute : Attribute
     public bool AllowMultiple { get; set; }
 }
 
-[Component(SchemaName, 1)]
+[Component(SchemaName, 1, true)]
 [StructLayout(LayoutKind.Sequential)]
 [PublicAPI]
 public struct FieldR1
@@ -49,9 +52,6 @@ public struct FieldR1
     public const string SchemaName = "Typhon.Schema.Field";
 
     public String64 Name;
-
-    [Index(AllowMultiple = true)]
-    public int ComponentFK;
 
     public int FieldId;
     public FieldType Type;
@@ -83,11 +83,6 @@ public struct ComponentR1
     public ComponentCollection<FieldR1> Fields;
 }
 
-[PublicAPI]
-public struct ComponentCollection<T> where T : unmanaged
-{
-}
-
 public class DatabaseEngineOptions
 {
 }
@@ -102,6 +97,8 @@ public class DatabaseEngine : IDisposable
     private ComponentTable _componentsTable;
     private ConcurrentDictionary<Type, ComponentTable> _componentTableByType;
     private long _curPrimaryKey;
+    private ConcurrentDictionary<int, ChunkBasedSegment> _componentCollectionSegmentByStride;
+    private ConcurrentDictionary<Type, VariableSizedBufferSegmentBase> _componentCollectionVSBSByType;
 
     public DatabaseDefinitions DBD { get; }
     public ManagedPagedMMF MMF { get; }
@@ -124,20 +121,23 @@ public class DatabaseEngine : IDisposable
         MMF = mmf;
         _log = log;
         _options = options;
+        _componentCollectionSegmentByStride = new ConcurrentDictionary<int, ChunkBasedSegment>();
+        _componentCollectionVSBSByType = new ConcurrentDictionary<Type, VariableSizedBufferSegmentBase>();
         TransactionChain = new TransactionChain();
 
         DBD = new DatabaseDefinitions();
         ConstructComponentStore();
 
-        MMF.CreatingEvent += OnCreating;
-        MMF.LoadingEvent += OnLoading;
+        if (MMF.IsDatabaseFileCreating)
+        {
+            CreateSystemSchemaR1();
+        }
+        else
+        {
+            
+        }
+        
     }
-
-    private void OnLoading(object sender, EventArgs args)
-    {
-    }
-
-    private void OnCreating(object sender, EventArgs args) => CreateSystemSchemaR1();
 
     public bool IsDisposed { get; private set; }
 
@@ -160,13 +160,46 @@ public class DatabaseEngine : IDisposable
         _curPrimaryKey = 0;
     }
 
+    private static int RoundToStandardStride(int size) =>
+        size switch
+        {
+            <= 16 => 16,
+            <= 32 => 32,
+            <= 64 => 64,
+            _ => (int)BitOperations.RoundUpToPowerOf2((uint)size)
+        };
+
+    private const int ComponentCollectionItemCountPerChunk      = 8;
+    private const int ComponentCollectionSegmentStartingSize    = 8;
+
+    internal VariableSizedBufferSegment<T> GetComponentCollectionVSBS<T>() where T : unmanaged =>
+        (VariableSizedBufferSegment<T>)_componentCollectionVSBSByType.GetOrAdd(typeof(T),
+            stride => new VariableSizedBufferSegment<T>(GetComponentCollectionSegment<T>()));
+
+    internal VariableSizedBufferSegmentBase GetComponentCollectionVSBS(Type itemType) =>
+        _componentCollectionVSBSByType.GetOrAdd(itemType,
+            type =>
+            {
+                // Create the type for ComponentCollection<T>
+                var ctType = typeof(VariableSizedBufferSegment<>).MakeGenericType(type);
+                var fieldSize = DatabaseSchemaExtensions.FromType(type).field.SizeInComp();
+                var segment = GetComponentCollectionSegment(fieldSize);
+                return (VariableSizedBufferSegmentBase)Activator.CreateInstance(ctType, segment);
+            });
+
+    unsafe internal ChunkBasedSegment GetComponentCollectionSegment<T>() where T : unmanaged =>
+        _componentCollectionSegmentByStride.GetOrAdd(RoundToStandardStride(sizeof(T) * 8),
+            stride => MMF.AllocateChunkBasedSegment(PageBlockType.None, ComponentCollectionSegmentStartingSize, stride));
+
+    internal ChunkBasedSegment GetComponentCollectionSegment(int itemSize) =>
+        _componentCollectionSegmentByStride.GetOrAdd(RoundToStandardStride(itemSize * 8),
+            stride => MMF.AllocateChunkBasedSegment(PageBlockType.None, ComponentCollectionSegmentStartingSize, stride));
+
     internal long GetNewPrimaryKey() => Interlocked.Increment(ref _curPrimaryKey);
 
     // Create the first revision of the system schema
     private void CreateSystemSchemaR1()
     {
-        const int revision = 1;
-        
         // Register the system components
         RegisterComponentFromAccessor<FieldR1>();
         RegisterComponentFromAccessor<ComponentR1>();
@@ -211,6 +244,26 @@ public class DatabaseEngine : IDisposable
             DefaultIndexSPI     = table.DefaultIndexSegment.RootPageIndex,
             String64IndexSPI    = table.String64IndexSegment.RootPageIndex,
         };
+
+        {
+            using var a = t.CreateComponentCollectionAccessor(ref comp.Fields);
+
+            foreach (var kvp in table.Definition.FieldsByName)
+            {
+                var field = kvp.Value;
+                var f = new FieldR1
+                {
+                    Name = (String64)field.Name,
+                    FieldId = field.FieldId,
+                    Type = field.Type,
+                    ArrayLength = field.ArrayLength
+                };
+            
+                a.Add(f);
+            }
+        }
+        
+        t.Commit();
     }
 
     public bool RegisterComponentFromAccessor<T>() where T : unmanaged

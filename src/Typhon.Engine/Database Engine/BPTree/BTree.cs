@@ -339,7 +339,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         var res = header.Count == 0;
         accessor.UnpinChunkBasedSegmentHeader(entry);
         return res;
-    }    
+    }
 
     public int IncCount(ChunkRandomAccessor accessor)
     {
@@ -347,7 +347,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         var res = ++header.Count;
         accessor.UnpinChunkBasedSegmentHeader(entry);
         return res;
-    }    
+    }
 
     public int DecCount(ChunkRandomAccessor accessor)
     {
@@ -355,14 +355,14 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         var res = --header.Count;
         accessor.UnpinChunkBasedSegmentHeader(entry);
         return res;
-    }    
+    }
 
     public void SetRootChunkId(ChunkRandomAccessor accessor, int rootChunkId)
     {
         ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false, out var entry);
         header.RootChunkId = rootChunkId;
         accessor.UnpinChunkBasedSegmentHeader(entry);
-    }    
+    }
 
     public int GetRootChunkId(ChunkRandomAccessor accessor)
     {
@@ -569,7 +569,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public VariableSizedBufferAccessor<int> TryGetMultiple(TKey key, ChunkRandomAccessor accessor)
     {
-        if (TryGet(key, out var bufferId, accessor) == false)
+        if (!TryGet(key, out var bufferId, accessor))
         {
             return default;
         }

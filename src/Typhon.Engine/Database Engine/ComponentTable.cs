@@ -15,11 +15,11 @@ namespace Typhon.Engine;
 /// </summary>
 /// <remarks>
 /// <p>
-/// The <see cref="ComponentTable.CompRevTableSegment"/> is a <see cref="ChunkBasedSegment"/> with chunks of <see cref="ComponentTable.CompRevChunkSize"/> bytes.
-/// Data is stored as a chain of chunks, the first one contains this header and is followed by <see cref="ComponentTable.CompRevCountInRoot"/> number
+/// The <see cref="ComponentTable.CompRevTableSegment"/> is a <see cref="ChunkBasedSegment"/> with chunks of <see cref="ComponentRevisionManager.CompRevChunkSize"/> bytes.
+/// Data is stored as a chain of chunks, the first one contains this header and is followed by <see cref="ComponentRevisionManager.CompRevCountInRoot"/> number
 /// of <see cref="CompRevStorageElement"/> elements.
 /// The following chunks in the chain have just an integer as header (giving the next chunk in the chain) and can
-/// store <see cref="ComponentTable.CompRevCountInNext"/> number of <see cref="CompRevStorageElement"/> elements.
+/// store <see cref="ComponentRevisionManager.CompRevCountInNext"/> number of <see cref="CompRevStorageElement"/> elements.
 /// </p>
 /// <p>
 /// The chain is a circular buffer, location of the first item is given through <see cref="FirstItemIndex"/> 
@@ -53,11 +53,11 @@ internal struct CompRevStorageHeader
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public static (int chunkIndex, int indexInChunk) GetRevisionLocation(int revisionIndex)
     {
-        if (revisionIndex < ComponentTable.CompRevCountInRoot)
+        if (revisionIndex < ComponentRevisionManager.CompRevCountInRoot)
         {
             return (0, revisionIndex);
         }
-        var chunkIndex = Math.DivRem(revisionIndex-ComponentTable.CompRevCountInRoot, ComponentTable.CompRevCountInNext, out var indexInChunk) + 1;
+        var chunkIndex = Math.DivRem(revisionIndex-ComponentRevisionManager.CompRevCountInRoot, ComponentRevisionManager.CompRevCountInNext, out var indexInChunk) + 1;
         return (chunkIndex, indexInChunk);
     }
 }
@@ -79,6 +79,15 @@ internal struct CompRevStorageElement
     private uint _packedTickHigh;
     private ushort _packedTickLow;
 
+    public void Void()
+    {
+        ComponentChunkId = 0;
+        _packedTickHigh = 0;
+        _packedTickLow = 0;
+    }
+    
+    public bool IsVoid => ComponentChunkId == 0 &&  _packedTickHigh == 0 && _packedTickLow == 0;
+    
     public bool IsolationFlag
     {
         get
@@ -91,18 +100,16 @@ internal struct CompRevStorageElement
         }
     }
 
-    public PackedDateTime48 DateTime
+    public long TSN
     {
         get
         {
-            var packed = (ulong)_packedTickHigh << 16 | (uint)(_packedTickLow & CompRevTransactionIsolatedMask);
-            return new PackedDateTime48((long)packed, true);
+            return (long)((ulong)_packedTickHigh << 16 | (uint)(_packedTickLow & CompRevTransactionIsolatedMask));
         }
         set
         {
-            var ticks = value.PackedTicks;
-            _packedTickHigh = (uint)(ticks >> 16);
-            _packedTickLow = (ushort)((ticks & CompRevTransactionIsolatedMask) | (uint)(_packedTickLow & CompRevTransactionIsolatedFlag));
+            _packedTickHigh = (uint)(value >> 16);
+            _packedTickLow = (ushort)((value & CompRevTransactionIsolatedMask) | (uint)(_packedTickLow & CompRevTransactionIsolatedFlag));
         }
     }
 }
@@ -118,28 +125,38 @@ internal struct IndexedFieldInfo
 }
 
 [PublicAPI]
+[Flags]
+public enum ComponentTableFlags
+{
+    None                = 0x00,
+    HasCollections      = 0x01
+}
+
+[PublicAPI]
 public unsafe class ComponentTable : IDisposable
 {
     private const int ComponentSegmentStartingSize = 4;
     private const int MainIndexSegmentStartingSize = 4;
 
-    internal const int CompRevChunkSize = 64;
-    internal static readonly int CompRevCountInRoot = (CompRevChunkSize - sizeof(CompRevStorageHeader)) / sizeof(CompRevStorageElement);
-    internal static readonly int CompRevCountInNext = (CompRevChunkSize / sizeof(CompRevStorageElement));
-
     public ChunkBasedSegment ComponentSegment { get; private set; }
     public ChunkBasedSegment CompRevTableSegment { get; private set; }
     public ChunkBasedSegment DefaultIndexSegment { get; private set; }
     public ChunkBasedSegment String64IndexSegment { get; private set; }
-    public LongSingleBTree PrimaryKeyIndex { get; private set; }
+    public BTree<long> PrimaryKeyIndex { get; private set; }
     public int ComponentStorageSize => Definition.ComponentStorageSize;
     public DBComponentDefinition Definition { get; private set; }
 
+    public ComponentTableFlags Flags => _flags;
+    public bool HasCollections => (_flags & ComponentTableFlags.HasCollections) != 0;
+    
     internal DatabaseEngine DBE { get; private set; }
     internal int ComponentOverhead => Definition.MultipleIndicesCount * sizeof(int);
     internal int ComponentTotalSize => Definition.ComponentStorageTotalSize;
     internal IndexedFieldInfo[] IndexedFieldInfos { get; private set; }
+    internal Dictionary<int, (VariableSizedBufferSegmentBase, ChunkRandomAccessor)> ComponentCollectionVSBSByOffset { get; private set; }
 
+    private ComponentTableFlags _flags;
+    
     public void Create(DatabaseEngine dbe, DBComponentDefinition definition)
     {
         DBE = dbe;
@@ -147,15 +164,23 @@ public unsafe class ComponentTable : IDisposable
 
         var mmf = DBE.MMF;
         ComponentSegment    = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, ComponentTotalSize);
-        CompRevTableSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, CompRevChunkSize);
+        CompRevTableSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, ComponentRevisionManager.CompRevChunkSize);
             
-        // This segment will be used for all kind of index types except String64 which needs a dedicated one because its chunk size is different (all others are 64 bytes)
+        // This segment will be used for all kinds of index types except String64 which needs a dedicated one because its chunk size is different (all others are 64 bytes)
         DefaultIndexSegment  = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(Index64Chunk));
         String64IndexSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(IndexString64Chunk));
 
-        PrimaryKeyIndex = new LongSingleBTree(DefaultIndexSegment, ChunkRandomAccessor.GetFromPool(DefaultIndexSegment, 8));
+        if (definition.AllowMultiple)
+        {
+            PrimaryKeyIndex = new LongMultipleBTree(DefaultIndexSegment, ChunkRandomAccessor.GetFromPool(DefaultIndexSegment, 8));
+        }
+        else
+        {
+            PrimaryKeyIndex = new LongSingleBTree(DefaultIndexSegment, ChunkRandomAccessor.GetFromPool(DefaultIndexSegment, 8));
+        }
 
         BuildIndexedFieldInfo();
+        BuildComponentCollectionInfo();
     }
 
     private void BuildIndexedFieldInfo()
@@ -183,6 +208,22 @@ public unsafe class ComponentTable : IDisposable
         }
 
         IndexedFieldInfos = l.ToArray();
+    }
+
+    private void BuildComponentCollectionInfo()
+    {
+        ComponentCollectionVSBSByOffset = new Dictionary<int, (VariableSizedBufferSegmentBase, ChunkRandomAccessor)>();
+        foreach (var field in Definition.FieldsByName.Values)
+        {
+            if (field.Type != FieldType.Collection)
+            {
+                continue;
+            }
+
+            var vsbs = DBE.GetComponentCollectionVSBS(field.DotNetUnderlyingType);
+            ComponentCollectionVSBSByOffset.Add(field.OffsetInComponentStorage, (vsbs, vsbs.Segment.CreateChunkRandomAccessor(8)));
+            _flags |= ComponentTableFlags.HasCollections;
+        }
     }
 
     private IBTree CreateIndexForField(DBComponentDefinition.Field field)
