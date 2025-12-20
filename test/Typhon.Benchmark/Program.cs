@@ -61,19 +61,32 @@ class Program
 
         File.WriteAllText(resultsPath, combinedReport.ToString());
     }
-    
+
     static void Main(string[] args)
     {
+        // Run ChunkAccessor comparison benchmark
+        BenchmarkRunner.Run<ChunkAccessorBenchmark>();
+
+        //BenchmarkRunner.Run<BTreeBenchmark>();
+        /*
+        var btb = new BTreeBenchmark();
+        btb.GlobalSetup();
+        btb.Run();
+        btb.GlobalCleanup();
+        */
+
         /*
         var summary = BenchmarkRunner.Run<PagedMemoryFileBenchmarks>();
         var path = summary.ResultsDirectoryPath;
         CombineBenchmarkResults(path);
         */
-        
+
+        /*
         var pvmmft = new PagedMemoryFileBenchmarks();
         pvmmft.GlobalSetup();
         pvmmft.TestRandomAccess();
         pvmmft.GlobalCleanup();
+        */
 
         /*
         {

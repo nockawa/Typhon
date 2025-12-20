@@ -326,7 +326,7 @@ public class ManagedPagedMMFTests
         var cap = s0.ChunkCapacity;
 
         using var mo = s0.AllocateChunks(2000, false);
-        using var ca = s0.CreateChunkRandomAccessor(4);
+        using var ca = s0.CreateChunkRandomAccessor(8);
 
         ref var obj = ref ca.GetChunk<ChunkA>(0);
         obj.A = -1;
