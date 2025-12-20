@@ -22,7 +22,7 @@ public class StringTableSegment
 
     public StringTableSegment(ChunkBasedSegment segment, ChunkRandomAccessor accessor=null)
     {
-        ChunkAccessor = accessor ?? segment.CreateChunkRandomAccessor(4);
+        ChunkAccessor = accessor ?? segment.CreateChunkRandomAccessor(8);
         Stride = Segment.Stride;
     }
 

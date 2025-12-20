@@ -978,8 +978,6 @@ public unsafe class Transaction : IDisposable
         };
         
         Exit:
-        compRevTableAccessor.UnpinChunk(compRevFirstChunkId);
-
         return res;
     }
 
@@ -1038,8 +1036,6 @@ public unsafe class Transaction : IDisposable
                         PrevRevisionIndex = prevCompRevisionIndex
                     });
                 }
-
-                compRevTableAccessor.UnpinChunk(compRevFirstChunkId);
             }
         } while (vsba.NextChunk());
 
