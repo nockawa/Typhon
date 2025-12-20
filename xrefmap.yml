@@ -10285,6 +10285,22 @@ references:
   isSpec: "True"
   fullName: Typhon.Engine.ChunkRandomAccessor.DisposePageAccessors
   nameWithType: ChunkRandomAccessor.DisposePageAccessors
+- uid: Typhon.Engine.ChunkRandomAccessor.FindLruSlot(Typhon.Engine.ChunkRandomAccessor.CachedEntry[])
+  name: FindLruSlot(CachedEntry[])
+  href: api/Typhon.Engine.ChunkRandomAccessor.html#Typhon_Engine_ChunkRandomAccessor_FindLruSlot_Typhon_Engine_ChunkRandomAccessor_CachedEntry___
+  commentId: M:Typhon.Engine.ChunkRandomAccessor.FindLruSlot(Typhon.Engine.ChunkRandomAccessor.CachedEntry[])
+  name.vb: FindLruSlot(CachedEntry())
+  fullName: Typhon.Engine.ChunkRandomAccessor.FindLruSlot(Typhon.Engine.ChunkRandomAccessor.CachedEntry[])
+  fullName.vb: Typhon.Engine.ChunkRandomAccessor.FindLruSlot(Typhon.Engine.ChunkRandomAccessor.CachedEntry())
+  nameWithType: ChunkRandomAccessor.FindLruSlot(ChunkRandomAccessor.CachedEntry[])
+  nameWithType.vb: ChunkRandomAccessor.FindLruSlot(ChunkRandomAccessor.CachedEntry())
+- uid: Typhon.Engine.ChunkRandomAccessor.FindLruSlot*
+  name: FindLruSlot
+  href: api/Typhon.Engine.ChunkRandomAccessor.html#Typhon_Engine_ChunkRandomAccessor_FindLruSlot_
+  commentId: Overload:Typhon.Engine.ChunkRandomAccessor.FindLruSlot
+  isSpec: "True"
+  fullName: Typhon.Engine.ChunkRandomAccessor.FindLruSlot
+  nameWithType: ChunkRandomAccessor.FindLruSlot
 - uid: Typhon.Engine.ChunkRandomAccessor.GetChunk*
   name: GetChunk
   href: api/Typhon.Engine.ChunkRandomAccessor.html#Typhon_Engine_ChunkRandomAccessor_GetChunk_
@@ -10552,6 +10568,12 @@ references:
   commentId: F:Typhon.Engine.ChunkRandomAccessor._changeSet
   fullName: Typhon.Engine.ChunkRandomAccessor._changeSet
   nameWithType: ChunkRandomAccessor._changeSet
+- uid: Typhon.Engine.ChunkRandomAccessor._mruIndex
+  name: _mruIndex
+  href: api/Typhon.Engine.ChunkRandomAccessor.html#Typhon_Engine_ChunkRandomAccessor__mruIndex
+  commentId: F:Typhon.Engine.ChunkRandomAccessor._mruIndex
+  fullName: Typhon.Engine.ChunkRandomAccessor._mruIndex
+  nameWithType: ChunkRandomAccessor._mruIndex
 - uid: Typhon.Engine.ChunkRandomAccessor._owner
   name: _owner
   href: api/Typhon.Engine.ChunkRandomAccessor.html#Typhon_Engine_ChunkRandomAccessor__owner
@@ -15856,6 +15878,18 @@ references:
   commentId: F:Typhon.Engine.PageAccessor._previousMode
   fullName: Typhon.Engine.PageAccessor._previousMode
   nameWithType: PageAccessor._previousMode
+- uid: Typhon.Engine.PageAccessorBuffer
+  name: PageAccessorBuffer
+  href: api/Typhon.Engine.PageAccessorBuffer.html
+  commentId: T:Typhon.Engine.PageAccessorBuffer
+  fullName: Typhon.Engine.PageAccessorBuffer
+  nameWithType: PageAccessorBuffer
+- uid: Typhon.Engine.PageAccessorBuffer._element
+  name: _element
+  href: api/Typhon.Engine.PageAccessorBuffer.html#Typhon_Engine_PageAccessorBuffer__element
+  commentId: F:Typhon.Engine.PageAccessorBuffer._element
+  fullName: Typhon.Engine.PageAccessorBuffer._element
+  nameWithType: PageAccessorBuffer._element
 - uid: Typhon.Engine.PageBaseHeader
   name: PageBaseHeader
   href: api/Typhon.Engine.PageBaseHeader.html
@@ -18449,6 +18483,400 @@ references:
   commentId: F:Typhon.Engine.SpanStream._data
   fullName: Typhon.Engine.SpanStream._data
   nameWithType: SpanStream._data
+- uid: Typhon.Engine.StackChunkAccessor
+  name: StackChunkAccessor
+  href: api/Typhon.Engine.StackChunkAccessor.html
+  commentId: T:Typhon.Engine.StackChunkAccessor
+  fullName: Typhon.Engine.StackChunkAccessor
+  nameWithType: StackChunkAccessor
+- uid: Typhon.Engine.StackChunkAccessor.Create(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChangeSet,System.Int32)
+  name: Create(ChunkBasedSegment, ChangeSet, int)
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_Create_Typhon_Engine_ChunkBasedSegment_Typhon_Engine_ChangeSet_System_Int32_
+  commentId: M:Typhon.Engine.StackChunkAccessor.Create(Typhon.Engine.ChunkBasedSegment,Typhon.Engine.ChangeSet,System.Int32)
+  name.vb: Create(ChunkBasedSegment, ChangeSet, Integer)
+  fullName: Typhon.Engine.StackChunkAccessor.Create(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChangeSet, int)
+  fullName.vb: Typhon.Engine.StackChunkAccessor.Create(Typhon.Engine.ChunkBasedSegment, Typhon.Engine.ChangeSet, Integer)
+  nameWithType: StackChunkAccessor.Create(ChunkBasedSegment, ChangeSet, int)
+  nameWithType.vb: StackChunkAccessor.Create(ChunkBasedSegment, ChangeSet, Integer)
+- uid: Typhon.Engine.StackChunkAccessor.Create*
+  name: Create
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_Create_
+  commentId: Overload:Typhon.Engine.StackChunkAccessor.Create
+  isSpec: "True"
+  fullName: Typhon.Engine.StackChunkAccessor.Create
+  nameWithType: StackChunkAccessor.Create
+- uid: Typhon.Engine.StackChunkAccessor.DemoteChunk(System.Int32)
+  name: DemoteChunk(int)
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_DemoteChunk_System_Int32_
+  commentId: M:Typhon.Engine.StackChunkAccessor.DemoteChunk(System.Int32)
+  name.vb: DemoteChunk(Integer)
+  fullName: Typhon.Engine.StackChunkAccessor.DemoteChunk(int)
+  fullName.vb: Typhon.Engine.StackChunkAccessor.DemoteChunk(Integer)
+  nameWithType: StackChunkAccessor.DemoteChunk(int)
+  nameWithType.vb: StackChunkAccessor.DemoteChunk(Integer)
+- uid: Typhon.Engine.StackChunkAccessor.DemoteChunk*
+  name: DemoteChunk
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_DemoteChunk_
+  commentId: Overload:Typhon.Engine.StackChunkAccessor.DemoteChunk
+  isSpec: "True"
+  fullName: Typhon.Engine.StackChunkAccessor.DemoteChunk
+  nameWithType: StackChunkAccessor.DemoteChunk
+- uid: Typhon.Engine.StackChunkAccessor.DemoteSlot(System.Int32)
+  name: DemoteSlot(int)
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_DemoteSlot_System_Int32_
+  commentId: M:Typhon.Engine.StackChunkAccessor.DemoteSlot(System.Int32)
+  name.vb: DemoteSlot(Integer)
+  fullName: Typhon.Engine.StackChunkAccessor.DemoteSlot(int)
+  fullName.vb: Typhon.Engine.StackChunkAccessor.DemoteSlot(Integer)
+  nameWithType: StackChunkAccessor.DemoteSlot(int)
+  nameWithType.vb: StackChunkAccessor.DemoteSlot(Integer)
+- uid: Typhon.Engine.StackChunkAccessor.DemoteSlot*
+  name: DemoteSlot
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_DemoteSlot_
+  commentId: Overload:Typhon.Engine.StackChunkAccessor.DemoteSlot
+  isSpec: "True"
+  fullName: Typhon.Engine.StackChunkAccessor.DemoteSlot
+  nameWithType: StackChunkAccessor.DemoteSlot
+- uid: Typhon.Engine.StackChunkAccessor.Dispose
+  name: Dispose()
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_Dispose
+  commentId: M:Typhon.Engine.StackChunkAccessor.Dispose
+  fullName: Typhon.Engine.StackChunkAccessor.Dispose()
+  nameWithType: StackChunkAccessor.Dispose()
+- uid: Typhon.Engine.StackChunkAccessor.Dispose*
+  name: Dispose
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_Dispose_
+  commentId: Overload:Typhon.Engine.StackChunkAccessor.Dispose
+  isSpec: "True"
+  fullName: Typhon.Engine.StackChunkAccessor.Dispose
+  nameWithType: StackChunkAccessor.Dispose
+- uid: Typhon.Engine.StackChunkAccessor.EnterScope
+  name: EnterScope()
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_EnterScope
+  commentId: M:Typhon.Engine.StackChunkAccessor.EnterScope
+  fullName: Typhon.Engine.StackChunkAccessor.EnterScope()
+  nameWithType: StackChunkAccessor.EnterScope()
+- uid: Typhon.Engine.StackChunkAccessor.EnterScope*
+  name: EnterScope
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_EnterScope_
+  commentId: Overload:Typhon.Engine.StackChunkAccessor.EnterScope
+  isSpec: "True"
+  fullName: Typhon.Engine.StackChunkAccessor.EnterScope
+  nameWithType: StackChunkAccessor.EnterScope
+- uid: Typhon.Engine.StackChunkAccessor.EvictSlot(System.Int32)
+  name: EvictSlot(int)
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_EvictSlot_System_Int32_
+  commentId: M:Typhon.Engine.StackChunkAccessor.EvictSlot(System.Int32)
+  name.vb: EvictSlot(Integer)
+  fullName: Typhon.Engine.StackChunkAccessor.EvictSlot(int)
+  fullName.vb: Typhon.Engine.StackChunkAccessor.EvictSlot(Integer)
+  nameWithType: StackChunkAccessor.EvictSlot(int)
+  nameWithType.vb: StackChunkAccessor.EvictSlot(Integer)
+- uid: Typhon.Engine.StackChunkAccessor.EvictSlot*
+  name: EvictSlot
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_EvictSlot_
+  commentId: Overload:Typhon.Engine.StackChunkAccessor.EvictSlot
+  isSpec: "True"
+  fullName: Typhon.Engine.StackChunkAccessor.EvictSlot
+  nameWithType: StackChunkAccessor.EvictSlot
+- uid: Typhon.Engine.StackChunkAccessor.ExitScope
+  name: ExitScope()
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_ExitScope
+  commentId: M:Typhon.Engine.StackChunkAccessor.ExitScope
+  fullName: Typhon.Engine.StackChunkAccessor.ExitScope()
+  nameWithType: StackChunkAccessor.ExitScope()
+- uid: Typhon.Engine.StackChunkAccessor.ExitScope*
+  name: ExitScope
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_ExitScope_
+  commentId: Overload:Typhon.Engine.StackChunkAccessor.ExitScope
+  isSpec: "True"
+  fullName: Typhon.Engine.StackChunkAccessor.ExitScope
+  nameWithType: StackChunkAccessor.ExitScope
+- uid: Typhon.Engine.StackChunkAccessor.FindEvictableSlot
+  name: FindEvictableSlot()
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_FindEvictableSlot
+  commentId: M:Typhon.Engine.StackChunkAccessor.FindEvictableSlot
+  fullName: Typhon.Engine.StackChunkAccessor.FindEvictableSlot()
+  nameWithType: StackChunkAccessor.FindEvictableSlot()
+- uid: Typhon.Engine.StackChunkAccessor.FindEvictableSlot*
+  name: FindEvictableSlot
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_FindEvictableSlot_
+  commentId: Overload:Typhon.Engine.StackChunkAccessor.FindEvictableSlot
+  isSpec: "True"
+  fullName: Typhon.Engine.StackChunkAccessor.FindEvictableSlot
+  nameWithType: StackChunkAccessor.FindEvictableSlot
+- uid: Typhon.Engine.StackChunkAccessor.Get*
+  name: Get
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_Get_
+  commentId: Overload:Typhon.Engine.StackChunkAccessor.Get
+  isSpec: "True"
+  fullName: Typhon.Engine.StackChunkAccessor.Get
+  nameWithType: StackChunkAccessor.Get
+- uid: Typhon.Engine.StackChunkAccessor.GetChunkAddress(System.Int32,System.Boolean)
+  name: GetChunkAddress(int, bool)
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_GetChunkAddress_System_Int32_System_Boolean_
+  commentId: M:Typhon.Engine.StackChunkAccessor.GetChunkAddress(System.Int32,System.Boolean)
+  name.vb: GetChunkAddress(Integer, Boolean)
+  fullName: Typhon.Engine.StackChunkAccessor.GetChunkAddress(int, bool)
+  fullName.vb: Typhon.Engine.StackChunkAccessor.GetChunkAddress(Integer, Boolean)
+  nameWithType: StackChunkAccessor.GetChunkAddress(int, bool)
+  nameWithType.vb: StackChunkAccessor.GetChunkAddress(Integer, Boolean)
+- uid: Typhon.Engine.StackChunkAccessor.GetChunkAddress*
+  name: GetChunkAddress
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_GetChunkAddress_
+  commentId: Overload:Typhon.Engine.StackChunkAccessor.GetChunkAddress
+  isSpec: "True"
+  fullName: Typhon.Engine.StackChunkAccessor.GetChunkAddress
+  nameWithType: StackChunkAccessor.GetChunkAddress
+- uid: Typhon.Engine.StackChunkAccessor.GetChunkAsReadOnlySpan(System.Int32,System.Boolean)
+  name: GetChunkAsReadOnlySpan(int, bool)
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_GetChunkAsReadOnlySpan_System_Int32_System_Boolean_
+  commentId: M:Typhon.Engine.StackChunkAccessor.GetChunkAsReadOnlySpan(System.Int32,System.Boolean)
+  name.vb: GetChunkAsReadOnlySpan(Integer, Boolean)
+  fullName: Typhon.Engine.StackChunkAccessor.GetChunkAsReadOnlySpan(int, bool)
+  fullName.vb: Typhon.Engine.StackChunkAccessor.GetChunkAsReadOnlySpan(Integer, Boolean)
+  nameWithType: StackChunkAccessor.GetChunkAsReadOnlySpan(int, bool)
+  nameWithType.vb: StackChunkAccessor.GetChunkAsReadOnlySpan(Integer, Boolean)
+- uid: Typhon.Engine.StackChunkAccessor.GetChunkAsReadOnlySpan*
+  name: GetChunkAsReadOnlySpan
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_GetChunkAsReadOnlySpan_
+  commentId: Overload:Typhon.Engine.StackChunkAccessor.GetChunkAsReadOnlySpan
+  isSpec: "True"
+  fullName: Typhon.Engine.StackChunkAccessor.GetChunkAsReadOnlySpan
+  nameWithType: StackChunkAccessor.GetChunkAsReadOnlySpan
+- uid: Typhon.Engine.StackChunkAccessor.GetChunkAsSpan(System.Int32,System.Boolean)
+  name: GetChunkAsSpan(int, bool)
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_GetChunkAsSpan_System_Int32_System_Boolean_
+  commentId: M:Typhon.Engine.StackChunkAccessor.GetChunkAsSpan(System.Int32,System.Boolean)
+  name.vb: GetChunkAsSpan(Integer, Boolean)
+  fullName: Typhon.Engine.StackChunkAccessor.GetChunkAsSpan(int, bool)
+  fullName.vb: Typhon.Engine.StackChunkAccessor.GetChunkAsSpan(Integer, Boolean)
+  nameWithType: StackChunkAccessor.GetChunkAsSpan(int, bool)
+  nameWithType.vb: StackChunkAccessor.GetChunkAsSpan(Integer, Boolean)
+- uid: Typhon.Engine.StackChunkAccessor.GetChunkAsSpan*
+  name: GetChunkAsSpan
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_GetChunkAsSpan_
+  commentId: Overload:Typhon.Engine.StackChunkAccessor.GetChunkAsSpan
+  isSpec: "True"
+  fullName: Typhon.Engine.StackChunkAccessor.GetChunkAsSpan
+  nameWithType: StackChunkAccessor.GetChunkAsSpan
+- uid: Typhon.Engine.StackChunkAccessor.GetChunkBasedSegmentHeader*
+  name: GetChunkBasedSegmentHeader
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_GetChunkBasedSegmentHeader_
+  commentId: Overload:Typhon.Engine.StackChunkAccessor.GetChunkBasedSegmentHeader
+  isSpec: "True"
+  fullName: Typhon.Engine.StackChunkAccessor.GetChunkBasedSegmentHeader
+  nameWithType: StackChunkAccessor.GetChunkBasedSegmentHeader
+- uid: Typhon.Engine.StackChunkAccessor.GetChunkBasedSegmentHeader``1(System.Int32,System.Boolean)
+  name: GetChunkBasedSegmentHeader<T>(int, bool)
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_GetChunkBasedSegmentHeader__1_System_Int32_System_Boolean_
+  commentId: M:Typhon.Engine.StackChunkAccessor.GetChunkBasedSegmentHeader``1(System.Int32,System.Boolean)
+  name.vb: GetChunkBasedSegmentHeader(Of T)(Integer, Boolean)
+  fullName: Typhon.Engine.StackChunkAccessor.GetChunkBasedSegmentHeader<T>(int, bool)
+  fullName.vb: Typhon.Engine.StackChunkAccessor.GetChunkBasedSegmentHeader(Of T)(Integer, Boolean)
+  nameWithType: StackChunkAccessor.GetChunkBasedSegmentHeader<T>(int, bool)
+  nameWithType.vb: StackChunkAccessor.GetChunkBasedSegmentHeader(Of T)(Integer, Boolean)
+- uid: Typhon.Engine.StackChunkAccessor.GetFromSlot(System.Int32,System.Int32,System.Boolean)
+  name: GetFromSlot(int, int, bool)
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_GetFromSlot_System_Int32_System_Int32_System_Boolean_
+  commentId: M:Typhon.Engine.StackChunkAccessor.GetFromSlot(System.Int32,System.Int32,System.Boolean)
+  name.vb: GetFromSlot(Integer, Integer, Boolean)
+  fullName: Typhon.Engine.StackChunkAccessor.GetFromSlot(int, int, bool)
+  fullName.vb: Typhon.Engine.StackChunkAccessor.GetFromSlot(Integer, Integer, Boolean)
+  nameWithType: StackChunkAccessor.GetFromSlot(int, int, bool)
+  nameWithType.vb: StackChunkAccessor.GetFromSlot(Integer, Integer, Boolean)
+- uid: Typhon.Engine.StackChunkAccessor.GetFromSlot*
+  name: GetFromSlot
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_GetFromSlot_
+  commentId: Overload:Typhon.Engine.StackChunkAccessor.GetFromSlot
+  isSpec: "True"
+  fullName: Typhon.Engine.StackChunkAccessor.GetFromSlot
+  nameWithType: StackChunkAccessor.GetFromSlot
+- uid: Typhon.Engine.StackChunkAccessor.GetReadOnly*
+  name: GetReadOnly
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_GetReadOnly_
+  commentId: Overload:Typhon.Engine.StackChunkAccessor.GetReadOnly
+  isSpec: "True"
+  fullName: Typhon.Engine.StackChunkAccessor.GetReadOnly
+  nameWithType: StackChunkAccessor.GetReadOnly
+- uid: Typhon.Engine.StackChunkAccessor.GetReadOnly``1(System.Int32)
+  name: GetReadOnly<T>(int)
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_GetReadOnly__1_System_Int32_
+  commentId: M:Typhon.Engine.StackChunkAccessor.GetReadOnly``1(System.Int32)
+  name.vb: GetReadOnly(Of T)(Integer)
+  fullName: Typhon.Engine.StackChunkAccessor.GetReadOnly<T>(int)
+  fullName.vb: Typhon.Engine.StackChunkAccessor.GetReadOnly(Of T)(Integer)
+  nameWithType: StackChunkAccessor.GetReadOnly<T>(int)
+  nameWithType.vb: StackChunkAccessor.GetReadOnly(Of T)(Integer)
+- uid: Typhon.Engine.StackChunkAccessor.Get``1(System.Int32,System.Boolean)
+  name: Get<T>(int, bool)
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_Get__1_System_Int32_System_Boolean_
+  commentId: M:Typhon.Engine.StackChunkAccessor.Get``1(System.Int32,System.Boolean)
+  name.vb: Get(Of T)(Integer, Boolean)
+  fullName: Typhon.Engine.StackChunkAccessor.Get<T>(int, bool)
+  fullName.vb: Typhon.Engine.StackChunkAccessor.Get(Of T)(Integer, Boolean)
+  nameWithType: StackChunkAccessor.Get<T>(int, bool)
+  nameWithType.vb: StackChunkAccessor.Get(Of T)(Integer, Boolean)
+- uid: Typhon.Engine.StackChunkAccessor.InvalidPageIndex
+  name: InvalidPageIndex
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_InvalidPageIndex
+  commentId: F:Typhon.Engine.StackChunkAccessor.InvalidPageIndex
+  fullName: Typhon.Engine.StackChunkAccessor.InvalidPageIndex
+  nameWithType: StackChunkAccessor.InvalidPageIndex
+- uid: Typhon.Engine.StackChunkAccessor.InvalidSlot
+  name: InvalidSlot
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_InvalidSlot
+  commentId: F:Typhon.Engine.StackChunkAccessor.InvalidSlot
+  fullName: Typhon.Engine.StackChunkAccessor.InvalidSlot
+  nameWithType: StackChunkAccessor.InvalidSlot
+- uid: Typhon.Engine.StackChunkAccessor.LoadAndGet(System.Int32,System.Int32,System.Boolean)
+  name: LoadAndGet(int, int, bool)
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_LoadAndGet_System_Int32_System_Int32_System_Boolean_
+  commentId: M:Typhon.Engine.StackChunkAccessor.LoadAndGet(System.Int32,System.Int32,System.Boolean)
+  name.vb: LoadAndGet(Integer, Integer, Boolean)
+  fullName: Typhon.Engine.StackChunkAccessor.LoadAndGet(int, int, bool)
+  fullName.vb: Typhon.Engine.StackChunkAccessor.LoadAndGet(Integer, Integer, Boolean)
+  nameWithType: StackChunkAccessor.LoadAndGet(int, int, bool)
+  nameWithType.vb: StackChunkAccessor.LoadAndGet(Integer, Integer, Boolean)
+- uid: Typhon.Engine.StackChunkAccessor.LoadAndGet*
+  name: LoadAndGet
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_LoadAndGet_
+  commentId: Overload:Typhon.Engine.StackChunkAccessor.LoadAndGet
+  isSpec: "True"
+  fullName: Typhon.Engine.StackChunkAccessor.LoadAndGet
+  nameWithType: StackChunkAccessor.LoadAndGet
+- uid: Typhon.Engine.StackChunkAccessor.LoadIntoSlot(System.Int32,System.Int32)
+  name: LoadIntoSlot(int, int)
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_LoadIntoSlot_System_Int32_System_Int32_
+  commentId: M:Typhon.Engine.StackChunkAccessor.LoadIntoSlot(System.Int32,System.Int32)
+  name.vb: LoadIntoSlot(Integer, Integer)
+  fullName: Typhon.Engine.StackChunkAccessor.LoadIntoSlot(int, int)
+  fullName.vb: Typhon.Engine.StackChunkAccessor.LoadIntoSlot(Integer, Integer)
+  nameWithType: StackChunkAccessor.LoadIntoSlot(int, int)
+  nameWithType.vb: StackChunkAccessor.LoadIntoSlot(Integer, Integer)
+- uid: Typhon.Engine.StackChunkAccessor.LoadIntoSlot*
+  name: LoadIntoSlot
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_LoadIntoSlot_
+  commentId: Overload:Typhon.Engine.StackChunkAccessor.LoadIntoSlot
+  isSpec: "True"
+  fullName: Typhon.Engine.StackChunkAccessor.LoadIntoSlot
+  nameWithType: StackChunkAccessor.LoadIntoSlot
+- uid: Typhon.Engine.StackChunkAccessor.MaxScope
+  name: MaxScope
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_MaxScope
+  commentId: F:Typhon.Engine.StackChunkAccessor.MaxScope
+  fullName: Typhon.Engine.StackChunkAccessor.MaxScope
+  nameWithType: StackChunkAccessor.MaxScope
+- uid: Typhon.Engine.StackChunkAccessor.TryPromoteChunk(System.Int32)
+  name: TryPromoteChunk(int)
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_TryPromoteChunk_System_Int32_
+  commentId: M:Typhon.Engine.StackChunkAccessor.TryPromoteChunk(System.Int32)
+  name.vb: TryPromoteChunk(Integer)
+  fullName: Typhon.Engine.StackChunkAccessor.TryPromoteChunk(int)
+  fullName.vb: Typhon.Engine.StackChunkAccessor.TryPromoteChunk(Integer)
+  nameWithType: StackChunkAccessor.TryPromoteChunk(int)
+  nameWithType.vb: StackChunkAccessor.TryPromoteChunk(Integer)
+- uid: Typhon.Engine.StackChunkAccessor.TryPromoteChunk*
+  name: TryPromoteChunk
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_TryPromoteChunk_
+  commentId: Overload:Typhon.Engine.StackChunkAccessor.TryPromoteChunk
+  isSpec: "True"
+  fullName: Typhon.Engine.StackChunkAccessor.TryPromoteChunk
+  nameWithType: StackChunkAccessor.TryPromoteChunk
+- uid: Typhon.Engine.StackChunkAccessor.TryPromoteSlot(System.Int32)
+  name: TryPromoteSlot(int)
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_TryPromoteSlot_System_Int32_
+  commentId: M:Typhon.Engine.StackChunkAccessor.TryPromoteSlot(System.Int32)
+  name.vb: TryPromoteSlot(Integer)
+  fullName: Typhon.Engine.StackChunkAccessor.TryPromoteSlot(int)
+  fullName.vb: Typhon.Engine.StackChunkAccessor.TryPromoteSlot(Integer)
+  nameWithType: StackChunkAccessor.TryPromoteSlot(int)
+  nameWithType.vb: StackChunkAccessor.TryPromoteSlot(Integer)
+- uid: Typhon.Engine.StackChunkAccessor.TryPromoteSlot*
+  name: TryPromoteSlot
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor_TryPromoteSlot_
+  commentId: Overload:Typhon.Engine.StackChunkAccessor.TryPromoteSlot
+  isSpec: "True"
+  fullName: Typhon.Engine.StackChunkAccessor.TryPromoteSlot
+  nameWithType: StackChunkAccessor.TryPromoteSlot
+- uid: Typhon.Engine.StackChunkAccessor._baseAddresses
+  name: _baseAddresses
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor__baseAddresses
+  commentId: F:Typhon.Engine.StackChunkAccessor._baseAddresses
+  fullName: Typhon.Engine.StackChunkAccessor._baseAddresses
+  nameWithType: StackChunkAccessor._baseAddresses
+- uid: Typhon.Engine.StackChunkAccessor._capacity
+  name: _capacity
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor__capacity
+  commentId: F:Typhon.Engine.StackChunkAccessor._capacity
+  fullName: Typhon.Engine.StackChunkAccessor._capacity
+  nameWithType: StackChunkAccessor._capacity
+- uid: Typhon.Engine.StackChunkAccessor._changeSet
+  name: _changeSet
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor__changeSet
+  commentId: F:Typhon.Engine.StackChunkAccessor._changeSet
+  fullName: Typhon.Engine.StackChunkAccessor._changeSet
+  nameWithType: StackChunkAccessor._changeSet
+- uid: Typhon.Engine.StackChunkAccessor._clockHand
+  name: _clockHand
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor__clockHand
+  commentId: F:Typhon.Engine.StackChunkAccessor._clockHand
+  fullName: Typhon.Engine.StackChunkAccessor._clockHand
+  nameWithType: StackChunkAccessor._clockHand
+- uid: Typhon.Engine.StackChunkAccessor._currentScope
+  name: _currentScope
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor__currentScope
+  commentId: F:Typhon.Engine.StackChunkAccessor._currentScope
+  fullName: Typhon.Engine.StackChunkAccessor._currentScope
+  nameWithType: StackChunkAccessor._currentScope
+- uid: Typhon.Engine.StackChunkAccessor._dirtyFlags
+  name: _dirtyFlags
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor__dirtyFlags
+  commentId: F:Typhon.Engine.StackChunkAccessor._dirtyFlags
+  fullName: Typhon.Engine.StackChunkAccessor._dirtyFlags
+  nameWithType: StackChunkAccessor._dirtyFlags
+- uid: Typhon.Engine.StackChunkAccessor._pageAccessors
+  name: _pageAccessors
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor__pageAccessors
+  commentId: F:Typhon.Engine.StackChunkAccessor._pageAccessors
+  fullName: Typhon.Engine.StackChunkAccessor._pageAccessors
+  nameWithType: StackChunkAccessor._pageAccessors
+- uid: Typhon.Engine.StackChunkAccessor._pageIndices
+  name: _pageIndices
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor__pageIndices
+  commentId: F:Typhon.Engine.StackChunkAccessor._pageIndices
+  fullName: Typhon.Engine.StackChunkAccessor._pageIndices
+  nameWithType: StackChunkAccessor._pageIndices
+- uid: Typhon.Engine.StackChunkAccessor._promoteCounters
+  name: _promoteCounters
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor__promoteCounters
+  commentId: F:Typhon.Engine.StackChunkAccessor._promoteCounters
+  fullName: Typhon.Engine.StackChunkAccessor._promoteCounters
+  nameWithType: StackChunkAccessor._promoteCounters
+- uid: Typhon.Engine.StackChunkAccessor._scopeLevels
+  name: _scopeLevels
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor__scopeLevels
+  commentId: F:Typhon.Engine.StackChunkAccessor._scopeLevels
+  fullName: Typhon.Engine.StackChunkAccessor._scopeLevels
+  nameWithType: StackChunkAccessor._scopeLevels
+- uid: Typhon.Engine.StackChunkAccessor._segment
+  name: _segment
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor__segment
+  commentId: F:Typhon.Engine.StackChunkAccessor._segment
+  fullName: Typhon.Engine.StackChunkAccessor._segment
+  nameWithType: StackChunkAccessor._segment
+- uid: Typhon.Engine.StackChunkAccessor._stride
+  name: _stride
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor__stride
+  commentId: F:Typhon.Engine.StackChunkAccessor._stride
+  fullName: Typhon.Engine.StackChunkAccessor._stride
+  nameWithType: StackChunkAccessor._stride
+- uid: Typhon.Engine.StackChunkAccessor._usedSlots
+  name: _usedSlots
+  href: api/Typhon.Engine.StackChunkAccessor.html#Typhon_Engine_StackChunkAccessor__usedSlots
+  commentId: F:Typhon.Engine.StackChunkAccessor._usedSlots
+  fullName: Typhon.Engine.StackChunkAccessor._usedSlots
+  nameWithType: StackChunkAccessor._usedSlots
 - uid: Typhon.Engine.String1024
   name: String1024
   href: api/Typhon.Engine.String1024.html
@@ -18991,6 +19419,44 @@ references:
   fullName.vb: Typhon.Engine.StructAllocator(Of T).Get
   nameWithType: StructAllocator<T>.Get
   nameWithType.vb: StructAllocator(Of T).Get
+- uid: Typhon.Engine.ThrowHelper
+  name: ThrowHelper
+  href: api/Typhon.Engine.ThrowHelper.html
+  commentId: T:Typhon.Engine.ThrowHelper
+  fullName: Typhon.Engine.ThrowHelper
+  nameWithType: ThrowHelper
+- uid: Typhon.Engine.ThrowHelper.ThrowArgument(System.String)
+  name: ThrowArgument(string)
+  href: api/Typhon.Engine.ThrowHelper.html#Typhon_Engine_ThrowHelper_ThrowArgument_System_String_
+  commentId: M:Typhon.Engine.ThrowHelper.ThrowArgument(System.String)
+  name.vb: ThrowArgument(String)
+  fullName: Typhon.Engine.ThrowHelper.ThrowArgument(string)
+  fullName.vb: Typhon.Engine.ThrowHelper.ThrowArgument(String)
+  nameWithType: ThrowHelper.ThrowArgument(string)
+  nameWithType.vb: ThrowHelper.ThrowArgument(String)
+- uid: Typhon.Engine.ThrowHelper.ThrowArgument*
+  name: ThrowArgument
+  href: api/Typhon.Engine.ThrowHelper.html#Typhon_Engine_ThrowHelper_ThrowArgument_
+  commentId: Overload:Typhon.Engine.ThrowHelper.ThrowArgument
+  isSpec: "True"
+  fullName: Typhon.Engine.ThrowHelper.ThrowArgument
+  nameWithType: ThrowHelper.ThrowArgument
+- uid: Typhon.Engine.ThrowHelper.ThrowInvalidOp(System.String)
+  name: ThrowInvalidOp(string)
+  href: api/Typhon.Engine.ThrowHelper.html#Typhon_Engine_ThrowHelper_ThrowInvalidOp_System_String_
+  commentId: M:Typhon.Engine.ThrowHelper.ThrowInvalidOp(System.String)
+  name.vb: ThrowInvalidOp(String)
+  fullName: Typhon.Engine.ThrowHelper.ThrowInvalidOp(string)
+  fullName.vb: Typhon.Engine.ThrowHelper.ThrowInvalidOp(String)
+  nameWithType: ThrowHelper.ThrowInvalidOp(string)
+  nameWithType.vb: ThrowHelper.ThrowInvalidOp(String)
+- uid: Typhon.Engine.ThrowHelper.ThrowInvalidOp*
+  name: ThrowInvalidOp
+  href: api/Typhon.Engine.ThrowHelper.html#Typhon_Engine_ThrowHelper_ThrowInvalidOp_
+  commentId: Overload:Typhon.Engine.ThrowHelper.ThrowInvalidOp
+  isSpec: "True"
+  fullName: Typhon.Engine.ThrowHelper.ThrowInvalidOp
+  nameWithType: ThrowHelper.ThrowInvalidOp
 - uid: Typhon.Engine.TimeManager
   name: TimeManager
   href: api/Typhon.Engine.TimeManager.html

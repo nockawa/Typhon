@@ -1748,6 +1748,20 @@
     },
     {
       "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.PageAccessorBuffer.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.PageAccessorBuffer.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.PageAccessorBuffer",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.PageAccessorBuffer.yml\" sourcestartlinenumber=\"1\">Inline array for PageAccessor storage (C# 12+).\nAllows fixed-size array of structs to be embedded in ref struct.</p>\n"
+    },
+    {
+      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.PageBaseHeader.yml",
       "output": {
         ".html": {
@@ -2098,6 +2112,20 @@
     },
     {
       "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.StackChunkAccessor.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.StackChunkAccessor.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.StackChunkAccessor",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.StackChunkAccessor.yml\" sourcestartlinenumber=\"1\">Stack-allocated chunk accessor with scope-based protection.\nZero heap allocation, SIMD-optimized, safe for recursion.</p>\n<p sourcefile=\"api/Typhon.Engine.StackChunkAccessor.yml\" sourcestartlinenumber=\"4\">All state is self-contained - no external allocations required.</p>\n"
+    },
+    {
+      "type": "ManagedReference",
       "source_relative_path": "api/Typhon.Engine.String1024.yml",
       "output": {
         ".html": {
@@ -2179,6 +2207,20 @@
       "IsMRef": true,
       "Title": "Typhon.Engine.StructAllocator<T>",
       "Summary": null
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/Typhon.Engine.ThrowHelper.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/Typhon.Engine.ThrowHelper.html"
+        }
+      },
+      "version": "",
+      "Uid": null,
+      "IsMRef": true,
+      "Title": "Typhon.Engine.ThrowHelper",
+      "Summary": "<p sourcefile=\"api/Typhon.Engine.ThrowHelper.yml\" sourcestartlinenumber=\"1\">Helper for throwing exceptions without inlining the throw site.</p>\n"
     },
     {
       "type": "ManagedReference",

@@ -2,11 +2,11 @@
 <html>
   <head>
     <meta charset="utf-8">
-      <title>Struct Transaction.CommitContext | Typhon </title>
+      <title>Struct PageAccessorBuffer | Typhon </title>
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <meta name="title" content="Struct Transaction.CommitContext | Typhon ">
+      <meta name="title" content="Struct PageAccessorBuffer | Typhon ">
       
-      
+      <meta name="description" content="Inline array for PageAccessor storage (C# 12+). Allows fixed-size array of structs to be embedded in ref struct.">
       <link rel="icon" href="../images/favicon.ico">
       <link rel="stylesheet" href="../public/docfx.min.css">
       <link rel="stylesheet" href="../public/main.css">
@@ -16,7 +16,7 @@
       <meta name="docfx:rel" content="../">
       
       
-      <meta name="docfx:docurl" content="https://github.com/nockawa/Typhon/new/new-persistence-layer/apiSpec/new?filename=Typhon_Engine_Transaction_CommitContext.md&amp;value=---%0Auid%3A%20Typhon.Engine.Transaction.CommitContext%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
+      <meta name="docfx:docurl" content="https://github.com/nockawa/Typhon/new/new-persistence-layer/apiSpec/new?filename=Typhon_Engine_PageAccessorBuffer.md&amp;value=---%0Auid%3A%20Typhon.Engine.PageAccessorBuffer%0Asummary%3A%20&#39;*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax&#39;%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">
       <meta name="loc:inThisArticle" content="In this article">
       <meta name="loc:searchResultsCount" content="{count} results for &quot;{query}&quot;">
       <meta name="loc:searchNoResults" content="No results for &quot;{query}&quot;">
@@ -84,12 +84,12 @@
           <nav id="breadcrumb"></nav>
         </div>
 
-        <article data-uid="Typhon.Engine.Transaction.CommitContext">
+        <article data-uid="Typhon.Engine.PageAccessorBuffer">
 
 
 
-  <h1 id="Typhon_Engine_Transaction_CommitContext" data-uid="Typhon.Engine.Transaction.CommitContext" class="text-break">
-Struct Transaction.CommitContext  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1452"><i class="bi bi-code-slash"></i></a>
+  <h1 id="Typhon_Engine_PageAccessorBuffer" data-uid="Typhon.Engine.PageAccessorBuffer" class="text-break">
+Struct PageAccessorBuffer  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/StackChunkAccessor.cs/#L14"><i class="bi bi-code-slash"></i></a>
   </h1>
 
   <div class="facts text-secondary">
@@ -97,11 +97,13 @@ Struct Transaction.CommitContext  <a class="header-action link-secondary" title=
   <dl><dt>Assembly</dt><dd>Typhon.Engine.dll</dd></dl>
   </div>
 
-  <div class="markdown summary"></div>
+  <div class="markdown summary"><p>Inline array for PageAccessor storage (C# 12+).
+Allows fixed-size array of structs to be embedded in ref struct.</p>
+</div>
   <div class="markdown conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">internal ref struct Transaction.CommitContext</code></pre>
+    <pre><code class="lang-csharp hljs">internal struct PageAccessorBuffer</code></pre>
   </div>
 
 
@@ -143,16 +145,16 @@ Struct Transaction.CommitContext  <a class="header-action link-secondary" title=
 
 
 
-  <h3 id="Typhon_Engine_Transaction_CommitContext_CompRevInfo" data-uid="Typhon.Engine.Transaction.CommitContext.CompRevInfo">
-  CompRevInfo
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1456"><i class="bi bi-code-slash"></i></a>
+  <h3 id="Typhon_Engine_PageAccessorBuffer__element" data-uid="Typhon.Engine.PageAccessorBuffer._element">
+  _element
+  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/StackChunkAccessor.cs/#L17"><i class="bi bi-code-slash"></i></a>
   </h3>
 
   <div class="markdown level1 summary"></div>
   <div class="markdown level1 conceptual"></div>
 
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public ref Transaction.ComponentInfoBase.CompRevInfo CompRevInfo</code></pre>
+    <pre><code class="lang-csharp hljs">private PageAccessor _element</code></pre>
   </div>
 
 
@@ -160,127 +162,7 @@ Struct Transaction.CommitContext  <a class="header-action link-secondary" title=
 
   <h4 class="section">Field Value</h4>
   <dl class="parameters">
-    <dt><a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfoBase.html">ComponentInfoBase</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfoBase.CompRevInfo.html">CompRevInfo</a></dt>
-    <dd></dd>
-  </dl>
-
-
-
-
-
-
-
-
-
-
-  <h3 id="Typhon_Engine_Transaction_CommitContext_Info" data-uid="Typhon.Engine.Transaction.CommitContext.Info">
-  Info
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1455"><i class="bi bi-code-slash"></i></a>
-  </h3>
-
-  <div class="markdown level1 summary"></div>
-  <div class="markdown level1 conceptual"></div>
-
-  <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public Transaction.ComponentInfoBase Info</code></pre>
-  </div>
-
-
-
-
-  <h4 class="section">Field Value</h4>
-  <dl class="parameters">
-    <dt><a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.ComponentInfoBase.html">ComponentInfoBase</a></dt>
-    <dd></dd>
-  </dl>
-
-
-
-
-
-
-
-
-
-
-  <h3 id="Typhon_Engine_Transaction_CommitContext_IsRollback" data-uid="Typhon.Engine.Transaction.CommitContext.IsRollback">
-  IsRollback
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1458"><i class="bi bi-code-slash"></i></a>
-  </h3>
-
-  <div class="markdown level1 summary"></div>
-  <div class="markdown level1 conceptual"></div>
-
-  <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public bool IsRollback</code></pre>
-  </div>
-
-
-
-
-  <h4 class="section">Field Value</h4>
-  <dl class="parameters">
-    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.boolean">bool</a></dt>
-    <dd></dd>
-  </dl>
-
-
-
-
-
-
-
-
-
-
-  <h3 id="Typhon_Engine_Transaction_CommitContext_PrimaryKey" data-uid="Typhon.Engine.Transaction.CommitContext.PrimaryKey">
-  PrimaryKey
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1454"><i class="bi bi-code-slash"></i></a>
-  </h3>
-
-  <div class="markdown level1 summary"></div>
-  <div class="markdown level1 conceptual"></div>
-
-  <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public long PrimaryKey</code></pre>
-  </div>
-
-
-
-
-  <h4 class="section">Field Value</h4>
-  <dl class="parameters">
-    <dt><a class="xref" href="https://learn.microsoft.com/dotnet/api/system.int64">long</a></dt>
-    <dd></dd>
-  </dl>
-
-
-
-
-
-
-
-
-
-
-  <h3 id="Typhon_Engine_Transaction_CommitContext_Solver" data-uid="Typhon.Engine.Transaction.CommitContext.Solver">
-  Solver
-  <a class="header-action link-secondary" title="View source" href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1457"><i class="bi bi-code-slash"></i></a>
-  </h3>
-
-  <div class="markdown level1 summary"></div>
-  <div class="markdown level1 conceptual"></div>
-
-  <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public Transaction.ConcurrencyConflictSolver Solver</code></pre>
-  </div>
-
-
-
-
-  <h4 class="section">Field Value</h4>
-  <dl class="parameters">
-    <dt><a class="xref" href="Typhon.Engine.Transaction.html">Transaction</a>.<a class="xref" href="Typhon.Engine.Transaction.ConcurrencyConflictSolver.html">ConcurrencyConflictSolver</a></dt>
+    <dt><a class="xref" href="Typhon.Engine.PageAccessor.html">PageAccessor</a></dt>
     <dd></dd>
   </dl>
 
@@ -296,7 +178,7 @@ Struct Transaction.CommitContext  <a class="header-action link-secondary" title=
 </article>
 
         <div class="contribution d-print-none">
-          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Database Engine/Transaction.cs/#L1452" class="edit-link">Edit this page</a>
+          <a href="https://github.com/nockawa/Typhon/blob/new-persistence-layer/src/Typhon.Engine/Persistence Layer/StackChunkAccessor.cs/#L14" class="edit-link">Edit this page</a>
         </div>
 
 
