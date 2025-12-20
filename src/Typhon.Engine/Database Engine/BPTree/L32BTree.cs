@@ -697,7 +697,7 @@ public class L32MultipleBTree<TKey> : L32BTree<TKey> where TKey : unmanaged
         }
 
         public override int Append(int bufferId, int value, ChunkRandomAccessor accessor) => _valueStore.AddElement(bufferId, value, accessor);
-        public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId, ChunkRandomAccessor accessor) => _valueStore.GetReadOnlyAccessor(bufferId, accessor.ChangeSet);
+        public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId, ChunkRandomAccessor accessor) => _valueStore.GetReadOnlyAccessor(bufferId);
 
         public override int CreateBuffer(ChunkRandomAccessor accessor) => _valueStore.AllocateBuffer(accessor);
 

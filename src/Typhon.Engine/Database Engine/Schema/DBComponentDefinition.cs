@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -40,6 +41,9 @@ public enum FieldType
     QuaternionF = 15,
     QuaternionD = DoubleFloat |  15,
     
+    Collection  = 16,
+    Component   = 17,
+    
     Unsigned    = 256,
     DoubleFloat = 512
 }
@@ -49,6 +53,7 @@ public class DBComponentDefinition
 {
     public string Name { get; private set; }
     public int Revision { get; private set; }
+    public bool AllowMultiple { get; private set; }
     public Type POCOType { get; internal set; }
     public string FullName => FormatFullName(Name, Revision);
     
@@ -83,21 +88,32 @@ public class DBComponentDefinition
     [PublicAPI]
     public class Field
     {
-        public Field(int fieldId, string name, FieldType type, int offsetInComponentStorage)
+        public Field(int fieldId, string name, FieldType type, FieldType underlyingType, int offsetInComponentStorage, Type dotNetType)
         {
             FieldId = fieldId;
             Name = name;
             Type = type;
+            DotNetType = dotNetType;
+            if (Type == FieldType.Collection)
+            {
+                DotNetUnderlyingType = dotNetType.GenericTypeArguments[0];
+            }
+            FieldSize = Type.SizeInComp();
+            UnderlyingType = underlyingType;
             OffsetInComponentStorage = offsetInComponentStorage;
         }
-
+        
         public int FieldId { get; }
 
         public string Name { get; }
 
         public FieldType Type { get; }
+        public FieldType UnderlyingType { get; }
 
         public int OffsetInComponentStorage { get; }
+        public Type DotNetType { get; }
+        public Type DotNetUnderlyingType { get; }
+        public int FieldSize { get; }
 
         public bool IsStatic { get; set; }
 
@@ -135,20 +151,21 @@ public class DBComponentDefinition
         public bool DoesFieldTypeSupportIndex() => (Type >= FieldType.Byte) && ((FieldType)((int)Type&0xFF) <= FieldType.String64);
     }
 
-    internal DBComponentDefinition(string name, int revision)
+    internal DBComponentDefinition(string name, int revision, bool allowMultiple)
     {
         Name = name;
         Revision = revision;
+        AllowMultiple = allowMultiple;
         _fieldsByName = new Dictionary<string, Field>();
     }
 
-    public Field CreateField(int fieldId, string name, FieldType type, int offset)
+    public Field CreateField(int fieldId, string name, FieldType type, FieldType underlyingType, int offset, Type dotNetType)
     {
         if (_fieldsByName.ContainsKey(name))
         {
             throw new ArgumentException($"The field name '{name}' is already taken", nameof(name));
         }
-        var field = new Field(fieldId, name, type, offset);
+        var field = new Field(fieldId, name, type, underlyingType, offset, dotNetType);
         _fieldsByName.Add(name, field);
         return field;
     }
@@ -218,46 +235,56 @@ public class DBComponentDefinition
 
 public static class DatabaseSchemaExtensions
 {
-    public static FieldType FromType<T>() => FromType(typeof(T));
+    public static (FieldType field, FieldType under) FromType<T>() => FromType(typeof(T));
 
-    public static FieldType FromType(Type t)
+    public static (FieldType field, FieldType under) FromType(Type t)
     {
         switch (Type.GetTypeCode(t))
         {
-            case TypeCode.Boolean: return FieldType.Boolean;
+            case TypeCode.Boolean: return (FieldType.Boolean, FieldType.None);
 
-            case TypeCode.Byte: return FieldType.UByte;
-            case TypeCode.SByte: return FieldType.Byte;
-            case TypeCode.Char: return FieldType.Char;
+            case TypeCode.Byte: return (FieldType.UByte, FieldType.None);
+            case TypeCode.SByte: return (FieldType.Byte, FieldType.None);
+            case TypeCode.Char: return (FieldType.Char, FieldType.None);
 
-            case TypeCode.Double: return FieldType.Double;
+            case TypeCode.Double: return (FieldType.Double, FieldType.None);
 
-            case TypeCode.Int16: return FieldType.Short;
-            case TypeCode.Int32: return FieldType.Int;
-            case TypeCode.Int64: return FieldType.Long;
-            case TypeCode.UInt16: return FieldType.UShort;
-            case TypeCode.UInt32: return FieldType.UInt;
-            case TypeCode.UInt64: return FieldType.ULong;
+            case TypeCode.Int16: return (FieldType.Short, FieldType.None);
+            case TypeCode.Int32: return (FieldType.Int, FieldType.None);
+            case TypeCode.Int64: return (FieldType.Long, FieldType.None);
+            case TypeCode.UInt16: return (FieldType.UShort, FieldType.None);
+            case TypeCode.UInt32: return (FieldType.UInt, FieldType.None);
+            case TypeCode.UInt64: return (FieldType.ULong, FieldType.None);
+        }
+        
+        var ca = t.GetCustomAttribute<ComponentAttribute>();
+        if (ca != null)
+        {
+            return (FieldType.Component, FieldType.None);
         }
 
-        if (t == typeof(float)) return FieldType.Float;
-        if (t == typeof(String64)) return FieldType.String64;
-        if (t == typeof(String1024)) return FieldType.String1024;
-        if (t == typeof(VarString)) return FieldType.String;
+        if (t == typeof(float)) return (FieldType.Float, FieldType.None);
+        if (t == typeof(String64)) return (FieldType.String64, FieldType.None);
+        if (t == typeof(String1024)) return (FieldType.String1024, FieldType.None);
+        if (t == typeof(VarString)) return (FieldType.String, FieldType.None);
 
-        if (t == typeof(Point2F)) return FieldType.Point2F;
-        if (t == typeof(Point3F)) return FieldType.Point3F;
-        if (t == typeof(Point4F)) return FieldType.Point4F;
+        if (t == typeof(Point2F)) return (FieldType.Point2F, FieldType.None);
+        if (t == typeof(Point3F)) return (FieldType.Point3F, FieldType.None);
+        if (t == typeof(Point4F)) return (FieldType.Point4F, FieldType.None);
 
-        if (t == typeof(Point2D)) return FieldType.Point2D;
-        if (t == typeof(Point3D)) return FieldType.Point3D;
-        if (t == typeof(Point4D)) return FieldType.Point4D;
+        if (t == typeof(Point2D)) return (FieldType.Point2D, FieldType.None);
+        if (t == typeof(Point3D)) return (FieldType.Point3D, FieldType.None);
+        if (t == typeof(Point4D)) return (FieldType.Point4D, FieldType.None);
 
-        if (t == typeof(QuaternionF)) return FieldType.QuaternionF;
-        if (t == typeof(QuaternionD)) return FieldType.QuaternionD;
+        if (t == typeof(QuaternionF)) return (FieldType.QuaternionF, FieldType.None);
+        if (t == typeof(QuaternionD)) return (FieldType.QuaternionD, FieldType.None);
 
-        return FieldType.None;
+        if (t.IsGenericType && t.GetGenericTypeDefinition() == typeof(ComponentCollection<>))
+        {
+            return (FieldType.Collection, FromType(t.GenericTypeArguments[0]).field);
+        }
 
+        return (FieldType.None, FieldType.None);
     }
 
     public static int SizeInComp(this FieldType field)
@@ -294,6 +321,9 @@ public static class DatabaseSchemaExtensions
 
             case FieldType.QuaternionF: return 16;
             case FieldType.QuaternionD: return 32;
+            
+            case FieldType.Collection: return 4;
+            case FieldType.Component: return 8;
 
             default: return 0;
         }

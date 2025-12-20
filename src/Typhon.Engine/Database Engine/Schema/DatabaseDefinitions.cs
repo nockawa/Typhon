@@ -24,7 +24,7 @@ public class DatabaseDefinitions
 
     public interface IDBComponentDefinitionBuilder
     {
-        IDbComponentFieldDefinitionBuilder WithField(int fieldId, string name, FieldType type, int offset);
+        IDbComponentFieldDefinitionBuilder WithField<T>(int fieldId, string name, int offset) where T : unmanaged;
         void Build();
         IDBComponentDefinitionBuilder WithPOCO<T>();
     }
@@ -40,10 +40,10 @@ public class DatabaseDefinitions
         private readonly DatabaseDefinitions _owner;
         protected readonly DBComponentDefinition Component;
 
-        public DBComponentDefinitionBuilder(DatabaseDefinitions owner, string name, int revision)
+        public DBComponentDefinitionBuilder(DatabaseDefinitions owner, string name, int revision, bool allowMultiple = false)
         {
             _owner = owner;
-            Component = new DBComponentDefinition(name, revision);
+            Component = new DBComponentDefinition(name, revision, allowMultiple);
         }
 
         protected DBComponentDefinitionBuilder(DatabaseDefinitions owner, DBComponentDefinition component)
@@ -58,8 +58,8 @@ public class DatabaseDefinitions
             return this;
         }
 
-        public IDbComponentFieldDefinitionBuilder WithField(int fieldId, string name, FieldType type, int offset) 
-            => new DBComponentFieldDefinitionBuilder(_owner, Component, fieldId, name, type, offset);
+        public IDbComponentFieldDefinitionBuilder WithField<T>(int fieldId, string name, int offset) where T : unmanaged 
+            => new DBComponentFieldDefinitionBuilder(_owner, Component, fieldId, name, typeof(T), offset);
 
         public void Build()
         {
@@ -93,11 +93,12 @@ public class DatabaseDefinitions
         }
 
         internal DBComponentFieldDefinitionBuilder(DatabaseDefinitions owner, DBComponentDefinition component, int fieldId, string fieldName,
-            FieldType fieldType, int offset) : base(owner, component)
+            Type type, int offset) : base(owner, component)
         {
+            var (fieldType, underType) = DatabaseSchemaExtensions.FromType(type);
             DBComponentDefinition.Field.CheckName(fieldName);
             DBComponentDefinition.Field.CheckType(fieldType);
-            _field = Component.CreateField(fieldId, fieldName, fieldType, offset);
+            _field = Component.CreateField(fieldId, fieldName, fieldType, underType, offset, type);
         }
 
     }
@@ -114,7 +115,7 @@ public class DatabaseDefinitions
             throw new InvalidOperationException($"Missing the ComponentAttribute on the type {t} declaration");
         }
         
-        var compDef = new DBComponentDefinition(ca.Name ?? t.Name, ca.Revision) { POCOType = t };
+        var compDef = new DBComponentDefinition(ca.Name ?? t.Name, ca.Revision, ca.AllowMultiple) { POCOType = t };
 
         if (_components.TryGetValue(compDef.FullName, out _))
         {
@@ -133,7 +134,7 @@ public class DatabaseDefinitions
             var fa = fieldInfo.GetCustomAttribute<FieldAttribute>();
             var ia = fieldInfo.GetCustomAttribute<IndexAttribute>();
 
-            var fieldType = DatabaseSchemaExtensions.FromType(fieldInfo.FieldType);
+            var (fieldType, fieldUnderlyingType) = DatabaseSchemaExtensions.FromType(fieldInfo.FieldType);
             if (fieldType == FieldType.None)
             {
                 continue;
@@ -143,7 +144,7 @@ public class DatabaseDefinitions
             var fieldName = fa?.Name ?? fieldInfo.Name;
             var fieldOffset = Marshal.OffsetOf(t, fieldInfo.Name).ToInt32();
 
-            var field = compDef.CreateField(fa?.FieldId ?? fieldId++, fieldName, fieldType, fieldOffset);
+            var field = compDef.CreateField(fa?.FieldId ?? fieldId++, fieldName, fieldType, fieldUnderlyingType, fieldOffset, fieldInfo.FieldType);
 
             // Index related data
             if (ia == null)

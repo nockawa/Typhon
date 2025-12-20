@@ -2,8 +2,6 @@
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 
 namespace Typhon.Engine.Tests.Database_Engine;
@@ -293,7 +291,49 @@ class TransactionTests : TestBase<TransactionTests>
     }
 
     [Test]
-    unsafe public void ComponentRevisionTortureTest()
+    public void CreateReadUpdate_MultipleComponent_SuccessfulOperation()
+    {
+        long e1;
+        var a = new CompA(1);
+        Span<CompE> eList = stackalloc CompE[16];
+        for (int i = 0; i < eList.Length; i++)
+        {
+            eList[i] = new CompE(12.0f + i, i, 3*i);
+        }
+        
+        {
+            using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+            RegisterComponents(dbe);
+            
+            {
+                using var t = dbe.CreateTransaction();
+
+                e1 = t.CreateEntity(ref a, eList);
+                Assert.That(e1, Is.Not.Zero, "A valid entity id must be non-zero");
+                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1), "Creating a component should lead to a unique revision");
+
+                var res = t.Commit();
+                Assert.That(res, Is.True);
+            }
+            
+            {
+                using var t = dbe.CreateTransaction();
+
+                var res = t.ReadEntity(e1, out a, out CompE[] eList2);
+                Assert.That(res, Is.True);
+                Assert.That(eList2.Length, Is.EqualTo(16));
+
+                for (int i = 0; i < 16; i++)
+                {
+                    Assert.That(eList[i], Is.EqualTo(eList2[i]));
+                }
+            }
+            
+        }
+    }    
+
+    [Test]
+    public void ComponentRevisionTortureTest()
     {
         {
             using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
@@ -326,9 +366,15 @@ class TransactionTests : TestBase<TransactionTests>
             int[] operations = [12, 5, 20, 3, 15, 10, 8, 7, 20];
             
             var commit = true;
+            var rbCount = 0;
             // var revisions = new List<(bool, CompA)>(operations.Sum());
             foreach (int opCount in operations)
             {
+                if (!commit)
+                {
+                    rbCount += opCount;
+                }
+                
                 for (int i = 0; i < opCount; i++)
                 {
                     using var t = dbe.CreateTransaction();
@@ -349,7 +395,7 @@ class TransactionTests : TestBase<TransactionTests>
             // Commit the long-running transaction, this should trigger a cleanup of old revisions, keeping only the last one which is the long running one
             {
                 using var readTransaction = dbe.CreateTransaction();
-                Assert.That(readTransaction.GetRevisionCount<CompA>(e1), Is.EqualTo(curRevisionCount), "The number of revisions stored should match the number of committed updates plus the original creation");
+                Assert.That(readTransaction.GetRevisionCount<CompA>(e1), Is.EqualTo(curRevisionCount-rbCount), "The number of revisions stored should match the number of committed updates plus the original creation");
                 var res = longRunningTransaction.Commit();
                 Assert.That(res, Is.True);
                 longRunningTransaction.Dispose();
@@ -1007,7 +1053,7 @@ class TransactionTests : TestBase<TransactionTests>
         // Create the entity e1, revision R1
         {
             using var t1 = dbe.CreateTransaction();
-            Logger.LogInformation("T1 creation time {tick}", t1.TransactionTick);
+            Logger.LogInformation("T1 creation time {tick}", t1.TSN);
 
             e1 = t1.CreateEntity(ref aR1, ref bR1, ref cR1);
 
@@ -1023,7 +1069,7 @@ class TransactionTests : TestBase<TransactionTests>
         {
             // ReSharper disable once AccessToDisposedClosure
             t2 = dbe.CreateTransaction();
-            Logger.LogInformation("T2 creation time {tick}", t2.TransactionTick);
+            Logger.LogInformation("T2 creation time {tick}", t2.TSN);
         });
 
         // Change the entity to create a new revision
@@ -1031,7 +1077,7 @@ class TransactionTests : TestBase<TransactionTests>
         {
             // ReSharper disable once AccessToDisposedClosure
             using var t3 = dbe.CreateTransaction();
-            Logger.LogInformation("T3 creation time {tick}", t3.TransactionTick);
+            Logger.LogInformation("T3 creation time {tick}", t3.TSN);
             t3.ReadEntity<CompB>(e1, out var lbR2);
 
             lbR2 = bR2;
@@ -1082,5 +1128,309 @@ class TransactionTests : TestBase<TransactionTests>
 
         t.Run();
 
+    }
+
+    /// <summary>
+    /// Tests that when a component is deleted and all its revisions are cleaned up,
+    /// the primary key index entry should be removed.
+    /// This test verifies the expected behavior - currently the cleanup is not implemented (TOFIX in Transaction.cs).
+    /// </summary>
+    [Test]
+    public void DeleteComponent_WhenLastRevisionCleanedUp_PrimaryKeyIndexShouldBeRemoved()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        var a = new CompA(42);
+
+        // Create entity
+        {
+            using var t = dbe.CreateTransaction();
+            e1 = t.CreateEntity(ref a);
+            Assert.That(e1, Is.Not.Zero, "Entity ID should be non-zero");
+            var res = t.Commit();
+            Assert.That(res, Is.True, "Commit should succeed");
+        }
+
+        // Verify entity exists in primary key index
+        var ct = dbe.GetComponentTable<CompA>();
+        Assert.That(ct, Is.Not.Null, "ComponentTable should exist");
+
+        using (var accessor = ct.DefaultIndexSegment.CreateChunkRandomAccessor(8))
+        {
+            var exists = ct.PrimaryKeyIndex.TryGet(e1, out _, accessor);
+            Assert.That(exists, Is.True, "Entity should exist in primary key index after creation");
+        }
+
+        // Delete entity - since this is the only transaction, cleanup should happen immediately
+        {
+            using var t = dbe.CreateTransaction();
+            var deleted = t.DeleteEntity<CompA>(e1);
+            Assert.That(deleted, Is.True, "Delete should succeed");
+            var res = t.Commit();
+            Assert.That(res, Is.True, "Commit should succeed");
+        }
+
+        // Verify entity is no longer readable
+        {
+            using var t = dbe.CreateTransaction();
+            var readable = t.ReadEntity(e1, out CompA _);
+            Assert.That(readable, Is.False, "Entity should not be readable after deletion");
+        }
+
+        // Check primary key index - entry should be removed after cleanup
+        // NOTE: This assertion documents the EXPECTED behavior.
+        // Currently this will FAIL because the cleanup code is commented out (TOFIX in Transaction.cs line ~971)
+        using (var accessor = ct.DefaultIndexSegment.CreateChunkRandomAccessor(8))
+        {
+            var existsAfterDelete = ct.PrimaryKeyIndex.TryGet(e1, out _, accessor);
+            Assert.That(existsAfterDelete, Is.False,
+                "Primary key index entry should be removed when component is deleted and all revisions cleaned up");
+        }
+    }
+
+    /// <summary>
+    /// Tests that when a component is created in one transaction and deleted in another,
+    /// the primary key index entry should be removed after cleanup.
+    /// </summary>
+    [Test]
+    public void CreateInOneTxn_DeleteInAnother_PrimaryKeyIndexShouldBeRemoved()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        var a = new CompA(42);
+
+        // Create entity in first transaction
+        {
+            using var t = dbe.CreateTransaction();
+            e1 = t.CreateEntity(ref a);
+            Assert.That(e1, Is.Not.Zero, "Entity ID should be non-zero");
+            var res = t.Commit();
+            Assert.That(res, Is.True, "Commit should succeed");
+        }
+
+        var ct = dbe.GetComponentTable<CompA>();
+        Assert.That(ct, Is.Not.Null, "ComponentTable should exist");
+
+        // Verify entity exists in primary key index after creation
+        using (var accessor = ct.DefaultIndexSegment.CreateChunkRandomAccessor(8))
+        {
+            var exists = ct.PrimaryKeyIndex.TryGet(e1, out _, accessor);
+            Assert.That(exists, Is.True, "Entity should exist in primary key index after creation");
+        }
+
+        // Delete entity in second transaction
+        {
+            using var t = dbe.CreateTransaction();
+            var deleted = t.DeleteEntity<CompA>(e1);
+            Assert.That(deleted, Is.True, "Delete should succeed");
+            var res = t.Commit();
+            Assert.That(res, Is.True, "Commit should succeed");
+        }
+
+        // Verify entity is not readable
+        {
+            using var t = dbe.CreateTransaction();
+            var readable = t.ReadEntity(e1, out CompA _);
+            Assert.That(readable, Is.False, "Entity should not be readable after deletion");
+        }
+
+        // Check primary key index - entry should be removed after cleanup
+        // NOTE: This assertion documents the EXPECTED behavior.
+        using (var accessor = ct.DefaultIndexSegment.CreateChunkRandomAccessor(8))
+        {
+            var exists = ct.PrimaryKeyIndex.TryGet(e1, out _, accessor);
+            Assert.That(exists, Is.False,
+                "Primary key index should not contain entry after entity is deleted");
+        }
+    }
+
+    /// <summary>
+    /// Tests that when a component is deleted but there's a long-running transaction keeping old revisions,
+    /// the primary key index entry should remain until cleanup happens.
+    /// </summary>
+    [Test]
+    [Ignore("Still WIP")]
+    public void DeleteComponent_WithLongRunningTransaction_PrimaryKeyIndexRemainsUntilCleanup()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        var a = new CompA(42);
+
+        // Create entity
+        {
+            using var t = dbe.CreateTransaction();
+            e1 = t.CreateEntity(ref a);
+            var res = t.Commit();
+            Assert.That(res, Is.True, "Commit should succeed");
+        }
+
+        var ct = dbe.GetComponentTable<CompA>();
+
+        // Start a long-running transaction to prevent cleanup
+        var longRunningTxn = dbe.CreateTransaction();
+
+        // Read in long-running transaction to establish snapshot
+        longRunningTxn.ReadEntity(e1, out CompA _);
+
+        // Delete entity in a separate transaction
+        {
+            using var t = dbe.CreateTransaction();
+            var deleted = t.DeleteEntity<CompA>(e1);
+            Assert.That(deleted, Is.True, "Delete should succeed");
+            var res = t.Commit();
+            Assert.That(res, Is.True, "Commit should succeed");
+        }
+
+        // The primary key index should still have the entry because long-running transaction prevents cleanup
+        using (var accessor = ct.DefaultIndexSegment.CreateChunkRandomAccessor(8))
+        {
+            var existsDuringLongTxn = ct.PrimaryKeyIndex.TryGet(e1, out _, accessor);
+            Assert.That(existsDuringLongTxn, Is.True,
+                "Primary key index should retain entry while long-running transaction holds old revisions");
+        }
+
+        // Verify multiple revisions exist (create + delete)
+        {
+            using var t = dbe.CreateTransaction();
+            var revCount = t.GetRevisionCount<CompA>(e1);
+            Assert.That(revCount, Is.GreaterThanOrEqualTo(2),
+                "Should have at least 2 revisions (create and delete) while long-running transaction exists");
+        }
+
+        // Complete the long-running transaction - this should trigger cleanup
+        longRunningTxn.Commit();
+        longRunningTxn.Dispose();
+
+        // After cleanup, primary key index entry should be removed
+        // NOTE: This assertion documents the EXPECTED behavior.
+        using (var accessor = ct.DefaultIndexSegment.CreateChunkRandomAccessor(8))
+        {
+            var existsAfterCleanup = ct.PrimaryKeyIndex.TryGet(e1, out _, accessor);
+            Assert.That(existsAfterCleanup, Is.False,
+                "Primary key index entry should be removed after long-running transaction completes and cleanup runs");
+        }
+    }
+
+    /// <summary>
+    /// Tests that multiple create-delete cycles properly clean up primary key index entries.
+    /// </summary>
+    [Test]
+    public void MultipleCreateDeleteCycles_PrimaryKeyIndexShouldBeCleanedUp()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        var ct = dbe.GetComponentTable<CompA>();
+        var entityIds = new long[5];
+
+        // Create multiple entities
+        for (int i = 0; i < 5; i++)
+        {
+            using var t = dbe.CreateTransaction();
+            var a = new CompA(i * 10);
+            entityIds[i] = t.CreateEntity(ref a);
+            t.Commit();
+        }
+
+        // Verify all entities exist in index
+        using (var accessor = ct.DefaultIndexSegment.CreateChunkRandomAccessor(8))
+        {
+            for (int i = 0; i < 5; i++)
+            {
+                var exists = ct.PrimaryKeyIndex.TryGet(entityIds[i], out _, accessor);
+                Assert.That(exists, Is.True, $"Entity {i} should exist in primary key index");
+            }
+        }
+
+        // Delete entities 0, 2, 4 (odd indices in the array)
+        for (int i = 0; i < 5; i += 2)
+        {
+            using var t = dbe.CreateTransaction();
+            t.DeleteEntity<CompA>(entityIds[i]);
+            t.Commit();
+        }
+
+        // Verify deleted entities are not readable
+        for (int i = 0; i < 5; i += 2)
+        {
+            using var t = dbe.CreateTransaction();
+            var readable = t.ReadEntity(entityIds[i], out CompA _);
+            Assert.That(readable, Is.False, $"Entity {i} should not be readable after deletion");
+        }
+
+        // Verify remaining entities are still readable
+        for (int i = 1; i < 5; i += 2)
+        {
+            using var t = dbe.CreateTransaction();
+            var readable = t.ReadEntity(entityIds[i], out CompA _);
+            Assert.That(readable, Is.True, $"Entity {i} should still be readable");
+        }
+
+        // Check primary key index state
+        // NOTE: The assertions for deleted entities document EXPECTED behavior.
+        using (var accessor = ct.DefaultIndexSegment.CreateChunkRandomAccessor(8))
+        {
+            // Remaining entities should exist
+            for (int i = 1; i < 5; i += 2)
+            {
+                var exists = ct.PrimaryKeyIndex.TryGet(entityIds[i], out _, accessor);
+                Assert.That(exists, Is.True, $"Entity {i} should exist in primary key index");
+            }
+
+            // Deleted entities should not exist (expected behavior after cleanup)
+            for (int i = 0; i < 5; i += 2)
+            {
+                var exists = ct.PrimaryKeyIndex.TryGet(entityIds[i], out _, accessor);
+                Assert.That(exists, Is.False,
+                    $"Entity {i} should be removed from primary key index after deletion and cleanup");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Tests that rolling back a create operation does not leave an entry in the primary key index.
+    /// </summary>
+    [Test]
+    public void RollbackCreate_PrimaryKeyIndexShouldNotContainEntry()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        var a = new CompA(42);
+
+        // Create and rollback
+        {
+            using var t = dbe.CreateTransaction();
+            e1 = t.CreateEntity(ref a);
+            Assert.That(e1, Is.Not.Zero, "Entity ID should be non-zero");
+
+            var res = t.Rollback();
+            Assert.That(res, Is.True, "Rollback should succeed");
+        }
+
+        // Verify entity is not readable
+        {
+            using var t = dbe.CreateTransaction();
+            var readable = t.ReadEntity(e1, out CompA _);
+            Assert.That(readable, Is.False, "Entity should not be readable after rollback");
+        }
+
+        // Check primary key index - entry should not exist after rollback
+        var ct = dbe.GetComponentTable<CompA>();
+        Assert.That(ct, Is.Not.Null, "ComponentTable should exist");
+
+        using (var accessor = ct.DefaultIndexSegment.CreateChunkRandomAccessor(8))
+        {
+            var exists = ct.PrimaryKeyIndex.TryGet(e1, out _, accessor);
+            Assert.That(exists, Is.False,
+                "Primary key index should not contain entry for rolled back creation");
+        }
     }
 }

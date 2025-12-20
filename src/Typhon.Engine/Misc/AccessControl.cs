@@ -24,6 +24,7 @@ public struct AccessControl
     private volatile int _lockedByThreadId;
     private volatile int _sharedUsedCounter;
 
+    public bool IsLockedByCurrentThread => _lockedByThreadId == System.Environment.CurrentManagedThreadId;
     public int LockedByThreadId => _lockedByThreadId;
     public int SharedUsedCounter => _sharedUsedCounter;
 
