@@ -34,7 +34,7 @@ class PagedMMFTests
             .Enrich.FromLogContext()
             .Enrich.WithThreadId()
             .Enrich.WithCurrentFrame()
-            .WriteTo.Seq("http://localhost:5341", compact: true)
+            .WriteTo.Seq("http://localhost:5341")
             .CreateLogger();
 #endif
 

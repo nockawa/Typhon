@@ -64,8 +64,40 @@ class Program
 
     static void Main(string[] args)
     {
+        // Run ChunkLocation comparison benchmark
+        //BenchmarkRunner.Run<ChunkLocationBenchmark>();
+
         // Run ChunkAccessor comparison benchmark
         BenchmarkRunner.Run<ChunkAccessorBenchmark>();
+
+        /*
+        long sumA = 0;
+        long sumB = 0;
+        {
+            for (int i = 0; i < 10; i++)
+            {
+                var b = new ChunkAccessorBenchmark();
+                b.GlobalSetup();
+                sumA += b.LinkedTraversal_ChunkRandomAccessor();
+                b.GlobalCleanup();
+            }
+        }
+
+        {
+            for (int i = 0; i < 10; i++)
+            {
+                var b = new ChunkAccessorBenchmark();
+                b.GlobalSetup();
+                sumB += b.LinkedTraversal_StackChunkAccessor();
+                b.GlobalCleanup();
+            }
+        }
+
+        if (sumA != sumB)
+        {
+            throw new Exception("Sums do not match");
+        }
+        */
 
         //BenchmarkRunner.Run<BTreeBenchmark>();
         /*
