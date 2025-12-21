@@ -141,13 +141,13 @@ public class ChunkAccessorTests
         var chunkId = segment.AllocateChunk(true);
         var accessor = ChunkAccessor.Create(segment);
 
-        ref var chunk = ref accessor.Get<TestChunk32>(chunkId);
+        ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
         chunk.A = 42;
         chunk.B = 100;
         chunk.C = 123456789L;
 
         // Verify we can read back the values
-        ref var chunk2 = ref accessor.Get<TestChunk32>(chunkId);
+        ref var chunk2 = ref accessor.GetChunk<TestChunk32>(chunkId);
         Assert.That(chunk2.A, Is.EqualTo(42));
         Assert.That(chunk2.B, Is.EqualTo(100));
         Assert.That(chunk2.C, Is.EqualTo(123456789L));
@@ -165,11 +165,11 @@ public class ChunkAccessorTests
         var accessor = ChunkAccessor.Create(segment);
 
         // Write with mutable reference
-        ref var chunk = ref accessor.Get<TestChunk32>(chunkId);
+        ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
         chunk.A = 42;
 
         // Read with readonly reference
-        ref readonly var readOnlyChunk = ref accessor.GetReadOnly<TestChunk32>(chunkId);
+        ref readonly var readOnlyChunk = ref accessor.GetChunkReadOnly<TestChunk32>(chunkId);
         Assert.That(readOnlyChunk.A, Is.EqualTo(42));
 
         accessor.Dispose();
@@ -185,7 +185,7 @@ public class ChunkAccessorTests
         var chunkId = segment.AllocateChunk(true);
         var accessor = ChunkAccessor.Create(segment, changeSet);
 
-        ref var chunk = ref accessor.Get<TestChunk32>(chunkId, dirty: true);
+        ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId, dirty: true);
         chunk.A = 999;
 
         accessor.Dispose();
@@ -208,19 +208,19 @@ public class ChunkAccessorTests
 
         var accessor = ChunkAccessor.Create(segment);
 
-        ref var c1 = ref accessor.Get<TestChunk8>(chunk1);
+        ref var c1 = ref accessor.GetChunk<TestChunk8>(chunk1);
         c1.Value = 100;
 
-        ref var c2 = ref accessor.Get<TestChunk8>(chunk2);
+        ref var c2 = ref accessor.GetChunk<TestChunk8>(chunk2);
         c2.Value = 200;
 
-        ref var c3 = ref accessor.Get<TestChunk8>(chunk3);
+        ref var c3 = ref accessor.GetChunk<TestChunk8>(chunk3);
         c3.Value = 300;
 
         // Verify all values are preserved
-        Assert.That(accessor.Get<TestChunk8>(chunk1).Value, Is.EqualTo(100));
-        Assert.That(accessor.Get<TestChunk8>(chunk2).Value, Is.EqualTo(200));
-        Assert.That(accessor.Get<TestChunk8>(chunk3).Value, Is.EqualTo(300));
+        Assert.That(accessor.GetChunk<TestChunk8>(chunk1).Value, Is.EqualTo(100));
+        Assert.That(accessor.GetChunk<TestChunk8>(chunk2).Value, Is.EqualTo(200));
+        Assert.That(accessor.GetChunk<TestChunk8>(chunk3).Value, Is.EqualTo(300));
 
         accessor.Dispose();
     }
@@ -238,7 +238,7 @@ public class ChunkAccessorTests
         var chunkId = segment.AllocateChunk(true);
         var accessor = ChunkAccessor.Create(segment);
 
-        using (var scope = accessor.GetScoped<TestChunk32>(chunkId))
+        using (var scope = accessor.GetChunkScoped<TestChunk32>(chunkId))
         {
             ref var chunk = ref scope.AsRef();
             chunk.A = 777;
@@ -246,7 +246,7 @@ public class ChunkAccessorTests
         }
 
         // After scope disposal, verify data is still accessible
-        ref var chunk2 = ref accessor.Get<TestChunk32>(chunkId);
+        ref var chunk2 = ref accessor.GetChunk<TestChunk32>(chunkId);
         Assert.That(chunk2.A, Is.EqualTo(777));
         Assert.That(chunk2.B, Is.EqualTo(888));
 
@@ -269,14 +269,14 @@ public class ChunkAccessorTests
         var accessor = ChunkAccessor.Create(segment);
 
         // Pin the first chunk
-        using var scope1 = accessor.GetScoped<TestChunk32>(chunks[0]);
+        using var scope1 = accessor.GetChunkScoped<TestChunk32>(chunks[0]);
         ref var chunk1 = ref scope1.AsRef();
         chunk1.A = 12345;
 
         // Access many other chunks to fill cache
         for (int i = 1; i < 17; i++)
         {
-            ref var c = ref accessor.Get<TestChunk32>(chunks[i]);
+            ref var c = ref accessor.GetChunk<TestChunk32>(chunks[i]);
             c.A = i * 100;
         }
 
@@ -295,7 +295,7 @@ public class ChunkAccessorTests
         var chunkId = segment.AllocateChunk(true);
         var accessor = ChunkAccessor.Create(segment);
 
-        using var scope = accessor.GetScoped<TestChunk32>(chunkId);
+        using var scope = accessor.GetChunkScoped<TestChunk32>(chunkId);
         var span = scope.AsSpan();
 
         Assert.That(span.Length, Is.EqualTo(sizeof(TestChunk32)));
@@ -314,10 +314,10 @@ public class ChunkAccessorTests
         var accessor = ChunkAccessor.Create(segment);
 
         // Write data first
-        ref var chunk = ref accessor.Get<TestChunk32>(chunkId);
+        ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
         chunk.A = 999;
 
-        using var scope = accessor.GetScoped<TestChunk32>(chunkId);
+        using var scope = accessor.GetChunkScoped<TestChunk32>(chunkId);
         var span = scope.AsReadOnlySpan();
 
         Assert.That(span.Length, Is.EqualTo(sizeof(TestChunk32)));
@@ -339,13 +339,13 @@ public class ChunkAccessorTests
         var accessor = ChunkAccessor.Create(segment);
 
         // First access
-        ref var chunk1 = ref accessor.Get<TestChunk32>(chunkId);
+        ref var chunk1 = ref accessor.GetChunk<TestChunk32>(chunkId);
         chunk1.A = 42;
 
         // Repeated accesses should hit MRU cache
         for (int i = 0; i < 100; i++)
         {
-            ref var chunk = ref accessor.Get<TestChunk32>(chunkId);
+            ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
             Assert.That(chunk.A, Is.EqualTo(42));
         }
 
@@ -363,16 +363,16 @@ public class ChunkAccessorTests
         var accessor = ChunkAccessor.Create(segment);
 
         // Access pattern: chunk1, chunk2, chunk1, chunk2
-        ref var c1 = ref accessor.Get<TestChunk32>(chunk1);
+        ref var c1 = ref accessor.GetChunk<TestChunk32>(chunk1);
         c1.A = 100;
 
-        ref var c2 = ref accessor.Get<TestChunk32>(chunk2);
+        ref var c2 = ref accessor.GetChunk<TestChunk32>(chunk2);
         c2.A = 200;
 
-        ref var c1_again = ref accessor.Get<TestChunk32>(chunk1);
+        ref var c1_again = ref accessor.GetChunk<TestChunk32>(chunk1);
         Assert.That(c1_again.A, Is.EqualTo(100));
 
-        ref var c2_again = ref accessor.Get<TestChunk32>(chunk2);
+        ref var c2_again = ref accessor.GetChunk<TestChunk32>(chunk2);
         Assert.That(c2_again.A, Is.EqualTo(200));
 
         accessor.Dispose();
@@ -409,14 +409,14 @@ public class ChunkAccessorTests
         // Set unique values
         for (int i = 0; i < 16; i++)
         {
-            ref var chunk = ref accessor.Get<TestChunk8>(chunks[i]);
+            ref var chunk = ref accessor.GetChunk<TestChunk8>(chunks[i]);
             chunk.Value = i * 1000;
         }
 
         // Verify all values
         for (int i = 0; i < 16; i++)
         {
-            ref var chunk = ref accessor.Get<TestChunk8>(chunks[i]);
+            ref var chunk = ref accessor.GetChunk<TestChunk8>(chunks[i]);
             Assert.That(chunk.Value, Is.EqualTo(i * 1000));
         }
 
@@ -446,21 +446,21 @@ public class ChunkAccessorTests
         // Access first 16 chunks
         for (int i = 0; i < 16; i++)
         {
-            ref var chunk = ref accessor.Get<TestChunk8>(chunks[i]);
+            ref var chunk = ref accessor.GetChunk<TestChunk8>(chunks[i]);
             chunk.Value = i;
         }
 
         // Access 4 more chunks (should evict LRU)
         for (int i = 16; i < 20; i++)
         {
-            ref var chunk = ref accessor.Get<TestChunk8>(chunks[i]);
+            ref var chunk = ref accessor.GetChunk<TestChunk8>(chunks[i]);
             chunk.Value = i * 100;
         }
 
         // Verify newer chunks are still accessible
         for (int i = 16; i < 20; i++)
         {
-            ref var chunk = ref accessor.Get<TestChunk8>(chunks[i]);
+            ref var chunk = ref accessor.GetChunk<TestChunk8>(chunks[i]);
             Assert.That(chunk.Value, Is.EqualTo(i * 100));
         }
 
@@ -494,22 +494,22 @@ public class ChunkAccessorTests
         // Fill cache with first 16 chunks
         for (int i = 0; i < 16; i++)
         {
-            ref var chunk = ref accessor.Get<TestChunk32>(chunks[i], dirty: true);
+            ref var chunk = ref accessor.GetChunk<TestChunk32>(chunks[i], dirty: true);
             chunk.A = i;
         }
 
         // Access first chunk multiple times to increase hit count
         for (int i = 0; i < 10; i++)
         {
-            _ = accessor.Get<TestChunk32>(chunks[0]);
+            _ = accessor.GetChunk<TestChunk32>(chunks[0]);
         }
 
         // Access 17th chunk - should evict LRU (not chunk 0)
-        ref var newChunk = ref accessor.Get<TestChunk32>(chunks[16], dirty: true);
+        ref var newChunk = ref accessor.GetChunk<TestChunk32>(chunks[16], dirty: true);
         newChunk.A = 9999;
 
         // Chunk 0 should still be in cache
-        ref var chunk0 = ref accessor.Get<TestChunk32>(chunks[0]);
+        ref var chunk0 = ref accessor.GetChunk<TestChunk32>(chunks[0]);
         Assert.That(chunk0.A, Is.EqualTo(0));
 
         accessor.Dispose();
@@ -541,14 +541,14 @@ public class ChunkAccessorTests
         // Fill cache and mark dirty
         for (int i = 0; i < 16; i++)
         {
-            ref var chunk = ref accessor.Get<TestChunk32>(chunks[i], dirty: true);
+            ref var chunk = ref accessor.GetChunk<TestChunk32>(chunks[i], dirty: true);
             chunk.A = i * 10;
         }
 
         // Force eviction by accessing more chunks
         for (int i = 16; i < 20; i++)
         {
-            ref var chunk = ref accessor.Get<TestChunk32>(chunks[i], dirty: true);
+            ref var chunk = ref accessor.GetChunk<TestChunk32>(chunks[i], dirty: true);
             chunk.A = i * 10;
         }
 
@@ -573,7 +573,7 @@ public class ChunkAccessorTests
         var accessor = ChunkAccessor.Create(segment);
 
         // Access chunk to cache it
-        ref var chunk = ref accessor.Get<TestChunk32>(chunkId);
+        ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
         chunk.A = 100;
 
         // Try to promote
@@ -614,7 +614,7 @@ public class ChunkAccessorTests
         var accessor = ChunkAccessor.Create(segment);
 
         // Access chunk
-        ref var chunk = ref accessor.Get<TestChunk32>(chunkId);
+        ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
         chunk.A = 555;
 
         // Promote multiple times
@@ -650,11 +650,11 @@ public class ChunkAccessorTests
         var accessor = ChunkAccessor.Create(segment, changeSet);
 
         // Access one chunk as dirty
-        ref var c1 = ref accessor.Get<TestChunk32>(chunk1, dirty: true);
+        ref var c1 = ref accessor.GetChunk<TestChunk32>(chunk1, dirty: true);
         c1.A = 100;
 
         // Access another as readonly
-        ref readonly var c2 = ref accessor.GetReadOnly<TestChunk32>(chunk2);
+        ref readonly var c2 = ref accessor.GetChunkReadOnly<TestChunk32>(chunk2);
 
         accessor.Dispose();
 
@@ -673,7 +673,7 @@ public class ChunkAccessorTests
         var chunkId = segment.AllocateChunk(true);
         var accessor = ChunkAccessor.Create(segment, changeSet);
 
-        ref var chunk = ref accessor.Get<TestChunk32>(chunkId, dirty: true);
+        ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId, dirty: true);
         chunk.A = 999;
         chunk.B = 888;
 
@@ -693,7 +693,7 @@ public class ChunkAccessorTests
         var chunkId = segment.AllocateChunk(true);
         var accessor = ChunkAccessor.Create(segment); // No changeset
 
-        ref var chunk = ref accessor.Get<TestChunk32>(chunkId, dirty: true);
+        ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId, dirty: true);
         chunk.A = 777;
 
         accessor.Dispose();
@@ -736,7 +736,7 @@ public class ChunkAccessorTests
         var s = stackalloc ChunkScope<TestChunk8>[16];
         for (int i = 0; i < 16; i++)
         {
-            s[i] = accessor.GetScoped<TestChunk8>(chunks[i]);
+            s[i] = accessor.GetChunkScoped<TestChunk8>(chunks[i]);
         }
 
         try
@@ -744,7 +744,7 @@ public class ChunkAccessorTests
             // Try to access 17th chunk on a different page - should throw
             try
             {
-                ref var chunk = ref accessor.Get<TestChunk8>(chunks[16]);
+                ref var chunk = ref accessor.GetChunk<TestChunk8>(chunks[16]);
                 Assert.Fail("Expected InvalidOperationException - all slots should be pinned");
             }
             catch (InvalidOperationException)
@@ -773,12 +773,12 @@ public class ChunkAccessorTests
         var chunkId = segment.AllocateChunk(true);
         var accessor = ChunkAccessor.Create(segment);
 
-        ref var chunk = ref accessor.Get<TestChunk32>(chunkId);
+        ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
         chunk.A = 12345;
         chunk.B = 67890;
 
         // Verify data persists
-        ref var chunk2 = ref accessor.Get<TestChunk32>(chunkId);
+        ref var chunk2 = ref accessor.GetChunk<TestChunk32>(chunkId);
         Assert.That(chunk2.A, Is.EqualTo(12345));
         Assert.That(chunk2.B, Is.EqualTo(67890));
 
@@ -795,12 +795,12 @@ public class ChunkAccessorTests
         var accessor = ChunkAccessor.Create(segment);
 
         // Access as TestChunk32
-        ref var chunk32 = ref accessor.Get<TestChunk32>(chunkId);
+        ref var chunk32 = ref accessor.GetChunk<TestChunk32>(chunkId);
         chunk32.A = 100;
         chunk32.B = 200;
 
         // Access same chunk as different type (unsafe but valid for testing)
-        ref var chunk16 = ref accessor.Get<TestChunk16>(chunkId);
+        ref var chunk16 = ref accessor.GetChunk<TestChunk16>(chunkId);
         Assert.That(chunk16.A, Is.Not.Zero);
 
         accessor.Dispose();
@@ -825,14 +825,14 @@ public class ChunkAccessorTests
         // Write sequentially
         for (int i = 0; i < chunkCount; i++)
         {
-            ref var chunk = ref accessor.Get<TestChunk8>(chunks[i], dirty: true);
+            ref var chunk = ref accessor.GetChunk<TestChunk8>(chunks[i], dirty: true);
             chunk.Value = i;
         }
 
         // Read sequentially
         for (int i = 0; i < chunkCount; i++)
         {
-            ref var chunk = ref accessor.Get<TestChunk8>(chunks[i]);
+            ref var chunk = ref accessor.GetChunk<TestChunk8>(chunks[i]);
             Assert.That(chunk.Value, Is.EqualTo(i));
         }
 
@@ -867,7 +867,7 @@ public class ChunkAccessorTests
         for (int i = 0; i < chunkCount; i++)
         {
             var chunkId = shuffled[i];
-            ref var chunk = ref accessor.Get<TestChunk16>(chunkId, dirty: true);
+            ref var chunk = ref accessor.GetChunk<TestChunk16>(chunkId, dirty: true);
             chunk.A = chunkId;
             chunk.B = chunkId * 2;
         }
@@ -882,7 +882,7 @@ public class ChunkAccessorTests
         for (int i = 0; i < chunkCount; i++)
         {
             var chunkId = shuffled[i];
-            ref var chunk = ref accessor.Get<TestChunk16>(chunkId);
+            ref var chunk = ref accessor.GetChunk<TestChunk16>(chunkId);
             Assert.That(chunk.A, Is.EqualTo(chunkId));
             Assert.That(chunk.B, Is.EqualTo(chunkId * 2));
         }
@@ -903,7 +903,7 @@ public class ChunkAccessorTests
         var chunkId = segment.AllocateChunk(true);
         var accessor = ChunkAccessor.Create(segment);
 
-        ref var chunk = ref accessor.Get<TestChunk32>(chunkId, dirty: true);
+        ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId, dirty: true);
         chunk.A = 555;
 
         accessor.Dispose();
@@ -920,7 +920,7 @@ public class ChunkAccessorTests
         var accessor = ChunkAccessor.Create(segment);
 
         // Access and promote
-        ref var chunk = ref accessor.Get<TestChunk32>(chunkId);
+        ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
         chunk.A = 123;
         accessor.TryPromoteChunk(chunkId);
 
@@ -939,7 +939,7 @@ public class ChunkAccessorTests
         var accessor = ChunkAccessor.Create(segment);
 
         // Create scoped access but dispose accessor first
-        var scope = accessor.GetScoped<TestChunk32>(chunkId);
+        var scope = accessor.GetChunkScoped<TestChunk32>(chunkId);
         ref var chunk = ref scope.AsRef();
         chunk.A = 999;
 
@@ -997,17 +997,17 @@ public class ChunkAccessorTests
             switch (op)
             {
                 case 0: // Regular get
-                    ref var c1 = ref accessor.Get<TestChunk32>(chunkId);
+                    ref var c1 = ref accessor.GetChunk<TestChunk32>(chunkId);
                     c1.A = iteration;
                     break;
 
                 case 1: // Dirty get
-                    ref var c2 = ref accessor.Get<TestChunk32>(chunkId, dirty: true);
+                    ref var c2 = ref accessor.GetChunk<TestChunk32>(chunkId, dirty: true);
                     c2.B = iteration * 2;
                     break;
 
                 case 2: // Readonly get
-                    ref readonly var c3 = ref accessor.GetReadOnly<TestChunk32>(chunkId);
+                    ref readonly var c3 = ref accessor.GetChunkReadOnly<TestChunk32>(chunkId);
                     _ = c3.A;
                     break;
 
@@ -1024,6 +1024,6 @@ public class ChunkAccessorTests
         accessor.Dispose();
         Assert.Pass("Stress test completed successfully");
     }
-
+    
     #endregion
 }

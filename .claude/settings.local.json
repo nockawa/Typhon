@@ -8,8 +8,7 @@
       "Bash(dotnet test:*)",
       "Bash(dotnet run:*)",
       "Bash(wait)",
-      "Bash(timeout 120 tail:*)",
-      "Bash(ls \"C:\\\\Dev\\\\github\\\\Typhon\\\\test\\\\Typhon.Benchmark\\\\BenchmarkDotNet.Artifacts\\\\results\"\" 2>nul || echo \"Results directory not yet created \")"
+      "Bash(timeout 120 tail:*)"
     ],
     "deny": [],
     "ask": []

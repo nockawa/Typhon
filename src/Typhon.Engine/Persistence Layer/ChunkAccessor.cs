@@ -53,15 +53,16 @@ internal static class ThrowHelper
 
 /// <summary>
 /// Stack-allocated chunk accessor combining best of ChunkRandomAccessor and StackChunkAccessor.
-/// - Zero heap allocation (ref struct)
+/// - Zero heap allocation (struct, always pass by ref)
 /// - SIMD-optimized hot paths
 /// - MRU cache for repeated access
 /// - Scoped safety for multi-chunk operations
 /// - Fixed 16-slot capacity for optimal performance
+/// WARNING: This struct is ~1KB in size. Always pass by ref to avoid expensive copies.
 /// </summary>
 [PublicAPI]
 [StructLayout(LayoutKind.Sequential)]
-public unsafe ref struct ChunkAccessor : IDisposable
+public unsafe struct ChunkAccessor : IDisposable
 {
     // === Hybrid SOA+AoS layout for optimal performance ===
     // SOA: page indices for SIMD search
@@ -114,26 +115,55 @@ public unsafe ref struct ChunkAccessor : IDisposable
     /// ULTRA-FAST PATH for hot loops (B+Tree operations, etc.)
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    public ref T Get<T>(int chunkId, bool dirty = false) where T : unmanaged => ref Unsafe.AsRef<T>(GetChunkAddress(chunkId, dirty));
+    public ref T GetChunk<T>(int chunkId, bool dirty = false) where T : unmanaged => ref Unsafe.AsRef<T>(GetChunkAddress(chunkId, dirty));
 
     /// <summary>
     /// Get read-only reference to chunk. Same performance as Get, safer semantics.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    public ref readonly T GetReadOnly<T>(int chunkId) where T : unmanaged => ref Get<T>(chunkId, dirty: false);
+    public ref readonly T GetChunkReadOnly<T>(int chunkId) where T : unmanaged => ref GetChunk<T>(chunkId, dirty: false);
 
     /// <summary>
     /// Get scoped access to chunk with automatic pinning. SAFE for multi-chunk operations.
     /// Pin prevents eviction until scope is disposed.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ChunkScope<T> GetScoped<T>(int chunkId, bool dirty = false) where T : unmanaged
+    public ChunkScope<T> GetChunkScoped<T>(int chunkId, bool dirty = false) where T : unmanaged
     {
         var addr = GetChunkAddressAndPin(chunkId, dirty, out var slotIndex);
         void* selfPtr = Unsafe.AsPointer(ref this);
         return new ChunkScope<T>(selfPtr, slotIndex, addr, _stride);
     }
 
+    /// <summary>
+    /// Commit the dirty state of each page and release the shared access.
+    /// </summary>
+    /// <remarks>
+    /// Typically call this method at the end of an atomic operation to update the <see cref="PagedMMF"/> accordingly.
+    /// If the page was promoted in exclusive mode, it won't be release, just simply ignored.
+    /// </remarks>
+    public void CommitChanges()
+    {
+        for (int i = 0; i < _usedSlots; i++)
+        {
+            if (_pageIndices[i] == InvalidPageIndex)
+            {
+                continue;
+            }
+
+            ref var slotData = ref _slots[i];
+
+            // Lazy dirty tracking: flush on dispose
+            if (slotData.DirtyFlag != 0 && _changeSet != null)
+            {
+                _changeSet.Add(_pageAccessors[i]);
+                slotData.DirtyFlag = 0;
+            }
+
+            _pageAccessors[i].Dispose();
+        }        
+    }
+    
     /// <summary>
     /// CRITICAL HOT PATH: Get chunk address with maximum performance.
     /// Three-tier optimization:
@@ -492,7 +522,7 @@ public unsafe ref struct ChunkAccessor : IDisposable
     /// <summary>
     /// Access segment header (for internal ChunkBasedSegment operations).
     /// </summary>
-    internal ref T GetSegmentHeader<T>(int offset, bool dirty) where T : unmanaged
+    internal ref T GetChunkBasedSegmentHeader<T>(int offset, bool dirty) where T : unmanaged
     {
         // Page 0 is always the root page containing the header
         var addr = GetChunkAddress(0, dirty);

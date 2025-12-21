@@ -46,6 +46,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Reference the Roslyn analyzer for ChunkAccessor enforcement -->
+    <ProjectReference Include="..\Typhon.Analyzers\Typhon.Analyzers.csproj"
+                      ReferenceOutputAssembly="false"
+                      OutputItemType="Analyzer" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Update="Persistence Layer\ManagedPagedMMF.BitmapL3.cs">
       <DependentUpon>ManagedPagedMMF.cs</DependentUpon>
     </Compile>

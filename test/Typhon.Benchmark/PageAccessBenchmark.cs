@@ -19,7 +19,7 @@ public class PageAccessBenchmark
 {
     private ServiceCollection _serviceCollection;
     private ServiceProvider _serviceProvider;
-    private LogicalSegment _segment;
+    //private LogicalSegment _segment;
 
     [GlobalSetup]
     public void GlobalSetup()
@@ -66,6 +66,7 @@ public class PageAccessBenchmark
     {
         var v = 0;
 
+        /*
         var length = _segment.Length;
         for (int i = 0; i < length; i++)
         {
@@ -80,6 +81,7 @@ public class PageAccessBenchmark
                 }
             }
         }
+        */
 
         return v;
     }
