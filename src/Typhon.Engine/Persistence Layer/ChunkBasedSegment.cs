@@ -30,6 +30,14 @@ public partial class ChunkBasedSegment : LogicalSegment
 {
     private BitmapL3 _map;
 
+    // Cached values for fast GetChunkLocation (avoids _map indirection)
+    private readonly int _rootChunkCount;
+    private readonly int _otherChunkCount;
+
+    // Magic multiplier for fast division: quotient = (n * _divMagic) >> 32
+    // This replaces expensive division (~20-80 cycles) with multiply+shift (~3-4 cycles)
+    private readonly ulong _divMagic;
+
     internal ChunkBasedSegment(ManagedPagedMMF manager, int stride) : base(manager)
     {
         if (stride < sizeof(long))
@@ -40,6 +48,15 @@ public partial class ChunkBasedSegment : LogicalSegment
         Stride = stride;
         ChunkCountRootPage = (PagedMMF.PageRawDataSize - RootHeaderIndexSectionLength) / stride;
         ChunkCountPerPage = PagedMMF.PageRawDataSize / stride;
+
+        // Cache for fast access in GetChunkLocation
+        _rootChunkCount = ChunkCountRootPage;
+        _otherChunkCount = ChunkCountPerPage;
+
+        // Precompute magic multiplier for fast division by _otherChunkCount
+        // Formula: magic = ceil(2^32 / divisor) = (2^32 + divisor - 1) / divisor
+        // This works for divisors where the maximum dividend fits in 32 bits
+        _divMagic = (0x1_0000_0000UL + (uint)_otherChunkCount - 1) / (uint)_otherChunkCount;
     }
 
     internal override bool Create(PageBlockType type, Span<int> filePageIndices, bool clear, ChangeSet changeSet = null)
@@ -104,16 +121,23 @@ public partial class ChunkBasedSegment : LogicalSegment
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public (int segmentIndex, int offset) GetChunkLocation(int index)
     {
-        var fs = _map._rootChunkCount;
-        var ss = _map._otherChunkCount;
-
-        if (index < fs)
+        // Fast path: chunk is on root page (most common for small segments)
+        if (index < _rootChunkCount)
         {
             return (0, index);
         }
 
-        var pi = Math.DivRem(index - fs, ss, out var off);
-        return (pi + 1, off);
+        // Adjust index relative to non-root pages
+        var adjusted = (uint)(index - _rootChunkCount);
+
+        // Fast division using magic multiplier: quotient = (n * magic) >> 32
+        // This replaces expensive idiv instruction with imul + shift
+        var pageIndex = (int)((adjusted * _divMagic) >> 32);
+
+        // Remainder: offset = adjusted - pageIndex * divisor
+        var offset = (int)(adjusted - (uint)(pageIndex * _otherChunkCount));
+
+        return (pageIndex + 1, offset);
     }
 
     public int Stride { get; }

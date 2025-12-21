@@ -13,6 +13,9 @@ public partial class ChunkBasedSegment
         internal readonly int _rootChunkCount;
         internal readonly int _otherChunkCount;
 
+        // Magic multiplier for fast division: quotient = (n * _divMagic) >> 32
+        private readonly ulong _divMagic;
+
         private readonly Memory<long> _l1All;
         private readonly Memory<long> _l2All;
         private readonly Memory<long> _l1Any;
@@ -22,6 +25,9 @@ public partial class ChunkBasedSegment
             _segment = segment;
             _rootChunkCount = segment.ChunkCountRootPage;
             _otherChunkCount = segment.ChunkCountPerPage;
+
+            // Precompute magic multiplier for fast division by _otherChunkCount
+            _divMagic = (0x1_0000_0000UL + (uint)_otherChunkCount - 1) / (uint)_otherChunkCount;
 
             var pageCount = segment.Length;
             Capacity = GetChunkCount(pageCount);
@@ -105,16 +111,22 @@ public partial class ChunkBasedSegment
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         private (int page, int offset) GetChunkLocation(int index)
         {
-            var fs = _rootChunkCount;
-            var ss = _otherChunkCount;
-
-            if (index < fs)
+            // Fast path: chunk is on root page
+            if (index < _rootChunkCount)
             {
                 return (0, index);
             }
 
-            var pi = Math.DivRem(index - fs, ss, out var off);
-            return (pi + 1, off);
+            // Adjust index relative to non-root pages
+            var adjusted = (uint)(index - _rootChunkCount);
+
+            // Fast division using magic multiplier: quotient = (n * magic) >> 32
+            var pageIndex = (int)((adjusted * _divMagic) >> 32);
+
+            // Remainder: offset = adjusted - pageIndex * divisor
+            var offset = (int)(adjusted - (uint)(pageIndex * _otherChunkCount));
+
+            return (pageIndex + 1, offset);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]

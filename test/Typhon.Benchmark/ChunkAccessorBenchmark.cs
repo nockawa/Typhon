@@ -1,4 +1,5 @@
 using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Configs;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System;
@@ -30,9 +31,11 @@ public struct TestChunkData
 /// Benchmark comparing ChunkRandomAccessor vs StackChunkAccessor performance
 /// across typical chunk manipulation scenarios.
 /// </summary>
-[SimpleJob(warmupCount: 3, iterationCount: 5)]
+[SimpleJob(warmupCount: 1, iterationCount: 3)]
 [MemoryDiagnoser]
 [JsonExporterAttribute.Full]
+[GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
+[CategoriesColumn]
 public class ChunkAccessorBenchmark
 {
     private const int ChunkCount = 10_000;
@@ -120,7 +123,7 @@ public class ChunkAccessorBenchmark
     // Note: StackChunkAccessor uses scopes to enable eviction
     // ========================================================================
 
-    [Benchmark(Description = "Sequential Read - ChunkRandomAccessor")]
+    [BenchmarkCategory("Sequential Read"), Benchmark(Baseline = true)]
     public long SequentialRead_ChunkRandomAccessor()
     {
         long sum = 0;
@@ -133,24 +136,17 @@ public class ChunkAccessorBenchmark
         return sum;
     }
 
-    [Benchmark(Description = "Sequential Read - StackChunkAccessor")]
-    public long SequentialRead_StackChunkAccessor()
+    [BenchmarkCategory("Sequential Read"), Benchmark]
+    public long SequentialRead_ChunkAccessor()
     {
         long sum = 0;
-        using var accessor = StackChunkAccessor.Create(_segment, capacity: 8);
+        using var accessor = ChunkAccessor.Create(_segment);
 
-        // Use scope-based iteration: enter scope, access batch, exit scope to allow eviction
-        const int batchSize = 6; // Leave room within 8 capacity
-        for (int batch = 0; batch < ChunkCount; batch += batchSize)
+        // No scopes needed - automatic LRU eviction
+        for (int i = 0; i < ChunkCount; i++)
         {
-            accessor.EnterScope();
-            int end = Math.Min(batch + batchSize, ChunkCount);
-            for (int i = batch; i < end; i++)
-            {
-                ref readonly var chunk = ref accessor.GetReadOnly<TestChunkData>(_allocatedChunks[i]);
-                sum += chunk.Id + chunk.Counter;
-            }
-            accessor.ExitScope(); // Marks slots as evictable
+            ref readonly var chunk = ref accessor.GetReadOnly<TestChunkData>(_allocatedChunks[i]);
+            sum += chunk.Id + chunk.Counter;
         }
         return sum;
     }
@@ -160,7 +156,7 @@ public class ChunkAccessorBenchmark
     // Simulates: B+Tree lookups, index traversal
     // ========================================================================
 
-    [Benchmark(Description = "Random Access - ChunkRandomAccessor")]
+    [BenchmarkCategory("Random Access"), Benchmark(Baseline = true)]
     public long RandomAccess_ChunkRandomAccessor()
     {
         long sum = 0;
@@ -173,25 +169,17 @@ public class ChunkAccessorBenchmark
         return sum;
     }
 
-    [Benchmark(Description = "Random Access - StackChunkAccessor")]
-    public long RandomAccess_StackChunkAccessor()
+    [BenchmarkCategory("Random Access"), Benchmark]
+    public long RandomAccess_ChunkAccessor()
     {
         long sum = 0;
-        using var accessor = StackChunkAccessor.Create(_segment, capacity: 16);
+        using var accessor = ChunkAccessor.Create(_segment);
 
-        // Process in small batches - random access can hit many pages
-        // Batch size must be <= capacity to avoid exhausting slots within a scope
-        const int batchSize = 12;
-        for (int batch = 0; batch < RandomAccessCount; batch += batchSize)
+        // No scopes - MRU optimization + automatic LRU eviction
+        for (int i = 0; i < RandomAccessCount; i++)
         {
-            accessor.EnterScope();
-            int end = Math.Min(batch + batchSize, RandomAccessCount);
-            for (int i = batch; i < end; i++)
-            {
-                ref readonly var chunk = ref accessor.GetReadOnly<TestChunkData>(_randomAccessPattern[i]);
-                sum += chunk.Id;
-            }
-            accessor.ExitScope();
+            ref readonly var chunk = ref accessor.GetReadOnly<TestChunkData>(_randomAccessPattern[i]);
+            sum += chunk.Id;
         }
         return sum;
     }
@@ -201,7 +189,7 @@ public class ChunkAccessorBenchmark
     // Simulates: Counter updates, modification operations
     // ========================================================================
 
-    [Benchmark(Description = "Mixed Read/Write - ChunkRandomAccessor")]
+    [BenchmarkCategory("Mixed Read/Write"), Benchmark(Baseline = true)]
     public long MixedReadWrite_ChunkRandomAccessor()
     {
         long sum = 0;
@@ -216,25 +204,18 @@ public class ChunkAccessorBenchmark
         return sum;
     }
 
-    [Benchmark(Description = "Mixed Read/Write - StackChunkAccessor")]
-    public long MixedReadWrite_StackChunkAccessor()
+    [BenchmarkCategory("Mixed Read/Write"), Benchmark]
+    public long MixedReadWrite_ChunkAccessor()
     {
         long sum = 0;
-        using var accessor = StackChunkAccessor.Create(_segment, capacity: 8);
+        using var accessor = ChunkAccessor.Create(_segment);
 
-        const int batchSize = 6;
-        for (int batch = 0; batch < ChunkCount; batch += batchSize)
+        for (int i = 0; i < ChunkCount; i++)
         {
-            accessor.EnterScope();
-            int end = Math.Min(batch + batchSize, ChunkCount);
-            for (int i = batch; i < end; i++)
-            {
-                ref var chunk = ref accessor.Get<TestChunkData>(_allocatedChunks[i], dirty: true);
-                sum += chunk.Counter;
-                chunk.Counter++;
-                chunk.Timestamp = DateTime.UtcNow.Ticks;
-            }
-            accessor.ExitScope();
+            ref var chunk = ref accessor.Get<TestChunkData>(_allocatedChunks[i], dirty: true);
+            sum += chunk.Counter;
+            chunk.Counter++;
+            chunk.Timestamp = DateTime.UtcNow.Ticks;
         }
         return sum;
     }
@@ -244,7 +225,7 @@ public class ChunkAccessorBenchmark
     // Simulates: B+Tree leaf chain traversal, cursor navigation
     // ========================================================================
 
-    [Benchmark(Description = "Linked Traversal - ChunkRandomAccessor")]
+    [BenchmarkCategory("Linked Traversal"), Benchmark(Baseline = true)]
     public long LinkedTraversal_ChunkRandomAccessor()
     {
         long sum = 0;
@@ -261,33 +242,20 @@ public class ChunkAccessorBenchmark
         return sum;
     }
 
-    [Benchmark(Description = "Linked Traversal - StackChunkAccessor")]
-    public long LinkedTraversal_StackChunkAccessor()
+    [BenchmarkCategory("Linked Traversal"), Benchmark]
+    public long LinkedTraversal_ChunkAccessor()
     {
         long sum = 0;
-        using var accessor = StackChunkAccessor.Create(_segment, capacity: 8);
+        using var accessor = ChunkAccessor.Create(_segment);
 
-        // Forward traversal with periodic scope refresh
+        // Forward traversal - no scope management needed
         int currentId = _allocatedChunks[0];
-        int count = 0;
-        const int batchSize = 6;
-
-        accessor.EnterScope();
         while (currentId != 0)
         {
             ref readonly var chunk = ref accessor.GetReadOnly<TestChunkData>(currentId);
             sum += chunk.Id;
             currentId = (int)chunk.NextId;
-
-            // Refresh scope periodically to allow eviction
-            if (++count >= batchSize)
-            {
-                accessor.ExitScope();
-                accessor.EnterScope();
-                count = 0;
-            }
         }
-        accessor.ExitScope();
         return sum;
     }
 
@@ -296,20 +264,20 @@ public class ChunkAccessorBenchmark
     // Simulates: B+Tree insert/delete with parent protection
     // ========================================================================
 
-    [Benchmark(Description = "Scoped Recursive - ChunkRandomAccessor")]
+    [BenchmarkCategory("Scoped Recursive"), Benchmark(Baseline = true)]
     public long ScopedRecursive_ChunkRandomAccessor()
     {
         using var accessor = _segment.CreateChunkRandomAccessor(16);
         return RecursiveTraverseWithHandles(accessor, 0, 0);
     }
 
-    [Benchmark(Description = "Scoped Recursive - StackChunkAccessor")]
-    public long ScopedRecursive_StackChunkAccessor()
+    [BenchmarkCategory("Scoped Recursive"), Benchmark]
+    public long ScopedRecursive_ChunkAccessor()
     {
-        var accessor = StackChunkAccessor.Create(_segment, capacity: 16);
+        var accessor = ChunkAccessor.Create(_segment);
         try
         {
-            return RecursiveTraverse(ref accessor, 0, 0);
+            return RecursiveTraverseChunkAccessor(ref accessor, 0, 0);
         }
         finally
         {
@@ -317,44 +285,9 @@ public class ChunkAccessorBenchmark
         }
     }
 
-    private long RecursiveTraverse(ref StackChunkAccessor accessor, int depth, int startIndex)
-    {
-        const int MaxDepth = 5;
-        const int ChunksPerLevel = 10;
-
-        if (depth >= MaxDepth || startIndex >= ChunkCount)
-            return 0;
-
-        accessor.EnterScope();
-        try
-        {
-            long sum = 0;
-            int endIndex = Math.Min(startIndex + ChunksPerLevel, ChunkCount);
-
-            // Access chunks at this level
-            for (int i = startIndex; i < endIndex; i++)
-            {
-                ref readonly var chunk = ref accessor.GetReadOnly<TestChunkData>(_allocatedChunks[i]);
-                sum += chunk.Id;
-            }
-
-            // Recurse to next level
-            sum += RecursiveTraverse(ref accessor, depth + 1, endIndex);
-
-            // After recursion, original refs are still valid due to scope protection
-            for (int i = startIndex; i < endIndex; i++)
-            {
-                ref readonly var chunk = ref accessor.GetReadOnly<TestChunkData>(_allocatedChunks[i]);
-                sum += chunk.Counter;
-            }
-
-            return sum;
-        }
-        finally
-        {
-            accessor.ExitScope();
-        }
-    }
+    // ========================================================================
+    // Helper method for ChunkAccessor recursive traversal
+    // ========================================================================
 
     private unsafe long RecursiveTraverseWithHandles(ChunkRandomAccessor accessor, int depth, int startIndex)
     {
@@ -402,12 +335,57 @@ public class ChunkAccessorBenchmark
         return sum;
     }
 
+    private unsafe long RecursiveTraverseChunkAccessor(ref ChunkAccessor accessor, int depth, int startIndex)
+    {
+        const int MaxDepth = 5;
+        const int ChunksPerLevel = 10;
+
+        if (depth >= MaxDepth || startIndex >= ChunkCount)
+            return 0;
+
+        long sum = 0;
+        int endIndex = Math.Min(startIndex + ChunksPerLevel, ChunkCount);
+        int scopeCount = endIndex - startIndex;
+
+        var scopes = stackalloc ChunkScope<TestChunkData>[scopeCount];
+
+        try
+        {
+            // Access chunks at this level with scoped protection
+            for (int i = 0; i < scopeCount; i++)
+            {
+                var scope = accessor.GetScoped<TestChunkData>(_allocatedChunks[startIndex + i]);
+                scopes[i] = scope;
+                sum += scope.AsRef().Id;
+            }
+
+            // Recurse to next level - scoped chunks are pinned and safe
+            sum += RecursiveTraverseChunkAccessor(ref accessor, depth + 1, endIndex);
+
+            // After recursion, scoped refs are still valid
+            for (int i = 0; i < scopeCount; i++)
+            {
+                sum += scopes[i].AsRef().Counter;
+            }
+        }
+        finally
+        {
+            // Dispose scopes (unpin) in reverse order
+            for (int i = scopeCount - 1; i >= 0; i--)
+            {
+                scopes[i].Dispose();
+            }
+        }
+
+        return sum;
+    }
+    
     // ========================================================================
     // Scenario 6: High-frequency accessor creation
     // Simulates: Per-operation accessor pattern
     // ========================================================================
 
-    [Benchmark(Description = "Accessor Creation - ChunkRandomAccessor")]
+    [BenchmarkCategory("Accessor Creation"), Benchmark(Baseline = true)]
     public long AccessorCreation_ChunkRandomAccessor()
     {
         long sum = 0;
@@ -420,13 +398,13 @@ public class ChunkAccessorBenchmark
         return sum;
     }
 
-    [Benchmark(Description = "Accessor Creation - StackChunkAccessor")]
-    public long AccessorCreation_StackChunkAccessor()
+    [BenchmarkCategory("Accessor Creation"), Benchmark]
+    public long AccessorCreation_ChunkAccessor()
     {
         long sum = 0;
         for (int i = 0; i < ChunkCount; i++)
         {
-            using var accessor = StackChunkAccessor.Create(_segment, capacity: 8);
+            using var accessor = ChunkAccessor.Create(_segment);
             ref readonly var chunk = ref accessor.GetReadOnly<TestChunkData>(_allocatedChunks[i]);
             sum += chunk.Id;
         }

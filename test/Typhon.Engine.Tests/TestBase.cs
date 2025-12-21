@@ -269,7 +269,7 @@ abstract class TestBase<T> : TestBase
         
         if (UseSeq)
         {
-            config.WriteTo.Seq("http://localhost:5341", compact: true);
+            config.WriteTo.Seq("http://localhost:5341");
         }
         
         Log.Logger = config.CreateLogger();
