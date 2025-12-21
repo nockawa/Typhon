@@ -39,4 +39,11 @@
     <ProjectReference Include="..\Typhon.Engine.Tests\Typhon.Engine.Tests.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Reference the Roslyn analyzer for ChunkAccessor enforcement -->
+    <ProjectReference Include="..\..\src\Typhon.Analyzers\Typhon.Analyzers.csproj"
+                      ReferenceOutputAssembly="false"
+                      OutputItemType="Analyzer" />
+  </ItemGroup>
+
 </Project>

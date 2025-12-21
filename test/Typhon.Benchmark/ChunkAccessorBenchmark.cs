@@ -145,7 +145,7 @@ public class ChunkAccessorBenchmark
         // No scopes needed - automatic LRU eviction
         for (int i = 0; i < ChunkCount; i++)
         {
-            ref readonly var chunk = ref accessor.GetReadOnly<TestChunkData>(_allocatedChunks[i]);
+            ref readonly var chunk = ref accessor.GetChunkReadOnly<TestChunkData>(_allocatedChunks[i]);
             sum += chunk.Id + chunk.Counter;
         }
         return sum;
@@ -178,7 +178,7 @@ public class ChunkAccessorBenchmark
         // No scopes - MRU optimization + automatic LRU eviction
         for (int i = 0; i < RandomAccessCount; i++)
         {
-            ref readonly var chunk = ref accessor.GetReadOnly<TestChunkData>(_randomAccessPattern[i]);
+            ref readonly var chunk = ref accessor.GetChunkReadOnly<TestChunkData>(_randomAccessPattern[i]);
             sum += chunk.Id;
         }
         return sum;
@@ -212,7 +212,7 @@ public class ChunkAccessorBenchmark
 
         for (int i = 0; i < ChunkCount; i++)
         {
-            ref var chunk = ref accessor.Get<TestChunkData>(_allocatedChunks[i], dirty: true);
+            ref var chunk = ref accessor.GetChunk<TestChunkData>(_allocatedChunks[i], dirty: true);
             sum += chunk.Counter;
             chunk.Counter++;
             chunk.Timestamp = DateTime.UtcNow.Ticks;
@@ -252,7 +252,7 @@ public class ChunkAccessorBenchmark
         int currentId = _allocatedChunks[0];
         while (currentId != 0)
         {
-            ref readonly var chunk = ref accessor.GetReadOnly<TestChunkData>(currentId);
+            ref readonly var chunk = ref accessor.GetChunkReadOnly<TestChunkData>(currentId);
             sum += chunk.Id;
             currentId = (int)chunk.NextId;
         }
@@ -354,7 +354,7 @@ public class ChunkAccessorBenchmark
             // Access chunks at this level with scoped protection
             for (int i = 0; i < scopeCount; i++)
             {
-                var scope = accessor.GetScoped<TestChunkData>(_allocatedChunks[startIndex + i]);
+                var scope = accessor.GetChunkScoped<TestChunkData>(_allocatedChunks[startIndex + i]);
                 scopes[i] = scope;
                 sum += scope.AsRef().Id;
             }
@@ -405,7 +405,7 @@ public class ChunkAccessorBenchmark
         for (int i = 0; i < ChunkCount; i++)
         {
             using var accessor = ChunkAccessor.Create(_segment);
-            ref readonly var chunk = ref accessor.GetReadOnly<TestChunkData>(_allocatedChunks[i]);
+            ref readonly var chunk = ref accessor.GetChunkReadOnly<TestChunkData>(_allocatedChunks[i]);
             sum += chunk.Id;
         }
         return sum;
