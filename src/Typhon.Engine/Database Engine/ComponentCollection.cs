@@ -16,7 +16,7 @@ public ref struct ComponentCollectionAccessor<T> : IDisposable where T : unmanag
 {
     private VariableSizedBufferSegment<T> _vsbs;
     private ref ComponentCollection<T> _field;
-    private readonly ChunkRandomAccessor _cbsa;
+    private ChunkAccessor _cbsa;
     private readonly int _initialBufferId;
     private readonly ChangeSet _changeSet;
 
@@ -25,27 +25,31 @@ public ref struct ComponentCollectionAccessor<T> : IDisposable where T : unmanag
         _vsbs = vsbs;
         _changeSet = changeSet;
         _field = ref field;
-        _cbsa = _vsbs.Segment.CreateChunkRandomAccessor(8, changeSet);
+        _cbsa = _vsbs.Segment.CreateChunkAccessor(changeSet);
         _initialBufferId = field._bufferId;
     }
 
-    public void Dispose() => _cbsa.CommitChanges();
+    public void Dispose()
+    {
+        _cbsa.CommitChanges();
+        _cbsa.Dispose();
+    }
 
     public void Add(T value)
     {
         // First time adding an item?
         if (_field._bufferId == 0)
         {
-            _field._bufferId = _vsbs.AllocateBuffer(_cbsa);
+            _field._bufferId = _vsbs.AllocateBuffer(ref _cbsa);
         } 
         
         // Need to clone the buffer as we mutate its content
         else if (_initialBufferId == _field._bufferId)
         {
-            _field._bufferId = _vsbs.CloneBuffer(_initialBufferId, _cbsa);
+            _field._bufferId = _vsbs.CloneBuffer(_initialBufferId, ref _cbsa);
         }
         
-        _vsbs.AddElement(_field._bufferId, value, _cbsa);
+        _vsbs.AddElement(_field._bufferId, value, ref _cbsa);
     }
 
     public int ElementCount

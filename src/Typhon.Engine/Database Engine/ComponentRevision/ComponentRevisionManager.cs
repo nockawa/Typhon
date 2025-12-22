@@ -43,7 +43,7 @@ internal ref struct ComponentRevisionManager
         public void Dispose() => _handle.Dispose();
     }
     
-    internal static ElementRevisionHandle GetRevisionElement(ChunkRandomAccessor accessor, int firstChunkId, short revisionIndex)
+    internal static ElementRevisionHandle GetRevisionElement(ref ChunkAccessor accessor, int firstChunkId, short revisionIndex)
     {
         var firstHandle = accessor.GetChunkHandle(firstChunkId, false);
         ref var firstHeader = ref firstHandle.AsRef<CompRevStorageHeader>();
@@ -81,7 +81,7 @@ internal ref struct ComponentRevisionManager
 
     internal static void AddCompRev(Transaction.ComponentInfoBase info, ref Transaction.ComponentInfoBase.CompRevInfo compRevInfo, long tsn, bool isDelete)
     {
-        var compRevTableAccessor = info.CompRevTableAccessor;
+        ref var compRevTableAccessor = ref info.CompRevTableAccessor;
         var compContent = info.CompContentSegment;
 
         using var handle = compRevTableAccessor.GetChunkHandle(compRevInfo.CompRevTableFirstChunkId, true);
@@ -101,7 +101,7 @@ internal ref struct ComponentRevisionManager
 
         // Add our new entry
         var newRevIndex = (short)(firstHeader.FirstItemIndex + firstHeader.ItemCount);
-        var indexInChunk = GetRevisionLocation(compRevTableAccessor, compRevInfo.CompRevTableFirstChunkId, newRevIndex, out var curChunkId);
+        var indexInChunk = GetRevisionLocation(ref compRevTableAccessor, compRevInfo.CompRevTableFirstChunkId, newRevIndex, out var curChunkId);
 
         Span<CompRevStorageElement> curChunkElements;
         ChunkHandle curChunkHandle = default;
@@ -179,7 +179,7 @@ internal ref struct ComponentRevisionManager
     /// This method walks through the chain of revision chunks and builds a new one, only the first chunk is kept.
     /// </remarks>
     internal static bool CleanUpUnusedEntries(Transaction.ComponentInfoBase info, ref Transaction.ComponentInfoBase.CompRevInfo compRevInfo, 
-        ChunkRandomAccessor compRevTableAccessor, long nextMinTSN)
+        ref ChunkAccessor compRevTableAccessor, long nextMinTSN)
     {
         var firstChunkId = compRevInfo.CompRevTableFirstChunkId;
         using var firstChunkHandle = compRevTableAccessor.GetChunkHandle(firstChunkId, false);
@@ -200,7 +200,7 @@ internal ref struct ComponentRevisionManager
 
         ChunkHandle newChunkHandle = default;
         {
-            using var enumerator = new RevisionEnumerator(compRevTableAccessor, firstChunkId, false, true);
+            using var enumerator = new RevisionEnumerator(ref compRevTableAccessor, firstChunkId, false, true);
             var prevChunkId = enumerator.IndexInChunk == 0 ? enumerator.CurChunkId : 0;
             var maxSkipCount = firstChunkHeader.ItemCount;
             var skipping = true;
@@ -217,7 +217,7 @@ internal ref struct ComponentRevisionManager
                             foreach (var kvp in ct.ComponentCollectionVSBSByOffset)
                             {
                                 var bufferId = info.CompContentAccessor.GetChunkAsReadOnlySpan(prevChunkId).Slice(kvp.Key).Cast<byte, int>()[0];
-                                kvp.Value.Item1.BufferRelease(bufferId, kvp.Value.Item2);
+                                kvp.Value.VSBS.BufferRelease(bufferId, ref kvp.Value.Accessor);
                             }
                         }
 
@@ -241,7 +241,7 @@ internal ref struct ComponentRevisionManager
                                 foreach (var kvp in ct.ComponentCollectionVSBSByOffset)
                                 {
                                     var bufferId = info.CompContentAccessor.GetChunkAsReadOnlySpan(revChunkId).Slice(kvp.Key).Cast<byte, int>()[0];
-                                    kvp.Value.Item1.BufferRelease(bufferId, kvp.Value.Item2);
+                                    kvp.Value.VSBS.BufferRelease(bufferId, ref kvp.Value.Accessor);
                                 }
                             }
 
@@ -307,7 +307,7 @@ internal ref struct ComponentRevisionManager
         // Special case, the first revision is in the first chunk, we need to walk to the end of the chain and add a new chunk there
         if (firstHeader.FirstItemIndex < CompRevCountInRoot)
         {
-            var enumerator = new RevisionEnumerator(compRevTableAccessor, firstChunkId, false, false);
+            var enumerator = new RevisionEnumerator(ref compRevTableAccessor, firstChunkId, false, false);
             enumerator.StepToChunk(firstHeader.ChainLength - 1, false);         // Walk to the last chunk in the chain
             enumerator.NextChunkId = compRevTable.AllocateChunk(true);          // Allocated, clear content to make sure the next chunk ID is 0, set as next
             compRevTableAccessor.DirtyChunk(enumerator.CurChunkId);
@@ -317,7 +317,7 @@ internal ref struct ComponentRevisionManager
         {
             // Locate the first index in the chain, we add a chunk just before it
             var (firstChunkInChain, firstItemIndexInChunk) = CompRevStorageHeader.GetRevisionLocation(firstHeader.FirstItemIndex);
-            var enumerator = new RevisionEnumerator(compRevTableAccessor, firstChunkId, false, false);
+            var enumerator = new RevisionEnumerator(ref compRevTableAccessor, firstChunkId, false, false);
             enumerator.StepToChunk(firstChunkInChain-1, false);                 // In a circular buffer, the chunk before the first is the last one
 
             // Get the ID of the first chunk in the chain
@@ -344,7 +344,7 @@ internal ref struct ComponentRevisionManager
     private static int ComputeRevElementCount(int chainLength) => CompRevCountInRoot + ((chainLength - 1) * CompRevCountInNext);
     
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    private static unsafe short GetRevisionLocation(ChunkRandomAccessor accessor, int firstChunkId, short revisionIndex, out int resChunkId)
+    private static unsafe short GetRevisionLocation(ref ChunkAccessor accessor, int firstChunkId, short revisionIndex, out int resChunkId)
     {
         if (revisionIndex < CompRevCountInRoot)
         {
@@ -352,7 +352,7 @@ internal ref struct ComponentRevisionManager
             return revisionIndex;
         }
 
-        var (chunkIndexInChain, indexInChunk) = CompRevStorageHeader.GetRevisionLocation(revisionIndex);
+        (int chunkIndexInChain, int indexInChunk) = CompRevStorageHeader.GetRevisionLocation(revisionIndex);
 
         // Walk through the linked list until we find the chunk that is our starting point
         var header = (CompRevStorageHeader*)accessor.GetChunkAddress(firstChunkId);

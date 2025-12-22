@@ -170,7 +170,7 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
         #region Chunk Properties Access
 
-        public override void InitializeNode(NodeWrapper node, NodeStates states, ChunkRandomAccessor accessor)
+        public override void InitializeNode(NodeWrapper node, NodeStates states, ref ChunkAccessor accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index32Chunk>(node.ChunkId, true);
             chunk.StateFlags = states;
@@ -178,43 +178,43 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
         
         public override int GetNodeCapacity() => Index32Chunk.Capacity;
 
-        public override NodeWrapper GetLeftNode(NodeWrapper node, ChunkRandomAccessor accessor)
+        public override NodeWrapper GetLeftNode(NodeWrapper node, ref ChunkAccessor accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
             return new NodeWrapper(this, chunk.LeftValue);
         }
 
-        public override void SetLeftNode(NodeWrapper node, int previousNodeId, ChunkRandomAccessor accessor)
+        public override void SetLeftNode(NodeWrapper node, int previousNodeId, ref ChunkAccessor accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index32Chunk>(node.ChunkId, true);
             chunk.LeftValue = previousNodeId;
         }
 
-        public override NodeWrapper GetPreviousNode(NodeWrapper node, ChunkRandomAccessor accessor)
+        public override NodeWrapper GetPreviousNode(NodeWrapper node, ref ChunkAccessor accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
             return new NodeWrapper(this, chunk.PrevChunk);
         }
 
-        public override void SetPreviousNode(NodeWrapper node, int previousNodeId, ChunkRandomAccessor accessor)
+        public override void SetPreviousNode(NodeWrapper node, int previousNodeId, ref ChunkAccessor accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index32Chunk>(node.ChunkId, true);
             chunk.PrevChunk = previousNodeId;
         }
 
-        public override NodeWrapper GetNextNode(NodeWrapper node, ChunkRandomAccessor accessor)
+        public override NodeWrapper GetNextNode(NodeWrapper node, ref ChunkAccessor accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
             return new NodeWrapper(this, chunk.NextChunk);
         }
 
-        public override void SetNextNode(NodeWrapper node, int nextNodeId, ChunkRandomAccessor accessor)
+        public override void SetNextNode(NodeWrapper node, int nextNodeId, ref ChunkAccessor accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index32Chunk>(node.ChunkId, true);
             chunk.NextChunk = nextNodeId;
         }
 
-        public override KeyValueItem GetItem(NodeWrapper node, int index, bool adjust, ChunkRandomAccessor accessor)
+        public override KeyValueItem GetItem(NodeWrapper node, int index, bool adjust, ref ChunkAccessor accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
             var i = adjust ? Index32Chunk.Adjust(chunk.Start + index) : index;
@@ -222,43 +222,43 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
             return new KeyValueItem(*(TKey*)&key, chunk.Values[i]);
         }
 
-        public override void SetItem(NodeWrapper node, int index, KeyValueItem value, bool adjust, ChunkRandomAccessor accessor)
+        public override void SetItem(NodeWrapper node, int index, KeyValueItem value, bool adjust, ref ChunkAccessor accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index32Chunk>(node.ChunkId, true);
             Set(ref chunk, index, value, adjust);
         }
 
-        public override int GetCount(NodeWrapper node, ChunkRandomAccessor accessor)
+        public override int GetCount(NodeWrapper node, ref ChunkAccessor accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
             return chunk.Count;
         }
 
-        public override void SetCount(NodeWrapper node, int value, ChunkRandomAccessor accessor)
+        public override void SetCount(NodeWrapper node, int value, ref ChunkAccessor accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index32Chunk>(node.ChunkId, true);
             chunk.Count = value;
         }
 
-        public override int GetStart(NodeWrapper node, ChunkRandomAccessor accessor)
+        public override int GetStart(NodeWrapper node, ref ChunkAccessor accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
             return chunk.Start;
         }
 
-        public override void SetStart(NodeWrapper node, int value, ChunkRandomAccessor accessor)
+        public override void SetStart(NodeWrapper node, int value, ref ChunkAccessor accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index32Chunk>(node.ChunkId, true);
             chunk.Start = value;
         }
 
-        public override int GetEnd(NodeWrapper node, ChunkRandomAccessor accessor)
+        public override int GetEnd(NodeWrapper node, ref ChunkAccessor accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
             return Index32Chunk.Adjust(chunk.Start + chunk.Count);
         }
 
-        public override NodeStates GetNodeStates(NodeWrapper node, ChunkRandomAccessor accessor)
+        public override NodeStates GetNodeStates(NodeWrapper node, ref ChunkAccessor accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
             return chunk.StateFlags;
@@ -268,7 +268,7 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
         #region Chunk Operations
 
-        public override void PushFirst(NodeWrapper node, KeyValueItem item, ChunkRandomAccessor accessor)
+        public override void PushFirst(NodeWrapper node, KeyValueItem item, ref ChunkAccessor accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index32Chunk>(node.ChunkId, true);
 
@@ -281,16 +281,16 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
             ++chunk.Count;
         }
 
-        public override void PushLast(NodeWrapper node, KeyValueItem item, ChunkRandomAccessor accessor)
+        public override void PushLast(NodeWrapper node, KeyValueItem item, ref ChunkAccessor accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index32Chunk>(node.ChunkId, true);
             var c = chunk.Count++;
             Set(ref chunk, c, item, true);
         }
 
-        public override int Append(int bufferId, int value, ChunkRandomAccessor accessor) => throw new Exception("Shouldn't be called as key replace is not supported and multi-value neither");
+        public override int Append(int bufferId, int value, ref ChunkAccessor accessor) => throw new Exception("Shouldn't be called as key replace is not supported and multi-value neither");
 
-        public override void Insert(NodeWrapper node, int index, KeyValueItem item, ChunkRandomAccessor accessor)
+        public override void Insert(NodeWrapper node, int index, KeyValueItem item, ref ChunkAccessor accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index32Chunk>(node.ChunkId, true);
             var lsh = index; // length of left shift
@@ -311,30 +311,30 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
             chunk.Count++;
         }
 
-        public override int CreateBuffer(ChunkRandomAccessor accessor) => default;
+        public override int CreateBuffer(ref ChunkAccessor accessor) => default;
 
-        public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId, ChunkRandomAccessor accessor) => default;
-        public override int RemoveFromBuffer(int bufferId, int elementId, int value, ChunkRandomAccessor accessor) => default;
-        public override void DeleteBuffer(int bufferId, ChunkRandomAccessor accessor) { }
+        public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId, ref ChunkAccessor accessor) => default;
+        public override int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor accessor) => default;
+        public override void DeleteBuffer(int bufferId, ref ChunkAccessor accessor) { }
 
-        public override NodeWrapper GetFirstChild(NodeWrapper node, ChunkRandomAccessor accessor)
+        public override NodeWrapper GetFirstChild(NodeWrapper node, ref ChunkAccessor accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
             return new NodeWrapper(this, chunk.LeftValue);
         }
 
-        public override bool IsRotated(NodeWrapper node, ChunkRandomAccessor accessor)
+        public override bool IsRotated(NodeWrapper node, ref ChunkAccessor accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
             return (chunk.Start + chunk.Count) > Index32Chunk.Capacity;
         }
 
-        public override int BinarySearch(NodeWrapper node, TKey key, IComparer<TKey> comparer, ChunkRandomAccessor accessor)
+        public override int BinarySearch(NodeWrapper node, TKey key, IComparer<TKey> comparer, ref ChunkAccessor accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
             fixed (int* keys = chunk.Keys)
             {
-                if (IsRotated(node, accessor))
+                if (IsRotated(node, ref accessor))
                 {
                     int chunkKey = chunk.Keys[Index32Chunk.Capacity - 1];
                     if (comparer.Compare(key, *(TKey*)&chunkKey) <= 0) // search right side if item is smaller than last item in array.
@@ -356,16 +356,16 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
             }
         }
 
-        public override NodeWrapper SplitRight(NodeWrapper node, NodeStates states, ChunkRandomAccessor accessor)
+        public override NodeWrapper SplitRight(NodeWrapper node, NodeStates states, ref ChunkAccessor accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index32Chunk>(node.ChunkId, true);
-            return SplitRight(ref chunk, states, accessor);
+            return SplitRight(ref chunk, states, ref accessor);
         }
 
-        public override KeyValueItem RemoveAt(NodeWrapper node, int index, ChunkRandomAccessor accessor)
+        public override KeyValueItem RemoveAt(NodeWrapper node, int index, ref ChunkAccessor accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index32Chunk>(node.ChunkId, true);
-            var item = GetItem(node, index, true, accessor);
+            var item = GetItem(node, index, true, ref accessor);
 
             var lsh = chunk.Count - index - 1; // length of left shift
             var rsh = index; // length of right shift
@@ -386,7 +386,7 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
             return item;
         }
 
-        public override void MergeLeft(NodeWrapper left, NodeWrapper right, ChunkRandomAccessor accessor)
+        public override void MergeLeft(NodeWrapper left, NodeWrapper right, ref ChunkAccessor accessor)
         {
             ref var leftChunk = ref accessor.GetChunk<Index32Chunk>(left.ChunkId, true);
             ref var rightChunk = ref accessor.GetChunk<Index32Chunk>(right.ChunkId, true);
@@ -396,8 +396,10 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
             var rk = rightChunk.KeysAsSpan;
             var rv = rightChunk.ValuesAsSpan;
 
-            if (leftChunk.Count + right.GetCount(accessor) > Index32Chunk.Capacity)
+            if (leftChunk.Count + right.GetCount(ref accessor) > Index32Chunk.Capacity)
+            {
                 throw new InvalidOperationException("can not merge, there is not enough capacity for this array.");
+            }
 
             var end = leftChunk.Start + leftChunk.Count;
 
@@ -407,16 +409,16 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
                 if (!rightChunk.IsRotated)
                 {
-                    rk.Slice(right.GetStart(accessor), right.GetCount(accessor)).CopyTo(lk.Slice(start, right.GetCount(accessor)));
-                    rv.Slice(right.GetStart(accessor), right.GetCount(accessor)).CopyTo(lv.Slice(start, right.GetCount(accessor)));
+                    rk.Slice(right.GetStart(ref accessor), right.GetCount(ref accessor)).CopyTo(lk.Slice(start, right.GetCount(ref accessor)));
+                    rv.Slice(right.GetStart(ref accessor), right.GetCount(ref accessor)).CopyTo(lv.Slice(start, right.GetCount(ref accessor)));
                 }
                 else
                 {
-                    var srLen = right.GetCapacity() - right.GetStart(accessor); // right length
-                    var slLen = right.GetCount(accessor) - srLen; // left length (remaining)
+                    var srLen = right.GetCapacity() - right.GetStart(ref accessor); // right length
+                    var slLen = right.GetCount(ref accessor) - srLen; // left length (remaining)
 
-                    rk.Slice(right.GetStart(accessor), srLen).CopyTo(lk.Slice(start, srLen));
-                    rv.Slice(right.GetStart(accessor), srLen).CopyTo(lv.Slice(start, srLen));
+                    rk.Slice(right.GetStart(ref accessor), srLen).CopyTo(lk.Slice(start, srLen));
+                    rv.Slice(right.GetStart(ref accessor), srLen).CopyTo(lv.Slice(start, srLen));
 
                     rk.Slice(0, slLen).CopyTo(lk.Slice(start + srLen, slLen));
                     rv.Slice(0, slLen).CopyTo(lv.Slice(start + srLen, slLen));
@@ -424,38 +426,38 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
             }
             else
             {
-                bool copyIsOnePiece = end + right.GetCount(accessor) <= Index32Chunk.Capacity;
+                bool copyIsOnePiece = end + right.GetCount(ref accessor) <= Index32Chunk.Capacity;
 
                 if (!rightChunk.IsRotated)
                 {
                     if (copyIsOnePiece)
                     {
-                        rk.Slice(right.GetStart(accessor), right.GetCount(accessor)).CopyTo(lk.Slice(end, right.GetCount(accessor)));
-                        rv.Slice(right.GetStart(accessor), right.GetCount(accessor)).CopyTo(lv.Slice(end, right.GetCount(accessor)));
+                        rk.Slice(right.GetStart(ref accessor), right.GetCount(ref accessor)).CopyTo(lk.Slice(end, right.GetCount(ref accessor)));
+                        rv.Slice(right.GetStart(ref accessor), right.GetCount(ref accessor)).CopyTo(lv.Slice(end, right.GetCount(ref accessor)));
                     }
                     else
                     {
                         var length = Index32Chunk.Capacity - end;
-                        var remaining = right.GetCount(accessor) - length;
+                        var remaining = right.GetCount(ref accessor) - length;
 
-                        rk.Slice(right.GetStart(accessor), length).CopyTo(lk.Slice(end, length));
-                        rk.Slice(right.GetStart(accessor) + length, remaining).CopyTo(lk.Slice(0, remaining));
+                        rk.Slice(right.GetStart(ref accessor), length).CopyTo(lk.Slice(end, length));
+                        rk.Slice(right.GetStart(ref accessor) + length, remaining).CopyTo(lk.Slice(0, remaining));
 
-                        rv.Slice(right.GetStart(accessor), length).CopyTo(lv.Slice(end, length));
-                        rv.Slice(right.GetStart(accessor) + length, remaining).CopyTo(lv.Slice(0, remaining));
+                        rv.Slice(right.GetStart(ref accessor), length).CopyTo(lv.Slice(end, length));
+                        rv.Slice(right.GetStart(ref accessor) + length, remaining).CopyTo(lv.Slice(0, remaining));
                     }
                 }
                 else
                 {
-                    var srLen = right.GetCapacity() - right.GetStart(accessor); // right length
-                    var slLen = right.GetCount(accessor) - srLen; // left length (remaining)
+                    var srLen = right.GetCapacity() - right.GetStart(ref accessor); // right length
+                    var slLen = right.GetCount(ref accessor) - srLen; // left length (remaining)
 
                     if (copyIsOnePiece)
                     {
-                        rk.Slice(right.GetStart(accessor), srLen).CopyTo(lk.Slice(end, srLen));
+                        rk.Slice(right.GetStart(ref accessor), srLen).CopyTo(lk.Slice(end, srLen));
                         rk.Slice(0, slLen).CopyTo(lk.Slice(end + srLen, slLen));
 
-                        rv.Slice(right.GetStart(accessor), srLen).CopyTo(lv.Slice(end, srLen));
+                        rv.Slice(right.GetStart(ref accessor), srLen).CopyTo(lv.Slice(end, srLen));
                         rv.Slice(0, slLen).CopyTo(lv.Slice(end + srLen, slLen));
                     }
                     else
@@ -467,8 +469,8 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
                             var secondCopyFirstLength = Index32Chunk.Capacity - mergeEnd;
                             var secondCopySecondLength = slLen - secondCopyFirstLength;
 
-                            rk.Slice(right.GetStart(accessor), srLen).CopyTo(lk.Slice(end, srLen));
-                            rv.Slice(right.GetStart(accessor), srLen).CopyTo(lv.Slice(end, srLen));
+                            rk.Slice(right.GetStart(ref accessor), srLen).CopyTo(lk.Slice(end, srLen));
+                            rv.Slice(right.GetStart(ref accessor), srLen).CopyTo(lv.Slice(end, srLen));
 
                             rk.Slice(0, secondCopySecondLength).CopyTo(lk.Slice(mergeEnd, secondCopyFirstLength));
                             rv.Slice(0, secondCopySecondLength).CopyTo(lv.Slice(mergeEnd, secondCopyFirstLength));
@@ -479,11 +481,11 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
                         {
                             var firstCopyFirstLength = Index32Chunk.Capacity - end;
                             var firstCopySecondLength = srLen - firstCopyFirstLength;
-                            var firstCopySecondStart = right.GetStart(accessor) + firstCopyFirstLength;
+                            var firstCopySecondStart = right.GetStart(ref accessor) + firstCopyFirstLength;
 
-                            rk.Slice(right.GetStart(accessor), firstCopyFirstLength).CopyTo(lk.Slice(end, firstCopyFirstLength));
+                            rk.Slice(right.GetStart(ref accessor), firstCopyFirstLength).CopyTo(lk.Slice(end, firstCopyFirstLength));
                             rk.Slice(firstCopySecondStart, firstCopySecondLength).CopyTo(lk.Slice(0, firstCopySecondLength));
-                            rv.Slice(right.GetStart(accessor), firstCopyFirstLength).CopyTo(lv.Slice(end, firstCopyFirstLength));
+                            rv.Slice(right.GetStart(ref accessor), firstCopyFirstLength).CopyTo(lv.Slice(end, firstCopyFirstLength));
                             rv.Slice(firstCopySecondStart, firstCopySecondLength).CopyTo(lv.Slice(0, firstCopySecondLength));
 
                             rk.Slice(0, slLen).CopyTo(lk.Slice(firstCopySecondLength, slLen));
@@ -493,23 +495,23 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
                 }
             }
 
-            leftChunk.Count += right.GetCount(accessor); // correct array length.
+            leftChunk.Count += right.GetCount(ref accessor); // correct array length.
         }
 
-        public override NodeWrapper GetLastChild(NodeWrapper node, ChunkRandomAccessor accessor)
+        public override NodeWrapper GetLastChild(NodeWrapper node, ref ChunkAccessor accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
             var index = Index32Chunk.Adjust(chunk.Start + chunk.Count - 1);
             return new NodeWrapper(this, chunk.Values[index]);
         }
 
-        public override void IncrementStart(NodeWrapper node, ChunkRandomAccessor accessor)
+        public override void IncrementStart(NodeWrapper node, ref ChunkAccessor accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index32Chunk>(node.ChunkId, true);
             IncrementStart(ref chunk);
         }
 
-        public override void DecrementStart(NodeWrapper node, ChunkRandomAccessor accessor)
+        public override void DecrementStart(NodeWrapper node, ref ChunkAccessor accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index32Chunk>(node.ChunkId, true);
             DecrementStart(ref chunk);
@@ -552,9 +554,20 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
         private void LeftShift(ref Index32Chunk chunk, int index, int length)
         {
-            if (length == 0) return;
-            if (length < 0 || length > Index32Chunk.Capacity) throw new ArgumentOutOfRangeException(nameof(length));
-            if (index < 0 || index >= Index32Chunk.Capacity) throw new ArgumentOutOfRangeException(nameof(length));
+            if (length == 0)
+            {
+                return;
+            }
+
+            if (length < 0 || length > Index32Chunk.Capacity)
+            {
+                throw new ArgumentOutOfRangeException(nameof(length));
+            }
+
+            if (index < 0 || index >= Index32Chunk.Capacity)
+            {
+                throw new ArgumentOutOfRangeException(nameof(length));
+            }
 
             var k = chunk.KeysAsSpan;
             var v = chunk.ValuesAsSpan;
@@ -592,9 +605,20 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
         private void RightShift(ref Index32Chunk chunk, int index, int length)
         {
-            if (length == 0) return;
-            if (length < 0 || length > Index32Chunk.Capacity) throw new ArgumentOutOfRangeException(nameof(length));
-            if (index < 0 || index >= Index32Chunk.Capacity) throw new ArgumentOutOfRangeException(nameof(length));
+            if (length == 0)
+            {
+                return;
+            }
+
+            if (length < 0 || length > Index32Chunk.Capacity)
+            {
+                throw new ArgumentOutOfRangeException(nameof(length));
+            }
+
+            if (index < 0 || index >= Index32Chunk.Capacity)
+            {
+                throw new ArgumentOutOfRangeException(nameof(length));
+            }
 
             var k = chunk.KeysAsSpan;
             var v = chunk.ValuesAsSpan;
@@ -621,9 +645,9 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
             }
         }
 
-        public NodeWrapper SplitRight(ref Index32Chunk left, NodeStates states, ChunkRandomAccessor accessor)
+        public NodeWrapper SplitRight(ref Index32Chunk left, NodeStates states, ref ChunkAccessor accessor)
         {
-            var rightNode = Owner.AllocNode(states, accessor);
+            var rightNode = Owner.AllocNode(states, ref accessor);
             ref var right = ref accessor.GetChunk<Index32Chunk>(rightNode.ChunkId, true);
 
             var lr = left.Count / 2; // length of right side
@@ -671,14 +695,14 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
     protected override BaseNodeStorage GetStorage() => new L32NodeStorage();
     public override bool AllowMultiple => false;
-    protected L32BTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load) : base(segment, accessor, load)
+    protected L32BTree(ChunkBasedSegment segment, ref ChunkAccessor accessor, bool load) : base(segment, ref accessor, load)
     {
     }
 }
 
 public class L32MultipleBTree<TKey> : L32BTree<TKey> where TKey : unmanaged
 {
-    public L32MultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
+    public L32MultipleBTree(ChunkBasedSegment segment, ref ChunkAccessor accessor, bool load = false) : base(segment, ref accessor, load)
     {
     }
 
@@ -696,34 +720,34 @@ public class L32MultipleBTree<TKey> : L32BTree<TKey> where TKey : unmanaged
 
         }
 
-        public override int Append(int bufferId, int value, ChunkRandomAccessor accessor) => _valueStore.AddElement(bufferId, value, accessor);
-        public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId, ChunkRandomAccessor accessor) => _valueStore.GetReadOnlyAccessor(bufferId);
+        public override int Append(int bufferId, int value, ref ChunkAccessor accessor) => _valueStore.AddElement(bufferId, value, ref accessor);
+        public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId, ref ChunkAccessor accessor) => _valueStore.GetReadOnlyAccessor(bufferId);
 
-        public override int CreateBuffer(ChunkRandomAccessor accessor) => _valueStore.AllocateBuffer(accessor);
+        public override int CreateBuffer(ref ChunkAccessor accessor) => _valueStore.AllocateBuffer(ref accessor);
 
-        public override int RemoveFromBuffer(int bufferId, int elementId, int value, ChunkRandomAccessor accessor) 
-            => _valueStore.DeleteElement(bufferId, elementId, value, accessor);
-        public override void DeleteBuffer(int bufferId, ChunkRandomAccessor accessor) => _valueStore.DeleteBuffer(bufferId, accessor);
+        public override int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor accessor) 
+            => _valueStore.DeleteElement(bufferId, elementId, value, ref accessor);
+        public override void DeleteBuffer(int bufferId, ref ChunkAccessor accessor) => _valueStore.DeleteBuffer(bufferId, ref accessor);
     }
 }
 
 public class IntSingleBTree : L32BTree<int>
 {
-    public IntSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
+    public IntSingleBTree(ChunkBasedSegment segment, ref ChunkAccessor accessor, bool load = false) : base(segment, ref accessor, load)
     {
     }
 }
 
 public class IntMultipleBTree : L32MultipleBTree<int>
 {
-    public IntMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
+    public IntMultipleBTree(ChunkBasedSegment segment, ref ChunkAccessor accessor, bool load = false) : base(segment, ref accessor, load)
     {
     }
 }
 
 public class UIntSingleBTree : L32BTree<uint>
 {
-    public UIntSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
+    public UIntSingleBTree(ChunkBasedSegment segment, ref ChunkAccessor accessor, bool load = false) : base(segment, ref accessor, load)
     {
     }
 
@@ -731,21 +755,21 @@ public class UIntSingleBTree : L32BTree<uint>
 
 public class UIntMultipleBTree : L32MultipleBTree<uint>
 {
-    public UIntMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
+    public UIntMultipleBTree(ChunkBasedSegment segment, ref ChunkAccessor accessor, bool load = false) : base(segment, ref accessor, load)
     {
     }
 }
 
 public class FloatSingleBTree : L32BTree<float>
 {
-    public FloatSingleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
+    public FloatSingleBTree(ChunkBasedSegment segment, ref ChunkAccessor accessor, bool load = false) : base(segment, ref accessor, load)
     {
     }
 }
 
 public class FloatMultipleBTree : L32MultipleBTree<float>
 {
-    public FloatMultipleBTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load = false) : base(segment, accessor, load)
+    public FloatMultipleBTree(ChunkBasedSegment segment, ref ChunkAccessor accessor, bool load = false) : base(segment, ref accessor, load)
     {
     }
 }

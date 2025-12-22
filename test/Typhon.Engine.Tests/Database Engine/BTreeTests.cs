@@ -69,26 +69,28 @@ class BtreeTests
     {
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-        using var accessor = segment.CreateChunkRandomAccessor(8);
-        var tree = new IntSingleBTree(segment, accessor);
+        var accessor = segment.CreateChunkAccessor();
+        var tree = new IntSingleBTree(segment, ref accessor);
 
-        tree.Add(10, 10, accessor);
+        tree.Add(10, 10, ref accessor);
         Assert.That(tree[10], Is.EqualTo(10));
-        tree.Add(15, 15, accessor);
-        tree.Add(20, 20, accessor);
+        tree.Add(15, 15, ref accessor);
+        tree.Add(20, 20, ref accessor);
         Assert.That(tree[20], Is.EqualTo(20));
-        tree.Add(50, 50, accessor);
-        tree.Add(80, 80, accessor);
+        tree.Add(50, 50, ref accessor);
+        tree.Add(80, 80, ref accessor);
         Assert.That(tree[80], Is.EqualTo(80));
-        tree.Add(90, 90, accessor);
+        tree.Add(90, 90, ref accessor);
         Assert.That(tree[90], Is.EqualTo(90));
 
-        tree.Add(100, 100, accessor);
+        tree.Add(100, 100, ref accessor);
         Assert.That(tree[100], Is.EqualTo(100));
-        tree.Add(120, 120, accessor);
+        tree.Add(120, 120, ref accessor);
         Assert.That(tree[120], Is.EqualTo(120));
-        tree.Add(140, 140, accessor);
+        tree.Add(140, 140, ref accessor);
         Assert.That(tree[140], Is.EqualTo(140));
+        
+        accessor.Dispose();
     }
 
     [Test]
@@ -96,26 +98,28 @@ class BtreeTests
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-        using var accessor = segment.CreateChunkRandomAccessor(8);
-        var tree = new FloatSingleBTree(segment, accessor);
+        var accessor = segment.CreateChunkAccessor();
+        var tree = new FloatSingleBTree(segment, ref accessor);
 
-        tree.Add(-0.10f, 10, accessor);
+        tree.Add(-0.10f, 10, ref accessor);
         Assert.That(tree[-0.10f], Is.EqualTo(10));
-        tree.Add(0.15f, 15, accessor);
-        tree.Add(0.20f, 20, accessor);
+        tree.Add(0.15f, 15, ref accessor);
+        tree.Add(0.20f, 20, ref accessor);
         Assert.That(tree[0.20f], Is.EqualTo(20));
-        tree.Add(0.50f, 50, accessor);
-        tree.Add(0.80f, 80, accessor);
+        tree.Add(0.50f, 50, ref accessor);
+        tree.Add(0.80f, 80, ref accessor);
         Assert.That(tree[0.80f], Is.EqualTo(80));
-        tree.Add(-0.90f, 90, accessor);
+        tree.Add(-0.90f, 90, ref accessor);
         Assert.That(tree[-0.90f], Is.EqualTo(90));
 
-        tree.Add(0.101f, 100, accessor);
+        tree.Add(0.101f, 100, ref accessor);
         Assert.That(tree[0.101f], Is.EqualTo(100));
-        tree.Add(0.121f, 120, accessor);
+        tree.Add(0.121f, 120, ref accessor);
         Assert.That(tree[0.121f], Is.EqualTo(120));
-        tree.Add(0.141f, 140, accessor);
+        tree.Add(0.141f, 140, ref accessor);
         Assert.That(tree[0.141f], Is.EqualTo(140));
+        
+        accessor.Dispose();
     }
 
     [Test]
@@ -123,29 +127,31 @@ class BtreeTests
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-        using var accessor = segment.CreateChunkRandomAccessor(8);
-        var tree = new IntSingleBTree(segment, accessor);
+        var accessor = segment.CreateChunkAccessor();
+        var tree = new IntSingleBTree(segment, ref accessor);
 
-        tree.Add(140, 140, accessor);
+        tree.Add(140, 140, ref accessor);
         Assert.That(tree[140], Is.EqualTo(140));
-        tree.Add(120, 120, accessor);
+        tree.Add(120, 120, ref accessor);
         Assert.That(tree[120], Is.EqualTo(120));
-        tree.Add(100, 100, accessor);
+        tree.Add(100, 100, ref accessor);
         Assert.That(tree[100], Is.EqualTo(100));
-        tree.Add(90, 90, accessor);
+        tree.Add(90, 90, ref accessor);
         Assert.That(tree[90], Is.EqualTo(90));
-        tree.Add(80, 80, accessor);
+        tree.Add(80, 80, ref accessor);
         Assert.That(tree[80], Is.EqualTo(80));
-        tree.Add(50, 50, accessor);
+        tree.Add(50, 50, ref accessor);
 
-        tree.Add(20, 20, accessor);
+        tree.Add(20, 20, ref accessor);
         Assert.That(tree[20], Is.EqualTo(20));
-        tree.Add(15, 15, accessor);
+        tree.Add(15, 15, ref accessor);
 
-        tree.Add(10, 10, accessor);
+        tree.Add(10, 10, ref accessor);
         Assert.That(tree[10], Is.EqualTo(10));
 
-        tree.CheckConsistency(accessor);
+        tree.CheckConsistency(ref accessor);
+        
+        accessor.Dispose();
     }
 
     [Test]
@@ -153,29 +159,31 @@ class BtreeTests
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(IndexString64Chunk));
-        using var accessor = segment.CreateChunkRandomAccessor(8);
-        var tree = new String64SingleBTree(segment, accessor);
+        var accessor = segment.CreateChunkAccessor();
+        var tree = new String64SingleBTree(segment, ref accessor);
 
-        tree.Add("140", 140, accessor);
+        tree.Add("140", 140, ref accessor);
         Assert.That(tree["140"], Is.EqualTo(140));
-        tree.Add("120", 120, accessor);
+        tree.Add("120", 120, ref accessor);
         Assert.That(tree["120"], Is.EqualTo(120));
-        tree.Add("100", 100, accessor);
+        tree.Add("100", 100, ref accessor);
         Assert.That(tree["100"], Is.EqualTo(100));
-        tree.Add("90", 90, accessor);
+        tree.Add("90", 90, ref accessor);
         Assert.That(tree["90"], Is.EqualTo(90));
-        tree.Add("80", 80, accessor);
+        tree.Add("80", 80, ref accessor);
         Assert.That(tree["80"], Is.EqualTo(80));
-        tree.Add("50", 50, accessor);
+        tree.Add("50", 50, ref accessor);
 
-        tree.Add("20", 20, accessor);
+        tree.Add("20", 20, ref accessor);
         Assert.That(tree["20"], Is.EqualTo(20));
-        tree.Add("15", 15, accessor);
+        tree.Add("15", 15, ref accessor);
 
-        tree.Add("10", 10, accessor);
+        tree.Add("10", 10, ref accessor);
         Assert.That(tree["10"], Is.EqualTo(10));
 
-        tree.CheckConsistency(accessor);
+        tree.CheckConsistency(ref accessor);
+        
+        accessor.Dispose();
     }
 
     [Test]
@@ -191,16 +199,18 @@ class BtreeTests
 
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-        using var accessor = segment.CreateChunkRandomAccessor(8);
-        var tree = new IntSingleBTree(segment, accessor);
+        var accessor = segment.CreateChunkAccessor();
+        var tree = new IntSingleBTree(segment, ref accessor);
 
         foreach (var v in values)
         {
-            tree.Add(v, v, accessor);
-            tree.CheckConsistency(accessor);
+            tree.Add(v, v, ref accessor);
+            tree.CheckConsistency(ref accessor);
         }
 
-        tree.CheckConsistency(accessor);
+        tree.CheckConsistency(ref accessor);
+        
+        accessor.Dispose();
     }
 
 
@@ -225,24 +235,24 @@ class BtreeTests
 
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-        using var accessor = segment.CreateChunkRandomAccessor(8);
-        var tree = new IntSingleBTree(segment, accessor);
+        var accessor = segment.CreateChunkAccessor();
+        var tree = new IntSingleBTree(segment, ref accessor);
 
         for (int loopC = 0; loopC < 2; loopC++)
         {
             foreach (var v in values)
             {
-                tree.Add(v, v + 1, accessor);
+                tree.Add(v, v + 1, ref accessor);
             }
 
-            Assert.That(tree.Remove(8080, out var _, accessor), Is.False);
-            tree.CheckConsistency(accessor);
+            Assert.That(tree.Remove(8080, out var _, ref accessor), Is.False);
+            tree.CheckConsistency(ref accessor);
 
             foreach (var v in valuesToRemove)
             {
-                Assert.That(tree.Remove(v, out var val, accessor), Is.True, () => $"Failed removed key {v}");
+                Assert.That(tree.Remove(v, out var val, ref accessor), Is.True, () => $"Failed removed key {v}");
                 Assert.That(val, Is.EqualTo(v + 1));
-                tree.CheckConsistency(accessor);
+                tree.CheckConsistency(ref accessor);
             }
 
             for (int i = 0; i < values.Length; i++)
@@ -250,12 +260,13 @@ class BtreeTests
                 int value = values[i];
                 if (valuesToRemove.Contains(value)) continue;
 
-                Assert.That(tree.Remove(value, out var val, accessor), Is.True, () => $"Failed removed key {value}");
+                Assert.That(tree.Remove(value, out var val, ref accessor), Is.True, () => $"Failed removed key {value}");
                 Assert.That(val, Is.EqualTo(value + 1));
-                tree.CheckConsistency(accessor);
+                tree.CheckConsistency(ref accessor);
             }
-
         }
+        
+        accessor.Dispose();
     }
 
     [Test]
@@ -274,8 +285,8 @@ class BtreeTests
         }
 
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 20, sizeof(Index32Chunk));
-        using var accessor = segment.CreateChunkRandomAccessor(8);
-        var tree = new IntSingleBTree(segment, accessor);
+        var accessor = segment.CreateChunkAccessor();
+        var tree = new IntSingleBTree(segment, ref accessor);
 
         var array = samples.ToArray();
         var count = array.Length;
@@ -286,13 +297,15 @@ class BtreeTests
         for (int i = 0; i < count; i++)
         {
             var v = array[i];
-            tree.Add(v, v, accessor);
+            tree.Add(v, v, ref accessor);
         }
 
         sw.Stop();
         Console.WriteLine($"Insertion of {sampleCount} in {sw.ElapsedMilliseconds}ms");
 
-        tree.CheckConsistency(accessor);
+        tree.CheckConsistency(ref accessor);
+        
+        accessor.Dispose();
     }
 
     [Test]
@@ -301,46 +314,48 @@ class BtreeTests
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
 
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-        using var accessor = segment.CreateChunkRandomAccessor(8);
-        var tree = new IntMultipleBTree(segment, accessor);
+        var accessor = segment.CreateChunkAccessor();
+        var tree = new IntMultipleBTree(segment, ref accessor);
 
-        var eid0 = tree.Add(1, 10, accessor);
-        var eid1 = tree.Add(3, 30, accessor);
-        var eid2 = tree.Add(2, 20, accessor);
-        var eid3 = tree.Add(2, 21, accessor);
-        var eid4 = tree.Add(1, 11, accessor);
-        var eid5 = tree.Add(3, 31, accessor);
-        var eid6 = tree.Add(2, 22, accessor);
-        var eid7 = tree.Add(1, 12, accessor);
+        var eid0 = tree.Add(1, 10, ref accessor);
+        var eid1 = tree.Add(3, 30, ref accessor);
+        var eid2 = tree.Add(2, 20, ref accessor);
+        var eid3 = tree.Add(2, 21, ref accessor);
+        var eid4 = tree.Add(1, 11, ref accessor);
+        var eid5 = tree.Add(3, 31, ref accessor);
+        var eid6 = tree.Add(2, 22, ref accessor);
+        var eid7 = tree.Add(1, 12, ref accessor);
 
         {
-            using var a = tree.TryGetMultiple(1, accessor);
+            using var a = tree.TryGetMultiple(1, ref accessor);
             Assert.That(a.IsValid, Is.True);
             Assert.That(a.ReadOnlyElements.Length, Is.EqualTo(3));
         }
 
         {
-            using var a = tree.TryGetMultiple(2, accessor);
+            using var a = tree.TryGetMultiple(2, ref accessor);
             Assert.That(a.IsValid, Is.True);
             Assert.That(a.ReadOnlyElements.Length, Is.EqualTo(3));
         }
 
         {
-            using var a = tree.TryGetMultiple(3, accessor);
+            using var a = tree.TryGetMultiple(3, ref accessor);
             Assert.That(a.IsValid, Is.True);
             Assert.That(a.ReadOnlyElements.Length, Is.EqualTo(2));
         }
 
-        tree.RemoveValue(1, eid0, 10, accessor);
-        tree.RemoveValue(1, eid7, 12, accessor);
-        tree.RemoveValue(1, eid4, 11, accessor);
+        tree.RemoveValue(1, eid0, 10, ref accessor);
+        tree.RemoveValue(1, eid7, 12, ref accessor);
+        tree.RemoveValue(1, eid4, 11, ref accessor);
 
         {
-            using var a = tree.TryGetMultiple(1, accessor);
+            using var a = tree.TryGetMultiple(1, ref accessor);
             Assert.That(a.IsValid, Is.False);
         }
 
-        tree.CheckConsistency(accessor);
+        tree.CheckConsistency(ref accessor);
+        
+        accessor.Dispose();
     }
     
     [Test]
@@ -349,46 +364,48 @@ class BtreeTests
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
 
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index16Chunk));
-        using var accessor = segment.CreateChunkRandomAccessor(8);
-        var tree = new ByteMultipleBTree(segment, accessor);
+        var accessor = segment.CreateChunkAccessor();
+        var tree = new ByteMultipleBTree(segment, ref accessor);
 
-        var eid0 = tree.Add(1, 10, accessor);
-        var eid1 = tree.Add(3, 30, accessor);
-        var eid2 = tree.Add(2, 20, accessor);
-        var eid3 = tree.Add(2, 21, accessor);
-        var eid4 = tree.Add(1, 11, accessor);
-        var eid5 = tree.Add(3, 31, accessor);
-        var eid6 = tree.Add(2, 22, accessor);
-        var eid7 = tree.Add(1, 12, accessor);
+        var eid0 = tree.Add(1, 10, ref accessor);
+        var eid1 = tree.Add(3, 30, ref accessor);
+        var eid2 = tree.Add(2, 20, ref accessor);
+        var eid3 = tree.Add(2, 21, ref accessor);
+        var eid4 = tree.Add(1, 11, ref accessor);
+        var eid5 = tree.Add(3, 31, ref accessor);
+        var eid6 = tree.Add(2, 22, ref accessor);
+        var eid7 = tree.Add(1, 12, ref accessor);
 
         {
-            using var a = tree.TryGetMultiple(1, accessor);
+            using var a = tree.TryGetMultiple(1, ref accessor);
             Assert.That(a.IsValid, Is.True);
             Assert.That(a.ReadOnlyElements.Length, Is.EqualTo(3));
         }
 
         {
-            using var a = tree.TryGetMultiple(2, accessor);
+            using var a = tree.TryGetMultiple(2, ref accessor);
             Assert.That(a.IsValid, Is.True);
             Assert.That(a.ReadOnlyElements.Length, Is.EqualTo(3));
         }
 
         {
-            using var a = tree.TryGetMultiple(3, accessor);
+            using var a = tree.TryGetMultiple(3, ref accessor);
             Assert.That(a.IsValid, Is.True);
             Assert.That(a.ReadOnlyElements.Length, Is.EqualTo(2));
         }
 
-        tree.RemoveValue(1, eid0, 10, accessor);
-        tree.RemoveValue(1, eid7, 12, accessor);
-        tree.RemoveValue(1, eid4, 11, accessor);
+        tree.RemoveValue(1, eid0, 10, ref accessor);
+        tree.RemoveValue(1, eid7, 12, ref accessor);
+        tree.RemoveValue(1, eid4, 11, ref accessor);
 
         {
-            using var a = tree.TryGetMultiple(1, accessor);
+            using var a = tree.TryGetMultiple(1, ref accessor);
             Assert.That(a.IsValid, Is.False);
         }
 
-        tree.CheckConsistency(accessor);
+        tree.CheckConsistency(ref accessor);
+        
+        accessor.Dispose();
     }
 
     [Test]
@@ -397,46 +414,48 @@ class BtreeTests
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-        using var accessor = segment.CreateChunkRandomAccessor(8);
-        var tree = new FloatMultipleBTree(segment, accessor);
+        var accessor = segment.CreateChunkAccessor();
+        var tree = new FloatMultipleBTree(segment, ref accessor);
 
-        var eid0 = tree.Add(1.1f, 10, accessor);
-        var eid1 = tree.Add(3.1f, 30, accessor);
-        var eid2 = tree.Add(2.1f, 20, accessor);
-        var eid3 = tree.Add(2.1f, 21, accessor);
-        var eid4 = tree.Add(1.1f, 11, accessor);
-        var eid5 = tree.Add(3.1f, 31, accessor);
-        var eid6 = tree.Add(2.1f, 22, accessor);
-        var eid7 = tree.Add(1.1f, 12, accessor);
+        var eid0 = tree.Add(1.1f, 10, ref accessor);
+        var eid1 = tree.Add(3.1f, 30, ref accessor);
+        var eid2 = tree.Add(2.1f, 20, ref accessor);
+        var eid3 = tree.Add(2.1f, 21, ref accessor);
+        var eid4 = tree.Add(1.1f, 11, ref accessor);
+        var eid5 = tree.Add(3.1f, 31, ref accessor);
+        var eid6 = tree.Add(2.1f, 22, ref accessor);
+        var eid7 = tree.Add(1.1f, 12, ref accessor);
 
         {
-            using var a = tree.TryGetMultiple(1.1f, accessor);
+            using var a = tree.TryGetMultiple(1.1f, ref accessor);
             Assert.That(a.IsValid, Is.True);
             Assert.That(a.ReadOnlyElements.Length, Is.EqualTo(3));
         }
 
         {
-            using var a = tree.TryGetMultiple(2.1f, accessor);
+            using var a = tree.TryGetMultiple(2.1f, ref accessor);
             Assert.That(a.IsValid, Is.True);
             Assert.That(a.ReadOnlyElements.Length, Is.EqualTo(3));
         }
 
         {
-            using var a = tree.TryGetMultiple(3.1f, accessor);
+            using var a = tree.TryGetMultiple(3.1f, ref accessor);
             Assert.That(a.IsValid, Is.True);
             Assert.That(a.ReadOnlyElements.Length, Is.EqualTo(2));
         }
 
-        tree.RemoveValue(1.1f, eid0, 10, accessor);
-        tree.RemoveValue(1.1f, eid7, 12, accessor);
-        tree.RemoveValue(1.1f, eid4, 11, accessor);
+        tree.RemoveValue(1.1f, eid0, 10, ref accessor);
+        tree.RemoveValue(1.1f, eid7, 12, ref accessor);
+        tree.RemoveValue(1.1f, eid4, 11, ref accessor);
 
         {
-            using var a = tree.TryGetMultiple(1, accessor);
+            using var a = tree.TryGetMultiple(1, ref accessor);
             Assert.That(a.IsValid, Is.False);
         }
 
-        tree.CheckConsistency(accessor);
+        tree.CheckConsistency(ref accessor);
+        
+        accessor.Dispose();
     }
 
     [Test]
@@ -455,8 +474,8 @@ class BtreeTests
 
             var segment = mmf.AllocateChunkBasedSegment(PageBlockType.None, 300, sizeof(Index32Chunk), changeSet);
             segmentIndex = segment.RootPageIndex;
-            using var accessor = segment.CreateChunkRandomAccessor(8, changeSet);
-            var tree = new FloatSingleBTree(segment, accessor);
+            var accessor = segment.CreateChunkAccessor(changeSet);
+            var tree = new FloatSingleBTree(segment, ref accessor);
 
             var rand = new Random(1234);
             var curValue = 12;
@@ -474,30 +493,34 @@ class BtreeTests
                         break;
                     }
                 }
-                tree.Add(key, curValue, accessor);
+                tree.Add(key, curValue, ref accessor);
                 curValue++;
             }
             
             changeSet.SaveChanges();
+        
+            accessor.Dispose();
         }
 
         {
             using var scope = _serviceProvider.CreateScope();
             using var mmf = scope.ServiceProvider.GetRequiredService<ManagedPagedMMF>();
             var segment = mmf.LoadChunkBasedSegment(segmentIndex, sizeof(Index32Chunk));
-            using var accessor = segment.CreateChunkRandomAccessor(8);
-            var tree = new FloatSingleBTree(segment, accessor, true);
+            var accessor = segment.CreateChunkAccessor();
+            var tree = new FloatSingleBTree(segment, ref accessor, true);
 
             foreach (var kvp in items)
             {
-                var res = tree.TryGet(kvp.Key, out var value, accessor);
+                var res = tree.TryGet(kvp.Key, out var value, ref accessor);
                 Assert.That(res, Is.True);
                 Assert.That(value, Is.EqualTo(kvp.Value), $"Failed to get value for key {kvp.Key}");
             }
+        
+            accessor.Dispose();
         }
         
         /*
-        tree.CheckConsistency(accessor);
+        tree.CheckConsistency(ref accessor);
         
         _logger.LogInformation("Total insertion count {itemCount}, chunk allocated {SegmentAllocatedChunkCount}, time per insert {time}", 
             itemCount, segment.AllocatedChunkCount, (sw.Elapsed / itemCount).TotalSeconds.FriendlyTime());
@@ -511,8 +534,8 @@ class BtreeTests
 
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 300, sizeof(Index32Chunk));
-        using var accessor = segment.CreateChunkRandomAccessor(8);
-        var tree = new FloatSingleBTree(segment, accessor);
+        var accessor = segment.CreateChunkAccessor();
+        var tree = new FloatSingleBTree(segment, ref accessor);
 
         var rand = new Random(1234);
         var hashset = new HashSet<float>();
@@ -531,15 +554,16 @@ class BtreeTests
                 }
             }
             sw.Start();
-            tree.Add(val, 1, accessor);
+            tree.Add(val, 1, ref accessor);
             sw.Stop();
         }
 
-        tree.CheckConsistency(accessor);
+        tree.CheckConsistency(ref accessor);
         
         _logger.LogInformation("Total insertion count {itemCount}, chunk allocated {SegmentAllocatedChunkCount}, time per insert {time}", 
             itemCount, segment.AllocatedChunkCount, (sw.Elapsed / itemCount).TotalSeconds.FriendlyTime());
         
+        accessor.Dispose();
     }
 
     [Test]
@@ -550,8 +574,8 @@ class BtreeTests
 
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 300, sizeof(Index32Chunk));
-        using var accessor = segment.CreateChunkRandomAccessor(8);
-        var tree = new IntMultipleBTree(segment, accessor);
+        var accessor = segment.CreateChunkAccessor();
+        var tree = new IntMultipleBTree(segment, ref accessor);
 
         var chunkCapacity = segment.ChunkCapacity;
         var freeChunkCount = segment.FreeChunkCount;
@@ -569,7 +593,7 @@ class BtreeTests
             for (int j = 0; j < i; j++, gc++)
             {
                 sw.Start();
-                var item = tree.Add(i, 10 + j, accessor);
+                var item = tree.Add(i, 10 + j, ref accessor);
                 sw.Stop();
                 idList.Add(item);
             }
@@ -581,7 +605,7 @@ class BtreeTests
         for (int i = 1; i < itemCount; i++)
         {
             var c = 0;
-            using var a = tree.TryGetMultiple(i, accessor);
+            using var a = tree.TryGetMultiple(i, ref accessor);
             Assert.That(a.IsValid, Is.True);
             do
             {
@@ -602,7 +626,7 @@ class BtreeTests
                 var elemId = idList[j];
                 if (((elemId + i) & 1) != 0)                // Use 'i'  to alternate deleting either odd or even chunks
                 {
-                    tree.RemoveValue(i, elemId, 10 + j, accessor);
+                    tree.RemoveValue(i, elemId, 10 + j, ref accessor);
                 }
             }
         }
@@ -613,7 +637,7 @@ class BtreeTests
         for (int i = 1; i < itemCount; i++)
         {
             var c = 0;
-            using var a = tree.TryGetMultiple(i, accessor);
+            using var a = tree.TryGetMultiple(i, ref accessor);
             if (a.IsValid == false) continue;
                 
             //Assert.That(a.IsValid, Is.True);
@@ -636,12 +660,14 @@ class BtreeTests
                 var elemId = idList[j];
                 if (((elemId + i) & 1) == 0)                // Use 'i'  to alternate deleting either odd or even chunks
                 {
-                    tree.RemoveValue(i, elemId, 10 + j, accessor);
+                    tree.RemoveValue(i, elemId, 10 + j, ref accessor);
                 }
             }
         }
 
         //tree.First
+        
+        accessor.Dispose();
 
         _logger.LogError("Remove all key/values, chunk allocated {cc}", segment.AllocatedChunkCount);
     }

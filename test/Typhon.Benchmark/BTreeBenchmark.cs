@@ -62,8 +62,8 @@ public class BTreeBenchmark
         const int itemCount = 400;
 
         var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 300, sizeof(Index32Chunk));
-        using var accessor = segment.CreateChunkRandomAccessor(8);
-        var tree = new IntMultipleBTree(segment, accessor);
+        var accessor = segment.CreateChunkAccessor();
+        var tree = new IntMultipleBTree(segment, ref accessor);
 
         var chunkCapacity = segment.ChunkCapacity;
         var freeChunkCount = segment.FreeChunkCount;
@@ -81,7 +81,7 @@ public class BTreeBenchmark
             for (int j = 0; j < i; j++, gc++)
             {
                 sw.Start();
-                var item = tree.Add(i, 10 + j, accessor);
+                var item = tree.Add(i, 10 + j, ref accessor);
                 sw.Stop();
                 idList.Add(item);
             }
@@ -91,7 +91,7 @@ public class BTreeBenchmark
         for (int i = 1; i < itemCount; i++)
         {
             var c = 0;
-            using var a = tree.TryGetMultiple(i, accessor);
+            using var a = tree.TryGetMultiple(i, ref accessor);
             Assert.That(a.IsValid, Is.True);
             do
             {
@@ -112,7 +112,7 @@ public class BTreeBenchmark
                 var elemId = idList[j];
                 if (((elemId + i) & 1) != 0)                // Use 'i'  to alternate deleting either odd or even chunks
                 {
-                    tree.RemoveValue(i, elemId, 10 + j, accessor);
+                    tree.RemoveValue(i, elemId, 10 + j, ref accessor);
                 }
             }
         }
@@ -121,7 +121,7 @@ public class BTreeBenchmark
         for (int i = 1; i < itemCount; i++)
         {
             var c = 0;
-            using var a = tree.TryGetMultiple(i, accessor);
+            using var a = tree.TryGetMultiple(i, ref accessor);
             if (a.IsValid == false) continue;
                     
             //Assert.That(a.IsValid, Is.True);
@@ -143,11 +143,12 @@ public class BTreeBenchmark
                 var elemId = idList[j];
                 if (((elemId + i) & 1) == 0)                // Use 'i'  to alternate deleting either odd or even chunks
                 {
-                    tree.RemoveValue(i, elemId, 10 + j, accessor);
+                    tree.RemoveValue(i, elemId, 10 + j, ref accessor);
                 }
             }
         }
 
         //tree.First
+        accessor.Dispose();
     }
 }

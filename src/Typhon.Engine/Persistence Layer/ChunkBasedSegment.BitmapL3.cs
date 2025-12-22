@@ -429,11 +429,7 @@ public partial class ChunkBasedSegment
 
             var span = result.Span;
 
-            ChunkRandomAccessor chunkAccessor = null;
-            if (clearContent)
-            {
-                chunkAccessor = _segment.CreateChunkRandomAccessor(8);
-            }
+            using ChunkAccessor chunkAccessor = clearContent ? _segment.CreateChunkAccessor() : default;
 
             // Allocate per bulk of 64 pages as long as we can
             while (hasL1 && (length >= 64))

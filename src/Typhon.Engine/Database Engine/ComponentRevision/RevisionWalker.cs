@@ -6,7 +6,7 @@ namespace Typhon.Engine;
 [PublicAPI]
 internal ref struct RevisionWalker : IDisposable
 {
-    private readonly ChunkRandomAccessor _accessor;
+    private ref ChunkAccessor _accessor;
     private readonly int _firstChunkId;
     private ChunkHandle _firstChunkHandle;
     private ChunkHandle _curChunkHandle;
@@ -20,7 +20,7 @@ internal ref struct RevisionWalker : IDisposable
     public ref int NextChunkId => ref _nextChunkId;
     public Span<CompRevStorageElement> Elements => _elements;
 
-    public RevisionWalker(ChunkRandomAccessor accessor, int firstChunkId)
+    public RevisionWalker(ref ChunkAccessor accessor, int firstChunkId)
     {
         _accessor = accessor;
         _firstChunkId = firstChunkId;

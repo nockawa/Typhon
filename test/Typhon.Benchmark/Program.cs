@@ -68,8 +68,7 @@ class Program
         //BenchmarkRunner.Run<ChunkLocationBenchmark>();
 
         // Run ChunkAccessor comparison benchmark
-        BenchmarkRunner.Run<ChunkAccessorBenchmark>();
-
+        
         /*
         long sumA = 0;
         long sumB = 0;
