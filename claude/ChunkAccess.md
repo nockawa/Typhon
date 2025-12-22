@@ -414,7 +414,7 @@ public unsafe ref struct ChunkAccessScope : IDisposable
 // Usage patterns:
 
 // Simple case - single scope
-public bool TryGet(TKey key, out int value, ChunkRandomAccessor accessor)
+public bool TryGet(TKey key, out int value, ref ChunkAccessor accessor)
 {
     using var scope = accessor.BeginScope();
 
@@ -640,7 +640,7 @@ private struct CachedEntry
 
 ```csharp
 // Read-only traversal - no pinning needed
-public NodeWrapper FindLeaf(TKey key, ChunkRandomAccessor accessor)
+public NodeWrapper FindLeaf(TKey key, ref ChunkAccessor accessor)
 {
     var node = Root;
     while (true)
@@ -657,7 +657,7 @@ public NodeWrapper FindLeaf(TKey key, ChunkRandomAccessor accessor)
 }
 
 // Write operation - use ValueMutable for stable reference
-public void UpdateNode(int chunkId, ChunkRandomAccessor accessor)
+public void UpdateNode(int chunkId, ref ChunkAccessor accessor)
 {
     var nodeRef = accessor.GetRef<NodeHeader>(chunkId);
     ref var node = ref nodeRef.ValueMutable;  // Now pinned
@@ -804,7 +804,7 @@ public unsafe class ChunkRandomAccessor : IDisposable
 }
 
 // Usage in BTree
-public void InsertRecursive(ref InsertArguments args, ChunkRandomAccessor accessor)
+public void InsertRecursive(ref InsertArguments args, ref ChunkAccessor accessor)
 {
     ref var node = ref accessor.GetChunk<NodeHeader>(ChunkId, dirty: true);
 
@@ -959,7 +959,7 @@ public unsafe partial class ChunkRandomAccessor
 }
 
 // Usage
-public void BTreeInsert(TKey key, int value, ChunkRandomAccessor accessor)
+public void BTreeInsert(TKey key, int value, ref ChunkAccessor accessor)
 {
     // Stack-allocate enough entries for tree height + some margin
     var buffer = ChunkEntryBuffer.Create(16);
@@ -1460,7 +1460,7 @@ public static class ChunkAccessorPool
         return new ChunkRandomAccessor(segment, cacheSize);
     }
 
-    public static void Return(ChunkRandomAccessor accessor)
+    public static void Return(ref ChunkAccessor accessor)
     {
         accessor.Reset();
         t_pool ??= new Stack<ChunkRandomAccessor>(4);
@@ -2668,7 +2668,7 @@ public readonly ref struct ChunkRef<T> : where T : unmanaged
 ### BTree with New API
 
 ```csharp
-public bool TryGet(TKey key, out int value, ChunkRandomAccessor accessor)
+public bool TryGet(TKey key, out int value, ref ChunkAccessor accessor)
 {
     value = default;
 
@@ -2695,7 +2695,7 @@ public bool TryGet(TKey key, out int value, ChunkRandomAccessor accessor)
     }
 }
 
-public int Add(TKey key, int value, ChunkRandomAccessor accessor)
+public int Add(TKey key, int value, ref ChunkAccessor accessor)
 {
     using var scope = accessor.BeginScope(expectedChunks: 8);
 

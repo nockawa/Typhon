@@ -34,7 +34,7 @@ public ref struct ComponentCollectionBuilder<T> : IDisposable where T : unmanage
     {
         _transaction = transaction;
         _vsbs = vsbs;
-        _accessor = vsbs.Segment.CreateChunkRandomAccessor(8, transaction.ChangeSet);
+        _accessor = vsbs.Segment.CreateChunkAccessor(transaction.ChangeSet);
         _bufferId = 0;  // Lazy allocation on first Add
         _built = false;
     }
@@ -191,7 +191,7 @@ public partial class Transaction
         {
             foreach (var (vsbs, bufferId) in _pendingBuilderBuffers)
             {
-                using var accessor = vsbs.Segment.CreateChunkRandomAccessor(8, ChangeSet);
+                using var accessor = vsbs.Segment.CreateChunkAccessor(ChangeSet);
                 vsbs.DeleteBuffer(bufferId, accessor);
             }
             _pendingBuilderBuffers.Clear();
@@ -425,7 +425,7 @@ protected override void OnCommit()
     {
         foreach (var (vsbs, bufferId) in _pendingBuilderBuffers)
         {
-            using var accessor = vsbs.Segment.CreateChunkRandomAccessor(8, ChangeSet);
+            using var accessor = vsbs.Segment.CreateChunkAccessor(ChangeSet);
             vsbs.DeleteBuffer(bufferId, accessor);
         }
         _pendingBuilderBuffers.Clear();

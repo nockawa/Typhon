@@ -153,7 +153,20 @@ public unsafe class ComponentTable : IDisposable
     internal int ComponentOverhead => Definition.MultipleIndicesCount * sizeof(int);
     internal int ComponentTotalSize => Definition.ComponentStorageTotalSize;
     internal IndexedFieldInfo[] IndexedFieldInfos { get; private set; }
-    internal Dictionary<int, (VariableSizedBufferSegmentBase, ChunkRandomAccessor)> ComponentCollectionVSBSByOffset { get; private set; }
+
+    internal class ComponentCollectionInfo
+    {
+        public VariableSizedBufferSegmentBase VSBS;
+        public ChunkAccessor Accessor;
+
+        public ComponentCollectionInfo(VariableSizedBufferSegmentBase vsbs)
+        {
+            VSBS = vsbs;
+            Accessor = VSBS.Segment.CreateChunkAccessor();
+        }
+    }
+    
+    internal Dictionary<int, ComponentCollectionInfo> ComponentCollectionVSBSByOffset { get; private set; }
 
     private ComponentTableFlags _flags;
     
@@ -172,11 +185,13 @@ public unsafe class ComponentTable : IDisposable
 
         if (definition.AllowMultiple)
         {
-            PrimaryKeyIndex = new LongMultipleBTree(DefaultIndexSegment, ChunkRandomAccessor.GetFromPool(DefaultIndexSegment, 8));
+            var accessor = DefaultIndexSegment.CreateChunkAccessor();
+            PrimaryKeyIndex = new LongMultipleBTree(DefaultIndexSegment, ref accessor);
         }
         else
         {
-            PrimaryKeyIndex = new LongSingleBTree(DefaultIndexSegment, ChunkRandomAccessor.GetFromPool(DefaultIndexSegment, 8));
+            var accessor = DefaultIndexSegment.CreateChunkAccessor();
+            PrimaryKeyIndex = new LongSingleBTree(DefaultIndexSegment, ref accessor);
         }
 
         BuildIndexedFieldInfo();
@@ -212,7 +227,7 @@ public unsafe class ComponentTable : IDisposable
 
     private void BuildComponentCollectionInfo()
     {
-        ComponentCollectionVSBSByOffset = new Dictionary<int, (VariableSizedBufferSegmentBase, ChunkRandomAccessor)>();
+        ComponentCollectionVSBSByOffset = new Dictionary<int, ComponentCollectionInfo>();
         foreach (var field in Definition.FieldsByName.Values)
         {
             if (field.Type != FieldType.Collection)
@@ -221,7 +236,7 @@ public unsafe class ComponentTable : IDisposable
             }
 
             var vsbs = DBE.GetComponentCollectionVSBS(field.DotNetUnderlyingType);
-            ComponentCollectionVSBSByOffset.Add(field.OffsetInComponentStorage, (vsbs, vsbs.Segment.CreateChunkRandomAccessor(8)));
+            ComponentCollectionVSBSByOffset.Add(field.OffsetInComponentStorage, new ComponentCollectionInfo(vsbs));
             _flags |= ComponentTableFlags.HasCollections;
         }
     }
@@ -229,21 +244,21 @@ public unsafe class ComponentTable : IDisposable
     private IBTree CreateIndexForField(DBComponentDefinition.Field field)
     {
         var s = field.Type == FieldType.String64 ? String64IndexSegment : DefaultIndexSegment;
-        var a = ChunkRandomAccessor.GetFromPool(s, 8);
+        var a = s.CreateChunkAccessor();
         switch (field.Type)
         {
-            case FieldType.Byte:        return field.IndexAllowMultiple ? new ByteMultipleBTree(s, a)     : new ByteSingleBTree(s, a);
-            case FieldType.Short:       return field.IndexAllowMultiple ? new ShortMultipleBTree(s, a)    : new ShortSingleBTree(s, a);
-            case FieldType.Int:         return field.IndexAllowMultiple ? new IntMultipleBTree(s, a)      : new IntSingleBTree(s, a);
-            case FieldType.Long:        return field.IndexAllowMultiple ? new LongMultipleBTree(s, a)     : new LongSingleBTree(s, a);
-            case FieldType.UByte:       return field.IndexAllowMultiple ? new UByteMultipleBTree(s, a)    : new UByteSingleBTree(s, a);
-            case FieldType.UShort:      return field.IndexAllowMultiple ? new UShortMultipleBTree(s, a)   : new UShortSingleBTree(s, a);
-            case FieldType.UInt:        return field.IndexAllowMultiple ? new UIntMultipleBTree(s, a)     : new UIntSingleBTree(s, a);
-            case FieldType.ULong:       return field.IndexAllowMultiple ? new ULongMultipleBTree(s, a)    : new ULongSingleBTree(s, a);
-            case FieldType.Float:       return field.IndexAllowMultiple ? new FloatMultipleBTree(s, a)    : new FloatSingleBTree(s, a);
-            case FieldType.Double:      return field.IndexAllowMultiple ? new DoubleMultipleBTree(s, a)   : new DoubleSingleBTree(s, a);
-            case FieldType.Char:        return field.IndexAllowMultiple ? new CharMultipleBTree(s, a)     : new CharSingleBTree(s, a);
-            case FieldType.String64:    return field.IndexAllowMultiple ? new String64MultipleBTree(s, a) : new String64SingleBTree(s, a);
+            case FieldType.Byte:        return field.IndexAllowMultiple ? new ByteMultipleBTree(s, ref a)     : new ByteSingleBTree(s, ref a);
+            case FieldType.Short:       return field.IndexAllowMultiple ? new ShortMultipleBTree(s, ref a)    : new ShortSingleBTree(s, ref a);
+            case FieldType.Int:         return field.IndexAllowMultiple ? new IntMultipleBTree(s, ref a)      : new IntSingleBTree(s, ref a);
+            case FieldType.Long:        return field.IndexAllowMultiple ? new LongMultipleBTree(s, ref a)     : new LongSingleBTree(s, ref a);
+            case FieldType.UByte:       return field.IndexAllowMultiple ? new UByteMultipleBTree(s, ref a)    : new UByteSingleBTree(s, ref a);
+            case FieldType.UShort:      return field.IndexAllowMultiple ? new UShortMultipleBTree(s, ref a)   : new UShortSingleBTree(s, ref a);
+            case FieldType.UInt:        return field.IndexAllowMultiple ? new UIntMultipleBTree(s, ref a)     : new UIntSingleBTree(s, ref a);
+            case FieldType.ULong:       return field.IndexAllowMultiple ? new ULongMultipleBTree(s, ref a)    : new ULongSingleBTree(s, ref a);
+            case FieldType.Float:       return field.IndexAllowMultiple ? new FloatMultipleBTree(s, ref a)    : new FloatSingleBTree(s, ref a);
+            case FieldType.Double:      return field.IndexAllowMultiple ? new DoubleMultipleBTree(s, ref a)   : new DoubleSingleBTree(s, ref a);
+            case FieldType.Char:        return field.IndexAllowMultiple ? new CharMultipleBTree(s, ref a)     : new CharSingleBTree(s, ref a);
+            case FieldType.String64:    return field.IndexAllowMultiple ? new String64MultipleBTree(s, ref a) : new String64SingleBTree(s, ref a);
             default:                    return null;
         }
     }

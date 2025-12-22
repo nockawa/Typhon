@@ -252,7 +252,7 @@ when the last revision is
             + should exist");
        1111 +  
        1112 +          using (var accessor = 
-            + ct.DefaultIndexSegment.CreateChunkRandomAccessor(8))
+            + ct.DefaultIndexSegment.CreateChunkAccessor())
        1113 +          {
        1114 +              var exists = ct.PrimaryKeyIndex.TryGet(e1, out
             +  _, accessor);
@@ -287,7 +287,7 @@ when the last revision is
        1136 +          // Currently this will FAIL because the cleanup 
             + code is commented out (TOFIX in Transaction.cs line ~971)
        1137 +          using (var accessor = 
-            + ct.DefaultIndexSegment.CreateChunkRandomAccessor(8))
+            + ct.DefaultIndexSegment.CreateChunkAccessor())
        1138 +          {
        1139 +              var existsAfterDelete = 
             + ct.PrimaryKeyIndex.TryGet(e1, out _, accessor);
@@ -345,7 +345,7 @@ when the last revision is
             + should exist");
        1181 +  
        1182 +          using (var accessor = 
-            + ct.DefaultIndexSegment.CreateChunkRandomAccessor(8))
+            + ct.DefaultIndexSegment.CreateChunkAccessor())
        1183 +          {
        1184 +              var exists = ct.PrimaryKeyIndex.TryGet(e1, out
             +  _, accessor);
@@ -405,7 +405,7 @@ when the last revision is
        1228 +          // Primary key index should still have the entry 
             + because long-running transaction prevents cleanup
        1229 +          using (var accessor = 
-            + ct.DefaultIndexSegment.CreateChunkRandomAccessor(8))
+            + ct.DefaultIndexSegment.CreateChunkAccessor())
        1230 +          {
        1231 +              var existsDuringLongTxn = 
             + ct.PrimaryKeyIndex.TryGet(e1, out _, accessor);
@@ -437,7 +437,7 @@ when the last revision is
        1250 +          // Currently this will FAIL because the cleanup 
             + code is commented out (TOFIX in Transaction.cs line ~971)
        1251 +          using (var accessor = 
-            + ct.DefaultIndexSegment.CreateChunkRandomAccessor(8))
+            + ct.DefaultIndexSegment.CreateChunkAccessor())
        1252 +          {
        1253 +              var existsAfterCleanup = 
             + ct.PrimaryKeyIndex.TryGet(e1, out _, accessor);
@@ -474,7 +474,7 @@ when the last revision is
        1279 +  
        1280 +          // Verify all entities exist in index
        1281 +          using (var accessor = 
-            + ct.DefaultIndexSegment.CreateChunkRandomAccessor(8))
+            + ct.DefaultIndexSegment.CreateChunkAccessor())
        1282 +          {
        1283 +              for (int i = 0; i < 5; i++)
        1284 +              {
@@ -520,7 +520,7 @@ when the last revision is
        1316 +          // Currently cleanup of deleted entries is not 
             + implemented (TOFIX in Transaction.cs)
        1317 +          using (var accessor = 
-            + ct.DefaultIndexSegment.CreateChunkRandomAccessor(8))
+            + ct.DefaultIndexSegment.CreateChunkAccessor())
        1318 +          {
        1319 +              // Remaining entities should exist
        1320 +              for (int i = 1; i < 5; i += 2)
@@ -586,7 +586,7 @@ when the last revision is
             + should exist");
        1368 +  
        1369 +          using (var accessor = 
-            + ct.DefaultIndexSegment.CreateChunkRandomAccessor(8))
+            + ct.DefaultIndexSegment.CreateChunkAccessor())
        1370 +          {
        1371 +              var exists = ct.PrimaryKeyIndex.TryGet(e1, out
             +  _, accessor);
@@ -1277,7 +1277,7 @@ when the last revision is
        1171 +          // Verify entity exists in primary key index after
             +  creation
        1172 +          using (var accessor = 
-            + ct.DefaultIndexSegment.CreateChunkRandomAccessor(8))
+            + ct.DefaultIndexSegment.CreateChunkAccessor())
        1173 +          {
        1174 +              var exists = ct.PrimaryKeyIndex.TryGet(e1, out
             +  _, accessor);
@@ -1314,7 +1314,7 @@ when the last revision is
             - should exist");
        1189 -  
        1187            using (var accessor = 
-              ct.DefaultIndexSegment.CreateChunkRandomAccessor(8))
+              ct.DefaultIndexSegment.CreateChunkAccessor())
        1188            {
        1189                var exists = ct.PrimaryKeyIndex.TryGet(e1, out
                _, accessor);
@@ -1412,7 +1412,7 @@ when the last revision is
   {
       // Remove the index
       using var accessor = 
-  info.PrimaryKeyIndex.Segment.CreateChunkRandomAccessor(8, _changeSet);
+  info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
       info.PrimaryKeyIndex.Remove(pk, out _, accessor);
       ...
   }
@@ -1843,13 +1843,13 @@ solutions.
       {
           // Get the revision chain for this entity
           using var indexAccessor =
-  table.DefaultIndexSegment.CreateChunkRandomAccessor(8, changeSet);
+  table.DefaultIndexSegment.CreateChunkAccessor(changeSet);
           if (!table.PrimaryKeyIndex.TryGet(pk, out var compRevFirstChunkId,
    indexAccessor))
               return false; // Entity no longer exists
 
           using var revTableAccessor =
-  table.CompRevTableSegment.CreateChunkRandomAccessor(8, changeSet);
+  table.CompRevTableSegment.CreateChunkAccessor(changeSet);
 
           // Perform cleanup similar to CleanUpUnusedEntries
           // ... (reuse existing cleanup logic)

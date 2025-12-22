@@ -326,7 +326,7 @@ public class ManagedPagedMMFTests
         var cap = s0.ChunkCapacity;
 
         using var mo = s0.AllocateChunks(2000, false);
-        using var ca = s0.CreateChunkRandomAccessor(8);
+        using var ca = s0.CreateChunkAccessor();
 
         ref var obj = ref ca.GetChunk<ChunkA>(0);
         obj.A = -1;
@@ -349,15 +349,15 @@ public class ManagedPagedMMFTests
 
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var s = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 64);
-        using var accessor = s.CreateChunkRandomAccessor(8);
+        var accessor = s.CreateChunkAccessor();
 
         var vsb = new VariableSizedBufferSegment<long>(s);
 
-        var id0 = vsb.AllocateBuffer(accessor);
+        var id0 = vsb.AllocateBuffer(ref accessor);
 
         for (int i = 0; i < itemCount; i++)
         {
-            vsb.AddElement(id0, 1234, accessor);
+            vsb.AddElement(id0, 1234, ref accessor);
         }
 
         var loopCount = 0;
@@ -373,6 +373,8 @@ public class ManagedPagedMMFTests
             }
         } while (ba.NextChunk());
         Assert.That(loopCount, Is.EqualTo(itemCount));
+        
+        accessor.Dispose();
     }
 
     [Test]
@@ -384,13 +386,13 @@ public class ManagedPagedMMFTests
         // Services
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var s = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 64);
-        using var accessor = s.CreateChunkRandomAccessor(8);
+        var accessor = s.CreateChunkAccessor();
 
         // VSBS
         var vsb = new VariableSizedBufferSegment<int>(s);
 
         // Buffer
-        var id0 = vsb.AllocateBuffer(accessor);
+        var id0 = vsb.AllocateBuffer(ref accessor);
 
         // Add the items, record their location and value
         var ids = new List<(int, int)>(itemCount);
@@ -399,7 +401,7 @@ public class ManagedPagedMMFTests
         {
             co++;
             var value = rand.Next();
-            ids.Add((vsb.AddElement(id0, value, accessor), value));
+            ids.Add((vsb.AddElement(id0, value, ref accessor), value));
         }
 
         // Delete 1/16 of the items to create fragmentation
@@ -409,11 +411,11 @@ public class ManagedPagedMMFTests
             var itemIndex = rand.Next(0, itemCount - i);
             var record = ids[itemIndex];
             ids.RemoveAt(itemIndex);
-            vsb.DeleteElement(id0, record.Item1, record.Item2, accessor);
+            vsb.DeleteElement(id0, record.Item1, record.Item2, ref accessor);
         }
         
         // Clone the buffer
-        var id1 = vsb.CloneBuffer(id0, accessor);
+        var id1 = vsb.CloneBuffer(id0, ref accessor);
         
         var hashset = new HashSet<int>();
         hashset.EnsureCapacity(itemCount);
@@ -432,6 +434,8 @@ public class ManagedPagedMMFTests
             }
         } while (ba.NextChunk());
         Assert.That(loopCount, Is.EqualTo(itemCount - deleteCount));
+        
+        accessor.Dispose();
     }
     
     [Test]
@@ -439,23 +443,23 @@ public class ManagedPagedMMFTests
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var s = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 64);
-        using var accessor = s.CreateChunkRandomAccessor(8);
+        var accessor = s.CreateChunkAccessor();
 
         var vsb = new VariableSizedBufferSegment<long>(s);
 
-        var id0 = vsb.AllocateBuffer(accessor);
+        var id0 = vsb.AllocateBuffer(ref accessor);
         var elIdList = new int[15];
 
         // 15 is spread into 3 chunks: 4, 7, 4
         for (int i = 0; i < 15; i++)
         {
-            elIdList[i] = vsb.AddElement(id0, i, accessor);
+            elIdList[i] = vsb.AddElement(id0, i, ref accessor);
         }
 
         // Delete all the elements of the second chunk
         for (int i = 4; i < 11; i++)
         {
-            Assert.That(vsb.DeleteElement(id0, elIdList[i], i, accessor), Is.Not.EqualTo(-1));
+            Assert.That(vsb.DeleteElement(id0, elIdList[i], i, ref accessor), Is.Not.EqualTo(-1));
         }
 
         // Trigger an enumeration that will remove the second chunk from the stored list and put it in the free list
@@ -472,6 +476,8 @@ public class ManagedPagedMMFTests
             Assert.That(count, Is.EqualTo(8));
             Assert.That(hops, Is.EqualTo(2));
         }
+        
+        accessor.Dispose();
     }
     
     private const string Muse =

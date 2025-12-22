@@ -705,7 +705,7 @@ private async Task RebuildStatisticsForIndex(ComponentTable table, IndexedFieldI
     var hll = new HyperLogLogStatistics();
 
     // Scan index (uses B+Tree in-order traversal)
-    using var accessor = indexInfo.Index.Segment.CreateChunkRandomAccessor(8, null);
+    using var accessor = indexInfo.Index.Segment.CreateChunkAccessor(null);
     foreach (var (value, entityIds) in indexInfo.Index.ScanAll(accessor))
     {
         long count = entityIds.Count();

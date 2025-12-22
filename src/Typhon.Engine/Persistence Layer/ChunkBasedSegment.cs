@@ -115,8 +115,7 @@ public partial class ChunkBasedSegment : LogicalSegment
 
     public void FreeChunk(int chunkId) => _map.ClearL0(chunkId);
 
-    public ChunkRandomAccessor CreateChunkRandomAccessor(int cachedPagesCount = 8, ChangeSet changeSet=null) =>
-        ChunkRandomAccessor.GetFromPool(this, cachedPagesCount, changeSet);
+    public ChunkAccessor CreateChunkAccessor(ChangeSet changeSet=null) => ChunkAccessor.Create(this, changeSet);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public (int segmentIndex, int offset) GetChunkLocation(int index)

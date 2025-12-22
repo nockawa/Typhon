@@ -252,11 +252,12 @@ unsafe public struct PageAccessor : IDisposable
             return;
         }
 
+        // If _previousMode is not Idle, it means a call to TryPromoteToExclusive() succeeded, so we need to demote back to Idle.
         if (_previousMode != PagedMMF.PageState.Idle)
         {
             _owner.DemoteExclusive(_pi, _previousMode);
         }
-        else
+        else if (_pi.PageState != PagedMMF.PageState.Idle)
         {
             _owner.TransitionPageFromAccessToIdle(_pi);
         }

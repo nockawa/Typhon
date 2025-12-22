@@ -1548,28 +1548,6 @@ public void Remove(Transaction t)
 }
 ```
 
-**ChunkRandomAccessor Pooling:**
-```csharp
-// ChunkBasedSegment.cs
-private static ConcurrentBag<ChunkRandomAccessor> _accessorPool;
-
-public ChunkRandomAccessor GetAccessor()
-{
-    if (_accessorPool.TryTake(out var accessor))
-    {
-        accessor.Initialize(this);
-        return accessor;
-    }
-    return new ChunkRandomAccessor(this);  // Allocate if pool empty
-}
-
-public void ReturnAccessor(ChunkRandomAccessor accessor)
-{
-    accessor.Reset();
-    _accessorPool.Add(accessor);
-}
-```
-
 **Benefits:**
 - Reduces GC pressure (fewer allocations)
 - Reduces initialization overhead (reuse initialized objects)

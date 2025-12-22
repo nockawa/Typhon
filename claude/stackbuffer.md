@@ -1010,7 +1010,7 @@ public bool TryGet(int chunkId, out MyData value)
 
 Before (with ChunkHandle pinning):
 ```csharp
-private void InsertRecursive(int nodeId, ChunkRandomAccessor accessor)
+private void InsertRecursive(int nodeId, ref ChunkAccessor accessor)
 {
     using var handle = accessor.GetChunkHandle(nodeId, dirty: true);
     ref var node = ref handle.AsRef<NodeHeader>();

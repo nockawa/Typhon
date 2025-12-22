@@ -238,9 +238,9 @@ public class ChunkAccessorTests
         var chunkId = segment.AllocateChunk(true);
         var accessor = ChunkAccessor.Create(segment);
 
-        using (var scope = accessor.GetChunkScoped<TestChunk32>(chunkId))
+        using (var scope = accessor.GetChunkHandle(chunkId))
         {
-            ref var chunk = ref scope.AsRef();
+            ref var chunk = ref scope.AsRef<TestChunk32>();
             chunk.A = 777;
             chunk.B = 888;
         }
@@ -269,8 +269,8 @@ public class ChunkAccessorTests
         var accessor = ChunkAccessor.Create(segment);
 
         // Pin the first chunk
-        using var scope1 = accessor.GetChunkScoped<TestChunk32>(chunks[0]);
-        ref var chunk1 = ref scope1.AsRef();
+        using var scope1 = accessor.GetChunkHandle(chunks[0]);
+        ref var chunk1 = ref scope1.AsRef<TestChunk32>();
         chunk1.A = 12345;
 
         // Access many other chunks to fill cache
@@ -295,7 +295,7 @@ public class ChunkAccessorTests
         var chunkId = segment.AllocateChunk(true);
         var accessor = ChunkAccessor.Create(segment);
 
-        using var scope = accessor.GetChunkScoped<TestChunk32>(chunkId);
+        using var scope = accessor.GetChunkHandle(chunkId);
         var span = scope.AsSpan();
 
         Assert.That(span.Length, Is.EqualTo(sizeof(TestChunk32)));
@@ -317,7 +317,7 @@ public class ChunkAccessorTests
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
         chunk.A = 999;
 
-        using var scope = accessor.GetChunkScoped<TestChunk32>(chunkId);
+        using var scope = accessor.GetChunkHandle(chunkId);
         var span = scope.AsReadOnlySpan();
 
         Assert.That(span.Length, Is.EqualTo(sizeof(TestChunk32)));
@@ -733,10 +733,10 @@ public class ChunkAccessorTests
         var accessor = ChunkAccessor.Create(segment);
 
         // Pin 16 chunks (all slots) using separate variables
-        var s = stackalloc ChunkScope<TestChunk8>[16];
+        var s = stackalloc ChunkHandle[16];
         for (int i = 0; i < 16; i++)
         {
-            s[i] = accessor.GetChunkScoped<TestChunk8>(chunks[i]);
+            s[i] = accessor.GetChunkHandle(chunks[i]);
         }
 
         try
@@ -939,8 +939,8 @@ public class ChunkAccessorTests
         var accessor = ChunkAccessor.Create(segment);
 
         // Create scoped access but dispose accessor first
-        var scope = accessor.GetChunkScoped<TestChunk32>(chunkId);
-        ref var chunk = ref scope.AsRef();
+        var scope = accessor.GetChunkHandle(chunkId);
+        ref var chunk = ref scope.AsRef<TestChunk32>();
         chunk.A = 999;
 
         // Dispose accessor (scope still active)

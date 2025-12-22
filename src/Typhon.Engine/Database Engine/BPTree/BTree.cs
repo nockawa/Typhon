@@ -92,12 +92,12 @@ public interface IBTree
     ChunkBasedSegment Segment { get; }
     bool AllowMultiple { get; }
     // int Count { get; }
-    unsafe int Add(void* keyAddr, int value, ChunkRandomAccessor accessor);
-    unsafe bool Remove(void* keyAddr, out int value, ChunkRandomAccessor accessor);
-    unsafe bool TryGet(void* keyAddr, out int value, ChunkRandomAccessor accessor);
-    unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ChunkRandomAccessor accessor);
-    unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ChunkRandomAccessor accessor);
-    void CheckConsistency(ChunkRandomAccessor accessor);
+    unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor);
+    unsafe bool Remove(void* keyAddr, out int value, ref ChunkAccessor accessor);
+    unsafe bool TryGet(void* keyAddr, out int value, ref ChunkAccessor accessor);
+    unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref ChunkAccessor accessor);
+    unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ref ChunkAccessor accessor);
+    void CheckConsistency(ref ChunkAccessor accessor);
 }
 
 public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged 
@@ -129,23 +129,23 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
     }
 
-    public struct InsertArguments
+    public ref struct InsertArguments
     {
-        public InsertArguments(TKey key, int value, IComparer<TKey> comparer=null, ChunkRandomAccessor accessor = null)
+        public InsertArguments(TKey key, int value, IComparer<TKey> comparer, ref ChunkAccessor accessor)
         {
             _value = value;
             _keyComparer = comparer ?? Comparer<TKey>.Default;
             Key = key;
             Added = false;
             ElementId = default;
-            Accessor = accessor;
+            Accessor = ref accessor;
         }
         public readonly TKey Key;
         public bool Added { get; private set; }
 
         public int ElementId;
 
-        public ChunkRandomAccessor Accessor;
+        public ref ChunkAccessor Accessor;
 
         private readonly int _value;
         private readonly IComparer<TKey> _keyComparer;
@@ -165,7 +165,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     {
         public readonly TKey Key;
         public readonly IComparer<TKey> Comparer;
-        public readonly ChunkRandomAccessor Accessor;
+        public ref ChunkAccessor Accessor;
 
         /// <summary>
         /// result is set once when the value is found at leaf node.
@@ -177,14 +177,14 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         /// </summary>
         public bool Removed { get; private set; }
 
-        public RemoveArguments(in TKey key, in IComparer<TKey> comparer, ChunkRandomAccessor accessor)
+        public RemoveArguments(in TKey key, in IComparer<TKey> comparer, ref ChunkAccessor accessor)
         {
             Key = key;
             Comparer = comparer;
 
             Value = default;
             Removed = false;
-            Accessor = accessor;
+            Accessor = ref accessor;
         }
 
         public void SetRemovedValue(int value)
@@ -271,9 +271,9 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         /// creates new relatives for child node.
         /// </summary>
         public static void Create(NodeWrapper child, int index, NodeWrapper parent, ref NodeRelatives parentRelatives, out NodeRelatives res,
-            ChunkRandomAccessor accessor)
+            ref ChunkAccessor accessor)
         {
-            Debug.Assert(index >= -1 && index < parent.GetLength(accessor));
+            Debug.Assert(index >= -1 && index < parent.GetLength(ref accessor));
 
             // assign nearest ancestors between child and siblings.
             NodeWrapper leftAncestor, rightAncestor;
@@ -285,36 +285,36 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             {
                 leftAncestor = parentRelatives.LeftAncestor;
                 leftAncestorIndex = parentRelatives.LeftAncestorIndex;
-                leftSibling = parentRelatives.LeftSibling.IsValid ? parentRelatives.LeftSibling.GetLastChild(accessor) : default;
+                leftSibling = parentRelatives.LeftSibling.IsValid ? parentRelatives.LeftSibling.GetLastChild(ref accessor) : default;
                 hasTrueLeftSibling = false;
 
                 rightAncestor = parent;
                 rightAncestorIndex = index + 1;
-                rightSibling = parent.GetChild(rightAncestorIndex, accessor);
+                rightSibling = parent.GetChild(rightAncestorIndex, ref accessor);
                 hasTrueRightSibling = true;
             }
-            else if (index == parent.GetLength(accessor) - 1) // if child is right most, use right cousin as right sibling.
+            else if (index == parent.GetLength(ref accessor) - 1) // if child is right most, use right cousin as right sibling.
             {
                 leftAncestor = parent;
                 leftAncestorIndex = index;
-                leftSibling = parent.GetChild(leftAncestorIndex - 1, accessor);
+                leftSibling = parent.GetChild(leftAncestorIndex - 1, ref accessor);
                 hasTrueLeftSibling = true;
 
                 rightAncestor = parentRelatives.RightAncestor;
                 rightAncestorIndex = parentRelatives.RightAncestorIndex;
-                rightSibling = parentRelatives.RightSibling.IsValid ? parentRelatives.RightSibling.GetFirstChild(accessor) : default;
+                rightSibling = parentRelatives.RightSibling.IsValid ? parentRelatives.RightSibling.GetFirstChild(ref accessor) : default;
                 hasTrueRightSibling = false;
             }
             else // child is not right most nor left most.
             {
                 leftAncestor = parent;
                 leftAncestorIndex = index;
-                leftSibling = parent.GetChild(leftAncestorIndex - 1, accessor);
+                leftSibling = parent.GetChild(leftAncestorIndex - 1, ref accessor);
                 hasTrueLeftSibling = true;
 
                 rightAncestor = parent;
                 rightAncestorIndex = index + 1;
-                rightSibling = parent.GetChild(rightAncestorIndex, accessor);
+                rightSibling = parent.GetChild(rightAncestorIndex, ref accessor);
                 hasTrueRightSibling = true;
             }
 
@@ -333,42 +333,37 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     private readonly ChunkBasedSegment _segment;
     private readonly BaseNodeStorage _storage;
 
-    public bool IsEmpty(ChunkRandomAccessor accessor)
+    public bool IsEmpty(ref ChunkAccessor accessor)
     {
-        ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false, out var entry);
+        ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false);
         var res = header.Count == 0;
-        accessor.UnpinChunkBasedSegmentHeader(entry);
         return res;
     }
 
-    public int IncCount(ChunkRandomAccessor accessor)
+    public int IncCount(ref ChunkAccessor accessor)
     {
-        ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false, out var entry);
+        ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false);
         var res = ++header.Count;
-        accessor.UnpinChunkBasedSegmentHeader(entry);
         return res;
     }
 
-    public int DecCount(ChunkRandomAccessor accessor)
+    public int DecCount(ref ChunkAccessor accessor)
     {
-        ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false, out var entry);
+        ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false);
         var res = --header.Count;
-        accessor.UnpinChunkBasedSegmentHeader(entry);
         return res;
     }
 
-    public void SetRootChunkId(ChunkRandomAccessor accessor, int rootChunkId)
+    public void SetRootChunkId(ref ChunkAccessor accessor, int rootChunkId)
     {
-        ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false, out var entry);
+        ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false);
         header.RootChunkId = rootChunkId;
-        accessor.UnpinChunkBasedSegmentHeader(entry);
     }
 
-    public int GetRootChunkId(ChunkRandomAccessor accessor)
+    public int GetRootChunkId(ref ChunkAccessor accessor)
     {
-        ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false, out var entry);
+        ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false);
         var res = header.RootChunkId;
-        accessor.UnpinChunkBasedSegmentHeader(entry);
         return res;
     }    
 
@@ -377,8 +372,8 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     private NodeWrapper ReverseLinkList;
     public int Height;
 
-    protected KeyValueItem GetFirst(ChunkRandomAccessor accessor) => LinkList.GetFirst(accessor);
-    protected KeyValueItem GetLast(ChunkRandomAccessor accessor) => ReverseLinkList.GetLast(accessor);
+    protected KeyValueItem GetFirst(ref ChunkAccessor accessor) => LinkList.GetFirst(ref accessor);
+    protected KeyValueItem GetLast(ref ChunkAccessor accessor) => ReverseLinkList.GetLast(ref accessor);
 
     #endregion
 
@@ -386,7 +381,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     
     public ChunkBasedSegment Segment => _segment;
 
-    protected BTree(ChunkBasedSegment segment, ChunkRandomAccessor accessor, bool load)
+    protected BTree(ChunkBasedSegment segment, ref ChunkAccessor accessor, bool load)
     {
         Comparer = Comparer<TKey>.Default;
         _segment = segment;
@@ -402,20 +397,21 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
         else
         {
-            Root = _storage.LoadNode(GetRootChunkId(accessor));
+            Root = _storage.LoadNode(GetRootChunkId(ref accessor));
         }
     }
 
-    public unsafe int Add(void* keyAddr, int value, ChunkRandomAccessor accessor) => Add(Unsafe.AsRef<TKey>(keyAddr), value, accessor);
-    public unsafe bool Remove(void* keyAddr, out int value, ChunkRandomAccessor accessor) => Remove(Unsafe.AsRef<TKey>(keyAddr), out value, accessor);
-    public unsafe bool TryGet(void* keyAddr, out int value, ChunkRandomAccessor accessor) => TryGet(Unsafe.AsRef<TKey>(keyAddr), out value, accessor);
-    public unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ChunkRandomAccessor accessor) 
-        => RemoveValue(Unsafe.AsRef<TKey>(keyAddr), elementId, value, accessor);
-    public unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ChunkRandomAccessor accessor) => TryGetMultiple(Unsafe.AsRef<TKey>(keyAddr), accessor);
+    public unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor) => Add(Unsafe.AsRef<TKey>(keyAddr), value, ref accessor);
+    public unsafe bool Remove(void* keyAddr, out int value, ref ChunkAccessor accessor) => Remove(Unsafe.AsRef<TKey>(keyAddr), out value, ref accessor);
+    public unsafe bool TryGet(void* keyAddr, out int value, ref ChunkAccessor accessor) => TryGet(Unsafe.AsRef<TKey>(keyAddr), out value, ref accessor);
+    public unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref ChunkAccessor accessor) 
+        => RemoveValue(Unsafe.AsRef<TKey>(keyAddr), elementId, value, ref accessor);
+    public unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ref ChunkAccessor accessor)
+        => TryGetMultiple(Unsafe.AsRef<TKey>(keyAddr), ref accessor);
 
-    public int Add(TKey key, int value, ChunkRandomAccessor accessor)
+    public int Add(TKey key, int value, ref ChunkAccessor accessor)
     {
-        var args = new InsertArguments(key, value, Comparer, accessor);
+        var args = new InsertArguments(key, value, Comparer, ref accessor);
         _access.EnterExclusiveAccess();
         try
         {
@@ -424,14 +420,14 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
         finally
         {
-            _storage.CommitChanges(accessor);
+            _storage.CommitChanges(ref accessor);
             _access.ExitExclusiveAccess();
         }
     }
 
-    public bool Remove(TKey key, out int value, ChunkRandomAccessor accessor)
+    public bool Remove(TKey key, out int value, ref ChunkAccessor accessor)
     {
-        var args = new RemoveArguments(key, Comparer, accessor);
+        var args = new RemoveArguments(key, Comparer, ref accessor);
         _access.EnterExclusiveAccess();
         try
         {
@@ -441,15 +437,15 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
         finally
         {
-            _storage.CommitChanges(accessor);
+            _storage.CommitChanges(ref accessor);
             _access.ExitExclusiveAccess();
         }
     }
 
-    public void CheckConsistency(ChunkRandomAccessor accessor)
+    public void CheckConsistency(ref ChunkAccessor accessor)
     {
         // Recursive check from Root to leaf
-        if (IsEmpty(accessor))
+        if (IsEmpty(ref accessor))
         {
             return;
         }
@@ -457,7 +453,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         _access.EnterSharedAccess();
         try
         {
-            Root.CheckConsistency(default, NodeWrapper.CheckConsistencyParent.Root, Comparer, Height, accessor);
+            Root.CheckConsistency(default, NodeWrapper.CheckConsistencyParent.Root, Comparer, Height, ref accessor);
 
             // Check the linked link of leaves in forward
             NodeWrapper prev = default;
@@ -468,15 +464,16 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             {
                 if (cur != LinkList)
                 {
-                    Trace.Assert(prev.GetNext(accessor) == cur, " Prev.Next doesn't link to current");
-                    Trace.Assert(cur.GetPrevious(accessor) == prev, "Cur.Previous doesn't link to previous");
+                    Trace.Assert(prev.GetNext(ref accessor) == cur, " Prev.Next doesn't link to current");
+                    Trace.Assert(cur.GetPrevious(ref accessor) == prev, "Cur.Previous doesn't link to previous");
 
-                    Trace.Assert(Comparer.Compare(prevValue, cur.GetFirst(accessor).Key) < 0, $"Previous Node's first key '{prevValue}' should be less than current node's first key'{cur.GetFirst(accessor).Key}'.");
+                    Trace.Assert(Comparer.Compare(prevValue, cur.GetFirst(ref accessor).Key) < 0, 
+                        $"Previous Node's first key '{prevValue}' should be less than current node's first key'{cur.GetFirst(ref accessor).Key}'.");
                 }
 
-                prevValue = cur.GetLast(accessor).Key;
+                prevValue = cur.GetLast(ref accessor).Key;
                 prev = cur;
-                cur = cur.GetNext(accessor);
+                cur = cur.GetNext(ref accessor);
             }
             Trace.Assert(prev == ReverseLinkList, "Last Node of the forward chain doesn't match ReverseLinkList");
 
@@ -489,15 +486,16 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             {
                 if (cur != ReverseLinkList)
                 {
-                    Trace.Assert(next.GetPrevious(accessor) == cur, " Next.Previous doesn't link to current");
-                    Trace.Assert(cur.GetNext(accessor) == next, "Cur.Next doesn't link to next");
+                    Trace.Assert(next.GetPrevious(ref accessor) == cur, " Next.Previous doesn't link to current");
+                    Trace.Assert(cur.GetNext(ref accessor) == next, "Cur.Next doesn't link to next");
 
-                    Trace.Assert(Comparer.Compare(nextValue, cur.GetLast(accessor).Key) > 0, $"Next Node's last key '{nextValue}' should be greater than current node's last key'{cur.GetLast(accessor).Key}'.");
+                    Trace.Assert(Comparer.Compare(nextValue, cur.GetLast(ref accessor).Key) > 0, 
+                        $"Next Node's last key '{nextValue}' should be greater than current node's last key'{cur.GetLast(ref accessor).Key}'.");
                 }
 
-                nextValue = cur.GetFirst(accessor).Key;
+                nextValue = cur.GetFirst(ref accessor).Key;
                 next = cur;
-                cur = cur.GetPrevious(accessor);
+                cur = cur.GetPrevious(ref accessor);
             }
             Trace.Assert(next == LinkList, "Last Node of the reverse chain doesn't match LinkedList");
         }
@@ -512,20 +510,28 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         get
         {
             // TODO use a thread-local ChunkRandomAccessor to avoid creating a new one every time.
-            var cra = this._segment.CreateChunkRandomAccessor(8);
-            if (!TryGet(key, out var value, cra)) throw new KeyNotFoundException();
+            var cra = this._segment.CreateChunkAccessor();
+            if (!TryGet(key, out var value, ref cra))
+            {
+                throw new KeyNotFoundException();
+            }
+
             return value;
         }
     }
 
-    public bool TryGet(TKey key, out int value, ChunkRandomAccessor accessor)
+    public bool TryGet(TKey key, out int value, ref ChunkAccessor accessor)
     {
         value = default;
         _access.EnterSharedAccess();
         try
         {
-            var leaf = FindLeaf(key, out var index, accessor);
-            if (index >= 0) value = leaf.GetItem(index, accessor).Value;
+            var leaf = FindLeaf(key, out var index, ref accessor);
+            if (index >= 0)
+            {
+                value = leaf.GetItem(index, ref accessor).Value;
+            }
+
             return index >= 0;
         }
         finally
@@ -534,137 +540,139 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
     }
 
-    public bool RemoveValue(TKey key, int elementId, int value, ChunkRandomAccessor accessor)
+    public bool RemoveValue(TKey key, int elementId, int value, ref ChunkAccessor accessor)
     {
-        if (TryGet(key, out var bufferId, accessor) == false)
+        if (!TryGet(key, out var bufferId, ref accessor))
         {
             return false;
         }
         _access.EnterExclusiveAccess();
         try
         {
-            var res = _storage.RemoveFromBuffer(bufferId, elementId, value, accessor);
-            if (res == -1) return false;
+            var res = _storage.RemoveFromBuffer(bufferId, elementId, value, ref accessor);
+            if (res == -1)
+            {
+                return false;
+            }
 
             // Remove the key if we no longer have values stored there
             if (res == 0)
             {
-                var args = new RemoveArguments(key, Comparer, accessor);
+                var args = new RemoveArguments(key, Comparer, ref accessor);
                 RemoveCore(ref args);
 
                 if (args.Removed)
                 {
-                    _storage.DeleteBuffer(args.Value, accessor);
+                    _storage.DeleteBuffer(args.Value, ref accessor);
                 }
             }
         }
         finally
         {
-            _storage.CommitChanges(accessor);
+            _storage.CommitChanges(ref accessor);
             _access.ExitExclusiveAccess();
         }
 
         return true;
     }
 
-    public VariableSizedBufferAccessor<int> TryGetMultiple(TKey key, ChunkRandomAccessor accessor)
+    public VariableSizedBufferAccessor<int> TryGetMultiple(TKey key, ref ChunkAccessor accessor)
     {
-        if (!TryGet(key, out var bufferId, accessor))
+        if (!TryGet(key, out var bufferId, ref accessor))
         {
             return default;
         }
-        return _storage.GetBufferReadOnlyAccessor(bufferId, accessor);
+        return _storage.GetBufferReadOnlyAccessor(bufferId, ref accessor);
     }
 
     #endregion
 
     #region Private API
 
-    protected internal NodeWrapper AllocNode(NodeStates states, ChunkRandomAccessor accessor)
+    protected internal NodeWrapper AllocNode(NodeStates states, ref ChunkAccessor accessor)
     {
         var node = new NodeWrapper(_storage, _segment.AllocateChunk(true));
-        _storage.InitializeNode(node, states, accessor);
+        _storage.InitializeNode(node, states, ref accessor);
         return node;
     }
 
     private void RemoveCore(ref RemoveArguments args)
     {
         var accessor = args.Accessor;
-        if (IsEmpty(accessor))
+        if (IsEmpty(ref accessor))
         {
             return;
         }
 
         // optimize for removing items from beginning
-        int order = args.Comparer.Compare(args.Key, GetFirst(accessor).Key);
+        int order = args.Comparer.Compare(args.Key, GetFirst(ref accessor).Key);
         if (order < 0)
         {
             return;
         }
 
-        if (order == 0 && (Root == LinkList || LinkList.GetCount(accessor) > LinkList.GetCapacity() / 2))
+        if (order == 0 && (Root == LinkList || LinkList.GetCount(ref accessor) > LinkList.GetCapacity() / 2))
         {
-            args.SetRemovedValue(LinkList.PopFirstInternal(accessor).Value);
-            Debug.Assert(Root == LinkList || LinkList.GetIsHalfFull(accessor));
-            DecCount(accessor);
-            if (IsEmpty(accessor))
+            args.SetRemovedValue(LinkList.PopFirstInternal(ref accessor).Value);
+            Debug.Assert(Root == LinkList || LinkList.GetIsHalfFull(ref accessor));
+            DecCount(ref accessor);
+            if (IsEmpty(ref accessor))
             {
                 Root = LinkList = ReverseLinkList = default;
-                SetRootChunkId(args.Accessor, 0);
+                SetRootChunkId(ref args.Accessor, 0);
                 Height--;
             }
             return;
         }
         // optimize for removing items from end
-        order = args.Comparer.Compare(args.Key, GetLast(accessor).Key);
+        order = args.Comparer.Compare(args.Key, GetLast(ref accessor).Key);
         if (order > 0)
         {
             return;
         }
 
-        if (order == 0 && (Root == ReverseLinkList || ReverseLinkList.GetCount(accessor) > ReverseLinkList.GetCapacity() / 2))
+        if (order == 0 && (Root == ReverseLinkList || ReverseLinkList.GetCount(ref accessor) > ReverseLinkList.GetCapacity() / 2))
         {
-            args.SetRemovedValue(ReverseLinkList.PopLastInternal(accessor).Value);
-            Debug.Assert(Root == ReverseLinkList || ReverseLinkList.GetIsHalfFull(accessor));
-            DecCount(accessor); // here count never becomes zero.
+            args.SetRemovedValue(ReverseLinkList.PopLastInternal(ref accessor).Value);
+            Debug.Assert(Root == ReverseLinkList || ReverseLinkList.GetIsHalfFull(ref accessor));
+            DecCount(ref accessor); // here count never becomes zero.
             return;
         }
 
         var nodeRelatives = new NodeRelatives();
-        var merge = Root.Remove(ref args, ref nodeRelatives, accessor);
+        var merge = Root.Remove(ref args, ref nodeRelatives, ref accessor);
 
         if (args.Removed)
         {
-            DecCount(accessor);
+            DecCount(ref accessor);
         }
 
-        if (merge && Root.GetLength(accessor) == 0)
+        if (merge && Root.GetLength(ref accessor) == 0)
         {
-            Root = Root.GetChild(-1, accessor); // left most child becomes root. (returns null for leafs)
+            Root = Root.GetChild(-1, ref accessor); // left most child becomes root. (returns null for leafs)
             if (Root.IsValid == false)
             {
                 LinkList = default;
                 ReverseLinkList = default;
             }
-            SetRootChunkId(args.Accessor, Root.IsValid ? Root.ChunkId : 0);
+            SetRootChunkId(ref args.Accessor, Root.IsValid ? Root.ChunkId : 0);
             Height--;
         }
 
-        if (ReverseLinkList.IsValid && ReverseLinkList.GetPrevious(accessor).IsValid && ReverseLinkList.GetPrevious(accessor).GetNext(accessor).IsValid==false) // true if last leaf is merged.
+        if (ReverseLinkList.IsValid && ReverseLinkList.GetPrevious(ref accessor).IsValid && ReverseLinkList.GetPrevious(ref accessor).GetNext(ref accessor).IsValid==false) // true if last leaf is merged.
         {
-            ReverseLinkList = ReverseLinkList.GetPrevious(accessor);
+            ReverseLinkList = ReverseLinkList.GetPrevious(ref accessor);
         }
     }
-
 
     private void AddOrUpdateCore(ref InsertArguments args)
     {
         var accessor = args.Accessor;
         
-        if (IsEmpty(accessor))
+        if (IsEmpty(ref accessor))
         {
-            Root = AllocNode(NodeStates.IsLeaf, args.Accessor);
-            SetRootChunkId(args.Accessor, Root.ChunkId);
+            Root = AllocNode(NodeStates.IsLeaf, ref args.Accessor);
+            SetRootChunkId(ref args.Accessor, Root.ChunkId);
             LinkList = Root;
             ReverseLinkList = LinkList;
             Height++;
@@ -672,88 +680,88 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
         int CreateBufferAndAddValue(ref InsertArguments iargs)
         {
-            var bufferId = _storage.CreateBuffer(accessor);
-            iargs.ElementId =_storage.Append(bufferId, iargs.GetValue(), accessor);
+            var bufferId = _storage.CreateBuffer(ref accessor);
+            iargs.ElementId =_storage.Append(bufferId, iargs.GetValue(), ref accessor);
             return bufferId;
         }
 
         // append optimization: if item key is in order, this may add item in O(1) operation.
-        int order = IsEmpty(accessor) ? 1 : args.Compare(args.Key, GetLast(accessor).Key);
-        if (order > 0 && !ReverseLinkList.GetIsFull(accessor))
+        int order = IsEmpty(ref accessor) ? 1 : args.Compare(args.Key, GetLast(ref accessor).Key);
+        if (order > 0 && !ReverseLinkList.GetIsFull(ref accessor))
         {
             var value = AllowMultiple ? CreateBufferAndAddValue(ref args) : args.GetValue();
-            ReverseLinkList.PushLast(new KeyValueItem(args.Key, value), accessor);
-            IncCount(accessor);
+            ReverseLinkList.PushLast(new KeyValueItem(args.Key, value), ref accessor);
+            IncCount(ref accessor);
             return;
         }
         else if (order == 0)
         {
             if (AllowMultiple)
             {
-                args.ElementId = _storage.Append(GetLast(accessor).Value, args.GetValue(), accessor);
+                args.ElementId = _storage.Append(GetLast(ref accessor).Value, args.GetValue(), ref accessor);
             }
             return;
         }
 
         // pre-append optimization: if item key is in order, this may add item in O(1) operation.
-        order = args.Compare(args.Key, GetFirst(accessor).Key);
-        if (order < 0 && !LinkList.GetIsFull(accessor))
+        order = args.Compare(args.Key, GetFirst(ref accessor).Key);
+        if (order < 0 && !LinkList.GetIsFull(ref accessor))
         {
             var value = AllowMultiple ? CreateBufferAndAddValue(ref args) : args.GetValue();
-            LinkList.PushFirst(new KeyValueItem(args.Key, value), accessor);
-            IncCount(accessor);
+            LinkList.PushFirst(new KeyValueItem(args.Key, value), ref accessor);
+            IncCount(ref accessor);
             return;
         }
         else if (order == 0)
         {
             if (AllowMultiple)
             {
-                args.ElementId = _storage.Append(GetFirst(accessor).Value, args.GetValue(), accessor);
+                args.ElementId = _storage.Append(GetFirst(ref accessor).Value, args.GetValue(), ref accessor);
             }
             return;
         }
 
         var nodeRelatives = new NodeRelatives();
-        var rightSplit = Root.Insert(ref args, ref nodeRelatives, default, accessor);
+        var rightSplit = Root.Insert(ref args, ref nodeRelatives, default, ref accessor);
 
         if (args.Added)
         {
-            IncCount(accessor);
+            IncCount(ref accessor);
         }
 
         // if split occurred at root, make a new root and increase height.
         if (rightSplit != null)
         {
-            var newRoot = AllocNode(NodeStates.None, args.Accessor);
-            newRoot.SetLeft(Root, accessor);
+            var newRoot = AllocNode(NodeStates.None, ref args.Accessor);
+            newRoot.SetLeft(Root, ref accessor);
 
-            newRoot.Insert(0, rightSplit.Value, accessor);
+            newRoot.Insert(0, rightSplit.Value, ref accessor);
             Root = newRoot;
-            SetRootChunkId(args.Accessor, Root.ChunkId);
+            SetRootChunkId(ref args.Accessor, Root.ChunkId);
             Height++;
         }
 
-        var next = ReverseLinkList.GetNext(accessor);
+        var next = ReverseLinkList.GetNext(ref accessor);
         if (next.IsValid)
         {
             ReverseLinkList = next;
         }
     }
 
-    private NodeWrapper FindLeaf(TKey key, out int index, ChunkRandomAccessor accessor)
+    private NodeWrapper FindLeaf(TKey key, out int index, ref ChunkAccessor accessor)
     {
         index = -1;
-        if (IsEmpty(accessor))
+        if (IsEmpty(ref accessor))
         {
             return default;
         }
 
         var node = Root;
-        while (!node.GetIsLeaf(accessor))
+        while (!node.GetIsLeaf(ref accessor))
         {
-            node = node.GetNearestChild(key, Comparer, accessor);
+            node = node.GetNearestChild(key, Comparer, ref accessor);
         }
-        index = node.Find(key, Comparer, accessor);
+        index = node.Find(key, Comparer, ref accessor);
         return node;
     }
 

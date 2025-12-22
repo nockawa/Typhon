@@ -17,12 +17,12 @@ public class StringTableSegment
 
     public int Stride { get; }
 
-    protected ChunkRandomAccessor ChunkAccessor;
+    protected ChunkAccessor ChunkAccessor;
     protected internal ChunkBasedSegment Segment => ChunkAccessor.Segment;
 
-    public StringTableSegment(ChunkBasedSegment segment, ChunkRandomAccessor accessor=null)
+    public StringTableSegment(ChunkBasedSegment segment)
     {
-        ChunkAccessor = accessor ?? segment.CreateChunkRandomAccessor(8);
+        ChunkAccessor = segment.CreateChunkAccessor();
         Stride = Segment.Stride;
     }
 
@@ -43,7 +43,7 @@ public class StringTableSegment
         var curOffset = 0;
         for (int i = 0; i < chunkCount; i++)
         {
-            var chunkAddr = ChunkAccessor.GetChunkAddress(chunkIds[i], dirtyPage: true);
+            var chunkAddr = ChunkAccessor.GetChunkAddress(chunkIds[i], true);
             ref var h = ref Unsafe.AsRef<ChunkHeader>(chunkAddr);
 
             var copySize = Math.Min(sizeLeft, blockSize);
@@ -93,7 +93,7 @@ public class StringTableSegment
     unsafe public void DeleteString(int stringId)
     {
         var curChunkId = stringId;
-        var curChunkAddr = ChunkAccessor.GetChunkAddress(stringId, dirtyPage: true);
+        var curChunkAddr = ChunkAccessor.GetChunkAddress(stringId, true);
         ref var curChunk = ref Unsafe.AsRef<ChunkHeader>(curChunkAddr);
 
         while (true)
@@ -104,7 +104,7 @@ public class StringTableSegment
             if (curChunk.NextChunkId == 0) break;
 
             curChunkId = nextChunkId;
-            curChunkAddr = ChunkAccessor.GetChunkAddress(curChunkId, dirtyPage: true);
+            curChunkAddr = ChunkAccessor.GetChunkAddress(curChunkId, true);
             curChunk = ref Unsafe.AsRef<ChunkHeader>(curChunkAddr);
         }
     }

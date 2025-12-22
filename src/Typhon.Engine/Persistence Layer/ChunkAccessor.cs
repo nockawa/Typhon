@@ -87,6 +87,8 @@ public unsafe struct ChunkAccessor : IDisposable
     // === Constants ===
     private const int Capacity = 16;
     private const int InvalidPageIndex = -1;
+    
+    public ChunkBasedSegment Segment => _segment;
 
     /// <summary>
     /// Create a new ChunkAccessor. All storage is stack-allocated - zero heap allocations.
@@ -123,17 +125,51 @@ public unsafe struct ChunkAccessor : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public ref readonly T GetChunkReadOnly<T>(int chunkId) where T : unmanaged => ref GetChunk<T>(chunkId, dirty: false);
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+    public Span<byte> GetChunkAsSpan(int index, bool dirtyPage = false) => new(GetChunkAddress(index, dirtyPage), _stride);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+    public ReadOnlySpan<byte> GetChunkAsReadOnlySpan(int index, bool dirtyPage = false) => new(GetChunkAddress(index, dirtyPage), _stride);
+    
     /// <summary>
     /// Get scoped access to chunk with automatic pinning. SAFE for multi-chunk operations.
     /// Pin prevents eviction until scope is disposed.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ChunkScope<T> GetChunkScoped<T>(int chunkId, bool dirty = false) where T : unmanaged
+    public ChunkHandle GetChunkHandle(int chunkId, bool dirty = false)
     {
         var addr = GetChunkAddressAndPin(chunkId, dirty, out var slotIndex);
         void* selfPtr = Unsafe.AsPointer(ref this);
-        return new ChunkScope<T>(selfPtr, slotIndex, addr, _stride);
+        return new ChunkHandle(selfPtr, slotIndex, addr, _stride);
     }
+    
+    internal void ClearChunk(int index)
+    {
+        var addr = GetChunkAddress(index);
+        new Span<long>(addr, _stride / 8).Clear();
+    }
+
+    internal void DirtyChunk(int index)
+    {
+        (int si, _) = _segment.GetChunkLocation(index);
+        for (int i = 0, used = 0; used < _usedSlots; i++)
+        {
+            if (_pageIndices[i] == InvalidPageIndex)
+            {
+                continue;
+            }
+
+            ++used;
+            ref var slotData = ref _slots[i];
+
+            if (_pageIndices[i] == si)
+            {
+                slotData.DirtyFlag = 1;
+                return;
+            }
+        }
+    }
+    
 
     /// <summary>
     /// Commit the dirty state of each page and release the shared access.
@@ -144,13 +180,14 @@ public unsafe struct ChunkAccessor : IDisposable
     /// </remarks>
     public void CommitChanges()
     {
-        for (int i = 0; i < _usedSlots; i++)
+        for (int i = 0, used = 0; used < _usedSlots; i++)
         {
             if (_pageIndices[i] == InvalidPageIndex)
             {
                 continue;
             }
 
+            ++used;
             ref var slotData = ref _slots[i];
 
             // Lazy dirty tracking: flush on dispose
@@ -159,8 +196,6 @@ public unsafe struct ChunkAccessor : IDisposable
                 _changeSet.Add(_pageAccessors[i]);
                 slotData.DirtyFlag = 0;
             }
-
-            _pageAccessors[i].Dispose();
         }        
     }
     
@@ -172,7 +207,7 @@ public unsafe struct ChunkAccessor : IDisposable
     /// 3. LRU eviction (cache miss, load new page)
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    internal byte* GetChunkAddress(int chunkId, bool dirty)
+    internal byte* GetChunkAddress(int chunkId, bool dirty = false)
     {
         (int pageIndex, int offset) = _segment.GetChunkLocation(chunkId);
 
@@ -537,26 +572,29 @@ public unsafe struct ChunkAccessor : IDisposable
     /// </summary>
     public void Dispose()
     {
-        for (int i = 0; i < _usedSlots; i++)
+        for (int i = 0, used = 0; used < _usedSlots; i++)
         {
-            if (_pageIndices[i] != InvalidPageIndex)
+            if (_pageIndices[i] == InvalidPageIndex)
             {
-                ref var slotData = ref _slots[i];
-
-                // Demote any promoted pages
-                if (slotData.PromoteCounter > 0)
-                {
-                    _pageAccessors[i].DemoteExclusive();
-                }
-
-                // Lazy dirty tracking: flush on dispose
-                if (slotData.DirtyFlag != 0 && _changeSet != null)
-                {
-                    _changeSet.Add(_pageAccessors[i]);
-                }
-
-                _pageAccessors[i].Dispose();
+                continue;
             }
+
+            ++used;
+            ref var slotData = ref _slots[i];
+
+            // Demote any promoted pages
+            if (slotData.PromoteCounter > 0)
+            {
+                _pageAccessors[i].DemoteExclusive();
+            }
+
+            // Lazy dirty tracking: flush on dispose
+            if (slotData.DirtyFlag != 0 && _changeSet != null)
+            {
+                _changeSet.Add(_pageAccessors[i]);
+            }
+
+            _pageAccessors[i].Dispose();
         }
 
         _usedSlots = 0;
@@ -569,14 +607,14 @@ public unsafe struct ChunkAccessor : IDisposable
 /// Prevents eviction until disposed - safe for multi-chunk operations.
 /// </summary>
 [PublicAPI]
-public unsafe ref struct ChunkScope<T> : IDisposable where T : unmanaged
+public unsafe struct ChunkHandle : IDisposable
 {
     private void* _ownerPtr;       // Pointer to ChunkAccessor on stack
     private byte* _chunkAddress;
     private int _chunkLength;
     private int _slotIndex;
 
-    internal ChunkScope(void* owner, int slotIndex, byte* chunkAddress, int chunkLength)
+    internal ChunkHandle(void* owner, int slotIndex, byte* chunkAddress, int chunkLength)
     {
         _ownerPtr = owner;
         _slotIndex = slotIndex;
@@ -584,11 +622,13 @@ public unsafe ref struct ChunkScope<T> : IDisposable where T : unmanaged
         _chunkLength = chunkLength;
     }
 
+    public byte* Address => _chunkAddress;
+    
     /// <summary>
     /// Get mutable reference to chunk data.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T AsRef() => ref Unsafe.AsRef<T>(_chunkAddress);
+    public ref T AsRef<T>() => ref Unsafe.AsRef<T>(_chunkAddress);
 
     /// <summary>
     /// Get chunk data as mutable span.
@@ -608,6 +648,8 @@ public unsafe ref struct ChunkScope<T> : IDisposable where T : unmanaged
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public SpanStream AsStream() => new(new Span<byte>(_chunkAddress, _chunkLength));
 
+    public bool IsDefault => _ownerPtr == null;
+    
     /// <summary>
     /// Dispose scope: unpin the slot, making it evictable again.
     /// </summary>

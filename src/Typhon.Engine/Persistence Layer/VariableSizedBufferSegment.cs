@@ -46,15 +46,14 @@ public unsafe class VariableSizedBufferSegmentBase
         ElementCountRootChunk = (stride - headerSize) / _elementSize;
         ElementCountPerChunk = (stride - sizeof(VariableSizedBufferChunkHeader)) / _elementSize;
         Segment = segment;
-        // ChunkAccessor = accessor ?? segment.CreateChunkRandomAccessor(4);
     }
 
-    public int AllocateBuffer(ChunkRandomAccessor accessor)
+    public int AllocateBuffer(ref ChunkAccessor accessor)
     {
         // Allocate and initialize the first chunk of the Buffer
         var segment = accessor.Segment;
         var chunkId = segment.AllocateChunk(false);
-        ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(accessor.GetChunkAddress(chunkId, dirtyPage: true));
+        ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(accessor.GetChunkAddress(chunkId, true));
         rh.Lock.Reset();
         rh.FirstFreeChunkId = 0;
         rh.FirstStoredChunkId = chunkId;
@@ -66,9 +65,10 @@ public unsafe class VariableSizedBufferSegmentBase
         return chunkId;
     }
 
-    public int BufferAddRef(int bufferId, ChunkRandomAccessor accessor)
+    public int BufferAddRef(int bufferId, ref ChunkAccessor accessor)
     {
-        ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(accessor.GetChunkAddress(bufferId, true, true));
+        using var handle = accessor.GetChunkHandle(bufferId, true);
+        ref var rh = ref handle.AsRef<VariableSizedBufferRootHeader>();
         try
         {
             // Lock the whole buffer as we are going to update it
@@ -79,13 +79,13 @@ public unsafe class VariableSizedBufferSegmentBase
         finally
         {
             ReleaseLockOnBuffer(ref rh);
-            accessor.UnpinChunk(bufferId);
         }
     }
 
-    public int BufferRelease(int bufferId, ChunkRandomAccessor accessor)
+    public int BufferRelease(int bufferId, ref ChunkAccessor accessor)
     {
-        ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(accessor.GetChunkAddress(bufferId, true, true));
+        using var handle = accessor.GetChunkHandle(bufferId, true);
+        ref var rh = ref handle.AsRef<VariableSizedBufferRootHeader>();
         try
         {
             // Lock the whole buffer as we are going to update it
@@ -94,22 +94,22 @@ public unsafe class VariableSizedBufferSegmentBase
             var newValue = --rh.RefCounter;
             if (newValue == 0)
             {
-                DeleteBuffer(bufferId, accessor);
+                DeleteBuffer(bufferId, ref accessor);
             }
             return newValue;
         }
         finally
         {
             ReleaseLockOnBuffer(ref rh);
-            accessor.UnpinChunk(bufferId);
         }
     }
 
-    public void DeleteBuffer(int bufferId, ChunkRandomAccessor accessor)
+    public void DeleteBuffer(int bufferId, ref ChunkAccessor accessor)
     {
         // Fetch the root chunk, pin it to prevent its page to be discarded by subsequent chunk accesses
         var unlock = false;
-        ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(accessor.GetChunkAddress(bufferId, true, true));
+        using var handle = accessor.GetChunkHandle(bufferId, true);
+        ref var rh = ref handle.AsRef<VariableSizedBufferRootHeader>();
         try
         {
             // Lock the whole buffer as we are going to update it
@@ -126,7 +126,7 @@ public unsafe class VariableSizedBufferSegmentBase
 
                 while (curChunkId != 0)
                 {
-                    var curChunkAddr = accessor.GetChunkAddress(curChunkId, dirtyPage: true);
+                    var curChunkAddr = accessor.GetChunkAddress(curChunkId, true);
                     ref var curChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(curChunkAddr);
 
                     var toDeleteChunkId = curChunkId;
@@ -146,7 +146,6 @@ public unsafe class VariableSizedBufferSegmentBase
                 ReleaseLockOnBuffer(ref rh);
             }
             accessor.Segment.FreeChunk(bufferId);
-            accessor.UnpinChunk(bufferId);
         }
     }
 
@@ -181,10 +180,11 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
     {
     }
 
-    unsafe public int AddElement(int bufferId, T value, ChunkRandomAccessor accessor)
+    unsafe public int AddElement(int bufferId, T value, ref ChunkAccessor accessor)
     {
         // Fetch the root chunk, pin it to prevent its page to be discarded by subsequent chunk accesses
-        ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(accessor.GetChunkAddress(bufferId, true, true));
+        using var handle = accessor.GetChunkHandle(bufferId, true);
+        ref var rh = ref handle.AsRef<VariableSizedBufferRootHeader>();
         try
         {
             // Lock the whole buffer as we are going to update it
@@ -217,7 +217,7 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
                 curChunkHeader.NextChunkId = curChunkId;
                 
                 // Fetch the new chunk
-                curChunkAddr = accessor.GetChunkAddress(curChunkId, dirtyPage: true);
+                curChunkAddr = accessor.GetChunkAddress(curChunkId, true);
                 curChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(curChunkAddr);
 
                 curChunkHeader.ElementCount = 0;
@@ -243,14 +243,14 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
         finally
         {
             ReleaseLockOnBuffer(ref rh);
-            accessor.UnpinChunk(bufferId);
         }
     }
 
-    unsafe public void AddElements(int bufferId, ReadOnlySpan<T> items, ChunkRandomAccessor accessor)
+    unsafe public void AddElements(int bufferId, ReadOnlySpan<T> items, ref ChunkAccessor accessor)
     {
         // Fetch the root chunk, pin it to prevent its page to be discarded by subsequent chunk accesses
-        ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(accessor.GetChunkAddress(bufferId, true, true));
+        using var handle = accessor.GetChunkHandle(bufferId, true);
+        ref var rh = ref handle.AsRef<VariableSizedBufferRootHeader>();
         try
         {
             // Lock the whole buffer as we are going to update it
@@ -287,7 +287,7 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
                     curChunkHeader.NextChunkId = curChunkId;
                 
                     // Fetch the new chunk
-                    curChunkAddr = accessor.GetChunkAddress(curChunkId, dirtyPage: true);
+                    curChunkAddr = accessor.GetChunkAddress(curChunkId, true);
                     curChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(curChunkAddr);
 
                     curChunkHeader.ElementCount = 0;
@@ -316,21 +316,21 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
         finally
         {
             ReleaseLockOnBuffer(ref rh);
-            accessor.UnpinChunk(bufferId);
         }
     }
 
-    unsafe public int DeleteElement(int bufferId, int elementId, T element, ChunkRandomAccessor accessor)
+    unsafe public int DeleteElement(int bufferId, int elementId, T element, ref ChunkAccessor accessor)
     {
         // Fetch the chunk, pin it to prevent its page to be discarded by subsequent chunk accesses
-        ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(accessor.GetChunkAddress(bufferId, true, true));
+        using var handle = accessor.GetChunkHandle(bufferId, true);
+        ref var rh = ref handle.AsRef<VariableSizedBufferRootHeader>();
         try
         {
             // Lock the whole buffer as we are going to update it
             LockBuffer(ref rh);
 
             // Fetch the chunk storing the element
-            var elementChunk = accessor.GetChunkAddress(elementId, dirtyPage: true);
+            var elementChunk = accessor.GetChunkAddress(elementId, true);
             ref var elementChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(elementChunk);
             var isRoot = bufferId == elementId;
             var baseElementAddr = (T*)(elementChunk + (isRoot ? sizeof(VariableSizedBufferRootHeader) : sizeof(VariableSizedBufferChunkHeader)));
@@ -361,7 +361,6 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
         finally
         {
             ReleaseLockOnBuffer(ref rh);
-            accessor.UnpinChunk(bufferId);
         }
     }
 
@@ -375,13 +374,13 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
     /// <returns>A ref struct enumerator that can be used in foreach loops</returns>
     public BufferEnumerator<T> EnumerateBuffer(int bufferId) => new(this, bufferId);
 
-    public int CloneBuffer(int sourceBufferId, ChunkRandomAccessor accessor)
+    public int CloneBuffer(int sourceBufferId, ref ChunkAccessor accessor)
     {
-        var destBufferId = AllocateBuffer(accessor);
+        var destBufferId = AllocateBuffer(ref accessor);
         using var source = GetReadOnlyAccessor(sourceBufferId);
         do
         {
-            AddElements(destBufferId, source.Elements, accessor);
+            AddElements(destBufferId, source.Elements, ref accessor);
         } while (source.NextChunk());
 
         return destBufferId;
@@ -465,12 +464,11 @@ public struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanaged
     private readonly ChunkBasedSegment _segment;
 
     private int _rootChunkId;
-    private readonly unsafe byte* _rootChunkAddr;
-
-    private readonly ChunkRandomAccessor _accessor;
+    private ChunkHandle _rootChunkHandle;
+    private ChunkAccessor _accessor;
 
     private int _curChunkId;
-    private unsafe byte* _curChunkAddr;
+    private ChunkHandle _curChunkHandle;
 
     private unsafe byte* _elementAddr;
     private int _elementCount;
@@ -484,7 +482,7 @@ public struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanaged
     {
         get
         {
-            ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(_rootChunkAddr);
+            ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(_rootChunkHandle.Address);
             return rh.TotalCount;
         }
     }
@@ -493,7 +491,7 @@ public struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanaged
     {
         get
         {
-            ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(_rootChunkAddr);
+            ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(_rootChunkHandle.Address);
             return rh.RefCounter;
         }
     }
@@ -504,20 +502,21 @@ public struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanaged
         _segment = owner.Segment;
         _rootChunkId = rootChunkId;
 
-        _accessor = ChunkRandomAccessor.GetFromPool(_segment, 8, changeSet);
+        _accessor = _segment.CreateChunkAccessor(changeSet);
 
-        _rootChunkAddr = _accessor.GetChunkAddress(_rootChunkId);
-        ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(_rootChunkAddr);
+        _rootChunkHandle = _accessor.GetChunkHandle(rootChunkId);
+        ref var rh = ref _rootChunkHandle.AsRef<VariableSizedBufferRootHeader>();
 
         // Enter read mode
         rh.Lock.EnterSharedAccess();
 
         // Switch to the first chunk that contains stored data
         _curChunkId = _rootChunkId;
-        _curChunkAddr = _accessor.GetChunkAddress(_curChunkId, true);
+        _curChunkHandle = _accessor.GetChunkHandle(_curChunkId);
+        var curChunkAddr = _curChunkHandle.Address;
 
-        _elementAddr = _curChunkAddr + (_curChunkId==rootChunkId ? sizeof(VariableSizedBufferRootHeader) : sizeof(VariableSizedBufferChunkHeader));
-        _elementCount = ((VariableSizedBufferChunkHeader*)_curChunkAddr)->ElementCount;
+        _elementAddr = curChunkAddr + (_curChunkId==rootChunkId ? sizeof(VariableSizedBufferRootHeader) : sizeof(VariableSizedBufferChunkHeader));
+        _elementCount = ((VariableSizedBufferChunkHeader*)curChunkAddr)->ElementCount;
 
         if (_elementCount == 0) NextChunk();
     }
@@ -525,16 +524,16 @@ public struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanaged
     unsafe public bool NextChunk()
     {
         // Read next chunk from the current header
-        var nextChunkId = ((VariableSizedBufferChunkHeader*)_curChunkAddr)->NextChunkId;
+        var curChunkAddr = _curChunkHandle.Address;
+        var nextChunkId = ((VariableSizedBufferChunkHeader*)curChunkAddr)->NextChunkId;
         var prevChunkId = _curChunkId;
-        var prevChunk = (VariableSizedBufferChunkHeader*)_curChunkAddr;
+        var prevChunk = (VariableSizedBufferChunkHeader*)curChunkAddr;
 
         // Quit if there's no more
         if (nextChunkId == 0)
         {
-            _accessor.UnpinChunk(_curChunkId);
+            _curChunkHandle.Dispose();
             _curChunkId = 0;
-            _curChunkAddr = null;
             _elementAddr = null;
             return false;
         }
@@ -546,7 +545,7 @@ public struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanaged
         // Check if the chunk is empty, then try to remove it from the storage list
         if (nextChunkElementCount == 0)
         {
-            ref var rootChunk = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(_rootChunkAddr);
+            ref var rootChunk = ref _rootChunkHandle.AsRef<VariableSizedBufferRootHeader>();
 
             // Try to promote the Buffer from read to read/write because we need to make changes
             if (rootChunk.Lock.TryPromoteToExclusiveAccess())
@@ -595,8 +594,8 @@ public struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanaged
                                 _accessor.DemoteChunk(curChunkId);
                             }
 
-                            // Cur Chunk is the empty one, we don't need it as we're stepping over, so release the pin
-                            _accessor.UnpinChunk(curChunkId);
+                            // Cur Chunk is the empty one, we don't need it as we're stepping over, so dispose it
+                            _curChunkHandle.Dispose();
 
                             // Update the new current chunk to be the next in line
                             curChunkId = prevChunk->NextChunkId;
@@ -617,39 +616,38 @@ public struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanaged
             }
         }
 
-        _accessor.UnpinChunk(prevChunkId);
         // Check if we reached the end of the VSB
         if (nextChunkAddr == null)
         {
             _curChunkId = 0;
-            _curChunkAddr = null;
+            _curChunkHandle.Dispose();
             _elementAddr = null;
             return false;
         }
 
+        _curChunkHandle.Dispose();
         _curChunkId = nextChunkId;
-        _curChunkAddr = nextChunkAddr;
-        _elementAddr = _curChunkAddr + (_curChunkId == _rootChunkId ? sizeof(VariableSizedBufferRootHeader) : sizeof(VariableSizedBufferChunkHeader));
-        _elementCount = ((VariableSizedBufferChunkHeader*)_curChunkAddr)->ElementCount;
+        _curChunkHandle = _accessor.GetChunkHandle(_curChunkId);
+        _elementAddr = _curChunkHandle.Address + (_curChunkId == _rootChunkId ? sizeof(VariableSizedBufferRootHeader) : sizeof(VariableSizedBufferChunkHeader));
+        _elementCount = ((VariableSizedBufferChunkHeader*)_curChunkHandle.Address)->ElementCount;
 
         return true;
     }
 
-    unsafe public void Dispose()
+    public void Dispose()
     {
         if (!IsValid)
         {
             return;
         }
 
-        ref var h = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(_rootChunkAddr);
+        ref var h = ref _rootChunkHandle.AsRef<VariableSizedBufferRootHeader>();
         h.Lock.ExitSharedAccess();
 
-        if (_curChunkId != 0)
-        {
-            _accessor.UnpinChunk(_curChunkId);
-        }
+        _rootChunkHandle.Dispose();
+        _curChunkHandle.Dispose();
         _accessor.Dispose();
         _rootChunkId = 0;
+        _curChunkId = 0;
     }
 }

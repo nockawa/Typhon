@@ -157,7 +157,7 @@ public readonly struct RevisionChainManager
     public RevisionChainManager(
         ChunkBasedSegment revisionSegment,
         ChunkBasedSegment componentSegment,
-        ChunkRandomAccessor accessor)
+        ref ChunkAccessor accessor)
     {
         _revisionSegment = revisionSegment;
         _componentSegment = componentSegment;
@@ -638,7 +638,7 @@ public struct RevisionGarbageCollector
     public RevisionGarbageCollector(
         ChunkBasedSegment revisionSegment,
         ChunkBasedSegment componentSegment,
-        ChunkRandomAccessor accessor)
+        ref ChunkAccessor accessor)
     {
         _revisionSegment = revisionSegment;
         _componentSegment = componentSegment;
