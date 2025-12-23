@@ -70,7 +70,7 @@ class BtreeTests
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
         var accessor = segment.CreateChunkAccessor();
-        var tree = new IntSingleBTree(segment, ref accessor);
+        var tree = new IntSingleBTree(segment);
 
         tree.Add(10, 10, ref accessor);
         Assert.That(tree[10], Is.EqualTo(10));
@@ -99,7 +99,7 @@ class BtreeTests
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
         var accessor = segment.CreateChunkAccessor();
-        var tree = new FloatSingleBTree(segment, ref accessor);
+        var tree = new FloatSingleBTree(segment);
 
         tree.Add(-0.10f, 10, ref accessor);
         Assert.That(tree[-0.10f], Is.EqualTo(10));
@@ -128,7 +128,7 @@ class BtreeTests
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
         var accessor = segment.CreateChunkAccessor();
-        var tree = new IntSingleBTree(segment, ref accessor);
+        var tree = new IntSingleBTree(segment);
 
         tree.Add(140, 140, ref accessor);
         Assert.That(tree[140], Is.EqualTo(140));
@@ -160,7 +160,7 @@ class BtreeTests
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(IndexString64Chunk));
         var accessor = segment.CreateChunkAccessor();
-        var tree = new String64SingleBTree(segment, ref accessor);
+        var tree = new String64SingleBTree(segment);
 
         tree.Add("140", 140, ref accessor);
         Assert.That(tree["140"], Is.EqualTo(140));
@@ -200,7 +200,7 @@ class BtreeTests
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
         var accessor = segment.CreateChunkAccessor();
-        var tree = new IntSingleBTree(segment, ref accessor);
+        var tree = new IntSingleBTree(segment);
 
         foreach (var v in values)
         {
@@ -236,7 +236,7 @@ class BtreeTests
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
         var accessor = segment.CreateChunkAccessor();
-        var tree = new IntSingleBTree(segment, ref accessor);
+        var tree = new IntSingleBTree(segment);
 
         for (int loopC = 0; loopC < 2; loopC++)
         {
@@ -286,7 +286,7 @@ class BtreeTests
 
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 20, sizeof(Index32Chunk));
         var accessor = segment.CreateChunkAccessor();
-        var tree = new IntSingleBTree(segment, ref accessor);
+        var tree = new IntSingleBTree(segment);
 
         var array = samples.ToArray();
         var count = array.Length;
@@ -315,7 +315,7 @@ class BtreeTests
 
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
         var accessor = segment.CreateChunkAccessor();
-        var tree = new IntMultipleBTree(segment, ref accessor);
+        var tree = new IntMultipleBTree(segment);
 
         var eid0 = tree.Add(1, 10, ref accessor);
         var eid1 = tree.Add(3, 30, ref accessor);
@@ -365,7 +365,7 @@ class BtreeTests
 
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index16Chunk));
         var accessor = segment.CreateChunkAccessor();
-        var tree = new ByteMultipleBTree(segment, ref accessor);
+        var tree = new ByteMultipleBTree(segment);
 
         var eid0 = tree.Add(1, 10, ref accessor);
         var eid1 = tree.Add(3, 30, ref accessor);
@@ -415,7 +415,7 @@ class BtreeTests
         
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
         var accessor = segment.CreateChunkAccessor();
-        var tree = new FloatMultipleBTree(segment, ref accessor);
+        var tree = new FloatMultipleBTree(segment);
 
         var eid0 = tree.Add(1.1f, 10, ref accessor);
         var eid1 = tree.Add(3.1f, 30, ref accessor);
@@ -475,7 +475,7 @@ class BtreeTests
             var segment = mmf.AllocateChunkBasedSegment(PageBlockType.None, 300, sizeof(Index32Chunk), changeSet);
             segmentIndex = segment.RootPageIndex;
             var accessor = segment.CreateChunkAccessor(changeSet);
-            var tree = new FloatSingleBTree(segment, ref accessor);
+            var tree = new FloatSingleBTree(segment);
 
             var rand = new Random(1234);
             var curValue = 12;
@@ -507,7 +507,7 @@ class BtreeTests
             using var mmf = scope.ServiceProvider.GetRequiredService<ManagedPagedMMF>();
             var segment = mmf.LoadChunkBasedSegment(segmentIndex, sizeof(Index32Chunk));
             var accessor = segment.CreateChunkAccessor();
-            var tree = new FloatSingleBTree(segment, ref accessor, true);
+            var tree = new FloatSingleBTree(segment, true);
 
             foreach (var kvp in items)
             {
@@ -535,7 +535,7 @@ class BtreeTests
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 300, sizeof(Index32Chunk));
         var accessor = segment.CreateChunkAccessor();
-        var tree = new FloatSingleBTree(segment, ref accessor);
+        var tree = new FloatSingleBTree(segment);
 
         var rand = new Random(1234);
         var hashset = new HashSet<float>();
@@ -575,7 +575,7 @@ class BtreeTests
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 300, sizeof(Index32Chunk));
         var accessor = segment.CreateChunkAccessor();
-        var tree = new IntMultipleBTree(segment, ref accessor);
+        var tree = new IntMultipleBTree(segment);
 
         var chunkCapacity = segment.ChunkCapacity;
         var freeChunkCount = segment.FreeChunkCount;

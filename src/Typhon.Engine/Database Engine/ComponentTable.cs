@@ -185,13 +185,11 @@ public unsafe class ComponentTable : IDisposable
 
         if (definition.AllowMultiple)
         {
-            var accessor = DefaultIndexSegment.CreateChunkAccessor();
-            PrimaryKeyIndex = new LongMultipleBTree(DefaultIndexSegment, ref accessor);
+            PrimaryKeyIndex = new LongMultipleBTree(DefaultIndexSegment);
         }
         else
         {
-            var accessor = DefaultIndexSegment.CreateChunkAccessor();
-            PrimaryKeyIndex = new LongSingleBTree(DefaultIndexSegment, ref accessor);
+            PrimaryKeyIndex = new LongSingleBTree(DefaultIndexSegment);
         }
 
         BuildIndexedFieldInfo();
@@ -244,21 +242,20 @@ public unsafe class ComponentTable : IDisposable
     private IBTree CreateIndexForField(DBComponentDefinition.Field field)
     {
         var s = field.Type == FieldType.String64 ? String64IndexSegment : DefaultIndexSegment;
-        var a = s.CreateChunkAccessor();
         switch (field.Type)
         {
-            case FieldType.Byte:        return field.IndexAllowMultiple ? new ByteMultipleBTree(s, ref a)     : new ByteSingleBTree(s, ref a);
-            case FieldType.Short:       return field.IndexAllowMultiple ? new ShortMultipleBTree(s, ref a)    : new ShortSingleBTree(s, ref a);
-            case FieldType.Int:         return field.IndexAllowMultiple ? new IntMultipleBTree(s, ref a)      : new IntSingleBTree(s, ref a);
-            case FieldType.Long:        return field.IndexAllowMultiple ? new LongMultipleBTree(s, ref a)     : new LongSingleBTree(s, ref a);
-            case FieldType.UByte:       return field.IndexAllowMultiple ? new UByteMultipleBTree(s, ref a)    : new UByteSingleBTree(s, ref a);
-            case FieldType.UShort:      return field.IndexAllowMultiple ? new UShortMultipleBTree(s, ref a)   : new UShortSingleBTree(s, ref a);
-            case FieldType.UInt:        return field.IndexAllowMultiple ? new UIntMultipleBTree(s, ref a)     : new UIntSingleBTree(s, ref a);
-            case FieldType.ULong:       return field.IndexAllowMultiple ? new ULongMultipleBTree(s, ref a)    : new ULongSingleBTree(s, ref a);
-            case FieldType.Float:       return field.IndexAllowMultiple ? new FloatMultipleBTree(s, ref a)    : new FloatSingleBTree(s, ref a);
-            case FieldType.Double:      return field.IndexAllowMultiple ? new DoubleMultipleBTree(s, ref a)   : new DoubleSingleBTree(s, ref a);
-            case FieldType.Char:        return field.IndexAllowMultiple ? new CharMultipleBTree(s, ref a)     : new CharSingleBTree(s, ref a);
-            case FieldType.String64:    return field.IndexAllowMultiple ? new String64MultipleBTree(s, ref a) : new String64SingleBTree(s, ref a);
+            case FieldType.Byte:        return field.IndexAllowMultiple ? new ByteMultipleBTree(s)     : new ByteSingleBTree(s);
+            case FieldType.Short:       return field.IndexAllowMultiple ? new ShortMultipleBTree(s)    : new ShortSingleBTree(s);
+            case FieldType.Int:         return field.IndexAllowMultiple ? new IntMultipleBTree(s)      : new IntSingleBTree(s);
+            case FieldType.Long:        return field.IndexAllowMultiple ? new LongMultipleBTree(s)     : new LongSingleBTree(s);
+            case FieldType.UByte:       return field.IndexAllowMultiple ? new UByteMultipleBTree(s)    : new UByteSingleBTree(s);
+            case FieldType.UShort:      return field.IndexAllowMultiple ? new UShortMultipleBTree(s)   : new UShortSingleBTree(s);
+            case FieldType.UInt:        return field.IndexAllowMultiple ? new UIntMultipleBTree(s)     : new UIntSingleBTree(s);
+            case FieldType.ULong:       return field.IndexAllowMultiple ? new ULongMultipleBTree(s)    : new ULongSingleBTree(s);
+            case FieldType.Float:       return field.IndexAllowMultiple ? new FloatMultipleBTree(s)    : new FloatSingleBTree(s);
+            case FieldType.Double:      return field.IndexAllowMultiple ? new DoubleMultipleBTree(s)   : new DoubleSingleBTree(s);
+            case FieldType.Char:        return field.IndexAllowMultiple ? new CharMultipleBTree(s)     : new CharSingleBTree(s);
+            case FieldType.String64:    return field.IndexAllowMultiple ? new String64MultipleBTree(s) : new String64SingleBTree(s);
             default:                    return null;
         }
     }

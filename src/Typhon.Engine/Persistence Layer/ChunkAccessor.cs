@@ -94,22 +94,20 @@ public unsafe struct ChunkAccessor : IDisposable
     /// Create a new ChunkAccessor. All storage is stack-allocated - zero heap allocations.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ChunkAccessor Create(ChunkBasedSegment segment, ChangeSet changeSet = null)
+    internal ChunkAccessor(ChunkBasedSegment segment, ChangeSet changeSet = null)
     {
-        var accessor = new ChunkAccessor
-        {
-            _segment = segment,
-            _changeSet = changeSet,
-            _mruSlot = 0,
-            _usedSlots = 0,
-            _stride = segment.Stride,
-            _rootHeaderOffset = LogicalSegment.RootHeaderIndexSectionLength
-        };
+        _segment = segment;
+        _changeSet = changeSet;
+        _mruSlot = 0;
+        _usedSlots = 0;
+        _stride = segment.Stride;
+        _rootHeaderOffset = LogicalSegment.RootHeaderIndexSectionLength;
 
         // Initialize page indices to invalid (-1). Other arrays are already zero-initialized by 'new'.
-        Unsafe.InitBlockUnaligned(accessor._pageIndices, 0xFF, 64);
-
-        return accessor;
+        fixed (int* pageIndices = _pageIndices)
+        {
+            Unsafe.InitBlockUnaligned(pageIndices, 0xFF, 64);
+        }
     }
 
     /// <summary>
@@ -139,8 +137,24 @@ public unsafe struct ChunkAccessor : IDisposable
     public ChunkHandle GetChunkHandle(int chunkId, bool dirty = false)
     {
         var addr = GetChunkAddressAndPin(chunkId, dirty, out var slotIndex);
+        return new ChunkHandle(ref this, slotIndex, addr, _stride);
+    }
+    
+    /// <summary>
+    /// Get scoped access to chunk with automatic pinning. SAFE for multi-chunk operations.
+    /// Pin prevents eviction until scope is disposed.
+    /// Unsafe version, see remarks
+    /// </summary>
+    /// <remarks>
+    /// This version return a <see cref="ChunkHandleUnsafe"/> which can be allocated on the stack but which is UNSAFE to be used with
+    /// a <see cref="ChunkAccessor"/> being declared as a field of a ref type (a type which instances can be moved by the GC).
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ChunkHandleUnsafe GetChunkHandleUnsafe(int chunkId, bool dirty = false)
+    {
+        var addr = GetChunkAddressAndPin(chunkId, dirty, out var slotIndex);
         void* selfPtr = Unsafe.AsPointer(ref this);
-        return new ChunkHandle(selfPtr, slotIndex, addr, _stride);
+        return new ChunkHandleUnsafe(selfPtr, slotIndex, addr, _stride);
     }
     
     internal void ClearChunk(int index)
@@ -607,16 +621,78 @@ public unsafe struct ChunkAccessor : IDisposable
 /// Prevents eviction until disposed - safe for multi-chunk operations.
 /// </summary>
 [PublicAPI]
-public unsafe struct ChunkHandle : IDisposable
+public unsafe ref struct ChunkHandle : IDisposable
 {
-    private void* _ownerPtr;       // Pointer to ChunkAccessor on stack
+    private ref ChunkAccessor _owner; 
     private byte* _chunkAddress;
     private int _chunkLength;
     private int _slotIndex;
 
-    internal ChunkHandle(void* owner, int slotIndex, byte* chunkAddress, int chunkLength)
+    internal ChunkHandle(ref ChunkAccessor owner, int slotIndex, byte* chunkAddress, int chunkLength)
     {
-        _ownerPtr = owner;
+        _owner = ref owner;
+        _slotIndex = slotIndex;
+        _chunkAddress = chunkAddress;
+        _chunkLength = chunkLength;
+    }
+
+    public byte* Address => _chunkAddress;
+    
+    /// <summary>
+    /// Get mutable reference to chunk data.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ref T AsRef<T>() => ref Unsafe.AsRef<T>(_chunkAddress);
+
+    /// <summary>
+    /// Get chunk data as mutable span.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public Span<byte> AsSpan() => new(_chunkAddress, _chunkLength);
+
+    /// <summary>
+    /// Get chunk data as read-only span.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ReadOnlySpan<byte> AsReadOnlySpan() => new(_chunkAddress, _chunkLength);
+
+    /// <summary>
+    /// Get chunk data as SpanStream for sequential parsing (revision enumeration).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public SpanStream AsStream() => new(new Span<byte>(_chunkAddress, _chunkLength));
+
+    public bool IsDefault => Unsafe.IsNullRef(ref _owner);
+    
+    /// <summary>
+    /// Dispose scope: unpin the slot, making it evictable again.
+    /// </summary>
+    public void Dispose()
+    {
+        if (!Unsafe.IsNullRef(ref _owner))
+        {
+            _owner.UnpinSlot(_slotIndex);
+            _owner = ref Unsafe.NullRef<ChunkAccessor>();
+        }
+    }
+}
+
+
+/// <summary>
+/// Scoped chunk access with automatic pinning.
+/// Prevents eviction until disposed - safe for multi-chunk operations.
+/// </summary>
+[PublicAPI]
+public unsafe ref struct ChunkHandleUnsafe : IDisposable
+{
+    private void* _ownerPtr; 
+    private byte* _chunkAddress;
+    private int _chunkLength;
+    private int _slotIndex;
+
+    internal ChunkHandleUnsafe(void* ownerPtr, int slotIndex, byte* chunkAddress, int chunkLength)
+    {
+        _ownerPtr = ownerPtr;
         _slotIndex = slotIndex;
         _chunkAddress = chunkAddress;
         _chunkLength = chunkLength;
