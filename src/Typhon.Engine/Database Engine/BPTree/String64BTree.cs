@@ -713,14 +713,14 @@ public abstract class String64BTree : BTree<String64>
 
     protected override BaseNodeStorage GetStorage() => new String64NodeStorage();
     public override bool AllowMultiple => false;
-    protected String64BTree(ChunkBasedSegment segment, ref ChunkAccessor accessor, bool load = false) : base(segment, ref accessor, load)
+    protected String64BTree(ChunkBasedSegment segment, bool load = false) : base(segment, load)
     {
     }
 }
 
 public class String64MultipleBTree : String64BTree
 {
-    public String64MultipleBTree(ChunkBasedSegment segment, ref ChunkAccessor accessor, bool load = false) : base(segment, ref accessor, load)
+    public String64MultipleBTree(ChunkBasedSegment segment, bool load = false) : base(segment, load)
     {
     }
 
@@ -751,7 +751,7 @@ public class String64MultipleBTree : String64BTree
 
 public class String64SingleBTree : String64BTree
 {
-    public String64SingleBTree(ChunkBasedSegment segment, ref ChunkAccessor accessor, bool load = false) : base(segment, ref accessor, load)
+    public String64SingleBTree(ChunkBasedSegment segment, bool load = false) : base(segment, load)
     {
     }
 }

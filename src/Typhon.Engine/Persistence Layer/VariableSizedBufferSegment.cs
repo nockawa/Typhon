@@ -458,7 +458,7 @@ public ref struct BufferEnumerator<T> where T : unmanaged
 }
 
 [PublicAPI]
-public struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanaged
+public ref struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanaged
 {
     private readonly VariableSizedBufferSegment<T> _owner;
     private readonly ChunkBasedSegment _segment;

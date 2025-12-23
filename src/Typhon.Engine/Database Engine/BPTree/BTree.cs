@@ -381,7 +381,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     
     public ChunkBasedSegment Segment => _segment;
 
-    protected BTree(ChunkBasedSegment segment, ref ChunkAccessor accessor, bool load)
+    protected BTree(ChunkBasedSegment segment, bool load)
     {
         Comparer = Comparer<TKey>.Default;
         _segment = segment;
@@ -397,7 +397,9 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
         else
         {
-            Root = _storage.LoadNode(GetRootChunkId(ref accessor));
+            var ca = segment.CreateChunkAccessor();
+            Root = _storage.LoadNode(GetRootChunkId(ref ca));
+            ca.Dispose();
         }
     }
 
@@ -510,8 +512,8 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         get
         {
             // TODO use a thread-local ChunkRandomAccessor to avoid creating a new one every time.
-            var cra = this._segment.CreateChunkAccessor();
-            if (!TryGet(key, out var value, ref cra))
+            var ca = this._segment.CreateChunkAccessor();
+            if (!TryGet(key, out var value, ref ca))
             {
                 throw new KeyNotFoundException();
             }

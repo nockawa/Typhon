@@ -22,7 +22,7 @@ internal ref struct RevisionWalker : IDisposable
 
     public RevisionWalker(ref ChunkAccessor accessor, int firstChunkId)
     {
-        _accessor = accessor;
+        _accessor = ref accessor;
         _firstChunkId = firstChunkId;
         _firstChunkHandle = accessor.GetChunkHandle(firstChunkId, false);
         _header = ref _firstChunkHandle.AsRef<CompRevStorageHeader>();

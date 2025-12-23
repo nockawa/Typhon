@@ -108,7 +108,7 @@ public class ChunkAccessorTests
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         // Verify accessor is created and usable
         accessor.Dispose();
@@ -122,7 +122,7 @@ public class ChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
         var changeSet = pmmf.CreateChangeSet();
 
-        var accessor = ChunkAccessor.Create(segment, changeSet);
+        var accessor = segment.CreateChunkAccessor(changeSet);
 
         accessor.Dispose();
         Assert.Pass();
@@ -139,7 +139,7 @@ public class ChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
         chunk.A = 42;
@@ -162,7 +162,7 @@ public class ChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         // Write with mutable reference
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
@@ -183,7 +183,7 @@ public class ChunkAccessorTests
         var changeSet = pmmf.CreateChangeSet();
 
         var chunkId = segment.AllocateChunk(true);
-        var accessor = ChunkAccessor.Create(segment, changeSet);
+        var accessor = segment.CreateChunkAccessor(changeSet);
 
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId, dirty: true);
         chunk.A = 999;
@@ -206,7 +206,7 @@ public class ChunkAccessorTests
         var chunk2 = segment.AllocateChunk(true);
         var chunk3 = segment.AllocateChunk(true);
 
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         ref var c1 = ref accessor.GetChunk<TestChunk8>(chunk1);
         c1.Value = 100;
@@ -236,7 +236,7 @@ public class ChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         using (var scope = accessor.GetChunkHandle(chunkId))
         {
@@ -266,7 +266,7 @@ public class ChunkAccessorTests
             chunks[i] = segment.AllocateChunk(true);
         }
 
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         // Pin the first chunk
         using var scope1 = accessor.GetChunkHandle(chunks[0]);
@@ -293,7 +293,7 @@ public class ChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         using var scope = accessor.GetChunkHandle(chunkId);
         var span = scope.AsSpan();
@@ -311,7 +311,7 @@ public class ChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         // Write data first
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
@@ -336,7 +336,7 @@ public class ChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         // First access
         ref var chunk1 = ref accessor.GetChunk<TestChunk32>(chunkId);
@@ -360,7 +360,7 @@ public class ChunkAccessorTests
 
         var chunk1 = segment.AllocateChunk(true);
         var chunk2 = segment.AllocateChunk(true);
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         // Access pattern: chunk1, chunk2, chunk1, chunk2
         ref var c1 = ref accessor.GetChunk<TestChunk32>(chunk1);
@@ -404,7 +404,7 @@ public class ChunkAccessorTests
             }
         }
 
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         // Set unique values
         for (int i = 0; i < 16; i++)
@@ -441,7 +441,7 @@ public class ChunkAccessorTests
             }
         }
 
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         // Access first 16 chunks
         for (int i = 0; i < 16; i++)
@@ -489,7 +489,7 @@ public class ChunkAccessorTests
             }
         }
 
-        var accessor = ChunkAccessor.Create(segment, changeSet);
+        var accessor = segment.CreateChunkAccessor(changeSet);
 
         // Fill cache with first 16 chunks
         for (int i = 0; i < 16; i++)
@@ -536,7 +536,7 @@ public class ChunkAccessorTests
             }
         }
 
-        var accessor = ChunkAccessor.Create(segment, changeSet);
+        var accessor = segment.CreateChunkAccessor(changeSet);
 
         // Fill cache and mark dirty
         for (int i = 0; i < 16; i++)
@@ -570,7 +570,7 @@ public class ChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         // Access chunk to cache it
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
@@ -593,7 +593,7 @@ public class ChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         // Try to promote without accessing first
         bool promoted = accessor.TryPromoteChunk(chunkId);
@@ -611,7 +611,7 @@ public class ChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         // Access chunk
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
@@ -647,7 +647,7 @@ public class ChunkAccessorTests
 
         var chunk1 = segment.AllocateChunk(true);
         var chunk2 = segment.AllocateChunk(true);
-        var accessor = ChunkAccessor.Create(segment, changeSet);
+        var accessor = segment.CreateChunkAccessor(changeSet);
 
         // Access one chunk as dirty
         ref var c1 = ref accessor.GetChunk<TestChunk32>(chunk1, dirty: true);
@@ -671,7 +671,7 @@ public class ChunkAccessorTests
         var changeSet = pmmf.CreateChangeSet();
 
         var chunkId = segment.AllocateChunk(true);
-        var accessor = ChunkAccessor.Create(segment, changeSet);
+        var accessor = segment.CreateChunkAccessor(changeSet);
 
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId, dirty: true);
         chunk.A = 999;
@@ -691,7 +691,7 @@ public class ChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
-        var accessor = ChunkAccessor.Create(segment); // No changeset
+        var accessor = segment.CreateChunkAccessor(); // No changeset
 
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId, dirty: true);
         chunk.A = 777;
@@ -730,13 +730,13 @@ public class ChunkAccessorTests
             chunks[i] = targetChunk + 1;
         }
 
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         // Pin 16 chunks (all slots) using separate variables
-        var s = stackalloc ChunkHandle[16];
+        var s = stackalloc ChunkHandleUnsafe[16];
         for (int i = 0; i < 16; i++)
         {
-            s[i] = accessor.GetChunkHandle(chunks[i]);
+            s[i] = accessor.GetChunkHandleUnsafe(chunks[i]);
         }
 
         try
@@ -771,7 +771,7 @@ public class ChunkAccessorTests
 
         // Chunk 0 is reserved, so allocate starting from 1
         var chunkId = segment.AllocateChunk(true);
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
         chunk.A = 12345;
@@ -792,7 +792,7 @@ public class ChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         // Access as TestChunk32
         ref var chunk32 = ref accessor.GetChunk<TestChunk32>(chunkId);
@@ -820,7 +820,7 @@ public class ChunkAccessorTests
             chunks[i] = segment.AllocateChunk(true);
         }
 
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         // Write sequentially
         for (int i = 0; i < chunkCount; i++)
@@ -854,7 +854,7 @@ public class ChunkAccessorTests
             chunks[i] = segment.AllocateChunk(true);
         }
 
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         // Write in random order
         var shuffled = new List<int>(chunks);
@@ -901,7 +901,7 @@ public class ChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId, dirty: true);
         chunk.A = 555;
@@ -917,7 +917,7 @@ public class ChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         // Access and promote
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
@@ -936,7 +936,7 @@ public class ChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         // Create scoped access but dispose accessor first
         var scope = accessor.GetChunkHandle(chunkId);
@@ -956,7 +956,7 @@ public class ChunkAccessorTests
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
-        var accessor = ChunkAccessor.Create(segment);
+        var accessor = segment.CreateChunkAccessor();
 
         accessor.Dispose();
 
@@ -985,7 +985,7 @@ public class ChunkAccessorTests
             chunks[i] = segment.AllocateChunk(true);
         }
 
-        var accessor = ChunkAccessor.Create(segment, changeSet);
+        var accessor = segment.CreateChunkAccessor(changeSet);
 
         // Mixed operations
         for (int iteration = 0; iteration < 1000; iteration++)

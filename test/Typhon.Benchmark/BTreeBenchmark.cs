@@ -63,7 +63,7 @@ public class BTreeBenchmark
 
         var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 300, sizeof(Index32Chunk));
         var accessor = segment.CreateChunkAccessor();
-        var tree = new IntMultipleBTree(segment, ref accessor);
+        var tree = new IntMultipleBTree(segment);
 
         var chunkCapacity = segment.ChunkCapacity;
         var freeChunkCount = segment.FreeChunkCount;
