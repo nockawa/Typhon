@@ -1,0 +1,643 @@
+
+> Think hard with me, I think there is an issue in the MVCC mechanism in the
+ case of a long running transaction. Say T1 is a long running, and T2 and T3
+ are subsequent ones, updates during T2 and T3 create new revisions keeping 
+the initial alive for T1 to POTENTIALLY access them. But if T1 does NOT 
+access such component, the initial revision wont be cleanup at T1 commit. 
+Does it make sense to you too ? Confirm this statement and propose 
+solutions. 
+
+● Yes, this makes complete sense. Let me analyze this carefully.
+
+  The Problem
+
+  You're right. Here's the scenario:
+
+  Timeline:
+  ─────────────────────────────────────────────────────────────────►
+  T1 starts (tick=100)
+                      T2 creates Entity E (tick=200), commits
+                                          T3 updates E (tick=300), commits
+                                                              T1 commits
+  (tick=400)
+
+  What happens:
+  1. T1 starts at tick=100, becomes the "tail" transaction
+  2. T2 creates entity E at tick=200, commits. Since T1 is older, revision
+  cleanup is blocked - the create revision is kept "in case T1 needs it"
+  (even though T1 can't see it - it was created after T1 started!)
+  3. T3 updates E at tick=300, commits. Again, cleanup blocked by T1. Now we
+   have 2 revisions.
+  4. T1 commits without ever touching entity E
+  5. At T1 commit, CleanUpUnusedEntries only runs for components T1 actually
+   accessed (in _componentInfos)
+
+  The leak: Entity E's old revisions are never cleaned up because T1 never
+  knew about E, so it has no entry in its CompRevInfoCache.
+
+  Let me verify this by looking at the commit code:
+
+● Read(src\Typhon.Engine\Database Engine\Transaction.cs)
+  ⎿  Read 60 lines
+
+● Let me look at the commit loop where cleanup is triggered:
+
+● Read(src\Typhon.Engine\Database Engine\Transaction.cs)
+  ⎿  Read 24 lines
+
+● Now let me check where the cleanup decision is made:
+
+● Read(src\Typhon.Engine\Database Engine\Transaction.cs)
+  ⎿  Read 30 lines
+
+● Confirmed Analysis
+
+  Yes, the problem is confirmed. Here's the exact flow:
+
+  1. Cleanup only happens in CommitComponent (line 959) which is called from
+   the commit loop
+  2. The commit loop only iterates over _componentInfos.Values (line 1490)
+  and then componentInfo.CompRevInfoCache.Keys (line 1494)
+  3. CompRevInfoCache only contains entries for components this transaction 
+  actually touched
+
+  So if T1 (the tail/oldest transaction) never accessed entity E, it has no
+  entry in any CompRevInfoCache, and CleanUpUnusedEntries is never called
+  for E's revisions.
+
+  The Severity
+
+  This is a memory/storage leak. Old revisions accumulate for any entity
+  that:
+  - Was created/updated while a long-running transaction was active
+  - Was never accessed by that long-running transaction
+
+  In workloads with:
+  - Long-running read transactions (analytics, reports)
+  - High write activity on other entities
+
+  ...you'd see unbounded growth of revision chains.
+
+  ---
+  Proposed Solutions
+
+  Solution 1: Deferred Cleanup Queue (Recommended)
+
+  Idea: Track entities that need cleanup but couldn't be cleaned because of
+  older transactions.
+
+  // In DatabaseEngine or TransactionChain
+  ConcurrentQueue<(ComponentTable table, long pk, long minTickForCleanup)>
+  _pendingCleanups;
+
+  Flow:
+  1. When T2 commits and can't cleanup (because T1 is older), enqueue
+  (table, pk, T1.TransactionTick)
+  2. When T1 commits, process the queue: for each entry where
+  minTickForCleanup <= T1.TransactionTick, run cleanup
+  3. Or: Have a background thread periodically process the queue when
+  minTickForCleanup < TransactionChain.MinTick
+
+  Pros:
+  - Cleanup is eventually done
+  - Minimal overhead during commit
+  - Works with existing MVCC semantics
+
+  Cons:
+  - Adds a data structure to maintain
+  - Slight delay in cleanup (not immediate)
+
+  ---
+  Solution 2: Global Cleanup Pass on Tail Commit
+
+  Idea: When the tail transaction commits, do a full scan of all
+  dirty/modified entities since that transaction started.
+
+  // In Transaction.Commit(), when isTail:
+  foreach (var componentTable in _dbe.AllComponentTables)
+  {
+      // Iterate through entities modified between this.TransactionTick and 
+  nextMinTick
+      CleanupRevisionsInRange(componentTable, this.TransactionTick,
+  nextMinTick);
+  }
+
+  Implementation requires:
+  - A way to efficiently find "entities modified in time range" (perhaps a
+  per-table modification log or timestamp index)
+
+  Pros:
+  - Cleanup happens immediately when the blocking transaction completes
+  - No pending queue to manage
+
+  Cons:
+  - Could be expensive if many entities were modified
+  - Requires additional tracking of modified entities
+
+  ---
+  Solution 3: Revision Chain Lazy Cleanup
+
+  Idea: Clean up old revisions lazily when any transaction accesses an
+  entity.
+
+  // In GetCompRevInfoFromIndex(), after finding the revision:
+  if (canCleanup && hasOldRevisions)
+  {
+      CleanUpUnusedEntries(info, ref compRevInfo, accessor, currentMinTick);
+  }
+
+  Pros:
+  - No additional tracking
+  - Cleanup happens naturally during normal access patterns
+  - "Hot" entities stay clean, "cold" entities don't matter
+
+  Cons:
+  - Adds latency to read operations
+  - Never-accessed entities never get cleaned up (storage leak for abandoned
+   data)
+
+  ---
+  Solution 4: Periodic Background Cleanup
+
+  Idea: A background thread/task that periodically scans all revision chains
+   and cleans up old revisions.
+
+  // Background task
+  while (running)
+  {
+      var minTick = _transactionChain.MinTick;
+      foreach (var table in _allComponentTables)
+      {
+          foreach (var pk in table.PrimaryKeyIndex.AllKeys())
+          {
+              CleanupRevisionsOlderThan(table, pk, minTick);
+          }
+      }
+      await Task.Delay(cleanupInterval);
+  }
+
+  Pros:
+  - Completely decoupled from transaction commit path
+  - Doesn't add latency to normal operations
+  - Can be tuned (frequency, batch size)
+
+  Cons:
+  - Background thread overhead
+  - Delayed cleanup
+  - Full scan can be expensive
+
+  ---
+  Solution 5: Hybrid - Queue + Lazy (My Recommendation)
+
+  Combine Solutions 1 and 3:
+
+  1. At commit time: When a transaction can't cleanup because older
+  transactions exist, enqueue the entity for deferred cleanup
+  2. At read time: Check if the revision chain has stale entries and clean
+  opportunistically
+  3. Queue processing: When the tail commits, process any queued cleanups
+  for that tick range
+
+  This gives you:
+  - Immediate cleanup when possible (lazy on read)
+  - Guaranteed eventual cleanup (queue processing)
+  - Minimal overhead (only tracks entities that actually need deferred
+  cleanup)
+
+  ---
+  Which Solution Do You Prefer?
+
+  The choice depends on your priorities:
+  - Minimal latency: Solution 1 (queue only)
+  - Immediate cleanup: Solution 2 (global pass)
+  - Simplest implementation: Solution 3 (lazy only, but has leak for cold
+  data)
+  - Most thorough: Solution 4 (background scan)
+  - Best balance: Solution 5 (hybrid)
+
+  Would you like me to elaborate on any of these approaches or sketch out a
+  more detailed implementation?
+
+> elaborate solution 5, specially the deferred cleanup 
+
+● Solution 5: Hybrid Deferred + Lazy Cleanup - Detailed Design
+
+  Core Concept
+
+  The key insight is that we need to track which entities have revisions 
+  that are being kept alive only because of older transactions. When those
+  older transactions complete, we need to clean up those revisions even
+  though the completing transaction never touched those entities.
+
+  ---
+  Data Structures
+
+  // In DatabaseEngine or TransactionChain
+  public class DeferredCleanupManager
+  {
+      // Key: The tick of the oldest transaction that was blocking cleanup
+      // Value: List of (ComponentTable, PrimaryKey) pairs that need cleanup
+   once that tick is gone
+      private readonly SortedDictionary<long, List<(ComponentTable Table,
+  long PrimaryKey)>> _pendingCleanups;
+
+      // For O(1) lookup to avoid duplicate entries
+      private readonly Dictionary<(ComponentTable, long), long>
+  _entityToBlockingTick;
+
+      // Lock for thread safety
+      private readonly AccessControl _lock;
+  }
+
+  Why SortedDictionary<long, ...> keyed by tick?
+  - When a transaction with tick T commits, we need to efficiently find all
+  cleanups that were blocked by T (or earlier)
+  - Sorted order lets us iterate from oldest to newest and stop early
+
+  ---
+  Flow Diagram
+
+  T1 starts (tick=100)           T2 commits (tick=200)              T1
+  commits (tick=400)
+        │                               │                                  │
+        │                               ▼                                  │
+        │                     ┌─────────────────────┐                      │
+        │                     │ T2 tries cleanup    │                      │
+        │                     │ isTail? NO (T1)     │                      │
+        │                     │                     │                      │
+        │                     │ Enqueue:            │                      │
+        │                     │  tick=100 →         │                      │
+        │                     │   [(CompA, pk=1)]   │                      │
+        │                     └─────────────────────┘                      │
+        │                                                                  ▼
+        │
+  ┌─────────────────────────┐
+        │                                                    │ T1 commits
+             │
+        │                                                    │ isTail? YES
+             │
+        │                                                    │
+             │
+        │                                                    │ 1. Commit own
+   changes   │
+        │                                                    │ 2. Process
+  deferred:    │
+        │                                                    │    - Get all
+  entries    │
+        │                                                    │      where
+  tick ≤ 100   │
+        │                                                    │    - Cleanup
+  (CompA, 1) │
+        │                                                    │    - Remove
+  from queue  │
+        │
+  └─────────────────────────┘
+
+  ---
+  Implementation Details
+
+  1. DeferredCleanupManager Class
+
+  public class DeferredCleanupManager
+  {
+      private readonly SortedDictionary<long, List<(ComponentTable Table,
+  long PrimaryKey)>> _pendingCleanups = new();
+      private readonly Dictionary<(ComponentTable, long), long>
+  _entityToBlockingTick = new();
+      private readonly AccessControl _lock = new();
+
+      /// <summary>
+      /// Enqueue an entity for deferred cleanup. Called when a transaction 
+  commits
+      /// but can't cleanup because older transactions exist.
+      /// </summary>
+      /// <param name="blockingTick">The tick of the oldest transaction 
+  blocking cleanup</param>
+      /// <param name="table">The component table</param>
+      /// <param name="pk">The primary key of the entity</param>
+      public void Enqueue(long blockingTick, ComponentTable table, long pk)
+      {
+          _lock.EnterExclusiveAccess();
+          try
+          {
+              var key = (table, pk);
+
+              // Check if this entity is already queued
+              if (_entityToBlockingTick.TryGetValue(key, out var
+  existingTick))
+              {
+                  // Already queued - keep the OLDEST blocking tick
+                  // (cleanup should happen when the oldest blocker 
+  completes)
+                  if (blockingTick >= existingTick)
+                      return; // Already waiting for an older transaction
+
+                  // New blocking tick is older - remove from old list, add 
+  to new
+                  RemoveFromList(existingTick, table, pk);
+              }
+
+              // Add to the appropriate tick bucket
+              if (!_pendingCleanups.TryGetValue(blockingTick, out var list))
+              {
+                  list = new List<(ComponentTable, long)>();
+                  _pendingCleanups[blockingTick] = list;
+              }
+              list.Add((table, pk));
+              _entityToBlockingTick[key] = blockingTick;
+          }
+          finally
+          {
+              _lock.ExitExclusiveAccess();
+          }
+      }
+
+      /// <summary>
+      /// Process all deferred cleanups that are no longer blocked.
+      /// Called when a transaction commits and is (or becomes) the tail.
+      /// </summary>
+      /// <param name="completedTick">The tick of the transaction that just 
+  completed</param>
+      /// <param name="nextMinTick">The tick of the next oldest transaction 
+  (or current time if none)</param>
+      /// <param name="changeSet">ChangeSet for tracking 
+  modifications</param>
+      /// <returns>Number of entities cleaned up</returns>
+      public int ProcessDeferredCleanups(long completedTick, long 
+  nextMinTick, ChangeSet changeSet)
+      {
+          List<(ComponentTable Table, long PrimaryKey)> toCleanup = new();
+
+          _lock.EnterExclusiveAccess();
+          try
+          {
+              // Collect all entries where blockingTick <= completedTick
+              var ticksToRemove = new List<long>();
+
+              foreach (var kvp in _pendingCleanups)
+              {
+                  if (kvp.Key > completedTick)
+                      break; // Sorted order - no more relevant entries
+
+                  toCleanup.AddRange(kvp.Value);
+                  ticksToRemove.Add(kvp.Key);
+
+                  // Remove from reverse lookup
+                  foreach (var (table, pk) in kvp.Value)
+                  {
+                      _entityToBlockingTick.Remove((table, pk));
+                  }
+              }
+
+              // Remove processed tick buckets
+              foreach (var tick in ticksToRemove)
+              {
+                  _pendingCleanups.Remove(tick);
+              }
+          }
+          finally
+          {
+              _lock.ExitExclusiveAccess();
+          }
+
+          // Perform cleanup outside the lock
+          int cleanedCount = 0;
+          foreach (var (table, pk) in toCleanup)
+          {
+              if (CleanupEntityRevisions(table, pk, nextMinTick, changeSet))
+                  cleanedCount++;
+          }
+
+          return cleanedCount;
+      }
+
+      private bool CleanupEntityRevisions(ComponentTable table, long pk, 
+  long nextMinTick, ChangeSet changeSet)
+      {
+          // Get the revision chain for this entity
+          using var indexAccessor =
+  table.DefaultIndexSegment.CreateChunkAccessor(changeSet);
+          if (!table.PrimaryKeyIndex.TryGet(pk, out var compRevFirstChunkId,
+   indexAccessor))
+              return false; // Entity no longer exists
+
+          using var revTableAccessor =
+  table.CompRevTableSegment.CreateChunkAccessor(changeSet);
+
+          // Perform cleanup similar to CleanUpUnusedEntries
+          // ... (reuse existing cleanup logic)
+
+          return true;
+      }
+
+      private void RemoveFromList(long tick, ComponentTable table, long pk)
+      {
+          if (_pendingCleanups.TryGetValue(tick, out var list))
+          {
+              list.Remove((table, pk));
+              if (list.Count == 0)
+                  _pendingCleanups.Remove(tick);
+          }
+      }
+  }
+
+  ---
+  2. Integration Points
+
+  A. When a non-tail transaction commits (Transaction.cs)
+
+  // In CommitComponent(), after the commit but when NOT the tail:
+  if (!isTail)
+  {
+      // We can't cleanup now, but we need to ensure cleanup happens later
+      var tailTick = _dbe.TransactionChain.Tail.TransactionTick;
+      _dbe.DeferredCleanupManager.Enqueue(tailTick, info.ComponentTable,
+  pk);
+  }
+
+  B. When the tail transaction commits (Transaction.cs)
+
+  // In Commit(), after committing all components:
+  if (isTail)
+  {
+      // Process our own component cleanups (existing logic)
+      // ...
+
+      // Then process deferred cleanups from other transactions
+      var nextMinTick = _dbe.TransactionChain.Tail.Next?.TransactionTick ??
+  DateTime.UtcNow.Ticks;
+
+  _dbe.DeferredCleanupManager.ProcessDeferredCleanups(this.TransactionTick,
+  nextMinTick, _changeSet);
+  }
+
+  C. When the tail changes (TransactionChain.cs)
+
+  When a transaction is removed from the chain (on commit/rollback/dispose),
+   if it was the tail, the new tail should also trigger deferred cleanup
+  processing:
+
+  // In TransactionChain, when removing the tail:
+  public void Remove(Transaction t)
+  {
+      // ... existing removal logic ...
+
+      if (t == _tail)
+      {
+          var newTail = t.Next;
+          _tail = newTail;
+
+          // Trigger deferred cleanup for the new tail
+          if (newTail != null)
+          {
+              var nextMinTick = newTail.Next?.TransactionTick ??
+  DateTime.UtcNow.Ticks;
+
+  _dbe.DeferredCleanupManager.ProcessDeferredCleanups(t.TransactionTick,
+  nextMinTick, changeSet);
+          }
+      }
+  }
+
+  ---
+  3. The Lazy Cleanup Component (Optional Enhancement)
+
+  For frequently accessed entities, we can also clean opportunistically
+  during reads:
+
+  // In GetCompRevInfoFromIndex():
+  private bool GetCompRevInfoFromIndex(long pk, ComponentInfo info, long 
+  tick, out ComponentInfo.CompRevInfo compRevInfo)
+  {
+      // ... existing logic to find the revision ...
+
+      // Opportunistic cleanup: if we notice old revisions, clean them
+      if (foundOldRevisions && CanCleanupNow())
+      {
+          var minTick = _dbe.TransactionChain.MinTick;
+          CleanupOldRevisions(info, pk, minTick);
+      }
+
+      return result;
+  }
+
+  This is optional but helps keep hot data clean without waiting for
+  deferred processing.
+
+  ---
+  Edge Cases and Considerations
+
+  1. Entity Deleted Before Deferred Cleanup Runs
+
+  // In CleanupEntityRevisions:
+  if (!table.PrimaryKeyIndex.TryGet(pk, out var compRevFirstChunkId,
+  indexAccessor))
+      return false; // Entity already cleaned up or deleted - nothing to do
+
+  2. Multiple Updates While Blocked
+
+  If entity E is updated multiple times (T2, T3, T4) while T1 is running:
+  - Each update tries to enqueue, but we keep only the oldest blocking tick
+  - When T1 completes, all accumulated revisions are cleaned at once
+
+  3. Transaction Disposal Without Commit/Rollback
+
+  If T1 is disposed without explicit commit/rollback:
+  - The disposal should trigger removal from the chain
+  - This should process deferred cleanups the same as a commit
+
+  4. Memory Pressure on the Queue
+
+  If there are many long-running transactions and many updates:
+
+  // Optional: Add a high-water mark
+  public void Enqueue(long blockingTick, ComponentTable table, long pk)
+  {
+      // ... 
+      if (_entityToBlockingTick.Count > HighWaterMark)
+      {
+          // Log warning, or trigger aggressive cleanup
+          _logger.LogWarning("Deferred cleanup queue size {Count} exceeds 
+  threshold", _entityToBlockingTick.Count);
+      }
+  }
+
+  5. Concurrent Access
+
+  The AccessControl lock protects the data structures, but cleanup
+  operations happen outside the lock to avoid holding it during I/O.
+
+  ---
+  Sequence Diagram - Complete Flow
+
+       T1                    T2                    DeferredCleanupManager
+        │                     │                              │
+        │ CreateTransaction() │                              │
+        │◄────────────────────│                              │
+        │ tick=100            │                              │
+        │                     │                              │
+        │                     │ CreateEntity(E)              │
+        │                     │ Commit()                     │
+        │                     │                              │
+        │                     │ isTail? NO                   │
+        │                     │──────────────────────────────►
+        │                     │ Enqueue(100, CompA, E)       │
+        │                     │                              │
+        │                     │◄─────────────────────────────│
+        │                     │                              │
+        │                     │                              │
+        │ Commit()            │                              │
+        │                     │                              │
+        │ isTail? YES         │                              │
+        │ (own cleanup)       │                              │
+        │                     │                              │
+        │─────────────────────────────────────────────────────►
+        │ ProcessDeferredCleanups(100, nextMinTick)          │
+        │                                                    │
+        │                     Cleanup Entity E               │
+        │◄───────────────────────────────────────────────────│
+        │                                                    │
+        │ Remove from chain   │                              │
+        │                     │                              │
+
+  ---
+  Summary
+
+  Deferred Cleanup Manager:
+  - Tracks (blockingTick, ComponentTable, PrimaryKey) tuples
+  - Indexed by blockingTick for efficient range queries
+  - Reverse index prevents duplicates
+
+  Trigger Points:
+  1. Non-tail commits → Enqueue
+  2. Tail commits → Process queue for tick ≤ completedTick
+  3. Tail changes (dispose/remove) → Process queue
+
+  Optional Enhancement:
+  - Lazy cleanup on read for hot entities
+
+  Would you like me to write the actual implementation code for this, or
+  discuss any aspect further?
+
+> /rename 
+  ⎿  Please provide a name for the session. Usage: /rename <name>
+
+> MVCC deferred cleanup 
+
+● I've renamed the session to "MVCC deferred cleanup".
+
+  Would you like me to proceed with implementing the deferred cleanup
+  solution? I can:
+
+  1. Write the DeferredCleanupManager class - the core data structure and
+  methods
+  2. Integrate it into Transaction.cs - add the enqueue and process calls at
+   the right points
+  3. Add it to DatabaseEngine.cs - instantiate and wire it up
+  4. Write unit tests - verify the deferred cleanup behavior
+
+  Or if you'd like to discuss the design further or explore any
+  modifications to the approach, I'm happy to do that as well.
+
+
+
