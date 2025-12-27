@@ -15,19 +15,19 @@ unsafe class BlockAllocatorTests
 
         using var ba = new BlockAllocator(8, pageSize);
 
-        var ids = new (IntPtr, int)[allocationCount];
+        var ids = stackalloc int[allocationCount];
         for (int i = 0; i < allocationCount; i++)
         {
-            var addr = (long*)ba.Allocate(out var id);
-            *addr = i;
+            var span = ba.AllocateBlock(out var id).Cast<byte, long>();
+            span[0] = i;
 
-            ids[i] = ((IntPtr)addr, id);
+            ids[i] = id;
         }
             
         for (int i = 0; i < allocationCount; i++)
         {
-            Assert.That(*(long*)ids[i].Item1, Is.EqualTo(i));
-            Assert.That(*(long*)ba.GetAddress(ids[i].Item2), Is.EqualTo(i));
+            var span = ba.GetBlock(ids[i]).Cast<byte, long>();
+            Assert.That(span[0], Is.EqualTo(i));
         }
     }
 
@@ -41,15 +41,15 @@ unsafe class BlockAllocatorTests
 
         for (int i = 0; i < allocationCount; i++)
         {
-            ba.Allocate(out var id1);
-            ba.Allocate(out var id2);
-            ba.Allocate(out var id3);
-            ba.Allocate(out var id4);
+            ba.AllocateBlock(out var id1);
+            ba.AllocateBlock(out var id2);
+            ba.AllocateBlock(out var id3);
+            ba.AllocateBlock(out var id4);
 
-            ba.Free(id1);
-            ba.Free(id2);
-            ba.Free(id3);
-            ba.Free(id4);
+            ba.FreeBlock(id1);
+            ba.FreeBlock(id2);
+            ba.FreeBlock(id3);
+            ba.FreeBlock(id4);
         }
 
         Assert.That(ba.Capacity, Is.EqualTo(pageSize));

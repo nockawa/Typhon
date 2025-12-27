@@ -1,0 +1,28 @@
+<Solution>
+    <Configurations>
+        <BuildType Name="Debug" />
+        <BuildType Name="Release" />
+        <BuildType Name="Telemetry Debug" />
+        <BuildType Name="Telemetry Release" />
+    </Configurations>
+    <Folder Name="/Solution Items/">
+        <File Path=".editorconfig" />
+        <File Path=".gitignore" />
+        <File Path="README.md" />
+        <File Path="Typhon.sln.DotSettings" />
+    </Folder>
+    <Folder Name="/src/">
+        <Project Path="src/Typhon.Analyzers/Typhon.Analyzers.csproj">
+            <BuildType Solution="Telemetry Debug|*" Project="Debug" />
+            <BuildType Solution="Telemetry Release|*" Project="Release" />
+        </Project>
+        <Project Path="src/Typhon.Engine/Typhon.Engine.csproj" />
+    </Folder>
+    <Folder Name="/test/">
+        <Project Path="test/Typhon.Benchmark/Typhon.Benchmark.csproj">
+            <BuildType Solution="Telemetry Debug|*" Project="Debug" />
+            <BuildType Solution="Telemetry Release|*" Project="Release" />
+        </Project>
+        <Project Path="test/Typhon.Engine.Tests/Typhon.Engine.Tests.csproj" />
+    </Folder>
+</Solution>

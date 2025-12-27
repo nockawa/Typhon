@@ -3236,7 +3236,7 @@ Parallel.ForEach(entityIds, entityId =>
 **Enable Verbose Logging:**
 
 ```bash
-dotnet build -c VerboseLogging
+dotnet build -c Telemetry
 ```
 
 **Log Configuration (appsettings.json):**

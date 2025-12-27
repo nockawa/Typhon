@@ -23,7 +23,7 @@ dotnet build Typhon.sln
 ```bash
 dotnet build -c Debug
 dotnet build -c Release
-dotnet build -c VerboseLogging  # Enables verbose logging via VERBOSELOGGING define
+dotnet build -c Telemetry  # Enables verbose logging via TELEMETRY define
 ```
 
 **Run all tests:**
@@ -203,7 +203,7 @@ Page (8192 bytes):
 ### Logging
 - Uses Serilog with Microsoft.Extensions.Logging abstractions
 - Custom enricher: CurrentFrameEnricher (adds frame context)
-- VerboseLogging configuration enables detailed tracing via `VERBOSELOGGING` define
+- Telemetry configuration enables detailed tracing via `TELEMETRY` define
 - Test projects configured with Serilog.Sinks.Seq for structured logging
 
 ## Project Structure
@@ -271,7 +271,7 @@ var committed = t.Commit(); // or t.Rollback()
 2. **Transaction Disposal**: Always use `using` statements with transactions to ensure proper cleanup.
 3. **Revision Tracking**: Don't assume revision numbers are contiguous after conflicts or rollbacks.
 4. **Page Cache Size**: Default 2MB cache may be insufficient for large datasets. Configure via PagedMMFOptions.
-5. **VerboseLogging Build**: The VerboseLogging configuration is for debugging only and significantly impacts performance.
+5. **Telemetry Build**: The Telemetry configuration is for debugging only and significantly impacts performance.
 
 ## Documentation
 

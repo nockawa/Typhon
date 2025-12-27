@@ -137,7 +137,9 @@ public unsafe struct ChunkAccessor : IDisposable
     public ChunkHandle GetChunkHandle(int chunkId, bool dirty = false)
     {
         var addr = GetChunkAddressAndPin(chunkId, dirty, out var slotIndex);
+#pragma warning disable CS9084 // Struct member returns 'this' or other instance members by reference
         return new ChunkHandle(ref this, slotIndex, addr, _stride);
+#pragma warning restore CS9084 // Struct member returns 'this' or other instance members by reference
     }
     
     /// <summary>

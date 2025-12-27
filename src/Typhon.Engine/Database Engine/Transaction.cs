@@ -952,12 +952,12 @@ public unsafe class Transaction : IDisposable
                 {
                     continue;
                 }
-                
+
                 if (element.TSN > TSN)
                 {
                     break;
                 }
-            
+
                 // Update the current revision (and the previous) if a valid entry (tick == 0 means a rollbacked entry) and it's not an isolated one
                 if ((element.TSN > 0) && !element.IsolationFlag)
                 {
@@ -968,7 +968,7 @@ public unsafe class Transaction : IDisposable
                 }
             }
         }
-        
+
         if (curCompRevisionIndex == -1)
         {
             res = false;
@@ -984,7 +984,7 @@ public unsafe class Transaction : IDisposable
             PrevCompContentChunkId = prevCompChunkId,
             PrevRevisionIndex = prevCompRevisionIndex
         };
-        
+
         Exit:
         return res;
     }
@@ -1173,14 +1173,14 @@ public unsafe class Transaction : IDisposable
         }
 
         elementHandle.Dispose();
-        
+
         // If this transaction is the oldest (the tail), we can remove the previous revision (if any), it is also the right place and time to clean up void
         //  revisions (the entry of a rolled back commit)
         _dbe.TransactionChain.Control.EnterSharedAccess();
         var isTail = _dbe.TransactionChain.Tail == this;
         long nextMinTSN = isTail ? _dbe.TransactionChain.Tail.Next?.TSN ?? _dbe.TransactionChain.NextFreeId : 0;
         _dbe.TransactionChain.Control.ExitSharedAccess();
-        
+
         if (isTail)
         {
             var isDeleted = ComponentRevisionManager.CleanUpUnusedEntries(info, ref compRevInfo, ref compRevTableAccessor, nextMinTSN);
@@ -1487,7 +1487,7 @@ public unsafe class Transaction : IDisposable
 
         var conflictSolver = handler != null ? GetConflictSolver() : null;
         var context = new CommitContext { IsRollback = false, Solver = conflictSolver };
-        
+
         // Process every Component Type and their components
         foreach (var componentInfo in _componentInfos.Values)
         {
@@ -1510,7 +1510,7 @@ public unsafe class Transaction : IDisposable
                         CommitComponent(ref context);
                     }
                     break;
-                
+
                 case ComponentInfoMultiple multiple:
                     foreach (var key in multiple.CompRevInfoCache.Keys)
                     {

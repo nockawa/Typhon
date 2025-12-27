@@ -289,6 +289,12 @@ public class ConcurrentBitmapL3All
                 }
             }
 
+            // After hierarchical skip, verify we're still within bounds
+            if (c0 >= capacity)
+            {
+                return false;
+            }
+
             var bitPos = BitOperations.TrailingZeroCount(~v0);
             v0 |= (1L << bitPos);
             index = (c0 & ~0x3F) + bitPos;
