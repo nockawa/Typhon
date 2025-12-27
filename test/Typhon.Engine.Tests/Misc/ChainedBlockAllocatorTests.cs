@@ -52,10 +52,22 @@ public class ChainedBlockAllocatorTests
     {
         using var allocator = new ChainedBlockAllocator(16, 64);
 
-        allocator.AllocateBlock(out var blockId, true);
+        allocator.AllocateBlock(out var blockId);
 
         Assert.That(blockId, Is.GreaterThan(0)); // Block 0 is reserved
         Assert.That(allocator.AllocatedCount, Is.EqualTo(2)); // 1 reserved + 1 allocated
+    }
+
+    [Test]
+    public void Allocate_InitializesChainHeaderToZero()
+    {
+        using var allocator = new ChainedBlockAllocator(16, 64);
+
+        var span = allocator.AllocateBlock(out int _);
+
+        // The chain header (4 bytes before the returned pointer) should be 0
+        var chainHeader = allocator.GetNextInChain(span);
+        Assert.That(chainHeader, Is.EqualTo(0));
     }
 
     [Test]
@@ -66,7 +78,7 @@ public class ChainedBlockAllocatorTests
 
         for (int i = 0; i < 32; i++)
         {
-            allocator.AllocateBlock(out var blockId, true);
+            allocator.AllocateBlock(out var blockId);
             Assert.That(ids.Add(blockId), Is.True, $"Block ID {blockId} was already allocated");
         }
 
@@ -82,7 +94,7 @@ public class ChainedBlockAllocatorTests
         // Allocate multiple blocks and write unique values
         for (int i = 0; i < 50; i++)
         {
-            var ptr = allocator.AllocateBlock(out var blockId, true).Cast<byte, long>();
+            var ptr = allocator.AllocateBlock(out var blockId).Cast<byte, long>();
             var value = (long)(i * 12345 + 67890);
             ptr[0] = value;
             allocations[i] = (ptr.ToStoreSpan(), blockId, value);
@@ -109,7 +121,7 @@ public class ChainedBlockAllocatorTests
         // Allocate more than the initial capacity
         for (int i = 0; i < initialPageSize + 1; i++)
         {
-            allocator.AllocateBlock(out _, true);
+            allocator.AllocateBlock(out _);
         }
 
         Assert.That(allocator.Capacity, Is.GreaterThan(initialPageSize));
@@ -127,7 +139,7 @@ public class ChainedBlockAllocatorTests
 
         for (int i = 0; i < allocationCount; i++)
         {
-            var span = allocator.AllocateBlock(out var blockId, true).Cast<byte, int>();
+            var span = allocator.AllocateBlock(out var blockId).Cast<byte, int>();
             span[0] = i;
             allocations[i] = (blockId, i);
         }
@@ -159,7 +171,7 @@ public class ChainedBlockAllocatorTests
     {
         using var allocator = new ChainedBlockAllocator(16, 64);
 
-        allocator.AllocateBlock(out var blockId, true);
+        allocator.AllocateBlock(out var blockId);
         var allocatedAddr = allocator.AsIntPtr(blockId);
         var retrievedAddr = allocator.AsIntPtr(blockId);
 
@@ -174,7 +186,7 @@ public class ChainedBlockAllocatorTests
 
         for (int i = 0; i < 20; i++)
         {
-            var span = allocator.AllocateBlock(out var id, true);
+            var span = allocator.AllocateBlock(out var id);
             span.Cast<byte, long>()[0] = i * 1000;
             blocks[i] = (allocator.AsIntPtr(id), id);
         }
@@ -196,8 +208,8 @@ public class ChainedBlockAllocatorTests
     {
         using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
 
-        var ptrA = allocator.AllocateBlock(out var blockA, true);
-        var ptrB = allocator.AllocateBlock(out var blockB, false);
+        var ptrA = allocator.AllocateBlock(out var blockA);
+        var ptrB = allocator.AllocateBlock(out var blockB);
 
         ptrA.Cast<byte, int>()[0] = 100;
         ptrB.Cast<byte, int>()[0] = 200;
@@ -205,7 +217,7 @@ public class ChainedBlockAllocatorTests
         allocator.Chain(blockA, blockB);
 
         // Verify chain: A -> B
-        var nextPtr = allocator.NextBlock(blockA, out _);
+        var nextPtr = allocator.NextBlock(ptrA);
         Assert.That(nextPtr.IsEmpty, Is.False);
         Assert.That(MemoryMarshal.Read<int>(nextPtr), Is.EqualTo(200)); // NextBlock returns data directly
     }
@@ -215,9 +227,9 @@ public class ChainedBlockAllocatorTests
     {
         using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
 
-        var ptrA = allocator.AllocateBlock(out var blockA, true);
-        var ptrB = allocator.AllocateBlock(out var blockB, false);
-        var ptrC = allocator.AllocateBlock(out var blockC, false);
+        var ptrA = allocator.AllocateBlock(out var blockA);
+        var ptrB = allocator.AllocateBlock(out var blockB);
+        var ptrC = allocator.AllocateBlock(out var blockC);
 
         ptrA.Cast<byte, int>()[0] = 1;
         ptrB.Cast<byte, int>()[0] = 2;
@@ -244,10 +256,10 @@ public class ChainedBlockAllocatorTests
         using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
 
         // Create chain A -> B -> C
-        var ptrA = allocator.AllocateBlock(out var blockA, true);
-        var ptrB = allocator.AllocateBlock(out var blockB, false);
-        var ptrC = allocator.AllocateBlock(out var blockC, false);
-        var ptrD = allocator.AllocateBlock(out var blockD, false);
+        var ptrA = allocator.AllocateBlock(out var blockA);
+        var ptrB = allocator.AllocateBlock(out var blockB);
+        var ptrC = allocator.AllocateBlock(out var blockC);
+        var ptrD = allocator.AllocateBlock(out var blockD);
 
         ptrA.Cast<byte, int>()[0] = 1;
         ptrB.Cast<byte, int>()[0] = 2;
@@ -279,19 +291,19 @@ public class ChainedBlockAllocatorTests
     {
         using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
 
-        var ptrA = allocator.AllocateBlock(out var blockA, true);
-        allocator.AllocateBlock(out var blockB, false);
+        var ptrA = allocator.AllocateBlock(out var blockA);
+        allocator.AllocateBlock(out var blockB);
 
         allocator.Chain(blockA, blockB);
 
         // Verify chain exists
-        Assert.That(allocator.NextBlock(blockA, out _).IsEmpty, Is.False);
+        Assert.That(allocator.NextBlock(ptrA).IsEmpty, Is.False);
 
         // Break the chain
         allocator.Chain(blockA, 0);
 
         // Verify chain is broken
-        Assert.That(allocator.NextBlock(blockA, out _).IsEmpty, Is.True);
+        Assert.That(allocator.NextBlock(ptrA).IsEmpty, Is.True);
     }
 
     [Test]
@@ -300,14 +312,14 @@ public class ChainedBlockAllocatorTests
         using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
 
         // Create chain 1: A -> B -> C
-        var ptrA = allocator.AllocateBlock(out var blockA, true);
-        var ptrB = allocator.AllocateBlock(out var blockB, false);
-        var ptrC = allocator.AllocateBlock(out var blockC, false);
+        var ptrA = allocator.AllocateBlock(out var blockA);
+        var ptrB = allocator.AllocateBlock(out var blockB);
+        var ptrC = allocator.AllocateBlock(out var blockC);
 
         // Create chain 2: D -> E -> F
-        var ptrD = allocator.AllocateBlock(out var blockD, true);
-        var ptrE = allocator.AllocateBlock(out var blockE, false);
-        var ptrF = allocator.AllocateBlock(out var blockF, false);
+        var ptrD = allocator.AllocateBlock(out var blockD);
+        var ptrE = allocator.AllocateBlock(out var blockE);
+        var ptrF = allocator.AllocateBlock(out var blockF);
 
         ptrA.Cast<byte, int>()[0] = 1;
         ptrB.Cast<byte, int>()[0] = 2;
@@ -345,7 +357,7 @@ public class ChainedBlockAllocatorTests
         // Allocate and initialize blocks
         for (int i = 0; i < blockCount; i++)
         {
-            var span = allocator.AllocateBlock(out var id, i == 0);
+            var span = allocator.AllocateBlock(out var id);
             var value = (long)(i * 11111);
             span.Cast<byte, long>()[0] = value;
             blocks[i] = (id, value);
@@ -384,7 +396,7 @@ public class ChainedBlockAllocatorTests
     {
         using var allocator = new ChainedBlockAllocator(16, 64);
 
-        allocator.AllocateBlock(out var blockA, true);
+        allocator.AllocateBlock(out var blockA);
 
         var result = allocator.RemoveNextBlock(blockA);
 
@@ -396,8 +408,8 @@ public class ChainedBlockAllocatorTests
     {
         using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
 
-        var ptrA = allocator.AllocateBlock(out var blockA, true);
-        var ptrB = allocator.AllocateBlock(out var blockB, false);
+        var ptrA = allocator.AllocateBlock(out var blockA);
+        var ptrB = allocator.AllocateBlock(out var blockB);
 
         ptrA.Cast<byte, int>()[0] = 100;
         ptrB.Cast<byte, int>()[0] = 200;
@@ -408,7 +420,7 @@ public class ChainedBlockAllocatorTests
 
         Assert.That(removedId, Is.EqualTo(blockB));
         // A should now have no next block
-        Assert.That(allocator.NextBlock(blockA, out _).IsEmpty, Is.True);
+        Assert.That(allocator.NextBlock(ptrA).IsEmpty, Is.True);
     }
 
     [Test]
@@ -416,9 +428,9 @@ public class ChainedBlockAllocatorTests
     {
         using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
 
-        var ptrA = allocator.AllocateBlock(out var blockA, true);
-        var ptrB = allocator.AllocateBlock(out var blockB, false);
-        var ptrC = allocator.AllocateBlock(out var blockC, false);
+        var ptrA = allocator.AllocateBlock(out var blockA);
+        var ptrB = allocator.AllocateBlock(out var blockB);
+        var ptrC = allocator.AllocateBlock(out var blockC);
 
         ptrA.Cast<byte, int>()[0] = 1;
         ptrB.Cast<byte, int>()[0] = 2;
@@ -449,9 +461,9 @@ public class ChainedBlockAllocatorTests
     {
         using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
 
-        allocator.AllocateBlock(out var blockA, true);
-        allocator.AllocateBlock(out var blockB, false);
-        allocator.AllocateBlock(out var blockC, false);
+        allocator.AllocateBlock(out var blockA);
+        allocator.AllocateBlock(out var blockB);
+        allocator.AllocateBlock(out var blockC);
 
         allocator.Chain(blockA, blockB);
         allocator.Chain(blockB, blockC);
@@ -460,7 +472,8 @@ public class ChainedBlockAllocatorTests
         var removedId = allocator.RemoveNextBlock(blockA);
 
         // Verify B is now unchained (its next pointer should be 0)
-        Assert.That(allocator.NextBlock(removedId, out _).IsEmpty, Is.True);
+        var ptrRemovedB = allocator.GetBlockData(removedId);
+        Assert.That(allocator.NextBlock(ptrRemovedB).IsEmpty, Is.True);
     }
 
     [Test]
@@ -468,9 +481,9 @@ public class ChainedBlockAllocatorTests
     {
         using var allocator = new ChainedBlockAllocator(sizeof(long), 64);
 
-        var ptrA = allocator.AllocateBlock(out var blockA, true);
-        var ptrB = allocator.AllocateBlock(out var blockB, false);
-        var ptrC = allocator.AllocateBlock(out var blockC, false);
+        var ptrA = allocator.AllocateBlock(out var blockA);
+        var ptrB = allocator.AllocateBlock(out var blockB);
+        var ptrC = allocator.AllocateBlock(out var blockC);
 
         ptrA.Cast<byte, long>()[0] = 111;
         ptrB.Cast<byte, long>()[0] = 222;
@@ -496,9 +509,9 @@ public class ChainedBlockAllocatorTests
     {
         using var allocator = new ChainedBlockAllocator(16, 64);
 
-        allocator.AllocateBlock(out var blockId, true);
+        var ptr = allocator.AllocateBlock(out _);
 
-        var next = allocator.NextBlock(blockId, out _);
+        var next = allocator.NextBlock(ptr);
 
         Assert.That(next.IsEmpty, Is.True);
     }
@@ -508,12 +521,12 @@ public class ChainedBlockAllocatorTests
     {
         using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
 
-        var ptrA = allocator.AllocateBlock(out var blockA, true);
-        allocator.AllocateBlock(out var blockB, false);
+        var ptrA = allocator.AllocateBlock(out var blockA);
+        allocator.AllocateBlock(out var blockB);
 
         allocator.Chain(blockA, blockB);
 
-        var next = allocator.NextBlock(blockA, out _);
+        var next = allocator.NextBlock(ptrA);
 
         Assert.That(next.IsEmpty, Is.False);
         // NextBlock now returns data directly (no header skip needed)
@@ -524,10 +537,10 @@ public class ChainedBlockAllocatorTests
     {
         using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
 
-        var ptrA = allocator.AllocateBlock(out var blockA, true);
-        var ptrB = allocator.AllocateBlock(out var blockB, false);
-        var ptrC = allocator.AllocateBlock(out var blockC, false);
-        var ptrD = allocator.AllocateBlock(out var blockD, false);
+        var ptrA = allocator.AllocateBlock(out var blockA);
+        var ptrB = allocator.AllocateBlock(out var blockB);
+        var ptrC = allocator.AllocateBlock(out var blockC);
+        var ptrD = allocator.AllocateBlock(out var blockD);
 
         ptrA.Cast<byte, int>()[0] = 1;
         ptrB.Cast<byte, int>()[0] = 2;
@@ -540,11 +553,11 @@ public class ChainedBlockAllocatorTests
 
         // Navigate using NextBlock - now returns data directly
         var values = new List<int>();
-        var current = blockA;
-        while (current != 0)
+        var current = ptrA;
+        while (!current.IsEmpty)
         {
-            values.Add(allocator.GetBlockData(current).Cast<byte, int>()[0]);
-            allocator.NextBlock(current, out current);
+            values.Add(MemoryMarshal.Read<int>(current));
+            current = allocator.NextBlock(current);
         }
 
         Assert.That(values, Is.EqualTo([1, 2, 3, 4]));
@@ -559,7 +572,7 @@ public class ChainedBlockAllocatorTests
     {
         using var allocator = new ChainedBlockAllocator(16, 64);
 
-        allocator.AllocateBlock(out var blockId, true);
+        allocator.AllocateBlock(out var blockId);
         Assert.That(allocator.AllocatedCount, Is.EqualTo(2)); // 1 reserved + 1 allocated
 
         allocator.Free(blockId);
@@ -571,9 +584,9 @@ public class ChainedBlockAllocatorTests
     {
         using var allocator = new ChainedBlockAllocator(16, 64);
 
-        allocator.AllocateBlock(out var blockA, true);
-        allocator.AllocateBlock(out var blockB, false);
-        allocator.AllocateBlock(out var blockC, false);
+        allocator.AllocateBlock(out var blockA);
+        allocator.AllocateBlock(out var blockB);
+        allocator.AllocateBlock(out var blockC);
 
         allocator.Chain(blockA, blockB);
         allocator.Chain(blockB, blockC);
@@ -590,10 +603,10 @@ public class ChainedBlockAllocatorTests
     {
         using var allocator = new ChainedBlockAllocator(16, 64);
 
-        allocator.AllocateBlock(out var blockA, true);
-        allocator.AllocateBlock(out var blockB, false);
-        allocator.AllocateBlock(out var blockC, false);
-        allocator.AllocateBlock(out var blockD, false);
+        allocator.AllocateBlock(out var blockA);
+        allocator.AllocateBlock(out var blockB);
+        allocator.AllocateBlock(out var blockC);
+        allocator.AllocateBlock(out var blockD);
 
         allocator.Chain(blockA, blockB);
         allocator.Chain(blockB, blockC);
@@ -613,13 +626,13 @@ public class ChainedBlockAllocatorTests
         using var allocator = new ChainedBlockAllocator(16, 64);
 
         // Chain 1: A -> B
-        allocator.AllocateBlock(out var blockA, true);
-        allocator.AllocateBlock(out var blockB, false);
+        allocator.AllocateBlock(out var blockA);
+        allocator.AllocateBlock(out var blockB);
         allocator.Chain(blockA, blockB);
 
         // Chain 2: C -> D
-        allocator.AllocateBlock(out var blockC, true);
-        allocator.AllocateBlock(out var blockD, false);
+        allocator.AllocateBlock(out var blockC);
+        allocator.AllocateBlock(out var blockD);
         allocator.Chain(blockC, blockD);
 
         Assert.That(allocator.AllocatedCount, Is.EqualTo(5)); // 1 reserved + 4 allocated
@@ -641,7 +654,7 @@ public class ChainedBlockAllocatorTests
         var ids = new int[pageSize];
         for (int i = 0; i < pageSize; i++)
         {
-            var span = allocator.AllocateBlock(out ids[i], true);
+            var span = allocator.AllocateBlock(out ids[i]);
             span.Cast<byte, int>()[0] = i;
         }
 
@@ -658,7 +671,7 @@ public class ChainedBlockAllocatorTests
         // Reallocate and verify
         for (int i = 0; i < pageSize; i++)
         {
-            var span = allocator.AllocateBlock(out int _, true);
+            var span = allocator.AllocateBlock(out int _);
             span.Cast<byte, int>()[0] = i + 100;
         }
 
@@ -688,7 +701,7 @@ public class ChainedBlockAllocatorTests
     {
         using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
 
-        var span = allocator.AllocateBlock(out var blockId, true);
+        var span = allocator.AllocateBlock(out var blockId);
         span.Cast<byte, int>()[0] = 42;
 
         var count = 0;
@@ -710,9 +723,9 @@ public class ChainedBlockAllocatorTests
     {
         using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
 
-        var ptrA = allocator.AllocateBlock(out var blockA, true);
-        var ptrB = allocator.AllocateBlock(out var blockB, false);
-        var ptrC = allocator.AllocateBlock(out var blockC, false);
+        var ptrA = allocator.AllocateBlock(out var blockA);
+        var ptrB = allocator.AllocateBlock(out var blockB);
+        var ptrC = allocator.AllocateBlock(out var blockC);
 
         ptrA.Cast<byte, int>()[0] = 10;
         ptrB.Cast<byte, int>()[0] = 20;
@@ -736,9 +749,9 @@ public class ChainedBlockAllocatorTests
     {
         using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
 
-        allocator.AllocateBlock(out var blockA, true);
-        allocator.AllocateBlock(out var blockB, false);
-        allocator.AllocateBlock(out var blockC, false);
+        allocator.AllocateBlock(out var blockA);
+        allocator.AllocateBlock(out var blockB);
+        allocator.AllocateBlock(out var blockC);
 
         allocator.Chain(blockA, blockB);
         allocator.Chain(blockB, blockC);
@@ -761,7 +774,7 @@ public class ChainedBlockAllocatorTests
         var blocks = new int[chainLength];
         for (int i = 0; i < chainLength; i++)
         {
-            var span = allocator.AllocateBlock(out blocks[i], i == 0);
+            var span = allocator.AllocateBlock(out blocks[i]);
             span.Cast<byte, int>()[0] = i;
         }
 
@@ -789,9 +802,9 @@ public class ChainedBlockAllocatorTests
     {
         using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
 
-        var ptrA = allocator.AllocateBlock(out var blockA, true);
-        var ptrB = allocator.AllocateBlock(out var blockB, false);
-        var ptrC = allocator.AllocateBlock(out var blockC, false);
+        var ptrA = allocator.AllocateBlock(out var blockA);
+        var ptrB = allocator.AllocateBlock(out var blockB);
+        var ptrC = allocator.AllocateBlock(out var blockC);
 
         ptrA.Cast<byte, int>()[0] = 1;
         ptrB.Cast<byte, int>()[0] = 2;
@@ -820,8 +833,8 @@ public class ChainedBlockAllocatorTests
     {
         var allocator = new ChainedBlockAllocator(16, 64);
 
-        allocator.AllocateBlock(out var blockA, true);
-        allocator.AllocateBlock(out var blockB, false);
+        allocator.AllocateBlock(out var blockA);
+        allocator.AllocateBlock(out var blockB);
         allocator.Chain(blockA, blockB);
 
         allocator.Dispose();
@@ -836,7 +849,7 @@ public class ChainedBlockAllocatorTests
         const int largeStride = 1024;
         using var allocator = new ChainedBlockAllocator(largeStride, 16);
 
-        var ptr = allocator.AllocateBlock(out var blockId, true);
+        var ptr = allocator.AllocateBlock(out var blockId);
 
         // Fill the entire block
         for (int i = 0; i < largeStride; i++)
@@ -858,7 +871,7 @@ public class ChainedBlockAllocatorTests
         const int smallStride = 1;
         using var allocator = new ChainedBlockAllocator(smallStride, 64);
 
-        var span = allocator.AllocateBlock(out var blockId, true);
+        var span = allocator.AllocateBlock(out var blockId);
         span[0] = 42;
 
         Assert.That(allocator.GetBlockData(blockId)[0], Is.EqualTo(42));
@@ -877,7 +890,7 @@ public class ChainedBlockAllocatorTests
             // Allocate some
             for (int i = 0; i < 5; i++)
             {
-                var span = allocator.AllocateBlock(out var id, true);
+                var span = allocator.AllocateBlock(out var id);
                 var value = iteration * 1000 + i;
                 span.Cast<byte, int>()[0] = value;
                 activeBlocks[id] = value;
@@ -918,7 +931,7 @@ public class ChainedBlockAllocatorTests
         var blocks = new List<int>();
         for (int i = 0; i < pageSize * 3; i++)
         {
-            var span = allocator.AllocateBlock(out var id, i == 0);
+            var span = allocator.AllocateBlock(out var id);
             span.Cast<byte, int>()[0] = i;
             blocks.Add(id);
         }
@@ -953,7 +966,7 @@ public class ChainedBlockAllocatorTests
         var blocks = new int[6];
         for (int i = 0; i < 6; i++)
         {
-            var span = allocator.AllocateBlock(out blocks[i], i is 0 or 3);
+            var span = allocator.AllocateBlock(out blocks[i]);
             span.Cast<byte, int>()[0] = i + 1; // 1, 2, 3, 4, 5, 6
         }
 

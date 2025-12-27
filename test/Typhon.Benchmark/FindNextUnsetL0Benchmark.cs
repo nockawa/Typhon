@@ -85,7 +85,8 @@ public class FindNextUnsetL0Benchmark
     {
         int count = 0;
         int index = -1;
-        while (_bitmap.FindNextUnsetL0(ref index))
+        long mask = 0;
+        while (_bitmap.FindNextUnsetL0(ref index, ref mask))
         {
             count++;
         }

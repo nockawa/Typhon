@@ -1,495 +1,358 @@
-// unset
+﻿// unset
 
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Typhon.Engine;
 
-/// <summary>
-/// A lock-free, thread-safe hierarchical bitmap with 3 levels of acceleration structures.
-///
-/// Structure:
-/// - L0All: Ground truth bitmap (each bit = one allocation slot)
-/// - L1All: "All full" summary (bit set when ALL 64 corresponding L0 bits are set)
-/// - L1Any: "Any set" summary (bit set when ANY corresponding L0 bit is set)
-/// - L2All: Top-level summary (bit set when ALL 64 corresponding L1All bits are set)
-///
-/// Concurrency model:
-/// - All state is encapsulated in an immutable-ish BitmapState object
-/// - L0 operations use Interlocked CAS - the result determines success/failure
-/// - L1/L2 are acceleration hints with best-effort updates (temporal incoherence is acceptable)
-/// - Resize creates a new state with recounted TotalBitSet, then atomically swaps
-/// - TotalBitSet is always exact: each state owns its counter, orphaned states don't matter
-/// </summary>
-public unsafe class ConcurrentBitmapL3All : IResource
+public class ConcurrentBitmapL3All
 {
-    private Bank[] _banks;
-    private readonly int _l0Size;
-    private readonly int _l1Size;
-    private readonly int _l2Size;
-    private readonly int _l0Shift;
-    private readonly int _indexInBankMask;
+    private const int L0All = 0;
+    private const int L1All = 1;
+    private const int L1Any = 2;
+    private const int L2All = 3;
 
-    private class Bank : IDisposable
+    private volatile int _control;
+    private Memory<long>[] _maps;
+
+    public int Capacity { get; private set; }
+    public int TotalBitSet { get; private set; }
+    public bool IsFull => Capacity == TotalBitSet;
+
+    public ConcurrentBitmapL3All(int bitCount)
     {
-        public int TotalBitSet;
-        public bool IsFull => TotalBitSet == _owner.BankBitCountCapacity;
-        public PinnedMemoryBlock MemoryBlock;
+        Capacity = bitCount;
+        TotalBitSet = 0;
 
-        public long* L0All;
-        public long* L1All;
-        public long* L1Any;
-        public long* L2All;
-        private readonly ConcurrentBitmapL3All _owner;
+        _maps = new Memory<long>[4];
+        var length = Math.Max(1, (bitCount + 63) / 64);
+        _maps[L0All] = new long[length];
 
-        public Bank(ConcurrentBitmapL3All owner, int bankIndex)
+        length = Math.Max(1, (length + 63) / 64);
+        _maps[L1All] = new long[length];
+        _maps[L1Any] = new long[length];
+
+        length = Math.Max(1, (length + 63) / 64);
+        _maps[L2All] = new long[length];
+    }
+
+    public void Resize(int newBitCount)
+    {
+        TakeControl();
+
+        var shrink = newBitCount < Capacity;
+        Capacity = newBitCount;
+
+        var maps = new Memory<long>[4];
+        var length = Math.Max(1, (newBitCount + 63) / 64);
+        var copySize = Math.Min(length, _maps[L0All].Length);
+
+        maps[L0All] = new long[length];
+        _maps[L0All].Span.Slice(0, copySize).CopyTo(maps[L0All].Span);
+
+        length = Math.Max(1, (length + 63) / 64);
+        maps[L1All] = new long[length];
+        maps[L1Any] = new long[length];
+
+        copySize = Math.Max(1, (copySize + 63) / 64);
+        _maps[L1All].Span.Slice(0, copySize).CopyTo(maps[L1All].Span);
+        _maps[L1Any].Span.Slice(0, copySize).CopyTo(maps[L1Any].Span);
+
+        length = Math.Max(1, (length + 63) / 64);
+        maps[L2All] = new long[length];
+
+        copySize = Math.Max(1, (copySize + 63) / 64);
+        _maps[L2All].Span.Slice(0, copySize).CopyTo(maps[L2All].Span);
+
+        _maps = maps;
+
+        if (shrink)
         {
-            _owner = owner;
-            var ma = TyphonServices.MemoryAllocator;
-            var sizeAsLong = _owner._l0Size + (_owner._l1Size * 2) + _owner._l2Size;
-            MemoryBlock = ma.AllocatePinned($"Bank{bankIndex}", owner, sizeAsLong * sizeof(long), true, 64);
+            var span = maps[L0All].Span.Cast<long, ulong>();
+            var spanLength = span.Length;
+            var newCount = 0;
 
-            L0All = (long*)MemoryBlock.DataAsIntPtr.ToPointer();
-            L1All = L0All + _owner._l0Size; 
-            L1Any = L1All + _owner._l1Size;
-            L2All = L1Any + _owner._l1Size;
+            for (int i = 0; i < spanLength; i++)
+            {
+                newCount += BitOperations.PopCount(span[i]);
+            }
+
+            TotalBitSet = newCount;
         }
-        
-        public void Dispose()
+
+        _control = 0;
+    }
+
+
+    private void TakeControl()
+    {
+        if (Interlocked.CompareExchange(ref _control, 1, 0) != 0)
         {
-            L0All = L1All = L1Any = L2All = null;
-            MemoryBlock.Dispose();
-            MemoryBlock = null;
-        }
-    }
-    
-    public int Capacity
-    {
-        get => _banks.Length * BankBitCountCapacity;
-    }
-    
-    public int BankBitCountCapacity { get; }
-
-    public int TotalBitSet => _banks.Aggregate(0, (current, bank) => current + bank.TotalBitSet);
-
-    public bool IsFull => _banks.All(b => b.IsFull);
-
-    public ConcurrentBitmapL3All(string id, IResource parent, int bankBitCountCapacity)
-    {
-        if (!MathHelpers.IsPow2(bankBitCountCapacity))
-        {
-            throw new Exception($"BankBitCountCapacity must be a power of 2 but {bankBitCountCapacity} was given");
-        }
-        
-        Id = id ?? Guid.NewGuid().ToString();
-        Parent = parent ?? TyphonServices.ResourceRegistry.Orphans;
-        Owner = Parent.Owner;
-        CreatedAt = DateTime.UtcNow;
-        BankBitCountCapacity = bankBitCountCapacity;
-        _l0Size = Math.Max(1, (bankBitCountCapacity + 63) / 64); 
-        _l1Size = Math.Max(1, (_l0Size + 63) / 64); 
-        _l2Size = Math.Max(1, (_l1Size + 63) / 64);
-        _l0Shift = BitOperations.Log2((uint)bankBitCountCapacity);
-        _indexInBankMask = (1 << _l0Shift) - 1;
-        _banks = [new Bank(this, 0)];
-    }
-    
-    public ConcurrentBitmapL3All(int bankBitCountCapacity) : this(null, null, bankBitCountCapacity)
-    {
-    }
-
-    public void Grow()
-    {
-        var banks = _banks;
-        var newBanks = new Bank[banks.Length +1];
-        Array.Copy(banks, newBanks, banks.Length);
-        newBanks[banks.Length] = new Bank(this, banks.Length);
-
-        if (Interlocked.CompareExchange(ref _banks, newBanks, banks) != banks)
-        {
-            // CAS failed - another thread already grew the array
-            // Dispose the bank we created to avoid leaking memory
-            newBanks[banks.Length].Dispose();
+            var sw = new SpinWait();
+            while (Interlocked.CompareExchange(ref _control, 1, 0) != 0)
+            {
+                sw.SpinOnce();
+            }
         }
     }
 
-    (Bank[], int, int) GetBankAndIndex(int bitIndex)
-    {
-        var banks = _banks;
-        var bankLength = banks.Length;
-        var bankIndex = bitIndex >> _l0Shift;
-        var index = bitIndex & _indexInBankMask;
-        return (banks, (bankIndex < bankLength) ? bankIndex : -1, index);
-    }
-    
-    /// <summary>
-    /// Sets a single bit at the given index.
-    /// Returns true if the bit was successfully set by this call, false if it was already set.
-    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public bool SetL0(int bitIndex)
     {
-        (Bank[] banks, int bankIndex, int indexInBank) = GetBankAndIndex(bitIndex);
+        var l0Offset = bitIndex >> 6;
+        var l0Mask = 1L << (bitIndex & 0x3F);
 
-        // Check bounds before accessing arrays
-        if (bankIndex < 0)
-        {
-            return false;
-        }
+        TakeControl();
 
-        var bank = banks[bankIndex];
-        
-        var l0Offset = indexInBank >> 6;
-        var l0Mask = 1L << (indexInBank & 0x3F);
-
-        // CAS operation on L0 - this IS the ground truth
-        var prevL0 = Interlocked.Or(ref bank.L0All[l0Offset], l0Mask);
+        var prevL0 = Interlocked.Or(ref _maps[L0All].Span[l0Offset], l0Mask);
         if ((prevL0 & l0Mask) != 0)
         {
-            // Bit was already set - optimistic failure, caller retries elsewhere
+            _control = 0;
+            // The bit was concurrently set by someone else
             return false;
         }
 
-        // Successfully set the bit in this state - now update hints (best-effort)
-
-        // Update L1All if L0 word became fully set
-        if ((prevL0 | l0Mask) == -1)
+        if (prevL0 != -1 && (prevL0 | l0Mask) == -1)
         {
             var l1Offset = l0Offset >> 6;
             var l1Mask = 1L << (l0Offset & 0x3F);
 
-            // Best-effort: Interlocked.Or is safe even if concurrent
-            var prevL1 = Interlocked.Or(ref bank.L1All[l1Offset], l1Mask);
+            var prevL1 = _maps[L1All].Span[l1Offset];
+            _maps[L1All].Span[l1Offset] |= l1Mask;
 
-            // Update L2All if L1 word became fully set
-            if ((prevL1 | l1Mask) == -1)
+            if (prevL1 != -1 && (prevL1 | l1Mask) == -1)
             {
                 var l2Offset = l1Offset >> 6;
                 var l2Mask = 1L << (l1Offset & 0x3F);
-                Interlocked.Or(ref bank.L2All[l2Offset], l2Mask);
+                _maps[L2All].Span[l2Offset] |= l2Mask;
             }
         }
 
-        // Update L1Any if L0 word transitioned from empty to non-empty
-        if (prevL0 == 0)
+        if (prevL0 == 0 && (prevL0 | l0Mask) != 0)
         {
             var l1Offset = l0Offset >> 6;
             var l1Mask = 1L << (l0Offset & 0x3F);
-            Interlocked.Or(ref bank.L1Any[l1Offset], l1Mask);
+            _maps[L1Any].Span[l1Offset] |= l1Mask;
         }
 
-        // State unchanged - increment counter
-        Interlocked.Increment(ref bank.TotalBitSet);
-
+        ++TotalBitSet;
+        _control = 0;
         return true;
     }
 
-    /// <summary>
-    /// Sets all 64 bits of an L0 word atomically (bulk allocation).
-    /// Uses CompareExchange to ensure the word was completely empty.
-    /// Returns true if successful, false if any bit was already set.
-    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    public bool SetL1(int bitIndex)
+    public bool SetL1(int index)
     {
-        (Bank[] banks, int bankIndex, int indexInBank) = GetBankAndIndex(bitIndex);
+        var l0Offset = index;
+        var l0Mask = -1L;
 
-        // Check bounds before accessing arrays
-        if (bankIndex < 0)
-        {
-            return false;
-        }
-
-        var bank = banks[bankIndex];
-        var l0Offset = indexInBank;
-
-        // CompareExchange: Only set all bits if word was completely empty
-        var prevL0 = Interlocked.CompareExchange(ref bank.L0All[l0Offset], -1L, 0L);
+        TakeControl();
+        var prevL0 = Interlocked.Or(ref _maps[L0All].Span[l0Offset], l0Mask);
         if (prevL0 != 0)
         {
-            // Word wasn't empty - we didn't modify anything
+            _control = 0;
+            // Can't allocate the whole L1, some bits are set at L0
             return false;
         }
 
-        // Successfully claimed all 64 bits - update hints (best-effort)
-        var l1Offset = l0Offset >> 6;
-        var l1Mask = 1L << (l0Offset & 0x3F);
-
-        var prevL1 = Interlocked.Or(ref bank.L1All[l1Offset], l1Mask);
-
-        // Update L2All if L1 word became fully set
-        if ((prevL1 | l1Mask) == -1)
-        {
-            var l2Offset = l1Offset >> 6;
-            var l2Mask = 1L << (l1Offset & 0x3F);
-            Interlocked.Or(ref bank.L2All[l2Offset], l2Mask);
-        }
-
-        // L1Any: word definitely has bits now
-        Interlocked.Or(ref bank.L1Any[l1Offset], l1Mask);
-
-        // State unchanged - increment counter
-        Interlocked.Add(ref bank.TotalBitSet, 64);
-        return true;
-    }
-
-    /// <summary>
-    /// Clears a single bit at the given index.
-    /// This operation is idempotent - clearing an already-clear bit is a no-op.
-    /// Returns true if successful (bit cleared or was already clear), false if state changed.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    public bool ClearL0(int bitIndex)
-    {
-        (Bank[] banks, int bankIndex, int indexInBank) = GetBankAndIndex(bitIndex);
-
-        // Check bounds before accessing arrays
-        if (bankIndex < 0)
-        {
-            return false;
-        }
-
-        var bank = banks[bankIndex];
-        
-        var l0Offset = indexInBank >> 6;
-        var l0Mask = ~(1L << (indexInBank & 0x3F));
-
-        // CAS: Clear the bit
-        var prevL0 = Interlocked.And(ref bank.L0All[l0Offset], l0Mask);
-
-        // If bit wasn't set, nothing to do (idempotent)
-        if ((prevL0 & ~l0Mask) == 0)
-        {
-            return true;
-        }
-
-        // Bit was set, now cleared - update hints (best-effort)
-
-        // Update L1All if L0 word was fully set (no longer is)
-        if (prevL0 == -1)
+        if (prevL0 != -1 && (prevL0 | l0Mask) == -1)
         {
             var l1Offset = l0Offset >> 6;
             var l1Mask = 1L << (l0Offset & 0x3F);
 
-            var prevL1 = Interlocked.And(ref bank.L1All[l1Offset], ~l1Mask);
+            var prevL1 = _maps[L1All].Span[l1Offset];
+            _maps[L1All].Span[l1Offset] |= l1Mask;
 
-            // Update L2All if L1 word was fully set
+            if (prevL1 != -1 && (prevL1 | l1Mask) == -1)
+            {
+                var l2Offset = l1Offset >> 6;
+                var l2Mask = 1L << (l1Offset & 0x3F);
+                _maps[L2All].Span[l2Offset] |= l2Mask;
+            }
+        }
+
+        if (prevL0 == 0 && (prevL0 | l0Mask) != 0)
+        {
+            var l1Offset = l0Offset >> 6;
+            var l1Mask = 1L << (l0Offset & 0x3F);
+
+            _maps[L1Any].Span[l1Offset] |= l1Mask;
+        }
+
+        TotalBitSet += 64;
+        _control = 0;
+        return true;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+    public void ClearL0(int index)
+    {
+        var l0Offset = index >> 6;
+        var l0Mask = ~(1L << (index & 0x3F));
+
+        TakeControl();
+        var prevL0 = Interlocked.And(ref _maps[L0All].Span[l0Offset], l0Mask);
+        if ((prevL0 == -1) && ((prevL0 & l0Mask) != -1))
+        {
+            var l1Offset = l0Offset >> 6;
+            var l1Mask = 1L << (l0Offset & 0x3F);
+
+            var prevL1 = _maps[L1All].Span[l1Offset];
+            _maps[L1All].Span[l1Offset] &= l1Mask;
+
             if (prevL1 == -1)
             {
                 var l2Offset = l1Offset >> 6;
                 var l2Mask = 1L << (l1Offset & 0x3F);
-                Interlocked.And(ref bank.L2All[l2Offset], ~l2Mask);
+                _maps[L2All].Span[l2Offset] &= l2Mask;
             }
         }
 
-        // Update L1Any if L0 word became empty
-        if ((prevL0 & l0Mask) == 0)
+        if ((prevL0 != 0) && ((prevL0 & l0Mask) == 0))
         {
             var l1Offset = l0Offset >> 6;
             var l1Mask = 1L << (l0Offset & 0x3F);
-            Interlocked.And(ref bank.L1Any[l1Offset], ~l1Mask);
+
+            _maps[L1Any].Span[l1Offset] &= l1Mask;
         }
 
-        // Decrement THIS state's counter
-        Interlocked.Decrement(ref bank.TotalBitSet);
-
-        return true;
+        _control = 0;
+        --TotalBitSet;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    public bool IsSet(int bitIndex)
+    public bool IsSet(int index)
     {
-        (Bank[] banks, int bankIndex, int indexInBank) = GetBankAndIndex(bitIndex);
+        var offset = index >> 6;
+        var mask = 1L << (index & 0x3F);
 
-        // Check bounds before accessing arrays
-        if (bankIndex < 0)
-        {
-            return false;
-        }
-
-        var bank = banks[bankIndex];
-        
-        var offset = indexInBank >> 6;
-        var mask = 1L << (indexInBank & 0x3F);
-
-        return (bank.L0All[offset] & mask) != 0L;
+        return (_maps[L0All].Span[offset] & mask) != 0L;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    public bool FindNextUnsetL0(ref int bitIndex)
+    public bool FindNextUnsetL0(ref int index, ref long mask)
     {
-        (Bank[] banks, int bankIndex, int indexInBank) = GetBankAndIndex(++bitIndex);
+        var capacity = Capacity;
+        var maps = _maps;
 
-        // Check bounds before accessing arrays
-        if (bankIndex < 0)
+        var c0 = ++index;
+        long v0 = mask;
+        long t0;
+
+        var ll0 = (capacity + 63) / 64;
+        var ll1 = maps[L1All].Length;
+        var ll2 = maps[L2All].Length;
+
+        while (c0 < capacity)
         {
-            return false;
-        }
-
-        var capacity = BankBitCountCapacity;
-        var c0 = indexInBank;
-
-        for ( ; bankIndex < banks.Length; bankIndex++)
-        {
-            var bank = banks[bankIndex];
-            var ll0 = capacity >> 6;
-            var ll1 = _l0Size;
-            var ll2 = _l2Size;
-            var v0 = bank.L0All[indexInBank>>6];
-            
-            while (c0 < capacity)
+            // Do we have to fetch a new L0?
+            if (((c0 & 0x3F) == 0) || (v0 == -1))
             {
-                // Do we have to fetch a new L0?
-                if (((c0 & 0x3F) == 0) || (v0 == -1))
+                // Check if we can skip the rest of the level 0
+                for (int i0 = c0 >> 6; i0 < ll0; i0 = c0 >> 6)
                 {
-                    // Check if we can skip the rest of the level 0
-                    for (int i0 = c0 >> 6; i0 < ll0; i0 = c0 >> 6)
+                    t0 = 1L << (c0 & 0x3F);
+                    v0 = maps[L0All].Span[i0] | (t0 - 1);
+
+                    if (v0 != -1)
                     {
-                        var t0 = 1L << (c0 & 0x3F);
-                        v0 = bank.L0All[i0] | (t0 - 1);
-
-                        if (v0 != -1)
-                        {
-                            break;
-                        }
-                        c0 = ++i0 << 6;
-
-                        // Check if we can skip the rest of the level 1
-                        for (int i1 = c0 >> 12; i1 < ll1; i1 = c0 >> 12)
-                        {
-                            var v1 = bank.L1All[i1] >> (i0 & 0x3F);
-                            if (v1 != -1)
-                            {
-                                break;
-                            }
-
-                            i0 = 0;
-                            c0 = ++i1 << 12;
-
-                            // Check if we can skip the rest of the level 2
-                            for (int i2 = c0 >> 18; i2 < ll2; i2 = c0 >> 18)
-                            {
-                                var v2 = bank.L2All[i2] >> (i1 & 0x3F);
-                                if (v2 != -1)
-                                {
-                                    break;
-                                }
-                                i1 = 0;
-                                c0 = ++i2 << 18;
-                            }
-                        }
+                        break;
                     }
-                }
+                    c0 = ++i0 << 6;
 
-                // After hierarchical skip, verify we're still within bounds
-                if (c0 >= capacity)
-                {
-                    c0 = 0;
-                    break;
-                }
-
-                bitIndex = (bankIndex << _l0Shift) + ((c0 & ~0x3F) + BitOperations.TrailingZeroCount(~v0));
-                return true;
-            }
-        }
-        
-        return false;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    public bool FindNextUnsetL1(ref int bitIndex)
-    {
-        (Bank[] banks, int bankIndex, int indexInBank) = GetBankAndIndex(++bitIndex);
-
-        // Check bounds before accessing arrays
-        if (bankIndex < 0)
-        {
-            return false;
-        }
-
-        var c1 = indexInBank;
-
-        for ( ; bankIndex < banks.Length; bankIndex++)
-        {
-            var bank = banks[bankIndex];
-            
-            var ll1 = _l1Size;
-            var ll2 = _l2Size;
-            var v1 = bank.L1All[indexInBank>>12];
-
-            while (c1 < (ll1 << 6))
-            {
-                if (((c1 & 0x3F) == 0) || (v1 == -1))
-                {
                     // Check if we can skip the rest of the level 1
-                    for (int i1 = c1 >> 6; i1 < ll1; i1 = c1 >> 6)
+                    for (int i1 = c0 >> 12; i1 < ll1; i1 = c0 >> 12)
                     {
-                        var t1 = 1L << (c1 & 0x3F);
-                        v1 = bank.L1All[i1] | (t1 - 1);
+                        var v1 = maps[L1All].Span[i1] >> (i0 & 0x3F);
                         if (v1 != -1)
                         {
                             break;
                         }
 
-                        c1 = ++i1 << 6;
+                        i0 = 0;
+                        c0 = ++i1 << 12;
 
                         // Check if we can skip the rest of the level 2
-                        for (int i2 = c1 >> 12; i2 < ll2; i2 = c1 >> 12)
+                        for (int i2 = c0 >> 18; i2 < ll2; i2 = c0 >> 18)
                         {
-                            var v2 = bank.L2All[i2] >> (i1 & 0x3F);
+                            var v2 = maps[L2All].Span[i2] >> (i1 & 0x3F);
                             if (v2 != -1)
                             {
                                 break;
                             }
-
                             i1 = 0;
-                            c1 = ++i2 << 12;
+                            c0 = ++i2 << 18;
                         }
                     }
-
-                    // After hierarchical skip, verify we're still within bounds
-                    if (c1 >= (ll1 << 6))
-                    {
-                        c1 = 0;
-                        break;
-                    }
                 }
-
-                var t = 1L << (c1 & 0x3F);
-                v1 = bank.L1Any[c1 >> 6] | (t - 1);
-                bitIndex = (bankIndex << _l0Shift) + ((c1 & ~0x3F) + BitOperations.TrailingZeroCount(~v1));
-                return true;
             }
+
+            // After hierarchical skip, verify we're still within bounds
+            if (c0 >= capacity)
+            {
+                return false;
+            }
+
+            var bitPos = BitOperations.TrailingZeroCount(~v0);
+            v0 |= (1L << bitPos);
+            index = (c0 & ~0x3F) + bitPos;
+            mask = v0;
+            return true;
         }
-    
         return false;
     }
 
-    public void Dispose()
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+    public bool FindNextUnsetL1(ref int index, ref long mask)
     {
-        var curBanks = _banks;
-        if (Interlocked.CompareExchange(ref _banks, null, curBanks) == curBanks)
+        var maps = _maps;
+        var c1 = ++index;
+        long v1 = mask;
+        var ll1 = maps[L1All].Length;
+        var ll2 = maps[L2All].Length;
+
+        while (c1 < (ll1 << 6))
         {
-            foreach (var bank in curBanks ?? [])
+            if (((c1 & 0x3F) == 0) || (v1 == -1))
             {
-                bank.Dispose();
+                // Check if we can skip the rest of the level 1
+                for (int i1 = c1 >> 6; i1 < ll1; i1 = c1 >> 6)
+                {
+                    var t1 = 1L << (c1 & 0x3F);
+                    v1 = maps[L1All].Span[i1] | (t1 - 1);
+                    if (v1 != -1)
+                    {
+                        break;
+                    }
+
+                    c1 = ++i1 << 6;
+
+                    // Check if we can skip the rest of the level 2
+                    for (int i2 = c1 >> 12; i2 < ll2; i2 = c1 >> 12)
+                    {
+                        var v2 = maps[L2All].Span[i2] >> (i1 & 0x3F);
+                        if (v2 != -1)
+                        {
+                            break;
+                        }
+
+                        i1 = 0;
+                        c1 = ++i2 << 12;
+                    }
+                }
             }
+
+            var t = 1L << (c1 & 0x3F);
+            v1 = maps[L1Any].Span[c1 >> 6] | (t - 1);
+            var bitPos = BitOperations.TrailingZeroCount(~v1);
+            v1 |= (1L << bitPos);
+            index = (c1 & ~0x3F) + bitPos;
+            mask = v1;
+            return true;
         }
+
+        return false;
     }
-
-    public string Id { get; }
-    public ResourceType Type => ResourceType.Bitmap;
-    public IResource Parent { get; }
-
-    public IEnumerable<IResource> Children => _banks.Select(bank => bank.MemoryBlock);
-
-    public DateTime CreatedAt { get; }
-    public IResourceRegistry Owner { get; }
-    public bool RegisterChild(IResource child) => false;
-
-    public bool RemoveChild(IResource resource) => false;
 }
