@@ -67,9 +67,6 @@
         <Compile Update="Persistence Layer\PagedMMF.Metrics.cs">
             <DependentUpon>PagedMMF.cs</DependentUpon>
         </Compile>
-        <Compile Update="Misc\AccessControl.Telemetry.cs">
-            <DependentUpon>AccessControl.cs</DependentUpon>
-        </Compile>
     </ItemGroup>
 
 </Project>
