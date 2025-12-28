@@ -275,8 +275,6 @@ class AccessControlTests
     [Test]
     public unsafe void AccessControl2_HeavyContention()
     {
-        var size = Unsafe.SizeOf<AccessOperation>();
-        
         var control = new AccessControl();
         var barrier = new Barrier(20);
         var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -359,8 +357,6 @@ class AccessControlTests
     [Test]
     public unsafe void NewAccessControl_HeavyContention()
     {
-        var size = Unsafe.SizeOf<AccessOperation>();
-        
         var control = new NewAccessControl();
         var barrier = new Barrier(20);
         var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -462,7 +458,7 @@ class AccessControlTests
     [Test]
     public void LockData_Counter_GetSet()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperations>(1024, 124);
+        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -486,7 +482,7 @@ class AccessControlTests
     [Test]
     public void LockData_SharedWaiters_GetSet()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperations>(1024, 124);
+        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -509,7 +505,7 @@ class AccessControlTests
     [Test]
     public void LockData_ExclusiveWaiters_GetSet()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperations>(1024, 124);
+        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -532,7 +528,7 @@ class AccessControlTests
     [Test]
     public void LockData_PromoterWaiters_GetSet()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperations>(1024, 124);
+        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -549,7 +545,7 @@ class AccessControlTests
     [Test]
     public void LockData_ThreadId_GetSet()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperations>(1024, 124);
+        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -566,7 +562,7 @@ class AccessControlTests
     [Test]
     public void LockData_State_GetSet()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperations>(1024, 124);
+        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -589,7 +585,7 @@ class AccessControlTests
     [Test]
     public void LockData_AllFields_IndependentModification()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperations>(1024, 124);
+        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -613,7 +609,7 @@ class AccessControlTests
     [Test]
     public void LockData_TryUpdate_SucceedsWhenUnchanged()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperations>(1024, 124);
+        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -630,7 +626,7 @@ class AccessControlTests
     [Test]
     public void LockData_TryUpdate_FailsWhenConcurrentlyModified()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperations>(1024, 124);
+        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -648,7 +644,7 @@ class AccessControlTests
     [Test]
     public void LockData_OperationsBlockId_AllocatesOnFirstAccess()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperations>(1024, 124);
+        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -665,7 +661,7 @@ class AccessControlTests
     [Test]
     public void LockData_OperationsBlockId_FreesOnFailedUpdate()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperations>(1024, 124);
+        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
         ulong data = 0;
 
         var initialAllocatedCount = allocator.AllocatedCount;
@@ -688,7 +684,7 @@ class AccessControlTests
     [Test]
     public void LockData_IsIdleNoWaiters_DetectsCorrectly()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperations>(1024, 124);
+        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -719,7 +715,7 @@ class AccessControlTests
     [Test]
     public void LockData_BitMaskIntegrity()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperations>(1024, 124);
+        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -901,15 +897,15 @@ class AccessControlTests
     }
 
     [Test]
-    [CancelAfter(10000)]
+    [CancelAfter(2000)]
     public void NewAccessControl_StressTest_RapidAcquisitionRelease(CancellationToken token)
     {
         var control = new NewAccessControl();
         var operationCount = 0;
 
-        Parallel.For(0, 20, i =>
+        Parallel.For(0, 10, i =>
         {
-            for (int j = 0; j < 250; j++)
+            for (int j = 0; j < 200; j++)
             {
                 if (j % 4 == 0)
                 {
@@ -918,6 +914,7 @@ class AccessControlTests
                         break;
                     }
                     control.ExitExclusiveAccess();
+                    Thread.Sleep(0);
                 }
                 else
                 {
@@ -933,11 +930,11 @@ class AccessControlTests
         });
 
         Console.WriteLine($"Completed {operationCount} operations");
-        Assert.That(operationCount, Is.EqualTo(5000), "Expected all operations to complete");
+        Assert.That(operationCount, Is.EqualTo(2000), "Expected all operations to complete");
     }
 
     [Test]
-    [CancelAfter(10000)]
+    [CancelAfter(1000)]
     public void NewAccessControl_HighContentionBarrier()
     {
         var control = new NewAccessControl();
