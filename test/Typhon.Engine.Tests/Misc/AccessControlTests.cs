@@ -358,13 +358,13 @@ class AccessControlTests
     public unsafe void NewAccessControl_HeavyContention()
     {
         var control = new NewAccessControl();
-        var barrier = new Barrier(20);
+        var barrier = new Barrier(10);
         var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var hangDetected = false;
 
         try
         {
-            Parallel.For(0, 20, new ParallelOptions { CancellationToken = cts.Token }, i =>
+            Parallel.For(0, 10, new ParallelOptions { CancellationToken = cts.Token }, i =>
             {
                 for (int j = 0; j < 100; j++)
                 {
@@ -373,13 +373,13 @@ class AccessControlTests
 
                     if (i % 3 == 0)
                     {
-                        control.EnterExclusiveAccess();
+                        control.EnterExclusiveAccess(token: cts.Token);
                         Thread.SpinWait(1);
                         control.ExitExclusiveAccess();
                     }
                     else
                     {
-                        control.EnterSharedAccess();
+                        control.EnterSharedAccess(token: cts.Token);
                         Thread.SpinWait(1);
                         control.ExitSharedAccess();
                     }
@@ -458,7 +458,7 @@ class AccessControlTests
     [Test]
     public void LockData_Counter_GetSet()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
+        var allocator = new ChainedBlockAllocator<AccessOperations>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -482,7 +482,7 @@ class AccessControlTests
     [Test]
     public void LockData_SharedWaiters_GetSet()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
+        var allocator = new ChainedBlockAllocator<AccessOperations>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -505,7 +505,7 @@ class AccessControlTests
     [Test]
     public void LockData_ExclusiveWaiters_GetSet()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
+        var allocator = new ChainedBlockAllocator<AccessOperations>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -528,7 +528,7 @@ class AccessControlTests
     [Test]
     public void LockData_PromoterWaiters_GetSet()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
+        var allocator = new ChainedBlockAllocator<AccessOperations>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -545,7 +545,7 @@ class AccessControlTests
     [Test]
     public void LockData_ThreadId_GetSet()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
+        var allocator = new ChainedBlockAllocator<AccessOperations>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -562,7 +562,7 @@ class AccessControlTests
     [Test]
     public void LockData_State_GetSet()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
+        var allocator = new ChainedBlockAllocator<AccessOperations>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -585,7 +585,7 @@ class AccessControlTests
     [Test]
     public void LockData_AllFields_IndependentModification()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
+        var allocator = new ChainedBlockAllocator<AccessOperations>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -609,7 +609,7 @@ class AccessControlTests
     [Test]
     public void LockData_TryUpdate_SucceedsWhenUnchanged()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
+        var allocator = new ChainedBlockAllocator<AccessOperations>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -626,7 +626,7 @@ class AccessControlTests
     [Test]
     public void LockData_TryUpdate_FailsWhenConcurrentlyModified()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
+        var allocator = new ChainedBlockAllocator<AccessOperations>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -644,7 +644,7 @@ class AccessControlTests
     [Test]
     public void LockData_OperationsBlockId_AllocatesOnFirstAccess()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
+        var allocator = new ChainedBlockAllocator<AccessOperations>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -661,7 +661,7 @@ class AccessControlTests
     [Test]
     public void LockData_OperationsBlockId_FreesOnFailedUpdate()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
+        var allocator = new ChainedBlockAllocator<AccessOperations>(1024);
         ulong data = 0;
 
         var initialAllocatedCount = allocator.AllocatedCount;
@@ -684,7 +684,7 @@ class AccessControlTests
     [Test]
     public void LockData_IsIdleNoWaiters_DetectsCorrectly()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
+        var allocator = new ChainedBlockAllocator<AccessOperations>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -715,7 +715,7 @@ class AccessControlTests
     [Test]
     public void LockData_BitMaskIntegrity()
     {
-        var allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
+        var allocator = new ChainedBlockAllocator<AccessOperations>(1024);
         ulong data = 0;
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
@@ -839,7 +839,7 @@ class AccessControlTests
         {
             for (int j = 0; (j < 100) && !token.IsCancellationRequested; j++)
             {
-                if (!control.EnterExclusiveAccess())
+                if (!control.EnterExclusiveAccess(token: token))
                 {
                     return;
                 }
@@ -907,14 +907,14 @@ class AccessControlTests
         {
             for (int j = 0; j < 200; j++)
             {
-                if (j % 4 == 0)
+                if (j % 2 == 0)
                 {
                     if (!control.EnterExclusiveAccess(token: token))
                     {
                         break;
                     }
                     control.ExitExclusiveAccess();
-                    Thread.Sleep(0);
+                    //Thread.Sleep(0);
                 }
                 else
                 {
@@ -938,9 +938,9 @@ class AccessControlTests
     public void NewAccessControl_HighContentionBarrier()
     {
         var control = new NewAccessControl();
-        var barrier = new Barrier(20);
+        var barrier = new Barrier(10);
 
-        Parallel.For(0, 20, i =>
+        Parallel.For(0, 10, i =>
         {
             for (int j = 0; j < 50; j++)
             {

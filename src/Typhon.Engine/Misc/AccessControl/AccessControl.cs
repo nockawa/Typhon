@@ -203,10 +203,9 @@ internal static partial class AccessControlImpl
                 // TODO OTLP reporting here
                 
                 // Uncomment to enable delayed log activity
-                //Console.WriteLine(ToDebugString(blockId, ref op));
-                    
-                // Free the whole chain as the lock turns back to idle
-                ld.FreeAccessOperations(blockId);
+                Console.WriteLine(ToDebugString(blockId, ref op));
+
+                ld.FreeBlock();
             }
             else
             {
@@ -371,10 +370,9 @@ internal static partial class AccessControlImpl
                 // TODO OTLP reporting here
 
                 // Uncomment to enable delayed log activity
-                //Console.WriteLine(ToDebugString(blockId, ref op));
-    
-                // Free the whole chain as the lock turns back to idle
-                ld.FreeAccessOperations(blockId);
+                Console.WriteLine(ToDebugString(blockId, ref op));
+
+                ld.FreeBlock();
             }
             else
             {
