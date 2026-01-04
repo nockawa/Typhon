@@ -164,8 +164,7 @@ public class ConcurrentBitmapBenchmark
 
         int count = 0;
         int index = -1;
-        long mask = 0;
-        while (c.FindNextUnsetL0(ref index, ref mask))
+        while (c.FindNextUnsetL0(ref index))
         {
             count++;
         }
@@ -189,8 +188,7 @@ public class ConcurrentBitmapBenchmark
 
         int count = 0;
         int index = -1;
-        long mask = 0;
-        while (c.FindNextUnsetL0(ref index, ref mask))
+        while (c.FindNextUnsetL0(ref index))
         {
             count++;
         }

@@ -9,13 +9,6 @@ using System.Threading;
 
 namespace Typhon.Engine;
 
-[StructLayout(LayoutKind.Sequential, Pack = 4)]
-internal struct AccessOperationChunk
-{
-    internal int AccessCounter;
-    internal AccessOperations Operations;
-}
-
 [InlineArray(Count)]
 internal struct  AccessOperations
 {
@@ -27,12 +20,12 @@ internal struct  AccessOperations
 
 internal static partial class AccessControlImpl
 {
-    private static readonly ChainedBlockAllocator<AccessOperationChunk> Allocator;
+    private static readonly ChainedBlockAllocator<AccessOperations> Allocator;
 
     static AccessControlImpl()
     {
         // 6 Operations are 120 bytes, +4 for AccessCounter, +4 for the chain header = 128. Fits in two cache lines -> Optimal!
-        Allocator = new ChainedBlockAllocator<AccessOperationChunk>(1024);
+        Allocator = new ChainedBlockAllocator<AccessOperations>(1024);
     }
 
     private static readonly ThreadLocal<StringBuilder> CachedToDebugStringBuilders = new(() => new StringBuilder(2048));
@@ -85,30 +78,30 @@ internal static partial class AccessControlImpl
         var sb = CachedToDebugStringBuilders.Value.Clear();
         sb.AppendLine($"Lock #{blockId}:");
 
-        var stop = false;
-        foreach (var curBlockId in Allocator.EnumerateChainedBlock(blockId))
-        {
-            ref var ops = ref Allocator.Get(curBlockId);
-            for (int i = 0; i < AccessOperations.Count; i++)
-            {
-                ref var op = ref ops.Operations[i];
-                if (op.IsEmpty)
-                {
-                    stop = true;
-                    break;
-                }
-                LogOp(ref op, sb);
-            }
-            if (stop)
-            {
-                break;
-            }
-        }
-
-        if (!Unsafe.IsNullRef(ref lastOp))
-        {
-            LogOp(ref lastOp, sb);
-        }
+        // var stop = false;
+        // foreach (var curBlockId in Allocator.EnumerateChainedBlock(blockId))
+        // {
+        //     ref var ops = ref Allocator.Get(curBlockId);
+        //     for (int i = 0; i < AccessOperations.Count; i++)
+        //     {
+        //         ref var op = ref ops[i];
+        //         if (op.IsEmpty)
+        //         {
+        //             stop = true;
+        //             break;
+        //         }
+        //         LogOp(ref op, sb);
+        //     }
+        //     if (stop)
+        //     {
+        //         break;
+        //     }
+        // }
+        //
+        // if (!Unsafe.IsNullRef(ref lastOp))
+        // {
+        //     LogOp(ref lastOp, sb);
+        // }
         
         return sb.ToString();
     }
