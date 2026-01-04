@@ -25,7 +25,7 @@ namespace Typhon.Engine;
 /// - Resize creates a new state with recounted TotalBitSet, then atomically swaps
 /// - TotalBitSet is always exact: each state owns its counter, orphaned states don't matter
 /// </summary>
-public class ConcurrentBitmapL3All : IResource
+public unsafe class ConcurrentBitmapL3All : IResource
 {
     private Bank[] _banks;
     private readonly int _l0Size;
@@ -34,16 +34,16 @@ public class ConcurrentBitmapL3All : IResource
     private readonly int _l0Shift;
     private readonly int _indexInBankMask;
 
-    private unsafe class Bank : IDisposable
+    private class Bank : IDisposable
     {
         public int TotalBitSet;
         public bool IsFull => TotalBitSet == _owner.BankBitCountCapacity;
         public PinnedMemoryBlock MemoryBlock;
 
-        private long* _l0All;
-        private long* _l1All;
-        private long* _l1Any;
-        private long* _l2All;
+        public long* L0All;
+        public long* L1All;
+        public long* L1Any;
+        public long* L2All;
         private readonly ConcurrentBitmapL3All _owner;
 
         public Bank(ConcurrentBitmapL3All owner, int bankIndex)
@@ -53,20 +53,15 @@ public class ConcurrentBitmapL3All : IResource
             var sizeAsLong = _owner._l0Size + (_owner._l1Size * 2) + _owner._l2Size;
             MemoryBlock = ma.AllocatePinned($"Bank{bankIndex}", owner, sizeAsLong * sizeof(long), true, 64);
 
-            _l0All = (long*)MemoryBlock.DataAsIntPtr.ToPointer();
-            _l1All = _l0All + _owner._l0Size; 
-            _l1Any = _l1All + _owner._l1Size;
-            _l2All = _l1Any + _owner._l1Size;
+            L0All = (long*)MemoryBlock.DataAsIntPtr.ToPointer();
+            L1All = L0All + _owner._l0Size; 
+            L1Any = L1All + _owner._l1Size;
+            L2All = L1Any + _owner._l1Size;
         }
-
-        public Span<long> L0AllAsSpan => new(_l0All, _owner._l0Size);
-        public Span<long> L1AllAsSpan => new(_l1All, _owner._l1Size);
-        public Span<long> L1AnyAsSpan => new(_l1Any, _owner._l1Size);
-        public Span<long> L2AllAsSpan => new(_l2All, _owner._l2Size);
         
         public void Dispose()
         {
-            _l0All = _l1All = _l1Any = _l2All = null;
+            L0All = L1All = L1Any = L2All = null;
             MemoryBlock.Dispose();
             MemoryBlock = null;
         }
@@ -152,7 +147,7 @@ public class ConcurrentBitmapL3All : IResource
         var l0Mask = 1L << (indexInBank & 0x3F);
 
         // CAS operation on L0 - this IS the ground truth
-        var prevL0 = Interlocked.Or(ref bank.L0AllAsSpan[l0Offset], l0Mask);
+        var prevL0 = Interlocked.Or(ref bank.L0All[l0Offset], l0Mask);
         if ((prevL0 & l0Mask) != 0)
         {
             // Bit was already set - optimistic failure, caller retries elsewhere
@@ -168,14 +163,14 @@ public class ConcurrentBitmapL3All : IResource
             var l1Mask = 1L << (l0Offset & 0x3F);
 
             // Best-effort: Interlocked.Or is safe even if concurrent
-            var prevL1 = Interlocked.Or(ref bank.L1AllAsSpan[l1Offset], l1Mask);
+            var prevL1 = Interlocked.Or(ref bank.L1All[l1Offset], l1Mask);
 
             // Update L2All if L1 word became fully set
             if ((prevL1 | l1Mask) == -1)
             {
                 var l2Offset = l1Offset >> 6;
                 var l2Mask = 1L << (l1Offset & 0x3F);
-                Interlocked.Or(ref bank.L2AllAsSpan[l2Offset], l2Mask);
+                Interlocked.Or(ref bank.L2All[l2Offset], l2Mask);
             }
         }
 
@@ -184,7 +179,7 @@ public class ConcurrentBitmapL3All : IResource
         {
             var l1Offset = l0Offset >> 6;
             var l1Mask = 1L << (l0Offset & 0x3F);
-            Interlocked.Or(ref bank.L1AnyAsSpan[l1Offset], l1Mask);
+            Interlocked.Or(ref bank.L1Any[l1Offset], l1Mask);
         }
 
         // State unchanged - increment counter
@@ -213,7 +208,7 @@ public class ConcurrentBitmapL3All : IResource
         var l0Offset = indexInBank;
 
         // CompareExchange: Only set all bits if word was completely empty
-        var prevL0 = Interlocked.CompareExchange(ref bank.L0AllAsSpan[l0Offset], -1L, 0L);
+        var prevL0 = Interlocked.CompareExchange(ref bank.L0All[l0Offset], -1L, 0L);
         if (prevL0 != 0)
         {
             // Word wasn't empty - we didn't modify anything
@@ -224,18 +219,18 @@ public class ConcurrentBitmapL3All : IResource
         var l1Offset = l0Offset >> 6;
         var l1Mask = 1L << (l0Offset & 0x3F);
 
-        var prevL1 = Interlocked.Or(ref bank.L1AllAsSpan[l1Offset], l1Mask);
+        var prevL1 = Interlocked.Or(ref bank.L1All[l1Offset], l1Mask);
 
         // Update L2All if L1 word became fully set
         if ((prevL1 | l1Mask) == -1)
         {
             var l2Offset = l1Offset >> 6;
             var l2Mask = 1L << (l1Offset & 0x3F);
-            Interlocked.Or(ref bank.L2AllAsSpan[l2Offset], l2Mask);
+            Interlocked.Or(ref bank.L2All[l2Offset], l2Mask);
         }
 
         // L1Any: word definitely has bits now
-        Interlocked.Or(ref bank.L1AnyAsSpan[l1Offset], l1Mask);
+        Interlocked.Or(ref bank.L1Any[l1Offset], l1Mask);
 
         // State unchanged - increment counter
         Interlocked.Add(ref bank.TotalBitSet, 64);
@@ -264,7 +259,7 @@ public class ConcurrentBitmapL3All : IResource
         var l0Mask = ~(1L << (indexInBank & 0x3F));
 
         // CAS: Clear the bit
-        var prevL0 = Interlocked.And(ref bank.L0AllAsSpan[l0Offset], l0Mask);
+        var prevL0 = Interlocked.And(ref bank.L0All[l0Offset], l0Mask);
 
         // If bit wasn't set, nothing to do (idempotent)
         if ((prevL0 & ~l0Mask) == 0)
@@ -280,14 +275,14 @@ public class ConcurrentBitmapL3All : IResource
             var l1Offset = l0Offset >> 6;
             var l1Mask = 1L << (l0Offset & 0x3F);
 
-            var prevL1 = Interlocked.And(ref bank.L1AllAsSpan[l1Offset], ~l1Mask);
+            var prevL1 = Interlocked.And(ref bank.L1All[l1Offset], ~l1Mask);
 
             // Update L2All if L1 word was fully set
             if (prevL1 == -1)
             {
                 var l2Offset = l1Offset >> 6;
                 var l2Mask = 1L << (l1Offset & 0x3F);
-                Interlocked.And(ref bank.L2AllAsSpan[l2Offset], ~l2Mask);
+                Interlocked.And(ref bank.L2All[l2Offset], ~l2Mask);
             }
         }
 
@@ -296,7 +291,7 @@ public class ConcurrentBitmapL3All : IResource
         {
             var l1Offset = l0Offset >> 6;
             var l1Mask = 1L << (l0Offset & 0x3F);
-            Interlocked.And(ref bank.L1AnyAsSpan[l1Offset], ~l1Mask);
+            Interlocked.And(ref bank.L1Any[l1Offset], ~l1Mask);
         }
 
         // Decrement THIS state's counter
@@ -321,7 +316,7 @@ public class ConcurrentBitmapL3All : IResource
         var offset = indexInBank >> 6;
         var mask = 1L << (indexInBank & 0x3F);
 
-        return (bank.L0AllAsSpan[offset] & mask) != 0L;
+        return (bank.L0All[offset] & mask) != 0L;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
@@ -342,9 +337,9 @@ public class ConcurrentBitmapL3All : IResource
         {
             var bank = banks[bankIndex];
             var ll0 = capacity >> 6;
-            var ll1 = bank.L1AllAsSpan.Length;
-            var ll2 = bank.L2AllAsSpan.Length;
-            var v0 = bank.L0AllAsSpan[indexInBank>>6];
+            var ll1 = _l0Size;
+            var ll2 = _l2Size;
+            var v0 = bank.L0All[indexInBank>>6];
             
             while (c0 < capacity)
             {
@@ -355,7 +350,7 @@ public class ConcurrentBitmapL3All : IResource
                     for (int i0 = c0 >> 6; i0 < ll0; i0 = c0 >> 6)
                     {
                         var t0 = 1L << (c0 & 0x3F);
-                        v0 = bank.L0AllAsSpan[i0] | (t0 - 1);
+                        v0 = bank.L0All[i0] | (t0 - 1);
 
                         if (v0 != -1)
                         {
@@ -366,7 +361,7 @@ public class ConcurrentBitmapL3All : IResource
                         // Check if we can skip the rest of the level 1
                         for (int i1 = c0 >> 12; i1 < ll1; i1 = c0 >> 12)
                         {
-                            var v1 = bank.L1AllAsSpan[i1] >> (i0 & 0x3F);
+                            var v1 = bank.L1All[i1] >> (i0 & 0x3F);
                             if (v1 != -1)
                             {
                                 break;
@@ -378,7 +373,7 @@ public class ConcurrentBitmapL3All : IResource
                             // Check if we can skip the rest of the level 2
                             for (int i2 = c0 >> 18; i2 < ll2; i2 = c0 >> 18)
                             {
-                                var v2 = bank.L2AllAsSpan[i2] >> (i1 & 0x3F);
+                                var v2 = bank.L2All[i2] >> (i1 & 0x3F);
                                 if (v2 != -1)
                                 {
                                     break;
@@ -422,9 +417,9 @@ public class ConcurrentBitmapL3All : IResource
         {
             var bank = banks[bankIndex];
             
-            var ll1 = bank.L1AllAsSpan.Length;
-            var ll2 = bank.L2AllAsSpan.Length;
-            var v1 = bank.L1AllAsSpan[indexInBank>>12];
+            var ll1 = _l1Size;
+            var ll2 = _l2Size;
+            var v1 = bank.L1All[indexInBank>>12];
 
             while (c1 < (ll1 << 6))
             {
@@ -434,7 +429,7 @@ public class ConcurrentBitmapL3All : IResource
                     for (int i1 = c1 >> 6; i1 < ll1; i1 = c1 >> 6)
                     {
                         var t1 = 1L << (c1 & 0x3F);
-                        v1 = bank.L1AllAsSpan[i1] | (t1 - 1);
+                        v1 = bank.L1All[i1] | (t1 - 1);
                         if (v1 != -1)
                         {
                             break;
@@ -445,7 +440,7 @@ public class ConcurrentBitmapL3All : IResource
                         // Check if we can skip the rest of the level 2
                         for (int i2 = c1 >> 12; i2 < ll2; i2 = c1 >> 12)
                         {
-                            var v2 = bank.L2AllAsSpan[i2] >> (i1 & 0x3F);
+                            var v2 = bank.L2All[i2] >> (i1 & 0x3F);
                             if (v2 != -1)
                             {
                                 break;
@@ -465,7 +460,7 @@ public class ConcurrentBitmapL3All : IResource
                 }
 
                 var t = 1L << (c1 & 0x3F);
-                v1 = bank.L1AnyAsSpan[c1 >> 6] | (t - 1);
+                v1 = bank.L1Any[c1 >> 6] | (t - 1);
                 bitIndex = (bankIndex << _l0Shift) + ((c1 & ~0x3F) + BitOperations.TrailingZeroCount(~v1));
                 return true;
             }
