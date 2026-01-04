@@ -1787,9 +1787,9 @@ public class TypedAllocatorThreadSafetyTests
 
         using var allocator = new StructAllocator<CleanableThreadTestStruct>(64);
         var activeBlocks = new ConcurrentDictionary<int, (long threadId, long iteration)>();
-        var cleanedBlocks = new ConcurrentBag<int>();
         var barrier = new Barrier(threadCount);
 
+        // Phase 1: Concurrent stress testing (allocate/free operations)
         var threads = new Thread[threadCount];
         for (int t = 0; t < threadCount; t++)
         {
@@ -1818,7 +1818,6 @@ public class TypedAllocatorThreadSafetyTests
                             if (activeBlocks.TryRemove(key, out _))
                             {
                                 allocator.Free(key);
-                                cleanedBlocks.Add(key);
                                 break;
                             }
                         }
@@ -1833,16 +1832,43 @@ public class TypedAllocatorThreadSafetyTests
             thread.Join();
         }
 
-        // Verify cleaned blocks have cleanup values
-        foreach (var id in cleanedBlocks)
+        // Verify concurrent operations maintained correct state
+        Assert.That(allocator.AllocatedCount, Is.EqualTo(activeBlocks.Count));
+
+        // Phase 2: Verify cleanup is called when freeing remaining blocks
+        // This phase has no race conditions because all threads are done
+        var blockCount = 0;
+        foreach (var kvp in activeBlocks)
         {
+            var id = kvp.Key;
+
+            // Verify data is still intact before freeing
             ref var item = ref allocator.Get(id);
-            Assert.That(item.ThreadId, Is.EqualTo(-1), $"Block {id} was not cleaned up");
-            Assert.That(item.Iteration, Is.EqualTo(-1));
-            Assert.That(item.Value, Is.EqualTo(-1));
+            Assert.That(item.ThreadId, Is.EqualTo(kvp.Value.threadId),
+                $"Block {id} data corrupted before free");
+            Assert.That(item.Iteration, Is.EqualTo(kvp.Value.iteration));
+
+            // Free the block
+            allocator.Free(id);
+
+            // Verify cleanup was called (fields should be -1)
+            ref var cleaned = ref allocator.Get(id);
+            Assert.That(cleaned.ThreadId, Is.EqualTo(-1),
+                $"Block {id}: Cleanup() not called - ThreadId should be -1");
+            Assert.That(cleaned.Iteration, Is.EqualTo(-1),
+                $"Block {id}: Cleanup() not called - Iteration should be -1");
+            Assert.That(cleaned.Value, Is.EqualTo(-1),
+                $"Block {id}: Cleanup() not called - Value should be -1");
+
+            blockCount++;
         }
 
-        Assert.That(allocator.AllocatedCount, Is.EqualTo(activeBlocks.Count));
+        // Verify we actually tested some blocks
+        Assert.That(blockCount, Is.GreaterThan(0),
+            "Test should have some remaining blocks to verify cleanup");
+
+        // All blocks should now be freed
+        Assert.That(allocator.AllocatedCount, Is.EqualTo(0));
     }
 
     [Test]

@@ -14,6 +14,7 @@ public unsafe abstract class BlockAllocatorBase : IDisposable
     private readonly ConcurrentBitmapL3All _blockMap;
     private readonly int _entryCountPerPage;
     private readonly int _pageShift;
+    private Lock _lock;
 
     protected BlockAllocatorBase(int stride, int entryCountPerPage)
     {
@@ -32,6 +33,7 @@ public unsafe abstract class BlockAllocatorBase : IDisposable
         _pages[0] = (Marshal.UnsafeAddrOfPinnedArrayElement(page, 0), page);
 
         _blockMap = new ConcurrentBitmapL3All(entryCountPerPage);
+        _lock = new Lock();
     }
 
     public int Capacity => _blockMap.Capacity;
@@ -55,9 +57,8 @@ public unsafe abstract class BlockAllocatorBase : IDisposable
             }
 
             blockId = -1;
-            var mask = 0L;
             var count = 1;
-            while ((count > 0) && map.FindNextUnsetL0(ref blockId, ref mask))
+            while ((count > 0) && map.FindNextUnsetL0(ref blockId))
             {
                 if (map.SetL0(blockId))
                 {
@@ -101,20 +102,26 @@ public unsafe abstract class BlockAllocatorBase : IDisposable
 
     private void Resize(int length)
     {
-        // Step 1: Resize bitmap FIRST (only grows, never shrinks)
-        // This ensures bitmap capacity is always >= what we need before pages are extended
-        var newCapacity = _entryCountPerPage * length;
-        if (_blockMap.Capacity < newCapacity)
+        lock (_lock)
         {
-            _blockMap.Resize(newCapacity);
-        }
+            // Step 1: Resize bitmap FIRST (only grows, never shrinks)
+            // This ensures bitmap capacity is always >= what we need before pages are extended
+            while (true)
+            {
+                var newCapacity = _entryCountPerPage * length;
+                if (_blockMap.Capacity >= newCapacity)
+                {
+                    break;
+                }
+                _blockMap.Grow();
+            }
 
-        // Step 2: Resize pages with CAS loop
-        while (true)
-        {
+            // Step 2: Resize pages with CAS loop
             var curPages = _pages;
             if (curPages.Length >= length)
+            {
                 return;  // Another thread already resized big enough
+            }
 
             var newPages = new (IntPtr, byte[])[length];
             new Span<(IntPtr, byte[])>(curPages).CopyTo(newPages);
@@ -126,11 +133,7 @@ public unsafe abstract class BlockAllocatorBase : IDisposable
                 newPages[i] = (Marshal.UnsafeAddrOfPinnedArrayElement(page, 0), page);
             }
 
-            if (Interlocked.CompareExchange(ref _pages, newPages, curPages) == curPages)
-            {
-                return;  // Success
-            }
-            // CAS failed, loop and retry
+            _pages = newPages;
         }
     }
 
