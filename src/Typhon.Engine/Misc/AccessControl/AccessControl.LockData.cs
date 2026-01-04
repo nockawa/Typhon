@@ -13,7 +13,7 @@ internal static partial class AccessControlImpl
     {
         public LockData(
 #if TELEMETRY
-            ChainedBlockAllocator<AccessOperationChunk> allocator, 
+            ChainedBlockAllocator<AccessOperations> allocator,
 #endif
             ref ulong data, TimeSpan? timeOut = null, CancellationToken token = default)
         {
@@ -35,7 +35,7 @@ internal static partial class AccessControlImpl
         private readonly CancellationToken _token;
 
 #if TELEMETRY
-        private readonly ChainedBlockAllocator<AccessOperationChunk> _allocator;
+        private readonly ChainedBlockAllocator<AccessOperations> _allocator;
         private bool _hasAllocatedBlock;
 #endif
         
@@ -114,56 +114,60 @@ internal static partial class AccessControlImpl
         internal void Fetch()
         {
             _initial = _staging = _data;
+#if TELEMETRY
+            _hasAllocatedBlock = false;
+#endif
             EnsureOperationsBlockIdAllocated();
         }
 
 #if TELEMETRY
-
-        private ref AccessOperationChunk ConcurrentGetOperationsBlockId()
+        public void FreeBlock()
         {
-            var blockId = OperationsBlockId;
-            ref var opChunk = ref Allocator.Get(blockId);
-
-            // Increment the access counter to prevent concurrent free of it
-            Interlocked.Increment(ref opChunk.AccessCounter);
-            
-            return ref opChunk;
-        }
-        
-        public void FreeAccessOperations(int blockId)
-        {
-            ref var opChunk = ref Allocator.Get(blockId);
-            SpinWait? sw = null;
-            while (opChunk.AccessCounter != 0)
+            while (true)
             {
-                sw ??= new SpinWait();
-                sw.Value.SpinOnce();
+                var curData = _data;
+                var blockId =(int)((curData & OperationsBlockIdMask) >> OperationsBlockIdShift);
+                if (blockId == 0)
+                {
+                    return;
+                }
+                var newData = _data & ~OperationsBlockIdMask;
+
+                if (Interlocked.CompareExchange(ref _data, newData, curData) == curData)
+                {
+                    _allocator.Free(blockId);
+                    break;
+                }
             }
-            Allocator.Free(blockId);
         }
-        
-        
+
+
         public void AddOperation(ref AccessOperation op)
         {
-            // Get the first bank of operations
-            ref var rootChunk = ref ConcurrentGetOperationsBlockId();
+            if (!Allocator.RequestEnumeration(OperationsBlockId, out var chainGeneration))
+            {
+                return;
+            }
+
+            var blockId = OperationsBlockId;
+            ref var rootChunk = ref Allocator.Get(blockId);
             ref var curChunk = ref rootChunk;
-            
+
             while (true)
             {
                 // Parse them to find the first empty
                 for (int i = 0; i < AccessOperations.Count; i++)
                 {
                     // Try to reserve the entry, will fail if it's already taken -> we loop
-                    ref var intPtr = ref Unsafe.As<AccessOperation, int>(ref curChunk.Operations[i]);
+                    ref var intPtr = ref Unsafe.As<AccessOperation, int>(ref curChunk[i]);
                     if (Interlocked.CompareExchange(ref intPtr, 1, 0) != 0)
                     {
                         continue;
                     }
 
                     // Successfully reserved, copy the data and exit
-                    curChunk.Operations[i] = op;
-                    
+                    curChunk[i] = op;
+
                     // Uncomment to enable real-time log activity
                     /*
                     var sb = CachedToDebugStringBuilders.Value.Clear();
@@ -171,14 +175,13 @@ internal static partial class AccessControlImpl
                     Console.Write(sb.ToString());
                     */
 
-                    // Decrement the access counter to exit the safe section
-                    Interlocked.Decrement(ref rootChunk.AccessCounter);
+                    Allocator.EndEnumeration(OperationsBlockId, chainGeneration);
                     return;
                 }
 
                 // All the entries are taken, go to the next bank
                 ref var nextChunk = ref Allocator.Next(ref curChunk);
-        
+
                 // End of the chain? Allocate a new bank and loop
                 if (Unsafe.IsNullRef(ref nextChunk))
                 {
@@ -297,7 +300,7 @@ internal static partial class AccessControlImpl
             var blockId = OperationsBlockId;
             if (blockId == 0)
             {
-                _allocator.Allocate(out blockId);
+                _allocator.Allocate(out blockId, true);
                 Debug.Assert(blockId < (int)(OperationsBlockIdMask >> OperationsBlockIdShift));
                 _hasAllocatedBlock = true;
                 OperationsBlockId = blockId;

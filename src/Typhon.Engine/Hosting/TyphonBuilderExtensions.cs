@@ -10,7 +10,110 @@ namespace Typhon.Engine;
 [PublicAPI]
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddPagedMMF(
+    public static IServiceCollection AddMemoryAllocator(this IServiceCollection services, Action<MemoryAllocatorOptions> configure = null)
+    {
+        ConfigureMemoryAllocatorOptions(services, configure);
+        services.Add(ServiceDescriptor.Singleton<IMemoryAllocator, MemoryAllocator>(sp =>
+        {
+            var options = sp.GetRequiredService<IOptions<MemoryAllocatorOptions>>();
+            var rr = sp.GetRequiredService<IResourceRegistry>();
+            return new MemoryAllocator(rr, options.Value);
+        }));
+        return services;
+    }
+
+    public static IServiceCollection AddScopedMemoryAllocator(this IServiceCollection services, Action<MemoryAllocatorOptions> configure = null)
+    {
+        ConfigureMemoryAllocatorOptions(services, configure);
+        services.Add(ServiceDescriptor.Scoped(sp =>
+        {
+            var options = sp.GetRequiredService<IOptions<MemoryAllocatorOptions>>();
+            var rr = sp.GetRequiredService<IResourceRegistry>();
+            return new MemoryAllocator(rr, options.Value);
+        }));
+        return services;
+    }
+
+    public static IServiceCollection AddTransientMemoryAllocator(this IServiceCollection services, Action<MemoryAllocatorOptions> configure = null)
+    {
+        ConfigureMemoryAllocatorOptions(services, configure);
+        services.Add(ServiceDescriptor.Transient(sp =>
+        {
+            var options = sp.GetRequiredService<IOptions<MemoryAllocatorOptions>>();
+            var rr = sp.GetRequiredService<IResourceRegistry>();
+            return new MemoryAllocator(rr, options.Value);
+        }));
+        return services;
+    }
+
+    private static void ConfigureMemoryAllocatorOptions(IServiceCollection services, Action<MemoryAllocatorOptions> configure)
+    {
+        if (configure == null)
+        {
+            return;
+        }
+
+        var optionsBuilder = services.AddOptions<MemoryAllocatorOptions>();
+        optionsBuilder.Configure(configure);
+
+        optionsBuilder.Validate(_ =>
+        {
+            // TODO Add validation logic
+            return true;
+        });
+    }
+
+    public static IServiceCollection AddResourceRegistry(this IServiceCollection services, Action<ResourceRegistryOptions> configure = null)
+    {
+        ConfigureResourceRegistryOptions(services, configure);
+        services.Add(ServiceDescriptor.Singleton<IResourceRegistry, ResourceRegistry>(sp =>
+        {
+            var options = sp.GetRequiredService<IOptions<ResourceRegistryOptions>>();
+            return new ResourceRegistry(options.Value);
+        }));
+        return services;
+    }
+
+    public static IServiceCollection AddScopedResourceRegistry(this IServiceCollection services, Action<ResourceRegistryOptions> configure = null)
+    {
+        ConfigureResourceRegistryOptions(services, configure);
+        services.Add(ServiceDescriptor.Scoped(sp =>
+        {
+            var options = sp.GetRequiredService<IOptions<ResourceRegistryOptions>>();
+            return new ResourceRegistry(options.Value);
+        }));
+        return services;
+    }
+
+    public static IServiceCollection AddTransientResourceRegistry(this IServiceCollection services, Action<ResourceRegistryOptions> configure = null)
+    {
+        ConfigureResourceRegistryOptions(services, configure);
+        services.Add(ServiceDescriptor.Transient(sp =>
+        {
+            var options = sp.GetRequiredService<IOptions<ResourceRegistryOptions>>();
+            return new ResourceRegistry(options.Value);
+        }));
+        return services;
+    }
+
+    private static void ConfigureResourceRegistryOptions(IServiceCollection services, Action<ResourceRegistryOptions> configure)
+    {
+        if (configure == null)
+        {
+            return;
+        }
+
+        var optionsBuilder = services.AddOptions<ResourceRegistryOptions>();
+        optionsBuilder.Configure(configure);
+
+        optionsBuilder.Validate(_ =>
+        {
+            // TODO Add validation logic 
+            return true;
+        });
+    }
+
+    public static IServiceCollection AddPagedMemoryMappedFiled(
         this IServiceCollection services,
         Action<PagedMMFOptions> configure = null) =>
         AddPagedMMF<PagedMMF, PagedMMFOptions>(services, ServiceLifetime.Singleton, configure);
@@ -60,16 +163,15 @@ public static class ServiceCollectionExtensions
         ServiceLifetime lifetime,
         Action<TO> configure = null) where TS : PagedMMF where TO : PagedMMFOptions
     {
-        services.AddOptions<TO>();
+        // services.AddOptions<TO>();
         services.TryAddSingleton<TimeManager>();
-
-        var optionsBuilder = services.AddOptions<TO>();
 
         if (configure != null)
         {
+            var optionsBuilder = services.AddOptions<TO>();
             optionsBuilder.Configure(configure);
 
-            optionsBuilder.Validate(options =>
+            optionsBuilder.Validate(_ =>
             {
                 
                 // TODO Add validation logic for PagedMemoryMappedFileOptions
@@ -114,7 +216,7 @@ public static class ServiceCollectionExtensions
         {
             optionsBuilder.Configure(configure);
 
-            optionsBuilder.Validate(options =>
+            optionsBuilder.Validate(_ =>
             {
                 
                 // TODO Add validation logic for PagedMemoryMappedFileOptions
