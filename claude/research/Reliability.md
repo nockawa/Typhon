@@ -1,5 +1,11 @@
 # Typhon Reliability Architecture
 
+**Date:** November 2024
+**Status:** In progress
+**Outcome:** —
+
+---
+
 This document outlines the critical reliability features missing from Typhon and provides detailed implementation guidance for achieving ACID durability guarantees.
 
 ## Executive Summary

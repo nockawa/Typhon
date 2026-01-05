@@ -1,5 +1,11 @@
 # Persistent Views Design for Typhon
 
+**Date:** December 2024
+**Status:** Concluded
+**Outcome:** Hybrid approach combining entity set caching with field-granular invalidation recommended
+
+---
+
 ## Table of Contents
 
 1. [Problem Statement](#problem-statement)

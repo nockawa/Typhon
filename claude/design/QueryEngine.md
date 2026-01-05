@@ -1,5 +1,11 @@
 # Typhon Query Engine: Design & Implementation Plan
 
+**Date:** December 2024
+**Status:** Ready for implementation
+**Branch:** —
+
+---
+
 ## Executive Summary
 
 This document defines the View and Query APIs for Typhon's query engine, detailing the chosen algorithms, design rationale, and implementation roadmap. The design prioritizes **simplicity and performance** through index-centric execution, incremental maintenance, and streaming pipelines.

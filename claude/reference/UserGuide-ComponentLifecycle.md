@@ -1,5 +1,10 @@
 # User Guide: Component Lifecycle & Transactions
 
+**Last Updated:** January 2026
+**Applies to:** Typhon.Engine transaction and component APIs
+
+---
+
 ## Table of Contents
 1. [Getting Started](#getting-started)
 2. [Creating Entities and Components](#creating-entities-and-components)

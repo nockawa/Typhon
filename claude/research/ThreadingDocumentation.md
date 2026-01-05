@@ -1,5 +1,11 @@
 # Threading Documentation Strategies for Typhon
 
+**Date:** November 2024
+**Status:** In progress
+**Outcome:** —
+
+---
+
 ## Overview
 
 This document explores different approaches to make threading requirements clear in the Typhon library, both for implementers/contributors and users. The challenge is particularly important for Typhon given its microsecond-level performance targets and complex concurrency architecture involving MVCC, transactions, and lock-based synchronization.

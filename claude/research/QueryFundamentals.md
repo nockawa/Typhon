@@ -1,5 +1,11 @@
 # Fundamental Query Engine Architecture: WHERE Clause Decomposition and Execution
 
+**Date:** December 2024
+**Status:** Moved to design
+**Outcome:** Unified expression with auto-decomposition + sorted index merge-scan pipeline selected
+
+---
+
 This document analyzes the fundamental design decisions for Typhon's query engine, focusing on WHERE clause decomposition, index utilization, caching strategies, and incremental updates. The analysis prioritizes performance through bandwidth minimization, leverages index statistics for optimization, and emphasizes pipeline execution over bitmap-based approaches.
 
 ## Part 1: WHERE Clause Decomposition Strategies

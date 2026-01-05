@@ -1,5 +1,11 @@
 # Typhon Architecture Redesign - Type Decomposition for Testability
 
+**Date:** November 2024
+**Status:** In progress
+**Outcome:** —
+
+---
+
 ## Executive Summary
 
 This document proposes **5 new concrete types** extracted from the monolithic `Transaction` and `ComponentTable` classes to improve separation of concerns and enable granular unit testing. Each proposal includes:

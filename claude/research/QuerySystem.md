@@ -1,5 +1,11 @@
 # Typhon Query System Documentation
 
+**Date:** December 2024
+**Status:** Moved to design
+**Outcome:** Index-first streaming pipeline approach selected (see design/QueryEngine.md)
+
+---
+
 ## Table of Contents
 
 1. [Overview](#overview)

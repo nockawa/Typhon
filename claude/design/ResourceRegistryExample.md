@@ -1,5 +1,12 @@
 # Resource Registry Integration Examples
 
+**Date:** January 2026
+**Companion to:** [ResourceRegistry.md](ResourceRegistry.md)
+
+> Usage patterns and code examples for integrating the Resource Registry system.
+
+---
+
 ## Setup: Register as Singleton
 
 ```csharp

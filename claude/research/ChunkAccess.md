@@ -1,5 +1,11 @@
 # ChunkRandomAccessor Redesign Analysis
 
+**Date:** December 2024
+**Status:** Concluded
+**Outcome:** Scope-based StackChunkAccessor with SIMD cache implemented (see reference/StackChunkAccessor.md)
+
+---
+
 ## Table of Contents
 
 1. [Problem Statement](#problem-statement)

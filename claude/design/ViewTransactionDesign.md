@@ -1,5 +1,11 @@
 # View and Transaction Integration Design
 
+**Date:** December 2024
+**Status:** Draft (needs decision on design option)
+**Branch:** —
+
+---
+
 ## The Core Problem
 
 Typhon uses MVCC (Multi-Version Concurrency Control) where every transaction has a timestamp (tick) that defines its snapshot point-in-time:
