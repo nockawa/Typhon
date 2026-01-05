@@ -18,7 +18,8 @@
       "Bash(timeout:*)",
       "Bash(cat:*)",
       "Bash(wait:*)",
-      "Bash(perl -e 'alarm 45; exec @ARGV' dotnet test:*)"
+      "Bash(perl -e 'alarm 45; exec @ARGV' dotnet test:*)",
+      "Bash(git mv:*)"
     ],
     "deny": [],
     "ask": []
