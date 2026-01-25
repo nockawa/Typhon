@@ -1,0 +1,217 @@
+# Typhon: Resource Tree Topology
+# Dense tree showing all graph nodes with their metric kinds
+
+direction: down
+
+# ── Title ─────────────────────────────────────────────────────
+title: "Resource Tree — Full Topology" {
+  shape: text
+  style.font-size: 20
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+# ── Root ─────────────────────────────────────────────────────
+root: "Root" {
+  shape: rectangle
+  style.fill: "#e8eaf6"
+  style.stroke: "#283593"
+  style.bold: true
+  style.border-radius: 6
+}
+
+# ── Services ─────────────────────────────────────────────────
+services: "Services" {
+  shape: rectangle
+  style.fill: "#f3e5f5"
+  style.stroke: "#6a1b9a"
+  style.border-radius: 6
+}
+mem_alloc: "MemoryAllocator\n[Memory, Throughput]" {
+  shape: rectangle
+  style.fill: "#e1bee7"
+  style.stroke: "#6a1b9a"
+  style.font-size: 12
+}
+
+# ── Storage ──────────────────────────────────────────────────
+storage: "Storage" {
+  shape: rectangle
+  style.fill: "#fff3e0"
+  style.stroke: "#e65100"
+  style.bold: true
+  style.border-radius: 6
+}
+page_cache: "PageCache\n[Memory, Capacity,\nDiskIO, Contention]" {
+  shape: rectangle
+  style.fill: "#ffe0b2"
+  style.stroke: "#e65100"
+  style.font-size: 12
+  style.bold: true
+}
+seg_mgr: "SegmentManager\n[Capacity]" {
+  shape: rectangle
+  style.fill: "#ffe0b2"
+  style.stroke: "#e65100"
+  style.font-size: 12
+}
+comp_seg: "ComponentSegment<T>\n[Memory, Capacity]" {
+  shape: rectangle
+  style.fill: "#fff8e1"
+  style.stroke: "#ff8f00"
+  style.font-size: 11
+}
+rev_seg: "RevisionSegment<T>\n[Memory, Capacity]" {
+  shape: rectangle
+  style.fill: "#fff8e1"
+  style.stroke: "#ff8f00"
+  style.font-size: 11
+}
+idx_seg: "IndexSegment<T>\n[Memory, Capacity]" {
+  shape: rectangle
+  style.fill: "#fff8e1"
+  style.stroke: "#ff8f00"
+  style.font-size: 11
+}
+chunk_cache: "ChunkAccessorCache\n[Capacity, Throughput]" {
+  shape: rectangle
+  style.fill: "#ffe0b2"
+  style.stroke: "#e65100"
+  style.font-size: 12
+}
+
+# ── DataEngine ───────────────────────────────────────────────
+data: "DataEngine" {
+  shape: rectangle
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.bold: true
+  style.border-radius: 6
+}
+tx_pool: "TransactionPool\n[Capacity, Throughput,\nDuration]" {
+  shape: rectangle
+  style.fill: "#bbdefb"
+  style.stroke: "#1976d2"
+  style.font-size: 12
+}
+comp_table: "ComponentTable<T>\n[Memory, Contention,\nThroughput]" {
+  shape: rectangle
+  style.fill: "#bbdefb"
+  style.stroke: "#1976d2"
+  style.font-size: 12
+}
+pk_idx: "PrimaryKeyIndex\n[Capacity, Throughput,\nDuration]" {
+  shape: rectangle
+  style.fill: "#e1f5fe"
+  style.stroke: "#0277bd"
+  style.font-size: 11
+}
+sec_idx: "SecondaryIndex<F>\n[Capacity, Throughput]" {
+  shape: rectangle
+  style.fill: "#e1f5fe"
+  style.stroke: "#0277bd"
+  style.font-size: 11
+}
+
+# ── Durability ───────────────────────────────────────────────
+durability: "Durability" {
+  shape: rectangle
+  style.fill: "#fce4ec"
+  style.stroke: "#c62828"
+  style.bold: true
+  style.border-radius: 6
+}
+wal_ring: "WALRingBuffer\n[Memory, Capacity,\nThroughput, Contention]" {
+  shape: rectangle
+  style.fill: "#f8bbd0"
+  style.stroke: "#c62828"
+  style.font-size: 12
+  style.bold: true
+}
+wal_segs: "WALSegments\n[DiskIO, Capacity]" {
+  shape: rectangle
+  style.fill: "#f8bbd0"
+  style.stroke: "#c62828"
+  style.font-size: 12
+}
+checkpoint: "Checkpoint\n[Throughput, Duration,\nDiskIO]" {
+  shape: rectangle
+  style.fill: "#f8bbd0"
+  style.stroke: "#c62828"
+  style.font-size: 12
+}
+
+# ── Backup ───────────────────────────────────────────────────
+backup: "Backup" {
+  shape: rectangle
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.bold: true
+  style.border-radius: 6
+}
+shadow_buf: "ShadowBuffer\n[Memory, Capacity,\nContention]" {
+  shape: rectangle
+  style.fill: "#c8e6c9"
+  style.stroke: "#2e7d32"
+  style.font-size: 12
+}
+snap_chain: "SnapshotChain\n[DiskIO, Capacity]" {
+  shape: rectangle
+  style.fill: "#c8e6c9"
+  style.stroke: "#2e7d32"
+  style.font-size: 12
+}
+
+# ── Execution ────────────────────────────────────────────────
+execution: "Execution" {
+  shape: rectangle
+  style.fill: "#efebe9"
+  style.stroke: "#4e342e"
+  style.bold: true
+  style.border-radius: 6
+}
+uow_pool: "UoWPool\n[Capacity, Throughput]" {
+  shape: rectangle
+  style.fill: "#d7ccc8"
+  style.stroke: "#4e342e"
+  style.font-size: 12
+}
+timers: "Timers\n[Throughput]" {
+  shape: rectangle
+  style.fill: "#d7ccc8"
+  style.stroke: "#4e342e"
+  style.font-size: 12
+}
+
+# ── Tree Edges ───────────────────────────────────────────────
+root -> services: "" {style.stroke: "#283593"}
+root -> storage: "" {style.stroke: "#283593"}
+root -> data: "" {style.stroke: "#283593"}
+root -> durability: "" {style.stroke: "#283593"}
+root -> backup: "" {style.stroke: "#283593"}
+root -> execution: "" {style.stroke: "#283593"}
+
+services -> mem_alloc: "" {style.stroke: "#6a1b9a"}
+
+storage -> page_cache: "" {style.stroke: "#e65100"}
+storage -> seg_mgr: "" {style.stroke: "#e65100"}
+storage -> chunk_cache: "" {style.stroke: "#e65100"}
+seg_mgr -> comp_seg: "" {style.stroke: "#ff8f00"}
+seg_mgr -> rev_seg: "" {style.stroke: "#ff8f00"}
+seg_mgr -> idx_seg: "" {style.stroke: "#ff8f00"}
+
+data -> tx_pool: "" {style.stroke: "#1565c0"}
+data -> comp_table: "" {style.stroke: "#1565c0"}
+comp_table -> pk_idx: "" {style.stroke: "#0277bd"}
+comp_table -> sec_idx: "" {style.stroke: "#0277bd"}
+
+durability -> wal_ring: "" {style.stroke: "#c62828"}
+durability -> wal_segs: "" {style.stroke: "#c62828"}
+durability -> checkpoint: "" {style.stroke: "#c62828"}
+
+backup -> shadow_buf: "" {style.stroke: "#2e7d32"}
+backup -> snap_chain: "" {style.stroke: "#2e7d32"}
+
+execution -> uow_pool: "" {style.stroke: "#4e342e"}
+execution -> timers: "" {style.stroke: "#4e342e"}

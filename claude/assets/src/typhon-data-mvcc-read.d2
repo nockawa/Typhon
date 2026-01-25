@@ -1,0 +1,35 @@
+# Typhon: MVCC Read Path
+# Sequence diagram showing how a read navigates PK → RevChain → Component
+
+title: "MVCC Read Path" {
+  shape: text
+  style.font-size: 18
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+seq: {
+  shape: sequence_diagram
+
+  tx: "Transaction"
+  ct: "ComponentTable"
+  pk: "PrimaryKeyIndex"
+  rev: "RevisionChain"
+  comp: "ComponentSegment"
+
+  tx -> ct: "ReadEntity(entityId)"
+  ct -> pk: "Lookup(entityId)"
+  pk -> ct: "RevChainFirstChunk" {style.stroke-dash: 3}
+
+  ct -> rev: "WalkRevisions(firstChunk)"
+
+  "For each revision": {
+    rev -> ct: "revision" {style.stroke-dash: 3}
+    ct."Skip if IsolationFlag && not my TX"
+    ct."Stop if TSN ≤ my snapshot"
+  }
+
+  ct -> comp: "GetChunk(revision.ComponentChunkId)"
+  comp -> tx: "Component data" {style.stroke-dash: 3}
+}

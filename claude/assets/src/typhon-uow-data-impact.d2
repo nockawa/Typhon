@@ -1,0 +1,332 @@
+# Typhon: UoW Data Impact Flowchart
+# Shows what happens to components, revisions, WAL at each step
+
+direction: down
+
+# ── Title ─────────────────────────────────────────────────────
+title: "UoW Data Impact — What Changes at Each Step" {
+  shape: text
+  style.font-size: 22
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+# ── Step 1: Create UoW ────────────────────────────────────────
+step1: "1. CreateUnitOfWork(mode)" {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.border-radius: 8
+  style.bold: true
+
+  action: "Allocate epoch from Registry\nRent ExecutionContext from pool" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+  }
+  data1: |md
+    **Data Impact:**
+    - Registry\[epoch\] = **Pending**
+    - ExecutionContext.Epoch set
+    - No component data touched yet
+  | {
+    shape: text
+    style.font-size: 13
+  }
+}
+
+# ── Step 2: Create Transaction ────────────────────────────────
+step2: "2. CreateTransaction()" {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.border-radius: 8
+
+  action: "Assign TSN (monotonic)\nSnapshot = current tick" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+  }
+  data2: |md
+    **Data Impact:**
+    - TSN counter incremented (atomic)
+    - Transaction added to TransactionChain
+    - State = **Created**
+    - No component data touched
+  | {
+    shape: text
+    style.font-size: 13
+  }
+}
+
+# ── Step 3: CRUD Operations ───────────────────────────────────
+step3: "3. CRUD Operations" {
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.border-radius: 8
+  style.bold: true
+
+  create_op: "Create: allocate chunk, write component" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+  }
+  read_op: "Read: traverse revision chain (MVCC)" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+  }
+  update_op: "Update: new revision in chain" {
+    shape: rectangle
+    style.fill: "#a5d6a7"
+  }
+  delete_op: "Delete: tombstone revision" {
+    shape: rectangle
+    style.fill: "#a5d6a7"
+  }
+  data3: |md
+    **Data Impact:**
+    - New CompRevStorageElements created
+    - **IsolationFlag = true** (invisible to others)
+    - Component chunks allocated in segments
+    - B+Tree entries NOT yet updated
+    - State = **InProgress**
+    - All buffered in tx._pending cache
+  | {
+    shape: text
+    style.font-size: 13
+  }
+}
+
+# ── Step 4: Commit — Conflict Check ──────────────────────────
+step4: "4. tx.Commit() — Conflict Check" {
+  style.fill: "#fff3e0"
+  style.stroke: "#e65100"
+  style.border-radius: 8
+
+  check: "Compare CurRevisionIndex\nvs LastCommitRevisionIndex" {
+    shape: diamond
+    style.fill: "#ffe0b2"
+  }
+  pass: "No conflict:\nproceed" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+  }
+  fail: "Conflict:\nrollback or\ncopy-forward" {
+    shape: rectangle
+    style.fill: "#ffcdd2"
+    style.stroke: "#c62828"
+  }
+
+  check -> pass: "" {style.stroke: "#2e7d32"}
+  check -> fail: "" {style.stroke: "#c62828"}
+
+  data4: |md
+    **Data Impact (on pass):**
+    - No data change yet
+    - Just validates no concurrent writes
+    - "Last write wins" may copy data forward
+  | {
+    shape: text
+    style.font-size: 13
+  }
+}
+
+# ── Step 5: Commit — Apply Changes ───────────────────────────
+step5: "5. ApplyChanges(epoch)" {
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.border-radius: 8
+  style.bold: true
+
+  epoch_stamp: "Stamp UowEpoch on\neach CompRevStorageElement" {
+    shape: rectangle
+    style.fill: "#a5d6a7"
+    style.bold: true
+  }
+  iso_clear: "Clear IsolationFlag\n(revisions now visible)" {
+    shape: rectangle
+    style.fill: "#81c784"
+    style.bold: true
+  }
+  idx_update: "Update B+Tree indexes\n(PK + secondary)" {
+    shape: rectangle
+    style.fill: "#66bb6a"
+    style.font-color: white
+  }
+
+  epoch_stamp -> iso_clear -> idx_update
+
+  data5: |md
+    **Data Impact:**
+    - CompRevStorageElement.UowEpoch = UoW's epoch
+    - IsolationFlag cleared → MVCC visible
+    - B+Tree nodes updated (split/merge if needed)
+    - Pages marked **dirty** in buffer pool
+    - State = **Committed**
+  | {
+    shape: text
+    style.font-size: 13
+  }
+}
+
+# ── Step 6: WAL Serialization ─────────────────────────────────
+step6: "6. Serialize WAL Record" {
+  style.fill: "#fce4ec"
+  style.stroke: "#c62828"
+  style.border-radius: 8
+
+  record: "Build WalRecord:\n{epoch, ops[], component data}" {
+    shape: rectangle
+    style.fill: "#f8bbd0"
+  }
+  ring: "XADD to Ring Buffer\n(atomic, ~100-500ns)" {
+    shape: cylinder
+    style.fill: "#f48fb1"
+    style.bold: true
+  }
+
+  record -> ring
+
+  data6: |md
+    **Data Impact:**
+    - WAL record in ring buffer (volatile!)
+    - Contains enough info to replay on crash
+    - Ring buffer tail advanced atomically
+    - No disk I/O yet
+  | {
+    shape: text
+    style.font-size: 13
+  }
+}
+
+# ── Step 7: Durability ────────────────────────────────────────
+step7: "7. Durability Resolution" {
+  style.fill: "#fce4ec"
+  style.stroke: "#c62828"
+  style.border-radius: 8
+  style.bold: true
+
+  mode_check: "Check DurabilityMode\n+ Override" {
+    shape: diamond
+    style.fill: "#f8bbd0"
+  }
+  immediate: "Immediate:\nSignal + Wait\n(~15-85µs FUA)" {
+    shape: rectangle
+    style.fill: "#ec407a"
+    style.font-color: white
+    style.bold: true
+  }
+  deferred: "Deferred:\nReturn now\n(volatile)" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+  }
+  group: "GroupCommit:\nReturn now\n(auto-flush 5-10ms)" {
+    shape: rectangle
+    style.fill: "#fff9c4"
+    style.stroke: "#f9a825"
+  }
+
+  mode_check -> immediate: "" {style.stroke: "#c62828"; style.bold: true}
+  mode_check -> deferred: "" {style.stroke: "#2e7d32"}
+  mode_check -> group: "" {style.stroke: "#f9a825"}
+
+  data7: |md
+    **Data Impact:**
+    - *Immediate*: WAL on disk (FUA), durable
+    - *Deferred*: still in ring buffer only
+    - *GroupCommit*: in ring buffer, WAL writer
+      will flush within interval
+    - Registry: epoch stays **Pending** until flush
+  | {
+    shape: text
+    style.font-size: 13
+  }
+}
+
+# ── Step 8: Background — WAL Flush ───────────────────────────
+step8: "8. WAL Writer Flush (background)" {
+  style.fill: "#f3e5f5"
+  style.stroke: "#6a1b9a"
+  style.border-radius: 8
+  style.stroke-dash: 5
+
+  drain: "Drain ring buffer\n(batch records)" {
+    shape: rectangle
+    style.fill: "#e1bee7"
+  }
+  fua: "FUA Write to\nWAL segment file" {
+    shape: page
+    style.fill: "#ce93d8"
+    style.bold: true
+  }
+
+  drain -> fua
+
+  data8: |md
+    **Data Impact:**
+    - WAL records on stable storage
+    - Registry\[epoch\] = **WalDurable**
+    - Survives crash: WAL replay restores state
+    - LSN confirmed to waiting threads (Immediate)
+  | {
+    shape: text
+    style.font-size: 13
+  }
+}
+
+# ── Step 9: Background — Checkpoint ──────────────────────────
+step9: "9. Checkpoint (background, ~10s)" {
+  style.fill: "#f3e5f5"
+  style.stroke: "#6a1b9a"
+  style.border-radius: 8
+  style.stroke-dash: 5
+
+  dirty_scan: "Scan dirty pages\nin buffer pool" {
+    shape: rectangle
+    style.fill: "#e1bee7"
+  }
+  fsync: "Write pages to\ndata file + fsync" {
+    shape: page
+    style.fill: "#ba68c8"
+    style.font-color: white
+  }
+  recycle: "Recycle WAL\nsegment" {
+    shape: rectangle
+    style.fill: "#9c27b0"
+    style.font-color: white
+  }
+
+  dirty_scan -> fsync -> recycle
+
+  data9: |md
+    **Data Impact:**
+    - Data pages now on disk (not just WAL)
+    - Registry\[epoch\] = **Committed**
+    - WAL segment can be recycled (space reclaimed)
+    - System reaches steady state
+  | {
+    shape: text
+    style.font-size: 13
+  }
+}
+
+# ── Main Flow Connections ─────────────────────────────────────
+step1 -> step2: "" {style.stroke: "#1565c0"}
+step2 -> step3: "" {style.stroke: "#1565c0"}
+step3 -> step4: "tx.Commit()" {style.stroke: "#e65100"; style.bold: true}
+step4 -> step5: "pass" {style.stroke: "#2e7d32"}
+step5 -> step6: "" {style.stroke: "#c62828"}
+step6 -> step7: "" {style.stroke: "#c62828"}
+step7 -> step8: "async\n(background)" {style.stroke: "#6a1b9a"; style.stroke-dash: 5}
+step8 -> step9: "periodic\n(~10s)" {style.stroke: "#6a1b9a"; style.stroke-dash: 5}
+
+# ── Crash annotations ─────────────────────────────────────────
+crash_note: |md
+  **Crash at any point:**
+  - Before step 8: data **lost** (Pending → Void)
+  - After step 8: data **recovered** (WAL replay)
+  - After step 9: data **intact** (on data pages)
+| {
+  shape: text
+  style.font-size: 14
+  style.font-color: "#c62828"
+  style.bold: true
+}

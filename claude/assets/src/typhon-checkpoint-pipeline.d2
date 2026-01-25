@@ -1,0 +1,159 @@
+# Typhon: Checkpoint Pipeline Steps
+# Background process: dirty pages → data file → WAL recycling
+
+direction: down
+
+# ── Title ─────────────────────────────────────────────────────
+title: "Checkpoint Pipeline — background thread, every 10-30s" {
+  shape: text
+  style.font-size: 22
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+# ── Pipeline (vertical sequence) ──────────────────────────────
+pipeline: "" {
+  style.fill: "#fafafa"
+  style.stroke: "#607d8b"
+  style.border-radius: 10
+
+  step1: "1. Record checkpoint-start LSN" {
+    shape: rectangle
+    style.fill: "#e3f2fd"
+    style.stroke: "#1565c0"
+    style.border-radius: 6
+  }
+
+  step2: "2. Write dirty pages to OS cache\n(revisions, indexes, checksums)" {
+    shape: rectangle
+    style.fill: "#e8f5e9"
+    style.stroke: "#2e7d32"
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  step3: "3. fsync data file\n→ pages now on stable media" {
+    shape: rectangle
+    style.fill: "#fff3e0"
+    style.stroke: "#e65100"
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  step4: "4. Update registry:\nWalDurable epochs → Committed" {
+    shape: rectangle
+    style.fill: "#f3e5f5"
+    style.stroke: "#6a1b9a"
+    style.border-radius: 6
+  }
+
+  step5: "5. Write checkpoint record to WAL\n(marks redundant position)" {
+    shape: rectangle
+    style.fill: "#fce4ec"
+    style.stroke: "#c62828"
+    style.border-radius: 6
+  }
+
+  step6: "6. fsync registry\n→ registry state durable" {
+    shape: rectangle
+    style.fill: "#fff3e0"
+    style.stroke: "#e65100"
+    style.border-radius: 6
+  }
+
+  step7: "7. Advance checkpoint LSN in header\n→ older WAL now recyclable" {
+    shape: rectangle
+    style.fill: "#e3f2fd"
+    style.stroke: "#1565c0"
+    style.border-radius: 6
+  }
+
+  step8: "8. Recycle old WAL segments\n(pre-allocate for reuse)" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  # Flow
+  step1 -> step2: "" {style.stroke: "#546e7a"}
+  step2 -> step3: "buffered" {style.stroke: "#78909c"; style.font-size: 12}
+  step3 -> step4: "" {style.stroke: "#546e7a"}
+  step4 -> step5: "" {style.stroke: "#546e7a"}
+  step5 -> step6: "" {style.stroke: "#546e7a"}
+  step6 -> step7: "" {style.stroke: "#546e7a"}
+  step7 -> step8: "" {style.stroke: "#546e7a"}
+}
+
+# ── Inputs (left) ────────────────────────────────────────────
+inputs: "Inputs" {
+  style.fill: "#eceff1"
+  style.stroke: "#90a4ae"
+  style.border-radius: 8
+
+  dirty: "Dirty Pages\n(Buffer Pool)" {
+    shape: cylinder
+    style.fill: "#cfd8dc"
+  }
+  registry_in: "UoW Registry\n(WalDurable)" {
+    shape: cylinder
+    style.fill: "#e1bee7"
+  }
+  wal_in: "Old WAL\nSegments" {
+    shape: page
+    style.fill: "#f8bbd0"
+  }
+}
+
+# ── Outputs (right) ──────────────────────────────────────────
+outputs: "Outputs" {
+  style.fill: "#eceff1"
+  style.stroke: "#90a4ae"
+  style.border-radius: 8
+
+  data_file: "Data File\n(durable)" {
+    shape: page
+    style.fill: "#a5d6a7"
+    style.stroke: "#2e7d32"
+  }
+  registry_out: "Registry\n(Committed)" {
+    shape: cylinder
+    style.fill: "#ce93d8"
+    style.stroke: "#6a1b9a"
+  }
+  free_segs: "Recycled WAL\n(ready)" {
+    shape: page
+    style.fill: "#a5d6a7"
+    style.stroke: "#2e7d32"
+  }
+}
+
+# ── Input → Step connections ─────────────────────────────────
+inputs.dirty -> pipeline.step2: "" {
+  style.stroke: "#2e7d32"
+  style.stroke-dash: 3
+}
+inputs.registry_in -> pipeline.step4: "" {
+  style.stroke: "#6a1b9a"
+  style.stroke-dash: 3
+}
+inputs.wal_in -> pipeline.step8: "" {
+  style.stroke: "#c62828"
+  style.stroke-dash: 3
+}
+
+# ── Step → Output connections ────────────────────────────────
+pipeline.step3 -> outputs.data_file: "" {
+  style.stroke: "#e65100"
+  style.stroke-dash: 3
+}
+pipeline.step6 -> outputs.registry_out: "" {
+  style.stroke: "#6a1b9a"
+  style.stroke-dash: 3
+}
+pipeline.step8 -> outputs.free_segs: "" {
+  style.stroke: "#2e7d32"
+  style.stroke-dash: 3
+}

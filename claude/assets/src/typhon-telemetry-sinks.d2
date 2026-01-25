@@ -1,0 +1,170 @@
+# Typhon: Telemetry Sinks — Dev & Production Stacks
+# Shows data sources flowing through pipelines to sinks
+
+direction: right
+
+# ── Title ─────────────────────────────────────────────────────
+title: "Telemetry Sinks — Dev & Production" {
+  shape: text
+  style.font-size: 22
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+# ── Data Sources ──────────────────────────────────────────────
+sources: "Data Sources" {
+  style.fill: "#fff8e1"
+  style.stroke: "#f57f17"
+  style.border-radius: 10
+
+  logs: "Logs\n(Serilog)" {
+    shape: rectangle
+    style.fill: "#fff9c4"
+    style.stroke: "#f9a825"
+    style.bold: true
+  }
+  metrics: "Metrics\n(OTel)" {
+    shape: rectangle
+    style.fill: "#fff9c4"
+    style.stroke: "#f9a825"
+    style.bold: true
+  }
+  traces: "Traces\n(OTel)" {
+    shape: rectangle
+    style.fill: "#fff9c4"
+    style.stroke: "#f9a825"
+    style.bold: true
+  }
+  deep: "Deep Diagnostics\n(lock history)" {
+    shape: rectangle
+    style.fill: "#fff9c4"
+    style.stroke: "#f9a825"
+    style.font-size: 12
+  }
+  health: "Health\n(/health)" {
+    shape: rectangle
+    style.fill: "#fff9c4"
+    style.stroke: "#f9a825"
+    style.font-size: 12
+  }
+}
+
+# ── Development Sinks ─────────────────────────────────────────
+dev: "Development Stack" {
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.border-radius: 10
+
+  seq: "Seq\nlocalhost:5341" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+    style.bold: true
+  }
+  seq_detail: "Structured queries\nCorrelation by TSN" {
+    shape: text
+    style.font-size: 11
+    style.font-color: "#2e7d32"
+  }
+
+  aspire: "Aspire Dashboard" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+    style.bold: true
+  }
+  aspire_detail: "Real-time gauges\nTrace waterfall" {
+    shape: text
+    style.font-size: 11
+    style.font-color: "#2e7d32"
+  }
+
+  debug: "Debug output / file" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+  }
+  debug_detail: "ToDebugString()" {
+    shape: text
+    style.font-size: 11
+    style.font-color: "#2e7d32"
+  }
+}
+
+# ── Production Pipeline ───────────────────────────────────────
+prod: "Production Stack (Grafana LGTM)" {
+  style.fill: "#fff3e0"
+  style.stroke: "#e65100"
+  style.border-radius: 10
+
+  collector: "OpenTelemetry\nCollector" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+    style.bold: true
+  }
+
+  loki: "Loki\n(logs)" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+  }
+  mimir: "Mimir\n(metrics)" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+  }
+  tempo: "Tempo\n(traces)" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+  }
+
+  grafana: "Grafana" {
+    shape: rectangle
+    style.fill: "#ffcc80"
+    style.stroke: "#e65100"
+    style.bold: true
+  }
+
+  collector -> loki: "" {style.stroke: "#e65100"}
+  collector -> mimir: "" {style.stroke: "#e65100"}
+  collector -> tempo: "" {style.stroke: "#e65100"}
+  loki -> grafana: "" {style.stroke: "#e65100"; style.stroke-dash: 5}
+  mimir -> grafana: "" {style.stroke: "#e65100"; style.stroke-dash: 5}
+  tempo -> grafana: "" {style.stroke: "#e65100"; style.stroke-dash: 5}
+}
+
+# ── Connections: Sources → Dev Sinks ──────────────────────────
+sources.logs -> dev.seq: "" {
+  style.stroke: "#2e7d32"
+  style.bold: true
+}
+sources.metrics -> dev.aspire: "" {
+  style.stroke: "#2e7d32"
+}
+sources.traces -> dev.aspire: "" {
+  style.stroke: "#2e7d32"
+}
+sources.deep -> dev.debug: "" {
+  style.stroke: "#2e7d32"
+  style.stroke-dash: 3
+}
+
+# ── Connections: Sources → Prod Pipeline ──────────────────────
+sources.logs -> prod.collector: "" {
+  style.stroke: "#e65100"
+  style.bold: true
+}
+sources.metrics -> prod.collector: "" {
+  style.stroke: "#e65100"
+}
+sources.traces -> prod.collector: "" {
+  style.stroke: "#e65100"
+}
+sources.health -> prod.grafana: "/health endpoint" {
+  style.stroke: "#e65100"
+  style.stroke-dash: 3
+  style.font-size: 11
+}

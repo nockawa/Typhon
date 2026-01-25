@@ -1,0 +1,147 @@
+# Typhon Engine: Architectural Layers
+
+direction: down
+
+# ── API Layer ──────────────────────────────────────────
+api: API Layer {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.border-radius: 8
+
+  dbe: DatabaseEngine {
+    shape: rectangle
+    style.fill: "#bbdefb"
+  }
+  uow: UnitOfWork {
+    shape: rectangle
+    style.fill: "#90caf9"
+  }
+  tx: Transaction {
+    shape: rectangle
+    style.fill: "#64b5f6"
+  }
+
+  dbe -> uow: creates
+  uow -> tx: creates
+}
+
+# ── Data Engine ────────────────────────────────────────
+data: Data Engine {
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.border-radius: 8
+
+  ct: ComponentTable {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+  }
+  rev: "Revision Chains\n(MVCC)" {
+    shape: cylinder
+    style.fill: "#a5d6a7"
+  }
+  idx: "B+Tree Indexes\n(L16/L32/L64)" {
+    shape: rectangle
+    style.fill: "#81c784"
+  }
+  schema: Schema {
+    shape: rectangle
+    style.fill: "#66bb6a"
+    style.font-color: white
+  }
+
+  ct -> rev
+  ct -> idx
+  ct -> schema
+}
+
+# ── Durability Layer ───────────────────────────────────
+durability: Durability Layer {
+  style.fill: "#fce4ec"
+  style.stroke: "#c62828"
+  style.border-radius: 8
+
+  wal: "WAL Writer\n+ Ring Buffer" {
+    shape: rectangle
+    style.fill: "#f8bbd0"
+  }
+  epoch: "Epoch Registry\n(crash recovery)" {
+    shape: cylinder
+    style.fill: "#f48fb1"
+  }
+  cp: "Checkpoint\nManager" {
+    shape: rectangle
+    style.fill: "#ec407a"
+    style.font-color: white
+  }
+
+  wal -> epoch
+  wal -> cp: "triggers after\nWAL segment full"
+}
+
+# ── Storage Engine ─────────────────────────────────────
+storage: Storage Engine {
+  style.fill: "#fff3e0"
+  style.stroke: "#e65100"
+  style.border-radius: 8
+
+  cache: "Buffer Pool\n(Clock-Sweep)" {
+    shape: cylinder
+    style.fill: "#ffe0b2"
+  }
+  chunks: "ChunkBasedSegment\n(3-level bitmap)" {
+    shape: rectangle
+    style.fill: "#ffcc80"
+  }
+  mmf: "PagedMMF\n(8KB pages)" {
+    shape: page
+    style.fill: "#ffb74d"
+  }
+
+  cache -> chunks
+  chunks -> mmf
+}
+
+# ── Concurrency ────────────────────────────────────────
+concurrency: Concurrency {
+  style.fill: "#f3e5f5"
+  style.stroke: "#6a1b9a"
+  style.border-radius: 8
+
+  ac: "AccessControl\n(64-bit RW lock)" {
+    shape: rectangle
+    style.fill: "#e1bee7"
+  }
+  rac: "ResourceAccessControl\n(3-mode)" {
+    shape: rectangle
+    style.fill: "#ce93d8"
+  }
+  spin: "AdaptiveSpinWait\n(no alloc)" {
+    shape: rectangle
+    style.fill: "#ba68c8"
+    style.font-color: white
+  }
+}
+
+# ── Cross-layer connections ────────────────────────────
+api -> data: "CRUD operations" {
+  style.stroke: "#1565c0"
+}
+api -> durability: "commit path" {
+  style.stroke: "#c62828"
+  style.bold: true
+}
+data -> storage: "page access" {
+  style.stroke: "#e65100"
+}
+durability -> storage: "fsync (checkpoint)" {
+  style.stroke: "#e65100"
+  style.stroke-dash: 5
+}
+concurrency -> data: "protects" {
+  style.stroke: "#6a1b9a"
+  style.stroke-dash: 3
+}
+concurrency -> storage: "protects" {
+  style.stroke: "#6a1b9a"
+  style.stroke-dash: 3
+}

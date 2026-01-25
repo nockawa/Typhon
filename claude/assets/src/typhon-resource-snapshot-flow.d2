@@ -1,0 +1,161 @@
+# Typhon: Resource Snapshot — Data Flow
+# Shows how components maintain counters, graph reads them, consumers use snapshots
+
+direction: down
+
+# ── Title ─────────────────────────────────────────────────────
+title: "Resource Snapshot — Data Flow" {
+  shape: text
+  style.font-size: 22
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+# ── Hot-Path Layer (components maintain counters) ──────────────
+hot_path: "Hot-Path Layer — Components Maintain Counters" {
+  style.fill: "#fff8e1"
+  style.stroke: "#f57f17"
+  style.border-radius: 10
+
+  page_cache: "PageCache\nCacheHit++\nCacheMiss++\nDirtyCount" {
+    shape: rectangle
+    style.fill: "#fff9c4"
+    style.stroke: "#f9a825"
+  }
+  wal: "WALRingBuffer\nFillLevel\nWriteCount\nBackPressureWaits" {
+    shape: rectangle
+    style.fill: "#fff9c4"
+    style.stroke: "#f9a825"
+  }
+  tx_pool: "TransactionPool\nActiveCount\nCommitCount\nConflicts" {
+    shape: rectangle
+    style.fill: "#fff9c4"
+    style.stroke: "#f9a825"
+  }
+  comp_table: "ComponentTable<T>\nContentionWaits\nInsertCount\nChunkCount" {
+    shape: rectangle
+    style.fill: "#fff9c4"
+    style.stroke: "#f9a825"
+  }
+
+  cost_label: "~1 ns per increment\n(plain field, no atomics)" {
+    shape: text
+    style.font-size: 11
+    style.font-color: "#e65100"
+    style.italic: true
+  }
+}
+
+# ── Graph Layer (reads on demand) ─────────────────────────────
+graph: "IResourceGraph — Pull-Based Snapshot" {
+  style.fill: "#e8eaf6"
+  style.stroke: "#283593"
+  style.border-radius: 10
+
+  walk: "Tree Walk\nfor each node:\n  if IMetricSource\n    ReadMetrics(writer)" {
+    shape: rectangle
+    style.fill: "#c5cae9"
+    style.stroke: "#3949ab"
+    style.bold: true
+  }
+  snapshot: "ResourceSnapshot\n(immutable, point-in-time)" {
+    shape: cylinder
+    style.fill: "#9fa8da"
+    style.stroke: "#283593"
+    style.bold: true
+  }
+
+  walk -> snapshot: "~50 ns/node" {
+    style.stroke: "#283593"
+  }
+}
+
+# ── Consumer Layer ─────────────────────────────────────────────
+consumers: "Consumers (Observability)" {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.border-radius: 10
+
+  otel: "OTel Metrics\nExport" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+  }
+  health: "Health\nChecks" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+  }
+  alert: "Root-Cause\nAlerts" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+  }
+  exhaust: "Exhaustion\nPolicy" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+  }
+}
+
+# ── Connections: hot path → graph ──────────────────────────────
+hot_path.page_cache -> graph.walk: "IMetricSource" {
+  style.stroke: "#f57f17"
+  style.stroke-dash: 4
+}
+hot_path.wal -> graph.walk: "IMetricSource" {
+  style.stroke: "#f57f17"
+  style.stroke-dash: 4
+}
+hot_path.tx_pool -> graph.walk: "IMetricSource" {
+  style.stroke: "#f57f17"
+  style.stroke-dash: 4
+}
+hot_path.comp_table -> graph.walk: "IMetricSource" {
+  style.stroke: "#f57f17"
+  style.stroke-dash: 4
+}
+
+# ── Connections: graph → consumers ─────────────────────────────
+graph.snapshot -> consumers.otel: "every 1–5s" {
+  style.stroke: "#1565c0"
+  style.bold: true
+}
+graph.snapshot -> consumers.health: "every 1s" {
+  style.stroke: "#1565c0"
+}
+graph.snapshot -> consumers.alert: "on threshold" {
+  style.stroke: "#1565c0"
+  style.stroke-dash: 3
+}
+graph.snapshot -> consumers.exhaust: "on pressure" {
+  style.stroke: "#1565c0"
+  style.stroke-dash: 3
+}
+
+# ── Sinks ──────────────────────────────────────────────────────
+sinks: "External Sinks" {
+  style.fill: "#efebe9"
+  style.stroke: "#4e342e"
+  style.border-radius: 8
+
+  grafana: "Grafana\nLTM" {
+    shape: rectangle
+    style.fill: "#d7ccc8"
+    style.stroke: "#4e342e"
+  }
+  seq: "Seq /\nAspire" {
+    shape: rectangle
+    style.fill: "#d7ccc8"
+    style.stroke: "#4e342e"
+  }
+}
+
+consumers.otel -> sinks.grafana: "OTel Collector" {
+  style.stroke: "#4e342e"
+}
+consumers.otel -> sinks.seq: "dev mode" {
+  style.stroke: "#4e342e"
+  style.stroke-dash: 3
+}

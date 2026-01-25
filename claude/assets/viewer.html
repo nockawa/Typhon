@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Typhon Diagram Viewer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .toolbar {
+            background: #16213e;
+            padding: 8px 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            border-bottom: 1px solid #0f3460;
+            flex-shrink: 0;
+        }
+
+        .toolbar h1 {
+            font-size: 14px;
+            font-weight: 600;
+            color: #e0e0e0;
+            margin-right: auto;
+        }
+
+        .toolbar button {
+            background: #0f3460;
+            border: 1px solid #1a5276;
+            color: #e0e0e0;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background 0.15s;
+        }
+
+        .toolbar button:hover { background: #1a5276; }
+        .toolbar button.active { background: #2980b9; border-color: #3498db; }
+
+        .toolbar .zoom-info {
+            font-size: 12px;
+            color: #7f8c8d;
+            min-width: 50px;
+            text-align: center;
+        }
+
+        .viewer {
+            flex: 1;
+            overflow: hidden;
+            position: relative;
+            cursor: grab;
+        }
+
+        .viewer:active { cursor: grabbing; }
+
+        .viewer svg, .viewer img {
+            position: absolute;
+            top: 0;
+            left: 0;
+            transform-origin: 0 0;
+            max-width: none;
+            max-height: none;
+        }
+
+        .help-overlay {
+            position: absolute;
+            bottom: 16px;
+            right: 16px;
+            background: rgba(22, 33, 62, 0.9);
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 12px 16px;
+            font-size: 12px;
+            line-height: 1.6;
+            color: #bdc3c7;
+            pointer-events: none;
+            opacity: 0.8;
+            transition: opacity 0.3s;
+        }
+
+        .help-overlay kbd {
+            background: #0f3460;
+            border: 1px solid #1a5276;
+            border-radius: 3px;
+            padding: 1px 5px;
+            font-family: monospace;
+            font-size: 11px;
+        }
+
+        .diagram-list {
+            position: absolute;
+            top: 48px;
+            left: 16px;
+            background: rgba(22, 33, 62, 0.95);
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 8px;
+            display: none;
+            z-index: 10;
+        }
+
+        .diagram-list.visible { display: block; }
+
+        .diagram-list a {
+            display: block;
+            padding: 8px 12px;
+            color: #e0e0e0;
+            text-decoration: none;
+            border-radius: 4px;
+            font-size: 13px;
+            white-space: nowrap;
+        }
+
+        .diagram-list a:hover { background: #0f3460; }
+        .diagram-list a.current { background: #2980b9; }
+    </style>
+</head>
+<body>
+    <div class="toolbar">
+        <h1 id="title">Typhon Diagram Viewer</h1>
+        <button id="btn-list" title="Switch diagram">&#9776; Diagrams</button>
+        <button id="btn-zoom-out" title="Zoom out (-)">&#8722;</button>
+        <span class="zoom-info" id="zoom-level">100%</span>
+        <button id="btn-zoom-in" title="Zoom in (+)">&#43;</button>
+        <button id="btn-fit" title="Fit to window (F)">Fit</button>
+        <button id="btn-reset" title="Reset view (R)">1:1</button>
+    </div>
+
+    <div class="viewer" id="viewer"></div>
+
+    <div class="diagram-list" id="diagram-list"></div>
+
+    <div class="help-overlay" id="help">
+        <kbd>Scroll</kbd> Zoom &nbsp;
+        <kbd>Drag</kbd> Pan &nbsp;
+        <kbd>F</kbd> Fit &nbsp;
+        <kbd>R</kbd> Reset &nbsp;
+        <kbd>+</kbd><kbd>-</kbd> Zoom
+    </div>
+
+    <script>
+        // ── Configuration ──────────────────────────────────────
+        const DIAGRAMS = [
+            { name: 'Concurrency Overview', file: 'typhon-concurrency-overview.svg' },
+            { name: 'UoW Lifecycle States', file: 'typhon-uow-lifecycle-states.svg' },
+            { name: 'UoW Swimlane Pipeline', file: 'typhon-uow-swimlane.svg' },
+            { name: 'UoW Data Impact', file: 'typhon-uow-data-impact.svg' },
+            { name: 'Commit Path', file: 'typhon-commit-path.svg' },
+            { name: 'Architecture Layers', file: 'typhon-architecture-layers.svg' },
+            { name: 'Immediate Commit Sequence', file: 'typhon-immediate-commit-sequence.svg' },
+            { name: 'Checkpoint Pipeline', file: 'typhon-checkpoint-pipeline.svg' },
+            { name: 'Durability Overview', file: 'typhon-durability-overview.svg' },
+            { name: 'Execution System Overview', file: 'typhon-execution-overview.svg' },
+            { name: 'Backup Overview', file: 'typhon-backup-overview.svg' },
+            { name: 'Backup CoW Mechanism', file: 'typhon-backup-cow-mechanism.svg' },
+            { name: 'Backup Reverse Delta', file: 'typhon-backup-reverse-delta.svg' },
+            { name: 'Storage Overview', file: 'typhon-storage-overview.svg' },
+            { name: 'Query Engine Overview', file: 'typhon-query-overview.svg' },
+            { name: 'Query Pipeline Executor', file: 'typhon-query-pipeline.svg' },
+            { name: 'Error Escalation Flow', file: 'typhon-error-escalation.svg' },
+            { name: 'Component Dependency Flow', file: 'typhon-dependency-flow.svg' },
+        ];
+
+        // ── State ──────────────────────────────────────────────
+        let scale = 1;
+        let panX = 0, panY = 0;
+        let isPanning = false;
+        let startX, startY, startPanX, startPanY;
+        let currentDiagram = null;
+        let contentEl = null;
+
+        const viewer = document.getElementById('viewer');
+        const zoomLevel = document.getElementById('zoom-level');
+        const title = document.getElementById('title');
+        const diagramList = document.getElementById('diagram-list');
+
+        // ── Diagram Loading ────────────────────────────────────
+        function loadDiagram(file, name) {
+            viewer.innerHTML = '<div style="color:#7f8c8d;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)">Loading...</div>';
+            currentDiagram = file;
+            title.textContent = name || file;
+
+            fetch(file)
+                .then(r => {
+                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                    return r.text();
+                })
+                .then(svg => {
+                    viewer.innerHTML = svg;
+                    contentEl = viewer.querySelector('svg');
+                    if (contentEl) {
+                        contentEl.style.position = 'absolute';
+                        contentEl.style.transformOrigin = '0 0';
+                        contentEl.removeAttribute('width');
+                        contentEl.removeAttribute('height');
+                        // Use viewBox dimensions or getBBox
+                        const vb = contentEl.viewBox?.baseVal;
+                        if (vb && vb.width) {
+                            contentEl.style.width = vb.width + 'px';
+                            contentEl.style.height = vb.height + 'px';
+                        }
+                    }
+                    fitToWindow();
+                    updateListHighlight();
+                })
+                .catch(err => {
+                    // Fallback: try as <img>
+                    viewer.innerHTML = '';
+                    const img = document.createElement('img');
+                    img.src = file;
+                    img.onload = () => {
+                        contentEl = img;
+                        fitToWindow();
+                    };
+                    img.onerror = () => {
+                        viewer.innerHTML = `<div style="color:#e74c3c;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)">
+                            Failed to load: ${file}<br><small>${err.message}</small></div>`;
+                    };
+                    viewer.appendChild(img);
+                });
+        }
+
+        // ── Transform ──────────────────────────────────────────
+        function applyTransform() {
+            if (!contentEl) return;
+            contentEl.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+            zoomLevel.textContent = Math.round(scale * 100) + '%';
+        }
+
+        function zoom(delta, cx, cy) {
+            const oldScale = scale;
+            scale = Math.min(10, Math.max(0.1, scale * (1 + delta)));
+            // Zoom toward cursor
+            if (cx !== undefined) {
+                panX = cx - (cx - panX) * (scale / oldScale);
+                panY = cy - (cy - panY) * (scale / oldScale);
+            }
+            applyTransform();
+        }
+
+        function fitToWindow() {
+            if (!contentEl) return;
+            const vw = viewer.clientWidth;
+            const vh = viewer.clientHeight;
+            let cw, ch;
+            if (contentEl.tagName === 'svg') {
+                const vb = contentEl.viewBox?.baseVal;
+                cw = vb?.width || contentEl.clientWidth || 800;
+                ch = vb?.height || contentEl.clientHeight || 600;
+            } else {
+                cw = contentEl.naturalWidth || contentEl.width;
+                ch = contentEl.naturalHeight || contentEl.height;
+            }
+            scale = Math.min((vw - 40) / cw, (vh - 40) / ch, 2);
+            panX = (vw - cw * scale) / 2;
+            panY = (vh - ch * scale) / 2;
+            applyTransform();
+        }
+
+        function resetView() {
+            scale = 1;
+            panX = 20;
+            panY = 20;
+            applyTransform();
+        }
+
+        // ── Mouse Events ───────────────────────────────────────
+        viewer.addEventListener('wheel', e => {
+            e.preventDefault();
+            const rect = viewer.getBoundingClientRect();
+            const cx = e.clientX - rect.left;
+            const cy = e.clientY - rect.top;
+            zoom(e.deltaY > 0 ? -0.1 : 0.1, cx, cy);
+        }, { passive: false });
+
+        viewer.addEventListener('mousedown', e => {
+            if (e.button !== 0) return;
+            isPanning = true;
+            startX = e.clientX;
+            startY = e.clientY;
+            startPanX = panX;
+            startPanY = panY;
+        });
+
+        window.addEventListener('mousemove', e => {
+            if (!isPanning) return;
+            panX = startPanX + (e.clientX - startX);
+            panY = startPanY + (e.clientY - startY);
+            applyTransform();
+        });
+
+        window.addEventListener('mouseup', () => { isPanning = false; });
+
+        // ── Keyboard ───────────────────────────────────────────
+        window.addEventListener('keydown', e => {
+            switch (e.key) {
+                case 'f': case 'F': fitToWindow(); break;
+                case 'r': case 'R': resetView(); break;
+                case '+': case '=': zoom(0.15); break;
+                case '-': zoom(-0.15); break;
+            }
+        });
+
+        // ── Toolbar Buttons ────────────────────────────────────
+        document.getElementById('btn-zoom-in').onclick = () => zoom(0.2);
+        document.getElementById('btn-zoom-out').onclick = () => zoom(-0.2);
+        document.getElementById('btn-fit').onclick = fitToWindow;
+        document.getElementById('btn-reset').onclick = resetView;
+
+        // ── Diagram List ───────────────────────────────────────
+        function buildList() {
+            diagramList.innerHTML = '';
+            DIAGRAMS.forEach(d => {
+                const a = document.createElement('a');
+                a.href = '#';
+                a.textContent = d.name;
+                a.dataset.file = d.file;
+                a.onclick = e => {
+                    e.preventDefault();
+                    loadDiagram(d.file, d.name);
+                    diagramList.classList.remove('visible');
+                };
+                diagramList.appendChild(a);
+            });
+        }
+
+        function updateListHighlight() {
+            diagramList.querySelectorAll('a').forEach(a => {
+                a.classList.toggle('current', a.dataset.file === currentDiagram);
+            });
+        }
+
+        document.getElementById('btn-list').onclick = () => {
+            diagramList.classList.toggle('visible');
+        };
+
+        // Close list on outside click
+        viewer.addEventListener('mousedown', () => {
+            diagramList.classList.remove('visible');
+        });
+
+        // ── Init ───────────────────────────────────────────────
+        buildList();
+
+        // Load from URL hash or query param, or default to first
+        const params = new URLSearchParams(window.location.search);
+        const requested = params.get('diagram') || window.location.hash.slice(1);
+        const match = DIAGRAMS.find(d => d.file === requested || d.file.includes(requested));
+        if (match) {
+            loadDiagram(match.file, match.name);
+        } else {
+            loadDiagram(DIAGRAMS[0].file, DIAGRAMS[0].name);
+        }
+
+        // Handle resize
+        window.addEventListener('resize', () => { if (contentEl) fitToWindow(); });
+
+        // Hide help after 5s
+        setTimeout(() => {
+            document.getElementById('help').style.opacity = '0';
+        }, 8000);
+    </script>
+</body>
+</html>

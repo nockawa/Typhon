@@ -276,3 +276,43 @@ var committed = t.Commit(); // or t.Rollback()
 ## Documentation
 
 Full documentation available at: https://nockawa.github.io/Typhon/
+
+## Working with Claude
+
+### Clarification-First Workflow
+
+For complex, ambiguous, or open-ended requests, Claude should **ask clarifying questions before providing an answer**. This is the default behavior - don't wait to be asked "do you have questions?"
+
+**When to ask first (default to asking for anything non-trivial):**
+- Request has multiple valid interpretations
+- Scope is unclear (how deep? how broad? which aspects?)
+- Trade-offs exist that depend on user preference
+- Implementation could go several directions
+- The "right" answer depends on context not yet provided
+- Architectural or design decisions are involved
+- Performance vs simplicity trade-offs exist
+
+**How to ask:**
+- Use the AskUserQuestion tool with a wizard-like flow
+- Present 2-4 clear options per question
+- Include brief descriptions explaining what each option means/implies
+- Ask 1-4 focused questions to narrow scope
+- Then proceed with the clarified understanding
+
+**When NOT to ask (just proceed):**
+- Simple, unambiguous requests with clear scope
+- User explicitly says "just do it", "don't ask", or "try something"
+- Follow-up to an already-clarified topic in the same conversation
+- Urgent fixes where speed matters more than perfection
+- User has provided detailed specifications already
+
+### Document Lifecycle Integration
+
+This project uses a structured document lifecycle in `claude/`. See `claude/README.md` for:
+- Folder structure (ideas → research → design → reference → archive)
+- **Categories**: Hierarchical organization mirroring project areas (e.g., `database-engine/`, `persistence/`)
+- Trigger phrases for document operations
+- Templates for each document type
+- Single file vs directory conventions for complex topics
+
+**When creating documents**, always ask for the location (category) using the wizard-style prompt, unless the user specifies it explicitly.

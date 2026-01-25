@@ -1,4 +1,5 @@
 {
+  "cleanupPeriodDays": 180,
   "env": {
     "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000"
   },
@@ -19,7 +20,34 @@
       "Bash(cat:*)",
       "Bash(wait:*)",
       "Bash(perl -e 'alarm 45; exec @ARGV' dotnet test:*)",
-      "Bash(git mv:*)"
+      "Bash(git mv:*)",
+      "mcp__rider__get_all_open_file_paths",
+      "mcp__rider__get_file_text_by_path",
+      "Bash(findstr:*)",
+      "Bash(dir \"C:\\\\Dev\\\\github\\\\Typhon\\\\claude\\\\design\")",
+      "Bash(tree:*)",
+      "Bash(ls:*)",
+      "Bash(wc:*)",
+      "Bash(\"/c/Program Files/D2/d2.exe\" --theme 0 \"C:/Dev/github/Typhon/claude/assets/src/typhon-uow-lifecycle-states.d2\" \"C:/Dev/github/Typhon/claude/assets/typhon-uow-lifecycle-states.svg\")",
+      "Bash(\"/c/Program Files/D2/d2.exe\" --theme 0 \"C:/Dev/github/Typhon/claude/assets/src/typhon-uow-swimlane.d2\" \"C:/Dev/github/Typhon/claude/assets/typhon-uow-swimlane.svg\")",
+      "Bash(\"/c/Program Files/D2/d2.exe\" --theme 0 \"C:/Dev/github/Typhon/claude/assets/src/typhon-uow-data-impact.d2\" \"C:/Dev/github/Typhon/claude/assets/typhon-uow-data-impact.svg\")",
+      "Bash(\"/c/Program Files/D2/d2.exe\" --theme 0 \"C:/Dev/github/Typhon/claude/assets/src/typhon-concurrency-overview.d2\" \"C:/Dev/github/Typhon/claude/assets/typhon-concurrency-overview.svg\")",
+      "Bash(\"/c/Program Files/D2/d2.exe\" --theme 0 \"C:/Dev/github/Typhon/claude/assets/src/typhon-checkpoint-pipeline.d2\" \"C:/Dev/github/Typhon/claude/assets/typhon-checkpoint-pipeline.svg\")",
+      "Bash(\"/c/Program Files/D2/d2.exe\" --theme 0 \"C:/Dev/github/Typhon/claude/assets/src/typhon-durability-overview.d2\" \"C:/Dev/github/Typhon/claude/assets/typhon-durability-overview.svg\")",
+      "Bash(\"/c/Program Files/D2/d2.exe\" --theme 1 \"C:\\\\Dev\\\\github\\\\Typhon\\\\claude\\\\assets\\\\src\\\\typhon-backup-overview.d2\" \"C:\\\\Dev\\\\github\\\\Typhon\\\\claude\\\\assets\\\\typhon-backup-overview.svg\")",
+      "Bash(\"/c/Program Files/D2/d2.exe\" --theme 1 \"C:\\\\Dev\\\\github\\\\Typhon\\\\claude\\\\assets\\\\src\\\\typhon-backup-cow-mechanism.d2\" \"C:\\\\Dev\\\\github\\\\Typhon\\\\claude\\\\assets\\\\typhon-backup-cow-mechanism.svg\")",
+      "Bash(\"/c/Program Files/D2/d2.exe\" --theme 1 \"C:\\\\Dev\\\\github\\\\Typhon\\\\claude\\\\assets\\\\src\\\\typhon-backup-reverse-delta.d2\" \"C:\\\\Dev\\\\github\\\\Typhon\\\\claude\\\\assets\\\\typhon-backup-reverse-delta.svg\")",
+      "Bash(\"/c/Program Files/D2/d2.exe\" --theme 1 \"C:/Dev/github/Typhon/claude/assets/src/typhon-storage-overview.d2\" \"C:/Dev/github/Typhon/claude/assets/typhon-storage-overview.svg\")",
+      "Bash(\"/c/Program Files/D2/d2.exe\" --theme 1 \"C:/Dev/github/Typhon/claude/assets/src/typhon-query-overview.d2\" \"C:/Dev/github/Typhon/claude/assets/typhon-query-overview.svg\")",
+      "Bash(\"/c/Program Files/D2/d2.exe\" --theme 1 \"C:/Dev/github/Typhon/claude/assets/src/typhon-query-pipeline.d2\" \"C:/Dev/github/Typhon/claude/assets/typhon-query-pipeline.svg\")",
+      "Bash(\"/c/Program Files/D2/d2.exe\":*)",
+      "Bash(\"/c/Program Files/D2/d2.exe\" --theme 1 \"C:/Dev/github/Typhon/claude/assets/src/typhon-dependency-flow.d2\" \"C:/Dev/github/Typhon/claude/assets/typhon-dependency-flow.svg\")",
+      "Bash(\"/c/Program Files/D2/d2.exe\" --help)",
+      "Bash(d2:*)",
+      "Bash(dir \"C:\\\\Dev\\\\github\\\\Typhon\\\\claude\\\\overview\"\" /A:-D)",
+      "Bash(dir \"C:\\\\Dev\\\\github\\\\Typhon\\\\claude\\\\assets\\\\*.svg\" /A:-D)",
+      "Bash(find claudeoverview -name \"*.md\" -exec sh -c 'echo \"\"File: $1\"\"; wc -c \"\"$1\"\"; wc -l \"\"$1\"\"' _ {} ;)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []

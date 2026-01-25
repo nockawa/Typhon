@@ -1,0 +1,117 @@
+# Typhon: Storage Engine — Component Overview
+# Shows Consumers → Storage Engine → Segments → Access Layer
+
+direction: down
+
+# ── Title ─────────────────────────────────────────────────────
+title: "Storage Engine — Component Overview" {
+  shape: text
+  style.font-size: 22
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+# ── Consumers ────────────────────────────────────────────────
+consumers: "Consumers (Upper Layers)" {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.border-radius: 10
+
+  data: "Data Engine\nComponentTable, B+Trees" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+    style.bold: true
+  }
+  durable: "Durability\nWAL, Recovery" {
+    shape: rectangle
+    style.fill: "#90caf9"
+    style.stroke: "#1565c0"
+  }
+}
+
+# ── Storage Engine Core ──────────────────────────────────────
+engine: "Storage Engine Core" {
+  style.fill: "#f3e5f5"
+  style.stroke: "#6a1b9a"
+  style.border-radius: 10
+
+  managed: "ManagedPagedMMF\nPage allocation, occupancy" {
+    shape: rectangle
+    style.fill: "#e1bee7"
+    style.stroke: "#7b1fa2"
+    style.bold: true
+  }
+  paged: "PagedMMF\nCache, async I/O, lifecycle" {
+    shape: rectangle
+    style.fill: "#ce93d8"
+    style.stroke: "#6a1b9a"
+    style.bold: true
+  }
+
+  managed -> paged: "extends" {style.stroke: "#6a1b9a"}
+}
+
+# ── Segment Abstractions ────────────────────────────────────
+segments: "Segment Abstractions" {
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.border-radius: 10
+
+  logical: "LogicalSegment\nMulti-page directories" {
+    shape: rectangle
+    style.fill: "#a5d6a7"
+    style.stroke: "#388e3c"
+  }
+  chunk: "ChunkBasedSegment\nFixed-size chunks" {
+    shape: rectangle
+    style.fill: "#81c784"
+    style.stroke: "#2e7d32"
+    style.bold: true
+  }
+  variable: "VariableSizedBuffer\nVariable buffers" {
+    shape: rectangle
+    style.fill: "#a5d6a7"
+    style.stroke: "#388e3c"
+  }
+  string: "StringTableSegment\nUTF-8 strings" {
+    shape: rectangle
+    style.fill: "#a5d6a7"
+    style.stroke: "#388e3c"
+  }
+
+  chunk -> logical: "uses" {style.stroke: "#2e7d32"}
+  variable -> chunk: "uses" {style.stroke: "#2e7d32"; style.stroke-dash: 3}
+  string -> chunk: "uses" {style.stroke: "#2e7d32"; style.stroke-dash: 3}
+}
+
+# ── Access Layer ─────────────────────────────────────────────
+access: "Access Layer" {
+  style.fill: "#fff3e0"
+  style.stroke: "#e65100"
+  style.border-radius: 10
+
+  pageacc: "PageAccessor\nSafe page handle" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+  }
+  chunkacc: "ChunkAccessor\nSIMD-optimized cache" {
+    shape: rectangle
+    style.fill: "#ffcc80"
+    style.stroke: "#e65100"
+    style.bold: true
+  }
+}
+
+# ── Consumers → Engine ───────────────────────────────────────
+consumers.data -> engine.managed: "" {style.stroke: "#6a1b9a"; style.bold: true}
+consumers.durable -> engine.managed: "" {style.stroke: "#6a1b9a"}
+
+# ── Segments → Engine ────────────────────────────────────────
+segments.logical -> engine.managed: "requests pages" {style.stroke: "#6a1b9a"; style.stroke-dash: 3}
+
+# ── Access → Engine/Segments ─────────────────────────────────
+access.pageacc -> engine.paged: "wraps page" {style.stroke: "#e65100"; style.stroke-dash: 3}
+access.chunkacc -> segments.chunk: "indexes chunks" {style.stroke: "#e65100"; style.stroke-dash: 3}

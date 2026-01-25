@@ -1,0 +1,140 @@
+# Typhon: Data Engine — Component Overview
+# Shows the layered API hierarchy and per-component storage
+
+direction: right
+
+title: |md
+  # Data Engine
+  Component storage & MVCC transactions
+|
+
+# ── Application Layer ─────────────────────────────────────────
+app: "Application" {
+  style.fill: "#e8eaf6"
+  style.stroke: "#283593"
+  style.border-radius: 10
+
+  code: "Application Code\nEntity CRUD ops" {
+    shape: rectangle
+    style.fill: "#c5cae9"
+    style.stroke: "#3949ab"
+    style.bold: true
+  }
+}
+
+# ── Data Engine Layer ─────────────────────────────────────────
+engine: "Data Engine" {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.border-radius: 10
+
+  dbe: "DatabaseEngine\nSchema & Setup" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+    style.bold: true
+  }
+  chain: "TransactionChain\nActive tx mgmt" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+  }
+  uow: "UnitOfWork\nDurability boundary" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+  }
+  tx: "Transaction\nMVCC operations" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+  }
+}
+
+# ── Per-Component Storage ─────────────────────────────────────
+storage: "Per-Component Storage" {
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.border-radius: 10
+
+  ct: "ComponentTable\nSchema + segments" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+    style.bold: true
+  }
+  comp: "ComponentSegment\nBlittable data" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+  }
+  rev: "CompRevTableSegment\nRevision chains" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+  }
+}
+
+# ── B+Tree Indexes ────────────────────────────────────────────
+indexes: "B+Tree Indexes" {
+  style.fill: "#fff3e0"
+  style.stroke: "#e65100"
+  style.border-radius: 10
+
+  pk: "PrimaryKeyIndex\nEntityID → RevChain" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+    style.bold: true
+  }
+  secondary: "Secondary Indexes\nL16 / L32 / L64 / String64" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+  }
+}
+
+# ── Schema System ─────────────────────────────────────────────
+schema: "Schema System" {
+  style.fill: "#fce4ec"
+  style.stroke: "#c62828"
+  style.border-radius: 10
+
+  def: "DBComponentDefinition\nField metadata" {
+    shape: rectangle
+    style.fill: "#f8bbd0"
+    style.stroke: "#c62828"
+  }
+  defs: "DatabaseDefinitions\nComponent registry" {
+    shape: rectangle
+    style.fill: "#f8bbd0"
+    style.stroke: "#c62828"
+  }
+}
+
+# ── Connections (establish rank ordering) ─────────────────────
+app.code -> engine.dbe: "register &\ncreate tx" {
+  style.stroke: "#283593"
+  style.bold: true
+}
+engine.dbe -> engine.chain: "" {style.stroke: "#1565c0"}
+engine.dbe -> engine.uow: "" {style.stroke: "#1565c0"}
+engine.uow -> engine.tx: "" {style.stroke: "#1565c0"}
+
+engine.tx -> storage.ct: "CRUD ops" {
+  style.stroke: "#1565c0"
+  style.bold: true
+}
+storage.ct -> storage.comp: "data\nchunks" {style.stroke: "#2e7d32"}
+storage.ct -> storage.rev: "revision\nhistory" {style.stroke: "#2e7d32"}
+
+storage.ct -> indexes.pk: "entity\nlookup" {
+  style.stroke: "#e65100"
+}
+storage.ct -> indexes.secondary: "field\nindexes" {
+  style.stroke: "#e65100"
+  style.stroke-dash: 3
+}
+
+engine.dbe -> schema.defs: "schema\nregistry" {style.stroke: "#c62828"}
+storage.ct -> schema.def: "field\nmetadata" {style.stroke: "#c62828"}

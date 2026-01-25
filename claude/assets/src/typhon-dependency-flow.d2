@@ -1,0 +1,134 @@
+# Typhon: Component Dependency Flow
+# Shows Application → Core → Infrastructure → Foundation, with Cross-Cutting
+
+direction: down
+
+# ── Title ─────────────────────────────────────────────────────
+title: "Typhon — Component Dependency Flow" {
+  shape: text
+  style.font-size: 22
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+# ── Application ──────────────────────────────────────────────
+application: "Application Layer" {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.border-radius: 10
+
+  app: "Application Code" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+    style.bold: true
+  }
+}
+
+# ── Core Engine ──────────────────────────────────────────────
+core: "Core Engine" {
+  style.fill: "#f3e5f5"
+  style.stroke: "#6a1b9a"
+  style.border-radius: 10
+
+  query: "5. Query Engine" {
+    shape: rectangle
+    style.fill: "#e1bee7"
+    style.stroke: "#7b1fa2"
+  }
+  data: "4. Data Engine\nSchema, Tables, B+Trees, Transactions" {
+    shape: rectangle
+    style.fill: "#ce93d8"
+    style.stroke: "#6a1b9a"
+    style.bold: true
+  }
+
+  query -> data: "" {style.stroke: "#6a1b9a"}
+}
+
+# ── Infrastructure ───────────────────────────────────────────
+infra: "Infrastructure" {
+  style.fill: "#fff3e0"
+  style.stroke: "#e65100"
+  style.border-radius: 10
+
+  durable: "6. Durability\nWAL Writer, Checkpoint" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+  }
+  storage: "3. Storage Engine\nPages, Buffer Pool" {
+    shape: rectangle
+    style.fill: "#ffcc80"
+    style.stroke: "#e65100"
+    style.bold: true
+  }
+  exec: "2. Execution System\nUoW, Deadlines, Workers" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+  }
+}
+
+# ── Foundation ───────────────────────────────────────────────
+foundation: "Foundation" {
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.border-radius: 10
+
+  concurrency: "1. Concurrency\nLatches, Deadlines, Cancellation" {
+    shape: rectangle
+    style.fill: "#a5d6a7"
+    style.stroke: "#388e3c"
+    style.bold: true
+  }
+  utils: "11. Shared Utilities\nAllocators, String64, Variant" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+  }
+
+  concurrency -> utils: "" {style.stroke: "#2e7d32"; style.stroke-dash: 3}
+}
+
+# ── Cross-Cutting ────────────────────────────────────────────
+crosscutting: "Cross-Cutting Concerns" {
+  style.fill: "#eceff1"
+  style.stroke: "#607d8b"
+  style.border-radius: 10
+
+  backup: "7. Backup" {
+    shape: rectangle
+    style.fill: "#cfd8dc"
+    style.stroke: "#607d8b"
+  }
+  observe: "8. Observability" {
+    shape: rectangle
+    style.fill: "#cfd8dc"
+    style.stroke: "#607d8b"
+  }
+  resource: "9. Resources" {
+    shape: rectangle
+    style.fill: "#cfd8dc"
+    style.stroke: "#607d8b"
+  }
+  errors: "10. Errors" {
+    shape: rectangle
+    style.fill: "#cfd8dc"
+    style.stroke: "#607d8b"
+  }
+}
+
+# ── Primary dependency chain ─────────────────────────────────
+application.app -> core.query: "" {style.stroke: "#6a1b9a"; style.bold: true}
+core.data -> infra.durable: "" {style.stroke: "#e65100"}
+core.data -> infra.storage: "" {style.stroke: "#e65100"; style.bold: true}
+core.data -> infra.exec: "" {style.stroke: "#e65100"}
+infra.durable -> foundation.concurrency: "" {style.stroke: "#2e7d32"}
+infra.storage -> foundation.concurrency: "" {style.stroke: "#2e7d32"}
+infra.exec -> foundation.concurrency: "" {style.stroke: "#2e7d32"}
+
+# ── Cross-cutting integrations ───────────────────────────────
+crosscutting -> core: "integrates" {style.stroke: "#90a4ae"; style.stroke-dash: 5}
+crosscutting -> infra: "integrates" {style.stroke: "#90a4ae"; style.stroke-dash: 5}

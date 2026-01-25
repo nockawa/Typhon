@@ -1,0 +1,127 @@
+# Typhon: Query Engine — Component Overview
+# Shows Application → QueryEngine → CacheLayer → DataEngine
+
+direction: down
+
+# ── Title ─────────────────────────────────────────────────────
+title: "Query Engine — Component Overview" {
+  shape: text
+  style.font-size: 22
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+# ── Application ──────────────────────────────────────────────
+app: "Application" {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.border-radius: 10
+
+  code: "Application Code\nQuery builder, Views" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+    style.bold: true
+  }
+}
+
+# ── Query Engine ─────────────────────────────────────────────
+query: "Query Engine" {
+  style.fill: "#f3e5f5"
+  style.stroke: "#6a1b9a"
+  style.border-radius: 10
+
+  qb: "QueryBuilder\nFluent API" {
+    shape: rectangle
+    style.fill: "#e1bee7"
+    style.stroke: "#7b1fa2"
+    style.bold: true
+  }
+  ep: "ExpressionParser\nLambda → AST" {
+    shape: rectangle
+    style.fill: "#e1bee7"
+    style.stroke: "#7b1fa2"
+  }
+  pb: "PlanBuilder\nExecution planning" {
+    shape: rectangle
+    style.fill: "#ce93d8"
+    style.stroke: "#6a1b9a"
+  }
+  pe: "PipelineExecutor\nStreaming execution" {
+    shape: rectangle
+    style.fill: "#ab47bc"
+    style.stroke: "#4a148c"
+    style.font-color: white
+    style.bold: true
+  }
+
+  qb -> ep: "parse" {style.stroke: "#6a1b9a"}
+  ep -> pb: "plan" {style.stroke: "#6a1b9a"}
+  pb -> pe: "execute" {style.stroke: "#6a1b9a"; style.bold: true}
+}
+
+# ── Cache Layer ──────────────────────────────────────────────
+cache: "Cache Management" {
+  style.fill: "#fff3e0"
+  style.stroke: "#e65100"
+  style.border-radius: 10
+
+  vc: "ViewCache\nHashSet + Dictionary" {
+    shape: cylinder
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+    style.bold: true
+  }
+  dt: "DeltaTracker\nAdded/Removed/Modified" {
+    shape: rectangle
+    style.fill: "#ffcc80"
+    style.stroke: "#e65100"
+  }
+  fi: "FieldInvalidator\nChange detection" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+  }
+
+  fi -> dt: "triggers" {style.stroke: "#e65100"; style.stroke-dash: 3}
+  dt -> vc: "updates" {style.stroke: "#e65100"}
+}
+
+# ── Data Engine ──────────────────────────────────────────────
+data: "Data Engine" {
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.border-radius: 10
+
+  ct: "ComponentTable" {
+    shape: rectangle
+    style.fill: "#a5d6a7"
+    style.stroke: "#388e3c"
+  }
+  idx: "B+Tree Indexes" {
+    shape: rectangle
+    style.fill: "#81c784"
+    style.stroke: "#2e7d32"
+    style.bold: true
+  }
+  stats: "Statistics\nHistograms" {
+    shape: rectangle
+    style.fill: "#a5d6a7"
+    style.stroke: "#388e3c"
+  }
+}
+
+# ── App → Query ──────────────────────────────────────────────
+app.code -> query.qb: "build query" {style.stroke: "#6a1b9a"; style.bold: true}
+
+# ── Query → Data ─────────────────────────────────────────────
+query.pb -> data.stats: "cost estimation" {style.stroke: "#2e7d32"; style.stroke-dash: 3}
+query.pe -> data.idx: "index scan" {style.stroke: "#2e7d32"; style.bold: true}
+query.pe -> data.ct: "materialize" {style.stroke: "#2e7d32"}
+
+# ── Query → Cache ────────────────────────────────────────────
+query.pe -> cache.vc: "populate" {style.stroke: "#e65100"}
+
+# ── Data → Cache ─────────────────────────────────────────────
+data.ct -> cache.fi: "field changes" {style.stroke: "#e65100"; style.stroke-dash: 3}

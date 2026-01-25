@@ -1,0 +1,47 @@
+# Typhon: MVCC Write Path
+# Sequence diagram showing update → cache → commit → WAL
+
+title: "MVCC Write Path" {
+  shape: text
+  style.font-size: 18
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+seq: {
+  shape: sequence_diagram
+
+  tx: "Transaction"
+  cache: "TX Cache"
+  ct: "ComponentTable"
+  comp: "ComponentSegment"
+  rev: "RevisionChain"
+  idx: "SecondaryIndexes"
+  wal: "WAL Ring Buffer"
+
+  tx -> cache: "UpdateEntity(entityId, data)"
+  cache."Store in local cache"
+
+  tx -> tx: "Commit()"
+  tx."1. Conflict detection"
+
+  "For each cached change": {
+    tx -> comp: "AllocateChunk()"
+    comp -> tx: "newChunkId" {style.stroke-dash: 3}
+    tx -> comp: "WriteData(newChunkId, data)"
+
+    tx -> rev: "AddRevision(TSN, newChunkId, UowEpoch)"
+    rev."Epoch stamped at write time"
+
+    tx -> idx: "UpdateIndexes(oldValue, newValue)"
+  }
+
+  tx -> wal: "SerializeWalRecord(changes)"
+  wal."Buffered in ring buffer"
+
+  "If Immediate durability": {
+    tx -> wal: "SignalFlush + WaitForLSN"
+    wal."Block until FUA complete"
+  }
+}

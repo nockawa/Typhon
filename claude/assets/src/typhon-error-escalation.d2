@@ -1,0 +1,105 @@
+# Typhon: Error Escalation — Decision Flow
+# Shows how errors are classified, retried, or escalated
+
+direction: down
+
+# ── Title ─────────────────────────────────────────────────────
+title: "Error Escalation — Decision Flow" {
+  shape: text
+  style.font-size: 22
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+# ── Flow ─────────────────────────────────────────────────────
+flow: "" {
+  style.fill: "#fafafa"
+  style.stroke: "#607d8b"
+  style.border-radius: 10
+
+  error: "Error Occurs" {
+    shape: rectangle
+    style.fill: "#ffcdd2"
+    style.stroke: "#c62828"
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  transient: "Transient?" {
+    shape: diamond
+    style.fill: "#fff3e0"
+    style.stroke: "#e65100"
+    style.bold: true
+  }
+
+  retry: "Attempts\nleft?" {
+    shape: diamond
+    style.fill: "#fff3e0"
+    style.stroke: "#e65100"
+  }
+
+  wait: "Wait & Retry" {
+    shape: rectangle
+    style.fill: "#e3f2fd"
+    style.stroke: "#1565c0"
+    style.border-radius: 6
+  }
+
+  escalate: "Escalate" {
+    shape: rectangle
+    style.fill: "#f8bbd0"
+    style.stroke: "#c62828"
+    style.border-radius: 6
+  }
+
+  critical: "Critical?" {
+    shape: diamond
+    style.fill: "#fff3e0"
+    style.stroke: "#e65100"
+    style.bold: true
+  }
+
+  alert: "Alert + Log" {
+    shape: rectangle
+    style.fill: "#ffcdd2"
+    style.stroke: "#b71c1c"
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  log: "Log + Return Error" {
+    shape: rectangle
+    style.fill: "#e8f5e9"
+    style.stroke: "#2e7d32"
+    style.border-radius: 6
+  }
+
+  stop: "Stop Operation" {
+    shape: rectangle
+    style.fill: "#b71c1c"
+    style.stroke: "#b71c1c"
+    style.font-color: white
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  ret: "Return to Caller" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+    style.border-radius: 6
+  }
+
+  error -> transient: "" {style.stroke: "#546e7a"}
+  transient -> retry: "Yes" {style.stroke: "#1565c0"}
+  transient -> critical: "No" {style.stroke: "#c62828"}
+  retry -> wait: "Yes" {style.stroke: "#1565c0"}
+  retry -> escalate: "Max reached" {style.stroke: "#c62828"}
+  wait -> error: "retry" {style.stroke: "#1565c0"; style.stroke-dash: 3}
+  escalate -> critical: "" {style.stroke: "#c62828"}
+  critical -> alert: "Yes" {style.stroke: "#c62828"; style.bold: true}
+  critical -> log: "No" {style.stroke: "#2e7d32"}
+  alert -> stop: "" {style.stroke: "#b71c1c"}
+  log -> ret: "" {style.stroke: "#2e7d32"}
+}

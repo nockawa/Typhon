@@ -1,0 +1,112 @@
+# Typhon: Concurrency & Synchronization — Layer Overview
+# Shows consumers (upper layers) → primitives → foundation
+
+direction: right
+
+title: |md
+  # Concurrency & Synchronization
+  Primitives and their consumers
+|
+
+# ── Consumers (Upper Layers) ─────────────────────────────────
+consumers: "Consumers (Upper Layers)" {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.border-radius: 10
+
+  storage: "Storage Engine\nPage latches" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+  }
+  data: "Data Engine\nB+Tree nodes,\nrevision chains" {
+    shape: rectangle
+    style.fill: "#90caf9"
+    style.stroke: "#1565c0"
+  }
+  exec: "Execution System\nWork item\ncoordination" {
+    shape: rectangle
+    style.fill: "#64b5f6"
+    style.stroke: "#0d47a1"
+    style.font-color: white
+  }
+}
+
+# ── Concurrency Primitives ────────────────────────────────────
+primitives: "Concurrency Primitives" {
+  style.fill: "#f3e5f5"
+  style.stroke: "#6a1b9a"
+  style.border-radius: 10
+
+  nac: "NewAccessControl\n64-bit RW lock" {
+    shape: rectangle
+    style.fill: "#e1bee7"
+    style.stroke: "#7b1fa2"
+    style.bold: true
+  }
+  acs: "AccessControlSmall\n32-bit RW lock" {
+    shape: rectangle
+    style.fill: "#ce93d8"
+    style.stroke: "#6a1b9a"
+  }
+  rac: "ResourceAccessControl\n3-mode lifecycle" {
+    shape: rectangle
+    style.fill: "#ba68c8"
+    style.stroke: "#4a148c"
+    style.font-color: white
+  }
+}
+
+# ── Foundation ────────────────────────────────────────────────
+foundation: "Foundation" {
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.border-radius: 10
+
+  deadline: "Deadline\nMonotonic time\n(8 bytes)" {
+    shape: rectangle
+    style.fill: "#a5d6a7"
+    style.stroke: "#388e3c"
+    style.bold: true
+  }
+  watchdog: "Watchdog Thread\nExpiry callbacks" {
+    shape: rectangle
+    style.fill: "#66bb6a"
+    style.stroke: "#2e7d32"
+    style.font-color: white
+  }
+}
+
+# ── Consumer → Primitive connections ──────────────────────────
+consumers.storage -> primitives.nac: "page\nlatches" {
+  style.stroke: "#1976d2"
+}
+consumers.storage -> primitives.acs: "compact\nlatches" {
+  style.stroke: "#1976d2"
+  style.stroke-dash: 3
+}
+consumers.data -> primitives.nac: "node\nlocks" {
+  style.stroke: "#1565c0"
+}
+consumers.data -> primitives.rac: "lifecycle\ncontrol" {
+  style.stroke: "#1565c0"
+}
+consumers.exec -> foundation.deadline: "timeout\ntracking" {
+  style.stroke: "#0d47a1"
+  style.stroke-dash: 5
+}
+
+# ── Primitive → Foundation connections ────────────────────────
+primitives.nac -> foundation.deadline: "timeout" {
+  style.stroke: "#6a1b9a"
+}
+primitives.acs -> foundation.deadline: "timeout" {
+  style.stroke: "#6a1b9a"
+}
+primitives.rac -> foundation.deadline: "timeout" {
+  style.stroke: "#6a1b9a"
+}
+foundation.deadline -> foundation.watchdog: "expiry\nnotification" {
+  style.stroke: "#2e7d32"
+  style.bold: true
+}
