@@ -2,6 +2,7 @@ using JetBrains.Annotations;
 using System;
 using System.Diagnostics;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -85,6 +86,12 @@ public unsafe abstract class BlockAllocatorBase : IDisposable
     }
 
     protected Span<byte> GetBlockAsSpanInternal(int blockId) => new(GetBlockInternal(blockId), Stride);
+    protected ref T GetBlockAs<T>(int blockId)
+    {
+        Debug.Assert(blockId >= 0, "Block id must be positive");
+        return ref Unsafe.AsRef<T>(GetBlockInternal(blockId));
+    }
+
     protected byte* GetBlockInternal(int blockId)
     {
         Debug.Assert(blockId >= 0, "Block id must be positive");

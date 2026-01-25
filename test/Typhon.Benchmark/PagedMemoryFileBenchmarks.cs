@@ -11,6 +11,7 @@ namespace Typhon.Benchmark;
 
 [SimpleJob(warmupCount: 3, iterationCount: 3)]
 [JsonExporterAttribute.Full]
+[BenchmarkCategory("Persistence")]
 public class PagedMemoryFileBenchmarks
 {
     private const ulong CacheSize = 128 * PagedMMF.PageSize;

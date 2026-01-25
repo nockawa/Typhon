@@ -1,23 +1,19 @@
 ﻿using BenchmarkDotNet.Running;
-using Microsoft.Win32.SafeHandles;
+using Spectre.Console;
 using System;
 using System.IO;
 using System.Linq;
 using System.Text.Json.Nodes;
-using System.Threading.Tasks;
-using Typhon.Engine.Tests;
+using Typhon.Benchmark.Cli;
 
 namespace Typhon.Benchmark;
 
 class Program
 {
-    static float SmoothStep(float t0, float t1, float x) => Math.Clamp((x - t0) / (t1 - t0), 0, 1);
-
-    static private ValueTask WriteData(SafeFileHandle handle, ReadOnlyMemory<byte> data, long offset)
-    {
-        return RandomAccess.WriteAsync(handle, data, offset);
-    }
-
+    /// <summary>
+    /// Combines multiple BenchmarkDotNet JSON result files into a single file.
+    /// Useful for aggregating results from multiple benchmark runs.
+    /// </summary>
     private static void CombineBenchmarkResults(
         string resultsDir = "./BenchmarkDotNet.Artifacts/results",
         string resultsFile = "Combined.Benchmarks",
@@ -26,26 +22,22 @@ class Program
         var resultsPath = Path.Combine(resultsDir, resultsFile + ".json");
 
         if (!Directory.Exists(resultsDir))
-        {
             throw new DirectoryNotFoundException($"Directory not found '{resultsDir}'");
-        }
 
         if (File.Exists(resultsPath))
-        {
             File.Delete(resultsPath);
-        }
 
         var reports = Directory
             .GetFiles(resultsDir, searchPattern, SearchOption.TopDirectoryOnly)
             .ToArray();
-        if (!reports.Any())
-        {
+
+        if (reports.Length == 0)
             throw new FileNotFoundException($"Reports not found '{searchPattern}'");
-        }
 
         var combinedReport = JsonNode.Parse(File.ReadAllText(reports.First()))!;
         var title = combinedReport["Title"]!;
         var benchmarks = combinedReport["Benchmarks"]!.AsArray();
+
         // Rename title whilst keeping original timestamp
         combinedReport["Title"] = $"{resultsFile}{title.GetValue<string>()[^16..]}";
 
@@ -64,204 +56,88 @@ class Program
 
     static void Main(string[] args)
     {
-        // Use BenchmarkSwitcher to allow command-line selection
-        BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
-        return;
-
-        // Run ChunkLocation comparison benchmark
-        //BenchmarkRunner.Run<ChunkLocationBenchmark>();
-
-        // Run ChunkAccessor comparison benchmark
-        
-        /*
-        long sumA = 0;
-        long sumB = 0;
+        // If command-line arguments are provided, use BenchmarkDotNet's built-in handling
+        // This preserves backward compatibility with --filter, --list, etc.
+        if (args.Length > 0)
         {
-            for (int i = 0; i < 10; i++)
+            // Handle special commands
+            if (args.Contains("--help") || args.Contains("-h") || args.Contains("-?"))
             {
-                var b = new ChunkAccessorBenchmark();
-                b.GlobalSetup();
-                sumA += b.LinkedTraversal_ChunkRandomAccessor();
-                b.GlobalCleanup();
-            }
-        }
-
-        {
-            for (int i = 0; i < 10; i++)
-            {
-                var b = new ChunkAccessorBenchmark();
-                b.GlobalSetup();
-                sumB += b.LinkedTraversal_StackChunkAccessor();
-                b.GlobalCleanup();
-            }
-        }
-
-        if (sumA != sumB)
-        {
-            throw new Exception("Sums do not match");
-        }
-        */
-
-        //BenchmarkRunner.Run<BTreeBenchmark>();
-        /*
-        var btb = new BTreeBenchmark();
-        btb.GlobalSetup();
-        btb.Run();
-        btb.GlobalCleanup();
-        */
-
-        /*
-        var summary = BenchmarkRunner.Run<PagedMemoryFileBenchmarks>();
-        var path = summary.ResultsDirectoryPath;
-        CombineBenchmarkResults(path);
-        */
-
-        /*
-        var pvmmft = new PagedMemoryFileBenchmarks();
-        pvmmft.GlobalSetup();
-        pvmmft.TestRandomAccess();
-        pvmmft.GlobalCleanup();
-
-        /*
-        {
-            // Thread-safe concurrent writes
-            using SafeFileHandle handle = File.OpenHandle(
-                "data.txt", FileMode.Create, FileAccess.Write,
-                FileShare.None, FileOptions.Asynchronous);
-
-            var arrays = new List<byte[]>();
-
-            var size = 8192;
-            for (int i = 0; i < 100; i++)
-            {
-                var a = new byte[size];
-                for (int j = 0; j < size; j++)
-                {
-                    a[j] = (byte)(i + j);
-                }
-                arrays.Add(a);
+                PrintHelp();
+                return;
             }
 
-            long offset = 0;
-            long totalIssued = 0;
-            long totalCompleted = 0;
-            for (int index = 0; index < arrays.Count; index++)
+            if (args.Contains("--list") || args.Contains("-l"))
             {
-                var i = index;
-                byte[] array = arrays[i];
-                var newOffset = Interlocked.Add(ref offset, size) - size;
-                var threadId = Thread.CurrentThread.ManagedThreadId;
-                var start = DateTime.UtcNow;
-                Console.WriteLine($"[{i}][Thread:{threadId}]Issuing");
-                var task = WriteData(handle, array, newOffset);
-                var ts = DateTime.UtcNow - start;
-                Interlocked.Add(ref totalIssued, ts.Ticks);
-                Console.WriteLine($"[{i}][Thread:{threadId}][{ts.TotalMilliseconds}ms] Issued");
-                await task.AsTask().ContinueWith(_ =>
-                {
-                    //RandomAccess.FlushToDisk(handle);
-                    var tId = Thread.CurrentThread.ManagedThreadId;
-                    var ts2 = DateTime.UtcNow - start;
-
-                    Interlocked.Add(ref totalCompleted, ts2.Ticks);
-                    Console.WriteLine($"[{i}][Thread:{tId}][{ts2.TotalMilliseconds}ms] Completed");
-                });
-
+                ListBenchmarks();
+                return;
             }
 
-            Console.WriteLine($"Average Issued time {TimeSpan.FromTicks(totalIssued / arrays.Count).TotalMilliseconds}ms");
-            Console.WriteLine($"Average Completed time {TimeSpan.FromTicks(totalCompleted / arrays.Count).TotalMilliseconds}ms");
+            // Pass through to BenchmarkDotNet for standard args like --filter
+            BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
+            return;
         }
-        */
 
-        //var o = new ConcurrentBitmapBenchmark();
-        //o.GlobalSetup();
-        //o.BenchDecay();
+        // No arguments: launch interactive mode
+        try
+        {
+            var runner = new InteractiveBenchmarkRunner(typeof(Program).Assembly);
+            runner.Run();
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.WriteException(ex);
+        }
+    }
 
-        //var taskList = new List<Task>();
-        //for (int i = 0; i < 1024; i++)
-        //{
-        //    taskList.Add(Task.Run(() =>
-        //    {
-        //        Console.WriteLine($"Thread Id {Thread.CurrentThread.ManagedThreadId}");
-        //    }));
-        //}
+    private static void PrintHelp()
+    {
+        AnsiConsole.Write(new Rule("[cyan]Typhon Benchmark Runner[/]").RuleStyle("grey"));
+        AnsiConsole.WriteLine();
 
-        //Task.WaitAll(taskList.ToArray());
+        var table = new Table()
+            .Border(TableBorder.Rounded)
+            .BorderColor(Color.Grey)
+            .AddColumn("[yellow]Option[/]")
+            .AddColumn("[yellow]Description[/]");
 
+        table.AddRow("[cyan](no args)[/]", "Launch interactive mode with menu selection");
+        table.AddRow("[cyan]--list, -l[/]", "List all available benchmarks");
+        table.AddRow("[cyan]--filter <pattern>[/]", "Run benchmarks matching the pattern (e.g., --filter *BTree*)");
+        table.AddRow("[cyan]--help, -h, -?[/]", "Show this help message");
+        table.AddRow("[cyan]--exporters <list>[/]", "Export formats: json,markdown,html,rplot");
 
-        //var summary = BenchmarkRunner.Run<ClassVersusType>();
+        AnsiConsole.Write(table);
+        AnsiConsole.WriteLine();
 
-        // var o = new ClassVersusType();
-        // o.BenchmarkClass();
-        // GC.Collect();
-        // o.BenchmarkClasWithMemory();
+        AnsiConsole.MarkupLine("[grey]Examples:[/]");
+        AnsiConsole.MarkupLine("  [white]dotnet run[/]                           [grey]# Interactive mode[/]");
+        AnsiConsole.MarkupLine("  [white]dotnet run -- --filter *BTree*[/]       [grey]# Run BTree benchmarks[/]");
+        AnsiConsole.MarkupLine("  [white]dotnet run -- --list[/]                 [grey]# List all benchmarks[/]");
+        AnsiConsole.WriteLine();
+    }
 
-        //var o = new MemCopyBench();
-        //o.GlobalSetup();
+    private static void ListBenchmarks()
+    {
+        var benchmarks = BenchmarkDiscovery.DiscoverBenchmarks(typeof(Program).Assembly);
+        var grouped = BenchmarkDiscovery.GroupByCategory(benchmarks);
 
-        //for (int i = 0; i < 100; i++)
-        //{
-        //    var sw = new Stopwatch();
-        //    sw.Start();
+        AnsiConsole.Write(new Rule("[cyan]Available Benchmarks[/]").RuleStyle("grey"));
+        AnsiConsole.WriteLine();
 
-        //    o.SpanCopy();
+        foreach (var (category, categoryBenchmarks) in grouped)
+        {
+            AnsiConsole.MarkupLine($"[yellow]■[/] [bold]{category}[/]");
 
-        //    sw.Stop();
+            foreach (var benchmark in categoryBenchmarks)
+            {
+                AnsiConsole.MarkupLine($"    [cyan]●[/] {benchmark.Name} [grey]({benchmark.MethodCount} method{(benchmark.MethodCount != 1 ? "s" : "")})[/]");
+            }
 
-        //    Console.WriteLine($"Copy time: {sw.Elapsed}ms, Tick: {sw.ElapsedTicks}");
-        //}
+            AnsiConsole.WriteLine();
+        }
 
-        //o.GlobalCleanup();
-
-        //var o = new DirectAccessBench();
-        //o.GlobalSetup();
-        //o.BenchmarkSegmentRefAccess();
-        //o.GlobalCleanup();
-
-        //var o = new PageAccessBenchmark();
-        //o.GlobalSetup();
-        //o.BenchmarkSegmentManualAccess();
-        //o.BenchmarkSegmentForEachElement();
-        //o.GlobalCleanup();
-
-        //var summary = BenchmarkRunner.Run<PageAccessBenchmark>();
-
-        //var minDecay = 1f;
-        //var maxDecay = 20f;
-
-        //var start = DateTime.UtcNow;
-
-        //var v = 150f;
-        //var w = 1000f;
-        //var z = 10f;
-        //var now = start;
-        //var step = 0f;
-
-        //while (now < start + TimeSpan.FromSeconds(20))
-        //{
-        //    var p = v;
-        //    var dt = (now - start);
-        //    var f = SmoothStep(minDecay, maxDecay, (float)dt.TotalSeconds);
-
-        //    v = (v * (1 - (f * step)));
-        //    w = (w * (1 - (f * step)));
-        //    z = (z * (1 - (f * step)));
-
-        //    Console.WriteLine($"[{dt.TotalSeconds:0.##}]\t Z {z:0.##}\t V {v:0.##}\t W {w:0.##}\t\tF {f:0.###}\tStep {step:0.##}");
-
-        //    Thread.Sleep(200);
-
-        //    var n = DateTime.UtcNow;
-        //    step = (float)(n - now).TotalSeconds;
-        //    now = n;
-        //}
-
-
-        //Array.S
-
-        //var o = new ConcurrentBitmapBenchmark();
-        //o.GlobalSetup();
-        //o.BenchConcurrentL4();
+        AnsiConsole.MarkupLine($"[grey]Total:[/] [white]{benchmarks.Count}[/] benchmarks, [white]{benchmarks.Sum(b => b.MethodCount)}[/] methods");
+        AnsiConsole.WriteLine();
     }
 }

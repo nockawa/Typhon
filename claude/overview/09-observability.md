@@ -6,13 +6,14 @@
 
 ## Overview
 
-The Observability component provides three tracks of visibility into Typhon's operations, each with different performance/detail trade-offs:
+The Observability component provides four tracks of visibility into Typhon's operations, each with different performance/detail trade-offs:
 
 | Track | Mechanism | Overhead | Use Case |
 |-------|-----------|----------|----------|
 | **Track 1: Hot-path telemetry** | `static readonly` fields, JIT-eliminated when false | Zero when disabled | Production monitoring |
 | **Track 2: DI-injectable options** | `IOptions<TelemetryOptions>` pattern | Low (DI resolution) | Cold-path configuration |
 | **Track 3: Deep diagnostics** | `static readonly bool` (same JIT trick as Track 1) | Zero when disabled | Lock post-mortem, development |
+| **Track 4: Per-resource telemetry** | `IContentionTarget` callbacks, per-resource `TelemetryLevel` | Negligible (null check) | Targeted resource diagnostics |
 
 <a href="../assets/typhon-observability-overview.svg">
   <img src="../assets/typhon-observability-overview.svg" width="1200"
@@ -24,7 +25,9 @@ The Observability component provides three tracks of visibility into Typhon's op
 
 ## Status: 🔧 In Progress
 
-Track 1 (static readonly) and Track 3 (static readonly deep diagnostics) are implemented. Track 2 (DI options) has infrastructure but no consumers yet. Metrics emission and sink integration are designed but not yet wired.
+Track 1 (static readonly) and Track 3 (static readonly deep diagnostics) are implemented. Track 2 (DI options) has infrastructure but no consumers yet. **Track 4** (per-resource telemetry via `IContentionTarget`) is implemented in `NewAccessControl`. Metrics emission and sink integration are designed but not yet wired.
+
+> **Migration in progress**: Track 3 is transitioning from `#if TELEMETRY` preprocessor directives to `static readonly bool` fields for simpler build configuration.
 
 ---
 
@@ -32,7 +35,11 @@ Track 1 (static readonly) and Track 3 (static readonly deep diagnostics) are imp
 
 | # | Name | Purpose | Status |
 |---|------|---------|--------|
-| **9.1** | [Telemetry Architecture](#91-telemetry-architecture) | Zero-overhead dual-track system | ✅ Implemented |
+| **9.1** | [Telemetry Architecture](#91-telemetry-architecture) | Zero-overhead multi-track system | ✅ Implemented |
+| **9.1.1** | [Track 1: Static Readonly](#track-1-static-readonly-configuration-telemetryconfig) | JIT-eliminated hot-path guards | ✅ Implemented |
+| **9.1.2** | [Track 2: DI Options](#track-2-di-injectable-options-telemetryoptions) | Cold-path configuration | ✅ Implemented |
+| **9.1.3** | [Track 3: Deep Diagnostics](#track-3-deep-diagnostics-static-readonly-bool) | Lock-centric operation history | ✅ Implemented |
+| **9.1.4** | [Track 4: Per-Resource](#track-4-per-resource-telemetry-icontentiontarget) | Resource-centric callbacks | ✅ Implemented |
 | **9.2** | [Metrics](#92-metrics) | Counters, histograms, gauges | 🆕 Designed |
 | **9.3** | [Traces](#93-traces) | Distributed tracing spans | 🆕 Designed |
 | **9.4** | [Structured Logging](#94-structured-logging) | Serilog-based logs | ✅ Exists |
@@ -160,6 +167,8 @@ services.AddTyphonTelemetry(opts => {                 // Programmatic
 
 Runtime-switchable deep instrumentation for development and post-mortem analysis. Uses the same `static readonly` JIT dead-code elimination as Track 1 — zero overhead when the flag is `false`.
 
+> **Note**: This track is transitioning from `#if TELEMETRY` preprocessor directives to `static readonly bool` fields. The new approach provides the same zero-overhead guarantee while avoiding separate build configurations.
+
 **AccessControl lock history** — Records every lock operation in a `ChainedBlockAllocator`:
 
 ```csharp
@@ -195,6 +204,100 @@ Lock #42:
 [2025-01-15T10:30:00.130] | Thread: 3  | Op: Exclusive Exit  | Data: [State: Exclus Shared: 0  ...]
 [2025-01-15T10:30:00.131] | Thread: 7  | Op: Shared    Start | Data: [State: Shared Shared: 1  ...]
 ```
+
+### Track 4: Per-Resource Telemetry (`IContentionTarget`)
+
+A **callback-based** telemetry system where resources opt-in to receive contention events from their locks. Unlike Tracks 1-3 which are global on/off switches, Track 4 provides **per-resource granularity** with three levels.
+
+#### TelemetryLevel Enum
+
+```csharp
+public enum TelemetryLevel
+{
+    None = 0,   // Zero overhead — simple null/enum check
+    Light = 1,  // Aggregate contention counters (WaitCount, TotalWaitUs)
+    Deep = 2    // Full operation history with timestamps and thread IDs
+}
+```
+
+#### IContentionTarget Interface
+
+Resources implement this interface to receive telemetry callbacks from locks:
+
+```csharp
+public interface IContentionTarget
+{
+    /// <summary>Current telemetry level (use volatile field).</summary>
+    TelemetryLevel TelemetryLevel { get; }
+
+    /// <summary>Optional link to IResource for graph integration.</summary>
+    IResource OwningResource { get; }
+
+    /// <summary>Light mode: called when a thread had to wait for a lock.</summary>
+    void RecordContention(long waitUs);
+
+    /// <summary>Deep mode: called for every lock operation.</summary>
+    void LogLockOperation(LockOperation operation, long durationUs);
+}
+```
+
+#### LockOperation Enum
+
+```csharp
+public enum LockOperation : byte
+{
+    None = 0,
+    SharedAcquired, SharedReleased, SharedWaitStart,
+    ExclusiveAcquired, ExclusiveReleased, ExclusiveWaitStart,
+    PromoteToExclusiveStart, PromoteToExclusiveAcquired, DemoteToShared,
+    TimedOut, Canceled
+}
+```
+
+#### Usage Pattern
+
+Lock methods accept `IContentionTarget` as the **last parameter** (`null` = no telemetry):
+
+```csharp
+// Lock API
+public bool EnterExclusiveAccess(TimeSpan? timeOut = null,
+    CancellationToken token = default, IContentionTarget target = null)
+
+// Resource passes itself when acquiring its locks
+_tableLatch.EnterExclusiveAccess(target: this);  // 'this' implements IContentionTarget
+```
+
+#### Deep Mode Storage
+
+When `TelemetryLevel.Deep` is active, operations are logged via `ResourceTelemetryAllocator`:
+
+```csharp
+// 16-byte packed entry stored in ChainedBlockAllocator
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+public struct ResourceOperationEntry
+{
+    public long Timestamp;           // 8 bytes - Stopwatch.GetTimestamp()
+    public uint DurationUs;          // 4 bytes - wait/operation duration
+    public ushort ThreadId;          // 2 bytes
+    public LockOperation Operation;  // 1 byte
+    public byte Flags;               // 1 byte - reserved
+}
+
+// 6 entries per block (96 bytes) fits in 128-byte allocation
+[InlineArray(6)]
+internal struct ResourceOperationBlock { ... }
+```
+
+#### Tracks Comparison
+
+| Track | Scope | Granularity | Overhead When Disabled | Use Case |
+|-------|-------|-------------|------------------------|----------|
+| **Track 1** | Global | Per-component (all AccessControl, all PagedMMF) | Zero (JIT eliminated) | Production monitoring |
+| **Track 2** | Global | Per-component | Low (DI resolution) | Cold-path config |
+| **Track 3** | Global | Lock-centric (per-lock history) | Zero (JIT eliminated) | Post-mortem debugging |
+| **Track 4** | Per-resource | Resource-centric (aggregate + history) | Negligible (null check) | Per-resource diagnostics |
+
+Track 4 complements the other tracks: it enables **targeted telemetry** on specific resources (e.g., enable Deep mode only on `ComponentTable<Player>`) without global overhead.
 
 ---
 
@@ -563,21 +666,37 @@ TYPHON__TELEMETRY__BTREE__TRACKKEYCOMPARISONS=true
 
 ## Code Locations
 
+### Track 1-3: Global Telemetry
+
 | Component | Location | Status |
 |-----------|----------|--------|
-| TelemetryConfig | `src/Typhon.Engine/Telemetry/TelemetryConfig.cs` | ✅ Implemented |
-| TelemetryOptions | `src/Typhon.Engine/Telemetry/TelemetryOptions.cs` | ✅ Implemented |
-| TelemetryServiceExtensions | `src/Typhon.Engine/Telemetry/TelemetryServiceExtensions.cs` | ✅ Implemented |
-| AccessControl Telemetry | `src/Typhon.Engine/Misc/AccessControl/AccessControl.Telemetry.cs` | ✅ Implemented |
-| AccessOperation | `src/Typhon.Engine/Misc/AccessControl/AccessOperation.cs` | ✅ Implemented |
-| OperationType enum | `src/Typhon.Engine/Misc/AccessControl/AccessOperation.cs` | ✅ Implemented |
-| CurrentFrameEnricher | `src/Typhon.Engine/Hosting/` | ✅ Exists |
+| TelemetryConfig | `src/Typhon.Engine/Observability/TelemetryConfig.cs` | ✅ Implemented |
+| TelemetryOptions | `src/Typhon.Engine/Observability/TelemetryOptions.cs` | ✅ Implemented |
+| TelemetryServiceExtensions | `src/Typhon.Engine/Observability/TelemetryServiceExtensions.cs` | ✅ Implemented |
+| AccessControl Telemetry | `src/Typhon.Engine/Concurrency/AccessControl.Telemetry.cs` | ✅ Implemented |
+| AccessOperation | `src/Typhon.Engine/Concurrency/AccessOperation.cs` | ✅ Implemented |
+| OperationType enum | `src/Typhon.Engine/Concurrency/AccessOperation.cs` | ✅ Implemented |
+| CurrentFrameEnricher | `src/Typhon.Engine/Observability/CurrentFrameEnricher.cs` | ✅ Exists |
 | Telemetry Toggle Benchmark | `test/Typhon.Benchmark/TelemetryToggleBenchmark.cs` | ✅ Exists |
 | ThreadLocal Dict Benchmark | `test/Typhon.Benchmark/ThreadLocalDictOverheadBenchmark.cs` | ✅ Exists |
+
+### Track 4: Per-Resource Telemetry (IContentionTarget)
+
+| Component | Location | Status |
+|-----------|----------|--------|
+| **IContentionTarget** | `src/Typhon.Engine/Observability/IContentionTarget.cs` | ✅ Implemented |
+| **TelemetryLevel** | `src/Typhon.Engine/Observability/TelemetryLevel.cs` | ✅ Implemented |
+| **LockOperation** | `src/Typhon.Engine/Observability/LockOperation.cs` | ✅ Implemented |
+| **ResourceOperationEntry** | `src/Typhon.Engine/Observability/ResourceOperationEntry.cs` | ✅ Implemented |
+| **ResourceTelemetryAllocator** | `src/Typhon.Engine/Observability/ResourceTelemetryAllocator.cs` | ✅ Implemented |
+| NewAccessControl (with IContentionTarget) | `src/Typhon.Engine/Concurrency/AccessControl.cs` | ✅ Implemented |
+| NewAccessControlTelemetryTests | `test/Typhon.Engine.Tests/Concurrency/NewAccessControlTelemetryTests.cs` | ✅ Implemented |
 
 ---
 
 ## Design Decisions
+
+### Tracks 1-3: Global Telemetry
 
 | Question | Decision | Rationale |
 |----------|----------|-----------|
@@ -585,11 +704,29 @@ TYPHON__TELEMETRY__BTREE__TRACKKEYCOMPARISONS=true
 | **Configuration immutability** | Set once in static constructor | Avoids volatile/memory barriers in hot path; restart to reconfigure |
 | **Pre-combined Active flags** | `ComponentActive = Enabled && ComponentEnabled` | Single field check in hot path, no multi-field branch |
 | **Deep diagnostics** | `static readonly bool` (same JIT trick) | Lock history needs ChainedBlockAllocator — zero overhead when disabled, no separate build config needed |
+| **Preprocessor → static readonly** | Replace `#if TELEMETRY` with `static readonly bool` | Same JIT elimination, but avoids separate build configurations |
 | **Lock operation recording** | 18-byte packed struct in InlineArray(6) | Fits 6 operations in 108 bytes → 128-byte block (2 cache lines) |
 | **DI track** | Separate `TelemetryOptions` class | Cold-path consumers need IOptions pattern; don't contaminate static hot-path design |
 | **Config file format** | `typhon.telemetry.json` | Separate from appsettings.json — telemetry config travels with the binary |
 | **Env var separator** | `__` (double underscore) | Cross-platform IConfiguration standard (`:` doesn't work on Linux) |
 | **Default state** | All disabled | Zero-overhead by default; opt-in per component |
+
+### Track 4: Per-Resource Telemetry (IContentionTarget)
+
+| Question | Decision | Rationale |
+|----------|----------|-----------|
+| **Per-resource levels** | `TelemetryLevel` enum (None/Light/Deep) | Different resources need different telemetry granularity; hot resources may need Deep, others just Light |
+| **Callback pattern** | Resources implement `IContentionTarget`, pass `this` to locks | Inverts dependency: locks don't need to know about resources; resources opt-in |
+| **IContentionTarget as last param** | `EnterExclusiveAccess(..., IContentionTarget target = null)` | Backward compatible — existing code passes no target (null = no telemetry) |
+| **Volatile TelemetryLevel** | Simple volatile field, no locking | Level changes are rare; volatile is sufficient for visibility |
+| **OwningResource property** | `IResource OwningResource { get; }` | Links telemetry back to resource graph without inheritance (`IContentionTarget` doesn't extend `IResource`) |
+| **Deep mode storage** | 16-byte `ResourceOperationEntry` in ChainedBlockAllocator | Compact format fits 6 entries per 128-byte block; chains grow unbounded until resource frees |
+| **No chain cap** | Deep mode chains grow unbounded | Resources are responsible for freeing chains when disabling Deep mode |
+
+### General
+
+| Question | Decision | Rationale |
+|----------|----------|-----------|
 | **Metrics framework** | OpenTelemetry `System.Diagnostics.Metrics` | .NET native, vendor-neutral, low overhead |
 | **Production sink** | Grafana LGTM | Full-stack solution (logs + metrics + traces), good visualization |
 | **Development sink** | Seq + Aspire | Rich structured log querying + real-time OTel dashboard |

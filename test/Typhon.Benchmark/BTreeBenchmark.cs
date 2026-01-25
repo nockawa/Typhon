@@ -11,6 +11,7 @@ namespace Typhon.Benchmark;
 
 [SimpleJob(warmupCount: 1, iterationCount: 1)]
 [JsonExporterAttribute.Full]
+[BenchmarkCategory("BTree")]
 public class BTreeBenchmark
 {
     private string CurrentDatabaseName => $"BTreeBenchmark_database";

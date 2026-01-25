@@ -3,6 +3,9 @@
 
 direction: down
 
+# ── Global Styles ────────────────────────────────────────────────
+*.style.font-size: 12
+
 # ── Title ─────────────────────────────────────────────────────
 title: "Resource Graph — Component Overview" {
   shape: text
@@ -47,7 +50,6 @@ root: "ResourceRegistry\n(Root)" {
       shape: rectangle
       style.fill: "#fff8e1"
       style.stroke: "#ff8f00"
-      style.font-size: 12
     }
   }
 
@@ -73,13 +75,11 @@ root: "ResourceRegistry\n(Root)" {
       shape: rectangle
       style.fill: "#e1f5fe"
       style.stroke: "#0277bd"
-      style.font-size: 12
     }
     comp_table.sec_idx: "SecondaryIndex<F>\n[Capacity, Throughput]" {
       shape: rectangle
       style.fill: "#e1f5fe"
       style.stroke: "#0277bd"
-      style.font-size: 12
     }
   }
 
@@ -170,42 +170,36 @@ legend: "Metric Kinds" {
     shape: rectangle
     style.fill: "#fafafa"
     style.stroke: "#bdbdbd"
-    style.font-size: 12
     style.border-radius: 4
   }
   c: "Capacity\nslots used vs max\n(utilization)" {
     shape: rectangle
     style.fill: "#fafafa"
     style.stroke: "#bdbdbd"
-    style.font-size: 12
     style.border-radius: 4
   }
   d: "DiskIO\nread/write ops\nand bytes" {
     shape: rectangle
     style.fill: "#fafafa"
     style.stroke: "#bdbdbd"
-    style.font-size: 12
     style.border-radius: 4
   }
   n: "Contention\nlock wait\ncount/duration" {
     shape: rectangle
     style.fill: "#fafafa"
     style.stroke: "#bdbdbd"
-    style.font-size: 12
     style.border-radius: 4
   }
   t: "Throughput\nops/sec\n(monotonic counters)" {
     shape: rectangle
     style.fill: "#fafafa"
     style.stroke: "#bdbdbd"
-    style.font-size: 12
     style.border-radius: 4
   }
   u: "Duration\noperation time\n(last/avg/max)" {
     shape: rectangle
     style.fill: "#fafafa"
     style.stroke: "#bdbdbd"
-    style.font-size: 12
     style.border-radius: 4
   }
 }

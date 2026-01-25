@@ -27,13 +27,15 @@ This primitive is specifically designed for data structures like linked chains, 
 
 ### 1.2 Relationship to Other Types
 
-| Type | Size | Modes | Use Case |
-|------|------|-------|----------|
-| `AccessControlSmall` | 32-bit | Shared/Exclusive | Compact traditional RW lock |
-| `NewAccessControl` | 64-bit | Shared/Exclusive + Telemetry | Full-featured RW lock with diagnostics |
-| `ResourceAccessControl` | 32-bit | Accessing/Modify/Destroy | Resource lifecycle management |
+| Type | Size | Modes | Telemetry | Use Case |
+|------|------|-------|-----------|----------|
+| `AccessControlSmall` | 32-bit | Shared/Exclusive | None | Compact traditional RW lock |
+| `NewAccessControl` | 64-bit | Shared/Exclusive | `IContentionTarget` callback | Full-featured RW lock with diagnostics |
+| `ResourceAccessControl` | 32-bit | Accessing/Modify/Destroy | `IContentionTarget` callback | Resource lifecycle management |
 
 **Key difference**: In `ResourceAccessControl`, MODIFY is **compatible** with ACCESSING. Modifiers can execute while accessors are active (for append-only/extend-only operations).
+
+**Telemetry pattern**: Like `NewAccessControl`, telemetry is implemented via the `IContentionTarget` callback interface. Resources that want contention telemetry implement this interface and pass themselves to the Enter methods. The lock calls back on contention events. See [Observability: Track 4](../../overview/09-observability.md#track-4-per-resource-telemetry-icontentiontarget).
 
 ---
 
@@ -198,9 +200,11 @@ DESTROY takes priority over MODIFY_PENDING:
 │ Bits 10-19  │ MODIFY holder Thread ID (0 = not held)            │
 │ Bit 20      │ MODIFY_PENDING flag                               │
 │ Bit 21      │ DESTROY flag (terminal, never cleared)            │
-│ Bits 22-31  │ Telemetry Block ID (0 = none allocated)           │
+│ Bits 22-31  │ Reserved (for future use)                         │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+> **Note on Telemetry**: Unlike the earlier design that embedded a 10-bit block ID in the state, telemetry is now handled via the `IContentionTarget` callback interface. Resources that want contention telemetry implement this interface and pass themselves to the Enter methods. This eliminates bit pressure and allows per-resource telemetry levels.
 
 ### 6.2 Constants
 
@@ -209,12 +213,10 @@ private const int ACCESSING_COUNT_MASK   = 0x0000_03FF;  // Bits 0-9
 private const int THREAD_ID_MASK         = 0x000F_FC00;  // Bits 10-19
 private const int MODIFY_PENDING_FLAG    = 0x0010_0000;  // Bit 20
 private const int DESTROY_FLAG           = 0x0020_0000;  // Bit 21
-private const int TELEMETRY_BLOCK_MASK   = 0xFFC0_0000;  // Bits 22-31
+// Bits 22-31 reserved for future use
 
 private const int THREAD_ID_SHIFT        = 10;
-private const int TELEMETRY_BLOCK_SHIFT  = 22;
 private const int MAX_ACCESSING_COUNT    = 1023;
-private const int MAX_TELEMETRY_BLOCK_ID = 1023;
 ```
 
 ### 6.3 Helper Methods
@@ -225,7 +227,6 @@ private static int GetThreadId(int state) => (state & THREAD_ID_MASK) >> THREAD_
 private static bool IsModifyHeld(int state) => GetThreadId(state) != 0;
 private static bool IsModifyPending(int state) => (state & MODIFY_PENDING_FLAG) != 0;
 private static bool IsDestroyed(int state) => (state & DESTROY_FLAG) != 0;
-private static int GetTelemetryBlockId(int state) => (state & TELEMETRY_BLOCK_MASK) >> TELEMETRY_BLOCK_SHIFT;
 private static bool HasPendingOrDestroy(int state) => (state & (MODIFY_PENDING_FLAG | DESTROY_FLAG)) != 0;
 ```
 
@@ -247,8 +248,9 @@ public struct ResourceAccessControl
     /// <summary>
     /// Attempt to enter ACCESSING mode without blocking.
     /// </summary>
+    /// <param name="target">Optional telemetry target. Receives callbacks on contention.</param>
     /// <returns>True if acquired, false if MODIFY_PENDING or DESTROY is set</returns>
-    public bool TryEnterAccessing();
+    public bool TryEnterAccessing(IContentionTarget target = null);
 
     /// <summary>
     /// Enter ACCESSING mode, spinning if necessary.
@@ -256,13 +258,16 @@ public struct ResourceAccessControl
     /// </summary>
     /// <param name="timeOut">Optional timeout. Null means wait indefinitely.</param>
     /// <param name="token">Optional cancellation token.</param>
+    /// <param name="target">Optional telemetry target. Receives callbacks on contention.</param>
     /// <returns>True if acquired, false if timed out or canceled</returns>
-    public bool EnterAccessing(TimeSpan? timeOut = null, CancellationToken token = default);
+    public bool EnterAccessing(TimeSpan? timeOut = null, CancellationToken token = default,
+        IContentionTarget target = null);
 
     /// <summary>
     /// Exit ACCESSING mode. Must be called once per successful enter.
     /// </summary>
-    public void ExitAccessing();
+    /// <param name="target">Optional telemetry target (should match Enter call).</param>
+    public void ExitAccessing(IContentionTarget target = null);
 
     // ═══════════════════════════════════════════════════════════════════
     // MODIFY Mode - Single holder, compatible with ACCESSING
@@ -271,9 +276,10 @@ public struct ResourceAccessControl
     /// <summary>
     /// Attempt to enter MODIFY mode without blocking.
     /// </summary>
+    /// <param name="target">Optional telemetry target. Receives callbacks on contention.</param>
     /// <returns>True if acquired immediately, false if ACCESSING holders exist,
     /// another MODIFY is held, or DESTROY is set</returns>
-    public bool TryEnterModify();
+    public bool TryEnterModify(IContentionTarget target = null);
 
     /// <summary>
     /// Enter MODIFY mode.
@@ -282,13 +288,16 @@ public struct ResourceAccessControl
     /// </summary>
     /// <param name="timeOut">Optional timeout. Null means wait indefinitely.</param>
     /// <param name="token">Optional cancellation token.</param>
+    /// <param name="target">Optional telemetry target. Receives callbacks on contention.</param>
     /// <returns>True if acquired, false if timed out or canceled</returns>
-    public bool EnterModify(TimeSpan? timeOut = null, CancellationToken token = default);
+    public bool EnterModify(TimeSpan? timeOut = null, CancellationToken token = default,
+        IContentionTarget target = null);
 
     /// <summary>
     /// Exit MODIFY mode.
     /// </summary>
-    public void ExitModify();
+    /// <param name="target">Optional telemetry target (should match Enter call).</param>
+    public void ExitModify(IContentionTarget target = null);
 
     // ═══════════════════════════════════════════════════════════════════
     // Promotion - ACCESSING → MODIFY
@@ -301,14 +310,17 @@ public struct ResourceAccessControl
     /// </summary>
     /// <param name="timeOut">Optional timeout. Null means wait indefinitely.</param>
     /// <param name="token">Optional cancellation token.</param>
+    /// <param name="target">Optional telemetry target. Receives callbacks on contention.</param>
     /// <returns>True if promoted, false if timed out, canceled, or DESTROY is set</returns>
-    public bool TryPromoteToModify(TimeSpan? timeOut = null, CancellationToken token = default);
+    public bool TryPromoteToModify(TimeSpan? timeOut = null, CancellationToken token = default,
+        IContentionTarget target = null);
 
     /// <summary>
     /// Demote from MODIFY back to ACCESSING.
     /// Caller must hold MODIFY. On return, caller holds ACCESSING instead.
     /// </summary>
-    public void DemoteFromModify();
+    /// <param name="target">Optional telemetry target (should match Enter call).</param>
+    public void DemoteFromModify(IContentionTarget target = null);
 
     // ═══════════════════════════════════════════════════════════════════
     // DESTROY Mode - Exclusive, terminal
@@ -321,8 +333,10 @@ public struct ResourceAccessControl
     /// </summary>
     /// <param name="timeOut">Optional timeout. Null means wait indefinitely.</param>
     /// <param name="token">Optional cancellation token.</param>
+    /// <param name="target">Optional telemetry target. Receives callbacks on contention.</param>
     /// <returns>True if acquired, false if timed out or canceled</returns>
-    public bool EnterDestroy(TimeSpan? timeOut = null, CancellationToken token = default);
+    public bool EnterDestroy(TimeSpan? timeOut = null, CancellationToken token = default,
+        IContentionTarget target = null);
 
     // No ExitDestroy - destruction is final
 
@@ -337,6 +351,11 @@ public struct ResourceAccessControl
     public void Reset();
 }
 ```
+
+> **Telemetry Pattern**: The `IContentionTarget target` parameter follows the same pattern as `NewAccessControl`. When `target` is null (the default), no telemetry overhead occurs. When provided, the lock calls back to the target based on its `TelemetryLevel`:
+> - **None**: No callbacks (zero overhead)
+> - **Light**: `RecordContention(waitUs)` called when thread had to wait
+> - **Deep**: `LogLockOperation(op, durationUs)` called for every Enter/Exit
 
 ### 7.2 Diagnostic Properties
 
@@ -368,7 +387,6 @@ public readonly struct ResourceAccessControlState
     public int ModifyHolderThreadId { get; init; }
     public bool ModifyPending { get; init; }
     public bool Destroyed { get; init; }
-    public int TelemetryBlockId { get; init; }
     public int RawState { get; init; }
 
     public override string ToString() =>
@@ -967,7 +985,6 @@ public ResourceAccessControlState GetDiagnosticState()
         ModifyHolderThreadId = GetThreadId(state),
         ModifyPending = IsModifyPending(state),
         Destroyed = IsDestroyed(state),
-        TelemetryBlockId = GetTelemetryBlockId(state),
         RawState = state
     };
 }
@@ -977,49 +994,188 @@ public ResourceAccessControlState GetDiagnosticState()
 
 ## 11. Telemetry Support
 
-### 11.1 Block ID Management
+### 11.1 Callback-Based Telemetry via IContentionTarget
 
-The 10-bit telemetry block ID (bits 22-31) can reference an entry in a `ChainedBlockAllocator` for operation logging.
+Telemetry is implemented via the `IContentionTarget` callback interface. This approach:
+- **Eliminates bit pressure**: No embedded block IDs in the 32-bit state
+- **Enables per-resource levels**: None/Light/Deep configurable per resource
+- **Zero overhead when disabled**: Null target means no telemetry code runs
+
+### 11.2 IContentionTarget Interface
 
 ```csharp
-#if TELEMETRY
-internal static readonly ChainedBlockAllocator<ResourceAccessOperations> TelemetryAllocator;
-
-static ResourceAccessControl()
+public interface IContentionTarget
 {
-    TelemetryAllocator = new ChainedBlockAllocator<ResourceAccessOperations>(1024);
+    /// <summary>Current telemetry level. Read via volatile for thread-safety.</summary>
+    TelemetryLevel TelemetryLevel { get; }
+
+    /// <summary>Optional link to owning IResource for graph integration.</summary>
+    IResource OwningResource { get; }
+
+    /// <summary>
+    /// Light mode: Record that contention occurred.
+    /// Called when a thread had to wait before acquiring.
+    /// </summary>
+    void RecordContention(long waitUs);
+
+    /// <summary>
+    /// Deep mode: Log a detailed lock operation.
+    /// Called for every Enter/Exit when TelemetryLevel >= Deep.
+    /// </summary>
+    void LogLockOperation(LockOperation operation, long durationUs);
 }
 
-private void EnsureTelemetryBlockAllocated()
+public enum TelemetryLevel
 {
-    int state = Volatile.Read(ref _state);
-    if (GetTelemetryBlockId(state) != 0)
-        return;
+    None = 0,   // No telemetry, zero overhead
+    Light = 1,  // Aggregate counters: contention counts, wait times
+    Deep = 2    // Full operation history with timestamps and thread IDs
+}
 
-    TelemetryAllocator.Allocate(out int blockId, true);
-    if (blockId > MAX_TELEMETRY_BLOCK_ID)
+public enum LockOperation : byte
+{
+    None = 0,
+    AccessingAcquired,
+    AccessingReleased,
+    AccessingWaitStart,
+    ModifyAcquired,
+    ModifyReleased,
+    ModifyWaitStart,
+    PromoteToModifyStart,
+    PromoteToModifyAcquired,
+    DemoteToAccessing,
+    DestroyAcquired,
+    DestroyWaitStart,
+    TimedOut,
+    Canceled
+}
+```
+
+### 11.3 Implementation Pattern
+
+```csharp
+public bool EnterModify(TimeSpan? timeOut = null, CancellationToken token = default,
+    IContentionTarget target = null)
+{
+    var level = target?.TelemetryLevel ?? TelemetryLevel.None;
+    long waitStartTicks = 0;
+    bool hadToWait = false;
+
+    // ... existing spin-wait logic ...
+
+    // On first contention:
+    if (needToWait && !hadToWait)
     {
-        TelemetryAllocator.FreeChain(blockId);
-        return;  // Too many concurrent locks
+        hadToWait = true;
+        waitStartTicks = Stopwatch.GetTimestamp();
+
+        if (level >= TelemetryLevel.Deep)
+            target!.LogLockOperation(LockOperation.ModifyWaitStart, 0);
     }
 
-    // Atomically set the block ID
-    while (true)
+    // After acquiring:
+    if (hadToWait && level >= TelemetryLevel.Light)
     {
-        int newState = (state & ~TELEMETRY_BLOCK_MASK)
-                     | (blockId << TELEMETRY_BLOCK_SHIFT);
-        if (Interlocked.CompareExchange(ref _state, newState, state) == state)
-            return;
-        state = Volatile.Read(ref _state);
-        if (GetTelemetryBlockId(state) != 0)
+        var waitUs = ComputeElapsedUs(waitStartTicks);
+        target!.RecordContention(waitUs);
+    }
+
+    if (level >= TelemetryLevel.Deep)
+    {
+        var waitUs = hadToWait ? ComputeElapsedUs(waitStartTicks) : 0;
+        target!.LogLockOperation(LockOperation.ModifyAcquired, waitUs);
+    }
+
+    return true;
+}
+
+public void ExitModify(IContentionTarget target = null)
+{
+    // ... existing exit logic ...
+
+    if (target?.TelemetryLevel >= TelemetryLevel.Deep)
+        target.LogLockOperation(LockOperation.ModifyReleased, 0);
+}
+
+private static long ComputeElapsedUs(long startTicks)
+{
+    var elapsed = Stopwatch.GetTimestamp() - startTicks;
+    return (elapsed * 1_000_000) / Stopwatch.Frequency;
+}
+```
+
+### 11.4 Owner Aggregates Pattern
+
+Resources that own `ResourceAccessControl` instances typically implement `IContentionTarget` themselves to aggregate telemetry:
+
+```csharp
+public class ChainedBlockAllocator : IContentionTarget
+{
+    private ResourceAccessControl _access;
+
+    // IContentionTarget implementation
+    public TelemetryLevel TelemetryLevel { get; set; } = TelemetryLevel.None;
+    public IResource OwningResource => this as IResource;
+
+    private long _contentionCount;
+    private long _totalWaitUs;
+    private int _deepModeBlockId;  // For ResourceTelemetryAllocator
+
+    public void RecordContention(long waitUs)
+    {
+        Interlocked.Increment(ref _contentionCount);
+        Interlocked.Add(ref _totalWaitUs, waitUs);
+    }
+
+    public void LogLockOperation(LockOperation operation, long durationUs)
+    {
+        if (_deepModeBlockId == 0)
+            ResourceTelemetryAllocator.AllocateChain(out _deepModeBlockId);
+
+        ResourceTelemetryAllocator.AppendOperation(ref _deepModeBlockId,
+            ResourceOperationEntry.Create(operation, durationUs));
+    }
+
+    // Usage: pass `this` as the telemetry target
+    public void AppendBlock()
+    {
+        _access.EnterModify(target: this);
+        try
         {
-            TelemetryAllocator.FreeChain(blockId);  // Someone else set it
-            return;
+            // ... modification logic ...
+        }
+        finally
+        {
+            _access.ExitModify(target: this);
         }
     }
 }
-#endif
 ```
+
+### 11.5 Deep Mode Storage
+
+For `Deep` mode, operation logs are stored in the global `ResourceTelemetryAllocator`:
+
+```csharp
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+public struct ResourceOperationEntry  // 16 bytes
+{
+    public long Timestamp;           // 8 bytes - Stopwatch.GetTimestamp()
+    public uint DurationUs;          // 4 bytes - Wait duration in microseconds
+    public ushort ThreadId;          // 2 bytes - Environment.CurrentManagedThreadId
+    public LockOperation Operation;  // 1 byte
+    public byte Flags;               // 1 byte - Reserved
+}
+
+// Blocks hold 6 entries each (96 bytes)
+[InlineArray(6)]
+internal struct ResourceOperationBlock
+{
+    private ResourceOperationEntry _element;
+}
+```
+
+See [ResourceTelemetryAllocator](../../src/Typhon.Engine/Observability/ResourceTelemetryAllocator.cs) for the chain-based storage implementation.
 
 ---
 
@@ -1140,7 +1296,7 @@ public IEnumerable<Block> EnumerateBlocks()
 | **Reentrancy** | ACCESSING only (via ref counting); MODIFY/DESTROY not reentrant |
 | **Max concurrent accessors** | 1,023 |
 | **Thread ID storage** | 10 bits (truncated) |
-| **Telemetry** | 10-bit block ID for operation logging |
+| **Telemetry** | `IContentionTarget` callback interface (None/Light/Deep) |
 
 ### Mode Selection Guide
 
@@ -1167,3 +1323,4 @@ public IEnumerable<Block> EnumerateBlocks()
 | Destroy | `EnterDestroy()` | — | — |
 | Reset | `Reset()` | `Reset()` | `Reset()` |
 | Timeout/Cancellation | All Enter methods | All Enter methods | All Enter methods |
+| Telemetry | `IContentionTarget target` (last param) | `IContentionTarget target` (last param) | — |
