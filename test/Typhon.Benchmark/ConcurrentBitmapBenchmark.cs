@@ -9,6 +9,7 @@ namespace Typhon.Benchmark;
 
 [MemoryDiagnoser]
 [SimpleJob(warmupCount: 3, iterationCount: 3)]
+[BenchmarkCategory("Collections")]
 public class ConcurrentBitmapBenchmark
 {
     private const int BitSize = 1024 * 1024;

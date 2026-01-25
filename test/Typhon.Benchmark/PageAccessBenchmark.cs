@@ -15,6 +15,7 @@ namespace Typhon.Benchmark;
 
 [MemoryDiagnoser]
 [SimpleJob(warmupCount: 3, iterationCount: 3)]
+[BenchmarkCategory("Persistence")]
 public class PageAccessBenchmark
 {
     private ServiceCollection _serviceCollection;

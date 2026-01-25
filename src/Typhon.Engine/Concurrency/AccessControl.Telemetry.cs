@@ -15,17 +15,17 @@ internal struct  AccessOperations
     internal const int Count = 6;
     private AccessOperation _element;
     
-    // 120 bytes structure
+    // 108 bytes structure
 }
 
 internal static partial class AccessControlImpl
 {
-    private static readonly ChainedBlockAllocator<AccessOperations> Allocator;
+    internal static readonly ChainedBlockAllocator<AccessOperations> Allocator;
 
     static AccessControlImpl()
     {
-        // 6 Operations are 120 bytes, +4 for AccessCounter, +4 for the chain header = 128. Fits in two cache lines -> Optimal!
-        Allocator = new ChainedBlockAllocator<AccessOperations>(1024);
+        // 6 Operations are 108 bytes, +16 for the chain header = 124. Let's take 2 cache lines
+        Allocator = new ChainedBlockAllocator<AccessOperations>(65536, 128-ChainedBlockAllocatorBase.BlockHeaderSize);
     }
 
     private static readonly ThreadLocal<StringBuilder> CachedToDebugStringBuilders = new(() => new StringBuilder(2048));
@@ -35,9 +35,15 @@ internal static partial class AccessControlImpl
     {
         var sb = CachedLogDataStringBuilders.Value.Clear();
 
-        sb.Append($"State: {GetStateName(data)}\t");
-        sb.Append($"Counter: {data&CounterMask}\t");
-        sb.Append($"Shared Waiters: {(data & SharedWaitersMask) >> SharedWaitersShift}\t");
+        sb.Append($"State: {GetAlignedStateName(data)}\t");
+        if ((data & SharedState) != 0)
+        {
+            sb.Append($"Shared Counter: {data&SharedCounterMask}\t");
+        }
+        else
+        {
+            sb.Append($"Shared Waiters: {data & SharedCounterMask}\t");
+        }
         sb.Append($"Exclusive Waiters: {(data & ExclusiveWaitersMask) >> ExclusiveWaitersShift}\t");
         sb.Append($"Promoter Waiters: {(data & PromoterWaitersMask) >> PromoterWaitersShift}\t");
         sb.Append($"BlockId: {(data & OperationsBlockIdMask) >> OperationsBlockIdShift}\t");
@@ -58,9 +64,9 @@ internal static partial class AccessControlImpl
             case OperationType.EnterExclusiveAccess:    return "Exclusive Start";
             case OperationType.ExitExclusiveAccess:     return "Exclusive Exit ";
             case OperationType.SharedStartWait:         return "Wait (S)  Start";
-            case OperationType.SharedEndWait:           return "Wait (S)  End  ";
+            //case OperationType.SharedEndWait:           return "Wait (S)  End  ";
             case OperationType.ExclusiveStartWait:      return "Wait (E)  Start";
-            case OperationType.ExclusiveEndWait:        return "Wait (E)  End  ";
+            //case OperationType.ExclusiveEndWait:        return "Wait (E)  End  ";
             case OperationType.TimedOutOrCanceled:      return "Timeout/Cancel ";
             default: return "?";
         }
@@ -78,35 +84,35 @@ internal static partial class AccessControlImpl
         var sb = CachedToDebugStringBuilders.Value.Clear();
         sb.AppendLine($"Lock #{blockId}:");
 
-        // var stop = false;
-        // foreach (var curBlockId in Allocator.EnumerateChainedBlock(blockId))
-        // {
-        //     ref var ops = ref Allocator.Get(curBlockId);
-        //     for (int i = 0; i < AccessOperations.Count; i++)
-        //     {
-        //         ref var op = ref ops[i];
-        //         if (op.IsEmpty)
-        //         {
-        //             stop = true;
-        //             break;
-        //         }
-        //         LogOp(ref op, sb);
-        //     }
-        //     if (stop)
-        //     {
-        //         break;
-        //     }
-        // }
-        //
-        // if (!Unsafe.IsNullRef(ref lastOp))
-        // {
-        //     LogOp(ref lastOp, sb);
-        // }
+        var stop = false;
+        foreach (var curBlockId in Allocator.EnumerateChainedBlock(blockId))
+        {
+            ref var ops = ref Allocator.Get(curBlockId);
+            for (int i = 0; i < AccessOperations.Count; i++)
+            {
+                ref var op = ref ops[i];
+                if (op.IsEmpty)
+                {
+                    stop = true;
+                    break;
+                }
+                LogOp(ref op, sb);
+            }
+            if (stop)
+            {
+                break;
+            }
+        }
+        
+        if (!Unsafe.IsNullRef(ref lastOp))
+        {
+            LogOp(ref lastOp, sb);
+        }
         
         return sb.ToString();
     }
     
-    private static string GetStateName(ulong state)
+    private static string GetAlignedStateName(ulong state)
     {
         switch (state&StateMask)
         {

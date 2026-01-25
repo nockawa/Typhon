@@ -15,7 +15,7 @@ The resource graph is:
 - **Already partially implemented** — `IResource`, `ResourceNode`, `ResourceRegistry`, `MemoryAllocator`, and `PagedMMF.Metrics` exist in the codebase
 
 <a href="../assets/typhon-resource-graph-overview.svg">
-  <img src="../assets/typhon-resource-graph-overview.svg" width="1200"
+  <img src="../assets/typhon-resource-graph-overview.svg"
        alt="Resource Graph — Component overview showing hierarchical tree with metric kinds per node">
 </a>
 <sub>🔍 Click to open full size — D2 source: <code>assets/src/typhon-resource-graph-overview.d2</code> — open <code>assets/viewer.html</code> for interactive pan-zoom</sub>
@@ -169,7 +169,7 @@ public interface IMetricWriter
 The graph structure is defined at startup (components register themselves and their resources). The tree does not change shape at runtime — only the metric values on nodes change.
 
 <a href="../assets/typhon-resource-tree-topology.svg">
-  <img src="../assets/typhon-resource-tree-topology.svg" width="1200"
+  <img src="../assets/typhon-resource-tree-topology.svg"
        alt="Resource Tree — Full topology showing Root with 6 subsystems and their component nodes with metric kinds">
 </a>
 <sub>🔍 Click to open full size — D2 source: <code>assets/src/typhon-resource-tree-topology.d2</code> — open <code>assets/viewer.html</code> for interactive pan-zoom</sub>
@@ -254,27 +254,89 @@ Tracks lock/latch wait behavior. This is the key metric for detecting CPU starva
 | `MaxWaitUs` | High-water | Longest single wait observed |
 | `TimeoutCount` | Counter | Waits that exceeded Deadline |
 
-**Granularity decision**: Individual `AccessControl` latches do NOT get their own graph nodes. Instead, the *owning component* (e.g., `PageCache`, `ComponentTable<T>`) aggregates contention across all its latches:
+**Granularity decision**: Individual `AccessControl` latches do NOT get their own graph nodes. Instead, the *owning component* (e.g., `PageCache`, `ComponentTable<T>`) aggregates contention across all its latches via the **callback pattern**.
+
+#### The IContentionTarget Callback Pattern
+
+Resources that want contention telemetry implement `IContentionTarget`. When acquiring locks, they pass themselves to the lock methods, and the lock calls back on contention events:
 
 ```csharp
-// The PageCache node aggregates its per-page latches:
-public class PageCacheResource : IResource, IMetricSource
+/// <summary>
+/// Interface for resources that want to receive contention telemetry from locks.
+/// </summary>
+public interface IContentionTarget
 {
-    // These are incremented by the page latch code, guarded by TelemetryConfig.AccessControlActive
+    /// <summary>Current telemetry level. Use volatile field for thread-safe reads.</summary>
+    TelemetryLevel TelemetryLevel { get; }
+
+    /// <summary>Optional link to owning IResource for graph integration.</summary>
+    IResource OwningResource { get; }
+
+    /// <summary>Light mode: Record that contention occurred (thread had to wait).</summary>
+    void RecordContention(long waitUs);
+
+    /// <summary>Deep mode: Log a detailed lock operation.</summary>
+    void LogLockOperation(LockOperation operation, long durationUs);
+}
+
+/// <summary>Per-resource telemetry granularity.</summary>
+public enum TelemetryLevel
+{
+    None = 0,   // Zero overhead — null check only
+    Light = 1,  // Aggregate counters (WaitCount, TotalWaitUs)
+    Deep = 2    // Full operation history with timestamps
+}
+```
+
+**Usage in lock methods** — `IContentionTarget` is always the last parameter, `null` means no telemetry:
+
+```csharp
+// Lock methods accept optional IContentionTarget
+public bool EnterExclusiveAccess(TimeSpan? timeOut = null,
+    CancellationToken token = default, IContentionTarget target = null)
+
+// Resource passes itself when acquiring locks
+_latch.EnterExclusiveAccess(target: this);  // 'this' implements IContentionTarget
+```
+
+**Example implementation** — a resource aggregating its latches' contention:
+
+```csharp
+public class PageCacheResource : IResource, IMetricSource, IContentionTarget
+{
+    // Telemetry level can be changed at runtime (volatile for thread-safety)
+    private volatile TelemetryLevel _telemetryLevel = TelemetryLevel.Light;
+    public TelemetryLevel TelemetryLevel => _telemetryLevel;
+    public IResource OwningResource => this;
+
+    // Aggregate counters updated by lock callbacks
     internal long ContentionWaitCount;
     internal long ContentionTotalUs;
     internal long ContentionMaxUs;
-    internal long ContentionTimeouts;
+
+    public void RecordContention(long waitUs)
+    {
+        Interlocked.Increment(ref ContentionWaitCount);
+        Interlocked.Add(ref ContentionTotalUs, waitUs);
+        // Update max atomically (compare-exchange loop)
+    }
+
+    public void LogLockOperation(LockOperation operation, long durationUs)
+    {
+        // Deep mode: append to operation log via ResourceTelemetryAllocator
+    }
 
     public void ReadMetrics(IMetricWriter writer)
     {
         writer.WriteContention(ContentionWaitCount, ContentionTotalUs,
-                              ContentionMaxUs, ContentionTimeouts);
+                              ContentionMaxUs, 0);
     }
 }
 ```
 
 **CPU cost measurement**: Since we already use `Stopwatch` for Deadline timeout tracking, reusing the elapsed time for contention duration is nearly free — the Stopwatch is already started when we enter a wait loop.
+
+**Zero overhead when disabled**: When `target` is `null` or `TelemetryLevel` is `None`, the lock code skips all telemetry paths with simple null/enum checks that the JIT can optimize.
 
 ### Kind 5: Throughput
 
@@ -349,7 +411,14 @@ Typhon has thousands of latches, millions of chunks, and potentially hundreds of
 
 ### The "Owner Aggregates" Pattern
 
-For fine-grained primitives that don't get their own nodes, the **owning component** maintains aggregate counters:
+For fine-grained primitives that don't get their own nodes, the **owning component** maintains aggregate counters. The mechanism is the `IContentionTarget` callback interface (see [Kind 4: Contention](#kind-4-contention)):
+
+1. The resource (e.g., `ComponentTable<T>`) implements `IContentionTarget`
+2. When acquiring any of its latches, it passes `this` as the `target` parameter
+3. The latch calls back to `RecordContention()` when threads have to wait
+4. All latches' contention metrics aggregate into the single resource node
+
+This inverts the traditional pattern where latches push metrics — instead, the resource *pulls* by passing itself to lock methods, and the lock *pushes back* via callbacks.
 
 <a href="../assets/typhon-owner-aggregates-pattern.svg">
   <img src="../assets/typhon-owner-aggregates-pattern.svg" width="1200"
@@ -779,7 +848,7 @@ The resource graph is the **single source of truth** for the observability syste
 ### Data Flow
 
 <a href="../assets/typhon-resource-snapshot-flow.svg">
-  <img src="../assets/typhon-resource-snapshot-flow.svg" width="1200"
+  <img src="../assets/typhon-resource-snapshot-flow.svg" width="1000"
        alt="Resource Snapshot — Data flow from hot-path counters through graph snapshot to observability consumers">
 </a>
 <sub>🔍 Click to open full size — D2 source: <code>assets/src/typhon-resource-snapshot-flow.d2</code> — open <code>assets/viewer.html</code> for interactive pan-zoom</sub>
@@ -843,16 +912,21 @@ The observability layer does NOT:
 
 | Component | Location | Status |
 |-----------|----------|--------|
-| IResource | `src/Typhon.Engine/Misc/Resouce Registry/IResource.cs` | ✅ Exists |
-| ResourceNode | `src/Typhon.Engine/Misc/Resouce Registry/ResourceNode.cs` | ✅ Exists |
-| ResourceRegistry | `src/Typhon.Engine/Misc/Resouce Registry/ResourceRegistry.cs` | ✅ Exists |
-| IMemoryResource | `src/Typhon.Engine/Misc/MemoryAllocator/MemoryBlockBase.cs` | ✅ Exists |
-| MemoryAllocator | `src/Typhon.Engine/Misc/MemoryAllocator/MemoryAllocator.cs` | ✅ Exists |
-| PinnedMemoryBlock | `src/Typhon.Engine/Misc/MemoryAllocator/PinnedMemoryBlock.cs` | ✅ Exists |
-| PagedMMF.Metrics | `src/Typhon.Engine/Persistence Layer/PagedMMF.Metrics.cs` | ✅ Exists |
+| IResource | `src/Typhon.Engine/Resources/IResource.cs` | ✅ Exists |
+| ResourceNode | `src/Typhon.Engine/Resources/ResourceNode.cs` | ✅ Exists |
+| ResourceRegistry | `src/Typhon.Engine/Resources/ResourceRegistry.cs` | ✅ Exists |
+| IMemoryResource | `src/Typhon.Engine/Memory/MemoryBlockBase.cs` | ✅ Exists |
+| MemoryAllocator | `src/Typhon.Engine/Memory/MemoryAllocator.cs` | ✅ Exists |
+| PinnedMemoryBlock | `src/Typhon.Engine/Memory/PinnedMemoryBlock.cs` | ✅ Exists |
+| PagedMMF.Metrics | `src/Typhon.Engine/Storage/PagedMMF.Metrics.cs` | ✅ Exists |
 | ConcurrentBitmapL3All : IResource | `src/Typhon.Engine/Collections/ConcurrentBitmapL3All.cs` | ✅ Exists |
-| BlockAllocatorBase (Capacity/Count) | `src/Typhon.Engine/Misc/BlockAllocator/BlockAllocatorBase.cs` | ✅ Exists |
+| BlockAllocatorBase (Capacity/Count) | `src/Typhon.Engine/Memory/Allocators/BlockAllocatorBase.cs` | ✅ Exists |
 | TyphonBuilderExtensions (DI setup) | `src/Typhon.Engine/Hosting/TyphonBuilderExtensions.cs` | ✅ Exists |
+| **IContentionTarget** | `src/Typhon.Engine/Observability/IContentionTarget.cs` | ✅ Exists |
+| **TelemetryLevel** | `src/Typhon.Engine/Observability/TelemetryLevel.cs` | ✅ Exists |
+| **LockOperation** | `src/Typhon.Engine/Observability/LockOperation.cs` | ✅ Exists |
+| **ResourceOperationEntry** | `src/Typhon.Engine/Observability/ResourceOperationEntry.cs` | ✅ Exists |
+| **ResourceTelemetryAllocator** | `src/Typhon.Engine/Observability/ResourceTelemetryAllocator.cs` | ✅ Exists |
 | IMetricSource | `src/Typhon.Engine/Resources/IMetricSource.cs` | 🆕 New |
 | IResourceGraph | `src/Typhon.Engine/Resources/IResourceGraph.cs` | 🆕 New |
 | ResourceSnapshot | `src/Typhon.Engine/Resources/ResourceSnapshot.cs` | 🆕 New |

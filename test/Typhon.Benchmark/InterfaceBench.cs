@@ -61,6 +61,7 @@ public struct TestInterface : IAddition
 }
 
 [SimpleJob(warmupCount: 3, iterationCount: 3)]
+[BenchmarkCategory("Memory")]
 public unsafe class InterfaceBench
 {
     private const int ElementCount = 1024 * 1024;
