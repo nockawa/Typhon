@@ -1,0 +1,38 @@
+# Typhon: UoW Lifecycle
+# Sequence diagram showing Unit of Work creation, transactions, and flush
+
+title: "UoW Lifecycle — Deferred Durability" {
+  shape: text
+  style.font-size: 18
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+seq: {
+  shape: sequence_diagram
+
+  app: "App"
+  uow: "UnitOfWork"
+  tx: "Transaction"
+  wal: "WAL Writer"
+
+  app -> uow: "db.CreateUnitOfWork(timeout, Deferred)"
+  uow -> uow: "Allocate Epoch from registry"
+
+  app -> tx: "uow.CreateTransaction()"
+  app -> tx: "tx.CreateEntity(...) / tx.UpdateEntity(...)"
+  app -> tx: "tx.Commit()"
+  tx -> wal: "Serialize WAL record to ring buffer"
+
+  app -> tx: "uow.CreateTransaction()"
+  app -> tx: "... more work ..."
+  app -> tx: "tx.Commit()"
+  tx -> wal: "Serialize WAL record to ring buffer"
+
+  app -> uow: "uow.FlushAsync()"
+  uow -> wal: "Signal flush, wait for FUA"
+  wal -> uow: "All records durable" {style.stroke-dash: 3}
+
+  app -> uow: "Dispose()"
+}

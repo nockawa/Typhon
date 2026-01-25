@@ -1,0 +1,153 @@
+# Typhon: Durability & Recovery — Component Overview
+# Shows User Layer → Durability System → Storage Engine
+
+direction: down
+
+# ── Title ─────────────────────────────────────────────────────
+title: "Durability & Recovery — Component Overview" {
+  shape: text
+  style.font-size: 22
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+# ── User Layer ────────────────────────────────────────────────
+user: "User Layer" {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.border-radius: 10
+
+  uow: "Unit of Work\n(durability boundary)" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+    style.bold: true
+  }
+  dmode: "DurabilityMode\nDeferred / GroupCommit / Immediate" {
+    shape: rectangle
+    style.fill: "#90caf9"
+    style.stroke: "#1565c0"
+  }
+
+  uow -> dmode: "selects" {style.stroke: "#1565c0"}
+}
+
+# ── Durability & Recovery System ──────────────────────────────
+durability: "Durability & Recovery" {
+  style.fill: "#fce4ec"
+  style.stroke: "#c62828"
+  style.border-radius: 10
+
+  wal: "Write-Ahead Log\n(sequential FUA writes)" {
+    shape: rectangle
+    style.fill: "#f8bbd0"
+    style.stroke: "#c62828"
+    style.bold: true
+  }
+  epoch: "UoW Epoch Stamp\n(per-revision tracking)" {
+    shape: rectangle
+    style.fill: "#f8bbd0"
+    style.stroke: "#c62828"
+  }
+  registry: "UoW Registry\nPending / WalDurable /\nCommitted / Void" {
+    shape: cylinder
+    style.fill: "#f48fb1"
+    style.stroke: "#ad1457"
+  }
+  cksum: "Page Checksums\n(torn write detection)" {
+    shape: rectangle
+    style.fill: "#f8bbd0"
+    style.stroke: "#c62828"
+  }
+  checkpoint: "Checkpoint Pipeline\npages → fsync → advance WAL" {
+    shape: rectangle
+    style.fill: "#ec407a"
+    style.stroke: "#880e4f"
+    style.font-color: white
+    style.bold: true
+  }
+  recovery: "Recovery Logic\nregistry scan + WAL replay" {
+    shape: rectangle
+    style.fill: "#ec407a"
+    style.stroke: "#880e4f"
+    style.font-color: white
+  }
+}
+
+# ── Storage Engine ────────────────────────────────────────────
+storage: "Storage Engine" {
+  style.fill: "#fff3e0"
+  style.stroke: "#e65100"
+  style.border-radius: 10
+
+  pages: "Data Pages\n(component revisions, 8KB)" {
+    shape: page
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+  }
+  walfile: "WAL File\n(O_DIRECT + FUA)" {
+    shape: page
+    style.fill: "#ffcc80"
+    style.stroke: "#e65100"
+    style.bold: true
+  }
+  header: "File Header\n(checkpoint LSN)" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+  }
+}
+
+# ── User → Durability connections ────────────────────────────
+user.uow -> durability.epoch: "stamps revisions" {
+  style.stroke: "#c62828"
+}
+user.dmode -> durability.wal: "controls flush" {
+  style.stroke: "#c62828"
+  style.bold: true
+}
+
+# ── Durability internal connections ──────────────────────────
+durability.wal -> durability.registry: "updates status" {
+  style.stroke: "#ad1457"
+  style.stroke-dash: 3
+}
+
+# ── Durability → Storage connections ─────────────────────────
+durability.epoch -> storage.pages: "on revisions" {
+  style.stroke: "#e65100"
+  style.stroke-dash: 3
+}
+durability.wal -> storage.walfile: "sequential append" {
+  style.stroke: "#e65100"
+  style.bold: true
+}
+durability.checkpoint -> storage.pages: "flush dirty" {
+  style.stroke: "#e65100"
+}
+durability.checkpoint -> durability.registry: "advance epochs" {
+  style.stroke: "#ad1457"
+}
+durability.checkpoint -> storage.walfile: "recycle segments" {
+  style.stroke: "#e65100"
+  style.stroke-dash: 5
+}
+durability.checkpoint -> storage.header: "advance LSN" {
+  style.stroke: "#e65100"
+  style.stroke-dash: 5
+}
+durability.recovery -> durability.registry: "scan epochs" {
+  style.stroke: "#ad1457"
+}
+durability.recovery -> storage.walfile: "replay records" {
+  style.stroke: "#e65100"
+}
+durability.cksum -> storage.pages: "verify integrity" {
+  style.stroke: "#e65100"
+  style.stroke-dash: 3
+}
+durability.recovery -> durability.cksum: "detect torn pages" {
+  style.stroke: "#ad1457"
+  style.stroke-dash: 3
+}

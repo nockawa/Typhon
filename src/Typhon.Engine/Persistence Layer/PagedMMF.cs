@@ -11,7 +11,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
-#if VERBOSELOGGING
+#if TELEMETRY
     using Serilog.Context;
 #endif
 
@@ -310,7 +310,7 @@ public partial class PagedMMF : IDisposable
     public bool RequestPage(int filePageIndex, bool exclusive, out PageAccessor result, 
         long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
     {
-#if VERBOSELOGGING
+#if TELEMETRY
         using var logId = LogContext.PushProperty("FilePageIndex", filePageIndex);
         using var logRW = LogContext.PushProperty("IsExclusive", exclusive);
         LogRequestPage(filePageIndex, exclusive);
@@ -386,7 +386,7 @@ public partial class PagedMMF : IDisposable
             LogMemPageCacheHit();
         }
 
-#if VERBOSELOGGING
+#if TELEMETRY
         using var logMemPageIndex = LogContext.PushProperty("MemPageIndex", memPageIndex);
 #endif
 
@@ -422,7 +422,7 @@ public partial class PagedMMF : IDisposable
     /// </remarks>
     private bool AllocateMemoryPage(int filePageIndex, out int memPageIndex, long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
     {
-#if VERBOSELOGGING
+#if TELEMETRY
         int loopCount = 0;
         DateTime start = DateTime.UtcNow;
 #endif        
@@ -508,7 +508,7 @@ public partial class PagedMMF : IDisposable
 
                 if (!found)
                 {
-#if VERBOSELOGGING
+#if TELEMETRY
                     
                     // We'll get here basically if all memory pages are currently in use, so it's very unlikely, except of complete system usage overload
                     // The best (and easiest) thing is to wait and try again.
@@ -657,7 +657,7 @@ public partial class PagedMMF : IDisposable
     private bool TransitionPageToAccess(int filePageIndex, PageInfo pi, bool exclusive, 
         long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
     {
-#if VERBOSELOGGING
+#if TELEMETRY
         int loopCount = 0;
         // ReSharper disable once TooWideLocalVariableScope
         DateTime start = DateTime.UtcNow;
@@ -673,7 +673,7 @@ public partial class PagedMMF : IDisposable
                 
                 Debug.Assert(pi.PageState != PageState.Free);
                 
-#if VERBOSELOGGING
+#if TELEMETRY
                 var memPageId = pi.MemPageIndex;
                 prevState = pi.PageState;
                 using var logId = LogContext.PushProperty("FilePageIndex", filePageIndex);
@@ -772,7 +772,7 @@ public partial class PagedMMF : IDisposable
 
             // We arrive here because we couldn't make the requested transition, in a leap of faith, we wait...and retry.
             // But we log it, because, ya know...
-#if VERBOSELOGGING
+#if TELEMETRY
             if (loopCount.IsPowerOf2())
             {
                 LogTransitionWaitAndLoop(prevState, exclusive ? PageState.Exclusive : PageState.Shared, loopCount, DateTime.UtcNow - start);
@@ -945,7 +945,7 @@ public partial class PagedMMF : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     internal void TransitionPageFromAccessToIdle(PageInfo pi)
     {
-#if VERBOSELOGGING
+#if TELEMETRY
         using var logId = LogContext.PushProperty("FilePageIndex", pi.FilePageIndex);
         using var logMemPageId = LogContext.PushProperty("MemPageIndex", pi.MemPageIndex);
 #endif
@@ -983,53 +983,53 @@ public partial class PagedMMF : IDisposable
     
     #region Logging helpers
 
-    [Conditional("VERBOSELOGGING")]
+    [Conditional("TELEMETRY")]
     private void LogRequestPage(int pageId, bool doesWrite) => Logger.LogDebug(10, "Request Disk Page: {PageId}, Write: {IsExclusive}", pageId, doesWrite);
     
-    [Conditional("VERBOSELOGGING")]
+    [Conditional("TELEMETRY")]
     private void LogMemPageCacheHit() => Logger.LogTrace(11, "MemPage Cache Hit");
     
-    [Conditional("VERBOSELOGGING")]
+    [Conditional("TELEMETRY")]
     private void LogMemPageCacheMiss() => Logger.LogTrace(12, "MemPage Cache Miss");
     
-    [Conditional("VERBOSELOGGING")]
+    [Conditional("TELEMETRY")]
     private void LogRequestPageFound() => Logger.LogTrace(13, "Request Page Found");
     
-    [Conditional("VERBOSELOGGING")]
+    [Conditional("TELEMETRY")]
     private void LogRequestPageRace() => Logger.LogTrace(14, "Request Page Race Condition (reallocation)");
 
-    [Conditional("VERBOSELOGGING")]
+    [Conditional("TELEMETRY")]
     private void LogAllocatePageEnter() => Logger.LogTrace(20, "Allocate Page Enter");
     
-    [Conditional("VERBOSELOGGING")]
+    [Conditional("TELEMETRY")]
     private void LogAllocatePageSequential() => Logger.LogTrace(22, "Allocate Page Sequential");
     
-    [Conditional("VERBOSELOGGING")]
+    [Conditional("TELEMETRY")]
     private void LogAllocatePageFound(int memPageIndex) => Logger.LogTrace(24, "Allocate Page Found {MemPageId}", memPageIndex);
     
-    [Conditional("VERBOSELOGGING")]
+    [Conditional("TELEMETRY")]
     private void LogAllocatePageLoad() => Logger.LogTrace(25, "Allocate Page Load From Disk");
 
-    [Conditional("VERBOSELOGGING")]
+    [Conditional("TELEMETRY")]
     private void LogTransitionSuccessful(PageState prevMode, PageState newMode) => 
         Logger.LogTrace(40, "Transition completed from {PrevMode} to {NewMode}", prevMode, newMode);
 
-    [Conditional("VERBOSELOGGING")]
+    [Conditional("TELEMETRY")]
     private void LogTransitionFailed(PageState newMode) => 
         Logger.LogTrace(41, "Transition completed to {NewMode} failed due to reallocation", newMode);
 
 
-    [Conditional("VERBOSELOGGING")]
+    [Conditional("TELEMETRY")]
     private void LogTransitionWaitAndLoop(PageState prevMode, PageState newMode, int loopCount, TimeSpan duration) => 
         Logger.LogTrace(42, "Transition waiting/reloop from {prevNode} to {NewMode} loop count: {loopCount}, duration: {duration}", prevMode, newMode, loopCount, duration);
 
  
-    [Conditional("VERBOSELOGGING")]
+    [Conditional("TELEMETRY")]
     private void LogPendingPageAllocation(int filePageIndex, int loopCount, TimeSpan duration) => 
         Logger.LogTrace(43, "Page Allocation pending/reloop for page {filePageIndex} loop count: {loopCount}, duration: {duration}", filePageIndex, loopCount, duration);
 
  
-    [Conditional("VERBOSELOGGING")]
+    [Conditional("TELEMETRY")]
     private void LogReset() => 
         Logger.LogTrace(44, "Resetting PagedFile instance !!!");
 

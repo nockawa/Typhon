@@ -1,0 +1,64 @@
+# Typhon: Query Pipeline Executor — Streaming Algorithm
+# Shows the primary-stream pipeline: select → scan → filter → materialize
+
+direction: right
+
+# ── Title ─────────────────────────────────────────────────────
+title: "Pipeline Executor — Streaming Algorithm" {
+  shape: text
+  style.font-size: 22
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+# ── Pipeline ─────────────────────────────────────────────────
+pipeline: "" {
+  style.fill: "#fafafa"
+  style.stroke: "#607d8b"
+  style.border-radius: 10
+
+  select: "1. Select Primary\n(most selective index)" {
+    shape: rectangle
+    style.fill: "#e3f2fd"
+    style.stroke: "#1565c0"
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  scan: "2. Index Scan\n(stream Entity IDs)" {
+    shape: rectangle
+    style.fill: "#e1bee7"
+    style.stroke: "#7b1fa2"
+    style.border-radius: 6
+  }
+
+  check: "3. Check Secondary\nPredicates" {
+    shape: diamond
+    style.fill: "#fff3e0"
+    style.stroke: "#e65100"
+    style.bold: true
+  }
+
+  materialize: "4. Materialize\nComponents" {
+    shape: rectangle
+    style.fill: "#e8f5e9"
+    style.stroke: "#2e7d32"
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  addcache: "5. Add to\nView Cache" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+    style.border-radius: 6
+  }
+
+  select -> scan: "" {style.stroke: "#546e7a"}
+  scan -> check: "for each ID" {style.stroke: "#546e7a"}
+  check -> materialize: "pass" {style.stroke: "#2e7d32"; style.bold: true}
+  check -> scan: "fail (skip)" {style.stroke: "#c62828"; style.stroke-dash: 3}
+  materialize -> addcache: "" {style.stroke: "#546e7a"}
+  addcache -> scan: "next" {style.stroke: "#546e7a"; style.stroke-dash: 3}
+}

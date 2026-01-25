@@ -64,6 +64,10 @@ class Program
 
     static void Main(string[] args)
     {
+        // Use BenchmarkSwitcher to allow command-line selection
+        BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
+        return;
+
         // Run ChunkLocation comparison benchmark
         //BenchmarkRunner.Run<ChunkLocationBenchmark>();
 

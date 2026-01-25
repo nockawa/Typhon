@@ -151,6 +151,51 @@ public class ConcurrentBitmapBenchmark
     }
 
     [Benchmark]
+    public int FindNextUnsetL0_Sparse()
+    {
+        // Test FindNextUnsetL0 with sparse bitmap (25% filled)
+        var c = new ConcurrentBitmapL3All(BitSize);
+
+        // Fill 25% of bits sparsely
+        for (int i = 0; i < BitSize; i += 4)
+        {
+            c.SetL0(i);
+        }
+
+        int count = 0;
+        int index = -1;
+        while (c.FindNextUnsetL0(ref index))
+        {
+            count++;
+        }
+        return count;
+    }
+
+    [Benchmark]
+    public int FindNextUnsetL0_Dense()
+    {
+        // Test FindNextUnsetL0 with dense bitmap (blocks of filled data)
+        var c = new ConcurrentBitmapL3All(BitSize);
+
+        // Fill blocks of 4096 bits (L1 regions) leaving gaps
+        for (int block = 0; block < BitSize; block += 8192)
+        {
+            for (int i = block; i < block + 4096 && i < BitSize; i++)
+            {
+                c.SetL0(i);
+            }
+        }
+
+        int count = 0;
+        int index = -1;
+        while (c.FindNextUnsetL0(ref index))
+        {
+            count++;
+        }
+        return count;
+    }
+
+    [Benchmark]
     public void BitmapL3Any()
     {
         var c = _bitmapL3;

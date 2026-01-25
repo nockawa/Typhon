@@ -23,7 +23,7 @@ dotnet build Typhon.sln
 ```bash
 dotnet build -c Debug
 dotnet build -c Release
-dotnet build -c VerboseLogging  # Enables verbose logging via VERBOSELOGGING define
+dotnet build -c Telemetry  # Enables verbose logging via TELEMETRY define
 ```
 
 **Run all tests:**
@@ -203,7 +203,7 @@ Page (8192 bytes):
 ### Logging
 - Uses Serilog with Microsoft.Extensions.Logging abstractions
 - Custom enricher: CurrentFrameEnricher (adds frame context)
-- VerboseLogging configuration enables detailed tracing via `VERBOSELOGGING` define
+- Telemetry configuration enables detailed tracing via `TELEMETRY` define
 - Test projects configured with Serilog.Sinks.Seq for structured logging
 
 ## Project Structure
@@ -271,8 +271,48 @@ var committed = t.Commit(); // or t.Rollback()
 2. **Transaction Disposal**: Always use `using` statements with transactions to ensure proper cleanup.
 3. **Revision Tracking**: Don't assume revision numbers are contiguous after conflicts or rollbacks.
 4. **Page Cache Size**: Default 2MB cache may be insufficient for large datasets. Configure via PagedMMFOptions.
-5. **VerboseLogging Build**: The VerboseLogging configuration is for debugging only and significantly impacts performance.
+5. **Telemetry Build**: The Telemetry configuration is for debugging only and significantly impacts performance.
 
 ## Documentation
 
 Full documentation available at: https://nockawa.github.io/Typhon/
+
+## Working with Claude
+
+### Clarification-First Workflow
+
+For complex, ambiguous, or open-ended requests, Claude should **ask clarifying questions before providing an answer**. This is the default behavior - don't wait to be asked "do you have questions?"
+
+**When to ask first (default to asking for anything non-trivial):**
+- Request has multiple valid interpretations
+- Scope is unclear (how deep? how broad? which aspects?)
+- Trade-offs exist that depend on user preference
+- Implementation could go several directions
+- The "right" answer depends on context not yet provided
+- Architectural or design decisions are involved
+- Performance vs simplicity trade-offs exist
+
+**How to ask:**
+- Use the AskUserQuestion tool with a wizard-like flow
+- Present 2-4 clear options per question
+- Include brief descriptions explaining what each option means/implies
+- Ask 1-4 focused questions to narrow scope
+- Then proceed with the clarified understanding
+
+**When NOT to ask (just proceed):**
+- Simple, unambiguous requests with clear scope
+- User explicitly says "just do it", "don't ask", or "try something"
+- Follow-up to an already-clarified topic in the same conversation
+- Urgent fixes where speed matters more than perfection
+- User has provided detailed specifications already
+
+### Document Lifecycle Integration
+
+This project uses a structured document lifecycle in `claude/`. See `claude/README.md` for:
+- Folder structure (ideas → research → design → reference → archive)
+- **Categories**: Hierarchical organization mirroring project areas (e.g., `database-engine/`, `persistence/`)
+- Trigger phrases for document operations
+- Templates for each document type
+- Single file vs directory conventions for complex topics
+
+**When creating documents**, always ask for the location (category) using the wizard-style prompt, unless the user specifies it explicitly.

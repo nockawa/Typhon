@@ -1,0 +1,129 @@
+# Typhon: "Owner Aggregates" Pattern
+# Shows how a graph node aggregates metrics from fine-grained primitives
+
+direction: down
+
+# ── Title ─────────────────────────────────────────────────────
+title: "Owner Aggregates Pattern" {
+  shape: text
+  style.font-size: 22
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+# ── Component Table (graph node) ─────────────────────────────
+comp_table: "ComponentTable<Player>\n(graph node)" {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.border-radius: 10
+  style.bold: true
+
+  # ── Aggregated Metrics ────────────────────────────────────
+  metrics: "Aggregated Metrics" {
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+    style.border-radius: 6
+    grid-columns: 3
+
+    contention: "Contention\nsum of all\nAccessControl waits" {
+      shape: rectangle
+      style.fill: "#e1f5fe"
+      style.stroke: "#0277bd"
+      style.font-size: 12
+      style.border-radius: 4
+    }
+    capacity: "Capacity\ntotal chunks\nacross segments" {
+      shape: rectangle
+      style.fill: "#e1f5fe"
+      style.stroke: "#0277bd"
+      style.font-size: 12
+      style.border-radius: 4
+    }
+    throughput: "Throughput\ninserts + updates\n+ deletes" {
+      shape: rectangle
+      style.fill: "#e1f5fe"
+      style.stroke: "#0277bd"
+      style.font-size: 12
+      style.border-radius: 4
+    }
+  }
+
+  # ── Fine-grained primitives (NO graph nodes) ──────────────
+  latches: "Individual Latches (no graph nodes)" {
+    style.fill: "#fafafa"
+    style.stroke: "#9e9e9e"
+    style.border-radius: 6
+    style.font-size: 12
+    grid-columns: 5
+
+    l1: "Latch" {
+      shape: rectangle
+      style.fill: "#f5f5f5"
+      style.stroke: "#bdbdbd"
+      style.font-size: 11
+    }
+    l2: "Latch" {
+      shape: rectangle
+      style.fill: "#f5f5f5"
+      style.stroke: "#bdbdbd"
+      style.font-size: 11
+    }
+    l3: "Latch" {
+      shape: rectangle
+      style.fill: "#f5f5f5"
+      style.stroke: "#bdbdbd"
+      style.font-size: 11
+    }
+    l4: "Latch" {
+      shape: rectangle
+      style.fill: "#f5f5f5"
+      style.stroke: "#bdbdbd"
+      style.font-size: 11
+    }
+    l5: "..." {
+      shape: rectangle
+      style.fill: "#f5f5f5"
+      style.stroke: "#bdbdbd"
+      style.font-size: 11
+    }
+  }
+
+  # ── Child graph node ──────────────────────────────────────
+  pk_index: "PrimaryKeyIndex\n(graph node)" {
+    style.fill: "#e8f5e9"
+    style.stroke: "#2e7d32"
+    style.border-radius: 8
+    style.bold: true
+    grid-columns: 3
+
+    pk_throughput: "Throughput\nlookups, inserts" {
+      shape: rectangle
+      style.fill: "#c8e6c9"
+      style.stroke: "#388e3c"
+      style.font-size: 12
+      style.border-radius: 4
+    }
+    pk_duration: "Duration\navg lookup time" {
+      shape: rectangle
+      style.fill: "#c8e6c9"
+      style.stroke: "#388e3c"
+      style.font-size: 12
+      style.border-radius: 4
+    }
+    pk_capacity: "Capacity\nnode count / max" {
+      shape: rectangle
+      style.fill: "#c8e6c9"
+      style.stroke: "#388e3c"
+      style.font-size: 12
+      style.border-radius: 4
+    }
+  }
+}
+
+# ── Annotations ──────────────────────────────────────────────
+comp_table.latches -> comp_table.metrics: "aggregate into" {
+  style.stroke: "#9e9e9e"
+  style.stroke-dash: 4
+  style.font-size: 11
+}

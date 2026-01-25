@@ -1,0 +1,194 @@
+# Typhon: Telemetry Tracks — Architecture Detail
+# Shows the three-track telemetry system with overhead characteristics
+
+direction: right
+
+# ── Title ─────────────────────────────────────────────────────
+title: "Telemetry Tracks — Zero-Overhead Architecture" {
+  shape: text
+  style.font-size: 22
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+# ── Hot Path Code ──────────────────────────────────────────────
+hot_path: "Hot-Path Code" {
+  style.fill: "#fff8e1"
+  style.stroke: "#f57f17"
+  style.border-radius: 10
+
+  access_ctrl: "AccessControl\nEnterShared()\nEnterExclusive()" {
+    shape: rectangle
+    style.fill: "#fff9c4"
+    style.stroke: "#f9a825"
+  }
+  paged_mmf: "PagedMMF\nGetPage()\nEvictPage()" {
+    shape: rectangle
+    style.fill: "#fff9c4"
+    style.stroke: "#f9a825"
+  }
+  btree: "B+Tree\nLookup()\nInsert()" {
+    shape: rectangle
+    style.fill: "#fff9c4"
+    style.stroke: "#f9a825"
+  }
+  transaction: "Transaction\nCommit()\nRollback()" {
+    shape: rectangle
+    style.fill: "#fff9c4"
+    style.stroke: "#f9a825"
+  }
+}
+
+# ── Track 1 ────────────────────────────────────────────────────
+track1: "Track 1: Static Readonly" {
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.border-radius: 10
+
+  config: "TelemetryConfig" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+    style.bold: true
+  }
+
+  flags: "AccessControlActive\nPagedMMFActive\nBTreeActive\nTransactionActive" {
+    shape: rectangle
+    style.fill: "#a5d6a7"
+    style.stroke: "#388e3c"
+    style.font-size: 12
+  }
+
+  jit: "JIT Tier 1\nDead-code elimination\nwhen false → 0 overhead" {
+    shape: rectangle
+    style.fill: "#81c784"
+    style.stroke: "#2e7d32"
+    style.font-color: white
+    style.bold: true
+  }
+
+  config -> flags: "static readonly" {style.stroke: "#2e7d32"}
+  flags -> jit: "compile-time\nconstant" {style.stroke: "#2e7d32"}
+}
+
+# ── Track 2 ────────────────────────────────────────────────────
+track2: "Track 2: DI Options" {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.border-radius: 10
+
+  options: "IOptions<TelemetryOptions>" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+  }
+  config2: "typhon.telemetry.json\nor IConfiguration" {
+    shape: page
+    style.fill: "#90caf9"
+    style.stroke: "#1565c0"
+  }
+  usage: "Cold-path services\nReporting\nConfiguration UI" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+    style.font-size: 12
+  }
+
+  config2 -> options: "bind" {style.stroke: "#1565c0"}
+  options -> usage: "DI resolve" {style.stroke: "#1565c0"}
+}
+
+# ── Track 3 ────────────────────────────────────────────────────
+track3: "Track 3: Deep Diagnostics" {
+  style.fill: "#fce4ec"
+  style.stroke: "#c62828"
+  style.border-radius: 10
+
+  define: "static readonly bool\nDeepDiagnosticsActive\n(same JIT trick as Track 1)" {
+    shape: rectangle
+    style.fill: "#f8bbd0"
+    style.stroke: "#c62828"
+    style.bold: true
+  }
+  ops: "ChainedBlockAllocator\n<AccessOperations>\n6 ops × 18 bytes = 108B/block" {
+    shape: rectangle
+    style.fill: "#f8bbd0"
+    style.stroke: "#c62828"
+    style.font-size: 12
+  }
+  debug: "ToDebugString()\nPost-mortem analysis\nLock history timeline" {
+    shape: rectangle
+    style.fill: "#ec407a"
+    style.stroke: "#880e4f"
+    style.font-color: white
+  }
+
+  define -> ops: "when true" {style.stroke: "#c62828"}
+  ops -> debug: "on demand" {style.stroke: "#c62828"}
+}
+
+# ── Connections: Hot Path → Tracks ─────────────────────────────
+hot_path.access_ctrl -> track1.flags: "if (Active)" {
+  style.stroke: "#2e7d32"
+  style.bold: true
+}
+hot_path.paged_mmf -> track1.flags: "if (Active)" {
+  style.stroke: "#2e7d32"
+  style.bold: true
+}
+hot_path.btree -> track1.flags: "if (Active)" {
+  style.stroke: "#2e7d32"
+}
+hot_path.transaction -> track1.flags: "if (Active)" {
+  style.stroke: "#2e7d32"
+}
+hot_path.access_ctrl -> track3.define: "if (DeepDiagActive)" {
+  style.stroke: "#c62828"
+  style.stroke-dash: 3
+}
+
+# ── Overhead Labels ────────────────────────────────────────────
+overhead: "Overhead Comparison" {
+  style.fill: "#fafafa"
+  style.stroke: "#9e9e9e"
+  style.border-radius: 6
+  grid-columns: 1
+
+  p1: "static readonly false → 0%" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+    style.font-size: 11
+    style.bold: true
+    style.border-radius: 4
+  }
+  p2: "static readonly true → +102%" {
+    shape: rectangle
+    style.fill: "#fff9c4"
+    style.stroke: "#f9a825"
+    style.font-size: 11
+    style.border-radius: 4
+  }
+  p3: "static (mutable) → +214%" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+    style.font-size: 11
+    style.border-radius: 4
+  }
+  p4: "Delegate → +318%" {
+    shape: rectangle
+    style.fill: "#ffccbc"
+    style.stroke: "#bf360c"
+    style.font-size: 11
+    style.border-radius: 4
+  }
+  p5: "Interface dispatch → +507%" {
+    shape: rectangle
+    style.fill: "#f8bbd0"
+    style.stroke: "#c62828"
+    style.font-size: 11
+    style.border-radius: 4
+  }
+}

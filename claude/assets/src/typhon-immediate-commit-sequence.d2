@@ -1,0 +1,30 @@
+# Typhon: Immediate Durability Commit Sequence
+
+shape: sequence_diagram
+
+app: Application
+tx: Transaction
+ct: ComponentTable
+ring: "Ring Buffer"
+writer: "WAL Writer"
+disk: "WAL Segment"
+
+# Normal commit with Immediate durability
+app -> tx: "tx.Commit(Immediate)"
+tx -> tx: "MVCC conflict check"
+tx -> ct: "ApplyChanges(epoch)"
+ct -> ct: "Stamp UowEpoch\non revisions"
+tx -> ring: "SerializeToBuffer()\n{atomic XADD, ~200ns}"
+tx -> writer: "SignalFlush()"
+writer -> ring: "Drain committed\nrecords"
+writer -> disk: "FUA write\n(FILE_FLAG_WRITE_THROUGH)"
+disk -> writer: "complete (~15-85µs)"
+writer -> tx: "LSN confirmed"
+tx -> app: "return true\n(durable)"
+
+# GroupCommit variant (commented for reference)
+# app -> tx: "tx.Commit(Default)"
+# tx -> ring: "SerializeToBuffer()"
+# tx -> app: "return true (volatile)"
+# ... later ...
+# writer -> disk: "batch FUA (~5ms interval)"

@@ -1,0 +1,122 @@
+# Typhon: Execution System — Component Overview
+# Shows User Layer → Execution System → Foundation
+
+direction: down
+
+# ── Title ─────────────────────────────────────────────────────
+title: "Execution System — Component Overview" {
+  shape: text
+  style.font-size: 22
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+# ── User Layer ────────────────────────────────────────────────
+user: "User Layer" {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.border-radius: 10
+
+  uow: "Unit of Work\n(durability boundary)" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+    style.bold: true
+  }
+  dmode: "DurabilityMode\nDeferred / GroupCommit / Immediate" {
+    shape: rectangle
+    style.fill: "#90caf9"
+    style.stroke: "#1565c0"
+  }
+
+  uow -> dmode: "selects" {style.stroke: "#1565c0"}
+}
+
+# ── Execution System ──────────────────────────────────────────
+execution: "Execution System" {
+  style.fill: "#f3e5f5"
+  style.stroke: "#6a1b9a"
+  style.border-radius: 10
+
+  ctx: "ExecutionContext\nDeadline, Cancellation, Holdoff" {
+    shape: rectangle
+    style.fill: "#e1bee7"
+    style.stroke: "#7b1fa2"
+  }
+  tx: "Transaction\n(atomic CRUD operations)" {
+    shape: rectangle
+    style.fill: "#ce93d8"
+    style.stroke: "#6a1b9a"
+    style.bold: true
+  }
+  commit: "Commit Path\nepoch stamp → WAL serialize" {
+    shape: rectangle
+    style.fill: "#ab47bc"
+    style.stroke: "#4a148c"
+    style.font-color: white
+    style.bold: true
+  }
+  timeout: "Timeout Enforcement\ndeadline checking + yield points" {
+    shape: rectangle
+    style.fill: "#e1bee7"
+    style.stroke: "#7b1fa2"
+  }
+
+  ctx -> tx: "creates" {style.stroke: "#6a1b9a"}
+  tx -> commit: "tx.Commit()" {style.stroke: "#6a1b9a"; style.bold: true}
+  ctx -> timeout: "monitors" {style.stroke: "#6a1b9a"; style.stroke-dash: 3}
+}
+
+# ── Foundation ────────────────────────────────────────────────
+foundation: "Foundation" {
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.border-radius: 10
+
+  deadline: "Deadline\nMonotonic time (8 bytes)" {
+    shape: rectangle
+    style.fill: "#a5d6a7"
+    style.stroke: "#388e3c"
+  }
+  watchdog: "Watchdog Thread\nExpiry callbacks" {
+    shape: rectangle
+    style.fill: "#66bb6a"
+    style.stroke: "#2e7d32"
+    style.font-color: white
+  }
+  bg: "Background Workers\nWAL Writer, Checkpoint, GC" {
+    shape: rectangle
+    style.fill: "#66bb6a"
+    style.stroke: "#2e7d32"
+    style.font-color: white
+    style.bold: true
+  }
+}
+
+# ── User → Execution connections ─────────────────────────────
+user.uow -> execution.ctx: "owns context" {
+  style.stroke: "#6a1b9a"
+  style.bold: true
+}
+user.dmode -> execution.commit: "controls\ndurability wait" {
+  style.stroke: "#6a1b9a"
+  style.stroke-dash: 3
+}
+
+# ── Execution → Foundation connections ───────────────────────
+execution.timeout -> foundation.deadline: "reads remaining" {
+  style.stroke: "#2e7d32"
+}
+execution.timeout -> foundation.watchdog: "registers expiry" {
+  style.stroke: "#2e7d32"
+  style.stroke-dash: 3
+}
+execution.commit -> foundation.bg: "signals WAL writer" {
+  style.stroke: "#2e7d32"
+  style.bold: true
+}
+user.uow -> foundation.bg: "triggers checkpoint" {
+  style.stroke: "#388e3c"
+  style.stroke-dash: 5
+}
