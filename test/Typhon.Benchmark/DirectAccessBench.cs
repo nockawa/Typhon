@@ -30,6 +30,7 @@ public unsafe struct TestDirect
 }
 
 [SimpleJob(warmupCount: 3, iterationCount: 3)]
+[BenchmarkCategory("Memory")]
 public unsafe class DirectAccessBench
 {
     private const int ElementCount = 1024 * 1024;

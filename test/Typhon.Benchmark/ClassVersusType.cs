@@ -6,6 +6,7 @@ using System;
 namespace Typhon.Benchmark;
 
 [SimpleJob(warmupCount: 3, iterationCount: 3)]
+[BenchmarkCategory("Memory")]
 public class ClassVersusType
 {
     private const int ElementCount = 10 * 1024;

@@ -13,6 +13,7 @@ namespace Typhon.Benchmark;
 [MemoryDiagnoser]
 [Orderer(SummaryOrderPolicy.FastestToSlowest)]
 [SimpleJob(warmupCount: 3, iterationCount: 5)]
+[BenchmarkCategory("Collections")]
 public class FindNextUnsetL0Benchmark
 {
     [Params(65536, 1048576)] // 64K, 1M bits

@@ -54,19 +54,20 @@ public class ChainedBlockAllocator<T> : ChainedBlockAllocatorBase where T : stru
     public unsafe ref T SafeAppend(ref T block)
     {
         var headerPtr = (BlockHeader*)Unsafe.AsPointer(ref block) - 1;
-
+        headerPtr->AccessControl.EnterExclusiveAccess();
+        if (headerPtr->NextBlockId != 0)
+        {
+            headerPtr->AccessControl.ExitExclusiveAccess();
+            return ref Get(headerPtr->NextBlockId);
+        }
+        
         var span = AllocateBlockAsSpanInternal(out var newBlockId);
         span.Clear();
+        span.Cast<byte, BlockHeader>()[0].ChainGeneration = headerPtr->ChainGeneration;
 
-        var prevBlockId = Interlocked.CompareExchange(ref headerPtr->NextBlockId, newBlockId, 0);
-
-        // Another thread beat us, free the block we just allocated, get the Span of the one already there to replace ours
-        if (prevBlockId != 0)
-        {
-            Free(newBlockId);
-            span = GetBlockAsSpanInternal(prevBlockId);
-        }
-
+        headerPtr->NextBlockId = newBlockId;
+        headerPtr->AccessControl.ExitExclusiveAccess();
+        
         // Skip header
         return ref span.Slice(BlockHeaderSize).Cast<byte, T>()[0];
     }

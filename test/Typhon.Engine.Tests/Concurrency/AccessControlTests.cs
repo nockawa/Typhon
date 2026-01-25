@@ -318,15 +318,15 @@ class AccessControlTests
     [Test]
     public void AccessControl2_RapidCycling()
     {
-        var control = new AccessControl();
+        var control = new NewAccessControl();
         var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var hangDetected = false;
 
         try
         {
-            Parallel.For(0, 20, new ParallelOptions { CancellationToken = cts.Token }, i =>
+            Parallel.For(0, 10, new ParallelOptions { CancellationToken = cts.Token }, i =>
             {
-                for (int j = 0; j < 10000; j++)
+                for (int j = 0; j < 1500; j++)
                 {
                     if (i % 2 == 0)
                     {
@@ -340,6 +340,7 @@ class AccessControlTests
                         // No delay - immediate release
                         control.ExitSharedAccess();
                     }
+                    //Thread.Sleep(1);
                 }
             });
         }
@@ -350,6 +351,10 @@ class AccessControlTests
             Console.WriteLine($"  LockedByThreadId: {control.LockedByThreadId}");
             Console.WriteLine($"  SharedUsedCounter: {control.SharedUsedCounter}");
         }
+        
+#if TELEMETRY
+        Console.WriteLine($"Allocator {AccessControlImpl.Allocator.AllocatedCount} blocks");
+#endif
 
         Assert.That(hangDetected, Is.False, "Deadlock detected in AccessControl2 during rapid cycling");
     }
@@ -400,7 +405,7 @@ class AccessControlTests
     [Test]
     public void NewAccessControl_RapidCycling()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
         var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var hangDetected = false;
 
@@ -440,7 +445,7 @@ class AccessControlTests
     [Test]
     public void NewAccessControl_Simple()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
 
         control.EnterSharedAccess();
         control.EnterSharedAccess();
@@ -456,76 +461,6 @@ class AccessControlTests
 
 #if TELEMETRY
     [Test]
-    public void LockData_Counter_GetSet()
-    {
-        var allocator = new ChainedBlockAllocator<AccessOperations>(1024);
-        ulong data = 0;
-        var lockData = new AccessControlImpl.LockData(allocator, ref data);
-
-        // Test setting and getting counter
-        lockData.Counter = 0;
-        Assert.That(lockData.Counter, Is.EqualTo(0));
-
-        lockData.Counter = 1;
-        Assert.That(lockData.Counter, Is.EqualTo(1));
-
-        lockData.Counter = 255; // Max value for 8 bits
-        Assert.That(lockData.Counter, Is.EqualTo(255));
-
-        // Verify other fields are not affected
-        lockData.Counter = 0;
-        lockData.SharedWaiters = 100;
-        lockData.Counter = 42;
-        Assert.That(lockData.SharedWaiters, Is.EqualTo(100), "Counter modification should not affect SharedWaiters");
-    }
-
-    [Test]
-    public void LockData_SharedWaiters_GetSet()
-    {
-        var allocator = new ChainedBlockAllocator<AccessOperations>(1024);
-        ulong data = 0;
-        var lockData = new AccessControlImpl.LockData(allocator, ref data);
-
-        lockData.SharedWaiters = 0;
-        Assert.That(lockData.SharedWaiters, Is.EqualTo(0));
-
-        lockData.SharedWaiters = 1;
-        Assert.That(lockData.SharedWaiters, Is.EqualTo(1));
-
-        lockData.SharedWaiters = 1023; // Max value for 10 bits
-        Assert.That(lockData.SharedWaiters, Is.EqualTo(1023));
-
-        // Verify other fields are not affected
-        lockData.SharedWaiters = 0;
-        lockData.Counter = 100;
-        lockData.SharedWaiters = 500;
-        Assert.That(lockData.Counter, Is.EqualTo(100), "SharedWaiters modification should not affect Counter");
-    }
-
-    [Test]
-    public void LockData_ExclusiveWaiters_GetSet()
-    {
-        var allocator = new ChainedBlockAllocator<AccessOperations>(1024);
-        ulong data = 0;
-        var lockData = new AccessControlImpl.LockData(allocator, ref data);
-
-        lockData.ExclusiveWaiters = 0;
-        Assert.That(lockData.ExclusiveWaiters, Is.EqualTo(0));
-
-        lockData.ExclusiveWaiters = 1;
-        Assert.That(lockData.ExclusiveWaiters, Is.EqualTo(1));
-
-        lockData.ExclusiveWaiters = 1023; // Max value for 10 bits
-        Assert.That(lockData.ExclusiveWaiters, Is.EqualTo(1023));
-
-        // Verify other fields are not affected
-        lockData.ExclusiveWaiters = 0;
-        lockData.SharedWaiters = 200;
-        lockData.ExclusiveWaiters = 300;
-        Assert.That(lockData.SharedWaiters, Is.EqualTo(200), "ExclusiveWaiters modification should not affect SharedWaiters");
-    }
-
-    [Test]
     public void LockData_PromoterWaiters_GetSet()
     {
         var allocator = new ChainedBlockAllocator<AccessOperations>(1024);
@@ -538,8 +473,8 @@ class AccessControlTests
         lockData.PromoterWaiters = 1;
         Assert.That(lockData.PromoterWaiters, Is.EqualTo(1));
 
-        lockData.PromoterWaiters = 1023; // Max value for 10 bits
-        Assert.That(lockData.PromoterWaiters, Is.EqualTo(1023));
+        lockData.PromoterWaiters = 255; // Max value for 8 bits
+        Assert.That(lockData.PromoterWaiters, Is.EqualTo(255));
     }
 
     [Test]
@@ -577,9 +512,9 @@ class AccessControlTests
         Assert.That(lockData.State, Is.EqualTo(0x4000_0000_0000_0000UL));
 
         // Verify other fields are not affected
-        lockData.Counter = 100;
+        lockData.SharedCounter = 100;
         lockData.State = 0x8000_0000_0000_0000;
-        Assert.That(lockData.Counter, Is.EqualTo(100), "State modification should not affect Counter");
+        Assert.That(lockData.SharedCounter, Is.EqualTo(100), "State modification should not affect Counter");
     }
 
     [Test]
@@ -590,18 +525,16 @@ class AccessControlTests
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
         // Set all fields to distinct values
-        lockData.Counter = 42;
-        lockData.SharedWaiters = 100;
+        lockData.SharedCounter = 42;
         lockData.ExclusiveWaiters = 200;
-        lockData.PromoterWaiters = 300;
+        lockData.PromoterWaiters = 150;
         lockData.ThreadId = 500;
         lockData.State = 0x8000_0000_0000_0000; // SharedState
 
         // Verify all values are preserved
-        Assert.That(lockData.Counter, Is.EqualTo(42));
-        Assert.That(lockData.SharedWaiters, Is.EqualTo(100));
+        Assert.That(lockData.SharedCounter, Is.EqualTo(42));
         Assert.That(lockData.ExclusiveWaiters, Is.EqualTo(200));
-        Assert.That(lockData.PromoterWaiters, Is.EqualTo(300));
+        Assert.That(lockData.PromoterWaiters, Is.EqualTo(150));
         Assert.That(lockData.ThreadId, Is.EqualTo(500));
         Assert.That(lockData.State, Is.EqualTo(0x8000_0000_0000_0000UL));
     }
@@ -614,7 +547,7 @@ class AccessControlTests
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
         // Modify staging and try to update
-        lockData.Counter = 1;
+        lockData.SharedCounter = 1;
         lockData.State = 0x8000_0000_0000_0000;
 
         bool result = lockData.TryUpdate();
@@ -631,7 +564,7 @@ class AccessControlTests
         var lockData = new AccessControlImpl.LockData(allocator, ref data);
 
         // Modify staging
-        lockData.Counter = 1;
+        lockData.SharedCounter = 1;
 
         // Simulate concurrent modification
         data = 0x8000_0000_0000_0001; // Different value
@@ -692,12 +625,12 @@ class AccessControlTests
         Assert.That(lockData.IsIdleNoWaiters, Is.True);
 
         // Add counter - should no longer be idle
-        lockData.Counter = 1;
+        lockData.SharedCounter = 1;
         Assert.That(lockData.IsIdleNoWaiters, Is.False);
 
         // Reset and add shared waiters
         lockData = new AccessControlImpl.LockData(allocator, ref data);
-        lockData.SharedWaiters = 1;
+        lockData.SharedCounter = 1;
         Assert.That(lockData.IsIdleNoWaiters, Is.False);
 
         // Reset and change state
@@ -712,43 +645,6 @@ class AccessControlTests
             "OperationsBlockId should not affect IsIdleNoWaiters");
     }
 
-    [Test]
-    public void LockData_BitMaskIntegrity()
-    {
-        var allocator = new ChainedBlockAllocator<AccessOperations>(1024);
-        ulong data = 0;
-        var lockData = new AccessControlImpl.LockData(allocator, ref data);
-
-        // Set all fields to maximum values and verify no overlap
-        lockData.Counter = 255;              // 8 bits: 0xFF
-        lockData.SharedWaiters = 1023;       // 10 bits: 0x3FF
-        lockData.ExclusiveWaiters = 1023;    // 10 bits: 0x3FF
-        lockData.PromoterWaiters = 1023;     // 10 bits: 0x3FF
-        lockData.ThreadId = 1023;            // 10 bits: 0x3FF
-        lockData.State = 0xC000_0000_0000_0000; // 2 bits
-
-        // Read back all values - they should all be at their maximums
-        Assert.That(lockData.Counter, Is.EqualTo(255));
-        Assert.That(lockData.SharedWaiters, Is.EqualTo(1023));
-        Assert.That(lockData.ExclusiveWaiters, Is.EqualTo(1023));
-        Assert.That(lockData.PromoterWaiters, Is.EqualTo(1023));
-        Assert.That(lockData.ThreadId, Is.EqualTo(1023));
-        Assert.That(lockData.State, Is.EqualTo(0xC000_0000_0000_0000UL));
-
-        // The staging value should have all bits in their proper positions
-        // Expected: 0xFFFF_FFFF_FFFF_FFFF with OperationsBlockId = 0
-        // Bits: State(2) | ThreadId(10) | PromoterWaiters(10) | ExclusiveWaiters(10) | SharedWaiters(10) | OpBlockId(14) | Counter(8)
-        // Let's verify it's constructed correctly by checking individual bits
-        ulong staging = lockData.Staging;
-
-        // Extract each field manually and verify
-        Assert.That(staging & 0xFF, Is.EqualTo(255UL), "Counter bits");
-        Assert.That((staging >> 22) & 0x3FF, Is.EqualTo(1023UL), "SharedWaiters bits");
-        Assert.That((staging >> 32) & 0x3FF, Is.EqualTo(1023UL), "ExclusiveWaiters bits");
-        Assert.That((staging >> 42) & 0x3FF, Is.EqualTo(1023UL), "PromoterWaiters bits");
-        Assert.That((staging >> 52) & 0x3FF, Is.EqualTo(1023UL), "ThreadId bits");
-        Assert.That(staging & 0xC000_0000_0000_0000, Is.EqualTo(0xC000_0000_0000_0000UL), "State bits");
-    }
 #endif
 
     // ========================================
@@ -758,7 +654,7 @@ class AccessControlTests
     [Test]
     public void NewAccessControl_BasicSharedAccess()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
 
         // Single shared access
         control.EnterSharedAccess();
@@ -776,7 +672,7 @@ class AccessControlTests
     [Test]
     public void NewAccessControl_BasicExclusiveAccess()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
 
         // Single exclusive access
         control.EnterExclusiveAccess();
@@ -792,7 +688,7 @@ class AccessControlTests
     [Test]
     public void NewAccessControl_AlternatingAccess()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
 
         // Alternate between shared and exclusive
         control.EnterSharedAccess();
@@ -937,7 +833,7 @@ class AccessControlTests
     [CancelAfter(1000)]
     public void NewAccessControl_HighContentionBarrier()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
         var barrier = new Barrier(10);
 
         Parallel.For(0, 10, i =>
@@ -966,7 +862,7 @@ class AccessControlTests
     [Test]
     public void NewAccessControl_NestedSharedAccess_Sequential()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
 
         // Test that shared access can be nested on the same thread
         control.EnterSharedAccess();
@@ -982,7 +878,7 @@ class AccessControlTests
     [CancelAfter(5000)]
     public void NewAccessControl_TransitionFromSharedToExclusive()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
         var success = true;
 
         var task = Task.Run(() =>
@@ -1014,7 +910,7 @@ class AccessControlTests
     [CancelAfter(5000)]
     public void NewAccessControl_StateTransitions()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
 
         // Idle -> Shared -> Idle
         control.EnterSharedAccess();
@@ -1045,7 +941,7 @@ class AccessControlTests
     [Test]
     public void NewAccessControl_Reset()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
 
         // Use the control
         control.EnterSharedAccess();

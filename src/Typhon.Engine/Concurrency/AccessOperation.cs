@@ -13,9 +13,10 @@ internal enum OperationType : byte
     EnterExclusiveAccess,
     ExitExclusiveAccess,
     SharedStartWait,
-    SharedEndWait,
     ExclusiveStartWait,
-    ExclusiveEndWait,
+    PromoteToExclusive,
+    PromoteStartWait,
+    DemoteFromExclusive,
     TimedOutOrCanceled
 }
 
@@ -24,13 +25,12 @@ internal enum OperationType : byte
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 internal struct AccessOperation
 {
-    private byte _marker;               // 1
-    internal OperationType Type;        // 2
-    internal ushort ThreadId;           // 4
-    internal ulong LockData;            // 12
-    internal long Tick;                 // 20
+    internal ulong LockData;            //  0 + 8
+    internal long Tick;                 //  8 + 8
+    internal OperationType Type;        // 16 + 1
+    internal byte ThreadId;             // 17 + 1 = 18
 
-    public bool IsEmpty => _marker == 0;
+    public bool IsEmpty => Type == OperationType.None;
 
     public static AccessOperation Wait(OperationType type)
     {
@@ -48,9 +48,8 @@ internal struct AccessOperation
 
     public AccessOperation(OperationType type)
     {
-        _marker = 0xFF;     // Anything but 0 is fine, we just make sure the first byte is non-zero to indicate the entry is occupied
         Type = type;
-        ThreadId = (ushort)Environment.CurrentManagedThreadId;
+        ThreadId = (byte)Environment.CurrentManagedThreadId;
     }
 
     public void Now() => Tick = DateTime.UtcNow.Ticks;
