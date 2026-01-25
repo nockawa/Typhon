@@ -10,6 +10,7 @@ using Typhon.Engine;
 namespace Typhon.Benchmark;
 
 [SimpleJob(warmupCount: 3, iterationCount: 3)]
+[BenchmarkCategory("Memory")]
 public unsafe class MemCopyBench
 {
     private const int BufferSize = 1024 * 1024 * 128;

@@ -2,7 +2,7 @@
 
     <PropertyGroup>
         <TargetFramework>net10.0</TargetFramework>
-        <Configurations>Debug;Release;Telemetry Debug;Telemetry Release</Configurations>
+        <Configurations>Debug;Release</Configurations>
         <Platforms>AnyCPU</Platforms>
         <LangVersion>default</LangVersion>
     </PropertyGroup>
@@ -12,19 +12,8 @@
         <DefineConstants>TRACE</DefineConstants>
     </PropertyGroup>
 
-    <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Telemetry Debug|AnyCPU'">
-        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-        <DefineConstants>DEBUG;TRACE;TELEMETRY</DefineConstants>
-        <Optimize>false</Optimize>
-    </PropertyGroup>
-
     <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    </PropertyGroup>
-
-    <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Telemetry Release|AnyCPU'">
-        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-        <DefineConstants>TELEMETRY</DefineConstants>
     </PropertyGroup>
 
     <ItemGroup>
@@ -51,22 +40,19 @@
     </ItemGroup>
 
     <ItemGroup>
-        <Compile Update="Persistence Layer\ManagedPagedMMF.BitmapL3.cs">
+        <Compile Update="Storage\ManagedPagedMMF.BitmapL3.cs">
             <DependentUpon>ManagedPagedMMF.cs</DependentUpon>
         </Compile>
-        <Compile Update="Persistence Layer\PagedMMF.PageInfo.cs">
+        <Compile Update="Storage\PagedMMF.PageInfo.cs">
             <DependentUpon>PagedMMF.cs</DependentUpon>
         </Compile>
-        <Compile Update="Persistence Layer\PagedMMFOptions.cs">
+        <Compile Update="Storage\PagedMMFOptions.cs">
             <DependentUpon>PagedMMF.cs</DependentUpon>
         </Compile>
-        <Compile Update="Persistence Layer\ChunkBasedSegment.BitmapL3.cs">
+        <Compile Update="Storage\Segments\ChunkBasedSegment.BitmapL3.cs">
             <DependentUpon>ChunkBasedSegment.cs</DependentUpon>
         </Compile>
-        <Compile Update="Persistence Layer\ChunkRandomAccessor.cs">
-            <DependentUpon>ChunkBasedSegment.cs</DependentUpon>
-        </Compile>
-        <Compile Update="Persistence Layer\PagedMMF.Metrics.cs">
+        <Compile Update="Storage\PagedMMF.Metrics.cs">
             <DependentUpon>PagedMMF.cs</DependentUpon>
         </Compile>
     </ItemGroup>

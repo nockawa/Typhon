@@ -1,4 +1,4 @@
-// unset
+﻿// unset
 
 using System;
 using System.Collections.Generic;
@@ -165,12 +165,25 @@ public unsafe class ConcurrentBitmapL3All : IResource
             // Best-effort: Interlocked.Or is safe even if concurrent
             var prevL1 = Interlocked.Or(ref bank.L1All[l1Offset], l1Mask);
 
+            // Self-correction: A concurrent ClearL0 may have cleared a bit in L0 between
+            // our L0 Or and our L1All Or. If L0 is no longer full, undo the L1All set.
+            // This prevents false positives where L1All claims "full" but L0 has free slots.
+            if (bank.L0All[l0Offset] != -1)
+            {
+                Interlocked.And(ref bank.L1All[l1Offset], ~l1Mask);
+            }
             // Update L2All if L1 word became fully set
-            if ((prevL1 | l1Mask) == -1)
+            else if ((prevL1 | l1Mask) == -1)
             {
                 var l2Offset = l1Offset >> 6;
                 var l2Mask = 1L << (l1Offset & 0x3F);
                 Interlocked.Or(ref bank.L2All[l2Offset], l2Mask);
+
+                // Self-correction for L2All: verify L1All is still full
+                if (bank.L1All[l1Offset] != -1)
+                {
+                    Interlocked.And(ref bank.L2All[l2Offset], ~l2Mask);
+                }
             }
         }
 
@@ -221,12 +234,23 @@ public unsafe class ConcurrentBitmapL3All : IResource
 
         var prevL1 = Interlocked.Or(ref bank.L1All[l1Offset], l1Mask);
 
+        // Self-correction: verify L0 is still full after setting L1All
+        if (bank.L0All[l0Offset] != -1)
+        {
+            Interlocked.And(ref bank.L1All[l1Offset], ~l1Mask);
+        }
         // Update L2All if L1 word became fully set
-        if ((prevL1 | l1Mask) == -1)
+        else if ((prevL1 | l1Mask) == -1)
         {
             var l2Offset = l1Offset >> 6;
             var l2Mask = 1L << (l1Offset & 0x3F);
             Interlocked.Or(ref bank.L2All[l2Offset], l2Mask);
+
+            // Self-correction for L2All: verify L1All is still full
+            if (bank.L1All[l1Offset] != -1)
+            {
+                Interlocked.And(ref bank.L2All[l2Offset], ~l2Mask);
+            }
         }
 
         // L1Any: word definitely has bits now
@@ -336,8 +360,14 @@ public unsafe class ConcurrentBitmapL3All : IResource
         for ( ; bankIndex < banks.Length; bankIndex++)
         {
             var bank = banks[bankIndex];
+
+            if (bank.IsFull)
+            {
+                continue;
+            }
+            
             var ll0 = capacity >> 6;
-            var ll1 = _l0Size;
+            var ll1 = _l1Size;
             var ll2 = _l2Size;
             var v0 = bank.L0All[indexInBank>>6];
             
@@ -389,6 +419,7 @@ public unsafe class ConcurrentBitmapL3All : IResource
                 if (c0 >= capacity)
                 {
                     c0 = 0;
+                    indexInBank = 0;
                     break;
                 }
 

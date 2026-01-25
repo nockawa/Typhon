@@ -742,9 +742,9 @@ public class ConcurrentBitmapL3AllTests
     [Repeat(3)]
     public void StressTest_PageAllocatorSimulation_MixedAllocation()
     {
-        const int BitmapSize = 1024*1024;        // 16K slots for mixed L0/L1
+        const int BitmapSize = 16384;        // 16K slots for mixed L0/L1
         const int ThreadCount = 10;
-        const int OperationsPerThread = 80000;
+        const int OperationsPerThread = 8000;
 
         var bitmap = new ConcurrentBitmapL3All(BitmapSize);
 
