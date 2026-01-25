@@ -31,7 +31,7 @@ internal class TransactionChain : IDisposable
         }
     }
 
-    public AccessControl Control => _control;
+    public ref AccessControl Control => ref _control;
     
     // Under lock of the caller
     public void PushHead(Transaction transaction)
@@ -50,7 +50,7 @@ internal class TransactionChain : IDisposable
     public void WalkHeadToTail(Func<Transaction, bool> predicate)
     {
         _control.EnterSharedAccess();
-            
+
         var cur = Head;
         while (cur != null)
         {
@@ -58,10 +58,10 @@ internal class TransactionChain : IDisposable
             {
                 break;
             }
-                
+
             cur = cur.Next;
         }
-            
+
         _control.ExitSharedAccess();
     }
 
@@ -115,7 +115,7 @@ internal class TransactionChain : IDisposable
         {
             // TODO Log some warning
         }
-        
+
         return t;
     }
 

@@ -1,0 +1,37 @@
+{
+  "Typhon": {
+    "Telemetry": {
+      "Enabled": false,
+
+      "AccessControl": {
+        "Enabled": false,
+        "TrackContention": true,
+        "TrackContentionDuration": true,
+        "TrackAccessPatterns": true
+      },
+
+      "PagedMMF": {
+        "Enabled": false,
+        "TrackPageAllocations": true,
+        "TrackPageEvictions": true,
+        "TrackIOOperations": true,
+        "TrackCacheHitRatio": true
+      },
+
+      "BTree": {
+        "Enabled": false,
+        "TrackNodeSplits": true,
+        "TrackNodeMerges": true,
+        "TrackSearchDepth": true,
+        "TrackKeyComparisons": false
+      },
+
+      "Transaction": {
+        "Enabled": false,
+        "TrackCommitRollback": true,
+        "TrackConflicts": true,
+        "TrackDuration": true
+      }
+    }
+  }
+}
