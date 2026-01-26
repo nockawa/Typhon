@@ -98,6 +98,13 @@ The goal is to create a system where:
 - Create with template
 - Ask: "Worth adding to GitHub for tracking, or just parking it?"
 
+**Example Claude Code Prompts:**
+```
+"I have an idea for spatial indexing support, capture it"
+"Create an idea doc about query caching in the database-engine category"
+"/create-issue Add support for spatial indexing"  ← if worth tracking immediately
+```
+
 ### Stage 2: Research
 
 **Trigger:** Idea needs exploration / Multiple approaches exist / Unknown territory
@@ -112,6 +119,14 @@ The goal is to create a system where:
 - Prompt: "This needs research before we can design. Create research doc?"
 - Link issue ↔ research doc bidirectionally
 - When research concludes: "Ready to promote to design?"
+
+**Example Claude Code Prompts:**
+```
+"Research the best approach for write-ahead logging in our persistence layer"
+"Create a research doc comparing B+Tree vs LSM-Tree for our index layer"
+"/create-issue Research WAL implementation strategies"  ← with label: research
+"Promote the WAL research to a design doc, the approach is decided"
+```
 
 ### Stage 3: Design
 
@@ -128,6 +143,14 @@ The goal is to create a system where:
 - Validate design covers: data structures, API, edge cases, tests
 - Prompt: "Design looks complete. Create branch and start implementation?"
 
+**Example Claude Code Prompts:**
+```
+"Create a design doc for the WAL system based on the research conclusions"
+"Review the design for QueryEngine — does it cover edge cases and testing?"
+"/create-issue Implement WAL system"  ← with design doc linked
+"/start-work 42"  ← when ready to begin implementation
+```
+
 ### Stage 4: Implementation
 
 **Trigger:** Design approved / Ready to code
@@ -142,6 +165,14 @@ The goal is to create a system where:
 - Track progress against design doc checklist
 - Remind about missing tests
 - Prompt when stuck: "Blocked? Should we update the issue?"
+
+**Example Claude Code Prompts:**
+```
+"/start-work 42"  ← updates status, creates branch, checks design doc
+"/dev-status"  ← see what's currently in progress
+"What's left to do for #42 according to the design doc?"
+"I'm blocked on #42, update the issue with a note about the concurrency problem"
+```
 
 ### Stage 5: Completion
 
@@ -159,6 +190,14 @@ The goal is to create a system where:
 - Prompt: "Feature complete! Let me update the roadmap and archive the design doc."
 - Check: "Should we update any overview/ docs?"
 - Check: "Any architectural decisions worth an ADR?"
+
+**Example Claude Code Prompts:**
+```
+"/complete-work 42"  ← closes issue, archives design, updates docs
+"/weekly-review"  ← see what was completed this week
+"/mountain-view"  ← how much work remains overall
+"Create an ADR for the decision to use circular buffers for revision chains"
+```
 
 ---
 
@@ -261,7 +300,7 @@ The goal is to create a system where:
 
 ## Claude Code Integration Points
 
-### Skill: `/status` — Where Are We?
+### Skill: `/dev-status` — Where Are We?
 
 ```markdown
 ---
@@ -281,22 +320,40 @@ Output:
 - Suggested next actions
 ```
 
+### Skill: `/create-issue` — Create a New Work Item
+
+```markdown
+---
+name: create-issue
+description: Create a GitHub issue and add it to the Typhon dev project
+argument-hint: [title] or leave empty for interactive mode
+---
+
+Actions:
+1. Gather info interactively (title, description, type labels, area, priority, phase, estimate)
+2. Create GitHub issue assigned to nockawa
+3. Add issue to "Typhon dev" project (#7)
+4. Set all project fields (Status, Priority, Phase, Area, Estimate)
+5. Report summary with issue link and field values
+```
+
 ### Skill: `/start-work` — Begin a Work Item
 
 ```markdown
 ---
 name: start-work
 description: Start working on a GitHub issue
-argument-hint: [issue number]
+argument-hint: [issue number or title]
 ---
 
 Actions:
-1. Verify design doc exists (prompt to create if missing)
-2. Update issue status → In Progress
-3. Create branch if needed
-4. Set issue Area field in Project
-5. Update design doc with branch name
-6. Report readiness
+1. If no argument: list Ready/Backlog issues to pick from, or offer to create a new one
+2. If non-numeric argument: offer to create issue or search existing ones
+3. Verify design doc exists (prompt to create if missing)
+4. Update issue status → In Progress
+5. Create branch if needed (feature/XX-name or fix/XX-name)
+6. Update design doc with branch name
+7. Report readiness
 ```
 
 ### Skill: `/complete-work` — Finish a Work Item
@@ -621,7 +678,7 @@ The following has been implemented:
 - Target: (date field for Roadmap view)
 
 ### Claude Code Skills
-- `/status` — Show current development status
+- `/dev-status` — Show current development status
 - `/start-work #XX` — Begin work on an issue
 - `/complete-work #XX` — Finish work, update artifacts
 - `/create-issue` — Create new issue with all fields
