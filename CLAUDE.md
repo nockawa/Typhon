@@ -12,6 +12,39 @@ Typhon is a real-time, low-latency ACID database engine with microsecond-level p
 - ECS-inspired data model for game/simulation workloads
 - Snapshot isolation via MVCC for high concurrency
 
+## Key Documentation Resources
+
+Typhon maintains comprehensive documentation in the `claude/` directory. Use these resources to understand architecture, design rationale, and development workflow.
+
+### Quick Navigation
+
+| When You Need... | Go To | Key Contents |
+|------------------|-------|--------------|
+| **How the engine works** | `claude/overview/` | 11-part architecture guide covering all subsystems |
+| **Why a decision was made** | `claude/adr/` | 30 Architecture Decision Records with rationale |
+| **Current priorities** | [GitHub Project](https://github.com/users/nockawa/projects/7) | Work tracking, status, roadmap |
+| **Feature designs** | `claude/design/` | Pre-implementation specifications |
+| **Deep research** | `claude/research/` | Analysis studies (e.g., timeout patterns, query systems) |
+| **Document workflows** | `claude/README.md` | Lifecycle, templates, trigger phrases |
+
+### Architecture Overview Series
+
+The `claude/overview/` directory is the **authoritative architectural reference**:
+
+| # | Document | Focus |
+|---|----------|-------|
+| 01 | [Concurrency](claude/overview/01-concurrency.md) | AccessControl, latches, deadlines, thread safety |
+| 02 | [Execution](claude/overview/02-execution.md) | UnitOfWork, durability modes, commit path |
+| 03 | [Storage](claude/overview/03-storage.md) | PagedMMF, page cache, segments, I/O |
+| 04 | [Data](claude/overview/04-data.md) | MVCC, ComponentTable, indexes, transactions |
+| 05 | [Query](claude/overview/05-query.md) | Query parsing, filtering, sorting |
+| 06 | [Durability](claude/overview/06-durability.md) | WAL, crash recovery, checkpoints |
+| 07 | [Backup](claude/overview/07-backup.md) | Incremental backup, restore |
+| 08 | [Resources](claude/overview/08-resources.md) | Memory budgets, resource graph |
+| 09 | [Observability](claude/overview/09-observability.md) | Telemetry, metrics, diagnostics |
+| 10 | [Errors](claude/overview/10-errors.md) | Error model, exception hierarchy |
+| 11 | [Utilities](claude/overview/11-utilities.md) | Allocators, disk management, shared utilities |
+
 ## Build & Development Commands
 
 **Build the solution:**
@@ -64,6 +97,8 @@ dotnet run -c Release --filter '*PagedMemoryFile*'
 - Generates unique primary keys for entities
 - Located in: `src/Typhon.Engine/Database Engine/DatabaseEngine.cs`
 
+> See also: [ADR-001: Three-Tier API Hierarchy](claude/adr/001-three-tier-api-hierarchy.md), [ADR-004: Embedded Engine](claude/adr/004-embedded-engine-no-server.md)
+
 **2. Transaction System (Concurrency Control)**
 - **Transaction**: Implements MVCC snapshot isolation with optimistic concurrency control
   - Each transaction has a timestamp (tick) defining its snapshot point
@@ -76,6 +111,8 @@ dotnet run -c Release --filter '*PagedMemoryFile*'
   - Transaction pooling to reduce allocations
   - Located in: `src/Typhon.Engine/Database Engine/TransactionChain.cs`
 
+> See also: [ADR-003: MVCC Snapshot Isolation](claude/adr/003-mvcc-snapshot-isolation.md), [ADR-005: Durability Mode Per UoW](claude/adr/005-durability-mode-per-uow.md)
+
 **3. ComponentTable (Data Storage per Component Type)**
 - One table per component type, stores all instances
 - Key segments:
@@ -84,6 +121,8 @@ dotnet run -c Release --filter '*PagedMemoryFile*'
   - **PrimaryKeyIndex**: B+Tree mapping entity IDs to revision chains
   - **Secondary Indexes**: Separate B+Trees for each indexed field
 - Located in: `src/Typhon.Engine/Database Engine/ComponentTable.cs`
+
+> See also: [ADR-002: ECS Data Model](claude/adr/002-ecs-data-model.md), [ADR-008: ChunkBasedSegment](claude/adr/008-chunk-based-segments.md)
 
 **4. Persistence Layer (Storage & Caching)**
 - **PagedMMF**: Base class handling memory-mapped file I/O
@@ -103,6 +142,8 @@ dotnet run -c Release --filter '*PagedMemoryFile*'
   - Occupancy tracking via 3-level bitmaps for efficient allocation
   - ChunkRandomAccessor provides cached access
   - Located in: `src/Typhon.Engine/Persistence Layer/ChunkBasedSegment.cs`
+
+> See also: [ADR-006: 8KB Page Size](claude/adr/006-8kb-page-size.md), [ADR-007: Clock-Sweep Eviction](claude/adr/007-clock-sweep-eviction.md)
 
 ### MVCC Implementation Details
 
@@ -130,6 +171,8 @@ dotnet run -c Release --filter '*PagedMemoryFile*'
 - Default: "last write wins" - creates new revision and copies data forward
 - Supports custom ConcurrencyConflictHandler for manual resolution
 
+> See also: [ADR-023: Circular Buffer Revision Chains](claude/adr/023-circular-buffer-revision-chains.md)
+
 ### B+Tree Indexes
 
 - Generic implementation supporting all primitive types + String64
@@ -138,6 +181,8 @@ dotnet run -c Release --filter '*PagedMemoryFile*'
 - Node storage via fixed-size chunks in ChunkBasedSegment
 - Thread-safe with AccessControl for concurrent operations
 - Located in: `src/Typhon.Engine/Database Engine/BPTree/`
+
+> See also: [ADR-021: Specialized B+Tree Variants](claude/adr/021-specialized-btree-variants.md), [ADR-022: 64-Byte Cache-Aligned Nodes](claude/adr/022-64byte-cache-aligned-nodes.md)
 
 ### Entity-Component-System Model
 
@@ -165,6 +210,8 @@ dotnet run -c Release --filter '*PagedMemoryFile*'
 - We must then rely on Structure of Array Optimization (SOA) to avoid excessive cache misses and process the data through SIMD instructions as much as possible.
 - CPU cache miss is something we want to avoid as much as possible, and we must strive to minimize the number of cache misses by optimizing memory access patterns and using efficient data structures.
 
+> See also: [ADR-009: Pinned Memory and Unsafe Code](claude/adr/009-pinned-memory-unsafe-code.md), [ADR-010: SOA Layout with SIMD](claude/adr/010-soa-simd-chunk-accessor.md), [ADR-027: Even-Sized Structs](claude/adr/027-even-sized-hot-path-structs.md)
+
 ### Unsafe Code & Performance
 - Project uses `<AllowUnsafeBlocks>true` extensively
 - Heavy use of pointers, stackalloc, and unmanaged memory for performance
@@ -178,6 +225,8 @@ dotnet run -c Release --filter '*PagedMemoryFile*'
 - Lock-free reads via shared page access
 - Located in: `src/Typhon.Engine/Misc/`
 
+> See also: [ADR-016: Three-Mode ResourceAccessControl](claude/adr/016-three-mode-resource-access-control.md), [ADR-017: 64-Bit Atomic State](claude/adr/017-64bit-access-control-state.md), [ADR-018: Adaptive Spin-Wait](claude/adr/018-adaptive-spin-wait.md)
+
 ### Page Structure
 ```
 Page (8192 bytes):
@@ -185,6 +234,8 @@ Page (8192 bytes):
   - PageMetadata (128 bytes): Occupancy bitmaps for chunks
   - PageRawData (8000 bytes): Actual data
 ```
+
+> See also: [ADR-015: CRC32C Page Checksums](claude/adr/015-crc32c-page-checksums.md)
 
 ### Segment Types
 1. **LogicalSegment**: Base class for multi-page abstractions (500 indices in root, 2000 per overflow)
@@ -220,7 +271,27 @@ Typhon/
 │   ├── Typhon.Engine.Tests/     # NUnit test suite
 │   └── Typhon.Benchmark/        # BenchmarkDotNet performance tests
 ├── doc/                         # DocFx documentation
-└── claude/                      # Claude working files
+└── claude/                      # Development documentation & design
+    ├── README.md                # Document lifecycle and workflows
+    ├── overview/                # Architecture overview (11 documents)
+    │   ├── 01-concurrency.md    # Locks, latches, thread-safety
+    │   ├── 02-execution.md      # UoW, transactions, durability
+    │   ├── 03-storage.md        # PagedMMF, caching, I/O
+    │   ├── 04-data.md           # MVCC, indexes, revision chains
+    │   └── ...                  # Query, durability, backup, etc.
+    ├── adr/                     # Architecture Decision Records (30)
+    │   ├── 001-three-tier-api-hierarchy.md
+    │   ├── 002-ecs-data-model.md
+    │   └── ...                  # Indexed in adr/README.md
+    ├── ideas/                   # Early-stage ideas
+    ├── research/                # Analysis & studies
+    ├── design/                  # Pre-implementation specs
+    ├── reference/               # Post-implementation guides
+    ├── assets/                  # Diagrams (D2 source + SVG)
+    │   ├── src/                 # D2 source files
+    │   ├── viewer.html          # Interactive diagram viewer
+    │   └── *.svg                # Rendered diagrams
+    └── archive/                 # Historical documents
 ```
 
 ## Development Notes
@@ -277,6 +348,58 @@ var committed = t.Commit(); // or t.Rollback()
 
 Full documentation available at: https://nockawa.github.io/Typhon/
 
+## Architecture Diagrams
+
+Visual documentation is maintained in `claude/assets/`:
+
+- **D2 source files**: `claude/assets/src/*.d2` (editable diagrams)
+- **Rendered SVGs**: `claude/assets/*.svg` (embedded in docs)
+- **Interactive viewer**: Open `claude/assets/viewer.html` in browser for pan-zoom navigation
+
+Key diagrams: `typhon-architecture-layers.svg`, `typhon-commit-path.svg`, `typhon-data-mvcc-read.svg`, `typhon-storage-overview.svg`
+
+For D2 tooling, themes, and embedding conventions, see [`claude/README.md` § Diagrams](claude/README.md#diagrams--visual-assets).
+
+## Development Workflow
+
+Work tracking is managed via the [Typhon dev GitHub Project](https://github.com/users/nockawa/projects/7). The `claude/` directory contains the knowledge base (architecture, designs, research), while the GitHub Project is the source of truth for work status.
+
+> **See also:** [CONTRIB.md](CONTRIB.md) for the full development workflow documentation including rituals, automation, and daily guides.
+
+### Claude Code Skills
+
+| Skill | Purpose |
+|-------|---------|
+| `/status` | Show current development status from GitHub Project |
+| `/start-work #XX` | Begin work on an issue (updates status, creates branch, verifies design) |
+| `/complete-work #XX` | Finish work (close issue, prompt for doc updates, archive design) |
+| `/create-issue` | Create new GitHub issue with project fields |
+| `/weekly-review` | Weekly progress summary and stale item detection |
+| `/mountain-view` | Full backlog analysis - see the entire mountain of work |
+
+### Issue Lifecycle
+
+```
+Backlog → Research → Ready → In Progress → Review → Done
+```
+
+1. **Backlog**: Captured but not yet prioritized
+2. **Research**: Needs exploration before design (creates `claude/research/` doc)
+3. **Ready**: Design complete, ready to implement (has `claude/design/` doc)
+4. **In Progress**: Active development (use `/start-work #XX`)
+5. **Review**: PR open, awaiting merge
+6. **Done**: Complete (use `/complete-work #XX`)
+
+### Project Fields
+
+- **Status**: Workflow stage (Backlog → Done)
+- **Priority**: P0-Critical, P1-High, P2-Medium, P3-Low
+- **Phase**: Telemetry, Query, WAL, Reliability, Infrastructure
+- **Area**: Database, MVCC, Transactions, Indexes, Schema, Storage, Memory, Concurrency, Primitives
+- **Estimate**: XS, S, M, L, XL
+- **Design Doc**: Link to `claude/design/` document
+- **Target**: Target date for Roadmap view
+
 ## Working with Claude
 
 ### Clarification-First Workflow
@@ -308,11 +431,12 @@ For complex, ambiguous, or open-ended requests, Claude should **ask clarifying q
 
 ### Document Lifecycle Integration
 
-This project uses a structured document lifecycle in `claude/`. See `claude/README.md` for:
-- Folder structure (ideas → research → design → reference → archive)
-- **Categories**: Hierarchical organization mirroring project areas (e.g., `database-engine/`, `persistence/`)
-- Trigger phrases for document operations
-- Templates for each document type
-- Single file vs directory conventions for complex topics
+This project uses a structured document lifecycle in `claude/`. Documents progress through stages:
 
-**When creating documents**, always ask for the location (category) using the wizard-style prompt, unless the user specifies it explicitly.
+```
+ideas/ → research/ → design/ → reference/ → archive/
+```
+
+**When creating documents**, Claude asks for the category location (e.g., `database-engine/`, `persistence/`) unless specified explicitly.
+
+For trigger phrases, templates, directory conventions, and workflows, see [`claude/README.md`](claude/README.md).

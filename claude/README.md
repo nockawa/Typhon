@@ -2,6 +2,8 @@
 
 This folder contains working documents for Typhon development, organized by lifecycle stage. These documents support collaboration between the developer and Claude Code.
 
+> **Note:** Work tracking and roadmap planning now live in the [Typhon dev GitHub Project](https://github.com/users/nockawa/projects/7). The `claude/` folder focuses on **knowledge** (architecture, designs, research), while the GitHub Project is the **source of truth for work status**.
+
 ---
 
 ## Folder Structure
@@ -9,7 +11,6 @@ This folder contains working documents for Typhon development, organized by life
 ```
 claude/
 ├── README.md       # This file - explains the structure and workflow
-├── ROADMAP.md      # Development roadmap and priorities
 │
 ├── overview/       # Comprehensive architectural documentation (living)
 │   ├── README.md             # Entry point: quick links, config, tuning
@@ -509,11 +510,12 @@ Use this template for the README.md entry point in directory-based documents:
 ### Starting a New Feature
 
 1. **Capture the idea** → Create a file in `ideas/` (or just discuss it)
-2. **Add to roadmap** → If worth pursuing, add to `ROADMAP.md` backlog
-3. **Research if needed** → Create `research/[topic].md` for complex decisions
-4. **Design it** → Create `design/[feature].md` when ready to plan implementation
-5. **Implement** → Reference the design doc during development
-6. **Document** → Move/update to `reference/` for ongoing documentation
+2. **Create GitHub Issue** → Use `/create-issue` to track it in the GitHub Project
+3. **Research if needed** → Create `research/[topic].md` for complex decisions (Status: Research)
+4. **Design it** → Create `design/[feature].md` when ready to plan implementation (Status: Ready)
+5. **Implement** → Use `/start-work #XX` to begin (Status: In Progress)
+6. **Complete** → Use `/complete-work #XX` to finalize (Status: Done)
+7. **Document** → Move/update design docs to `reference/` for ongoing documentation
 
 ### Trigger Phrases
 
@@ -606,20 +608,30 @@ Use these phrases to trigger document lifecycle actions. Claude will **always co
 
 ### Regular Cleanup
 
-Periodically review:
+Use `/weekly-review` to identify items needing attention, or periodically review:
 - `ideas/` - Archive or promote stale ideas
 - `research/` - Archive concluded research, promote decisions to design
 - `design/` - Archive implemented designs or move to reference
 - `reference/` - Keep current with actual implementation
 
-### Linking to Roadmap
+### Linking to GitHub Project
 
-The `ROADMAP.md` file should link to relevant documents:
+GitHub Issues should reference design docs. Use the project's **Design Doc** field to link issues to their corresponding design documents:
+
 ```markdown
-| Item | Design Doc | Status |
-|------|------------|--------|
-| Query System | [QueryOptimization](design/QueryOptimization.md) | In progress |
+Design Doc: claude/design/FeatureName.md
 ```
+
+### Claude Code Skills for Workflow
+
+| Skill | Purpose |
+|-------|---------|
+| `/status` | Show current development status from GitHub Project |
+| `/start-work #XX` | Begin work on an issue (creates branch, updates status) |
+| `/complete-work #XX` | Finish work (close issue, prompt for doc updates) |
+| `/create-issue` | Create new GitHub issue with project fields |
+| `/weekly-review` | Weekly progress summary and stale item detection |
+| `/mountain-view` | Full backlog analysis - see the entire mountain of work |
 
 ---
 
