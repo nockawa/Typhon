@@ -28,7 +28,8 @@
       "Bash(find:*)",
       "WebSearch",
       "Bash(tree:*)",
-      "Bash(gh api:*)"
+      "Bash(gh api:*)",
+      "Bash(gh pr list:*)"
     ],
     "deny": [],
     "ask": []

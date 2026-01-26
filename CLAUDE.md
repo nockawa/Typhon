@@ -370,7 +370,7 @@ Work tracking is managed via the [Typhon dev GitHub Project](https://github.com/
 
 | Skill | Purpose |
 |-------|---------|
-| `/status` | Show current development status from GitHub Project |
+| `/dev-status` | Show current development status from GitHub Project |
 | `/start-work #XX` | Begin work on an issue (updates status, creates branch, verifies design) |
 | `/complete-work #XX` | Finish work (close issue, prompt for doc updates, archive design) |
 | `/create-issue` | Create new GitHub issue with project fields |

@@ -1,7 +1,7 @@
 ---
 name: start-work
 description: Start working on a GitHub issue - updates status, creates branch, verifies design
-argument-hint: [issue number]
+argument-hint: [issue number or title]
 ---
 
 # Start Work on a GitHub Issue
@@ -10,9 +10,47 @@ Prepare to work on an issue by updating its status, creating a branch, and verif
 
 ## Input
 
-$ARGUMENTS should contain the issue number (e.g., "42" or "#42").
+$ARGUMENTS may contain:
+- An **issue number** (e.g., `42` or `#42`) → proceed directly to the workflow
+- A **title/text** (non-numeric) → offer to create a new issue with that title
+- **Nothing** (empty) → show available issues to pick from, or offer to create one
 
-If no issue number provided, use `AskUserQuestion` to ask which issue to start.
+## Handling No Issue Number
+
+### Case 1: No arguments provided
+
+Fetch Ready and Backlog items from the project:
+
+```bash
+gh project item-list 7 --owner nockawa --format json
+```
+
+Filter for items with Status = "Ready" or "Backlog". Then use `AskUserQuestion` to present a choice:
+
+**Question:** "Which issue would you like to start working on?"
+**Header:** "Issue"
+**Options** (up to 4, prioritize Ready items first, then Backlog by priority):
+- `#<number> - <title>` (description: "[Status] [Priority] [Area]") — for each candidate issue
+- `Create a new issue` (description: "Launch the /create-issue workflow to define a new issue first")
+
+If the user picks an existing issue, continue with the normal workflow below using that issue number.
+
+If the user picks "Create a new issue", tell the user:
+> No worries! Let's create an issue first. Please run `/create-issue` with your issue title, then come back with `/start-work <number>`.
+
+### Case 2: Non-numeric argument (looks like a title)
+
+If $ARGUMENTS is not empty and not a number (doesn't match `^\d+$` after stripping `#`), use `AskUserQuestion`:
+
+**Question:** "It looks like you provided a title instead of an issue number. Would you like to:"
+**Header:** "Action"
+**Options:**
+- `Create a new issue with this title` (description: "Will launch the create-issue workflow with the title '$ARGUMENTS'")
+- `Search existing issues` (description: "Search for issues matching '$ARGUMENTS' to pick one")
+
+If "Create a new issue": tell the user to run `/create-issue $ARGUMENTS`, then come back with `/start-work <number>`.
+
+If "Search existing issues": run `gh issue list --repo nockawa/Typhon --search "$ARGUMENTS" --json number,title,state --limit 5` and present matching issues via `AskUserQuestion`.
 
 ## Workflow
 

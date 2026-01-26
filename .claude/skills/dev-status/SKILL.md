@@ -1,5 +1,5 @@
 ---
-name: status
+name: dev-status
 description: Show current development status from GitHub Project
 argument-hint: (no arguments)
 ---
