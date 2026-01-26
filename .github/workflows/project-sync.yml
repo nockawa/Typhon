@@ -1,0 +1,180 @@
+# Typhon Development Project Sync
+#
+# Automatically adds new issues to the "Typhon dev" GitHub Project
+# and performs basic housekeeping when issues/PRs are updated.
+#
+# Project: https://github.com/users/nockawa/projects/7
+
+name: Project Sync
+
+on:
+  issues:
+    types: [opened, closed, reopened]
+  pull_request:
+    types: [opened, closed]
+
+env:
+  PROJECT_NUMBER: 7
+  PROJECT_OWNER: nockawa
+
+jobs:
+  # Automatically add new issues to the project
+  add-to-project:
+    name: Add to Project
+    if: github.event_name == 'issues' && github.event.action == 'opened'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add issue to project
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh project item-add ${{ env.PROJECT_NUMBER }} \
+            --owner ${{ env.PROJECT_OWNER }} \
+            --url ${{ github.event.issue.html_url }}
+          echo "✅ Added issue #${{ github.event.issue.number }} to Typhon dev project"
+
+  # Update project status when issues are closed
+  update-status-on-close:
+    name: Update Status on Close
+    if: github.event_name == 'issues' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update status to Done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Get the project item ID for this issue
+          ITEM_ID=$(gh project item-list ${{ env.PROJECT_NUMBER }} \
+            --owner ${{ env.PROJECT_OWNER }} \
+            --format json | \
+            grep -B5 '"number":${{ github.event.issue.number }}' | \
+            grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+          if [ -n "$ITEM_ID" ]; then
+            # Update status to Done
+            gh project item-edit \
+              --project-id PVT_kwHOAud1ac4BNdCj \
+              --id "$ITEM_ID" \
+              --field-id PVTSSF_lAHOAud1ac4BNdCjzg8cXYI \
+              --single-select-option-id 12503e99
+            echo "✅ Updated issue #${{ github.event.issue.number }} status to Done"
+          else
+            echo "⚠️ Could not find project item for issue #${{ github.event.issue.number }}"
+          fi
+
+  # Update project status when issues are reopened
+  update-status-on-reopen:
+    name: Update Status on Reopen
+    if: github.event_name == 'issues' && github.event.action == 'reopened'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update status to In Progress
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Get the project item ID for this issue
+          ITEM_ID=$(gh project item-list ${{ env.PROJECT_NUMBER }} \
+            --owner ${{ env.PROJECT_OWNER }} \
+            --format json | \
+            grep -B5 '"number":${{ github.event.issue.number }}' | \
+            grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+          if [ -n "$ITEM_ID" ]; then
+            # Update status to In Progress
+            gh project item-edit \
+              --project-id PVT_kwHOAud1ac4BNdCj \
+              --id "$ITEM_ID" \
+              --field-id PVTSSF_lAHOAud1ac4BNdCjzg8cXYI \
+              --single-select-option-id a0a7aab6
+            echo "✅ Updated issue #${{ github.event.issue.number }} status to In Progress"
+          else
+            echo "⚠️ Could not find project item for issue #${{ github.event.issue.number }}"
+          fi
+
+  # Link PRs to issues and update status
+  link-pr-to-issue:
+    name: Link PR and Update Status
+    if: github.event_name == 'pull_request' && github.event.action == 'opened'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract issue number and update status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Extract issue number from PR title or branch name
+          # Supports formats: "fix #123", "feature/123-name", "fix/123-name"
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          PR_BRANCH="${{ github.event.pull_request.head.ref }}"
+
+          # Try to extract from title first (e.g., "Fix #123: description")
+          ISSUE_NUM=$(echo "$PR_TITLE" | grep -oE '#[0-9]+' | head -1 | tr -d '#')
+
+          # If not found, try branch name (e.g., "feature/123-name" or "fix/123-name")
+          if [ -z "$ISSUE_NUM" ]; then
+            ISSUE_NUM=$(echo "$PR_BRANCH" | grep -oE '(feature|fix)/[0-9]+' | grep -oE '[0-9]+')
+          fi
+
+          if [ -n "$ISSUE_NUM" ]; then
+            echo "Found linked issue: #$ISSUE_NUM"
+
+            # Get the project item ID
+            ITEM_ID=$(gh project item-list ${{ env.PROJECT_NUMBER }} \
+              --owner ${{ env.PROJECT_OWNER }} \
+              --format json | \
+              grep -B5 "\"number\":$ISSUE_NUM" | \
+              grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+            if [ -n "$ITEM_ID" ]; then
+              # Update status to Review
+              gh project item-edit \
+                --project-id PVT_kwHOAud1ac4BNdCj \
+                --id "$ITEM_ID" \
+                --field-id PVTSSF_lAHOAud1ac4BNdCjzg8cXYI \
+                --single-select-option-id fadead67
+              echo "✅ Updated issue #$ISSUE_NUM status to Review"
+            fi
+          else
+            echo "ℹ️ No issue number found in PR title or branch name"
+          fi
+
+  # Update status when PR is merged
+  update-on-merge:
+    name: Update Status on Merge
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update linked issue status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          PR_BRANCH="${{ github.event.pull_request.head.ref }}"
+
+          # Extract issue number
+          ISSUE_NUM=$(echo "$PR_TITLE" | grep -oE '#[0-9]+' | head -1 | tr -d '#')
+          if [ -z "$ISSUE_NUM" ]; then
+            ISSUE_NUM=$(echo "$PR_BRANCH" | grep -oE '(feature|fix)/[0-9]+' | grep -oE '[0-9]+')
+          fi
+
+          if [ -n "$ISSUE_NUM" ]; then
+            echo "PR merged, updating issue #$ISSUE_NUM"
+
+            # Close the issue
+            gh issue close $ISSUE_NUM --repo ${{ github.repository }} || true
+
+            # Get project item and update status to Done
+            ITEM_ID=$(gh project item-list ${{ env.PROJECT_NUMBER }} \
+              --owner ${{ env.PROJECT_OWNER }} \
+              --format json | \
+              grep -B5 "\"number\":$ISSUE_NUM" | \
+              grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+            if [ -n "$ITEM_ID" ]; then
+              gh project item-edit \
+                --project-id PVT_kwHOAud1ac4BNdCj \
+                --id "$ITEM_ID" \
+                --field-id PVTSSF_lAHOAud1ac4BNdCjzg8cXYI \
+                --single-select-option-id 12503e99
+              echo "✅ Issue #$ISSUE_NUM marked as Done"
+            fi
+          fi

@@ -19,7 +19,16 @@
       "Bash(cat:*)",
       "Bash(wait:*)",
       "Bash(perl -e 'alarm 45; exec @ARGV' dotnet test:*)",
-      "Bash(git mv:*)"
+      "Bash(git mv:*)",
+      "Bash(gh project:*)",
+      "Bash(gh issue:*)",
+      "Bash(wc:*)",
+      "Bash(gh label create:*)",
+      "Bash(gh label list:*)",
+      "Bash(find:*)",
+      "WebSearch",
+      "Bash(tree:*)",
+      "Bash(gh api:*)"
     ],
     "deny": [],
     "ask": []
