@@ -5,6 +5,10 @@
 
 ---
 
+> 💡 **TL;DR — Hands-on CRUD guide.** Jump to [Getting Started](#getting-started) for setup code, then follow Create → Read → Update → Delete through sections 2–5. Come back to [Understanding Transactions](#understanding-transactions) and [Best Practices](#best-practices) once you're comfortable with the basics.
+
+---
+
 ## Table of Contents
 1. [Getting Started](#getting-started)
 2. [Creating Entities and Components](#creating-entities-and-components)

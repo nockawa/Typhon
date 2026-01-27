@@ -593,7 +593,7 @@ Use these phrases to trigger document lifecycle actions. Claude will **always co
 | Capture an idea | "Add an idea about X to ideas/" |
 | Research options | "Research approaches for X, create a study in research/" |
 | Create a design | "Create a design doc for X based on our research" |
-| Update roadmap | "Mark X as complete and add Y to the backlog" |
+| Update project status | "Mark X as complete in the GitHub Project" |
 | Archive old docs | "Move the old X design to archive, it's superseded by Y" |
 
 ### File Naming Conventions

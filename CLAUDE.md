@@ -12,6 +12,8 @@ Typhon is a real-time, low-latency ACID database engine with microsecond-level p
 - ECS-inspired data model for game/simulation workloads
 - Snapshot isolation via MVCC for high concurrency
 
+> 💡 **TL;DR — Developer quick start:** Jump to [Build & Development Commands](#build--development-commands) to build, test, and benchmark immediately. For architecture orientation, see the [Quick Navigation](#quick-navigation) table below.
+
 ## Key Documentation Resources
 
 Typhon maintains comprehensive documentation in the `claude/` directory. Use these resources to understand architecture, design rationale, and development workflow.
@@ -440,3 +442,11 @@ ideas/ → research/ → design/ → reference/ → archive/
 **When creating documents**, Claude asks for the category location (e.g., `database-engine/`, `persistence/`) unless specified explicitly.
 
 For trigger phrases, templates, directory conventions, and workflows, see [`claude/README.md`](claude/README.md).
+
+### Documentation Writing Principles
+
+When creating or updating long documents (design docs, guides, references, CONTRIB.md, etc.), follow the **"do first, read later"** principle:
+
+- **Always include a TL;DR or quick-start signpost** near the top of any document longer than ~100 lines. Use a `> 💡` blockquote pointing readers to the most actionable section (e.g., "Skip to [Getting Started](#getting-started) for hands-on steps").
+- **Structure for two audiences**: the reader who wants to *do something right now* and the reader who wants to *understand the full picture*. Put practical/actionable content (daily guides, setup steps, checklists) in clearly labeled sections. Put conceptual/architectural content (lifecycle stages, design rationale, principles) separately.
+- **Front-load the practical.** Readers should be able to start working within the first screenful of content, then circle back for depth when they're ready.

@@ -22,6 +22,8 @@ The goal is to create a system where:
 3. The "next thing to work on" is always clear
 4. Documentation stays synchronized with reality
 
+> 💡 **TL;DR — Just want to get started?** Skip to the [Developer's Daily Guide](#developers-daily-guide) for practical step-by-step workflows, and [Rider IDE Setup](#rider-ide-setup) for one-time configuration.
+
 ---
 
 ## Table of Contents
@@ -60,11 +62,13 @@ The goal is to create a system where:
 │        │                                                       │            │
 │        ▼                                                       ▼            │
 │  ┌─────────────┐                                       ┌─────────────────┐  │
-│  │  ROADMAP    │◄──────────────────────────────────────│    REFERENCE    │  │
-│  │  (claude/)  │      Completed items feed back        │    (claude/)    │  │
+│  │  ARCHIVE    │◄──────────────────────────────────────│    REFERENCE    │  │
+│  │  (claude/)  │      Completed items documented       │    (claude/)    │  │
 │  └─────────────┘                                       └─────────────────┘  │
 │                                                                             │
 │  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  RIDER: Tasks, branches, context switching, shelving, navigation     │   │
+│  ├──────────────────────────────────────────────────────────────────────┤   │
 │  │  CLAUDE CODE: Watches, prompts, automates, correlates, enforces      │   │
 │  └──────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
@@ -76,9 +80,8 @@ The goal is to create a system where:
 1. **GitHub Project = Source of Truth** — Where is this work right now? What's the roadmap?
 2. **claude/ docs = Knowledge** — What do we know about this problem/solution?
 3. **Issues = Discussion** — Comments, decisions, blockers for specific work items
-4. **Claude Code = Glue** — Keeps everything synchronized and prompts for missing pieces
-
-> **Note:** ROADMAP.md has been retired. Work planning and tracking now live entirely in the [GitHub Project](https://github.com/users/nockawa/projects/7) with views for Workflow Board, Roadmap, By Area, By Priority, and By Phase.
+4. **Rider = Developer Cockpit** — Branch management, context switching, issue navigation
+5. **Claude Code = Glue** — Keeps everything synchronized and prompts for missing pieces
 
 ---
 
@@ -182,12 +185,12 @@ The goal is to create a system where:
 |----------|--------|
 | GitHub Issue | Closed (auto or manual) |
 | Design doc | → `reference/` (if useful) or `archive/` |
-| ROADMAP.md | Updated with completion date |
+| GitHub Project | Status → Done |
 | overview/ | Updated if architectural impact |
 | ADR | Created if significant decision was made |
 
 **Claude's Role:**
-- Prompt: "Feature complete! Let me update the roadmap and archive the design doc."
+- Prompt: "Feature complete! Let me update the project and archive the design doc."
 - Check: "Should we update any overview/ docs?"
 - Check: "Any architectural decisions worth an ADR?"
 
@@ -205,8 +208,8 @@ The goal is to create a system where:
 
 ```
                     ┌─────────────────┐
-                    │   ROADMAP.md    │
-                    │  (Strategic)    │
+                    │ GitHub Project  │
+                    │  (Tracking)     │
                     └────────┬────────┘
                              │ references
                              ▼
@@ -253,10 +256,8 @@ The goal is to create a system where:
 **Branch:** `feature/query-engine`
 ```
 
-**In ROADMAP.md:**
-```markdown
-| Query System | 🚧 | [#42](https://github.com/nockawa/Typhon/issues/42) | [Design](design/QueryEngine.md) |
-```
+**In GitHub Project:**
+Set the "Design Doc" field to the path (e.g., `claude/design/QueryEngine.md`).
 
 ---
 
@@ -265,7 +266,7 @@ The goal is to create a system where:
 ### Daily Start (5 min)
 
 1. **Check GitHub Project board** — What's In Progress?
-2. **Ask Claude:** "What am I working on?" (Claude reads Project + ROADMAP)
+2. **Ask Claude:** "What am I working on?" (Claude reads GitHub Project)
 3. **Review any blockers** — Update issue status if needed
 
 ### Before Starting New Work
@@ -275,26 +276,32 @@ The goal is to create a system where:
 3. **Update issue status** → `In Progress`
 4. **Create branch** with proper naming
 
-**Claude Prompt:** "Starting work on #42"
-- Claude verifies design exists
-- Claude updates issue status
-- Claude reminds of branch naming convention
+**Two approaches — pick your preferred flow:**
+
+| | Claude-First | Rider-First |
+|---|---|---|
+| Step 1 | `/start-work #42` — Claude verifies design, updates status, suggests branch | `Alt+Shift+N` in Rider — Open Task creates branch + switches context |
+| Step 2 | Claude creates branch or you use Rider | `/start-work #42` — Claude verifies design, updates project status |
+| Best for | New issues, need design check | Quick context switch, branch already planned |
+
+Both approaches end in the same state: issue In Progress, branch created, Rider context loaded.
 
 ### After Completing Work
 
-1. **Update issue** with summary of what was done
-2. **Ask Claude:** "Feature complete for #42"
+1. **Rider:** `Alt+Shift+W` (Close Task) — commits remaining changes, optionally merges branch
+2. **Update issue** with summary of what was done
+3. **Ask Claude:** `/complete-work #42`
    - Claude moves design doc → reference/archive
-   - Claude updates ROADMAP.md
+   - Claude updates GitHub Project status → Done
    - Claude checks for overview/ updates
+   - Claude offers branch cleanup
 
 ### Weekly Review (30 min)
 
-1. **Review ROADMAP.md** — Still accurate?
+1. **Review GitHub Project** — Status fields accurate? Stale items? Anything stuck?
 2. **Check `ideas/`** — Anything to promote or archive?
 3. **Check `research/`** — Any stale research?
-4. **Review GitHub Project** — Anything stuck?
-5. **Ask Claude:** "Give me a status summary"
+4. **Ask Claude:** `/weekly-review` for a full status summary
 
 ---
 
@@ -309,8 +316,7 @@ description: Show current development status across all systems
 ---
 
 Reads and correlates:
-- GitHub Project (In Progress items)
-- ROADMAP.md (Current Phase, Active Work)
+- GitHub Project (In Progress items, Phase, Priority)
 - Recent git activity
 
 Output:
@@ -368,7 +374,7 @@ argument-hint: [issue number]
 Actions:
 1. Update issue status → Done (or close)
 2. Move design doc → reference/ or archive/
-3. Update ROADMAP.md completed section
+3. Update GitHub Project status → Done
 4. Check for overview/ updates needed
 5. Prompt for ADR if significant decision
 6. Report summary
@@ -392,7 +398,7 @@ Output:
 - Progress summary
 - Stale items warning
 - Suggested cleanups
-- Roadmap alignment check
+- Phase alignment check
 ```
 
 ### Skill: `/mountain-view` — How Big Is the Mountain?
@@ -433,7 +439,7 @@ actions:
 # .claude/hooks/session-start.yaml
 trigger: claude code session start
 actions:
-  - Show current phase from ROADMAP.md
+  - Show current phase from GitHub Project
   - List In Progress items
   - Note any stale work (>7 days no activity)
 ```
@@ -494,27 +500,19 @@ jobs:
           # Warn on orphaned docs
 ```
 
-### Proposed: ROADMAP ↔ Project Sync
-
-When ROADMAP.md changes:
-1. Parse Active Work table
-2. Ensure each item has a GitHub Issue
-3. Ensure issue is in correct Project status column
-4. Report discrepancies
-
 ---
 
 ## Views & Dashboards
 
 ### GitHub Project Views
 
-| View | Purpose | Grouping | Filters |
-|------|---------|----------|---------|
-| **Sprint Board** | Daily work | Status columns | None (all active) |
-| **By Area** | Subsystem focus | Area field | Exclude Done |
-| **Research Queue** | What needs exploration | Status | `label:research` |
-| **Roadmap** | Timeline view | Milestone/Target Date | Has date |
-| **Stale Items** | Items needing attention | None | No activity > 14 days |
+| View | Layout | Configuration |
+|------|--------|---------------|
+| **Workflow Board** | Board | Group by Status |
+| **Roadmap** | Roadmap | Date field: Target |
+| **By Area** | Table | Group by Area, filter: `-status:Done` |
+| **By Priority** | Table | Group by Priority, filter: `-status:Done` |
+| **By Phase** | Table | Group by Phase |
 
 ### Custom Fields for Project
 
@@ -525,37 +523,83 @@ When ROADMAP.md changes:
 | Estimate | Single-select | XS, S, M, L, XL | Effort sizing |
 | Priority | Single-select | P0, P1, P2, P3 | Urgency |
 | Design Doc | Text | URL/path | Link to design |
-| Target | Iteration | Sprint dates | Planning |
+| Target | Date | Target dates | Roadmap positioning |
 
-### ROADMAP.md Enhanced Format
+---
 
-```markdown
-## Current Phase: [Phase Name]
+## Rider IDE Setup
 
-> [Phase description and goals]
+Rider's built-in Task Management connects directly to GitHub Issues and provides branch creation, context switching, and issue navigation — all tightly integrated with the Typhon workflow.
 
-### Active Work
+### Task Server Configuration
 
-| Status | Item | Issue | Design | Area | Est | Notes |
-|--------|------|-------|--------|------|-----|-------|
-| 🚧 | Feature X | [#42](url) | [Design](path) | Storage | M | In PR review |
+**Settings → Tools → Tasks → Servers → Add → GitHub**
 
-### Up Next (Prioritized)
+| Setting | Value |
+|---------|-------|
+| Server URL | `https://github.com/nockawa/Typhon` |
+| API Token | Personal access token with `repo` scope |
+| Search query | `assignee:nockawa state:open` |
 
-| Priority | Item | Issue | Prereqs | Est |
-|----------|------|-------|---------|-----|
-| P0 | Critical Y | [#43](url) | #42 | L |
+### Task Name & Branch Templates
 
-### Backlog
+**Settings → Tools → Tasks:**
 
-[Grouped by Area with rough priorities]
+| Setting | Value | Example Output |
+|---------|-------|----------------|
+| Changelist name format | `${id} ${summary}` | `42 Query engine foundation` |
+| Feature branch name format | `feature/${id}-${summary}` | `feature/42-query-engine-foundation` |
+| ☑ Lowercased | checked | (auto-lowercases and replaces spaces with hyphens) |
 
-### Completed This Phase
+The branch format matches the convention used by `/start-work` (e.g., `feature/42-query-engine`).
 
-| Item | Issue | Completed | Impact |
-|------|-------|-----------|--------|
-| Feature Z | [#40](url) | 2026-01-20 | Enabled X capability |
+For bug-fix issues, manually adjust to `fix/${id}-${summary}` when prompted, or set up separate task types if desired.
+
+### Commit Message Template
+
+**Settings → Tools → Tasks → Servers → (your GitHub server) → Commit Message tab:**
+
+Enable the commit message checkbox and set the template to:
+
 ```
+#${id}: ${summary}
+```
+
+This produces commit messages like `#42: Query engine foundation`, automatically linking commits to GitHub issues. The template is populated when you close a task or commit while a task is active.
+
+### Issue Navigation Pattern
+
+**Settings → Tools → Tasks → Issue Navigation → Add:**
+
+| Setting | Value |
+|---------|-------|
+| Pattern | `#(\d+)` |
+| Link URL | `https://github.com/nockawa/Typhon/issues/$1` |
+
+This makes `#42` references in code comments, commit messages, and changelogs clickable — jumping straight to the GitHub issue.
+
+### Key Shortcuts
+
+| Action | Shortcut | What It Does |
+|--------|----------|-------------|
+| Open Task | `Alt+Shift+N` | Pick a GitHub issue → creates branch, shelves current changes, clears editor tabs |
+| Close Task | `Alt+Shift+W` | Commits changes, optionally merges branch, restores previous context |
+| Switch Task | `Alt+Shift+N` | Swap to a different open task (Rider restores that task's editor state) |
+| Task Combo | Top-right toolbar | Quick-switch between recent tasks |
+
+### Context Switching
+
+When you **Open Task**, Rider automatically:
+- Shelves uncommitted changes from the current branch
+- Creates the new branch (using the template above)
+- Clears editor tabs and restores the new task's saved context (tabs, bookmarks, breakpoints)
+
+When you **Close Task**, Rider reverses this:
+- Commits or shelves remaining changes
+- Optionally merges/deletes the branch
+- Restores the previous task's editor state
+
+This means you can jump between issues mid-day without losing your place — each task has its own editor "workspace."
 
 ---
 
@@ -565,12 +609,15 @@ When ROADMAP.md changes:
 
 ```
 1. Open Rider (workspace loads last project)
+   - Check the Task combo (top-right) — Rider remembers your last active task
+   - If resuming yesterday's work, your editor tabs/bookmarks are already restored
 2. Terminal: `claude` (starts session)
 3. Claude automatically shows:
    - "Good morning! Current phase: Telemetry"
    - "You have 2 items In Progress: #42, #45"
    - "⚠️ #42 has no activity for 5 days"
 4. Pick up where you left off or ask "what should I focus on?"
+   - To switch tasks mid-day: Alt+Shift+N in Rider (shelves current work, loads new context)
 ```
 
 ### Starting New Feature
@@ -598,6 +645,17 @@ Claude: [Creates research/database-engine/QueryCaching.md]
 "Done! Research doc and issue #50 created.
  The research doc has starter questions based on the idea.
  Want me to help explore any specific aspect first?"
+
+Developer: "Let's start implementing"
+
+Claude: [Runs /start-work #50]
+        [Updates status → In Progress, suggests branch]
+
+"Branch: feature/50-query-caching
+ → Use Alt+Shift+N in Rider to Open Task for #50
+   (creates branch + switches editor context)"
+
+Developer: [Alt+Shift+N in Rider → selects #50 → branch created, tabs cleared]
 ```
 
 ### Completing Feature
@@ -609,7 +667,7 @@ Claude: "Excellent! Let me wrap this up:
 
   ✅ Issue #42 closed
   ✅ Moved design/QueryEngine.md → reference/
-  ✅ Updated ROADMAP.md (marked complete, dated)
+  ✅ Project status → Done
 
   Quick questions:
   1. Should I update any overview/ docs? This touched the query layer.
@@ -685,11 +743,15 @@ The following has been implemented:
 - `/weekly-review` — Weekly progress summary
 - `/mountain-view` — Full backlog analysis
 
+### Rider Configuration
+- **Task Server:** GitHub → `nockawa/Typhon`, filter: `assignee:nockawa state:open`
+- **Changelist name:** `${id} ${summary}`
+- **Branch template:** `feature/${id}-${summary}` (lowercased)
+- **Commit message:** `#${id}: ${summary}` (per-server → Commit Message tab)
+- **Issue navigation:** `#(\d+)` → `https://github.com/nockawa/Typhon/issues/$1`
+
 ### GitHub Actions
 - `.github/workflows/project-sync.yml` — Auto-add issues, sync status on close/merge
-
-### Archived
-- `claude/ROADMAP.md` → `claude/archive/ROADMAP-2026-01.md`
 
 ---
 
