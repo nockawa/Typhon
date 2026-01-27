@@ -31,12 +31,11 @@ Filter for items with Status = "Ready" or "Backlog". Then use `AskUserQuestion` 
 **Header:** "Issue"
 **Options** (up to 4, prioritize Ready items first, then Backlog by priority):
 - `#<number> - <title>` (description: "[Status] [Priority] [Area]") — for each candidate issue
-- `Create a new issue` (description: "Launch the /create-issue workflow to define a new issue first")
+- `Create a new issue` (description: "I'll help you create one right now")
 
 If the user picks an existing issue, continue with the normal workflow below using that issue number.
 
-If the user picks "Create a new issue", tell the user:
-> No worries! Let's create an issue first. Please run `/create-issue` with your issue title, then come back with `/start-work <number>`.
+If the user picks "Create a new issue", proceed to **Inline Issue Creation** below.
 
 ### Case 2: Non-numeric argument (looks like a title)
 
@@ -45,12 +44,34 @@ If $ARGUMENTS is not empty and not a number (doesn't match `^\d+$` after strippi
 **Question:** "It looks like you provided a title instead of an issue number. Would you like to:"
 **Header:** "Action"
 **Options:**
-- `Create a new issue with this title` (description: "Will launch the create-issue workflow with the title '$ARGUMENTS'")
+- `Create a new issue with this title` (description: "I'll create '#$ARGUMENTS' and start work on it")
 - `Search existing issues` (description: "Search for issues matching '$ARGUMENTS' to pick one")
 
-If "Create a new issue": tell the user to run `/create-issue $ARGUMENTS`, then come back with `/start-work <number>`.
+If "Create a new issue": proceed to **Inline Issue Creation** with the title pre-filled.
 
 If "Search existing issues": run `gh issue list --repo nockawa/Typhon --search "$ARGUMENTS" --json number,title,state --limit 5` and present matching issues via `AskUserQuestion`.
+
+## Inline Issue Creation
+
+When an issue needs to be created, do it inline rather than redirecting the user to `/create-issue`.
+
+Follow the `/create-issue` skill workflow directly:
+
+1. **Gather info** — Use `AskUserQuestion` to collect:
+   - Title (if not already provided from $ARGUMENTS)
+   - Description (ask the user to describe what needs to be done)
+   - Type labels, Area, Priority, Phase, Estimate (use the same questions as `/create-issue`)
+
+2. **Create the issue** — Execute the full `/create-issue` workflow:
+   ```bash
+   gh issue create --repo nockawa/Typhon --title "TITLE" --body "DESCRIPTION" --label "LABELS" --assignee nockawa
+   ```
+
+3. **Add to project and set fields** — Follow `/create-issue` steps 3-5
+
+4. **Continue** — Once the issue is created, continue with the normal `/start-work` workflow below using the new issue number.
+
+This makes `/start-work` a one-stop command: describe what you want to work on, and Claude creates the issue + starts work in a single flow.
 
 ## Workflow
 
@@ -69,6 +90,7 @@ Look for design doc reference in:
 If no design doc exists and this is an enhancement (not a bug fix):
 - Ask: "This issue has no design doc. Should I create one, or proceed without?"
 - If yes, create `claude/design/<IssueName>.md` using the design template
+- Set the Design Doc project field to the path
 
 ### 3. Update Project Status
 
@@ -84,15 +106,31 @@ gh project item-edit --project-id PVT_kwHOAud1ac4BNdCj --id <item_id> \
   --single-select-option-id a0a7aab6  # "In Progress"
 ```
 
-### 4. Create Branch
+### 4. Branch Creation
 
-Determine branch name based on issue type:
+Determine the recommended branch name based on issue type:
 - Enhancement/Feature: `feature/<number>-short-name`
 - Bug: `fix/<number>-short-name`
 
+Then ask the user how they want the branch created:
+
+**Question:** "How should the branch be created?"
+**Header:** "Branch"
+**Options:**
+- `Claude creates it` (description: "I'll run git checkout -b <branch-name> right now")
+- `Rider Open Task` (description: "I'll skip — use Alt+Shift+N in Rider to create branch via Open Task for issue #<number>")
+- `Skip branch` (description: "Don't create a branch yet, I'll handle it later")
+
+**If "Claude creates it":**
 ```bash
 git checkout -b feature/<number>-short-name
 ```
+
+**If "Rider Open Task":**
+Report the recommended branch name for reference but don't create it. The user will use Rider's `Tools > Tasks & Contexts > Open Task` (Alt+Shift+N) to select the issue and let Rider create the branch + context switch.
+
+**If "Skip branch":**
+Just report the recommended name for later use.
 
 ### 5. Update Design Doc (if exists)
 
@@ -103,15 +141,17 @@ Add branch reference to the design doc:
 **Status:** In progress
 ```
 
+Note: If the user chose "Rider Open Task" or "Skip branch", still write the recommended branch name in the design doc. Update it later if Rider uses a different name.
+
 ### 6. Report Summary
 
 ```
 Starting work on #<number>: <title>
 
-✅ Design doc exists: claude/design/<Name>.md (or "No design doc")
+✅ Design doc: claude/design/<Name>.md (or "No design doc — skipped")
 ✅ Status updated: <old> → In Progress
-✅ Branch created: feature/<number>-short-name
-✅ Checked out branch
+🌿 Branch: feature/<number>-short-name
+   └─ Created by Claude / Use Rider Open Task (Alt+Shift+N) / Skipped
 
 Ready to implement!
 ```
@@ -125,3 +165,27 @@ For reference:
 - In Progress: `a0a7aab6`
 - Review: `fadead67`
 - Done: `12503e99`
+
+## Field Reference
+
+### Project ID
+- `PVT_kwHOAud1ac4BNdCj`
+
+### Status Field
+- Field ID: `PVTSSF_lAHOAud1ac4BNdCjzg8cXYI`
+
+### Priority Field
+- Field ID: `PVTSSF_lAHOAud1ac4BNdCjzg8c8uQ`
+
+### Phase Field
+- Field ID: `PVTSSF_lAHOAud1ac4BNdCjzg8c8uU`
+
+### Area Field
+- Field ID: `PVTSSF_lAHOAud1ac4BNdCjzg8cX_E`
+
+### Estimate Field
+- Field ID: `PVTSSF_lAHOAud1ac4BNdCjzg8cYEU`
+
+### Design Doc Field (Text)
+- Field ID: `PVTF_lAHOAud1ac4BNdCjzg8c8uY`
+- Set with: `--text "claude/design/FeatureName.md"`
