@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -6,27 +6,52 @@ using System.Threading;
 
 namespace Typhon.Engine;
 
-internal static partial class AccessControlImpl
+public partial struct AccessControl
 {
     [StructLayout(LayoutKind.Sequential)]
-    internal ref struct LockData
+    private ref struct LockData
     {
-        public LockData(ref ulong data, TimeSpan? timeOut = null, CancellationToken token = default)
+        /// <summary>
+        /// Constructor for blocking operations that may need to wait.
+        /// </summary>
+        /// <param name="data">Reference to the lock's state data.</param>
+        /// <param name="ctx">Reference to WaitContext. Use <c>ref WaitContext.Null</c> for infinite wait.</param>
+        public LockData(ref ulong data, ref WaitContext ctx)
         {
             _data = ref data;
             _initial = _staging = _data;
-            _token = token;
-            _timeOutAt = (timeOut != null) ? (DateTime.UtcNow + timeOut.Value) : DateTime.MaxValue;
+            _ctx = ref ctx;
+            _isNullRef = Unsafe.IsNullRef(ref ctx);
         }
-        
+
+        /// <summary>
+        /// Constructor for non-blocking operations (exit, demote, try-enter).
+        /// </summary>
+        /// <param name="data">Reference to the lock's state data.</param>
+        public LockData(ref ulong data)
+        {
+            _data = ref data;
+            _initial = _staging = _data;
+            _ctx = ref Unsafe.NullRef<WaitContext>();
+            _isNullRef = true;
+        }
+
         private ref ulong _data;
         private ulong _initial;
         private ulong _staging;
-        private readonly DateTime _timeOutAt;
-        private readonly CancellationToken _token;
+        private readonly ref WaitContext _ctx;
+        private readonly bool _isNullRef;
 
-        public bool IsTimedOutOrCanceled => (DateTime.UtcNow > _timeOutAt) || _token.IsCancellationRequested;
-        
+        /// <summary>
+        /// Returns true if the wait should stop due to timeout or cancellation.
+        /// Returns false for infinite wait (NullRef pattern).
+        /// </summary>
+        public bool ShouldStop
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => !_isNullRef && _ctx.ShouldStop;
+        }
+
         public int SharedCounter
         {
             get => (int)(_staging & SharedCounterMask);
@@ -36,7 +61,7 @@ internal static partial class AccessControlImpl
                 _staging = (_staging & ~SharedCounterMask) | (uint)value;
             }
         }
-        
+
         public int SharedWaiters
         {
             get => (int)((_staging & SharedWaitersMask) >> SharedWaitersShift);
@@ -46,7 +71,6 @@ internal static partial class AccessControlImpl
                 _staging = (_staging & ~SharedWaitersMask) | (ulong)value << SharedWaitersShift;
             }
         }
-
 
         public int ExclusiveWaiters
         {
@@ -102,8 +126,7 @@ internal static partial class AccessControlImpl
         {
             _initial = _staging = _data;
         }
-        
-        public bool IsIdleNoWaiters => (_staging & ~OperationsBlockIdMask) == 0;
+
         public bool CanShareStart => (_staging & (PromoterWaitersMask | ExclusiveWaitersMask)) == 0;
         public bool CanExclusiveStart => (_staging & PromoterWaitersMask) == 0;
         public bool CanPromoteToExclusive => (_initial & SharedCounterMask) == 1;
@@ -111,25 +134,22 @@ internal static partial class AccessControlImpl
         public bool WaitForSharedCanStart()
         {
             var res = false;
-            
-            // Increment the Shared Waiter counter
-            //Interlocked.Add(ref _data, 1UL << SharedWaitersShift);
-            
+
             var sw = new SpinWait();
             var maxWaitCounter = 100;
-            while ((DateTime.UtcNow < _timeOutAt) && !_token.IsCancellationRequested && (--maxWaitCounter > 0))
+            while (!ShouldStop && (--maxWaitCounter > 0))
             {
                 var cur = _data;
-                
-                var state = (cur&StateMask);
-                
-                // A concurrent change of state may occur and if that's the case, we need to exist the wait and reassess
+
+                var state = (cur & StateMask);
+
+                // A concurrent change of state may occur and if that's the case, we need to exit the wait and reassess
                 if (state == ExclusiveState)
                 {
                     res = true;
                     break;
                 }
-                
+
                 // Can't be exclusive, without exclusive or promoters waiters (they have the priority)
                 if (((cur & (ExclusiveWaitersMask | PromoterWaitersMask)) == 0))
                 {
@@ -140,10 +160,7 @@ internal static partial class AccessControlImpl
 //                Console.WriteLine($"[Thread {Environment.CurrentManagedThreadId}] {LogData(cur)}");
             }
 
-            // Decrement the Shared Waiter counter
-            //Interlocked.Add(ref _data, unchecked((ulong)(-(1L << SharedWaitersShift))));
-            
-            return (maxWaitCounter==0) || res;
+            return (maxWaitCounter == 0) || res;
         }
 
         internal enum WaitFor
@@ -152,7 +169,7 @@ internal static partial class AccessControlImpl
             Exclusive,
             Promote
         }
-        
+
         public bool WaitForIdleState(WaitFor waitFor)
         {
             // Log the operation start and set the value to increment as a waiter
@@ -160,19 +177,19 @@ internal static partial class AccessControlImpl
             bool overflow;
             switch (waitFor)
             {
-                case WaitFor.Shared:    
+                case WaitFor.Shared:
                     // TOFIX
                     // AddWaitOperation(OperationType.SharedStartWait);
                     overflow = SharedWaiters == byte.MaxValue;
-                    waitIncValue = 1 << SharedWaitersShift;    
+                    waitIncValue = 1 << SharedWaitersShift;
                     break;
-                case WaitFor.Exclusive: 
+                case WaitFor.Exclusive:
                     // TOFIX
                     // AddWaitOperation(OperationType.ExclusiveStartWait); 
                     overflow = ExclusiveWaiters == byte.MaxValue;
-                    waitIncValue = 1 << ExclusiveWaitersShift; 
+                    waitIncValue = 1 << ExclusiveWaitersShift;
                     break;
-                case WaitFor.Promote:   
+                case WaitFor.Promote:
                     // TOFIX
                     // AddWaitOperation(OperationType.PromoteStartWait);
                     overflow = PromoterWaiters == byte.MaxValue;
@@ -195,29 +212,32 @@ internal static partial class AccessControlImpl
                 }
                 // Keep going on as expected
             }
-            
+
+            // Set contention flag (sticky, atomic) - we had to wait, so contention occurred
+            Interlocked.Or(ref Unsafe.As<ulong, long>(ref _data), (long)ContentionFlagMask);
+
             // Enter the wait loop where we fetch the lock data and check for idle state
             var sw = new SpinWait();
             var maxWaitCounter = 1000;
             var res = false;
-            while ((DateTime.UtcNow < _timeOutAt) && !_token.IsCancellationRequested && (--maxWaitCounter > 0))
+            while (!ShouldStop && (--maxWaitCounter > 0))
             {
                 var data = _data;
                 var threadId = (data & ThreadIdMask) >> ThreadIdShift;
-                
+
                 // Idle ?
-                if ((data&StateMask) == IdleState)
+                if ((data & StateMask) == IdleState)
                 {
                     // Set result to true to signal to reassess
                     res = true;
                     break;
                 }
-                
+
                 sw.SpinOnce();
             }
 
             // Update res to be either true (try again/reassess) or false (timeout or cancellation)
-            res = (maxWaitCounter==0) || res;
+            res = (maxWaitCounter == 0) || res;
 
             if (!overflow)
             {
@@ -233,8 +253,8 @@ internal static partial class AccessControlImpl
                     }
                 }
             }
-            
-            // Log if we timed out or were canceled
+
+            // Return false if we timed out or were canceled
             if (!res)
             {
                 // TOFIX

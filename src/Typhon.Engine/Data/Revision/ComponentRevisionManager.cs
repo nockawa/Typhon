@@ -61,7 +61,7 @@ internal ref struct ComponentRevisionManager
         var useLock = !firstHeader.Control.IsLockedByCurrentThread;
         if (useLock)
         {
-            firstHeader.Control.EnterSharedAccess();
+            firstHeader.Control.EnterSharedAccess(ref WaitContext.Null);
         }
         while (--chunkIndexInChain >= 0)
         {
@@ -91,7 +91,7 @@ internal ref struct ComponentRevisionManager
         ref var firstHeader = ref stream.PopRef<CompRevStorageHeader>();
 
         // Enter exclusive access for the Revision Table
-        firstHeader.Control.EnterExclusiveAccess();
+        firstHeader.Control.EnterExclusiveAccess(ref WaitContext.Null);
 
         // Check if we need to add one more chunk to the chain
         if (ComputeRevElementCount(firstHeader.ChainLength) == firstHeader.ItemCount)
@@ -362,7 +362,7 @@ internal ref struct ComponentRevisionManager
         var useLock = !first->Control.IsLockedByCurrentThread;
         if (useLock)
         {
-            first->Control.EnterSharedAccess();
+            first->Control.EnterSharedAccess(ref WaitContext.Null);
         }
         while (--chunkIndexInChain != 0)
         {

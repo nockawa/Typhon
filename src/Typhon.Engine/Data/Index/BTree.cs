@@ -414,7 +414,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     public int Add(TKey key, int value, ref ChunkAccessor accessor)
     {
         var args = new InsertArguments(key, value, Comparer, ref accessor);
-        _access.EnterExclusiveAccess();
+        _access.EnterExclusiveAccess(ref WaitContext.Null);
         try
         {
             AddOrUpdateCore(ref args);
@@ -430,7 +430,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     public bool Remove(TKey key, out int value, ref ChunkAccessor accessor)
     {
         var args = new RemoveArguments(key, Comparer, ref accessor);
-        _access.EnterExclusiveAccess();
+        _access.EnterExclusiveAccess(ref WaitContext.Null);
         try
         {
             RemoveCore(ref args);
@@ -452,7 +452,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             return;
         }
 
-        _access.EnterSharedAccess();
+        _access.EnterSharedAccess(ref WaitContext.Null);
         try
         {
             Root.CheckConsistency(default, NodeWrapper.CheckConsistencyParent.Root, Comparer, Height, ref accessor);
@@ -525,7 +525,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     public bool TryGet(TKey key, out int value, ref ChunkAccessor accessor)
     {
         value = default;
-        _access.EnterSharedAccess();
+        _access.EnterSharedAccess(ref WaitContext.Null);
         try
         {
             var leaf = FindLeaf(key, out var index, ref accessor);
@@ -548,7 +548,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         {
             return false;
         }
-        _access.EnterExclusiveAccess();
+        _access.EnterExclusiveAccess(ref WaitContext.Null);
         try
         {
             var res = _storage.RemoveFromBuffer(bufferId, elementId, value, ref accessor);

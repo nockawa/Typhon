@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 namespace Typhon.Engine.Tests.Concurrency;
 
 [TestFixture]
-public class NewAccessControlTelemetryTests
+public class AccessControlTelemetryTests
 {
     /// <summary>
     /// Mock implementation of IContentionTarget for testing telemetry callbacks.
@@ -57,30 +57,30 @@ public class NewAccessControlTelemetryTests
     [Test]
     public void EnterExclusiveAccess_WithNullTarget_NoTelemetry()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
 
         // Should work without exceptions when target is null
-        control.EnterExclusiveAccess(target: null);
+        control.EnterExclusiveAccess(ref WaitContext.Null, target: null);
         control.ExitExclusiveAccess(target: null);
     }
 
     [Test]
     public void EnterSharedAccess_WithNullTarget_NoTelemetry()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
 
         // Should work without exceptions when target is null
-        control.EnterSharedAccess(target: null);
+        control.EnterSharedAccess(ref WaitContext.Null, target: null);
         control.ExitSharedAccess(target: null);
     }
 
     [Test]
     public void TelemetryLevel_None_NoCallbacks()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
         var target = new MockContentionTarget { TelemetryLevel = TelemetryLevel.None };
 
-        control.EnterExclusiveAccess(target: target);
+        control.EnterExclusiveAccess(ref WaitContext.Null, target: target);
         control.ExitExclusiveAccess(target: target);
 
         Assert.That(target.ContentionCount, Is.EqualTo(0));
@@ -90,10 +90,10 @@ public class NewAccessControlTelemetryTests
     [Test]
     public void EnterExclusiveAccess_WithDeepMode_LogsOperations()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
         var target = new MockContentionTarget { TelemetryLevel = TelemetryLevel.Deep };
 
-        control.EnterExclusiveAccess(target: target);
+        control.EnterExclusiveAccess(ref WaitContext.Null, target: target);
         control.ExitExclusiveAccess(target: target);
 
         Assert.That(target.Operations.Count, Is.EqualTo(2));
@@ -104,10 +104,10 @@ public class NewAccessControlTelemetryTests
     [Test]
     public void EnterSharedAccess_WithDeepMode_LogsOperations()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
         var target = new MockContentionTarget { TelemetryLevel = TelemetryLevel.Deep };
 
-        control.EnterSharedAccess(target: target);
+        control.EnterSharedAccess(ref WaitContext.Null, target: target);
         control.ExitSharedAccess(target: target);
 
         Assert.That(target.Operations.Count, Is.EqualTo(2));
@@ -118,7 +118,7 @@ public class NewAccessControlTelemetryTests
     [Test]
     public void TryEnterExclusiveAccess_WithDeepMode_LogsAcquired()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
         var target = new MockContentionTarget { TelemetryLevel = TelemetryLevel.Deep };
 
         var result = control.TryEnterExclusiveAccess(target: target);
@@ -134,11 +134,11 @@ public class NewAccessControlTelemetryTests
     [Test]
     public void TryEnterExclusiveAccess_WhenLocked_NoDeepModeCallbacks()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
         var target = new MockContentionTarget { TelemetryLevel = TelemetryLevel.Deep };
 
         // Lock first
-        control.EnterExclusiveAccess();
+        control.EnterExclusiveAccess(ref WaitContext.Null);
 
         // Try should fail
         var result = control.TryEnterExclusiveAccess(target: target);
@@ -153,11 +153,11 @@ public class NewAccessControlTelemetryTests
     [Test]
     public void DemoteFromExclusiveAccess_WithDeepMode_LogsDemote()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
         var target = new MockContentionTarget { TelemetryLevel = TelemetryLevel.Deep };
 
-        control.EnterSharedAccess(target: target);
-        var promoted = control.TryPromoteToExclusiveAccess(target: target);
+        control.EnterSharedAccess(ref WaitContext.Null, target: target);
+        var promoted = control.TryPromoteToExclusiveAccess(ref WaitContext.Null, target: target);
 
         if (promoted)
         {
@@ -180,14 +180,14 @@ public class NewAccessControlTelemetryTests
     [CancelAfter(5000)]
     public void EnterExclusiveAccess_WithLightMode_RecordsContention()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
         var target = new MockContentionTarget { TelemetryLevel = TelemetryLevel.Light };
         var barrier = new Barrier(2);
 
         // Thread 1 holds exclusive, Thread 2 waits
         var t1 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(target: target);
+            control.EnterExclusiveAccess(ref WaitContext.Null, target: target);
             barrier.SignalAndWait();
             Thread.Sleep(50);  // Hold lock
             control.ExitExclusiveAccess(target: target);
@@ -196,7 +196,7 @@ public class NewAccessControlTelemetryTests
         barrier.SignalAndWait();
         Thread.Sleep(10);  // Ensure T1 has lock
 
-        control.EnterExclusiveAccess(target: target);  // Should wait and record contention
+        control.EnterExclusiveAccess(ref WaitContext.Null, target: target);  // Should wait and record contention
         control.ExitExclusiveAccess(target: target);
 
         t1.Wait();
@@ -213,14 +213,14 @@ public class NewAccessControlTelemetryTests
     [CancelAfter(5000)]
     public void EnterSharedAccess_WhenExclusiveHeld_WithLightMode_RecordsContention()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
         var target = new MockContentionTarget { TelemetryLevel = TelemetryLevel.Light };
         var barrier = new Barrier(2);
 
         // Thread 1 holds exclusive, Thread 2 tries shared
         var t1 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(target: target);
+            control.EnterExclusiveAccess(ref WaitContext.Null, target: target);
             barrier.SignalAndWait();
             Thread.Sleep(50);  // Hold lock
             control.ExitExclusiveAccess(target: target);
@@ -229,7 +229,7 @@ public class NewAccessControlTelemetryTests
         barrier.SignalAndWait();
         Thread.Sleep(10);  // Ensure T1 has lock
 
-        control.EnterSharedAccess(target: target);  // Should wait and record contention
+        control.EnterSharedAccess(ref WaitContext.Null, target: target);  // Should wait and record contention
         control.ExitSharedAccess(target: target);
 
         t1.Wait();
@@ -245,7 +245,7 @@ public class NewAccessControlTelemetryTests
     [CancelAfter(10000)]
     public void ConcurrentAccess_WithLightModeTelemetry_RecordsContention()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
         var target = new MockContentionTarget { TelemetryLevel = TelemetryLevel.Light };
         var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
 
@@ -253,7 +253,8 @@ public class NewAccessControlTelemetryTests
         {
             for (int j = 0; j < 100 && !cts.Token.IsCancellationRequested; j++)
             {
-                control.EnterExclusiveAccess(token: cts.Token, target: target);
+                var ctx = WaitContext.FromToken(cts.Token);
+                control.EnterExclusiveAccess(ref ctx, target: target);
                 Thread.SpinWait(10);
                 control.ExitExclusiveAccess(target: target);
             }
@@ -270,7 +271,7 @@ public class NewAccessControlTelemetryTests
     [CancelAfter(10000)]
     public void ConcurrentAccess_WithDeepModeTelemetry_LogsAllOperations()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
         var target = new MockContentionTarget { TelemetryLevel = TelemetryLevel.Deep };
         var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
         var operationCount = 0;
@@ -279,7 +280,8 @@ public class NewAccessControlTelemetryTests
         {
             for (int j = 0; j < 25 && !cts.Token.IsCancellationRequested; j++)
             {
-                control.EnterExclusiveAccess(token: cts.Token, target: target);
+                var ctx = WaitContext.FromToken(cts.Token);
+                control.EnterExclusiveAccess(ref ctx, target: target);
                 Thread.SpinWait(10);
                 control.ExitExclusiveAccess(target: target);
                 Interlocked.Increment(ref operationCount);
@@ -297,13 +299,13 @@ public class NewAccessControlTelemetryTests
     [Test]
     public void MultipleSharedAccess_WithDeepMode_LogsAllOperations()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
         var target = new MockContentionTarget { TelemetryLevel = TelemetryLevel.Deep };
 
         // Multiple shared readers should all succeed
-        control.EnterSharedAccess(target: target);
-        control.EnterSharedAccess(target: target);
-        control.EnterSharedAccess(target: target);
+        control.EnterSharedAccess(ref WaitContext.Null, target: target);
+        control.EnterSharedAccess(ref WaitContext.Null, target: target);
+        control.EnterSharedAccess(ref WaitContext.Null, target: target);
         control.ExitSharedAccess(target: target);
         control.ExitSharedAccess(target: target);
         control.ExitSharedAccess(target: target);
@@ -321,18 +323,18 @@ public class NewAccessControlTelemetryTests
     [Test]
     public void MixedTelemetryLevels_OnlyDeepLogsOperations()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
         var lightTarget = new MockContentionTarget { TelemetryLevel = TelemetryLevel.Light };
         var deepTarget = new MockContentionTarget { TelemetryLevel = TelemetryLevel.Deep };
 
         // Light mode: no operations logged
-        control.EnterExclusiveAccess(target: lightTarget);
+        control.EnterExclusiveAccess(ref WaitContext.Null, target: lightTarget);
         control.ExitExclusiveAccess(target: lightTarget);
 
         Assert.That(lightTarget.Operations.Count, Is.EqualTo(0), "Light mode should not log operations");
 
         // Deep mode: operations logged
-        control.EnterExclusiveAccess(target: deepTarget);
+        control.EnterExclusiveAccess(ref WaitContext.Null, target: deepTarget);
         control.ExitExclusiveAccess(target: deepTarget);
 
         Assert.That(deepTarget.Operations.Count, Is.EqualTo(2), "Deep mode should log operations");
@@ -341,24 +343,24 @@ public class NewAccessControlTelemetryTests
     [Test]
     public void TelemetryLevelChange_DynamicallyRespected()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
         var target = new MockContentionTarget { TelemetryLevel = TelemetryLevel.None };
 
         // Start with None - no logging
-        control.EnterExclusiveAccess(target: target);
+        control.EnterExclusiveAccess(ref WaitContext.Null, target: target);
         control.ExitExclusiveAccess(target: target);
         Assert.That(target.Operations.Count, Is.EqualTo(0));
 
         // Change to Deep - should log
         target.TelemetryLevel = TelemetryLevel.Deep;
-        control.EnterExclusiveAccess(target: target);
+        control.EnterExclusiveAccess(ref WaitContext.Null, target: target);
         control.ExitExclusiveAccess(target: target);
         Assert.That(target.Operations.Count, Is.EqualTo(2));
 
         // Change back to None - no more logging
         target.Reset();
         target.TelemetryLevel = TelemetryLevel.None;
-        control.EnterExclusiveAccess(target: target);
+        control.EnterExclusiveAccess(ref WaitContext.Null, target: target);
         control.ExitExclusiveAccess(target: target);
         Assert.That(target.Operations.Count, Is.EqualTo(0));
     }
@@ -367,14 +369,14 @@ public class NewAccessControlTelemetryTests
     [CancelAfter(5000)]
     public void TimeoutWithTelemetry_LogsTimedOut()
     {
-        var control = new NewAccessControl();
+        var control = new AccessControl();
         var target = new MockContentionTarget { TelemetryLevel = TelemetryLevel.Deep };
         var barrier = new Barrier(2);
 
         // Thread 1 holds exclusive indefinitely
         var t1 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess();
+            control.EnterExclusiveAccess(ref WaitContext.Null);
             barrier.SignalAndWait();
             Thread.Sleep(500);  // Hold lock longer than timeout
             control.ExitExclusiveAccess();
@@ -384,7 +386,8 @@ public class NewAccessControlTelemetryTests
         Thread.Sleep(10);  // Ensure T1 has lock
 
         // Thread 2 should timeout
-        var result = control.EnterExclusiveAccess(timeOut: TimeSpan.FromMilliseconds(50), target: target);
+        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(50));
+        var result = control.EnterExclusiveAccess(ref ctx, target: target);
 
         Assert.That(result, Is.False, "Should have timed out");
         Assert.That(target.Operations, Has.Some.Matches<(LockOperation Op, long DurationUs)>(x => x.Op == LockOperation.ExclusiveWaitStart));

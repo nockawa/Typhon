@@ -149,7 +149,7 @@ public unsafe class VariableSizedBufferSegmentBase
         }
     }
 
-    internal void LockBuffer(ref VariableSizedBufferRootHeader rh) => rh.Lock.EnterExclusiveAccess();
+    internal void LockBuffer(ref VariableSizedBufferRootHeader rh) => rh.Lock.EnterExclusiveAccess(ref WaitContext.Null);
     internal void ReleaseLockOnBuffer(ref VariableSizedBufferRootHeader header) => header.Lock.ExitExclusiveAccess();
 }
 
@@ -508,7 +508,7 @@ public ref struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanag
         ref var rh = ref _rootChunkHandle.AsRef<VariableSizedBufferRootHeader>();
 
         // Enter read mode
-        rh.Lock.EnterSharedAccess();
+        rh.Lock.EnterSharedAccess(ref WaitContext.Null);
 
         // Switch to the first chunk that contains stored data
         _curChunkId = _rootChunkId;
@@ -548,7 +548,7 @@ public ref struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanag
             ref var rootChunk = ref _rootChunkHandle.AsRef<VariableSizedBufferRootHeader>();
 
             // Try to promote the Buffer from read to read/write because we need to make changes
-            if (rootChunk.Lock.TryPromoteToExclusiveAccess())
+            if (rootChunk.Lock.TryPromoteToExclusiveAccess(ref WaitContext.Null))
             {
                 // Try to promote the root chunk to read/write access
                 if (_accessor.TryPromoteChunk(_rootChunkId))

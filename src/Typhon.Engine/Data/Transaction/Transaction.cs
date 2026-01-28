@@ -1176,7 +1176,7 @@ public unsafe class Transaction : IDisposable
 
         // If this transaction is the oldest (the tail), we can remove the previous revision (if any), it is also the right place and time to clean up void
         //  revisions (the entry of a rolled back commit)
-        _dbe.TransactionChain.Control.EnterSharedAccess();
+        _dbe.TransactionChain.Control.EnterSharedAccess(ref WaitContext.Null);
         var isTail = _dbe.TransactionChain.Tail == this;
         long nextMinTSN = isTail ? _dbe.TransactionChain.Tail.Next?.TSN ?? _dbe.TransactionChain.NextFreeId : 0;
         _dbe.TransactionChain.Control.ExitSharedAccess();

@@ -84,7 +84,7 @@ public unsafe abstract class ChainedBlockAllocatorBase : BlockAllocatorBase
 
         public bool RequestEnumeration(out int chainGeneration)
         {
-            AccessControl.EnterSharedAccess();
+            AccessControl.EnterSharedAccess(ref WaitContext.Null);
             var newData = _data;
             if ((newData & FreeRequested) != 0)
             {
@@ -276,7 +276,7 @@ public unsafe abstract class ChainedBlockAllocatorBase : BlockAllocatorBase
         
         var chainRootBlockId = blockHeader.GetChainRootBlockId(blockId);
         ref var chainRootHeader = ref GetBlockAsSpanInternal(chainRootBlockId).Cast<byte, BlockHeader>()[0];
-        chainRootHeader.AccessControl.EnterExclusiveAccess();
+        chainRootHeader.AccessControl.EnterExclusiveAccess(ref WaitContext.Null);
         
         var oldNextBlockId = blockHeader.NextBlockId;
         var chainGen = chainRootHeader.ChainGeneration;
@@ -355,7 +355,7 @@ public unsafe abstract class ChainedBlockAllocatorBase : BlockAllocatorBase
     public Span<byte> SafeAppend(int blockId, out int newBlockId)
     {
         ref var rootHeader = ref GetBlockAsSpanInternal(blockId).Cast<byte, BlockHeader>()[0];
-        rootHeader.AccessControl.EnterExclusiveAccess();
+        rootHeader.AccessControl.EnterExclusiveAccess(ref WaitContext.Null);
 
         Span<byte> span;
         if (rootHeader.NextBlockId == 0)
@@ -441,7 +441,7 @@ public unsafe abstract class ChainedBlockAllocatorBase : BlockAllocatorBase
         
         // Signal we want to free the block
         rootHeader.RequestFree();
-        rootHeader.AccessControl.EnterExclusiveAccess();
+        rootHeader.AccessControl.EnterExclusiveAccess(ref WaitContext.Null);
 
         if (generation == rootHeader.ChainGeneration)
         {
