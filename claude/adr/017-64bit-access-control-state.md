@@ -1,6 +1,6 @@
 # ADR-017: 64-Bit Atomic State for AccessControl
 
-**Status**: Accepted
+**Status**: Accepted (thread ID field width superseded by [ADR-031](031-unified-concurrency-patterns.md))
 **Date**: 2024-09 (inferred from implementation)
 **Deciders**: Developer
 

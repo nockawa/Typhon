@@ -70,15 +70,16 @@ What becomes easier or more difficult because of this decision?
 | [014](014-no-point-in-time-recovery.md) | No Point-in-Time Recovery (WAL Recycled After Checkpoint) | Accepted | 2025-01 |
 | [015](015-crc32c-page-checksums.md) | CRC32C Hardware-Accelerated Page Checksums | Accepted | 2025-01 |
 
-### Concurrency & Synchronization (016–020)
+### Concurrency & Synchronization (016–020, 031)
 
 | # | Title | Status | Date |
 |---|-------|--------|------|
 | [016](016-three-mode-resource-access-control.md) | Three-Mode ResourceAccessControl (ACCESSING/MODIFY/DESTROY) | Accepted | 2025-01 |
-| [017](017-64bit-access-control-state.md) | 64-Bit Atomic State for AccessControl | Accepted | 2024-09 |
+| [017](017-64bit-access-control-state.md) | 64-Bit Atomic State for AccessControl | Partially superseded by 031 | 2024-09 |
 | [018](018-adaptive-spin-wait.md) | Adaptive Spin-Wait (No Allocation Contention) | Accepted | 2024-06 |
 | [019](019-runtime-telemetry-toggle.md) | Runtime Telemetry Toggle via Static Readonly | Accepted | 2025-01 |
 | [020](020-dedicated-wal-writer-thread.md) | Dedicated WAL Writer Thread (Not ThreadPool) | Accepted | 2025-01 |
+| [031](031-unified-concurrency-patterns.md) | Unified Concurrency Patterns (WaitContext, Deadline, IContentionTarget) | Accepted | 2026-01 |
 
 ### Indexing & Queries (021–023)
 

@@ -463,19 +463,46 @@ Base class for concurrent collection implementations.
 
 Locks and waiting primitives for concurrent access control.
 
-## E.1 AccessControl (Reader-Writer Lock)
+## E.1 AccessControl Family
 
 ### Purpose
 
-High-performance reader-writer lock allowing multiple shared readers OR one exclusive writer.
+High-performance synchronization primitives for concurrent access control. The family consists of three specialized types, all using **16-bit thread IDs** (max 65,535) to support servers with 500+ cores.
 
 ### Variants
 
 | Type | Size | Features |
 |------|------|----------|
 | **AccessControl** | 8 bytes | Full-featured RW lock with telemetry, promote/demote, waiter tracking |
-| **AccessControlSmall** | 4 bytes | Compact version for high-density scenarios |
-| **ResourceAccessControl** | 4 bytes | 3-mode lifecycle lock (Accessing/Modify/Destroy) |
+| **AccessControlSmall** | 4 bytes | Compact version for high-density scenarios (B+Tree nodes, page headers) |
+| **ResourceAccessControl** | 4 bytes | 3-mode lifecycle lock (Accessing/Modify/Destroy) for resource management |
+
+### Timeout Pattern: WaitContext + Deadline
+
+All three primitives use a unified timeout/cancellation pattern via `WaitContext` and `Deadline`:
+
+```csharp
+// WaitContext: combines timeout and cancellation
+public ref struct WaitContext
+{
+    public Deadline Deadline;           // Absolute deadline
+    public CancellationToken Token;     // Cancellation support
+
+    // Factory methods
+    public static WaitContext Infinite();                    // No timeout
+    public static WaitContext FromTimeout(TimeSpan timeout); // Relative timeout
+    public static WaitContext FromDeadline(Deadline deadline);
+}
+
+// Deadline: high-resolution monotonic timestamp
+public readonly struct Deadline
+{
+    public static Deadline Infinite { get; }
+    public static Deadline FromTimeout(TimeSpan timeout);
+    public bool IsExpired { get; }
+    public TimeSpan Remaining { get; }
+}
+```
 
 ### Design (AccessControl)
 
@@ -502,25 +529,49 @@ public struct AccessControl
 }
 ```
 
-### Bit Layout (64-bit)
+### Bit Layout (AccessControl - 64-bit)
 
 ```
 Bits  0-7:   Shared Usage Counter (8 bits)
 Bits  8-15:  Shared Waiters Counter (8 bits)
 Bits 16-23:  Exclusive Waiters (8 bits)
 Bits 24-31:  Promoter Waiters (8 bits)
-Bits 32-51:  Operations Block Id (20 bits, telemetry only)
-Bits 52-61:  Thread Id (10 bits)
-Bits 62-63:  State (2 bits: Idle/Shared/Exclusive)
+Bits 32-47:  Thread Id (16 bits)
+Bits 48-63:  Reserved / State (16 bits)
 ```
 
-### Telemetry Mode
+### Telemetry Support
 
-When built with `TELEMETRY` define, operations are logged to a chain of blocks for debugging deadlocks and contention analysis.
+All three primitives support **IContentionTarget** callbacks for per-resource telemetry:
 
-### Code Location
+```csharp
+public interface IContentionTarget
+{
+    TelemetryLevel TelemetryLevel { get; }  // None, Light, Deep
+    void RecordContention(long waitUs);      // Light mode
+    void LogLockOperation(LockOperation op, long durationUs);  // Deep mode
+}
+```
 
-`src/Typhon.Engine/Misc/AccessControl/AccessControl.cs`
+See [09-observability.md](09-observability.md#track-4-per-resource-telemetry-icontentiontarget) for details.
+
+### Code Locations
+
+| Type | Location |
+|------|----------|
+| AccessControl | `src/Typhon.Engine/Concurrency/AccessControl.cs` |
+| AccessControlSmall | `src/Typhon.Engine/Concurrency/AccessControlSmall.cs` |
+| ResourceAccessControl | `src/Typhon.Engine/Concurrency/ResourceAccessControl.cs` |
+| WaitContext | `src/Typhon.Engine/Concurrency/WaitContext.cs` |
+| Deadline | `src/Typhon.Engine/Concurrency/Deadline.cs` |
+
+### Reference Documentation
+
+For detailed design rationale and specifications, see:
+- [AccessControlFamily.md](../reference/concurrency/AccessControlFamily.md)
+- [AccessControl.md](../reference/concurrency/AccessControl.md)
+- [WaitContext.md](../reference/concurrency/WaitContext.md)
+- [Deadline.md](../reference/concurrency/Deadline.md)
 
 ---
 
@@ -948,8 +999,10 @@ public static class Compression
 | C | SpanHelpers, SpanStream | `src/Typhon.Engine/Misc/SpanHelpers.cs` |
 | D | Concurrent Bitmaps | `src/Typhon.Engine/Collections/` |
 | D | ConcurrentArray | `src/Typhon.Engine/Collections/ConcurrentArray.cs` |
-| E | AccessControl | `src/Typhon.Engine/Misc/AccessControl/` |
-| E | AccessControlSmall | `src/Typhon.Engine/Misc/AccessControlSmall.cs` |
+| E | AccessControl | `src/Typhon.Engine/Concurrency/AccessControl.cs` |
+| E | AccessControlSmall | `src/Typhon.Engine/Concurrency/AccessControlSmall.cs` |
+| E | ResourceAccessControl | `src/Typhon.Engine/Concurrency/ResourceAccessControl.cs` |
+| E | WaitContext, Deadline | `src/Typhon.Engine/Concurrency/` |
 | E | AdaptiveWaiter | `src/Typhon.Engine/Misc/AdaptiveWaiter.cs` |
 | F | Block Allocators | `src/Typhon.Engine/Misc/BlockAllocator/` |
 | F | Memory Allocators | `src/Typhon.Engine/Misc/MemoryAllocator/` |
