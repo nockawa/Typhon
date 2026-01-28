@@ -471,24 +471,24 @@ Root ─────────────────────────
 │   │   • Exhaustion: Evict → Wait (if all pinned)
 │   │
 │   ├── SegmentManager ──────────────────────────────── [Capacity, Throughput]
-│   │   ├── Segment: ComponentSegment<T> ──────────────── [Memory, Capacity]
-│   │   ├── Segment: RevisionSegment<T> ───────────────── [Memory, Capacity]
-│   │   ├── Segment: IndexSegment<T> ─────────────────── [Memory, Capacity]
-│   │   └── Segment: StringTableSegment ──────────────── [Memory, Capacity]
+│   │   ├── Segment: ComponentSegment<T> ────────────── [Memory, Capacity]
+│   │   ├── Segment: RevisionSegment<T> ─────────────── [Memory, Capacity]
+│   │   ├── Segment: IndexSegment<T> ────────────────── [Memory, Capacity]
+│   │   └── Segment: StringTableSegment ─────────────── [Memory, Capacity]
 │   │
-│   └── ChunkAccessorCache ──────────────────────── [Capacity, Throughput]
+│   └── ChunkAccessorCache ──────────────────────────── [Capacity, Throughput]
 │       • 16 SIMD-optimized slots per accessor
 │       • Exhaustion: LRU eviction (self-healing)
 │
-├── DataEngine ───────────────────────────────────────────── [Memory(aggregate)]
+├── DataEngine ──────────────────────────────────────── [Memory(aggregate)]
 │   ├── TransactionPool ────────────────── [Capacity, Throughput, Duration]
 │   │   • 16 pooled instances, active count ≤ 1000
 │   │   • Config: ResourceOptions.MaxActiveTransactions
 │   │   • Exhaustion: FailFast beyond max
 │   │
 │   ├── ComponentTable<T₁> ─────────── [Memory, Contention, Throughput]
-│   │   ├── PrimaryKeyIndex ──────────── [Capacity, Throughput, Duration]
-│   │   └── SecondaryIndex<Field> ────── [Capacity, Throughput]
+│   │   ├── PrimaryKeyIndex ────────── [Capacity, Throughput, Duration]
+│   │   └── SecondaryIndex<Field> ──── [Capacity, Throughput]
 │   │
 │   ├── ComponentTable<T₂> ─────────── ...
 │   └── ...
@@ -574,7 +574,7 @@ Pool ──→ Borrow ──→ Use ──→ Release
          └─── Create if empty ──┘
 ```
 
-**Resources**: Transaction pool, ExecutionContext pool, UoW epoch slots.
+**Resources**: Transaction pool, UnitOfWorkContext pool, UoW epoch slots.
 
 Capacity metric tracks `borrowed / poolSize`. Throughput tracks borrow/return rate.
 

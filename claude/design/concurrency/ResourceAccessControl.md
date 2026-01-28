@@ -23,19 +23,19 @@ This primitive is specifically designed for data structures like linked chains, 
 - **No allocations**: No wait queue, no heap allocations
 - **Lock-free fast path**: All state changes via `Interlocked.CompareExchange`
 - **SpinWait for contention**: Waiters use `SpinWait` to yield CPU efficiently
-- **API consistency**: Follow `Enter`/`Exit` naming pattern from `NewAccessControl` and `AccessControlSmall`
+- **API consistency**: Follow `Enter`/`Exit` naming pattern from `AccessControl` and `AccessControlSmall`
 
 ### 1.2 Relationship to Other Types
 
 | Type | Size | Modes | Telemetry | Use Case |
 |------|------|-------|-----------|----------|
 | `AccessControlSmall` | 32-bit | Shared/Exclusive | None | Compact traditional RW lock |
-| `NewAccessControl` | 64-bit | Shared/Exclusive | `IContentionTarget` callback | Full-featured RW lock with diagnostics |
+| `AccessControl` | 64-bit | Shared/Exclusive | `IContentionTarget` callback | Full-featured RW lock with diagnostics |
 | `ResourceAccessControl` | 32-bit | Accessing/Modify/Destroy | `IContentionTarget` callback | Resource lifecycle management |
 
 **Key difference**: In `ResourceAccessControl`, MODIFY is **compatible** with ACCESSING. Modifiers can execute while accessors are active (for append-only/extend-only operations).
 
-**Telemetry pattern**: Like `NewAccessControl`, telemetry is implemented via the `IContentionTarget` callback interface. Resources that want contention telemetry implement this interface and pass themselves to the Enter methods. The lock calls back on contention events. See [Observability: Track 4](../../overview/09-observability.md#track-4-per-resource-telemetry-icontentiontarget).
+**Telemetry pattern**: Like `AccessControl`, telemetry is implemented via the `IContentionTarget` callback interface. Resources that want contention telemetry implement this interface and pass themselves to the Enter methods. The lock calls back on contention events. See [Observability: Track 4](../../overview/09-observability.md#track-4-per-resource-telemetry-icontentiontarget).
 
 ---
 
@@ -196,11 +196,12 @@ DESTROY takes priority over MODIFY_PENDING:
 ┌─────────────────────────────────────────────────────────────────┐
 │                         32-bit State                            │
 ├─────────────────────────────────────────────────────────────────┤
-│ Bits 0-9    │ ACCESSING count (0 to 1,023)                      │
-│ Bits 10-19  │ MODIFY holder Thread ID (0 = not held)            │
-│ Bit 20      │ MODIFY_PENDING flag                               │
-│ Bit 21      │ DESTROY flag (terminal, never cleared)            │
-│ Bits 22-31  │ Reserved (for future use)                         │
+│ Bits 0-7    │ ACCESSING count (0 to 255)                        │
+│ Bits 8-23   │ MODIFY holder Thread ID (16 bits, 0 = not held)   │
+│ Bit 24      │ MODIFY_PENDING flag                               │
+│ Bit 25      │ DESTROY flag (terminal, never cleared)            │
+│ Bit 26      │ CONTENTION flag (sticky, set when thread waits)   │
+│ Bits 27-31  │ Reserved (5 bits, for future use)                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -209,14 +210,15 @@ DESTROY takes priority over MODIFY_PENDING:
 ### 6.2 Constants
 
 ```csharp
-private const int ACCESSING_COUNT_MASK   = 0x0000_03FF;  // Bits 0-9
-private const int THREAD_ID_MASK         = 0x000F_FC00;  // Bits 10-19
-private const int MODIFY_PENDING_FLAG    = 0x0010_0000;  // Bit 20
-private const int DESTROY_FLAG           = 0x0020_0000;  // Bit 21
-// Bits 22-31 reserved for future use
+private const int ACCESSING_COUNT_MASK   = 0x0000_00FF;  // Bits 0-7
+private const int THREAD_ID_MASK         = 0x00FF_FF00;  // Bits 8-23
+private const int MODIFY_PENDING_FLAG    = 0x0100_0000;  // Bit 24
+private const int DESTROY_FLAG           = 0x0200_0000;  // Bit 25
+private const int CONTENTION_FLAG        = 0x0400_0000;  // Bit 26
+// Bits 27-31 reserved for future use
 
-private const int THREAD_ID_SHIFT        = 10;
-private const int MAX_ACCESSING_COUNT    = 1023;
+private const int THREAD_ID_SHIFT        = 8;
+private const int MAX_ACCESSING_COUNT    = 255;
 ```
 
 ### 6.3 Helper Methods
@@ -256,11 +258,10 @@ public struct ResourceAccessControl
     /// Enter ACCESSING mode, spinning if necessary.
     /// Spins while MODIFY_PENDING or DESTROY is set.
     /// </summary>
-    /// <param name="timeOut">Optional timeout. Null means wait indefinitely.</param>
-    /// <param name="token">Optional cancellation token.</param>
+    /// <param name="ctx">Wait context (deadline + cancellation). Pass NullRef for infinite wait.</param>
     /// <param name="target">Optional telemetry target. Receives callbacks on contention.</param>
-    /// <returns>True if acquired, false if timed out or canceled</returns>
-    public bool EnterAccessing(TimeSpan? timeOut = null, CancellationToken token = default,
+    /// <returns>True if acquired, false if deadline expired or cancellation requested.</returns>
+    public bool EnterAccessing(ref WaitContext ctx,
         IContentionTarget target = null);
 
     /// <summary>
@@ -286,11 +287,10 @@ public struct ResourceAccessControl
     /// Sets MODIFY_PENDING and spins until ACCESSING count reaches zero.
     /// Spins while DESTROY is set or another MODIFY is held.
     /// </summary>
-    /// <param name="timeOut">Optional timeout. Null means wait indefinitely.</param>
-    /// <param name="token">Optional cancellation token.</param>
+    /// <param name="ctx">Wait context (deadline + cancellation). Pass NullRef for infinite wait.</param>
     /// <param name="target">Optional telemetry target. Receives callbacks on contention.</param>
-    /// <returns>True if acquired, false if timed out or canceled</returns>
-    public bool EnterModify(TimeSpan? timeOut = null, CancellationToken token = default,
+    /// <returns>True if acquired, false if deadline expired or cancellation requested.</returns>
+    public bool EnterModify(ref WaitContext ctx,
         IContentionTarget target = null);
 
     /// <summary>
@@ -308,11 +308,10 @@ public struct ResourceAccessControl
     /// Caller must hold ACCESSING. On success, caller holds MODIFY instead.
     /// Sets MODIFY_PENDING to block new ACCESSING, waits for count to drain to 1.
     /// </summary>
-    /// <param name="timeOut">Optional timeout. Null means wait indefinitely.</param>
-    /// <param name="token">Optional cancellation token.</param>
+    /// <param name="ctx">Wait context (deadline + cancellation). Pass NullRef for infinite wait.</param>
     /// <param name="target">Optional telemetry target. Receives callbacks on contention.</param>
-    /// <returns>True if promoted, false if timed out, canceled, or DESTROY is set</returns>
-    public bool TryPromoteToModify(TimeSpan? timeOut = null, CancellationToken token = default,
+    /// <returns>True if promoted, false if deadline expired, cancellation requested, or DESTROY is set.</returns>
+    public bool TryPromoteToModify(ref WaitContext ctx,
         IContentionTarget target = null);
 
     /// <summary>
@@ -331,11 +330,10 @@ public struct ResourceAccessControl
     /// Sets DESTROY flag and spins until ACCESSING=0 and MODIFY not held.
     /// This is a terminal operation - the primitive cannot be reused after success.
     /// </summary>
-    /// <param name="timeOut">Optional timeout. Null means wait indefinitely.</param>
-    /// <param name="token">Optional cancellation token.</param>
+    /// <param name="ctx">Wait context (deadline + cancellation). Pass NullRef for infinite wait.</param>
     /// <param name="target">Optional telemetry target. Receives callbacks on contention.</param>
-    /// <returns>True if acquired, false if timed out or canceled</returns>
-    public bool EnterDestroy(TimeSpan? timeOut = null, CancellationToken token = default,
+    /// <returns>True if acquired, false if deadline expired or cancellation requested.</returns>
+    public bool EnterDestroy(ref WaitContext ctx,
         IContentionTarget target = null);
 
     // No ExitDestroy - destruction is final
@@ -352,7 +350,7 @@ public struct ResourceAccessControl
 }
 ```
 
-> **Telemetry Pattern**: The `IContentionTarget target` parameter follows the same pattern as `NewAccessControl`. When `target` is null (the default), no telemetry overhead occurs. When provided, the lock calls back to the target based on its `TelemetryLevel`:
+> **Telemetry Pattern**: The `IContentionTarget target` parameter follows the same pattern as `AccessControl`. When `target` is null (the default), no telemetry overhead occurs. When provided, the lock calls back to the target based on its `TelemetryLevel`:
 > - **None**: No callbacks (zero overhead)
 > - **Light**: `RecordContention(waitUs)` called when thread had to wait
 > - **Deep**: `LogLockOperation(op, durationUs)` called for every Enter/Exit
@@ -365,7 +363,7 @@ public struct ResourceAccessControl
     /// <summary>True if MODIFY is held by the current thread.</summary>
     public bool IsModifyHeldByCurrentThread { get; }
 
-    /// <summary>Thread ID holding MODIFY (truncated to 10 bits), or 0 if not held.</summary>
+    /// <summary>Thread ID holding MODIFY (16 bits), or 0 if not held.</summary>
     public int ModifyHolderThreadId { get; }
 
     /// <summary>Current ACCESSING count.</summary>
@@ -376,6 +374,12 @@ public struct ResourceAccessControl
 
     /// <summary>True if DESTROY has been acquired (terminal state).</summary>
     public bool IsDestroyed { get; }
+
+    /// <summary>
+    /// Returns true if this lock has ever experienced contention (a thread had to wait).
+    /// This flag is sticky - once set, it remains set until Reset() is called.
+    /// </summary>
+    public bool WasContended { get; }
 
     /// <summary>Get complete diagnostic state snapshot.</summary>
     public ResourceAccessControlState GetDiagnosticState();
@@ -403,16 +407,16 @@ public struct ResourceAccessControl
     /// <summary>
     /// Enter ACCESSING and return a disposable guard that exits on dispose.
     /// </summary>
-    /// <exception cref="TimeoutException">If acquisition times out</exception>
-    /// <exception cref="OperationCanceledException">If canceled</exception>
-    public AccessingGuard EnterAccessingScoped(TimeSpan? timeOut = null, CancellationToken token = default);
+    /// <param name="ctx">Wait context (deadline + cancellation). Pass NullRef for infinite wait.</param>
+    /// <exception cref="TimeoutException">If deadline expires before acquisition.</exception>
+    public AccessingGuard EnterAccessingScoped(ref WaitContext ctx);
 
     /// <summary>
     /// Enter MODIFY and return a disposable guard that exits on dispose.
     /// </summary>
-    /// <exception cref="TimeoutException">If acquisition times out</exception>
-    /// <exception cref="OperationCanceledException">If canceled</exception>
-    public ModifyGuard EnterModifyScoped(TimeSpan? timeOut = null, CancellationToken token = default);
+    /// <param name="ctx">Wait context (deadline + cancellation). Pass NullRef for infinite wait.</param>
+    /// <exception cref="TimeoutException">If deadline expires before acquisition.</exception>
+    public ModifyGuard EnterModifyScoped(ref WaitContext ctx);
 }
 
 public readonly ref struct AccessingGuard
@@ -450,7 +454,7 @@ public readonly ref struct ModifyGuard
 Can acquire if:
   - MODIFY_PENDING = 0
   - DESTROY = 0
-  - ACCESSING count < MAX (1023)
+  - ACCESSING count < MAX (255)
 
 State change on success:
   ACCESSING count += 1
@@ -475,7 +479,7 @@ Can acquire if:
   - DESTROY = 0
 
 State change on success:
-  ThreadId = CurrentManagedThreadId & 0x3FF
+  ThreadId = CurrentManagedThreadId & 0xFFFF
 ```
 
 ### 8.4 EnterModify
@@ -496,7 +500,7 @@ Phase 2 - Acquire:
     - DESTROY = 0
 
   State change:
-    ThreadId = CurrentManagedThreadId & 0x3FF
+    ThreadId = CurrentManagedThreadId & 0xFFFF
     MODIFY_PENDING = 0
 ```
 
@@ -504,7 +508,7 @@ Phase 2 - Acquire:
 
 ```
 Precondition:
-  - ThreadId = CurrentManagedThreadId & 0x3FF
+  - ThreadId = CurrentManagedThreadId & 0xFFFF
 
 State change:
   ThreadId = 0
@@ -529,7 +533,7 @@ Phase 2 - Promote:
 
   State change (atomic):
     ACCESSING count = 0
-    ThreadId = CurrentManagedThreadId & 0x3FF
+    ThreadId = CurrentManagedThreadId & 0xFFFF
     MODIFY_PENDING = 0
 ```
 
@@ -537,7 +541,7 @@ Phase 2 - Promote:
 
 ```
 Precondition:
-  - ThreadId = CurrentManagedThreadId & 0x3FF
+  - ThreadId = CurrentManagedThreadId & 0xFFFF
 
 State change (atomic):
   ThreadId = 0
@@ -587,14 +591,14 @@ public bool TryEnterAccessing()
 ### 9.2 EnterAccessing
 
 ```csharp
-public bool EnterAccessing(TimeSpan? timeOut = null, CancellationToken token = default)
+public bool EnterAccessing(ref WaitContext ctx)
 {
-    DateTime deadline = timeOut.HasValue ? DateTime.UtcNow + timeOut.Value : DateTime.MaxValue;
+    bool isNullRef = Unsafe.IsNullRef(ref ctx);
     SpinWait spin = default;
 
     while (true)
     {
-        if (token.IsCancellationRequested || DateTime.UtcNow >= deadline)
+        if (!isNullRef && ctx.ShouldStop)
             return false;
 
         int state = Volatile.Read(ref _state);
@@ -661,7 +665,7 @@ public bool TryEnterModify()
     if (GetAccessingCount(state) > 0)
         return false;
 
-    int threadId = Environment.CurrentManagedThreadId & 0x3FF;
+    int threadId = Environment.CurrentManagedThreadId & 0xFFFF;
     int newState = (state & ~THREAD_ID_MASK) | (threadId << THREAD_ID_SHIFT);
 
     return Interlocked.CompareExchange(ref _state, newState, state) == state;
@@ -671,15 +675,15 @@ public bool TryEnterModify()
 ### 9.5 EnterModify
 
 ```csharp
-public bool EnterModify(TimeSpan? timeOut = null, CancellationToken token = default)
+public bool EnterModify(ref WaitContext ctx)
 {
-    DateTime deadline = timeOut.HasValue ? DateTime.UtcNow + timeOut.Value : DateTime.MaxValue;
+    bool isNullRef = Unsafe.IsNullRef(ref ctx);
     SpinWait spin = default;
-    int threadId = Environment.CurrentManagedThreadId & 0x3FF;
+    int threadId = Environment.CurrentManagedThreadId & 0xFFFF;
 
     while (true)
     {
-        if (token.IsCancellationRequested || DateTime.UtcNow >= deadline)
+        if (!isNullRef && ctx.ShouldStop)
             return false;
 
         int state = Volatile.Read(ref _state);
@@ -731,7 +735,7 @@ public bool EnterModify(TimeSpan? timeOut = null, CancellationToken token = defa
 public void ExitModify()
 {
     SpinWait spin = default;
-    int expectedThreadId = Environment.CurrentManagedThreadId & 0x3FF;
+    int expectedThreadId = Environment.CurrentManagedThreadId & 0xFFFF;
 
     while (true)
     {
@@ -753,15 +757,15 @@ public void ExitModify()
 ### 9.7 TryPromoteToModify
 
 ```csharp
-public bool TryPromoteToModify(TimeSpan? timeOut = null, CancellationToken token = default)
+public bool TryPromoteToModify(ref WaitContext ctx)
 {
-    DateTime deadline = timeOut.HasValue ? DateTime.UtcNow + timeOut.Value : DateTime.MaxValue;
+    bool isNullRef = Unsafe.IsNullRef(ref ctx);
     SpinWait spin = default;
-    int threadId = Environment.CurrentManagedThreadId & 0x3FF;
+    int threadId = Environment.CurrentManagedThreadId & 0xFFFF;
 
     while (true)
     {
-        if (token.IsCancellationRequested || DateTime.UtcNow >= deadline)
+        if (!isNullRef && ctx.ShouldStop)
             return false;
 
         int state = Volatile.Read(ref _state);
@@ -810,7 +814,7 @@ public bool TryPromoteToModify(TimeSpan? timeOut = null, CancellationToken token
 public void DemoteFromModify()
 {
     SpinWait spin = default;
-    int expectedThreadId = Environment.CurrentManagedThreadId & 0x3FF;
+    int expectedThreadId = Environment.CurrentManagedThreadId & 0xFFFF;
 
     while (true)
     {
@@ -833,15 +837,15 @@ public void DemoteFromModify()
 ### 9.9 EnterDestroy
 
 ```csharp
-public bool EnterDestroy(TimeSpan? timeOut = null, CancellationToken token = default)
+public bool EnterDestroy(ref WaitContext ctx)
 {
-    DateTime deadline = timeOut.HasValue ? DateTime.UtcNow + timeOut.Value : DateTime.MaxValue;
+    bool isNullRef = Unsafe.IsNullRef(ref ctx);
     SpinWait spin = default;
 
     // Phase 1: Set DESTROY flag
     while (true)
     {
-        if (token.IsCancellationRequested || DateTime.UtcNow >= deadline)
+        if (!isNullRef && ctx.ShouldStop)
             return false;
 
         int state = Volatile.Read(ref _state);
@@ -862,7 +866,7 @@ public bool EnterDestroy(TimeSpan? timeOut = null, CancellationToken token = def
 
     while (true)
     {
-        if (token.IsCancellationRequested || DateTime.UtcNow >= deadline)
+        if (!isNullRef && ctx.ShouldStop)
         {
             // Note: DESTROY flag remains set - primitive is now in a broken state
             // This is acceptable as destruction was requested but couldn't complete
@@ -1054,7 +1058,7 @@ public enum LockOperation : byte
 ### 11.3 Implementation Pattern
 
 ```csharp
-public bool EnterModify(TimeSpan? timeOut = null, CancellationToken token = default,
+public bool EnterModify(ref WaitContext ctx,
     IContentionTarget target = null)
 {
     var level = target?.TelemetryLevel ?? TelemetryLevel.None;
@@ -1139,7 +1143,8 @@ public class ChainedBlockAllocator : IContentionTarget
     // Usage: pass `this` as the telemetry target
     public void AppendBlock()
     {
-        _access.EnterModify(target: this);
+        // NullRef = infinite wait (internal operation)
+        _access.EnterModify(ref Unsafe.NullRef<WaitContext>(), target: this);
         try
         {
             // ... modification logic ...
@@ -1190,13 +1195,15 @@ public class ChainedBlockAllocator
 
     public Enumerator GetEnumerator()
     {
-        _access.EnterAccessing();
+        // NullRef = infinite wait (enumeration must succeed)
+        _access.EnterAccessing(ref Unsafe.NullRef<WaitContext>());
         return new Enumerator(this);
     }
 
     public void Destroy()
     {
-        if (!_access.EnterDestroy(TimeSpan.FromSeconds(30)))
+        var ctx = WaitContext.FromTimeout(TimeSpan.FromSeconds(30));
+        if (!_access.EnterDestroy(ref ctx))
             throw new TimeoutException("Could not acquire destroy lock");
 
         var current = _head;
@@ -1214,7 +1221,8 @@ public class ChainedBlockAllocator
 
     internal Block AppendBlock()
     {
-        _access.EnterModify();
+        // NullRef = infinite wait (internal structural modification)
+        _access.EnterModify(ref Unsafe.NullRef<WaitContext>());
 
         var newBlock = new Block();
         if (_tail != null)
@@ -1262,7 +1270,8 @@ public struct Enumerator : IDisposable
 ```csharp
 public void SafeModification()
 {
-    using var guard = _access.EnterModifyScoped();
+    // NullRef = infinite wait (must succeed)
+    using var guard = _access.EnterModifyScoped(ref Unsafe.NullRef<WaitContext>());
 
     // Modifications here...
     // Guard automatically calls ExitModify on dispose
@@ -1270,7 +1279,8 @@ public void SafeModification()
 
 public IEnumerable<Block> EnumerateBlocks()
 {
-    using var guard = _access.EnterAccessingScoped();
+    // NullRef = infinite wait (enumeration must succeed)
+    using var guard = _access.EnterAccessingScoped(ref Unsafe.NullRef<WaitContext>());
 
     var current = _head;
     while (current != null)
@@ -1292,10 +1302,12 @@ public IEnumerable<Block> EnumerateBlocks()
 | **Modes** | ACCESSING (multiple), MODIFY (single), DESTROY (terminal) |
 | **Key feature** | MODIFY compatible with ACCESSING (accessors not blocked) |
 | **Fairness** | MODIFY_PENDING flag blocks new ACCESSING when MODIFY waiting |
+| **WaitContext** | All blocking operations accept `ref WaitContext` (deadline + cancellation) |
 | **Wait mechanism** | `SpinWait` (no allocations) |
 | **Reentrancy** | ACCESSING only (via ref counting); MODIFY/DESTROY not reentrant |
-| **Max concurrent accessors** | 1,023 |
-| **Thread ID storage** | 10 bits (truncated) |
+| **Max concurrent accessors** | 255 |
+| **Thread ID storage** | 16 bits |
+| **Contention flag** | 1 bit (sticky, set when any thread had to wait) |
 | **Telemetry** | `IContentionTarget` callback interface (None/Light/Deep) |
 
 ### Mode Selection Guide
@@ -1310,7 +1322,7 @@ public IEnumerable<Block> EnumerateBlocks()
 
 ### API Consistency with Other Types
 
-| Operation | ResourceAccessControl | NewAccessControl | AccessControlSmall |
+| Operation | ResourceAccessControl | AccessControl | AccessControlSmall |
 |-----------|----------------------|------------------|-------------------|
 | Enter shared/accessing | `EnterAccessing()` | `EnterSharedAccess()` | `EnterSharedAccess()` |
 | Exit shared/accessing | `ExitAccessing()` | `ExitSharedAccess()` | `ExitSharedAccess()` |
@@ -1322,5 +1334,5 @@ public IEnumerable<Block> EnumerateBlocks()
 | Scoped guard | `EnterAccessingScoped()`, `EnterModifyScoped()` | — | — |
 | Destroy | `EnterDestroy()` | — | — |
 | Reset | `Reset()` | `Reset()` | `Reset()` |
-| Timeout/Cancellation | All Enter methods | All Enter methods | All Enter methods |
+| WaitContext | `ref WaitContext` on all Enter methods | `ref WaitContext` on all Enter methods | `ref WaitContext` on all Enter methods |
 | Telemetry | `IContentionTarget target` (last param) | `IContentionTarget target` (last param) | — |

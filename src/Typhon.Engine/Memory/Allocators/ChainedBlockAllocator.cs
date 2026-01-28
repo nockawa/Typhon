@@ -54,7 +54,7 @@ public class ChainedBlockAllocator<T> : ChainedBlockAllocatorBase where T : stru
     public unsafe ref T SafeAppend(ref T block)
     {
         var headerPtr = (BlockHeader*)Unsafe.AsPointer(ref block) - 1;
-        headerPtr->AccessControl.EnterExclusiveAccess();
+        headerPtr->AccessControl.EnterExclusiveAccess(ref WaitContext.Null);
         if (headerPtr->NextBlockId != 0)
         {
             headerPtr->AccessControl.ExitExclusiveAccess();

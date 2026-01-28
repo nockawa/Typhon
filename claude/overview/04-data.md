@@ -97,7 +97,7 @@ All transactions must be created from a UnitOfWork — there is no direct `Datab
 ```csharp
 public sealed class UnitOfWork : IDisposable, IAsyncDisposable
 {
-    public ExecutionContext Context { get; }
+    public UnitOfWorkContext Context { get; }
     public DurabilityMode DurabilityMode { get; }
     public ushort Epoch { get; }  // Allocated from UoW Registry
 
@@ -303,16 +303,16 @@ Doubly-linked list managing all active transactions:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                        TransactionChain                                  │
+│                        TransactionChain                                 │
 ├─────────────────────────────────────────────────────────────────────────┤
 │   Head ──────────────────────────────────────────────────────── Tail    │
-│    │                                                              │      │
-│    ▼                                                              ▼      │
-│  [T100] ◄──► [T99] ◄──► [T98] ◄──► [T97] ◄──► [T96] ◄──► [T95]         │
+│    │                                                              │     │
+│    ▼                                                              ▼     │
+│  [T100] ◄──► [T99] ◄──► [T98] ◄──► [T97] ◄──► [T96] ◄──► [T95]          │
 │  newest                                                      oldest     │
 ├─────────────────────────────────────────────────────────────────────────┤
-│   MinTSN = 95 (for GC: revisions with TSN < 95 can be cleaned)         │
-│   Pool: [T94, T93, T92, ...] (up to 16 reusable transactions)          │
+│   MinTSN = 95 (for GC: revisions with TSN < 95 can be cleaned)          │
+│   Pool: [T94, T93, T92, ...] (up to 16 reusable transactions)           │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -397,11 +397,11 @@ This provides cross-component atomicity without requiring cross-table locks — 
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                    ComponentTable<PlayerComponent>                       │
+│                    ComponentTable<PlayerComponent>                      │
 ├─────────────────────────────────────────────────────────────────────────┤
-│   DBComponentDefinition ──► Schema metadata                              │
+│   DBComponentDefinition ──► Schema metadata                             │
 ├─────────────────────────────────────────────────────────────────────────┤
-│   ComponentSegment (ChunkBasedSegment)                                   │
+│   ComponentSegment (ChunkBasedSegment)                                  │
 │     └── Stores actual PlayerComponent structs                           │
 ├─────────────────────────────────────────────────────────────────────────┤
 │   CompRevTableSegment (ChunkBasedSegment)                               │
@@ -410,10 +410,10 @@ This provides cross-component atomicity without requiring cross-table locks — 
 │   PrimaryKeyIndex (L64BTree)                                            │
 │     └── Maps EntityID (long) → RevisionChain first chunk                │
 ├─────────────────────────────────────────────────────────────────────────┤
-│   Secondary Indexes                                                      │
+│   Secondary Indexes                                                     │
 │     ├── L32BTree for int PlayerId field                                 │
 │     ├── String64BTree for String64 Name field                           │
-│     └── ...                                                              │
+│     └── ...                                                             │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -442,7 +442,7 @@ Stores MVCC history for each entity-component pair as a circular buffer of revis
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                      CompRevStorageHeader (58 bytes)                     │
+│                      CompRevStorageHeader (58 bytes)                    │
 ├─────────────────────────────────────────────────────────────────────────┤
 │   NextChunkId       : Linked list to next chunk                         │
 │   FirstItemRevision : Base revision number                              │
@@ -452,7 +452,7 @@ Stores MVCC history for each entity-component pair as a circular buffer of revis
 │   LastCommitRevision: For conflict detection                            │
 │   AccessControlSmall: Thread-safe lock                                  │
 ├─────────────────────────────────────────────────────────────────────────┤
-│                  CompRevStorageElement (12 bytes, Pack=2)                │
+│                  CompRevStorageElement (12 bytes, Pack=2)               │
 ├─────────────────────────────────────────────────────────────────────────┤
 │   Logical fields:                                                       │
 │     ComponentChunkId  : 32 bits (0 = deleted)                           │
@@ -462,9 +462,9 @@ Stores MVCC history for each entity-component pair as a circular buffer of revis
 │                                                                         │
 │   Physical layout (3 fields, 12 bytes):                                 │
 │     _componentChunkId : int    (4 bytes)                                │
-│     _packedTickHigh   : uint   (4 bytes) ─┐ TSN high 32 bits           │
-│     _packedTickLow    : ushort (2 bytes) ─┘ TSN low 15 bits + 1-bit IF │
-│     _uowEpoch         : ushort (2 bytes)   UoW epoch                   │
+│     _packedTickHigh   : uint   (4 bytes) ─┐ TSN high 32 bits            │
+│     _packedTickLow    : ushort (2 bytes) ─┘ TSN low 15 bits + 1-bit IF  │
+│     _uowEpoch         : ushort (2 bytes)   UoW epoch                    │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -532,9 +532,9 @@ Persistent B+Tree indexes for fast key-value lookups. Four variants optimized fo
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                        B+Tree Node (64 bytes)                            │
+│                        B+Tree Node (64 bytes)                           │
 ├─────────────────────────────────────────────────────────────────────────┤
-│   Control (4 bytes)                                                      │
+│   Control (4 bytes)                                                     │
 │     ├── Ownership bit (lock)                                            │
 │     ├── StateFlags (15 bits)                                            │
 │     ├── Start (8 bits) - circular buffer start                          │

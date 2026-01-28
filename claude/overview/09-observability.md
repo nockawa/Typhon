@@ -25,7 +25,7 @@ The Observability component provides four tracks of visibility into Typhon's ope
 
 ## Status: 🔧 In Progress
 
-Track 1 (static readonly) and Track 3 (static readonly deep diagnostics) are implemented. Track 2 (DI options) has infrastructure but no consumers yet. **Track 4** (per-resource telemetry via `IContentionTarget`) is implemented in `NewAccessControl`. Metrics emission and sink integration are designed but not yet wired.
+Track 1 (static readonly) and Track 3 (static readonly deep diagnostics) are implemented. Track 2 (DI options) has infrastructure but no consumers yet. **Track 4** (per-resource telemetry via `IContentionTarget`) is implemented in `AccessControl`. Metrics emission and sink integration are designed but not yet wired.
 
 > **Migration in progress**: Track 3 is transitioning from `#if TELEMETRY` preprocessor directives to `static readonly bool` fields for simpler build configuration.
 
@@ -689,8 +689,8 @@ TYPHON__TELEMETRY__BTREE__TRACKKEYCOMPARISONS=true
 | **LockOperation** | `src/Typhon.Engine/Observability/LockOperation.cs` | ✅ Implemented |
 | **ResourceOperationEntry** | `src/Typhon.Engine/Observability/ResourceOperationEntry.cs` | ✅ Implemented |
 | **ResourceTelemetryAllocator** | `src/Typhon.Engine/Observability/ResourceTelemetryAllocator.cs` | ✅ Implemented |
-| NewAccessControl (with IContentionTarget) | `src/Typhon.Engine/Concurrency/AccessControl.cs` | ✅ Implemented |
-| NewAccessControlTelemetryTests | `test/Typhon.Engine.Tests/Concurrency/NewAccessControlTelemetryTests.cs` | ✅ Implemented |
+| AccessControl (with IContentionTarget) | `src/Typhon.Engine/Concurrency/AccessControl.cs` | ✅ Implemented |
+| AccessControlTelemetryTests | `test/Typhon.Engine.Tests/Concurrency/AccessControlTelemetryTests.cs` | ✅ Implemented |
 
 ---
 

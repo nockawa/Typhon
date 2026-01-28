@@ -473,29 +473,29 @@ High-performance reader-writer lock allowing multiple shared readers OR one excl
 
 | Type | Size | Features |
 |------|------|----------|
-| **AccessControl** | 8 bytes | Basic shared/exclusive |
-| **NewAccessControl** | 8 bytes | Advanced with telemetry, promote/demote |
-| **AccessControlSmall** | 4 bytes | Compact version |
+| **AccessControl** | 8 bytes | Full-featured RW lock with telemetry, promote/demote, waiter tracking |
+| **AccessControlSmall** | 4 bytes | Compact version for high-density scenarios |
+| **ResourceAccessControl** | 4 bytes | 3-mode lifecycle lock (Accessing/Modify/Destroy) |
 
-### Design (NewAccessControl)
+### Design (AccessControl)
 
 ```csharp
-public struct NewAccessControl
+public struct AccessControl
 {
     private ulong _data;  // Packed bit fields
 
     // Shared access (multiple concurrent readers)
-    public bool EnterSharedAccess(TimeSpan? timeOut = null, CancellationToken token = default);
-    public void ExitSharedAccess();
+    public bool EnterSharedAccess(ref WaitContext ctx, IContentionTarget target = null);
+    public void ExitSharedAccess(IContentionTarget target = null);
 
     // Exclusive access (single writer)
-    public bool EnterExclusiveAccess(TimeSpan? timeOut = null, CancellationToken token = default);
-    public void ExitExclusiveAccess();
-    public bool TryEnterExclusiveAccess();
+    public bool EnterExclusiveAccess(ref WaitContext ctx, IContentionTarget target = null);
+    public void ExitExclusiveAccess(IContentionTarget target = null);
+    public bool TryEnterExclusiveAccess(IContentionTarget target = null);
 
-    // Promotion (shared → exclusive)
-    public bool TryPromoteToExclusiveAccess(TimeSpan? timeOut = null, CancellationToken token = default);
-    public void DemoteFromExclusiveAccess();
+    // Promotion (shared → exclusive) / Demotion
+    public bool TryPromoteToExclusiveAccess(ref WaitContext ctx, IContentionTarget target = null);
+    public void DemoteFromExclusiveAccess(IContentionTarget target = null);
 
     public bool IsLockedByCurrentThread { get; }
     public void Reset();

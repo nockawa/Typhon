@@ -26,10 +26,10 @@ This component does not yet exist in the codebase. This document captures the de
 
 | # | Name | Purpose | Status |
 |---|------|---------|--------|
-| **2.1** | [Unit of Work](#21-unit-of-work) | Durability boundary, owns ExecutionContext | 🆕 New |
+| **2.1** | [Unit of Work](#21-unit-of-work) | Durability boundary, owns UnitOfWorkContext | 🆕 New |
 | **2.2** | [Transaction Commit Path](#22-transaction-commit-path) | Epoch stamp, WAL serialization, durability decision | 🆕 New |
 | **2.3** | [Durability Modes](#23-durability-modes) | Deferred / GroupCommit / Immediate + per-tx override | 🆕 New |
-| **2.4** | [ExecutionContext](#24-executioncontext) | Deadline, cancellation, holdoff state | 🆕 New |
+| **2.4** | [UnitOfWorkContext](#24-executioncontext) | Deadline, cancellation, holdoff state | 🆕 New |
 | **2.5** | [Deadline Management](#25-deadline-management) | Monotonic time, timeout conversion | 🆕 New |
 | **2.6** | [Cancellation & Holdoff](#26-cancellation--holdoff) | Cooperative cancellation, critical sections | 🆕 New |
 | **2.7** | [Background Workers](#27-background-workers) | WAL Writer, Checkpoint Manager, Watchdog, GC | 🆕 New |
@@ -191,7 +191,7 @@ public sealed class UnitOfWork : IDisposable, IAsyncDisposable
     public ushort Epoch { get; }              // Allocated from UoW Registry
 
     // Owns the execution context
-    public ExecutionContext Context { get; }
+    public UnitOfWorkContext Context { get; }
 
     // Factory for transactions within this UoW
     public Transaction CreateTransaction();
@@ -226,7 +226,7 @@ public enum DurabilityMode
 ```
 CreateUnitOfWork(mode)
   → Allocate epoch from UoW Registry (Pending)
-  → Rent ExecutionContext from pool
+  → Rent UnitOfWorkContext from pool
   → Return UoW
 
 UoW in use:
@@ -242,7 +242,7 @@ Flush() / FlushAsync():
 Dispose():
   → If flushed: normal cleanup
   → If NOT flushed: changes remain volatile (crash = rolled back)
-  → Return ExecutionContext to pool
+  → Return UnitOfWorkContext to pool
   → Epoch eventually recycled when no active tx references it
 ```
 
@@ -570,11 +570,11 @@ This resolves [Open Question #4](#open-questions): 5ms is the correct default fo
 
 ---
 
-## 2.4 ExecutionContext
+## 2.4 UnitOfWorkContext
 
 ### Purpose
 
-ExecutionContext carries runtime state through all operations within a Unit of Work: deadline, cancellation token, holdoff counter, UoW epoch, and wait state tracking.
+UnitOfWorkContext carries runtime state through all operations within a Unit of Work: deadline, cancellation token, holdoff counter, UoW epoch, and wait state tracking.
 
 ### Design Rationale
 
@@ -594,7 +594,7 @@ The context flows through the entire call stack, ensuring:
 
 ### Lifetime & Allocation
 
-**Design Decision**: ExecutionContext is a **pooled class**, bound to Unit of Work lifetime.
+**Design Decision**: UnitOfWorkContext is a **pooled class**, bound to Unit of Work lifetime.
 
 | Factor | Decision | Rationale |
 |--------|----------|-----------|
@@ -605,7 +605,7 @@ The context flows through the entire call stack, ensuring:
 ### Design Sketch
 
 ```csharp
-public sealed class ExecutionContext : IDisposable
+public sealed class UnitOfWorkContext : IDisposable
 {
     // Identity (for diagnostics)
     internal long UnitOfWorkId { get; }
@@ -649,9 +649,9 @@ public sealed class ExecutionContext : IDisposable
 
 public readonly ref struct HoldoffScope
 {
-    private readonly ExecutionContext _context;
+    private readonly UnitOfWorkContext _context;
 
-    internal HoldoffScope(ExecutionContext context)
+    internal HoldoffScope(UnitOfWorkContext context)
     {
         _context = context;
         _context.BeginHoldoff();
@@ -663,7 +663,7 @@ public readonly ref struct HoldoffScope
 
 ### Context Propagation
 
-ExecutionContext flows implicitly through operations via the owning UnitOfWork and Transaction:
+UnitOfWorkContext flows implicitly through operations via the owning UnitOfWork and Transaction:
 
 ```csharp
 // User code - context flows automatically
@@ -680,23 +680,23 @@ tx.ReadEntity(entityId, out MyComponent comp);
 
 ### Pooling Integration
 
-ExecutionContext is pooled alongside UnitOfWork:
+UnitOfWorkContext is pooled alongside UnitOfWork:
 
 ```csharp
-internal class ExecutionContextPool
+internal class UnitOfWorkContextPool
 {
-    private readonly ConcurrentQueue<ExecutionContext> _pool = new();
+    private readonly ConcurrentQueue<UnitOfWorkContext> _pool = new();
 
-    public ExecutionContext Rent(Deadline deadline, ushort epoch)
+    public UnitOfWorkContext Rent(Deadline deadline, ushort epoch)
     {
         if (!_pool.TryDequeue(out var ctx))
-            ctx = new ExecutionContext();
+            ctx = new UnitOfWorkContext();
 
         ctx.Initialize(deadline, epoch);
         return ctx;
     }
 
-    public void Return(ExecutionContext ctx)
+    public void Return(UnitOfWorkContext ctx)
     {
         ctx.Reset();
         _pool.Enqueue(ctx);
@@ -706,7 +706,7 @@ internal class ExecutionContextPool
 
 ### Pool Sizing & Exhaustion
 
-The ExecutionContext pool is an **unbounded `ConcurrentQueue`** — it allocates on-demand if the pool is empty, and never shrinks. This design has specific trade-offs:
+The UnitOfWorkContext pool is an **unbounded `ConcurrentQueue`** — it allocates on-demand if the pool is empty, and never shrinks. This design has specific trade-offs:
 
 | Property | Behavior | Rationale |
 |----------|----------|-----------|
@@ -715,9 +715,9 @@ The ExecutionContext pool is an **unbounded `ConcurrentQueue`** — it allocates
 | **Shrinking** | Never | Avoids deallocation churn in bursty workloads |
 | **Thread safety** | Lock-free (`ConcurrentQueue`) | No contention on Rent/Return |
 
-**GC benefit**: The primary value of pooling ExecutionContext is avoiding Gen0 GC pressure from its managed fields — specifically the `CancellationTokenSource` (which internally allocates a `Timer` and state objects). In a game server processing 1000+ transactions per tick, this avoids ~1000 CTS allocations per tick.
+**GC benefit**: The primary value of pooling UnitOfWorkContext is avoiding Gen0 GC pressure from its managed fields — specifically the `CancellationTokenSource` (which internally allocates a `Timer` and state objects). In a game server processing 1000+ transactions per tick, this avoids ~1000 CTS allocations per tick.
 
-**Comparison with TransactionChain pool**: The transaction pool (in `TransactionChain`) uses a bounded `Queue<Transaction>` with `PoolMaxSize = 16` and `ExclusiveAccess` synchronization. The ExecutionContext pool is simpler because contexts are higher-level (one per UoW, not one per transaction) and contention is inherently lower.
+**Comparison with TransactionChain pool**: The transaction pool (in `TransactionChain`) uses a bounded `Queue<Transaction>` with `PoolMaxSize = 16` and `ExclusiveAccess` synchronization. The UnitOfWorkContext pool is simpler because contexts are higher-level (one per UoW, not one per transaction) and contention is inherently lower.
 
 ---
 
@@ -841,7 +841,7 @@ public sealed class UnitOfWork
         if (!deadline.IsInfinite)
             _cts.CancelAfter(deadline.Remaining);
 
-        Context = new ExecutionContext(deadline, _cts.Token);
+        Context = new UnitOfWorkContext(deadline, _cts.Token);
     }
 }
 ```
@@ -872,7 +872,7 @@ Yield points are locations in code where it's safe to check for cancellation and
 
 ```csharp
 // Example: Row processing with yield points
-public void ProcessRows(IEnumerable<Row> rows, ExecutionContext ctx)
+public void ProcessRows(IEnumerable<Row> rows, UnitOfWorkContext ctx)
 {
     int count = 0;
     foreach (var row in rows)
@@ -900,7 +900,7 @@ public void ProcessRows(IEnumerable<Row> rows, ExecutionContext ctx)
 **Solution**: Holdoff regions defer cancellation checking until the critical section completes.
 
 ```csharp
-void FlushWAL(ExecutionContext ctx)
+void FlushWAL(UnitOfWorkContext ctx)
 {
     // Enter critical section - cancellation checks are skipped
     using (ctx.EnterHoldoff())
@@ -931,7 +931,7 @@ public void ThrowIfCancelled()
 }
 
 // Nesting is supported
-void OuterOperation(ExecutionContext ctx)
+void OuterOperation(UnitOfWorkContext ctx)
 {
     using (ctx.EnterHoldoff())  // HoldoffCount = 1
     {
@@ -940,7 +940,7 @@ void OuterOperation(ExecutionContext ctx)
     // HoldoffCount = 0, cancellation checked at next yield point
 }
 
-void InnerOperation(ExecutionContext ctx)
+void InnerOperation(UnitOfWorkContext ctx)
 {
     using (ctx.EnterHoldoff())  // HoldoffCount = 2
     {
@@ -1051,7 +1051,7 @@ The WAL Writer and Checkpoint Manager are the two primary background workers. Th
 
 ```
                     ┌─────────────────────────────────────────────┐
-                    │              User Threads                    │
+                    │              User Threads                   │
                     │  tx.Commit() → serialize to ring buffer     │
                     └─────────────────┬───────────────────────────┘
                                       │ (lock-free CAS)
@@ -1071,7 +1071,7 @@ The WAL Writer and Checkpoint Manager are the two primary background workers. Th
 │  • Only checkpoints pages with LSN ≤ DurableLSN                   │
 │  • Writes to data file (fsync)                                    │
 │  • Advances CheckpointLSN                                         │
-│  • Transitions epochs: WalDurable → Committed                    │
+│  • Transitions epochs: WalDurable → Committed                     │
 └───────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1223,12 +1223,12 @@ using var uow = db.CreateUnitOfWork(timeout, durability);
 await using var uow = await db.CreateUnitOfWorkAsync(timeout, durability);
 ```
 
-After creation, **the API is identical**. The only difference is how `ExecutionContext` flows:
+After creation, **the API is identical**. The only difference is how `UnitOfWorkContext` flows:
 
 | Entry Point | Context Flow Mechanism |
 |-------------|------------------------|
 | `CreateUnitOfWork()` | Only via UoW/Transaction references |
-| `CreateUnitOfWorkAsync()` | Also via `AsyncLocal<ExecutionContext>` |
+| `CreateUnitOfWorkAsync()` | Also via `AsyncLocal<UnitOfWorkContext>` |
 
 ### How AsyncLocal Works
 
@@ -1238,9 +1238,9 @@ After creation, **the API is identical**. The only difference is how `ExecutionC
 // Inside Typhon (conceptual)
 internal static class TyphonContext
 {
-    private static readonly AsyncLocal<ExecutionContext?> _current = new();
+    private static readonly AsyncLocal<UnitOfWorkContext?> _current = new();
 
-    public static ExecutionContext? Current
+    public static UnitOfWorkContext? Current
     {
         get => _current.Value;
         internal set => _current.Value = value;
@@ -1252,7 +1252,7 @@ public static async ValueTask<UnitOfWork> CreateUnitOfWorkAsync(
     TimeSpan timeout,
     DurabilityMode durability = DurabilityMode.Deferred)
 {
-    var ctx = ExecutionContextPool.Rent(Deadline.FromTimeout(timeout), durability);
+    var ctx = UnitOfWorkContextPool.Rent(Deadline.FromTimeout(timeout), durability);
 
     // Set ambient context for async flow
     TyphonContext.Current = ctx;
@@ -1281,7 +1281,7 @@ using var tx = uow.CreateTransaction();  // Context still available
 │  User Layer (async-friendly)                                │
 │  - UoW created with CreateUnitOfWorkAsync()                 │
 │  - await allowed between operations                         │
-│  - ExecutionContext flows via AsyncLocal                    │
+│  - UnitOfWorkContext flows via AsyncLocal                   │
 ├─────────────────────────────────────────────────────────────┤
 │  Typhon Public API                                          │
 │  - Transaction methods: sync (fast, in-memory)              │
@@ -1290,7 +1290,7 @@ using var tx = uow.CreateTransaction();  // Context still available
 ├─────────────────────────────────────────────────────────────┤
 │  Typhon Internals (sync, explicit parameter passing)        │
 │  - NO AsyncLocal access in hot paths                        │
-│  - ExecutionContext passed as explicit parameter            │
+│  - UnitOfWorkContext passed as explicit parameter           │
 │  - B+Tree, MVCC, page cache: all synchronous                │
 │  - Zero AsyncLocal overhead in critical code                │
 └─────────────────────────────────────────────────────────────┘
@@ -1386,13 +1386,13 @@ This is idiomatic .NET - the same pattern ASP.NET Core uses with `HttpContext.Re
 | Aspect | Sync Mode | Async Mode |
 |--------|-----------|------------|
 | UoW creation | ~100ns | ~150ns (sets AsyncLocal) |
-| Per await | N/A | ~50-100ns (ExecutionContext capture) |
+| Per await | N/A | ~50-100ns (UnitOfWorkContext capture) |
 | Transaction operations | Same | Same (sync internally) |
 | Internal hot paths | Same | Same (no AsyncLocal access) |
 
 The async overhead is isolated to user-level operations and does not affect Typhon's internal performance.
 
-### Ambient Access: ExecutionContext.Current
+### Ambient Access: UnitOfWorkContext.Current
 
 For deep call stacks where passing references is cumbersome, async mode enables ambient access:
 
@@ -1408,7 +1408,7 @@ void ProcessOrder(UnitOfWork uow, Order order)
 // Option B: Ambient access (async mode only)
 void ProcessOrder(Order order)
 {
-    var ctx = ExecutionContext.Current;  // From AsyncLocal
+    var ctx = UnitOfWorkContext.Current;  // From AsyncLocal
     if (ctx != null)
         ctx.ThrowIfCancelled();
     // ...
@@ -1422,37 +1422,37 @@ void ProcessOrder(Order order)
 ```csharp
 public sealed class UnitOfWork : IDisposable, IAsyncDisposable
 {
-    private static readonly AsyncLocal<ExecutionContext?> _ambient = new();
+    private static readonly AsyncLocal<UnitOfWorkContext?> _ambient = new();
 
     // Sync creation (no AsyncLocal)
     public static UnitOfWork Create(TimeSpan timeout, DurabilityMode mode)
     {
-        var ctx = ExecutionContextPool.Rent(Deadline.FromTimeout(timeout), mode);
+        var ctx = UnitOfWorkContextPool.Rent(Deadline.FromTimeout(timeout), mode);
         return new UnitOfWork(ctx, ambient: false);
     }
 
     // Async creation (sets AsyncLocal)
     public static ValueTask<UnitOfWork> CreateAsync(TimeSpan timeout, DurabilityMode mode)
     {
-        var ctx = ExecutionContextPool.Rent(Deadline.FromTimeout(timeout), mode);
+        var ctx = UnitOfWorkContextPool.Rent(Deadline.FromTimeout(timeout), mode);
         _ambient.Value = ctx;
         return new ValueTask<UnitOfWork>(new UnitOfWork(ctx, ambient: true));
     }
 
     // Ambient access (null if not in async UoW)
-    public static ExecutionContext? Current => _ambient.Value;
+    public static UnitOfWorkContext? Current => _ambient.Value;
 
     // Cleanup
     public void Dispose()
     {
         if (_ambient) _ambient.Value = null;
-        ExecutionContextPool.Return(_context);
+        UnitOfWorkContextPool.Return(_context);
     }
 
     public async ValueTask DisposeAsync()
     {
         if (_ambient) _ambient.Value = null;
-        ExecutionContextPool.Return(_context);
+        UnitOfWorkContextPool.Return(_context);
     }
 }
 ```
@@ -1632,7 +1632,7 @@ The timeout isn't just a technical limit — it's a **user experience decision**
 
 For a responsive feel, this should be short. If the database can't complete the operation in time, it's better to fail fast and let the player retry than to leave them staring at a frozen screen.
 
-The UoW timeout flows through to all database operations (ExecutionContext), ensuring no individual lock wait or I/O operation exceeds the player's patience.
+The UoW timeout flows through to all database operations (UnitOfWorkContext), ensuring no individual lock wait or I/O operation exceeds the player's patience.
 
 ---
 
@@ -1643,7 +1643,7 @@ The UoW timeout flows through to all database operations (ExecutionContext), ens
 | Component | Status | Location | Notes |
 |-----------|--------|----------|-------|
 | **Unit of Work** | ❌ Missing | - | To be implemented |
-| **ExecutionContext** | ❌ Missing | - | To be implemented |
+| **UnitOfWorkContext** | ❌ Missing | - | To be implemented |
 | **Deadline** | ❌ Missing | - | To be implemented |
 | **WAL Writer** | ❌ Missing | - | To be implemented (see [06-durability.md](06-durability.md)) |
 | **Checkpoint Manager** | ❌ Missing | - | To be implemented (see [06-durability.md](06-durability.md)) |
@@ -1668,7 +1668,7 @@ private readonly Deadline _deadline;
 public bool IsTimedOutOrCanceled => _deadline.IsExpired || _token.IsCancellationRequested;
 ```
 
-**Step 3**: Implement `ExecutionContext` with pooling
+**Step 3**: Implement `UnitOfWorkContext` with pooling
 
 **Step 4**: Implement `UnitOfWork` wrapping Transaction creation
 
@@ -1714,7 +1714,7 @@ gantt
     Deadline struct (monotonic)     :d1, 0, 1
 
     section Core
-    ExecutionContext (pooled)       :d2, after d1, 1
+    UnitOfWorkContext (pooled)       :d2, after d1, 1
     Holdoff regions                 :d3, after d2, 1
 
     section Durability (shared w/ 06)
@@ -1737,7 +1737,7 @@ gantt
 
 **Order:**
 1. **Deadline struct** - Foundation for all time-based operations
-2. **ExecutionContext** - Carries deadline/cancellation/epoch through operations
+2. **UnitOfWorkContext** - Carries deadline/cancellation/epoch through operations
 3. **Holdoff regions** - Critical section support
 4. **WAL Writer + Ring Buffer** - Durability backbone (shared with 06)
 5. **UoW Registry** - Epoch allocation and tracking
@@ -1754,7 +1754,7 @@ gantt
 | Component | Planned Location |
 |-----------|------------------|
 | Deadline | `src/Typhon.Engine/Misc/Deadline.cs` |
-| ExecutionContext | `src/Typhon.Engine/Execution/ExecutionContext.cs` |
+| UnitOfWorkContext | `src/Typhon.Engine/Execution/UnitOfWorkContext.cs` |
 | UnitOfWork | `src/Typhon.Engine/Execution/UnitOfWork.cs` |
 | DeadlineWatchdog | `src/Typhon.Engine/Execution/DeadlineWatchdog.cs` |
 | WAL Writer | `src/Typhon.Engine/Durability/WalWriter.cs` |
@@ -1773,8 +1773,8 @@ gantt
 | **UoW nesting** | Not supported (flat only) | Simplicity, avoid complexity |
 | **UoW concurrency** | Multiple concurrent UoWs allowed | Multi-threaded game servers |
 | **Crash recovery** | Epoch voiding via registry + WAL replay | Instant init + data repair |
-| **ExecutionContext allocation** | Pooled class | Contains managed refs, medium lifetime |
-| **ExecutionContext epoch** | Carried in context | Avoids indirection on commit hot path |
+| **UnitOfWorkContext allocation** | Pooled class | Contains managed refs, medium lifetime |
+| **UnitOfWorkContext epoch** | Carried in context | Avoids indirection on commit hot path |
 | **Deadline time source** | Monotonic (`Stopwatch`) | Immune to clock adjustments |
 | **Cancellation model** | Cooperative with holdoff | Safe abort at yield points |
 | **Holdoff implementation** | Counter-based + scoped | Allows nesting, RAII cleanup |
