@@ -49,7 +49,7 @@ internal class TransactionChain : IDisposable
 
     public void WalkHeadToTail(Func<Transaction, bool> predicate)
     {
-        _control.EnterSharedAccess();
+        _control.EnterSharedAccess(ref WaitContext.Null);
 
         var cur = Head;
         while (cur != null)
@@ -67,7 +67,7 @@ internal class TransactionChain : IDisposable
 
     public void Remove(Transaction transaction)
     {
-        _control.EnterExclusiveAccess();
+        _control.EnterExclusiveAccess(ref WaitContext.Null);
 
         if (transaction.Next != null)
         {
@@ -101,7 +101,7 @@ internal class TransactionChain : IDisposable
 
     public Transaction CreateTransaction(DatabaseEngine dbe)
     {
-        _control.EnterExclusiveAccess();
+        _control.EnterExclusiveAccess(ref WaitContext.Null);
         if (!_pool.TryDequeue(out var t))
         {
             t = new Transaction();
