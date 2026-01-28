@@ -15,7 +15,7 @@ public partial class PagedMMF
         public int ClockSweepCounter => _clockSweepCounter;
         public int DirtyCounter;
 
-        public SmallAccessControl StateSyncRoot;
+        public AccessControlSmall StateSyncRoot;
         public PageState PageState;                 // Must always be changed under StateSyncRoot lock
         public int LockedByThreadId;                // Same
         public int ConcurrentSharedCounter;         // Same
@@ -35,7 +35,7 @@ public partial class PagedMMF
             FilePageIndex = -1;
             _clockSweepCounter = 0;
             ConcurrentSharedCounter = 0;
-            StateSyncRoot = new SmallAccessControl();
+            StateSyncRoot = new AccessControlSmall();
         }
 
         public void IncrementClockSweepCounter()

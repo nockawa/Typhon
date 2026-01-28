@@ -74,7 +74,7 @@ internal ref struct RevisionEnumerator : IDisposable
         _header = ref _firstChunkHandle.AsRef<CompRevStorageHeader>();
         if (!_header.Control.IsLockedByCurrentThread)
         {
-            _header.Control.Enter(_exclusiveAccess);
+            _header.Control.Enter(_exclusiveAccess, ref WaitContext.Null);
         }
         _itemCountLeft = _header.ItemCount;
         _nextChunkId = ref _header.NextChunkId;

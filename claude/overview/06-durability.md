@@ -141,7 +141,7 @@ struct WalRecordHeader  // 32 bytes
     public long LSN;               // 8B - Log Sequence Number (monotonic, never reused)
     public long TransactionTSN;    // 8B - Transaction timestamp (links to MVCC)
     public ushort UowEpoch;        // 2B - Links to epoch registry
-    public ushort ComponentTypeId;  // 2B - Which component table
+    public ushort ComponentTypeId; // 2B - Which component table
     public int EntityId;           // 4B - Which entity (primary key)
     public ushort PayloadLength;   // 2B - Bytes of component data following header
     public byte OperationType;     // 1B - Create=1, Update=2, Delete=3
@@ -489,12 +489,12 @@ Pending → WalDurable → Committed → Free
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ Registry Page 0 (8KB)                                                    │
+│ Registry Page 0 (8KB)                                                   │
 ├─────────────────────────────────────────────────────────────────────────┤
 │   UowRegistryHeader: 80 bytes                                           │
-│   UowRegistryEntry[253]: 253 x 32 = 8096 bytes                         │
+│   UowRegistryEntry[253]: 253 x 32 = 8096 bytes                          │
 ├─────────────────────────────────────────────────────────────────────────┤
-│ Overflow Pages (if > 253 concurrent UoWs needed)                         │
+│ Overflow Pages (if > 253 concurrent UoWs needed)                        │
 │   UowRegistryEntry[250] per overflow page                               │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -940,7 +940,7 @@ The Unit of Work from the Execution System owns the durability boundary:
 
 ```
 ExecutionSystem.UnitOfWork
-  ├── ExecutionContext (deadline, cancellation)
+  ├── UnitOfWorkContext (deadline, cancellation)
   ├── Transaction[] (MVCC operations)
   ├── DurabilityMode → Controls WAL flush behavior
   └── DurabilityOverride → Per-tx override (optional)

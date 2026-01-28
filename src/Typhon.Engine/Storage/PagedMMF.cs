@@ -560,14 +560,14 @@ public partial class PagedMMF : IDisposable
             if (newMemPageIndex != memPageIndex)
             {
                 // Undo the page allocation, we are not going to use it
-                pi.StateSyncRoot.Enter();
+                pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
                 pi.FilePageIndex = -1;
                 pi.PageState = PageState.Free;
                 pi.ResetIOCompletionTask();
                 pi.ResetClockSweepCounter();
                 pi.ConcurrentSharedCounter = 0;
                 pi.LockedByThreadId = 0;
-                pi.StateSyncRoot.Exit();
+                pi.StateSyncRoot.ExitExclusiveAccess();
 
                 memPageIndex = newMemPageIndex;
                 _metrics.TotalMemPageAllocatedCount--;
@@ -589,7 +589,7 @@ public partial class PagedMMF : IDisposable
         // Second pass, under lock
         try
         {
-            info.StateSyncRoot.Enter();
+            info.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
 
             // PageAccessor is responsible to reset the IOMode from read to none for a loading page, but only if the user creates and uses one, (which is
             //  most of the cases, but not all o them). So we take the opportunity to reset the IOMode here, if needed.
@@ -621,7 +621,7 @@ public partial class PagedMMF : IDisposable
         }
         finally
         {
-            info.StateSyncRoot.Exit();
+            info.StateSyncRoot.ExitExclusiveAccess();
         }
     }
     
@@ -669,8 +669,8 @@ public partial class PagedMMF : IDisposable
             try
             {
                 // We want to change the state, so we need to acquire the lock
-                pi.StateSyncRoot.Enter();
-                
+                pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
+
                 Debug.Assert(pi.PageState != PageState.Free);
                 
 #if TELEMETRY
@@ -767,7 +767,7 @@ public partial class PagedMMF : IDisposable
             }
             finally
             {
-                pi.StateSyncRoot.Exit();
+                pi.StateSyncRoot.ExitExclusiveAccess();
             }
 
             // We arrive here because we couldn't make the requested transition, in a leap of faith, we wait...and retry.
@@ -791,8 +791,8 @@ public partial class PagedMMF : IDisposable
     {
         try
         {
-            pi.StateSyncRoot.Enter();
-            
+            pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
+
             previousMode = pi.PageState;
 
             // Check if the page was reallocated by the time we got the lock
@@ -825,7 +825,7 @@ public partial class PagedMMF : IDisposable
         }
         finally
         {
-            pi.StateSyncRoot.Exit();
+            pi.StateSyncRoot.ExitExclusiveAccess();
         }
     }
 
@@ -833,13 +833,13 @@ public partial class PagedMMF : IDisposable
     {
         try
         {
-            pi.StateSyncRoot.Enter();
+            pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
             --pi.ConcurrentSharedCounter;
             pi.PageState = previousMode;
         }
         finally
         {
-            pi.StateSyncRoot.Exit();
+            pi.StateSyncRoot.ExitExclusiveAccess();
         }
     }
 
@@ -847,22 +847,22 @@ public partial class PagedMMF : IDisposable
     {
         var pi = _memPagesInfo[memPageIndex];
         Debug.Assert(pi.PageState is PageState.Shared or PageState.Exclusive, "We can't increment the dirty counter for a page that is not Shared or Exclusive.");
-        
-        pi.StateSyncRoot.Enter();
+
+        pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
         ++pi.DirtyCounter;
-        pi.StateSyncRoot.Exit();
+        pi.StateSyncRoot.ExitExclusiveAccess();
     }
     
     internal void DecrementDirty(int memPageIndex)
     {
         var pi = _memPagesInfo[memPageIndex];
-        pi.StateSyncRoot.Enter();
+        pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
         if (--pi.DirtyCounter == 0 && pi.PageState == PageState.IdleAndDirty)
         {
             pi.PageState = PageState.Idle;
             Interlocked.Increment(ref _metrics.FreeMemPageCount);
         }
-        pi.StateSyncRoot.Exit();
+        pi.StateSyncRoot.ExitExclusiveAccess();
     }
 
     unsafe internal Task SavePages(int[] memPageIndices)
@@ -951,7 +951,7 @@ public partial class PagedMMF : IDisposable
 #endif
         try
         {
-            pi.StateSyncRoot.Enter();
+            pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
             var pageState = pi.PageState;
             Debug.Assert(pageState == PageState.Shared || pageState == PageState.Exclusive);
 
@@ -975,7 +975,7 @@ public partial class PagedMMF : IDisposable
         }
         finally
         {
-            pi.StateSyncRoot.Exit();
+            pi.StateSyncRoot.ExitExclusiveAccess();
         }
     }
 

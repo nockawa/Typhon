@@ -51,7 +51,7 @@ The `claude/overview/` directory is the **authoritative architectural reference*
 
 **Build the solution:**
 ```bash
-dotnet build Typhon.sln
+dotnet build Typhon.slnx
 ```
 
 **Build specific configurations:**
@@ -219,6 +219,12 @@ dotnet run -c Release --filter '*PagedMemoryFile*'
 - Heavy use of pointers, stackalloc, and unmanaged memory for performance
 - GCHandle pins page cache to avoid GC moves
 - Blittable struct requirements for components ensure zero-copy operations
+
+### Coding Standards
+- **No nullable reference types**: Do not use `#nullable enable` or nullable annotations (`Type?`). Typhon does not rely on C# nullable reference types feature. Pass `null` for optional parameters without annotations.
+- **Thread IDs stored as 16 bits**: All synchronization primitives that store thread IDs must use exactly 16 bits (max 65,535). This ensures consistency across `AccessControl`, `AccessControlSmall`, and `ResourceAccessControl`, and provides headroom for servers with 500+ cores.
+- **No LINQ in hot paths**: Avoid LINQ in performance-critical code due to allocations and delegate overhead.
+- **Prefer `ref struct` for short-lived helpers**: Use `ref struct` for stack-only types that wrap references (e.g., `AtomicChange`, `LockData`).
 
 ### Concurrency Primitives
 - **AccessControl**: Reader-writer lock for general concurrent access

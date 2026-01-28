@@ -22,7 +22,7 @@ Every database operation that touches shared data needs synchronization. This co
 |---|------|------|---------|--------|
 | **1.1** | [Deadline](#11-deadline) | 8 bytes | Monotonic timeout tracking | 🆕 New |
 | **1.2** | [Watchdog Thread](#12-watchdog-thread) | N/A | Background expiry monitoring | 🆕 New |
-| **1.3** | [NewAccessControl](#13-newaccesscontrol) | 64-bit | Reader-writer lock with telemetry | 🔧 In Progress |
+| **1.3** | [AccessControl](#13-accesscontrol) | 64-bit | Reader-writer lock with telemetry | ✅ Complete |
 | **1.4** | [AccessControlSmall](#14-accesscontrolsmall) | 32-bit | Compact RW lock | ✅ Exists (needs Deadline) |
 | **1.5** | [ResourceAccessControl](#15-resourceaccesscontrol) | 32-bit | 3-mode lifecycle lock | 📐 Designed |
 | **1.6** | [Cancellation Helpers](#16-cancellation-helpers) | N/A | Yield points, holdoff regions | 🔮 Future |
@@ -137,7 +137,7 @@ internal static class DeadlineWatchdog
 
 ---
 
-## 1.3 NewAccessControl
+## 1.3 AccessControl
 
 ### Purpose
 
@@ -150,7 +150,7 @@ internal static class DeadlineWatchdog
 
 ### Current State
 
-**In Progress** - Core logic exists but uses `DateTime.UtcNow`. Needs migration to `Deadline`.
+**Complete** - Full WaitContext support with monotonic Deadline and CancellationToken integration.
 
 ### Bit Layout (64-bit)
 
@@ -171,24 +171,23 @@ internal static class DeadlineWatchdog
 ### API
 
 ```csharp
-public struct NewAccessControl
+public struct AccessControl
 {
     // Shared access (multiple concurrent)
-    public bool TryEnterSharedAccess();
-    public bool EnterSharedAccess(Deadline deadline, CancellationToken token = default);
-    public void ExitSharedAccess();
+    public bool EnterSharedAccess(ref WaitContext ctx, IContentionTarget target = null);
+    public void ExitSharedAccess(IContentionTarget target = null);
 
     // Exclusive access (single holder)
-    public bool TryEnterExclusiveAccess();
-    public bool EnterExclusiveAccess(Deadline deadline, CancellationToken token = default);
-    public void ExitExclusiveAccess();
+    public bool TryEnterExclusiveAccess(IContentionTarget target = null);
+    public bool EnterExclusiveAccess(ref WaitContext ctx, IContentionTarget target = null);
+    public void ExitExclusiveAccess(IContentionTarget target = null);
 
     // Promotion (Shared → Exclusive)
-    public bool TryPromoteToExclusiveAccess(Deadline deadline, CancellationToken token = default);
-    public void DemoteFromExclusiveAccess();
+    public bool TryPromoteToExclusiveAccess(ref WaitContext ctx, IContentionTarget target = null);
+    public void DemoteFromExclusiveAccess(IContentionTarget target = null);
 
-    // Diagnostics
-    public AccessControlState GetDiagnosticState();
+    // Lifecycle
+    public void Reset();
 }
 ```
 
@@ -205,7 +204,7 @@ if (TelemetryConfig.AccessControl.Enabled)
 
 ### Fairness Protocol
 
-NewAccessControl implements a **writer-preferring** fairness policy. The key decision point is in `EnterSharedAccess`:
+AccessControl implements a **writer-preferring** fairness policy. The key decision point is in `EnterSharedAccess`:
 
 ```csharp
 // From AccessControlImpl:
@@ -300,7 +299,7 @@ Between phases: Thread.Sleep(100µs) — yields CPU, OS reschedules
 | **Sleep duration** | 100µs | Below typical OS scheduler quantum (~1-15ms) — wakes quickly on unlock |
 | **Single-core fallback** | Immediate sleep | Spinning on single-core is pointless (no other thread can release the lock) |
 
-**Current usage**: `AdaptiveWaiter` is available but **not yet integrated** into `NewAccessControl`. The current `LockData.WaitForIdleState` uses .NET's built-in `SpinWait` with a hard-coded iteration limit (`maxWaitCounter = 1000`). The migration to `AdaptiveWaiter` is planned alongside the `Deadline` migration.
+**Current usage**: `AccessControl` uses `SpinWait` with adaptive yielding. The implementation checks `WaitContext.ShouldStop` (which combines `Deadline.IsExpired` and `CancellationToken.IsCancellationRequested`) during spin loops to support timeout and cancellation.
 
 **Comparison with .NET's SpinWait**:
 
@@ -353,15 +352,7 @@ For now, the three-pillar argument holds. Deadlock detection is explicitly **not
 
 ### Code Location
 
-`src/Typhon.Engine/Misc/AccessControl/AccessControl.cs` and related files
-
-### Migration Tasks
-
-- [ ] Replace `DateTime.UtcNow` with `Deadline`
-- [ ] Remove `maxWaitCounter` artificial limits
-- [ ] Integrate `AdaptiveWaiter` into `LockData.WaitForIdleState`
-- [ ] Convert `#if TELEMETRY` to runtime `TelemetryConfig` checks
-- [ ] Add scoped guard helpers (`EnterSharedScoped()`)
+`src/Typhon.Engine/Concurrency/AccessControl.cs` and `AccessControl.LockData.cs`
 
 ---
 
@@ -369,11 +360,11 @@ For now, the three-pillar argument holds. Deadlock detection is explicitly **not
 
 ### Purpose
 
-32-bit compact version of NewAccessControl for space-constrained scenarios (e.g., per-page latches where thousands exist).
+32-bit compact version of AccessControl for space-constrained scenarios (e.g., B+Tree node latches, per-page latches where thousands exist).
 
 ### Current State
 
-**Exists** - Needs same `Deadline` migration as NewAccessControl.
+**Complete** - Fully implemented with WaitContext/Deadline support and IContentionTarget telemetry.
 
 ### Bit Layout (32-bit)
 
@@ -381,26 +372,27 @@ For now, the three-pillar argument holds. Deadlock detection is explicitly **not
 ┌────────────────────────────────────────────────────────────────────────────┐
 │                              32-bit State                                   │
 ├────────────────────────────────────────────────────────────────────────────┤
-│ Bits 0-7    │ Shared counter (0-255)                                       │
-│ Bits 8-17   │ Thread ID (truncated to 10 bits)                             │
-│ Bits 18-19  │ State (Idle=0, Shared=1, Exclusive=2)                        │
-│ Bits 20-31  │ Reserved / Telemetry                                         │
+│ Bits 0-15   │ Shared counter (0-65,535)                                    │
+│ Bits 16-31  │ Thread ID (16 bits, max 65,535)                              │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Differences from NewAccessControl
+State is **implicit**: ThreadId≠0 means Exclusive held, Counter>0 means Shared held, both zero means Idle.
 
-| Aspect | NewAccessControl | AccessControlSmall |
+### Differences from AccessControl
+
+| Aspect | AccessControl | AccessControlSmall |
 |--------|------------------|-------------------|
 | Size | 64-bit | 32-bit |
-| Waiter tracking | Yes (fairness) | No (simpler) |
-| Thread ID bits | 16 | 10 |
-| Telemetry detail | Full | Minimal |
-| Use case | General purpose | High-density (pages) |
+| Waiter tracking | Yes (fairness) | No (simpler spin) |
+| Thread ID bits | 16 | 16 |
+| Shared counter bits | 8 (max 255) | 16 (max 65,535) |
+| Telemetry | IContentionTarget | IContentionTarget |
+| Use case | General purpose | High-density (B+Tree, pages) |
 
 ### Code Location
 
-`src/Typhon.Engine/Misc/AccessControlSmall.cs`
+`src/Typhon.Engine/Concurrency/AccessControlSmall.cs`
 
 ---
 
@@ -424,7 +416,7 @@ Unlike traditional RW locks, **Modify is compatible with Accessing**. This is pe
 
 ### Current State
 
-**Designed** - Full design doc at [ResourceAccessControl-Design.md](../design/ResourceAccessControl-Design.md)
+**Complete** - Full design doc at [ResourceAccessControl.md](../design/concurrency/ResourceAccessControl.md). Implemented with WaitContext/Deadline support and IContentionTarget telemetry.
 
 ### Bit Layout (32-bit)
 
@@ -432,11 +424,11 @@ Unlike traditional RW locks, **Modify is compatible with Accessing**. This is pe
 ┌────────────────────────────────────────────────────────────────────────────┐
 │                              32-bit State                                   │
 ├────────────────────────────────────────────────────────────────────────────┤
-│ Bits 0-9    │ Accessing count (0-1023)                                     │
-│ Bits 10-19  │ Modify holder Thread ID (0 = not held)                       │
-│ Bit 20      │ Modify pending flag (fairness)                               │
-│ Bit 21      │ Destroy flag (terminal, never cleared)                       │
-│ Bits 22-31  │ Telemetry block ID                                           │
+│ Bits 0-7    │ Accessing count (0-255)                                      │
+│ Bits 8-23   │ Modify holder Thread ID (16 bits, 0 = not held)              │
+│ Bit 24      │ Modify pending flag (fairness)                               │
+│ Bit 25      │ Destroy flag (terminal, never cleared)                       │
+│ Bits 26-31  │ Reserved                                                     │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -517,7 +509,7 @@ gantt
     Watchdog thread          :d2, after d1, 1
 
     section Lock Primitives
-    NewAccessControl update  :d3, after d2, 2
+    AccessControl update  :d3, after d2, 2
     AccessControlSmall update :d4, after d2, 1
     ResourceAccessControl    :d5, after d2, 2
 
@@ -528,7 +520,7 @@ gantt
 **Order:**
 1. **Deadline** - Everything else depends on it
 2. **Watchdog Thread** - Needed for `ToCancellationToken()`
-3. **NewAccessControl / AccessControlSmall / ResourceAccessControl** - Can be parallelized
+3. **AccessControl / AccessControlSmall / ResourceAccessControl** - Can be parallelized
 4. **Cancellation Helpers** - Defer until Execution System work begins
 
 ---
@@ -539,7 +531,7 @@ gantt
 |---------------|------------|
 | Deadline | Overflow handling, `Remaining` accuracy, `ToCancellationToken` behavior |
 | Watchdog | Multiple deadlines, cancellation timing, cleanup on disposal |
-| NewAccessControl | Fairness (waiters get served), timeout expiry, telemetry recording |
+| AccessControl | Fairness (waiters get served), timeout expiry, telemetry recording |
 | AccessControlSmall | Same as above, but stress high-density scenarios |
 | ResourceAccessControl | Mode compatibility matrix, Destroy terminal behavior, promotion |
 
@@ -551,9 +543,9 @@ Existing tests in `test/Typhon.Engine.Tests/Misc/AccessControlTests.cs` provide 
 
 | Question | Decision | Rationale |
 |----------|----------|-----------|
-| **Telemetry strategy** | Runtime via `static readonly bool` from `TelemetryConfig` | Remove `#if TELEMETRY` compile-time branching; single binary, JIT still optimizes away disabled paths |
+| **Telemetry strategy** | Runtime via `IContentionTarget` callback | Optional telemetry without compile-time branching; callers pass `target` parameter to receive callbacks |
 | **Overflow handling** | Clamp to `long.MaxValue` | At 1 GHz, overflow at ~292 years; defensive clamping is cheap insurance |
-| **Old AccessControl** | Full replacement | NewAccessControl will completely replace it once migration is complete |
+| **AccessControl migration** | Complete | Legacy `AccessControl` struct has been removed; current `AccessControl` is the 64-bit atomic version |
 | **ResourceAccessControl timing** | Implement alongside Deadline | Design is ready; build on proper foundation from start |
 | **ToCancellationToken** | Shared watchdog thread | Avoids timer-per-deadline overhead; watchdog will serve other future purposes |
 | **Watchdog precision** | Millisecond-level | Fine for lock timeouts; easy to adjust frequency if needed |
