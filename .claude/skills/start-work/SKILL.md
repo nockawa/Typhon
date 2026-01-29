@@ -83,14 +83,12 @@ gh issue view <number> --json number,title,body,labels
 
 ### 2. Check Design Doc
 
-Look for design doc reference in:
-- Issue body (links to `claude/design/`)
-- Project item's "Design Doc" field
+Look for design doc reference in the issue body (links to `claude/design/`).
 
 If no design doc exists and this is an enhancement (not a bug fix):
 - Ask: "This issue has no design doc. Should I create one, or proceed without?"
 - If yes, create `claude/design/<IssueName>.md` using the design template
-- Set the Design Doc project field to the path
+- Add a link to the design doc in the issue body under "Related Documents"
 
 ### 3. Update Project Status
 
@@ -108,6 +106,8 @@ gh project item-edit --project-id PVT_kwHOAud1ac4BNdCj --id <item_id> \
 
 ### 4. Branch Creation
 
+**Base branch:** Always create feature branches from `main` (GitHub Flow).
+
 Determine the recommended branch name based on issue type:
 - Enhancement/Feature: `feature/<number>-short-name`
 - Bug: `fix/<number>-short-name`
@@ -117,12 +117,15 @@ Then ask the user how they want the branch created:
 **Question:** "How should the branch be created?"
 **Header:** "Branch"
 **Options:**
-- `Claude creates it` (description: "I'll run git checkout -b <branch-name> right now")
+- `Claude creates it` (description: "I'll run git checkout -b <branch-name> from main")
 - `Rider Open Task` (description: "I'll skip — use Alt+Shift+N in Rider to create branch via Open Task for issue #<number>")
 - `Skip branch` (description: "Don't create a branch yet, I'll handle it later")
 
 **If "Claude creates it":**
 ```bash
+# Ensure we're on main and up-to-date
+git checkout main
+git pull origin main
 git checkout -b feature/<number>-short-name
 ```
 
@@ -186,6 +189,3 @@ For reference:
 ### Estimate Field
 - Field ID: `PVTSSF_lAHOAud1ac4BNdCjzg8cYEU`
 
-### Design Doc Field (Text)
-- Field ID: `PVTF_lAHOAud1ac4BNdCjzg8c8uY`
-- Set with: `--text "claude/design/FeatureName.md"`

@@ -828,7 +828,10 @@ public class ResourceAccessControlTests
         control.EnterDestroy(ref WaitContext.Null); // Block all access
 
         var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(10));
-        Assert.Throws<TimeoutException>(() => control.EnterAccessingScoped(ref ctx));
+        Assert.Throws<TimeoutException>(() =>
+        {
+            control.EnterAccessingScoped(ref ctx);
+        });
     }
 
     [Test]
@@ -839,7 +842,10 @@ public class ResourceAccessControlTests
         control.EnterDestroy(ref WaitContext.Null); // Block all access
 
         var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(10));
-        Assert.Throws<TimeoutException>(() => control.EnterModifyScoped(ref ctx));
+        Assert.Throws<TimeoutException>(() =>
+        {
+            control.EnterModifyScoped(ref ctx);
+        });
     }
 
     // ========================================
