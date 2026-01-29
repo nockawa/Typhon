@@ -1,0 +1,40 @@
+{
+  "env": {
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build:*)",
+      "Bash(dotnet test:*)",
+      "Bash(dotnet run:*)",
+      "Bash(wait)",
+      "Bash(timeout 120 tail:*)",
+      "Bash(for i in {1..5})",
+      "Bash(do echo \"=== Run $i ===\")",
+      "Bash(timeout 15 dotnet test:*)",
+      "Bash(echo:*)",
+      "Bash(done)",
+      "Bash(timeout 20 dotnet test:*)",
+      "Bash(timeout:*)",
+      "Bash(cat:*)",
+      "Bash(wait:*)",
+      "Bash(perl -e 'alarm 45; exec @ARGV' dotnet test:*)",
+      "Bash(git mv:*)",
+      "Bash(gh project:*)",
+      "Bash(gh issue:*)",
+      "Bash(wc:*)",
+      "Bash(gh label create:*)",
+      "Bash(gh label list:*)",
+      "Bash(find:*)",
+      "WebSearch",
+      "Bash(tree:*)",
+      "Bash(gh api:*)",
+      "Bash(gh pr list:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(findstr:*)"
+    ],
+    "deny": [],
+    "ask": []
+  },
+  "outputStyle": "Explanatory"
+}
