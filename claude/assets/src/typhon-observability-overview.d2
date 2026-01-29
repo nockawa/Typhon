@@ -1,0 +1,192 @@
+# Typhon: Observability — Component Overview
+# Shows Track 1/2/3 feeding into sinks and health checks
+
+direction: down
+
+# ── Title ─────────────────────────────────────────────────────
+title: "Observability — Component Overview" {
+  shape: text
+  style.font-size: 22
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+# ── Data Source: Resource Graph ────────────────────────────────
+source: "Resource Graph" {
+  style.fill: "#e8eaf6"
+  style.stroke: "#283593"
+  style.border-radius: 10
+
+  graph: "IResourceGraph\nGetSnapshot()" {
+    shape: cylinder
+    style.fill: "#c5cae9"
+    style.stroke: "#3949ab"
+    style.bold: true
+  }
+  nodes: "NodeSnapshot[]\n50–100 nodes\nwith metric values" {
+    shape: rectangle
+    style.fill: "#c5cae9"
+    style.stroke: "#3949ab"
+  }
+
+  graph -> nodes: "~5–10 μs" {
+    style.stroke: "#3949ab"
+  }
+}
+
+# ── Telemetry Tracks ──────────────────────────────────────────
+tracks: "Telemetry Tracks" {
+  style.fill: "#fce4ec"
+  style.stroke: "#c62828"
+  style.border-radius: 10
+
+  track1: "Track 1: Static Readonly\n(TelemetryConfig)" {
+    shape: rectangle
+    style.fill: "#f8bbd0"
+    style.stroke: "#c62828"
+    style.bold: true
+  }
+  track1_detail: "Zero overhead when false\nJIT-eliminated dead code\nPer-component Active flags" {
+    shape: text
+    style.font-size: 11
+    style.font-color: "#880e4f"
+  }
+
+  track2: "Track 2: DI Options\n(TelemetryOptions)" {
+    shape: rectangle
+    style.fill: "#f8bbd0"
+    style.stroke: "#c62828"
+  }
+  track2_detail: "IOptions<T> pattern\nCold-path only\nConfiguration UI" {
+    shape: text
+    style.font-size: 11
+    style.font-color: "#880e4f"
+  }
+
+  track3: "Track 3: Deep Diagnostics\n(static readonly bool)" {
+    shape: rectangle
+    style.fill: "#ec407a"
+    style.stroke: "#880e4f"
+    style.font-color: white
+  }
+  track3_detail: "Lock history (AccessOps)\nPost-mortem analysis\nSame JIT trick as Track 1" {
+    shape: text
+    style.font-size: 11
+    style.font-color: "#880e4f"
+  }
+}
+
+# ── Observability Consumers ────────────────────────────────────
+consumers: "Observability Consumers" {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.border-radius: 10
+
+  metrics: "OTel Metrics\ntyphon.resource.{path}.{metric}\nCounters, Gauges, Histograms" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+    style.bold: true
+  }
+  traces: "OTel Traces\ntyphon.transaction\ntyphon.page.load\ntyphon.checkpoint" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+  }
+  health: "Health Checks\nHealthy / Degraded / Unhealthy\nComposite = worst-of" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+  }
+  logs: "Structured Logs\nSerilog + enrichers\nCorrelation IDs" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+  }
+}
+
+# ── Sinks ──────────────────────────────────────────────────────
+dev_sinks: "Development" {
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.border-radius: 8
+
+  seq: "Seq\n(structured logs)" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+  }
+  aspire: "Aspire Dashboard\n(metrics + traces)" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+  }
+}
+
+prod_sinks: "Production" {
+  style.fill: "#fff3e0"
+  style.stroke: "#e65100"
+  style.border-radius: 8
+
+  loki: "Loki\n(logs)" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+  }
+  mimir: "Mimir\n(metrics)" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+  }
+  tempo: "Tempo\n(traces)" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+  }
+  grafana: "Grafana\n(visualization)" {
+    shape: rectangle
+    style.fill: "#ffcc80"
+    style.stroke: "#e65100"
+    style.bold: true
+  }
+}
+
+# ── Connections: Source → Consumers ────────────────────────────
+source.nodes -> consumers.metrics: "snapshot values" {
+  style.stroke: "#1565c0"
+  style.bold: true
+}
+source.nodes -> consumers.health: "utilization %" {
+  style.stroke: "#1565c0"
+}
+tracks.track1 -> consumers.metrics: "hot-path counters" {
+  style.stroke: "#c62828"
+  style.stroke-dash: 3
+}
+tracks.track1 -> consumers.traces: "span boundaries" {
+  style.stroke: "#c62828"
+  style.stroke-dash: 3
+}
+tracks.track2 -> consumers.metrics: "cold-path config" {
+  style.stroke: "#c62828"
+  style.stroke-dash: 5
+}
+tracks.track3 -> consumers.logs: "lock history" {
+  style.stroke: "#880e4f"
+  style.stroke-dash: 3
+}
+
+# ── Connections: Consumers → Sinks ─────────────────────────────
+consumers.metrics -> dev_sinks.aspire: "" {style.stroke: "#2e7d32"}
+consumers.traces -> dev_sinks.aspire: "" {style.stroke: "#2e7d32"}
+consumers.logs -> dev_sinks.seq: "" {style.stroke: "#2e7d32"}
+
+consumers.metrics -> prod_sinks.mimir: "OTel Collector" {style.stroke: "#e65100"}
+consumers.traces -> prod_sinks.tempo: "OTel Collector" {style.stroke: "#e65100"}
+consumers.logs -> prod_sinks.loki: "OTel Collector" {style.stroke: "#e65100"}
+consumers.health -> prod_sinks.grafana: "/health" {style.stroke: "#e65100"; style.stroke-dash: 3}
+
+prod_sinks.loki -> prod_sinks.grafana: "" {style.stroke: "#e65100"; style.stroke-dash: 5}
+prod_sinks.mimir -> prod_sinks.grafana: "" {style.stroke: "#e65100"; style.stroke-dash: 5}
+prod_sinks.tempo -> prod_sinks.grafana: "" {style.stroke: "#e65100"; style.stroke-dash: 5}

@@ -1,0 +1,131 @@
+# Typhon: Transaction Commit Path
+# Shows the flow from tx.Commit() through WAL to durable storage
+
+direction: right
+
+title: |md
+  # Transaction Commit Path
+  From tx.Commit() to durable storage
+|
+
+# ── Application Layer ──────────────────────────────────
+app: Application Thread {
+  style.fill: "#e8f4fd"
+  style.stroke: "#2196F3"
+
+  uow: UnitOfWork {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    tooltip: "Durability boundary"
+  }
+  tx: Transaction {
+    shape: rectangle
+    style.fill: "#90caf9"
+    tooltip: "MVCC operations"
+  }
+  commit: tx.Commit() {
+    shape: rectangle
+    style.fill: "#64b5f6"
+    style.font-color: white
+    style.bold: true
+  }
+}
+
+# ── Commit Pipeline ────────────────────────────────────
+pipeline: Commit Pipeline {
+  style.fill: "#fff3e0"
+  style.stroke: "#FF9800"
+
+  conflict: "1. MVCC Conflict\nDetection" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+  }
+  stamp: "2. Stamp UowEpoch\non Revisions" {
+    shape: rectangle
+    style.fill: "#ffcc80"
+  }
+  serialize: "3. Serialize WAL\nRecord to Buffer" {
+    shape: rectangle
+    style.fill: "#ffb74d"
+  }
+  decide: "4. Durability\nDecision" {
+    shape: diamond
+    style.fill: "#ffa726"
+    style.font-color: white
+  }
+}
+
+# ── WAL Infrastructure ─────────────────────────────────
+wal: WAL Infrastructure {
+  style.fill: "#fce4ec"
+  style.stroke: "#E91E63"
+
+  ring: "MPSC Ring Buffer\n(4MB, lock-free)" {
+    shape: cylinder
+    style.fill: "#f8bbd0"
+  }
+  writer: "WAL Writer Thread\n(dedicated)" {
+    shape: rectangle
+    style.fill: "#f48fb1"
+    style.bold: true
+  }
+  segment: "WAL Segment\n(64MB, FUA)" {
+    shape: page
+    style.fill: "#ec407a"
+    style.font-color: white
+  }
+}
+
+# ── Storage Layer ──────────────────────────────────────
+storage: Storage Layer {
+  style.fill: "#e8f5e9"
+  style.stroke: "#4CAF50"
+
+  pages: "Dirty Pages\n(Buffer Pool)" {
+    shape: cylinder
+    style.fill: "#c8e6c9"
+  }
+  checkpoint: "Checkpoint Manager\n(10s interval)" {
+    shape: rectangle
+    style.fill: "#a5d6a7"
+  }
+  data: "Data File\n(8KB pages)" {
+    shape: page
+    style.fill: "#66bb6a"
+    style.font-color: white
+  }
+}
+
+# ── Connections ────────────────────────────────────────
+app.uow -> app.tx: creates
+app.tx -> app.commit: calls
+app.commit -> pipeline.conflict: ""
+
+pipeline.conflict -> pipeline.stamp: pass
+pipeline.stamp -> pipeline.decide: ""
+pipeline.stamp -> pipeline.serialize: ""
+
+pipeline.decide -> wal.ring: "Immediate:\nsignal + wait" {
+  style.stroke: "#d32f2f"
+  style.font-color: "#d32f2f"
+  style.bold: true
+}
+pipeline.decide -> app.tx: "Deferred:\nreturn immediately" {
+  style.stroke: "#388e3c"
+  style.font-color: "#388e3c"
+  style.stroke-dash: 5
+}
+
+pipeline.serialize -> wal.ring: "atomic XADD\n(~100-500ns)"
+
+wal.ring -> wal.writer: drain
+wal.writer -> wal.segment: "FUA write\n(~15-85µs)"
+
+# Checkpoint path (async, background)
+wal.segment -> storage.pages: "revisions\nvisible" {
+  style.stroke-dash: 5
+}
+storage.pages -> storage.checkpoint: "periodic"
+storage.checkpoint -> storage.data: "fsync\n(sole owner)" {
+  style.bold: true
+}

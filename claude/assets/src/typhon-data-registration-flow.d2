@@ -1,0 +1,26 @@
+# Typhon: Component Registration Flow
+# Sequence diagram showing how components are registered at startup
+
+title: "Component Registration Flow" {
+  shape: text
+  style.font-size: 18
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+seq: {
+  shape: sequence_diagram
+
+  app: "App"
+  dbe: "DatabaseEngine"
+  defs: "DatabaseDefinitions"
+  ct: "ComponentTable"
+
+  app -> dbe: "RegisterComponent<PlayerComponent>()"
+  dbe -> defs: "GetOrCreate definition"
+  defs -> dbe: "DBComponentDefinition" {style.stroke-dash: 3}
+  dbe -> ct: "new ComponentTable(definition)"
+  ct -> ct: "Create segments\n(Component, RevTable, Indexes)"
+  dbe -> dbe: "Store in _componentTables"
+}

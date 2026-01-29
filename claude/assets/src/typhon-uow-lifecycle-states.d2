@@ -1,0 +1,189 @@
+# Typhon: UoW + Transaction Lifecycle State Machine
+# Shows legal states and transitions for both UoW and Transaction
+
+direction: right
+
+title: |md
+  # UoW & Transaction Lifecycle
+  States, transitions, and crash behavior
+|
+
+# ── Unit of Work Lifecycle ────────────────────────────────────
+uow: Unit of Work Lifecycle {
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.border-radius: 12
+
+  # States
+  idle: "Idle\n(no UoW)" {
+    shape: circle
+    style.fill: "#c8e6c9"
+    style.stroke: "#388e3c"
+  }
+  pending: "Pending\n(epoch allocated)" {
+    shape: rectangle
+    style.fill: "#a5d6a7"
+    style.stroke: "#388e3c"
+    style.bold: true
+  }
+  wal_durable: "WalDurable\n(FUA complete)" {
+    shape: rectangle
+    style.fill: "#66bb6a"
+    style.stroke: "#2e7d32"
+    style.font-color: white
+    style.bold: true
+  }
+  committed: "Committed\n(checkpointed)" {
+    shape: rectangle
+    style.fill: "#2e7d32"
+    style.font-color: white
+    style.stroke: "#1b5e20"
+  }
+  void: "Void\n(crash recovery)" {
+    shape: rectangle
+    style.fill: "#ffcdd2"
+    style.stroke: "#c62828"
+    style.font-color: "#b71c1c"
+  }
+
+  # Transitions
+  idle -> pending: "CreateUnitOfWork()\nallocate epoch" {
+    style.stroke: "#388e3c"
+  }
+  pending -> wal_durable: "Flush() / auto-flush\n(WAL FUA complete)" {
+    style.stroke: "#2e7d32"
+    style.bold: true
+  }
+  wal_durable -> committed: "Checkpoint Manager\n(pages fsynced)" {
+    style.stroke: "#1b5e20"
+    style.stroke-dash: 5
+  }
+  committed -> idle: "Epoch GC\n(slot recycled)" {
+    style.stroke: "#757575"
+    style.stroke-dash: 5
+  }
+  pending -> void: "CRASH\n(recovery voids epoch)" {
+    style.stroke: "#c62828"
+    style.bold: true
+  }
+  void -> idle: "Epoch GC\n(no active refs)" {
+    style.stroke: "#757575"
+    style.stroke-dash: 5
+  }
+
+  # Note
+  note: |md
+    **Durability Modes control Pending → WalDurable:**
+    - *Deferred*: only on explicit Flush()
+    - *GroupCommit*: auto every 5-10ms
+    - *Immediate*: on every tx.Commit()
+  | {
+    shape: text
+    style.font-size: 13
+  }
+}
+
+# ── Transaction Lifecycle ─────────────────────────────────────
+tx: Transaction Lifecycle {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.border-radius: 12
+
+  # States
+  pool: "Pool\n(recycled)" {
+    shape: circle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+  }
+  created: "Created\n(TSN assigned)" {
+    shape: rectangle
+    style.fill: "#90caf9"
+    style.stroke: "#1565c0"
+  }
+  in_progress: "InProgress\n(has operations)" {
+    shape: rectangle
+    style.fill: "#64b5f6"
+    style.stroke: "#1565c0"
+    style.bold: true
+  }
+  committed_tx: "Committed\n(changes applied)" {
+    shape: rectangle
+    style.fill: "#1565c0"
+    style.font-color: white
+    style.bold: true
+  }
+  rollbacked: "Rollbacked\n(changes discarded)" {
+    shape: rectangle
+    style.fill: "#ffcdd2"
+    style.stroke: "#c62828"
+  }
+
+  # Transitions
+  pool -> created: "CreateTransaction()\nassign TSN" {
+    style.stroke: "#1976d2"
+  }
+  created -> in_progress: "First CRUD\noperation" {
+    style.stroke: "#1565c0"
+  }
+  in_progress -> committed_tx: "tx.Commit()\n(conflict check passes)" {
+    style.stroke: "#1565c0"
+    style.bold: true
+  }
+  in_progress -> rollbacked: "tx.Rollback()\nor conflict failure" {
+    style.stroke: "#c62828"
+  }
+  created -> rollbacked: "Dispose()\nwithout ops" {
+    style.stroke: "#9e9e9e"
+    style.stroke-dash: 5
+  }
+  in_progress -> rollbacked: "Dispose()\nwithout Commit" {
+    style.stroke: "#9e9e9e"
+    style.stroke-dash: 5
+  }
+  committed_tx -> pool: "Dispose()\nreturn to pool" {
+    style.stroke: "#757575"
+    style.stroke-dash: 5
+  }
+  rollbacked -> pool: "Dispose()\nreturn to pool" {
+    style.stroke: "#757575"
+    style.stroke-dash: 5
+  }
+}
+
+# ── Relationship ──────────────────────────────────────────────
+uow.pending -> tx.pool: "UoW creates\nmultiple Tx" {
+  style.stroke: "#ff9800"
+  style.bold: true
+  style.stroke-dash: 3
+}
+
+# ── Durability Guarantee Progression ─────────────────────────
+dg: Durability Guarantee {
+  style.fill: "#fff3e0"
+  style.stroke: "#e65100"
+  style.border-radius: 8
+
+  volatile: "Volatile\n(in-memory only)" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+  }
+  durable: "Durable\n(WAL on disk)" {
+    shape: rectangle
+    style.fill: "#ffb74d"
+    style.bold: true
+  }
+  checkpointed: "Checkpointed\n(data pages on disk)" {
+    shape: rectangle
+    style.fill: "#e65100"
+    style.font-color: white
+  }
+
+  volatile -> durable: "WAL FUA" {
+    style.stroke: "#e65100"
+    style.bold: true
+  }
+  durable -> checkpointed: "Checkpoint fsync" {
+    style.stroke: "#e65100"
+    style.stroke-dash: 5
+  }
+}

@@ -1,0 +1,20 @@
+<Solution>
+    <Configurations>
+        <BuildType Name="Debug" />
+        <BuildType Name="Release" />
+    </Configurations>
+    <Folder Name="/Solution Items/">
+        <File Path=".editorconfig" />
+        <File Path=".gitignore" />
+        <File Path="README.md" />
+        <File Path="Typhon.sln.DotSettings" />
+    </Folder>
+    <Folder Name="/src/">
+        <Project Path="src/Typhon.Analyzers/Typhon.Analyzers.csproj" />
+        <Project Path="src/Typhon.Engine/Typhon.Engine.csproj" />
+    </Folder>
+    <Folder Name="/test/">
+        <Project Path="test/Typhon.Benchmark/Typhon.Benchmark.csproj" />
+        <Project Path="test/Typhon.Engine.Tests/Typhon.Engine.Tests.csproj" />
+    </Folder>
+</Solution>

@@ -1,0 +1,151 @@
+# Typhon: Backup & Restore — Component Overview
+# Shows Application → Backup System → Storage/Output
+
+direction: down
+
+# ── Title ─────────────────────────────────────────────────────
+title: "Backup & Restore — Component Overview" {
+  shape: text
+  style.font-size: 22
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+# ── Application Layer ────────────────────────────────────────
+app: "Application Layer" {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.border-radius: 10
+
+  admin: "Admin API\nCreateSnapshot / DeleteSnapshot / Restore" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+    style.bold: true
+  }
+  scheduler: "Scheduler\n(optional periodic snapshots)" {
+    shape: rectangle
+    style.fill: "#90caf9"
+    style.stroke: "#1565c0"
+  }
+}
+
+# ── Backup System ────────────────────────────────────────────
+backup: "Backup System" {
+  style.fill: "#fce4ec"
+  style.stroke: "#c62828"
+  style.border-radius: 10
+
+  cow: "CoW Shadow Buffer\n(pre-modification page copies)" {
+    shape: rectangle
+    style.fill: "#f8bbd0"
+    style.stroke: "#c62828"
+    style.bold: true
+  }
+  writer: "Background Writer\ncompress → sequential write" {
+    shape: rectangle
+    style.fill: "#f48fb1"
+    style.stroke: "#ad1457"
+    style.font-color: white
+    style.bold: true
+  }
+  delta: "Reverse Delta Engine\ndiff(current, previous)" {
+    shape: rectangle
+    style.fill: "#f8bbd0"
+    style.stroke: "#c62828"
+  }
+  bitmap: "CoW Bitmap\n(1 bit per page: backed up?)" {
+    shape: rectangle
+    style.fill: "#fce4ec"
+    style.stroke: "#c62828"
+  }
+
+  cow -> writer: "enqueue pages" {style.stroke: "#ad1457"}
+  writer -> delta: "compute deltas" {style.stroke: "#ad1457"; style.stroke-dash: 3}
+}
+
+# ── Storage Engine ───────────────────────────────────────────
+storage: "Storage Engine" {
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.border-radius: 10
+
+  pages: "Page Cache\n(pinned byte[], 8KB pages)" {
+    shape: cylinder
+    style.fill: "#a5d6a7"
+    style.stroke: "#388e3c"
+    style.bold: true
+  }
+  checkpoint: "Checkpoint Manager\n(flush dirty pages)" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+  }
+  datafile: "Data File\n(on-disk pages)" {
+    shape: page
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+  }
+}
+
+# ── Backup Output ────────────────────────────────────────────
+output: "Backup Storage" {
+  style.fill: "#fff3e0"
+  style.stroke: "#e65100"
+  style.border-radius: 10
+
+  full: "Full Snapshot\n(all pages, compressed)" {
+    shape: page
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+    style.bold: true
+  }
+  rdelta: "Reverse Deltas\n(how to go backward)" {
+    shape: page
+    style.fill: "#ffcc80"
+    style.stroke: "#e65100"
+  }
+  index: "Page Index\n(FilePageIndex → offset)" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+  }
+}
+
+# ── App → Backup connections ─────────────────────────────────
+app.admin -> backup.cow: "triggers snapshot" {
+  style.stroke: "#c62828"
+  style.bold: true
+}
+app.admin -> storage.checkpoint: "force checkpoint first" {
+  style.stroke: "#2e7d32"
+  style.stroke-dash: 3
+}
+
+# ── Storage → Backup connections ─────────────────────────────
+storage.pages -> backup.cow: "page about to be modified\n→ copy to shadow" {
+  style.stroke: "#c62828"
+  style.bold: true
+}
+storage.pages -> backup.bitmap: "check before exclusive" {
+  style.stroke: "#c62828"
+  style.stroke-dash: 3
+}
+storage.checkpoint -> backup.cow: "checkpoint-aware\n(CoW before flush)" {
+  style.stroke: "#2e7d32"
+  style.stroke-dash: 3
+}
+
+# ── Backup → Output connections ──────────────────────────────
+backup.writer -> output.full: "first snapshot" {
+  style.stroke: "#e65100"
+  style.bold: true
+}
+backup.writer -> output.rdelta: "subsequent snapshots" {
+  style.stroke: "#e65100"
+}
+backup.writer -> output.index: "page directory" {
+  style.stroke: "#e65100"
+  style.stroke-dash: 3
+}

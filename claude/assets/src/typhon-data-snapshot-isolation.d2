@@ -1,0 +1,37 @@
+# Typhon: Snapshot Isolation
+# Sequence diagram showing how MVCC provides snapshot reads
+
+title: "Snapshot Isolation — MVCC Behavior" {
+  shape: text
+  style.font-size: 18
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+seq: {
+  shape: sequence_diagram
+
+  t1: "Transaction 1\n(TSN=100)"
+  t2: "Transaction 2\n(TSN=101)"
+  rev: "Revision Chain"
+
+  # T1 starts, establishes snapshot
+  t1."T1 starts, sees data at TSN ≤ 100"
+
+  # T2 creates a new revision
+  t2 -> rev: "Create revision (TSN=101, IsolationFlag=1)"
+  rev."Revision invisible to T1"
+
+  # T1 reads — doesn't see T2's change
+  t1 -> rev: "Read entity"
+  rev -> t1: "Returns revision with TSN ≤ 100" {style.stroke-dash: 3}
+
+  # T2 commits
+  t2 -> t2: "Commit (clears IsolationFlag)"
+  rev."Now visible to new transactions"
+
+  # T1 reads again — still sees old snapshot
+  t1 -> rev: "Read entity again"
+  rev -> t1: "Still returns TSN ≤ 100 (snapshot)" {style.stroke-dash: 3}
+}

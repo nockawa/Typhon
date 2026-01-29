@@ -1,0 +1,150 @@
+# Typhon: CoW Shadow Buffer — Hot Path Mechanism
+# Shows what happens when a page is acquired for exclusive access during backup
+
+direction: down
+
+# ── Title ─────────────────────────────────────────────────────
+title: "CoW Shadow Buffer — Hot Path" {
+  shape: text
+  style.font-size: 22
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+# ── Hot Path Steps ───────────────────────────────────────────
+pipeline: "" {
+  style.fill: "#fafafa"
+  style.stroke: "#607d8b"
+  style.border-radius: 10
+
+  step1: "Thread calls RequestPage(exclusive=true)" {
+    shape: rectangle
+    style.fill: "#e3f2fd"
+    style.stroke: "#1565c0"
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  step2: "TransitionPageToAccess\ncheck: _backupActive != 0" {
+    shape: rectangle
+    style.fill: "#e3f2fd"
+    style.stroke: "#1565c0"
+    style.border-radius: 6
+  }
+
+  decision: "Backup\nactive?" {
+    shape: diamond
+    style.fill: "#fff3e0"
+    style.stroke: "#e65100"
+    style.bold: true
+  }
+
+  fastpath: "Normal path\n(1 volatile read, ~1 cycle)" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+    style.border-radius: 6
+  }
+
+  step3: "CowBitmap.TrySet(filePageIndex)\natomic test-and-set" {
+    shape: rectangle
+    style.fill: "#f8bbd0"
+    style.stroke: "#c62828"
+    style.border-radius: 6
+  }
+
+  decision2: "Already\nCoW'd?" {
+    shape: diamond
+    style.fill: "#fff3e0"
+    style.stroke: "#e65100"
+  }
+
+  step4: "Copy 8KB: pageCache → shadowPool\nBuffer.MemoryCopy (pinned → pinned)" {
+    shape: rectangle
+    style.fill: "#f48fb1"
+    style.stroke: "#ad1457"
+    style.border-radius: 6
+    style.font-color: white
+    style.bold: true
+  }
+
+  step5: "Enqueue ShadowEntry\n{FilePageIndex, ChangeRevision, SlotIndex}" {
+    shape: rectangle
+    style.fill: "#f8bbd0"
+    style.stroke: "#c62828"
+    style.border-radius: 6
+  }
+
+  step6: "PageState → Exclusive\n(mutation proceeds normally)" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  step1 -> step2: "" {style.stroke: "#546e7a"}
+  step2 -> decision: "" {style.stroke: "#546e7a"}
+  decision -> fastpath: "No" {style.stroke: "#2e7d32"; style.bold: true}
+  decision -> step3: "Yes" {style.stroke: "#c62828"}
+  step3 -> decision2: "" {style.stroke: "#546e7a"}
+  decision2 -> step6: "Yes (skip)" {style.stroke: "#2e7d32"}
+  decision2 -> step4: "No (first write)" {style.stroke: "#c62828"; style.bold: true}
+  step4 -> step5: "" {style.stroke: "#546e7a"}
+  step5 -> step6: "" {style.stroke: "#546e7a"}
+  fastpath -> step6: "" {style.stroke: "#2e7d32"; style.stroke-dash: 3}
+}
+
+# ── Background Writer ────────────────────────────────────────
+writer: "Background Backup Writer" {
+  style.fill: "#f3e5f5"
+  style.stroke: "#6a1b9a"
+  style.border-radius: 10
+
+  dequeue: "Dequeue ShadowEntry" {
+    shape: rectangle
+    style.fill: "#e1bee7"
+    style.stroke: "#7b1fa2"
+    style.border-radius: 6
+  }
+  compress: "Compress page (LZ4)" {
+    shape: rectangle
+    style.fill: "#ce93d8"
+    style.stroke: "#6a1b9a"
+    style.border-radius: 6
+    style.bold: true
+  }
+  write: "Write sequentially\nto backup file" {
+    shape: rectangle
+    style.fill: "#ab47bc"
+    style.stroke: "#4a148c"
+    style.font-color: white
+    style.border-radius: 6
+  }
+  free: "Free shadow slot\n(ring buffer advance)" {
+    shape: rectangle
+    style.fill: "#e1bee7"
+    style.stroke: "#7b1fa2"
+    style.border-radius: 6
+  }
+
+  dequeue -> compress: "" {style.stroke: "#6a1b9a"}
+  compress -> write: "" {style.stroke: "#6a1b9a"}
+  write -> free: "" {style.stroke: "#6a1b9a"}
+}
+
+# ── Connection from hot path to writer ───────────────────────
+pipeline.step5 -> writer.dequeue: "ConcurrentQueue" {
+  style.stroke: "#6a1b9a"
+  style.bold: true
+  style.stroke-dash: 3
+}
+
+# ── Performance annotation ───────────────────────────────────
+perf: "Performance Cost" {
+  shape: text
+  style.font-size: 14
+  style.font-color: "#546e7a"
+  near: bottom-center
+}

@@ -1,0 +1,199 @@
+# Typhon: UoW + Transaction Swimlane Pipeline
+# Shows which architectural layer handles each step of the commit path
+
+direction: down
+
+title: |md
+  # UoW Commit Pipeline — Layer Ownership
+  Which layer handles what, and when work crosses boundaries
+|
+
+# ── Layer Columns (Swimlanes) ─────────────────────────────────
+
+app: "Application\n(user code)" {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.border-radius: 8
+
+  create_uow: "1. CreateUnitOfWork(mode)\n   → allocate epoch" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+  }
+  create_tx: "2. CreateTransaction()\n   → assign TSN" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+  }
+  crud: "3. CRUD Operations\n   Create / Read / Update / Delete" {
+    shape: rectangle
+    style.fill: "#90caf9"
+    style.bold: true
+  }
+  call_commit: "4. tx.Commit(override?)" {
+    shape: rectangle
+    style.fill: "#64b5f6"
+    style.font-color: white
+    style.bold: true
+  }
+  flush: "7. Flush() / Dispose()" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+  }
+}
+
+engine: "Data Engine\n(MVCC + Indexes)" {
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.border-radius: 8
+
+  cache_ops: "3a. Cache operations\n    in tx._pending" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+  }
+  conflict: "4a. MVCC Conflict\n    Detection" {
+    shape: rectangle
+    style.fill: "#a5d6a7"
+    style.bold: true
+  }
+  apply: "4b. ApplyChanges()\n    stamp UowEpoch\n    update indexes" {
+    shape: rectangle
+    style.fill: "#81c784"
+    style.bold: true
+  }
+  visibility: "Revisions now\nMVCC-visible" {
+    shape: rectangle
+    style.fill: "#66bb6a"
+    style.font-color: white
+  }
+}
+
+durability: "Durability Layer\n(WAL + Ring Buffer)" {
+  style.fill: "#fce4ec"
+  style.stroke: "#c62828"
+  style.border-radius: 8
+
+  serialize: "5. Serialize WAL Record\n   to Ring Buffer\n   {atomic XADD, ~100-500ns}" {
+    shape: rectangle
+    style.fill: "#f8bbd0"
+    style.bold: true
+  }
+  decide: "6. Durability Decision" {
+    shape: diamond
+    style.fill: "#f48fb1"
+  }
+  signal: "6a. Signal WAL Writer\n    + Wait for LSN\n    {~15-85µs}" {
+    shape: rectangle
+    style.fill: "#ec407a"
+    style.font-color: white
+    style.bold: true
+  }
+  return_vol: "6b. Return immediately\n    (volatile)" {
+    shape: rectangle
+    style.fill: "#f8bbd0"
+  }
+  wal_writer: "WAL Writer Thread\n(dedicated, drains ring)" {
+    shape: rectangle
+    style.fill: "#c62828"
+    style.font-color: white
+    style.bold: true
+  }
+  fua: "FUA Write\n(FILE_FLAG_WRITE_THROUGH)" {
+    shape: page
+    style.fill: "#b71c1c"
+    style.font-color: white
+  }
+}
+
+storage: "Storage Engine\n(Pages + Checkpoint)" {
+  style.fill: "#fff3e0"
+  style.stroke: "#e65100"
+  style.border-radius: 8
+
+  dirty: "Pages marked dirty\n(in buffer pool)" {
+    shape: cylinder
+    style.fill: "#ffe0b2"
+  }
+  checkpoint: "Checkpoint Manager\n(every ~10s)" {
+    shape: rectangle
+    style.fill: "#ffcc80"
+    style.stroke-dash: 5
+  }
+  data_file: "Data File\n(8KB pages, fsync)" {
+    shape: page
+    style.fill: "#e65100"
+    style.font-color: white
+  }
+}
+
+# ── Flow Connections ──────────────────────────────────────────
+
+# Application layer internal flow
+app.create_uow -> app.create_tx: "" {style.stroke: "#1565c0"}
+app.create_tx -> app.crud: "" {style.stroke: "#1565c0"}
+app.crud -> app.call_commit: "" {style.stroke: "#1565c0"}
+
+# App → Engine crossing
+app.crud -> engine.cache_ops: "buffer in tx" {
+  style.stroke: "#2e7d32"
+  style.stroke-dash: 3
+}
+app.call_commit -> engine.conflict: "commit path\nbegins" {
+  style.stroke: "#2e7d32"
+  style.bold: true
+}
+
+# Engine internal flow
+engine.conflict -> engine.apply: "pass" {
+  style.stroke: "#2e7d32"
+}
+engine.apply -> engine.visibility: "epoch stamped" {
+  style.stroke: "#2e7d32"
+}
+
+# Engine → Durability crossing
+engine.apply -> durability.serialize: "build WAL record" {
+  style.stroke: "#c62828"
+  style.bold: true
+}
+
+# Durability internal flow
+durability.serialize -> durability.decide: "" {style.stroke: "#c62828"}
+durability.decide -> durability.signal: "Immediate" {
+  style.stroke: "#c62828"
+  style.bold: true
+  style.font-color: "#c62828"
+}
+durability.decide -> durability.return_vol: "Deferred /\nGroupCommit" {
+  style.stroke: "#388e3c"
+  style.font-color: "#388e3c"
+}
+durability.signal -> durability.wal_writer: "wake" {style.stroke: "#c62828"}
+durability.wal_writer -> durability.fua: "sequential\nappend" {style.stroke: "#c62828"}
+
+# Return paths
+durability.return_vol -> app.flush: "tx returns\n(volatile)" {
+  style.stroke: "#388e3c"
+  style.stroke-dash: 5
+}
+durability.fua -> app.flush: "LSN confirmed\n(durable)" {
+  style.stroke: "#c62828"
+  style.stroke-dash: 5
+}
+
+# Durability → Storage (async, background)
+engine.visibility -> storage.dirty: "pages in\nbuffer pool" {
+  style.stroke: "#e65100"
+  style.stroke-dash: 5
+}
+storage.dirty -> storage.checkpoint: "periodic" {
+  style.stroke: "#e65100"
+  style.stroke-dash: 5
+}
+storage.checkpoint -> storage.data_file: "fsync\n(sole owner)" {
+  style.stroke: "#e65100"
+}
+
+# Flush triggers
+app.flush -> durability.wal_writer: "Flush() forces\nWAL drain" {
+  style.stroke: "#ff9800"
+  style.stroke-dash: 3
+}
