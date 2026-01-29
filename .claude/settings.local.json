@@ -31,7 +31,8 @@
       "Bash(gh api:*)",
       "Bash(gh pr list:*)",
       "WebFetch(domain:github.com)",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(dir:*)"
     ],
     "deny": [],
     "ask": []

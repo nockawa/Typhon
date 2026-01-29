@@ -174,10 +174,6 @@ gh project item-edit --project-id PVT_kwHOAud1ac4BNdCj --id ITEM_ID \
 - Field ID: `PVTSSF_lAHOAud1ac4BNdCjzg8cYEU`
 - Options: Look up via `gh project field-list 7 --owner nockawa --format json`
 
-### Design Doc Field (Text)
-- Field ID: `PVTF_lAHOAud1ac4BNdCjzg8c8uY`
-- Set with: `--text "claude/design/FeatureName.md"`
-
 ### Target Date Field
 - Field ID: `PVTF_lAHOAud1ac4BNdCjzg8c8uc`
 - Set with: `--date "2026-02-15"`

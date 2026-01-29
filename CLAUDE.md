@@ -405,7 +405,6 @@ Backlog → Research → Ready → In Progress → Review → Done
 - **Phase**: Telemetry, Query, WAL, Reliability, Infrastructure
 - **Area**: Database, MVCC, Transactions, Indexes, Schema, Storage, Memory, Concurrency, Primitives
 - **Estimate**: XS, S, M, L, XL
-- **Design Doc**: Link to `claude/design/` document
 - **Target**: Target date for Roadmap view
 
 ## Working with Claude

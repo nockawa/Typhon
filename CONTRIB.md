@@ -29,14 +29,15 @@ The goal is to create a system where:
 ## Table of Contents
 
 1. [The Big Picture](#the-big-picture)
-2. [Lifecycle Stages](#lifecycle-stages)
-3. [Artifact Relationships](#artifact-relationships)
-4. [Workflow Rituals](#workflow-rituals)
-5. [Claude Code Integration Points](#claude-code-integration-points)
-6. [Automation Specifications](#automation-specifications)
-7. [Views & Dashboards](#views--dashboards)
-8. [Developer's Daily Guide](#developers-daily-guide)
-9. [Implementation Plan](#implementation-plan)
+2. [Branch Strategy](#branch-strategy)
+3. [Lifecycle Stages](#lifecycle-stages)
+4. [Artifact Relationships](#artifact-relationships)
+5. [Workflow Rituals](#workflow-rituals)
+6. [Claude Code Integration Points](#claude-code-integration-points)
+7. [Automation Specifications](#automation-specifications)
+8. [Views & Dashboards](#views--dashboards)
+9. [Developer's Daily Guide](#developers-daily-guide)
+10. [Implementation Plan](#implementation-plan)
 
 ---
 
@@ -82,6 +83,60 @@ The goal is to create a system where:
 3. **Issues = Discussion** — Comments, decisions, blockers for specific work items
 4. **Rider = Developer Cockpit** — Branch management, context switching, issue navigation
 5. **Claude Code = Glue** — Keeps everything synchronized and prompts for missing pieces
+
+---
+
+## Branch Strategy
+
+Typhon uses **GitHub Flow** — a simple, effective branching model:
+
+```
+main (default) ◄── feature/18-accesscontrol
+                ◄── feature/42-query-engine
+                ◄── fix/55-page-cache-bug
+
+Tags: v0.1.0, v0.2.0 (mark release points)
+```
+
+### Branch Types
+
+| Branch | Purpose | Naming | Lifespan |
+|--------|---------|--------|----------|
+| `main` | Default branch, always deployable | — | Permanent |
+| `feature/*` | New functionality | `feature/<issue>-short-name` | Days to weeks |
+| `fix/*` | Bug fixes | `fix/<issue>-short-name` | Days |
+| `hotfix/*` | Emergency fixes (rare) | `hotfix/<issue>-description` | Hours |
+
+### Workflow
+
+1. **Create feature branch** from `main`: `git checkout -b feature/42-query-engine`
+2. **Work on the branch**: Commit frequently with issue references (`#42: Add parser`)
+3. **Open PR** to `main` when ready
+4. **Merge PR** (squash or merge commit)
+5. **Delete feature branch** after merge
+
+### Releases
+
+Releases are simply **tags on `main`**:
+
+```bash
+# When ready for a release:
+git tag -a v0.1.0 -m "Telemetry foundation release"
+git push origin v0.1.0
+gh release create v0.1.0 --title "v0.1.0 - Telemetry Foundation" --generate-notes
+```
+
+**Versioning (pre-1.0):**
+- Breaking changes: bump MINOR (`0.1.0` → `0.2.0`)
+- Non-breaking changes: bump PATCH (`0.1.0` → `0.1.1`)
+
+### Linking to Documentation
+
+When linking to `claude/` docs in GitHub issues, use the `main` branch:
+
+```markdown
+[Design Doc](https://github.com/nockawa/Typhon/blob/main/claude/design/FeatureName.md)
+```
 
 ---
 
@@ -257,7 +312,7 @@ The goal is to create a system where:
 ```
 
 **In GitHub Project:**
-Set the "Design Doc" field to the path (e.g., `claude/design/QueryEngine.md`).
+Design docs are linked in the issue body's "Related Documents" section (not as a project field, since text fields aren't clickable).
 
 ---
 
@@ -522,7 +577,6 @@ jobs:
 | Area | Single-select | Database, MVCC, Transactions, Indexes, Schema, Storage, Memory, Concurrency, Primitives | Subsystem |
 | Estimate | Single-select | XS, S, M, L, XL | Effort sizing |
 | Priority | Single-select | P0, P1, P2, P3 | Urgency |
-| Design Doc | Text | URL/path | Link to design |
 | Target | Date | Target dates | Roadmap positioning |
 
 ---
@@ -732,7 +786,6 @@ The following has been implemented:
 - Phase: Telemetry, Query, WAL, Reliability, Infrastructure
 - Area: Database, MVCC, Transactions, Indexes, Schema, Storage, Memory, Concurrency, Primitives
 - Estimate: XS, S, M, L, XL
-- Design Doc: (text field for linking to claude/design/)
 - Target: (date field for Roadmap view)
 
 ### Claude Code Skills
