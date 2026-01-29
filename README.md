@@ -1,31 +1,129 @@
-# 🐍 Typhon 🐍
+# 🐍 Typhon
 
-**A real-time, low latency and very fast ACID database.**
+[![Build](https://github.com/nockawa/Typhon/actions/workflows/build-documentation.yml/badge.svg)](https://github.com/nockawa/Typhon/actions)
+[![.NET](https://img.shields.io/badge/.NET-10-512BD4)](https://dotnet.microsoft.com/)
 
-Documentation can be found [here](https://nockawa.github.io/Typhon/).
+**A microsecond-latency ACID database engine combining ECS architecture with MVCC isolation.**
 
-# History
-This project went through many things:
-- Bootstrapped in 2015 with a very different design and intent, then quickly put on a shelf.
-- Resurrected during COVID in 2020 as a POC of "is it possible to make a real-time ACID database, down to the µs", oriented for persistent games ? Then put on a shelf after promising work.
-- Many concepts around unsafe/GC-free .net programming lead me to develop [🍅](https://github.com/nockawa/Tomate), but the two projects are not dependent. I, for once, successfully restrained myself to retrofit 🍅 into this one, it's totally doable, but as usual, just a matter of time...
-- Re-resurrected in summer 2025 with the "firm, but fragile" intention to reach an alpha stage.
+Typhon is an embedded database designed for real-time workloads like game servers, simulations, and high-frequency trading systems. It delivers ACID transactions with configurable durability, snapshot isolation via MVCC, and a data model inspired by Entity-Component-System patterns.
 
-## Why ?
-Initially I wanted to "make a database engine for MMOs, something fast, reliable and scalable" (in that order).
+📖 [Documentation](https://nockawa.github.io/Typhon/) · 🐛 [Issues](https://github.com/nockawa/Typhon/issues) · 📋 [Project Board](https://github.com/users/nockawa/projects/7)
 
-Something like a weird mixed between [ECS](https://en.wikipedia.org/wiki/Entity_component_system) and a "regular database engine".
+---
 
-### Fast
-In the realm of the micro-second. Concessions would have to be made, but it has to be fast, otherwise there's no really a point to it.
+## ✨ Key Features
 
-### More suitable
-Not the original intent, but quickly a very interesting angle. Adopting some of the ECS principals would make this more natural for the users.
+- **Microsecond Operations** — Optimized for µs-level latency with pinned memory, SIMD, and lock-free reads
+- **ACID Transactions** — Full transactional semantics with optimistic concurrency control
+- **Configurable Durability** — Choose per-component whether data persists to disk or stays in-memory
+- **MVCC Snapshot Isolation** — Readers never block writers; each transaction sees a consistent snapshot
+- **ECS-Inspired Data Model** — Entities are just IDs; components are blittable structs with automatic indexing
+- **B+Tree Indexes** — Cache-aligned 64-byte nodes with specialized variants for different key sizes
 
-### Reliable, meaning Durable (or not...)
-Atomic, transaction-based and durable operations. 
+## 🚀 Quick Start
 
-Through a design decision, the user can opt out durability on chosen components.
+```csharp
+// Define a component
+[Component]
+public struct Player
+{
+    [Field] [Index] public int PlayerId;
+    [Field] public float Health;
+    [Field] public String64 Name;
+}
 
-### Scalable
-While it's still a goal, the ambitions were tuned down. A theoretical evolution would be a shard/hash based implementation, but the resulting complexity makes this no longer an objective.
+// Use the database
+using var dbe = serviceProvider.GetRequiredService<DatabaseEngine>();
+dbe.RegisterComponent<Player>();
+
+using var tx = dbe.CreateTransaction();
+
+// Create an entity
+var player = new Player { PlayerId = 42, Health = 100f, Name = "Alice" };
+var entityId = tx.CreateEntity(ref player);
+
+// Read it back
+tx.ReadEntity(entityId, out Player loaded);
+
+// Commit the transaction
+tx.Commit();
+```
+
+## 📦 Installation
+
+> ⚠️ **Pre-release**: Typhon is in active development. No NuGet package yet.
+
+```bash
+# Clone and build
+git clone https://github.com/nockawa/Typhon.git
+cd Typhon
+dotnet build
+dotnet test
+```
+
+## 🏗️ Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     DatabaseEngine                          │
+│  (API, Transaction Management, Component Registration)      │
+├─────────────────────────────────────────────────────────────┤
+│                     Transaction Layer                       │
+│  (MVCC, Snapshot Isolation, Conflict Detection)             │
+├─────────────────────────────────────────────────────────────┤
+│                     Component Tables                        │
+│  (Per-Type Storage, Revision Chains, B+Tree Indexes)        │
+├─────────────────────────────────────────────────────────────┤
+│                     Persistence Layer                       │
+│  (PagedMMF, 8KB Pages, Clock-Sweep Cache, Segments)         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+For detailed architecture, see the [Overview Documentation](claude/overview/).
+
+## 🎯 Use Cases
+
+Typhon is designed for workloads where **latency matters more than throughput**:
+
+| Domain | Application |
+|--------|-------------|
+| **Gaming** | Persistent world state, real-time entity updates, MMO backends |
+| **Finance** | High-frequency trading, tick-by-tick market data, order management |
+| **Embedded** | In-process database without network overhead, edge computing |
+| **ECS Persistence** | Natural storage layer for entity-component-system architectures |
+
+## 📚 Documentation
+
+- **[API Documentation](https://nockawa.github.io/Typhon/)** — Full API reference
+- **[Architecture Overview](claude/overview/)** — 11-part deep dive into internals
+- **[ADRs](claude/adr/)** — 30 Architecture Decision Records explaining design choices
+- **[Contributing](CONTRIB.md)** — Development workflow and guidelines
+
+## 🧪 Development Status
+
+Typhon is in **active development** targeting an alpha release. Current focus:
+
+- [x] Core transaction engine with MVCC
+- [x] B+Tree indexes with concurrent access
+- [x] Component-level durability options
+- [ ] Write-Ahead Logging (WAL)
+- [ ] Query engine with filtering/sorting
+- [ ] Backup and restore
+
+See the [Project Board](https://github.com/users/nockawa/projects/7) for current priorities.
+
+## 📜 History
+
+This project has had quite a journey:
+
+- **2015** — Initial bootstrap with a different design, quickly shelved
+- **2020** — COVID resurrection as a POC: "Can we build a µs-latency ACID database for persistent games?" Promising results, then shelved again
+- **2025** — Third resurrection with firm intention to reach alpha stage
+
+Along the way, explorations in unsafe/GC-free .NET programming led to [🍅 Tomate](https://github.com/nockawa/Tomate) — a separate project that could theoretically integrate but intentionally doesn't (yet).
+
+---
+
+<p align="center">
+  <i>Built with 🐍 and excessive amounts of unsafe code</i>
+</p>
