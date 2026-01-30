@@ -87,11 +87,21 @@ public class DatabaseEngineOptions
 {
 }
 
+/// <summary>
+/// The main database engine class providing transaction-based access to component data.
+/// </summary>
+/// <remarks>
+/// <para>
+/// DatabaseEngine registers itself under the <see cref="ResourceSubsystem.DataEngine"/> subsystem
+/// in the resource tree. ComponentTables are registered as children of this engine.
+/// </para>
+/// </remarks>
 [PublicAPI]
-public class DatabaseEngine : IDisposable
+public class DatabaseEngine : IDisposable, IResource
 {
     private readonly DatabaseEngineOptions      _options;
     private readonly ILogger<DatabaseEngine>    _log;
+    private readonly ConcurrentDictionary<string, IResource> _children;
 
     private ComponentTable _fieldsTable;
     private ComponentTable _componentsTable;
@@ -105,6 +115,34 @@ public class DatabaseEngine : IDisposable
 
     internal TransactionChain TransactionChain { get; }
 
+    #region IResource Implementation
+
+    /// <inheritdoc />
+    public string Id { get; }
+
+    /// <inheritdoc />
+    public ResourceType Type => ResourceType.Node;
+
+    /// <inheritdoc />
+    public IResource Parent { get; }
+
+    /// <inheritdoc />
+    public IEnumerable<IResource> Children => _children.Values;
+
+    /// <inheritdoc />
+    public DateTime CreatedAt { get; }
+
+    /// <inheritdoc />
+    public IResourceRegistry Owner { get; }
+
+    /// <inheritdoc />
+    public bool RegisterChild(IResource child) => _children.TryAdd(child.Id, child);
+
+    /// <inheritdoc />
+    public bool RemoveChild(IResource resource) => _children.TryRemove(resource.Id, out _);
+
+    #endregion
+
     /// <summary>
     /// Create a transaction in order to make Queries and CRUD operation on the database
     /// </summary>
@@ -117,7 +155,22 @@ public class DatabaseEngine : IDisposable
     public Transaction CreateTransaction() => TransactionChain.CreateTransaction(this);
 
     public DatabaseEngine(DatabaseEngineOptions options, ManagedPagedMMF mmf, ILogger<DatabaseEngine> log)
+        : this(options, mmf, log, TyphonServices.ResourceRegistry)
     {
+    }
+
+    public DatabaseEngine(DatabaseEngineOptions options, ManagedPagedMMF mmf, ILogger<DatabaseEngine> log,
+        IResourceRegistry resourceRegistry, string name = null)
+    {
+        // IResource initialization
+        Id = name ?? $"DatabaseEngine_{Guid.NewGuid():N}";
+        Owner = resourceRegistry ?? throw new ArgumentNullException(nameof(resourceRegistry));
+        Parent = Owner.DataEngine;
+        CreatedAt = DateTime.UtcNow;
+        _children = new ConcurrentDictionary<string, IResource>();
+        Parent.RegisterChild(this);
+
+        // Engine initialization
         MMF = mmf;
         _log = log;
         _options = options;
@@ -132,11 +185,6 @@ public class DatabaseEngine : IDisposable
         {
             CreateSystemSchemaR1();
         }
-        else
-        {
-            
-        }
-        
     }
 
     public bool IsDisposed { get; private set; }
@@ -147,6 +195,16 @@ public class DatabaseEngine : IDisposable
         {
             return;
         }
+
+        // Dispose children (ComponentTables)
+        foreach (var child in _children.Values)
+        {
+            child.Dispose();
+        }
+        _children.Clear();
+
+        // Unregister from parent
+        Parent?.RemoveChild(this);
 
         TransactionChain.Dispose();
         MMF.Dispose();

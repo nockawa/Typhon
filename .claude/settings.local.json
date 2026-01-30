@@ -32,7 +32,8 @@
       "Bash(gh pr list:*)",
       "WebFetch(domain:github.com)",
       "Bash(findstr:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(git -C \"C:/Dev/github/Typhon\" diff --stat claude/design/resources/01-registry.md)"
     ],
     "deny": [],
     "ask": []

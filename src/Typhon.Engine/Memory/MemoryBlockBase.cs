@@ -37,12 +37,10 @@ public abstract class MemoryBlockBase : IMemoryResource
     protected MemoryBlockBase(MemoryAllocator allocator, string id, IResource parent)
     {
         Allocator = allocator ?? throw new ArgumentNullException(nameof(allocator), "Memory allocator cannot be null");
-        Id = id;
+        Parent = parent ?? throw new ArgumentNullException(nameof(parent), "Parent resource cannot be null. Resources must have an explicit parent.");
+        Id = id ?? throw new ArgumentNullException(nameof(id), "Resource ID cannot be null");
         CreatedAt = DateTime.UtcNow;
-
-        parent ??= TyphonServices.ResourceRegistry.Orphans;
-        Parent = parent;
+        Owner = Parent.Owner;
         Parent.RegisterChild(this);
-        Owner = parent.Owner;
     }
 }

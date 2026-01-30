@@ -15,6 +15,10 @@ namespace Typhon.Engine.Tests.Collections;
 [TestFixture]
 public class ConcurrentBitmapL3AllTests
 {
+    // Helper to create bitmap with default parent for tests
+    private static ConcurrentBitmapL3All CreateBitmap(int capacity)
+        => new ConcurrentBitmapL3All("TestBitmap", TyphonServices.ResourceRegistry.Allocation, capacity);
+
     [Test]
     [Explicit("Performance test - run manually")]
     public void FindNextUnsetL0_PerformanceTest()
@@ -26,7 +30,7 @@ public class ConcurrentBitmapL3AllTests
         var sw = Stopwatch.StartNew();
         for (int iter = 0; iter < Iterations; iter++)
         {
-            var bitmap = new ConcurrentBitmapL3All(BitSize);
+            var bitmap = CreateBitmap(BitSize);
             for (int i = 0; i < BitSize; i += 4)
             {
                 bitmap.SetL0(i);
@@ -45,7 +49,7 @@ public class ConcurrentBitmapL3AllTests
         sw.Restart();
         for (int iter = 0; iter < Iterations; iter++)
         {
-            var bitmap = new ConcurrentBitmapL3All(BitSize);
+            var bitmap = CreateBitmap(BitSize);
             for (int block = 0; block < BitSize; block += 8192)
             {
                 for (int i = block; i < block + 4096 && i < BitSize; i++)
@@ -70,7 +74,7 @@ public class ConcurrentBitmapL3AllTests
     [Test]
     public void FindNextUnsetL0_EmptyBitmap_FindsAllBitsSequentially()
     {
-        var bitmap = new ConcurrentBitmapL3All(256);
+        var bitmap = CreateBitmap(256);
         int index = -1;
 
         for (int expected = 0; expected < 256; expected++)
@@ -87,7 +91,7 @@ public class ConcurrentBitmapL3AllTests
     [Test]
     public void FindNextUnsetL0_WithSomeBitsSet_SkipsSetBits()
     {
-        var bitmap = new ConcurrentBitmapL3All(256);
+        var bitmap = CreateBitmap(256);
 
         // Set some bits
         bitmap.SetL0(0);
@@ -119,7 +123,7 @@ public class ConcurrentBitmapL3AllTests
     [Test]
     public void FindNextUnsetL0_FullL0Word_SkipsToNextWord()
     {
-        var bitmap = new ConcurrentBitmapL3All(256);
+        var bitmap = CreateBitmap(256);
 
         // Fill the entire first L0 word (64 bits)
         for (int i = 0; i < 64; i++)
@@ -138,7 +142,7 @@ public class ConcurrentBitmapL3AllTests
     public void FindNextUnsetL0_LargeBitmap_HandlesHierarchicalSkipping()
     {
         // 64 * 64 * 4 = 16384 bits to test L1 skipping
-        var bitmap = new ConcurrentBitmapL3All(16384);
+        var bitmap = CreateBitmap(16384);
 
         // Fill first 64*64 = 4096 bits (entire first L1 region)
         for (int i = 0; i < 4096; i++)
@@ -156,7 +160,7 @@ public class ConcurrentBitmapL3AllTests
     [Test]
     public void FindNextUnsetL0_ResumeFromMiddle_ContinuesCorrectly()
     {
-        var bitmap = new ConcurrentBitmapL3All(256);
+        var bitmap = CreateBitmap(256);
 
         int index = 63; // Start from end of first L0 word
 
@@ -168,7 +172,7 @@ public class ConcurrentBitmapL3AllTests
     [Test]
     public void FindNextUnsetL0_AtCapacity_ReturnsFalse()
     {
-        var bitmap = new ConcurrentBitmapL3All(64);
+        var bitmap = CreateBitmap(64);
         var capacity = bitmap.Capacity >> 6;
         
         // Fill all bits
@@ -184,7 +188,7 @@ public class ConcurrentBitmapL3AllTests
     [Test]
     public void FindNextUnsetL0_SmallBitmap_HandlesEdgeCases()
     {
-        var bitmap = new ConcurrentBitmapL3All(16);
+        var bitmap = CreateBitmap(16);
 
         int index = -1;
 
@@ -204,7 +208,7 @@ public class ConcurrentBitmapL3AllTests
     [Test]
     public void SetL0_ReturnsFalse_WhenBitAlreadySet()
     {
-        var bitmap = new ConcurrentBitmapL3All(256);
+        var bitmap = CreateBitmap(256);
 
         // First set should succeed
         Assert.That(bitmap.SetL0(42), Is.True);
@@ -216,7 +220,7 @@ public class ConcurrentBitmapL3AllTests
     [Test]
     public void SetL1_UsesCompareExchange_FailsIfAnyBitSet()
     {
-        var bitmap = new ConcurrentBitmapL3All(256);
+        var bitmap = CreateBitmap(256);
 
         // Set just one bit in word 0
         bitmap.SetL0(5);
@@ -232,7 +236,7 @@ public class ConcurrentBitmapL3AllTests
     [Test]
     public void SetL1_Success_WhenWordIsEmpty()
     {
-        var bitmap = new ConcurrentBitmapL3All(256);
+        var bitmap = CreateBitmap(256);
 
         // SetL1(1) should succeed (word 1 is empty)
         Assert.That(bitmap.SetL1(1), Is.True);
@@ -249,7 +253,7 @@ public class ConcurrentBitmapL3AllTests
     [Test]
     public void ClearL0_ReturnsTrue_WhenBitWasSet()
     {
-        var bitmap = new ConcurrentBitmapL3All(256);
+        var bitmap = CreateBitmap(256);
 
         bitmap.SetL0(42);
         Assert.That(bitmap.ClearL0(42), Is.True);
@@ -259,7 +263,7 @@ public class ConcurrentBitmapL3AllTests
     [Test]
     public void ClearL0_ReturnsTrue_WhenBitWasAlreadyClear()
     {
-        var bitmap = new ConcurrentBitmapL3All(256);
+        var bitmap = CreateBitmap(256);
 
         // Clearing an already-clear bit is idempotent, returns true (no resize)
         Assert.That(bitmap.ClearL0(42), Is.True);
@@ -269,7 +273,7 @@ public class ConcurrentBitmapL3AllTests
     [Test]
     public void TotalBitSet_IsApproximate_UsesInterlocked()
     {
-        var bitmap = new ConcurrentBitmapL3All(256);
+        var bitmap = CreateBitmap(256);
 
         // Set 10 bits
         for (int i = 0; i < 10; i++)
@@ -291,7 +295,7 @@ public class ConcurrentBitmapL3AllTests
     public void ConcurrentSetL0_AllBitsEventuallySet()
     {
         const int BitCount = 1024;
-        var bitmap = new ConcurrentBitmapL3All(BitCount);
+        var bitmap = CreateBitmap(BitCount);
         var successCount = 0;
 
         // Multiple threads trying to set all bits
@@ -317,7 +321,7 @@ public class ConcurrentBitmapL3AllTests
     public void ConcurrentSetL1_NoDataCorruption()
     {
         const int WordCount = 16;
-        var bitmap = new ConcurrentBitmapL3All(WordCount * 64);
+        var bitmap = CreateBitmap(WordCount * 64);
         var successCount = 0;
 
         // Multiple threads trying to claim entire words
@@ -342,7 +346,7 @@ public class ConcurrentBitmapL3AllTests
     [Test]
     public void FindNextUnsetL0_CorrectlySkipping()
     {
-        var bitmap = new ConcurrentBitmapL3All(32);
+        var bitmap = CreateBitmap(32);
         int index = -1;
         for (int i = 0; i < 32; i++)
         {
@@ -355,7 +359,7 @@ public class ConcurrentBitmapL3AllTests
     [Test]
     public void ClearL0_CorrectlyUpdatesL1All_WhenClearingFromFullWord()
     {
-        var bitmap = new ConcurrentBitmapL3All(256);
+        var bitmap = CreateBitmap(256);
 
         // Fill L0 words 0, 1, 2 completely
         for (int i = 0; i < 192; i++)
@@ -390,7 +394,7 @@ public class ConcurrentBitmapL3AllTests
     [Test]
     public void ClearL0_CorrectlyUpdatesL2All_WhenClearingFromFullL1Region()
     {
-        var bitmap = new ConcurrentBitmapL3All(16384);
+        var bitmap = CreateBitmap(16384);
 
         // Fill first L1 region (bits 0-4095 = 64 L0 words)
         for (int i = 0; i < 4096; i++)
@@ -427,7 +431,7 @@ public class ConcurrentBitmapL3AllTests
     [Test]
     public void ClearL0_CorrectlyUpdatesL1Any_WhenL0WordBecomesEmpty()
     {
-        var bitmap = new ConcurrentBitmapL3All(256);
+        var bitmap = CreateBitmap(256);
 
         // Set one bit in L0 words 0, 1, 2
         bitmap.SetL0(0);
@@ -473,7 +477,7 @@ public class ConcurrentBitmapL3AllTests
         const int ThreadCount = 10;          // Concurrent threads
         const int OperationsPerThread = 10000;
 
-        var bitmap = new ConcurrentBitmapL3All(BitmapSize);
+        var bitmap = CreateBitmap(BitmapSize);
 
         // Track allocations: blockId -> (threadId, allocationToken)
         // If we see a different threadId for the same block, we have a race!
@@ -613,7 +617,7 @@ public class ConcurrentBitmapL3AllTests
         const int threadCount = 10;
         const int operationsPerThread = 5000;
 
-        var bitmap = new ConcurrentBitmapL3All(bitmapSize);
+        var bitmap = CreateBitmap(bitmapSize);
         var allocations = new ConcurrentDictionary<int, long>(); // L0 word index -> token
         var errors = new ConcurrentBag<string>();
         var totalAllocations = 0;
@@ -746,7 +750,7 @@ public class ConcurrentBitmapL3AllTests
         const int ThreadCount = 10;
         const int OperationsPerThread = 8000;
 
-        var bitmap = new ConcurrentBitmapL3All(BitmapSize);
+        var bitmap = CreateBitmap(BitmapSize);
 
         // Track both L0 and L1 allocations
         var l0Allocations = new ConcurrentDictionary<int, long>();  // bit index -> token
