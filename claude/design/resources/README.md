@@ -29,6 +29,7 @@
 | 06 | [Snapshot API](06-snapshot-api.md) | `IResourceGraph`, `ResourceSnapshot`, queries | 📐 Designed |
 | 07 | [Budgets & Exhaustion](07-budgets-exhaustion.md) | `ResourceOptions`, policies, back-pressure | 📐 Designed |
 | 08 | [Observability Bridge](08-observability-bridge.md) | OTel mapping, health checks, alerts | 📐 Designed |
+| 09 | [Resource Observability Implementations](09-resource-observability-implementations.md) | Adding metrics to ManagedPagedMMF, DatabaseEngine, etc. | 📐 Designed |
 
 ---
 
@@ -67,7 +68,10 @@ README.md ◄─── Entry point (you are here)
     ├── 07-budgets-exhaustion.md ───────── Limits and back-pressure
     │       │
     │       ▼
-    └── 08-observability-bridge.md ─────── Export to OTel, health, alerts
+    ├── 08-observability-bridge.md ─────── Export to OTel, health, alerts
+    │       │
+    │       ▼
+    └── 09-resource-observability-implementations.md ── Per-type metric specs
 ```
 
 **Reading order:**
@@ -89,6 +93,7 @@ README.md ◄─── Entry point (you are here)
 | **Debug exhaustion/back-pressure** | 07-budgets-exhaustion.md |
 | **Set up Grafana dashboards** | 08-observability-bridge.md |
 | **Configure health checks** | 08-observability-bridge.md |
+| **Add metrics to existing IResource types** | 09-resource-observability-implementations.md |
 
 ---
 
