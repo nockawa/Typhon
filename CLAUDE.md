@@ -221,6 +221,19 @@ dotnet run -c Release --filter '*PagedMemoryFile*'
 - Blittable struct requirements for components ensure zero-copy operations
 
 ### Coding Standards
+- **Follow `.editorconfig`**: All C# code must follow the formatting rules in `/.editorconfig`. Key rules include:
+  - Expression-bodied members for simple methods/properties (`=>` syntax)
+  - Braces on new lines (`csharp_new_line_before_open_brace = all`)
+  - Always use braces for control flow statements
+  - Collection expressions (`[]` instead of `Array.Empty<T>()`)
+  - Private fields use `_camelCase` (underscore prefix)
+  - Use `ArgumentNullException.ThrowIfNull()` for null checks
+- **160 column max line length**: Lines must not exceed 160 characters. When a statement exceeds this limit:
+  - Method parameters: Wrap after opening parenthesis, one parameter per line
+  - Method arguments: Wrap after opening parenthesis, one argument per line
+  - Chained calls: Wrap before the dot
+  - Binary expressions: Wrap before the operator
+  - Collection initializers: Wrap elements if line is too long
 - **No nullable reference types**: Do not use `#nullable enable` or nullable annotations (`Type?`). Typhon does not rely on C# nullable reference types feature. Pass `null` for optional parameters without annotations.
 - **Thread IDs stored as 16 bits**: All synchronization primitives that store thread IDs must use exactly 16 bits (max 65,535). This ensures consistency across `AccessControl`, `AccessControlSmall`, and `ResourceAccessControl`, and provides headroom for servers with 500+ cores.
 - **No LINQ in hot paths**: Avoid LINQ in performance-critical code due to allocations and delegate overhead.
