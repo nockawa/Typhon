@@ -290,8 +290,10 @@ To find the native width, check the SVG file's first line: `viewBox="0 0 <width>
 
 1. Create D2 source in `assets/src/my-diagram.d2`
 2. Render: `"/c/Program Files/D2/d2.exe" --theme 0 assets/src/my-diagram.d2 assets/my-diagram.svg`
-3. Add entry to `DIAGRAMS` array in `viewer.html` (for the switcher menu)
+3. **⚠️ IMPORTANT:** Add entry to `DIAGRAMS` array in `viewer.html` (for the switcher menu)
 4. Embed in markdown using patterns above
+
+> **Maintenance Note:** The `viewer.html` DIAGRAMS array must be manually updated whenever diagrams are added. To verify sync: `ls assets/*.svg | wc -l` should match the DIAGRAMS array length. The array is organized by category (Architecture, Concurrency, Execution, Storage, etc.) — add new diagrams to the appropriate section.
 
 ---
 
