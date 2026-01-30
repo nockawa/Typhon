@@ -1,8 +1,9 @@
-# Typhon Resource Registry System
+# 01 — Resource Registry & Tree Structure
+
+> **Part of the [Resource System Design](README.md) series**
 
 **Date:** January 2026
 **Status:** Ready for implementation
-**Branch:** —
 
 ---
 
@@ -13,7 +14,9 @@ The **Resource Registry** is a hierarchical tracking system for all managed reso
 - **Lifecycle Management**: Track creation, ownership, and disposal of resources
 - **Hierarchical Organization**: Parent-child relationships reflecting logical ownership
 - **Debug Visibility**: Runtime introspection of system state
-- **Telemetry Integration**: OpenTelemetry metrics export for monitoring
+- **Metric Integration**: Foundation for resource metrics (see [03-metric-source.md](03-metric-source.md))
+
+> 💡 **Quick start:** For usage patterns and code examples, see [02-registry-examples.md](02-registry-examples.md).
 
 ---
 
@@ -25,9 +28,18 @@ The **Resource Registry** is a hierarchical tracking system for all managed reso
 4. [Type Inventory](#4-type-inventory)
 5. [Implementation Patterns](#5-implementation-patterns)
 6. [Integration Examples](#6-integration-examples)
-7. [Telemetry & Metrics](#7-telemetry--metrics)
-8. [Design Decisions](#8-design-decisions)
-9. [Migration Guide](#9-migration-guide)
+7. [Design Decisions](#7-design-decisions)
+8. [Migration Guide](#8-migration-guide)
+
+## Related Documents
+
+| Document | Relationship |
+|----------|--------------|
+| [03-metric-source.md](03-metric-source.md) | How nodes report metrics via `IMetricSource` |
+| [04-metric-kinds.md](04-metric-kinds.md) | The 6 metric types nodes can expose |
+| [05-granularity-strategy.md](05-granularity-strategy.md) | What gets a node vs aggregated |
+| [06-snapshot-api.md](06-snapshot-api.md) | Reading metrics from the tree |
+| [08-observability-bridge.md](08-observability-bridge.md) | OTel export from resource metrics |
 
 ---
 
@@ -63,50 +75,72 @@ public interface IResource : IDisposable
 public interface IResourceRegistry : IDisposable
 {
     IResource Root { get; }      // Root of the resource tree
-    IResource Services { get; }  // Container for top-level services
-    IResource Orphans { get; }   // Container for unparented resources
 
-    IResource RegisterService<T>(T service) where T : IResource;
+    // Subsystem grouping nodes (created automatically)
+    IResource Storage { get; }      // PageCache, Segments
+    IResource DataEngine { get; }   // Transactions, ComponentTables
+    IResource Durability { get; }   // WAL, Checkpoint
+    IResource Allocation { get; }   // MemoryAllocator, Bitmaps
 }
 ```
+
+> **Design decision:** No `Orphans` container. Resources must have an explicit parent — if `parent` is null, the constructor throws `ArgumentNullException`. This fails fast and surfaces bugs at the call site.
+
+> **Scope:** One `IResourceRegistry` per process. Multiple `DatabaseEngine` instances are siblings under the same registry.
 
 ### 1.4 Resource Tree Structure
 
 ```mermaid
 graph TD
-    Root["Root (Node)"]
-    Services["Services (Node)"]
-    Orphans["Orphans (Node)"]
+    Root["Root"]
 
-    Root --> Services
-    Root --> Orphans
+    Root --> Storage["Storage"]
+    Root --> DataEngine["DataEngine"]
+    Root --> Durability["Durability"]
+    Root --> Allocation["Allocation"]
 
-    Services --> MA["MemoryAllocator (Service)"]
-    Services --> DBE["DatabaseEngine (Engine)"]
+    Storage --> PageCache["PageCache"]
+    Storage --> ManagedMMF["ManagedPagedMMF"]
 
-    MA --> PMB1["PinnedMemoryBlock (Memory)"]
-    MA --> PMB2["PinnedMemoryBlock (Memory)"]
+    DataEngine --> Transactions["TransactionPool"]
+    DataEngine --> Player["Player"]
+    DataEngine --> Position["Position"]
 
-    DBE --> MMF["ManagedPagedMMF (File)"]
-    DBE --> TC["TransactionChain (TransactionPool)"]
-    DBE --> CT1["ComponentTable: CompA (ComponentTable)"]
-    DBE --> CT2["ComponentTable: CompB (ComponentTable)"]
+    Transactions --> T1["1001"]
+    Transactions --> T2["1002"]
 
-    Orphans --> Orphan1["Unparented Resource"]
+    Player --> PK1["PrimaryKey"]
+    Player --> TeamId["TeamId"]
+
+    Position --> PK2["PrimaryKey"]
+
+    Durability --> WALRing["WALRingBuffer"]
+    Durability --> WALSegs["WALSegments"]
+    Durability --> Checkpoint["Checkpoint"]
+
+    Allocation --> MemAlloc["MemoryAllocator"]
 
     style Root fill:#e1f5fe
-    style Services fill:#c8e6c9
-    style Orphans fill:#ffcdd2
-    style DBE fill:#fff9c4
+    style Storage fill:#e8f5e9
+    style DataEngine fill:#fff8e1
+    style Durability fill:#f3e5f5
+    style Allocation fill:#e0f2f1
 ```
+
+> **ID naming convention:** IDs are just names (`Player`, `PrimaryKey`, `1001`). Type information comes from the `ResourceType` property. This keeps paths clean and navigable: `DataEngine/Player/PrimaryKey`.
+>
+> **Note:** Segments (ComponentSegment, etc.) are NOT graph nodes — they follow the Owner Aggregates pattern. See [05-granularity-strategy.md](05-granularity-strategy.md).
 
 ---
 
 ## 2. ResourceType Enum
 
-### 2.1 Current Definition (Incomplete)
+### 2.1 Legacy Definition (Reference Only)
+
+> **Note:** This was the original incomplete definition. See §2.2 for the complete definition to implement.
 
 ```csharp
+// OLD — do not use
 public enum ResourceType
 {
     None,
@@ -114,12 +148,12 @@ public enum ResourceType
     Service,         // Top-level services
     Memory,          // Memory blocks
     File,            // File handles
-    Synchronization, // Locks (unused)
+    Synchronization, // Locks (removed — unused)
     Bitmap           // Hierarchical bitmaps
 }
 ```
 
-### 2.2 Proposed Extended Definition
+### 2.2 Complete Definition (Implement This)
 
 ```csharp
 public enum ResourceType
@@ -200,8 +234,18 @@ public enum ResourceType
     /// <summary>Block allocator for fixed-size allocations</summary>
     Allocator = 60,
 
-    /// <summary>Synchronization primitive (reader-writer lock, etc.)</summary>
-    Synchronization = 61
+    // ═══════════════════════════════════════════════════════════════
+    // DURABILITY LAYER
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>Write-ahead log resources (ring buffer, segments)</summary>
+    WAL = 70,
+
+    /// <summary>Checkpoint subsystem</summary>
+    Checkpoint = 71,
+
+    /// <summary>Backup/restore resources (shadow buffer, snapshot store)</summary>
+    Backup = 72
 }
 ```
 
@@ -242,9 +286,14 @@ graph LR
         Schema
     end
 
+    subgraph "Durability Layer"
+        WAL
+        Checkpoint
+        Backup
+    end
+
     subgraph Utility
         Allocator
-        Synchronization
     end
 ```
 
@@ -259,98 +308,75 @@ graph TD
     subgraph "Resource Registry"
         Root["📁 Root"]
 
-        subgraph "Services Container"
-            Services["📁 Services"]
-
-            subgraph "Memory Allocator"
-                MA["🔧 MemoryAllocator"]
-                MA_PMB1["💾 PinnedMemoryBlock: PageCache"]
-                MA_PMB2["💾 PinnedMemoryBlock: Bank0"]
-                MA_PMB3["💾 MemoryBlockArray: TempBuffer"]
-            end
-
-            subgraph "Database Engine"
-                DBE["🗄️ DatabaseEngine"]
-
-                subgraph "File System"
-                    MMF["📄 ManagedPagedMMF: typhon.db"]
-                    MMF_BMP["🗺️ ConcurrentBitmapL3All: Occupancy"]
-                    MMF_BMP_B0["💾 PinnedMemoryBlock: Bank0"]
-                end
-
-                subgraph "Transaction Management"
-                    TC["🔄 TransactionChain"]
-                    T1["📝 Transaction: T-1001"]
-                    T2["📝 Transaction: T-1002"]
-                end
-
-                subgraph "Schema Registry"
-                    DBD["📋 DatabaseDefinitions"]
-                    DBCD1["📄 DBComponentDefinition: Player"]
-                    DBCD2["📄 DBComponentDefinition: Position"]
-                end
-
-                subgraph "Component Tables"
-                    CT_Player["📊 ComponentTable: Player"]
-                    CT_Player_Seg1["📦 ChunkBasedSegment: Data"]
-                    CT_Player_Seg2["📦 ChunkBasedSegment: Revisions"]
-                    CT_Player_Idx1["🔍 LongSingleBTree: PrimaryKey"]
-                    CT_Player_Idx2["🔍 IntMultipleBTree: TeamId"]
-                    CT_Player_BMP["🗺️ Bitmap: Occupancy"]
-
-                    CT_Position["📊 ComponentTable: Position"]
-                    CT_Pos_Seg1["📦 ChunkBasedSegment: Data"]
-                    CT_Pos_Idx1["🔍 LongSingleBTree: PrimaryKey"]
-                end
-            end
+        subgraph "Storage Subsystem"
+            Storage["📁 Storage"]
+            PageCache["🗃️ PageCache"]
+            ManagedMMF["📄 ManagedPagedMMF"]
         end
 
-        Orphans["📁 Orphans"]
+        subgraph "Data Engine Subsystem"
+            DataEngine["📁 DataEngine"]
+            Transactions["📁 TransactionPool"]
+            T1["📝 1001"]
+            T2["📝 1002"]
+            CT_Player["📊 Player"]
+            CT_Player_Idx1["🔍 PrimaryKey"]
+            CT_Player_Idx2["🔍 TeamId"]
+            CT_Player_Segs["(segments)"]
+            CT_Position["📊 Position"]
+            CT_Pos_Idx1["🔍 PrimaryKey"]
+        end
+
+        subgraph "Durability Subsystem"
+            Durability["📁 Durability"]
+            WAL_Ring["🔄 WALRingBuffer"]
+            WAL_Segs["📄 WALSegments"]
+            Checkpoint["⏱️ Checkpoint"]
+        end
+
+        subgraph "Allocation Subsystem"
+            Allocation["📁 Allocation"]
+            MemAlloc["🔧 MemoryAllocator"]
+            MemBlocks["💾 PinnedMemoryBlock[]"]
+        end
     end
 
-    Root --> Services
-    Root --> Orphans
+    Root --> Storage
+    Root --> DataEngine
+    Root --> Durability
+    Root --> Allocation
 
-    Services --> MA
-    Services --> DBE
+    Storage --> PageCache
+    Storage --> ManagedMMF
 
-    MA --> MA_PMB1
-    MA --> MA_PMB2
-    MA --> MA_PMB3
-
-    DBE --> MMF
-    DBE --> TC
-    DBE --> DBD
-    DBE --> CT_Player
-    DBE --> CT_Position
-
-    MMF --> MMF_BMP
-    MMF_BMP --> MMF_BMP_B0
-
-    TC --> T1
-    TC --> T2
-
-    DBD --> DBCD1
-    DBD --> DBCD2
-
-    CT_Player --> CT_Player_Seg1
-    CT_Player --> CT_Player_Seg2
+    DataEngine --> Transactions
+    DataEngine --> CT_Player
+    DataEngine --> CT_Position
+    Transactions --> T1
+    Transactions --> T2
     CT_Player --> CT_Player_Idx1
     CT_Player --> CT_Player_Idx2
-    CT_Player_Seg1 --> CT_Player_BMP
-
-    CT_Position --> CT_Pos_Seg1
+    CT_Player -.->|aggregates| CT_Player_Segs
     CT_Position --> CT_Pos_Idx1
 
+    Durability --> WAL_Ring
+    Durability --> WAL_Segs
+    Durability --> Checkpoint
+
+    Allocation --> MemAlloc
+    MemAlloc --> MemBlocks
+
     style Root fill:#e3f2fd
-    style Services fill:#e8f5e9
-    style Orphans fill:#ffebee
-    style DBE fill:#fff8e1
-    style MMF fill:#f3e5f5
-    style TC fill:#e0f2f1
+    style Storage fill:#e8f5e9
+    style DataEngine fill:#fff8e1
+    style Durability fill:#f3e5f5
+    style Allocation fill:#e0f2f1
     style CT_Player fill:#fce4ec
     style CT_Position fill:#fce4ec
+    style CT_Player_Segs fill:#f5f5f5,stroke-dasharray: 5 5
 ```
+
+> **Note:** Segments are shown with dashed border — they follow the **Owner Aggregates** pattern (NOT graph nodes). See [05-granularity-strategy.md](05-granularity-strategy.md). Memory blocks appear under their **consumer/owner**, not under `MemoryAllocator`.
 
 ### 3.2 Ownership Relationships
 
@@ -371,51 +397,41 @@ classDiagram
 
     class ResourceRegistry {
         +Root: IResource
-        +Services: IResource
-        +Orphans: IResource
-        +RegisterService~T~(service): IResource
-    }
-
-    class DatabaseEngine {
-        +MMF: ManagedPagedMMF
-        +TransactionChain: TransactionChain
-        +ComponentTables: Dictionary
-        +DBD: DatabaseDefinitions
-    }
-
-    class ManagedPagedMMF {
-        +OccupancyBitmap: ConcurrentBitmapL3All
-        +Segments: Dictionary
+        +Storage: IResource
+        +DataEngine: IResource
+        +Durability: IResource
+        +Allocation: IResource
     }
 
     class ComponentTable {
-        +ComponentSegment: ChunkBasedSegment
-        +RevisionSegment: ChunkBasedSegment
         +PrimaryKeyIndex: BTree
         +SecondaryIndexes: BTree[]
-    }
-
-    class ChunkBasedSegment {
-        +OccupancyBitmap: ConcurrentBitmapL3All
+        -_segments: "(aggregated)"
     }
 
     class ConcurrentBitmapL3All {
         +Banks: PinnedMemoryBlock[]
     }
 
-    IResource <|.. DatabaseEngine
-    IResource <|.. ManagedPagedMMF
+    class WALRingBuffer {
+        +Buffer: PinnedMemoryBlock
+    }
+
     IResource <|.. ComponentTable
-    IResource <|.. ChunkBasedSegment
     IResource <|.. ConcurrentBitmapL3All
     IResource <|.. PinnedMemoryBlock
+    IResource <|.. WALRingBuffer
 
     ResourceRegistry --> IResource : Root
-    DatabaseEngine --> ManagedPagedMMF : owns
-    DatabaseEngine --> ComponentTable : owns *
-    ComponentTable --> ChunkBasedSegment : owns *
-    ChunkBasedSegment --> ConcurrentBitmapL3All : owns
+    ComponentTable --> BTree : owns *
+    ComponentTable ..> Segment : aggregates (not IResource)
     ConcurrentBitmapL3All --> PinnedMemoryBlock : owns *
+    WALRingBuffer --> PinnedMemoryBlock : owns
+
+    class Segment {
+        <<not IResource>>
+        (Owner Aggregates pattern)
+    }
 ```
 
 ---
@@ -445,12 +461,10 @@ classDiagram
 | Type | ResourceType | Parent | Children | Priority |
 |------|--------------|--------|----------|----------|
 | `PagedMMF` | `File` | DatabaseEngine | PageCache memory | **P0** |
-| `ManagedPagedMMF` | `File` | DatabaseEngine | OccupancyBitmap, LogicalSegments | **P0** |
-| `LogicalSegment` | `Segment` | ManagedPagedMMF | (pages via parent) | **P1** |
-| `ChunkBasedSegment` | `Segment` | ComponentTable | OccupancyBitmap | **P1** |
-| `VariableSizedBufferSegmentBase` | `Segment` | ComponentTable | (leaf) | **P2** |
-| `StringTableSegment` | `Segment` | ComponentTable | (leaf) | **P2** |
+| `ManagedPagedMMF` | `File` | DatabaseEngine | OccupancyBitmap | **P0** |
 | `ChangeSet` | `ChangeSet` | Transaction | (leaf) | **P3** |
+
+> **Note:** Segments (LogicalSegment, ChunkBasedSegment, etc.) do NOT implement IResource. They follow the **Owner Aggregates** pattern — see [05-granularity-strategy.md](05-granularity-strategy.md). ComponentTable aggregates segment metrics via `IMetricSource` and provides drill-down via `IDebugPropertiesProvider`.
 
 #### 4.1.4 Index Layer
 
@@ -480,15 +494,23 @@ classDiagram
 
 | Type | Reason |
 |------|--------|
+| **Segments (Owner Aggregates)** | |
+| `LogicalSegment` | Owner Aggregates — ComponentTable aggregates via `IMetricSource` |
+| `ChunkBasedSegment` | Owner Aggregates — see [05-granularity-strategy.md](05-granularity-strategy.md) |
+| `VariableSizedBufferSegmentBase` | Owner Aggregates — drill-down via `IDebugPropertiesProvider` |
+| `StringTableSegment` | Owner Aggregates |
+| **Stack-allocated / ref structs** | |
 | `PageAccessor` | Stack-allocated struct, scoped lifetime via `using` |
 | `ChunkAccessor` | Stack-allocated ~1KB struct with inline MRU cache |
 | `ComponentRevisionManager` | `ref struct`, transaction-scoped |
 | `ComponentRevision` | `ref struct`, ephemeral |
 | `RevisionEnumerator` | Scoped iteration utility |
 | `RevisionWalker` | Scoped traversal utility |
+| **Embedded primitives** | |
 | `AccessControl` | 8-byte struct embedded in other types |
 | `AccessControlSmall` | 4-byte struct embedded in other types |
 | `AdaptiveWaiter` | Utility with no state |
+| **Generic containers** | |
 | `ConcurrentArray<T>` | Generic container, no specific lifecycle |
 | `ConcurrentCollection<T>` | Generic container |
 | `ComponentCollection<T>` | 4-byte struct (buffer ID reference) |
@@ -724,8 +746,10 @@ public class ConcurrentBitmapL3All : IResource
 {
     public ConcurrentBitmapL3All(string id, IResource parent, int bankCapacity)
     {
-        Id = id ?? Guid.NewGuid().ToString();
-        Parent = parent ?? TyphonServices.ResourceRegistry.Orphans;  // Fallback to Orphans
+        // Fail fast — no orphans, explicit parent required
+        Id = id ?? throw new ArgumentNullException(nameof(id));
+        Parent = parent ?? throw new ArgumentNullException(nameof(parent),
+            "Resources must have an explicit parent.");
         Owner = Parent.Owner;
         CreatedAt = DateTime.UtcNow;
 
@@ -741,7 +765,9 @@ public class ConcurrentBitmapL3All : IResource
     {
         public Bank(ConcurrentBitmapL3All owner, int index)
         {
-            var allocator = TyphonServices.MemoryAllocator;
+            // Memory blocks are owned by their consumer, not the allocator
+            var allocator = owner.Owner.Allocation.Children
+                .OfType<IMemoryAllocator>().First();
             MemoryBlock = allocator.AllocatePinned($"Bank{index}", owner, size, zeroed: true, alignment: 64);
         }
     }
@@ -749,6 +775,8 @@ public class ConcurrentBitmapL3All : IResource
     public IEnumerable<IResource> Children => _banks.Select(b => b.MemoryBlock);
 }
 ```
+
+> **Note:** Resources are always created with explicit parents. There is no Orphans container — if parent is null, the constructor throws immediately. This surfaces bugs at the exact call site where the fix is needed.
 
 ---
 
@@ -760,28 +788,32 @@ public class ConcurrentBitmapL3All : IResource
 // In Startup.cs or Program.cs
 public static IServiceCollection AddTyphon(this IServiceCollection services)
 {
-    // Register the resource registry as singleton
+    // Register the resource registry as singleton (one per process)
     services.AddSingleton<IResourceRegistry>(sp =>
     {
-        var registry = new ResourceRegistry(new ResourceRegistryOptions { Name = "Typhon" });
-        TyphonServices.Initialize(registry);
-        return registry;
+        return new ResourceRegistry(new ResourceRegistryOptions { Name = "Typhon" });
+        // Note: No static accessor — use DI everywhere
     });
 
-    // Register MemoryAllocator (will auto-register as Service)
+    // Register MemoryAllocator (registers under Allocation subsystem)
     services.AddSingleton<IMemoryAllocator>(sp =>
     {
         var registry = sp.GetRequiredService<IResourceRegistry>();
-        return new MemoryAllocator(registry, new MemoryAllocatorOptions { Name = "DefaultAllocator" });
+        return new MemoryAllocator("MemoryAllocator", registry.Allocation,
+            new MemoryAllocatorOptions());
     });
 
-    // Register DatabaseEngine
+    // Register DatabaseEngine components under their subsystems
     services.AddSingleton<DatabaseEngine>(sp =>
     {
         var registry = sp.GetRequiredService<IResourceRegistry>();
-        var mmf = new ManagedPagedMMF(/* options */);
         var logger = sp.GetRequiredService<ILogger<DatabaseEngine>>();
-        return new DatabaseEngine(registry, new DatabaseEngineOptions(), mmf, logger);
+
+        // Components register under appropriate subsystems:
+        // - PageCache → registry.Storage
+        // - TransactionPool → registry.DataEngine
+        // - WAL → registry.Durability
+        return new DatabaseEngine(registry, new DatabaseEngineOptions(), logger);
     });
 
     return services;
@@ -834,6 +866,11 @@ public class ResourceInspector
         ResourceType.Transaction => "📝",
         ResourceType.TransactionPool => "🔄",
         ResourceType.Schema => "📋",
+        ResourceType.Cache => "🗃️",
+        ResourceType.WAL => "🔄",
+        ResourceType.Checkpoint => "⏱️",
+        ResourceType.Backup => "💾",
+        ResourceType.Allocator => "🔧",
         _ => "❓"
     };
 
@@ -968,7 +1005,7 @@ public class ComponentTable : IResource, IDebugPropertiesProvider
 public class ResourceRegistryTests : TestBase
 {
     [Test]
-    public void DatabaseEngine_RegistersInResourceTree()
+    public void ComponentTable_RegistersUnderDataEngine()
     {
         // Arrange
         var registry = ServiceProvider.GetRequiredService<IResourceRegistry>();
@@ -977,20 +1014,17 @@ public class ResourceRegistryTests : TestBase
         // Act
         dbe.RegisterComponent<TestComponent>();
 
-        // Assert
-        var engineResource = registry.Services.Children
-            .FirstOrDefault(c => c.Type == ResourceType.Engine);
-
-        Assert.That(engineResource, Is.Not.Null);
-        Assert.That(engineResource.Id, Is.EqualTo("DatabaseEngine"));
-
-        // Verify ComponentTable was registered
-        var componentTables = engineResource.Children
+        // Assert — ComponentTable appears under DataEngine subsystem
+        var componentTables = registry.DataEngine.Children
             .Where(c => c.Type == ResourceType.ComponentTable)
             .ToList();
 
         Assert.That(componentTables, Has.Count.EqualTo(1));
-        Assert.That(componentTables[0].Id, Does.Contain("TestComponent"));
+        Assert.That(componentTables[0].Id, Is.EqualTo("TestComponent")); // Name only, no type prefix
+
+        // Verify path is clean
+        var player = registry.FindByPath("DataEngine/TestComponent");
+        Assert.That(player, Is.Not.Null);
     }
 
     [Test]
@@ -998,7 +1032,7 @@ public class ResourceRegistryTests : TestBase
     {
         // Arrange
         var registry = new ResourceRegistry(new ResourceRegistryOptions { Name = "Test" });
-        var node = new ResourceNode("TestNode", ResourceType.Node, registry.Root);
+        var node = new ResourceNode("TestNode", ResourceType.Node, registry.DataEngine);
         var childNode = new ResourceNode("ChildNode", ResourceType.Node, node);
 
         // Act
@@ -1009,26 +1043,32 @@ public class ResourceRegistryTests : TestBase
     }
 
     [Test]
-    public void MemoryAllocation_TracksInRegistry()
+    public void MemoryAllocation_TracksUnderOwner()
     {
         // Arrange
         var registry = ServiceProvider.GetRequiredService<IResourceRegistry>();
         var allocator = ServiceProvider.GetRequiredService<IMemoryAllocator>();
 
-        // Act
-        var block = allocator.AllocatePinned("TestBlock", registry.Services, 1024);
+        // Create a parent resource to own the memory block
+        var owner = new ResourceNode("TestOwner", ResourceType.Node, registry.Allocation);
 
-        // Assert
-        var memoryResources = registry.Services.Children
-            .SelectMany(EnumerateAll)
-            .Where(r => r.Type == ResourceType.Memory)
-            .ToList();
+        // Act — memory block is owned by consumer, not allocator
+        var block = allocator.AllocatePinned("TestBlock", owner, 1024);
 
-        Assert.That(memoryResources, Has.Count.GreaterThanOrEqualTo(1));
-        Assert.That(memoryResources.Any(m => m.Id == "TestBlock"), Is.True);
+        // Assert — block appears under owner, not under MemoryAllocator
+        Assert.That(owner.Children.Any(c => c.Id == "TestBlock"), Is.True);
 
         // Cleanup
         block.Dispose();
+        owner.Dispose();
+    }
+
+    [Test]
+    public void NullParent_ThrowsArgumentNullException()
+    {
+        // Resources must have explicit parent — no Orphans fallback
+        Assert.Throws<ArgumentNullException>(() =>
+            new ResourceNode("Test", ResourceType.Node, null));
     }
 
     private IEnumerable<IResource> EnumerateAll(IResource root)
@@ -1042,154 +1082,9 @@ public class ResourceRegistryTests : TestBase
 
 ---
 
-## 7. Telemetry & Metrics
+## 7. Design Decisions
 
-### 7.1 OpenTelemetry Integration
-
-```csharp
-public class DatabaseEngine : IResource, IDebugPropertiesProvider
-{
-    private readonly Meter _meter;
-    private readonly Counter<long> _transactionCounter;
-    private readonly ObservableGauge<int> _activeTransactionsGauge;
-
-    public DatabaseEngine(IResourceRegistry registry, /* ... */)
-    {
-        // ... standard initialization ...
-
-        // Create OpenTelemetry meter
-        _meter = new Meter("Typhon.DatabaseEngine", "1.0.0");
-
-        // Counter for total transactions
-        _transactionCounter = _meter.CreateCounter<long>(
-            "typhon.transactions.total",
-            unit: "{transaction}",
-            description: "Total number of transactions created");
-
-        // Gauge for active transactions
-        _activeTransactionsGauge = _meter.CreateObservableGauge(
-            "typhon.transactions.active",
-            () => TransactionChain.ActiveCount,
-            unit: "{transaction}",
-            description: "Number of currently active transactions");
-    }
-
-    public Transaction CreateTransaction()
-    {
-        _transactionCounter.Add(1);
-        return TransactionChain.CreateTransaction(this);
-    }
-
-    // Debug properties for ResourceRegistry inspection
-    public Dictionary<string, Func<object>> DebugProperties => new()
-    {
-        ["ActiveTransactions"] = () => TransactionChain.ActiveCount,
-        ["MinTick"] = () => TransactionChain.MinTick,
-        ["ComponentTableCount"] = () => _componentTableByType.Count
-    };
-}
-```
-
-### 7.2 Page Cache Metrics
-
-```csharp
-public partial class PagedMMF : IResource, IDebugPropertiesProvider
-{
-    private readonly Meter _meter;
-    private readonly Counter<long> _cacheHits;
-    private readonly Counter<long> _cacheMisses;
-    private readonly Histogram<double> _pageLoadTime;
-    private readonly ObservableGauge<int> _dirtyPagesGauge;
-
-    public PagedMMF(IResource parent, PagedMMFOptions options)
-    {
-        // ... initialization ...
-
-        _meter = new Meter("Typhon.PagedMMF", "1.0.0");
-
-        _cacheHits = _meter.CreateCounter<long>("typhon.pagecache.hits");
-        _cacheMisses = _meter.CreateCounter<long>("typhon.pagecache.misses");
-
-        _pageLoadTime = _meter.CreateHistogram<double>(
-            "typhon.pagecache.load_time",
-            unit: "ms",
-            description: "Time to load a page from disk");
-
-        _dirtyPagesGauge = _meter.CreateObservableGauge(
-            "typhon.pagecache.dirty_pages",
-            () => CountDirtyPages());
-    }
-
-    public Dictionary<string, Func<object>> DebugProperties => new()
-    {
-        ["TotalPages"] = () => _header.PageCount,
-        ["CachedPages"] = () => CountCachedPages(),
-        ["DirtyPages"] = () => CountDirtyPages(),
-        ["HitRate"] = () => CalculateHitRate(),
-        ["FileSizeMB"] = () => _fileStream.Length / (1024.0 * 1024.0)
-    };
-}
-```
-
-### 7.3 Prometheus/Grafana Queries
-
-```promql
-# Active transactions over time
-typhon_transactions_active
-
-# Transaction rate (per second)
-rate(typhon_transactions_total[1m])
-
-# Page cache hit rate
-sum(rate(typhon_pagecache_hits[5m])) /
-(sum(rate(typhon_pagecache_hits[5m])) + sum(rate(typhon_pagecache_misses[5m])))
-
-# P95 page load time
-histogram_quantile(0.95, rate(typhon_pagecache_load_time_bucket[5m]))
-
-# Entity count by component type
-typhon_componenttable_entity_count{component_type=~".*"}
-
-# Memory usage by resource type
-sum by (resource_type) (typhon_memory_allocated_bytes)
-```
-
-### 7.4 Metrics Dashboard Layout
-
-```mermaid
-graph TD
-    subgraph "Grafana Dashboard: Typhon Overview"
-        subgraph "Row 1: Transactions"
-            P1["Active Txns (Gauge)"]
-            P2["Txn Rate (Graph)"]
-            P3["Txn Latency P50/P95"]
-        end
-
-        subgraph "Row 2: Page Cache"
-            P4["Hit Rate % (Gauge)"]
-            P5["Cache Size (Graph)"]
-            P6["Dirty Pages (Graph)"]
-        end
-
-        subgraph "Row 3: Component Tables"
-            P7["Entity Counts (Table)"]
-            P8["Revision Growth (Graph)"]
-            P9["Index Sizes (Bar)"]
-        end
-
-        subgraph "Row 4: Memory"
-            P10["Total Allocated (Gauge)"]
-            P11["By Resource Type (Pie)"]
-            P12["Allocation Rate (Graph)"]
-        end
-    end
-```
-
----
-
-## 8. Design Decisions
-
-### 8.1 Why Hierarchical Resources?
+### 7.1 Why Hierarchical Resources?
 
 ```mermaid
 flowchart LR
@@ -1219,7 +1114,7 @@ flowchart LR
 3. **Scoped queries**: "Find all segments under ComponentTable:Player"
 4. **Debugging context**: See which parent created a leaked resource
 
-### 8.2 Why Self-Registration?
+### 7.2 Why Self-Registration?
 
 Resources register themselves with their parent in their constructor:
 
@@ -1239,7 +1134,7 @@ public ChunkBasedSegment(string id, IResource parent, ...)
 **Alternative considered:** Factory-only creation
 - Rejected because it adds ceremony and doesn't prevent leaks
 
-### 8.3 Transaction Tracking Strategy
+### 7.3 Transaction Tracking Strategy
 
 **Decision:** Track transactions as resources, but with awareness of pooling.
 
@@ -1259,7 +1154,7 @@ stateDiagram-v2
 - Pooled transactions don't need visibility
 - Overhead is acceptable since transaction count is bounded
 
-### 8.4 Memory Overhead Analysis
+### 7.4 Memory Overhead Analysis
 
 | IResource Implementation | Memory Overhead |
 |--------------------------|-----------------|
@@ -1275,7 +1170,7 @@ stateDiagram-v2
 2. Use lightweight leaf pattern (no `_children` dictionary)
 3. Consider conditional tracking (debug builds only) for high-frequency types
 
-### 8.5 Thread Safety
+### 7.5 Thread Safety
 
 All `IResource` implementations must be thread-safe:
 
@@ -1288,11 +1183,24 @@ All `IResource` implementations must be thread-safe:
 
 **Warning:** `Children` enumeration may see inconsistent state during concurrent modification. This is acceptable for debugging/monitoring but not for critical logic.
 
+### 7.6 Additional Design Decisions
+
+| Question | Decision | Rationale |
+|----------|----------|-----------|
+| **Orphans container?** | No — fail fast | Null parent throws `ArgumentNullException`. Surfaces bugs at exact call site. |
+| **Static accessor?** | No — DI only | Better testability, supports multiple engines, explicit dependencies. |
+| **ID naming** | Name only | Type info from `ResourceType` property. Clean paths like `DataEngine/Player`. |
+| **Memory block ownership** | Under consumer | Allocator is a factory; consumer owns the block. Tree reflects usage hierarchy. |
+| **Disposal errors** | Log and continue | Don't abort on child failure. Ensures all children get disposal attempt. |
+| **Transaction visibility** | Active only | Appear on `CreateTransaction()`, disappear on `Commit()`/`Rollback()`. Pooled = invisible. |
+| **Registry scope** | One per process | Multiple engines are siblings under same registry. Simpler design. |
+| **Tree structure** | Subsystem grouping | Storage, DataEngine, Durability, Allocation. Enables scoped queries. |
+
 ---
 
-## 9. Migration Guide
+## 8. Migration Guide
 
-### 9.1 Step 1: Add IResource to Existing Types
+### 8.1 Step 1: Add IResource to Existing Types
 
 ```csharp
 // Before
@@ -1346,7 +1254,7 @@ public class ComponentTable : IResource, IDisposable
 }
 ```
 
-### 9.2 Step 2: Update Constructors to Accept Parent
+### 8.2 Step 2: Update Constructors to Accept Parent
 
 ```csharp
 // Before
@@ -1356,7 +1264,7 @@ public ChunkBasedSegment(ManagedPagedMMF mmf, int chunkSize)
 public ChunkBasedSegment(string id, IResource parent, ManagedPagedMMF mmf, int chunkSize)
 ```
 
-### 9.3 Step 3: Update Child Creation
+### 8.3 Step 3: Update Child Creation
 
 ```csharp
 // Before
@@ -1370,7 +1278,7 @@ _componentSegment = new ChunkBasedSegment(
     componentSize);
 ```
 
-### 9.4 Step 4: Add Debug Properties (Optional)
+### 8.4 Step 4: Add Debug Properties (Optional)
 
 ```csharp
 public class ComponentTable : IResource, IDebugPropertiesProvider
@@ -1384,7 +1292,7 @@ public class ComponentTable : IResource, IDebugPropertiesProvider
 }
 ```
 
-### 9.5 Migration Checklist
+### 8.5 Migration Checklist
 
 - [ ] Identify all types that should implement `IResource` (see Type Inventory)
 - [ ] Add `IResource` interface to each type
@@ -1407,8 +1315,10 @@ public class MyResource : IResource
 {
     public MyResource(string id, IResource parent)
     {
-        Id = id;
-        Parent = parent ?? TyphonServices.ResourceRegistry.Orphans;
+        // Fail fast — explicit parent required
+        Id = id ?? throw new ArgumentNullException(nameof(id));
+        Parent = parent ?? throw new ArgumentNullException(nameof(parent),
+            "Resources must have an explicit parent.");
         Owner = Parent.Owner;
         CreatedAt = DateTime.UtcNow;
         Parent.RegisterChild(this);
@@ -1424,9 +1334,19 @@ public void Dispose()
     if (_disposed) return;
     _disposed = true;
 
-    // 1. Dispose children
+    // 1. Dispose children — log and continue on errors
     foreach (var child in Children.ToList())
-        child.Dispose();
+    {
+        try
+        {
+            child.Dispose();
+        }
+        catch (Exception ex)
+        {
+            // Log but don't abort — ensure all children get disposal attempt
+            _logger?.LogError(ex, "Failed to dispose child {ChildId}", child.Id);
+        }
+    }
 
     // 2. Remove from parent
     Parent?.RemoveChild(this);
@@ -1438,14 +1358,18 @@ public void Dispose()
 }
 ```
 
+> **Error handling:** If a child's `Dispose()` throws, we log the error and continue disposing remaining children. This ensures cleanup is as complete as possible.
+
 ### Finding Resources
 
 ```csharp
 // By type
 var segments = registry.FindByType(ResourceType.Segment);
 
-// By path
-var player = registry.FindByPath("Services/DatabaseEngine/ComponentTables/Player");
+// By path (clean names, not type prefixes)
+var player = registry.FindByPath("DataEngine/Player");
+var primaryKey = registry.FindByPath("DataEngine/Player/PrimaryKey");
+var walRing = registry.FindByPath("Durability/WAL/RingBuffer");
 
 // Memory stats
 var (count, bytes) = new ResourceInspector(registry).GetMemoryStats();
@@ -1458,15 +1382,22 @@ var (count, bytes) = new ResourceInspector(registry).GetMemoryStats();
 | Term | Definition |
 |------|------------|
 | **Resource** | Any tracked object with lifecycle management |
-| **ResourceRegistry** | Central registry holding the resource tree |
-| **Parent** | The resource that owns/created this resource |
+| **ResourceRegistry** | Central registry holding the resource tree (one per process) |
+| **Parent** | The resource that owns/created this resource (required, cannot be null) |
 | **Children** | Resources owned by this resource |
-| **Orphan** | Resource created without explicit parent (goes to Orphans node) |
-| **Service** | Top-level singleton resource under Services node |
+| **Subsystem** | Top-level grouping node (Storage, DataEngine, Durability, Allocation) |
 | **Cascade Disposal** | Disposing parent automatically disposes children |
+| **Name-only ID** | Resource IDs are just names; type info comes from `ResourceType` property |
+| **Fail Fast** | No Orphans fallback — null parent throws `ArgumentNullException` immediately |
 
 ---
 
-*Document Version: 1.0*
-*Last Updated: 2024*
-*Author: Claude Code Analysis*
+*Document Version: 3.1*
+*Last Updated: January 2026*
+*Part of the Resource System Design series*
+
+**Change History:**
+- v3.1: Aligned segments with Owner Aggregates pattern (per 05-granularity-strategy.md). Segments no longer implement IResource.
+- v3.0: Resolved 10 open design questions (subsystem grouping, no Orphans, name-only IDs, etc.)
+- v2.0: Migrated to resources/ directory, removed telemetry section
+- v1.0: Initial design

@@ -1,15 +1,40 @@
 # Typhon: Resource Tree Topology
-# Dense tree showing all graph nodes with their metric kinds
+# Final agreed structure showing what IS and IS NOT a graph node
+# Segments follow "Owner Aggregates" pattern (NOT graph nodes)
 
 direction: down
 
 # ── Title ─────────────────────────────────────────────────────
-title: "Resource Tree — Full Topology" {
+title: "Resource Tree — Final Topology" {
   shape: text
   style.font-size: 20
   style.bold: true
   style.font-color: "#37474f"
   near: top-center
+}
+
+# ── Legend ────────────────────────────────────────────────────
+legend: "Legend" {
+  style.fill: "#fafafa"
+  style.stroke: "#9e9e9e"
+  style.border-radius: 6
+  grid-columns: 2
+
+  node_example: "Graph Node\n[Metric Kinds]" {
+    shape: rectangle
+    style.fill: "#e3f2fd"
+    style.stroke: "#1565c0"
+    style.font-size: 11
+    style.border-radius: 4
+  }
+  agg_example: "(AGGREGATED)\nnot a node" {
+    shape: rectangle
+    style.fill: "#f5f5f5"
+    style.stroke: "#bdbdbd"
+    style.stroke-dash: 3
+    style.font-size: 11
+    style.border-radius: 4
+  }
 }
 
 # ── Root ─────────────────────────────────────────────────────
@@ -21,20 +46,6 @@ root: "Root" {
   style.border-radius: 6
 }
 
-# ── Services ─────────────────────────────────────────────────
-services: "Services" {
-  shape: rectangle
-  style.fill: "#f3e5f5"
-  style.stroke: "#6a1b9a"
-  style.border-radius: 6
-}
-mem_alloc: "MemoryAllocator\n[Memory, Throughput]" {
-  shape: rectangle
-  style.fill: "#e1bee7"
-  style.stroke: "#6a1b9a"
-  style.font-size: 12
-}
-
 # ── Storage ──────────────────────────────────────────────────
 storage: "Storage" {
   shape: rectangle
@@ -43,38 +54,14 @@ storage: "Storage" {
   style.bold: true
   style.border-radius: 6
 }
-page_cache: "PageCache\n[Memory, Capacity,\nDiskIO, Contention]" {
+page_cache: "PageCache\n[Memory, Capacity,\nDiskIO, Contention,\nThroughput]" {
   shape: rectangle
   style.fill: "#ffe0b2"
   style.stroke: "#e65100"
   style.font-size: 12
   style.bold: true
 }
-seg_mgr: "SegmentManager\n[Capacity]" {
-  shape: rectangle
-  style.fill: "#ffe0b2"
-  style.stroke: "#e65100"
-  style.font-size: 12
-}
-comp_seg: "ComponentSegment<T>\n[Memory, Capacity]" {
-  shape: rectangle
-  style.fill: "#fff8e1"
-  style.stroke: "#ff8f00"
-  style.font-size: 11
-}
-rev_seg: "RevisionSegment<T>\n[Memory, Capacity]" {
-  shape: rectangle
-  style.fill: "#fff8e1"
-  style.stroke: "#ff8f00"
-  style.font-size: 11
-}
-idx_seg: "IndexSegment<T>\n[Memory, Capacity]" {
-  shape: rectangle
-  style.fill: "#fff8e1"
-  style.stroke: "#ff8f00"
-  style.font-size: 11
-}
-chunk_cache: "ChunkAccessorCache\n[Capacity, Throughput]" {
+mmf: "ManagedPagedMMF\n[Memory, Capacity,\nDiskIO]" {
   shape: rectangle
   style.fill: "#ffe0b2"
   style.stroke: "#e65100"
@@ -95,11 +82,12 @@ tx_pool: "TransactionPool\n[Capacity, Throughput,\nDuration]" {
   style.stroke: "#1976d2"
   style.font-size: 12
 }
-comp_table: "ComponentTable<T>\n[Memory, Contention,\nThroughput]" {
+comp_table: "ComponentTable<T>\n[Memory, Contention,\nCapacity, Throughput]" {
   shape: rectangle
   style.fill: "#bbdefb"
   style.stroke: "#1976d2"
   style.font-size: 12
+  style.bold: true
 }
 pk_idx: "PrimaryKeyIndex\n[Capacity, Throughput,\nDuration]" {
   shape: rectangle
@@ -112,6 +100,23 @@ sec_idx: "SecondaryIndex<F>\n[Capacity, Throughput]" {
   style.fill: "#e1f5fe"
   style.stroke: "#0277bd"
   style.font-size: 11
+}
+
+# ── Segments (AGGREGATED - NOT GRAPH NODES) ──────────────────
+segments: "(Segments: AGGREGATED via IDebugPropertiesProvider)" {
+  shape: rectangle
+  style.fill: "#f5f5f5"
+  style.stroke: "#bdbdbd"
+  style.stroke-dash: 3
+  style.font-size: 10
+  style.font-color: "#757575"
+  style.border-radius: 4
+
+  inner_segs: "ComponentSegment | CompRevTableSegment\nDefaultIndexSegment | String64IndexSegment" {
+    shape: text
+    style.font-size: 10
+    style.font-color: "#9e9e9e"
+  }
 }
 
 # ── Durability ───────────────────────────────────────────────
@@ -141,6 +146,12 @@ checkpoint: "Checkpoint\n[Throughput, Duration,\nDiskIO]" {
   style.stroke: "#c62828"
   style.font-size: 12
 }
+uow_epoch: "UoWEpochRegistry\n[Capacity]" {
+  shape: rectangle
+  style.fill: "#f8bbd0"
+  style.stroke: "#c62828"
+  style.font-size: 12
+}
 
 # ── Backup ───────────────────────────────────────────────────
 backup: "Backup" {
@@ -156,62 +167,75 @@ shadow_buf: "ShadowBuffer\n[Memory, Capacity,\nContention]" {
   style.stroke: "#2e7d32"
   style.font-size: 12
 }
-snap_chain: "SnapshotChain\n[DiskIO, Capacity]" {
+snap_store: "SnapshotStore\n[DiskIO, Capacity]" {
   shape: rectangle
   style.fill: "#c8e6c9"
   style.stroke: "#2e7d32"
   style.font-size: 12
 }
 
-# ── Execution ────────────────────────────────────────────────
-execution: "Execution" {
+# ── Allocation ──────────────────────────────────────────────
+allocation: "Allocation" {
   shape: rectangle
-  style.fill: "#efebe9"
-  style.stroke: "#4e342e"
+  style.fill: "#f3e5f5"
+  style.stroke: "#6a1b9a"
   style.bold: true
   style.border-radius: 6
 }
-uow_pool: "UoWPool\n[Capacity, Throughput]" {
+mem_alloc: "MemoryAllocator\n[Memory, Throughput]" {
   shape: rectangle
-  style.fill: "#d7ccc8"
-  style.stroke: "#4e342e"
+  style.fill: "#e1bee7"
+  style.stroke: "#6a1b9a"
   style.font-size: 12
 }
-timers: "Timers\n[Throughput]" {
+mem_block: "PinnedMemoryBlock[]\n[Memory]" {
   shape: rectangle
-  style.fill: "#d7ccc8"
-  style.stroke: "#4e342e"
-  style.font-size: 12
+  style.fill: "#f3e5f5"
+  style.stroke: "#7b1fa2"
+  style.font-size: 11
 }
 
 # ── Tree Edges ───────────────────────────────────────────────
-root -> services: "" {style.stroke: "#283593"}
 root -> storage: "" {style.stroke: "#283593"}
 root -> data: "" {style.stroke: "#283593"}
 root -> durability: "" {style.stroke: "#283593"}
 root -> backup: "" {style.stroke: "#283593"}
-root -> execution: "" {style.stroke: "#283593"}
-
-services -> mem_alloc: "" {style.stroke: "#6a1b9a"}
+root -> allocation: "" {style.stroke: "#283593"}
 
 storage -> page_cache: "" {style.stroke: "#e65100"}
-storage -> seg_mgr: "" {style.stroke: "#e65100"}
-storage -> chunk_cache: "" {style.stroke: "#e65100"}
-seg_mgr -> comp_seg: "" {style.stroke: "#ff8f00"}
-seg_mgr -> rev_seg: "" {style.stroke: "#ff8f00"}
-seg_mgr -> idx_seg: "" {style.stroke: "#ff8f00"}
+storage -> mmf: "" {style.stroke: "#e65100"}
 
 data -> tx_pool: "" {style.stroke: "#1565c0"}
 data -> comp_table: "" {style.stroke: "#1565c0"}
 comp_table -> pk_idx: "" {style.stroke: "#0277bd"}
 comp_table -> sec_idx: "" {style.stroke: "#0277bd"}
+comp_table -> segments: "aggregates\n(not child nodes)" {
+  style.stroke: "#bdbdbd"
+  style.stroke-dash: 3
+  style.font-size: 10
+}
 
 durability -> wal_ring: "" {style.stroke: "#c62828"}
 durability -> wal_segs: "" {style.stroke: "#c62828"}
 durability -> checkpoint: "" {style.stroke: "#c62828"}
+durability -> uow_epoch: "" {style.stroke: "#c62828"}
 
 backup -> shadow_buf: "" {style.stroke: "#2e7d32"}
-backup -> snap_chain: "" {style.stroke: "#2e7d32"}
+backup -> snap_store: "" {style.stroke: "#2e7d32"}
 
-execution -> uow_pool: "" {style.stroke: "#4e342e"}
-execution -> timers: "" {style.stroke: "#4e342e"}
+allocation -> mem_alloc: "" {style.stroke: "#6a1b9a"}
+mem_alloc -> mem_block: "" {style.stroke: "#7b1fa2"}
+
+# ── Design Notes ─────────────────────────────────────────────
+note: |md
+  **Granularity Rules (05-granularity-strategy.md)**
+  - Target depth: 3 levels (4 only when justified)
+  - Segments: Owner Aggregates (ComponentTable aggregates)
+  - Latches/chunks: never graph nodes
+  - Memory blocks: yes (bounded count, distinct lifecycle)
+| {
+  shape: text
+  style.font-size: 11
+  style.font-color: "#546e7a"
+  near: bottom-left
+}

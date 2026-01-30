@@ -101,19 +101,119 @@
             position: absolute;
             top: 48px;
             left: 16px;
-            background: rgba(22, 33, 62, 0.95);
+            background: rgba(22, 33, 62, 0.98);
             border: 1px solid #0f3460;
             border-radius: 8px;
             padding: 8px;
             display: none;
             z-index: 10;
+            max-height: calc(100vh - 80px);
+            overflow-y: auto;
+            min-width: 260px;
         }
 
         .diagram-list.visible { display: block; }
 
+        /* List header with pin button */
+        .diagram-list-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 4px 8px 8px 8px;
+            margin-bottom: 4px;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        .diagram-list-header span {
+            font-size: 11px;
+            color: #7f8c8d;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .pin-btn {
+            background: transparent;
+            border: 1px solid transparent;
+            color: #7f8c8d;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.15s;
+        }
+
+        .pin-btn:hover {
+            background: #0f3460;
+            color: #e0e0e0;
+        }
+
+        .pin-btn.pinned {
+            background: #2980b9;
+            border-color: #3498db;
+            color: #fff;
+        }
+
+        .diagram-list.pinned {
+            border-color: #3498db;
+            box-shadow: 0 0 12px rgba(52, 152, 219, 0.3);
+        }
+
+        /* Category headers */
+        .diagram-list .category {
+            display: flex;
+            align-items: center;
+            padding: 8px 10px;
+            color: #3498db;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            cursor: pointer;
+            border-radius: 4px;
+            margin-top: 4px;
+            user-select: none;
+        }
+
+        .diagram-list .category:first-child {
+            margin-top: 0;
+        }
+
+        .diagram-list .category:hover {
+            background: rgba(52, 152, 219, 0.1);
+        }
+
+        .diagram-list .category::before {
+            content: '▼';
+            font-size: 8px;
+            margin-right: 8px;
+            transition: transform 0.2s;
+            display: inline-block;
+        }
+
+        .diagram-list .category.collapsed::before {
+            transform: rotate(-90deg);
+        }
+
+        .diagram-list .category .count {
+            margin-left: auto;
+            font-size: 10px;
+            color: #7f8c8d;
+            font-weight: normal;
+        }
+
+        /* Category items container */
+        .diagram-list .category-items {
+            overflow: hidden;
+            transition: max-height 0.2s ease-out;
+        }
+
+        .diagram-list .category-items.collapsed {
+            max-height: 0 !important;
+        }
+
         .diagram-list a {
             display: block;
-            padding: 8px 12px;
+            padding: 6px 12px 6px 26px;
             color: #e0e0e0;
             text-decoration: none;
             border-radius: 4px;
@@ -123,6 +223,21 @@
 
         .diagram-list a:hover { background: #0f3460; }
         .diagram-list a.current { background: #2980b9; }
+
+        /* Scrollbar styling */
+        .diagram-list::-webkit-scrollbar {
+            width: 8px;
+        }
+        .diagram-list::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .diagram-list::-webkit-scrollbar-thumb {
+            background: #0f3460;
+            border-radius: 4px;
+        }
+        .diagram-list::-webkit-scrollbar-thumb:hover {
+            background: #1a5276;
+        }
     </style>
 </head>
 <body>
@@ -145,31 +260,111 @@
         <kbd>Drag</kbd> Pan &nbsp;
         <kbd>F</kbd> Fit &nbsp;
         <kbd>R</kbd> Reset &nbsp;
-        <kbd>+</kbd><kbd>-</kbd> Zoom
+        <kbd>+</kbd><kbd>-</kbd> Zoom &nbsp;
+        <kbd>P</kbd> Pin list
     </div>
 
     <script>
         // ── Configuration ──────────────────────────────────────
-        const DIAGRAMS = [
-            { name: 'Concurrency Overview', file: 'typhon-concurrency-overview.svg' },
-            { name: 'UoW Lifecycle States', file: 'typhon-uow-lifecycle-states.svg' },
-            { name: 'UoW Swimlane Pipeline', file: 'typhon-uow-swimlane.svg' },
-            { name: 'UoW Data Impact', file: 'typhon-uow-data-impact.svg' },
-            { name: 'Commit Path', file: 'typhon-commit-path.svg' },
-            { name: 'Architecture Layers', file: 'typhon-architecture-layers.svg' },
-            { name: 'Immediate Commit Sequence', file: 'typhon-immediate-commit-sequence.svg' },
-            { name: 'Checkpoint Pipeline', file: 'typhon-checkpoint-pipeline.svg' },
-            { name: 'Durability Overview', file: 'typhon-durability-overview.svg' },
-            { name: 'Execution System Overview', file: 'typhon-execution-overview.svg' },
-            { name: 'Backup Overview', file: 'typhon-backup-overview.svg' },
-            { name: 'Backup CoW Mechanism', file: 'typhon-backup-cow-mechanism.svg' },
-            { name: 'Backup Reverse Delta', file: 'typhon-backup-reverse-delta.svg' },
-            { name: 'Storage Overview', file: 'typhon-storage-overview.svg' },
-            { name: 'Query Engine Overview', file: 'typhon-query-overview.svg' },
-            { name: 'Query Pipeline Executor', file: 'typhon-query-pipeline.svg' },
-            { name: 'Error Escalation Flow', file: 'typhon-error-escalation.svg' },
-            { name: 'Component Dependency Flow', file: 'typhon-dependency-flow.svg' },
+        // NOTE: Keep this list in sync when adding new diagrams!
+        // Run: ls claude/assets/*.svg to see all available diagrams
+        const DIAGRAM_CATEGORIES = [
+            {
+                name: 'Architecture',
+                items: [
+                    { name: 'Architecture Layers', file: 'typhon-architecture-layers.svg' },
+                    { name: 'Component Dependency Flow', file: 'typhon-dependency-flow.svg' },
+                ]
+            },
+            {
+                name: 'Concurrency',
+                items: [
+                    { name: 'Concurrency Overview', file: 'typhon-concurrency-overview.svg' },
+                ]
+            },
+            {
+                name: 'Execution & UoW',
+                items: [
+                    { name: 'Execution System Overview', file: 'typhon-execution-overview.svg' },
+                    { name: 'UoW Lifecycle States', file: 'typhon-uow-lifecycle-states.svg' },
+                    { name: 'UoW Swimlane Pipeline', file: 'typhon-uow-swimlane.svg' },
+                    { name: 'UoW Data Impact', file: 'typhon-uow-data-impact.svg' },
+                    { name: 'Commit Path', file: 'typhon-commit-path.svg' },
+                    { name: 'Immediate Commit Sequence', file: 'typhon-immediate-commit-sequence.svg' },
+                ]
+            },
+            {
+                name: 'Storage',
+                items: [
+                    { name: 'Storage Overview', file: 'typhon-storage-overview.svg' },
+                ]
+            },
+            {
+                name: 'Data Engine & MVCC',
+                items: [
+                    { name: 'Data Engine Overview', file: 'typhon-data-engine-overview.svg' },
+                    { name: 'MVCC Read Path', file: 'typhon-data-mvcc-read.svg' },
+                    { name: 'MVCC Write Path', file: 'typhon-data-mvcc-write.svg' },
+                    { name: 'Data Registration Flow', file: 'typhon-data-registration-flow.svg' },
+                    { name: 'Snapshot Isolation', file: 'typhon-data-snapshot-isolation.svg' },
+                    { name: 'Data UoW Lifecycle', file: 'typhon-data-uow-lifecycle.svg' },
+                ]
+            },
+            {
+                name: 'Query',
+                items: [
+                    { name: 'Query Engine Overview', file: 'typhon-query-overview.svg' },
+                    { name: 'Query Pipeline Executor', file: 'typhon-query-pipeline.svg' },
+                ]
+            },
+            {
+                name: 'Durability',
+                items: [
+                    { name: 'Durability Overview', file: 'typhon-durability-overview.svg' },
+                    { name: 'Checkpoint Pipeline', file: 'typhon-checkpoint-pipeline.svg' },
+                ]
+            },
+            {
+                name: 'Backup',
+                items: [
+                    { name: 'Backup Overview', file: 'typhon-backup-overview.svg' },
+                    { name: 'Backup CoW Mechanism', file: 'typhon-backup-cow-mechanism.svg' },
+                    { name: 'Backup Reverse Delta', file: 'typhon-backup-reverse-delta.svg' },
+                ]
+            },
+            {
+                name: 'Resources',
+                items: [
+                    { name: 'Resource Graph Overview', file: 'typhon-resource-graph-overview.svg' },
+                    { name: 'Resource Tree Topology', file: 'typhon-resource-tree-topology.svg' },
+                    { name: 'Resource Snapshot Flow', file: 'typhon-resource-snapshot-flow.svg' },
+                    { name: 'Owner Aggregates Pattern', file: 'typhon-owner-aggregates-pattern.svg' },
+                ]
+            },
+            {
+                name: 'Observability',
+                items: [
+                    { name: 'Observability Overview', file: 'typhon-observability-overview.svg' },
+                    { name: 'Telemetry Tracks', file: 'typhon-telemetry-tracks.svg' },
+                    { name: 'Telemetry Sinks', file: 'typhon-telemetry-sinks.svg' },
+                ]
+            },
+            {
+                name: 'Errors',
+                items: [
+                    { name: 'Error Escalation Flow', file: 'typhon-error-escalation.svg' },
+                ]
+            },
+            {
+                name: 'Utilities',
+                items: [
+                    { name: 'Utilities Overview', file: 'typhon-utilities-overview.svg' },
+                ]
+            },
         ];
+
+        // Flatten for easy lookup
+        const ALL_DIAGRAMS = DIAGRAM_CATEGORIES.flatMap(cat => cat.items);
 
         // ── State ──────────────────────────────────────────────
         let scale = 1;
@@ -178,6 +373,7 @@
         let startX, startY, startPanX, startPanY;
         let currentDiagram = null;
         let contentEl = null;
+        let isPinned = false;
 
         const viewer = document.getElementById('viewer');
         const zoomLevel = document.getElementById('zoom-level');
@@ -308,6 +504,11 @@
                 case 'r': case 'R': resetView(); break;
                 case '+': case '=': zoom(0.15); break;
                 case '-': zoom(-0.15); break;
+                case 'p': case 'P':
+                    if (diagramList.classList.contains('visible')) {
+                        togglePin();
+                    }
+                    break;
             }
         });
 
@@ -317,36 +518,112 @@
         document.getElementById('btn-fit').onclick = fitToWindow;
         document.getElementById('btn-reset').onclick = resetView;
 
-        // ── Diagram List ───────────────────────────────────────
+        // ── Diagram List with Categories ───────────────────────
         function buildList() {
             diagramList.innerHTML = '';
-            DIAGRAMS.forEach(d => {
-                const a = document.createElement('a');
-                a.href = '#';
-                a.textContent = d.name;
-                a.dataset.file = d.file;
-                a.onclick = e => {
-                    e.preventDefault();
-                    loadDiagram(d.file, d.name);
-                    diagramList.classList.remove('visible');
+
+            // Header with pin button
+            const header = document.createElement('div');
+            header.className = 'diagram-list-header';
+            header.innerHTML = `
+                <span>${ALL_DIAGRAMS.length} diagrams</span>
+                <button class="pin-btn" id="pin-btn" title="Pin list open (P)">📌</button>
+            `;
+            diagramList.appendChild(header);
+
+            // Pin button handler
+            setTimeout(() => {
+                document.getElementById('pin-btn').onclick = (e) => {
+                    e.stopPropagation();
+                    togglePin();
                 };
-                diagramList.appendChild(a);
+            }, 0);
+
+            DIAGRAM_CATEGORIES.forEach((cat, catIndex) => {
+                // Category header
+                const header = document.createElement('div');
+                header.className = 'category';
+                header.innerHTML = `${cat.name}<span class="count">${cat.items.length}</span>`;
+                header.dataset.category = catIndex;
+                header.onclick = () => toggleCategory(catIndex);
+                diagramList.appendChild(header);
+
+                // Category items container
+                const itemsContainer = document.createElement('div');
+                itemsContainer.className = 'category-items';
+                itemsContainer.id = `cat-items-${catIndex}`;
+
+                cat.items.forEach(d => {
+                    const a = document.createElement('a');
+                    a.href = '#';
+                    a.textContent = d.name;
+                    a.dataset.file = d.file;
+                    a.onclick = e => {
+                        e.preventDefault();
+                        loadDiagram(d.file, d.name);
+                        if (!isPinned) {
+                            diagramList.classList.remove('visible');
+                        }
+                    };
+                    itemsContainer.appendChild(a);
+                });
+
+                diagramList.appendChild(itemsContainer);
+
+                // Set initial max-height for animation
+                itemsContainer.style.maxHeight = itemsContainer.scrollHeight + 'px';
             });
+        }
+
+        function toggleCategory(catIndex) {
+            const header = diagramList.querySelector(`.category[data-category="${catIndex}"]`);
+            const items = document.getElementById(`cat-items-${catIndex}`);
+
+            if (header.classList.contains('collapsed')) {
+                header.classList.remove('collapsed');
+                items.classList.remove('collapsed');
+                items.style.maxHeight = items.scrollHeight + 'px';
+            } else {
+                header.classList.add('collapsed');
+                items.classList.add('collapsed');
+            }
         }
 
         function updateListHighlight() {
             diagramList.querySelectorAll('a').forEach(a => {
                 a.classList.toggle('current', a.dataset.file === currentDiagram);
             });
+
+            // Expand category containing current diagram
+            DIAGRAM_CATEGORIES.forEach((cat, catIndex) => {
+                if (cat.items.some(d => d.file === currentDiagram)) {
+                    const header = diagramList.querySelector(`.category[data-category="${catIndex}"]`);
+                    const items = document.getElementById(`cat-items-${catIndex}`);
+                    if (header && header.classList.contains('collapsed')) {
+                        header.classList.remove('collapsed');
+                        items.classList.remove('collapsed');
+                        items.style.maxHeight = items.scrollHeight + 'px';
+                    }
+                }
+            });
+        }
+
+        function togglePin() {
+            isPinned = !isPinned;
+            const pinBtn = document.getElementById('pin-btn');
+            pinBtn.classList.toggle('pinned', isPinned);
+            diagramList.classList.toggle('pinned', isPinned);
         }
 
         document.getElementById('btn-list').onclick = () => {
             diagramList.classList.toggle('visible');
         };
 
-        // Close list on outside click
+        // Close list on outside click (unless pinned)
         viewer.addEventListener('mousedown', () => {
-            diagramList.classList.remove('visible');
+            if (!isPinned) {
+                diagramList.classList.remove('visible');
+            }
         });
 
         // ── Init ───────────────────────────────────────────────
@@ -355,11 +632,11 @@
         // Load from URL hash or query param, or default to first
         const params = new URLSearchParams(window.location.search);
         const requested = params.get('diagram') || window.location.hash.slice(1);
-        const match = DIAGRAMS.find(d => d.file === requested || d.file.includes(requested));
+        const match = ALL_DIAGRAMS.find(d => d.file === requested || d.file.includes(requested));
         if (match) {
             loadDiagram(match.file, match.name);
         } else {
-            loadDiagram(DIAGRAMS[0].file, DIAGRAMS[0].name);
+            loadDiagram(ALL_DIAGRAMS[0].file, ALL_DIAGRAMS[0].name);
         }
 
         // Handle resize
