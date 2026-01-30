@@ -4,6 +4,10 @@
 # and performs basic housekeeping when issues/PRs are updated.
 #
 # Project: https://github.com/users/nockawa/projects/7
+#
+# IMPORTANT: This workflow requires a Personal Access Token (PAT) stored as
+# the repository secret PROJECT_TOKEN. The default GITHUB_TOKEN cannot access
+# user-level projects. Create a classic PAT with 'project' and 'repo' scopes.
 
 name: Project Sync
 
@@ -26,7 +30,9 @@ jobs:
     steps:
       - name: Add issue to project
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # NOTE: GITHUB_TOKEN cannot access user-level projects.
+          # PROJECT_TOKEN is a PAT with 'project' scope.
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
         run: |
           gh project item-add ${{ env.PROJECT_NUMBER }} \
             --owner ${{ env.PROJECT_OWNER }} \
@@ -41,7 +47,7 @@ jobs:
     steps:
       - name: Update status to Done
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
         run: |
           # Get the project item ID for this issue
           ITEM_ID=$(gh project item-list ${{ env.PROJECT_NUMBER }} \
@@ -70,7 +76,7 @@ jobs:
     steps:
       - name: Update status to In Progress
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
         run: |
           # Get the project item ID for this issue
           ITEM_ID=$(gh project item-list ${{ env.PROJECT_NUMBER }} \
@@ -99,7 +105,7 @@ jobs:
     steps:
       - name: Extract issue number and update status
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
         run: |
           # Extract issue number from PR title or branch name
           # Supports formats: "fix #123", "feature/123-name", "fix/123-name"
@@ -145,7 +151,7 @@ jobs:
     steps:
       - name: Update linked issue status
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
         run: |
           PR_TITLE="${{ github.event.pull_request.title }}"
           PR_BRANCH="${{ github.event.pull_request.head.ref }}"
