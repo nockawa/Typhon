@@ -55,7 +55,7 @@ public class ConcurrentBitmapBenchmark
         _concurrent = new ConcurrentBitmap(BitSize);
         _bitmapL3 = new BitmapL3Any(BitSize);
         _concurrentL3 = new ConcurrentBitmapL3Any(BitSize);
-        _concurrentL3All = new ConcurrentBitmapL3All(BitSize);
+        _concurrentL3All = new ConcurrentBitmapL3All("BenchmarkBitmap", TyphonServices.ResourceRegistry.Allocation, BitSize);
 
         _pageCount = 1 << 19;
             
@@ -155,7 +155,7 @@ public class ConcurrentBitmapBenchmark
     public int FindNextUnsetL0_Sparse()
     {
         // Test FindNextUnsetL0 with sparse bitmap (25% filled)
-        var c = new ConcurrentBitmapL3All(BitSize);
+        var c = new ConcurrentBitmapL3All("SparseBitmap", TyphonServices.ResourceRegistry.Allocation, BitSize);
 
         // Fill 25% of bits sparsely
         for (int i = 0; i < BitSize; i += 4)
@@ -176,7 +176,7 @@ public class ConcurrentBitmapBenchmark
     public int FindNextUnsetL0_Dense()
     {
         // Test FindNextUnsetL0 with dense bitmap (blocks of filled data)
-        var c = new ConcurrentBitmapL3All(BitSize);
+        var c = new ConcurrentBitmapL3All("DenseBitmap", TyphonServices.ResourceRegistry.Allocation, BitSize);
 
         // Fill blocks of 4096 bits (L1 regions) leaving gaps
         for (int block = 0; block < BitSize; block += 8192)

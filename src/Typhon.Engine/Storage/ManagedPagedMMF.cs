@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -45,7 +46,6 @@ unsafe internal struct RootFileHeader
 [PublicAPI]
 public class ManagedPagedMMFOptions : PagedMMFOptions
 {
-    
 }
 
 // ============================================================================================================================================================
@@ -57,8 +57,17 @@ public class ManagedPagedMMFOptions : PagedMMFOptions
 // 3: Reserved page for occupancy map next map data (in case we need more than 500 pages to store the occupancy map)
 // ============================================================================================================================================================
 
+/// <summary>
+/// Memory-mapped file manager with page allocation, segment management, and occupancy tracking.
+/// </summary>
+/// <remarks>
+/// <para>
+/// ManagedPagedMMF registers itself under the <see cref="ResourceSubsystem.Storage"/> subsystem
+/// in the resource tree. It is typically the storage backend for a <see cref="DatabaseEngine"/>.
+/// </para>
+/// </remarks>
 [PublicAPI]
-public partial class ManagedPagedMMF : PagedMMF
+public partial class ManagedPagedMMF : PagedMMF, IResource
 {
     #region Constants
 
@@ -67,16 +76,56 @@ public partial class ManagedPagedMMF : PagedMMF
     internal const string HeaderSignature = "TyphonDatabase";
 
     #endregion
-    
+
     private ConcurrentDictionary<int, LogicalSegment> _segments;
     private LogicalSegment _occupancySegment;
     private BitmapL3 _occupancyMap;
     private int _occupancyNextReservedPageIndex;
     private int _occupancyNextReservedMapPageIndex;
 
-    public ManagedPagedMMF(IServiceProvider serviceProvider, PagedMMFOptions options, TimeManager timeManager, ILogger<PagedMMF> logger) : 
-        base(serviceProvider, options, timeManager, logger)
+    #region IResource Implementation
+
+    /// <inheritdoc />
+    public string Id { get; private set; }
+
+    /// <inheritdoc />
+    public ResourceType Type => ResourceType.File;
+
+    /// <inheritdoc />
+    public IResource Parent { get; private set; }
+
+    /// <inheritdoc />
+    public IEnumerable<IResource> Children => [];  // Segments are aggregated, not children
+
+    /// <inheritdoc />
+    public DateTime CreatedAt { get; private set; }
+
+    /// <inheritdoc />
+    public IResourceRegistry Owner { get; private set; }
+
+    /// <inheritdoc />
+    public bool RegisterChild(IResource child) => false;
+
+    /// <inheritdoc />
+    public bool RemoveChild(IResource resource) => false;
+
+    #endregion
+
+    public ManagedPagedMMF(IServiceProvider serviceProvider, PagedMMFOptions options, TimeManager timeManager, ILogger<PagedMMF> logger)
+        : this(serviceProvider, options, timeManager, logger, TyphonServices.ResourceRegistry)
     {
+    }
+
+    public ManagedPagedMMF(IServiceProvider serviceProvider, PagedMMFOptions options, TimeManager timeManager,
+        ILogger<PagedMMF> logger, IResourceRegistry resourceRegistry, string name = null)
+        : base(serviceProvider, options, timeManager, logger)
+    {
+        // IResource initialization
+        Id = name ?? $"ManagedPagedMMF_{options?.DatabaseName ?? Guid.NewGuid().ToString("N")}";
+        Owner = resourceRegistry ?? throw new ArgumentNullException(nameof(resourceRegistry));
+        Parent = Owner.Storage;
+        CreatedAt = DateTime.UtcNow;
+        Parent.RegisterChild(this);
     }
 
     public int AllocatePage(ChangeSet changeSet = null)
@@ -145,7 +194,7 @@ public partial class ManagedPagedMMF : PagedMMF
             fixed (byte* headerSignature = rootFileHeader.HeaderSignature)
             {
                 StringExtensions.StoreString(HeaderSignature, headerSignature, 32);
-            };
+            }
             rootFileHeader.DatabaseFormatRevision = DatabaseFormatRevision;
             fixed (byte* databaseName = rootFileHeader.DatabaseName)
             {
@@ -177,7 +226,7 @@ public partial class ManagedPagedMMF : PagedMMF
         }
     }
 
-    unsafe protected override void OnFileLoading()
+    protected override void OnFileLoading()
     {
         base.OnFileLoading();
         RequestPage(0, false, out var pa);
@@ -295,7 +344,10 @@ public partial class ManagedPagedMMF : PagedMMF
         {
             return;
         }
-        
+
+        // Unregister from parent (Storage subsystem)
+        Parent?.RemoveChild(this);
+
         var dic = Interlocked.Exchange(ref _segments, null);
         if (dic != null)
         {
@@ -304,7 +356,7 @@ public partial class ManagedPagedMMF : PagedMMF
                 segment.Dispose();
             }
         }
-        
+
         base.OnDispose();
     }
 

@@ -78,28 +78,32 @@ public unsafe class ConcurrentBitmapL3All : IResource
 
     public bool IsFull => _banks.All(b => b.IsFull);
 
+    /// <summary>
+    /// Creates a new concurrent bitmap with the specified capacity per bank.
+    /// </summary>
+    /// <param name="id">Unique identifier for this resource.</param>
+    /// <param name="parent">Parent resource (required, cannot be null).</param>
+    /// <param name="bankBitCountCapacity">Capacity per bank (must be power of 2).</param>
+    /// <exception cref="ArgumentNullException">Thrown if parent is null.</exception>
+    /// <exception cref="ArgumentException">Thrown if capacity is not a power of 2.</exception>
     public ConcurrentBitmapL3All(string id, IResource parent, int bankBitCountCapacity)
     {
         if (!MathHelpers.IsPow2(bankBitCountCapacity))
         {
-            throw new Exception($"BankBitCountCapacity must be a power of 2 but {bankBitCountCapacity} was given");
+            throw new ArgumentException($"BankBitCountCapacity must be a power of 2 but {bankBitCountCapacity} was given", nameof(bankBitCountCapacity));
         }
-        
+
+        Parent = parent ?? throw new ArgumentNullException(nameof(parent), "Parent resource cannot be null. Resources must have an explicit parent.");
         Id = id ?? Guid.NewGuid().ToString();
-        Parent = parent ?? TyphonServices.ResourceRegistry.Orphans;
         Owner = Parent.Owner;
         CreatedAt = DateTime.UtcNow;
         BankBitCountCapacity = bankBitCountCapacity;
-        _l0Size = Math.Max(1, (bankBitCountCapacity + 63) / 64); 
-        _l1Size = Math.Max(1, (_l0Size + 63) / 64); 
+        _l0Size = Math.Max(1, (bankBitCountCapacity + 63) / 64);
+        _l1Size = Math.Max(1, (_l0Size + 63) / 64);
         _l2Size = Math.Max(1, (_l1Size + 63) / 64);
         _l0Shift = BitOperations.Log2((uint)bankBitCountCapacity);
         _indexInBankMask = (1 << _l0Shift) - 1;
         _banks = [new Bank(this, 0)];
-    }
-    
-    public ConcurrentBitmapL3All(int bankBitCountCapacity) : this(null, null, bankBitCountCapacity)
-    {
     }
 
     public void Grow()
