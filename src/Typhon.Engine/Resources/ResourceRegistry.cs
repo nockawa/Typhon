@@ -1,5 +1,6 @@
 using JetBrains.Annotations;
 using System;
+using System.Linq;
 
 namespace Typhon.Engine;
 
@@ -87,6 +88,21 @@ public class ResourceRegistry : IResourceRegistry
         var parent = GetSubsystem(subsystem);
         parent.RegisterChild(resource);
         return parent;
+    }
+
+    /// <inheritdoc />
+    public IResource FindByPath(string path, string separator = "/")
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+
+        var parts = path.Split(new[] { separator }, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return null;
+
+        // Path must start with Root
+        if (parts[0] != Root.Id) return null;
+
+        // Navigate from root
+        return Root.FindByPath(string.Join(separator, parts.Skip(1)), separator);
     }
 
     /// <summary>

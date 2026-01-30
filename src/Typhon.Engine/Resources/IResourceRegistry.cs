@@ -64,4 +64,12 @@ public interface IResourceRegistry : IDisposable
     /// </summary>
     /// <returns>The subsystem node (for fluent chaining or parent assignment).</returns>
     IResource Register<T>(T resource, ResourceSubsystem subsystem) where T : IResource;
+
+    /// <summary>
+    /// Finds a resource by its full path from root.
+    /// </summary>
+    /// <param name="path">Full path (e.g., "Root/DataEngine/DatabaseEngine_abc123/ComponentTable_Player").</param>
+    /// <param name="separator">Path separator (default: "/").</param>
+    /// <returns>The resource at the path, or null if not found.</returns>
+    IResource FindByPath(string path, string separator = "/");
 }
