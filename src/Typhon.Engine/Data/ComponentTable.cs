@@ -132,8 +132,18 @@ public enum ComponentTableFlags
     HasCollections      = 0x01
 }
 
+/// <summary>
+/// Stores all instances of a single component type with MVCC revision tracking.
+/// </summary>
+/// <remarks>
+/// <para>
+/// ComponentTable registers as a child of its owning <see cref="DatabaseEngine"/> in the resource tree.
+/// Segments (ComponentSegment, CompRevTableSegment, etc.) are NOT registered as children —
+/// they follow the "Owner Aggregates" pattern where ComponentTable will aggregate their metrics.
+/// </para>
+/// </remarks>
 [PublicAPI]
-public unsafe class ComponentTable : IDisposable
+public unsafe class ComponentTable : IDisposable, IResource
 {
     private const int ComponentSegmentStartingSize = 4;
     private const int MainIndexSegmentStartingSize = 4;
@@ -148,7 +158,7 @@ public unsafe class ComponentTable : IDisposable
 
     public ComponentTableFlags Flags => _flags;
     public bool HasCollections => (_flags & ComponentTableFlags.HasCollections) != 0;
-    
+
     internal DatabaseEngine DBE { get; private set; }
     internal int ComponentOverhead => Definition.MultipleIndicesCount * sizeof(int);
     internal int ComponentTotalSize => Definition.ComponentStorageTotalSize;
@@ -165,20 +175,55 @@ public unsafe class ComponentTable : IDisposable
             Accessor = VSBS.Segment.CreateChunkAccessor();
         }
     }
-    
+
     internal Dictionary<int, ComponentCollectionInfo> ComponentCollectionVSBSByOffset { get; private set; }
 
     private ComponentTableFlags _flags;
+
+    #region IResource Implementation
+
+    /// <inheritdoc />
+    public string Id { get; private set; }
+
+    /// <inheritdoc />
+    public ResourceType Type => ResourceType.Node;
+
+    /// <inheritdoc />
+    public IResource Parent { get; private set; }
+
+    /// <inheritdoc />
+    public IEnumerable<IResource> Children => [];  // Segments are aggregated, not children
+
+    /// <inheritdoc />
+    public DateTime CreatedAt { get; private set; }
+
+    /// <inheritdoc />
+    public IResourceRegistry Owner { get; private set; }
+
+    /// <inheritdoc />
+    public bool RegisterChild(IResource child) => false;  // No children allowed
+
+    /// <inheritdoc />
+    public bool RemoveChild(IResource resource) => false;  // No children allowed
+
+    #endregion
     
     public void Create(DatabaseEngine dbe, DBComponentDefinition definition)
     {
         DBE = dbe;
         Definition = definition;
 
+        // IResource initialization - register as child of DatabaseEngine
+        Id = $"ComponentTable_{definition.Name}";
+        Parent = dbe;
+        Owner = dbe.Owner;
+        CreatedAt = DateTime.UtcNow;
+        Parent.RegisterChild(this);
+
         var mmf = DBE.MMF;
         ComponentSegment    = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, ComponentTotalSize);
         CompRevTableSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, ComponentRevisionManager.CompRevChunkSize);
-            
+
         // This segment will be used for all kinds of index types except String64 which needs a dedicated one because its chunk size is different (all others are 64 bytes)
         DefaultIndexSegment  = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(Index64Chunk));
         String64IndexSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(IndexString64Chunk));
@@ -263,6 +308,9 @@ public unsafe class ComponentTable : IDisposable
     public void Dispose()
     {
         if (ComponentSegment == null) return;
+
+        // Unregister from parent (DatabaseEngine)
+        Parent?.RemoveChild(this);
 
         String64IndexSegment?.Dispose();
         DefaultIndexSegment.Dispose();

@@ -28,7 +28,7 @@ public class FindNextUnsetL0Benchmark
     [GlobalSetup]
     public void Setup()
     {
-        _bitmap = new ConcurrentBitmapL3All(BitSize);
+        _bitmap = new ConcurrentBitmapL3All("BenchmarkBitmap", TyphonServices.ResourceRegistry.Allocation, BitSize);
         _bitmapOld = new ConcurrentBitmapL3AllOld(BitSize);
 
         switch (Pattern)

@@ -51,7 +51,7 @@ public class BlockAllocatorTests
     [TestCase(17)]
     [TestCase(100)]
     public void Constructor_NonPowerOfTwoEntryCount_ThrowsException(int entryCountPerPage)
-        => Assert.Throws<Exception>(() =>
+        => Assert.Throws<ArgumentException>(() =>
         {
             _ = new BlockAllocator(8, entryCountPerPage);
         });
