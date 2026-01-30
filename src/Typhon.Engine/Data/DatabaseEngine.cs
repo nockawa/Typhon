@@ -83,8 +83,25 @@ public struct ComponentR1
     public ComponentCollection<FieldR1> Fields;
 }
 
+/// <summary>
+/// Configuration options for <see cref="DatabaseEngine"/>.
+/// </summary>
+[PublicAPI]
 public class DatabaseEngineOptions
 {
+    /// <summary>
+    /// Resource budget and limit configuration.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Contains settings for page cache size, transaction limits, WAL configuration,
+    /// checkpoint behavior, and overall memory budget.
+    /// </para>
+    /// <para>
+    /// Call <see cref="ResourceOptions.Validate"/> to verify configuration before engine creation.
+    /// </para>
+    /// </remarks>
+    public ResourceOptions Resources { get; set; } = new();
 }
 
 /// <summary>
