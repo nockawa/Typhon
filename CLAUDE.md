@@ -238,6 +238,7 @@ dotnet run -c Release --filter '*PagedMemoryFile*'
 - **Thread IDs stored as 16 bits**: All synchronization primitives that store thread IDs must use exactly 16 bits (max 65,535). This ensures consistency across `AccessControl`, `AccessControlSmall`, and `ResourceAccessControl`, and provides headroom for servers with 500+ cores.
 - **No LINQ in hot paths**: Avoid LINQ in performance-critical code due to allocations and delegate overhead.
 - **Prefer `ref struct` for short-lived helpers**: Use `ref struct` for stack-only types that wrap references (e.g., `AtomicChange`, `LockData`).
+- **No `Volatile.Read`/`Write` for ≤64-bit types**: On x64, reads and writes of primitives up to 64 bits are naturally atomic. `Volatile.Read`/`Write` only adds unnecessary memory barrier overhead. Use plain field access instead. Reserve `Interlocked` operations for read-modify-write sequences (increment, compare-exchange, etc.).
 
 ### Concurrency Primitives
 - **AccessControl**: Reader-writer lock for general concurrent access

@@ -114,11 +114,23 @@ public class DatabaseEngineOptions
 /// </para>
 /// </remarks>
 [PublicAPI]
-public class DatabaseEngine : IDisposable, IResource
+public class DatabaseEngine : IResource, IMetricSource, IDebugPropertiesProvider
 {
     private readonly DatabaseEngineOptions      _options;
     private readonly ILogger<DatabaseEngine>    _log;
     private readonly ConcurrentDictionary<string, IResource> _children;
+
+    // Transaction counters for observability
+    private long _transactionsCreated;
+    private long _transactionsCommitted;
+    private long _transactionsRolledBack;
+    private long _transactionConflicts;
+
+    // Commit duration tracking
+    private long _commitLastUs;
+    private long _commitSumUs;
+    private long _commitCount;
+    private long _commitMaxUs;
 
     private ComponentTable _fieldsTable;
     private ComponentTable _componentsTable;
@@ -169,7 +181,11 @@ public class DatabaseEngine : IDisposable, IResource
     /// time when the transaction was created) is used as the reference point, every access will be based on the data that existed up to this point.
     /// Every change will be isolated from other transactions until the content is committed.
     /// </remarks>
-    public Transaction CreateTransaction() => TransactionChain.CreateTransaction(this);
+    public Transaction CreateTransaction()
+    {
+        Interlocked.Increment(ref _transactionsCreated);
+        return TransactionChain.CreateTransaction(this);
+    }
 
     public DatabaseEngine(DatabaseEngineOptions options, ManagedPagedMMF mmf, ILogger<DatabaseEngine> log)
         : this(options, mmf, log, TyphonServices.ResourceRegistry)
@@ -359,4 +375,79 @@ public class DatabaseEngine : IDisposable, IResource
     public ComponentTable GetComponentTable<T>() where T : unmanaged => GetComponentTable(typeof(T));
 
     public ComponentTable GetComponentTable(Type type) => _componentTableByType.GetValueOrDefault(type);
+
+    #region Instrumentation Methods
+
+    internal void RecordCommitDuration(long durationUs)
+    {
+        _commitLastUs = durationUs;
+
+        if (durationUs > _commitMaxUs)
+        {
+            _commitMaxUs = durationUs;
+        }
+
+        Interlocked.Add(ref _commitSumUs, durationUs);
+        Interlocked.Increment(ref _commitCount);
+        Interlocked.Increment(ref _transactionsCommitted);
+    }
+
+    internal void RecordRollback() => Interlocked.Increment(ref _transactionsRolledBack);
+
+    internal void RecordConflict() => Interlocked.Increment(ref _transactionConflicts);
+
+    #endregion
+
+    #region IMetricSource Implementation
+
+    /// <inheritdoc />
+    public void ReadMetrics(IMetricWriter writer)
+    {
+        // Capacity: active transactions
+        long activeCount = TransactionChain.ActiveCount;
+        long maxCount = _options?.Resources?.MaxActiveTransactions ?? 1000;
+        writer.WriteCapacity(activeCount, maxCount);
+
+        // Throughput: transaction lifecycle
+        writer.WriteThroughput("Created", _transactionsCreated);
+        writer.WriteThroughput("Committed", _transactionsCommitted);
+        writer.WriteThroughput("RolledBack", _transactionsRolledBack);
+        writer.WriteThroughput("Conflicts", _transactionConflicts);
+
+        // Duration: commit timing
+        var avgUs = _commitCount > 0 ? _commitSumUs / _commitCount : 0;
+        writer.WriteDuration("Commit", _commitLastUs, avgUs, _commitMaxUs);
+    }
+
+    /// <inheritdoc />
+    public void ResetPeaks()
+    {
+        _commitMaxUs = 0;
+        _commitSumUs = 0;
+        _commitCount = 0;
+    }
+
+    #endregion
+
+    #region IDebugPropertiesProvider Implementation
+
+    /// <inheritdoc />
+    public IReadOnlyDictionary<string, object> GetDebugProperties() =>
+        new Dictionary<string, object>
+        {
+            ["TransactionChain.ActiveCount"] = TransactionChain.ActiveCount,
+            ["TransactionChain.MinTSN"] = TransactionChain.MinTSN,
+            ["TransactionChain.CurrentTSN"] = TransactionChain.NextFreeId,
+            ["ComponentTables.Count"] = _componentTableByType?.Count ?? 0,
+            ["PrimaryKey.Current"] = _curPrimaryKey,
+            ["Transactions.Created"] = _transactionsCreated,
+            ["Transactions.Committed"] = _transactionsCommitted,
+            ["Transactions.RolledBack"] = _transactionsRolledBack,
+            ["Transactions.Conflicts"] = _transactionConflicts,
+            ["Commit.LastUs"] = _commitLastUs,
+            ["Commit.MaxUs"] = _commitMaxUs,
+            ["Commit.Count"] = _commitCount,
+        };
+
+    #endregion
 }

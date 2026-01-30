@@ -1125,6 +1125,8 @@ public unsafe class Transaction : IDisposable
             var hasConflict = (conflictSolver?.IsBuildPhase ?? true) && (lastCommitRevisionIndex >= compRevInfo.CurRevisionIndex);
             if (hasConflict)
             {
+                // Record conflict for observability
+                _dbe?.RecordConflict();
                 // Create a new revision
                 ComponentRevisionManager.AddCompRev(info, ref compRevInfo, TSN, false);
                 
@@ -1370,6 +1372,7 @@ public unsafe class Transaction : IDisposable
 
         // New state
         State = TransactionState.Rollbacked;
+        _dbe?.RecordRollback();
         return true;
     }
 
@@ -1485,6 +1488,8 @@ public unsafe class Transaction : IDisposable
             return false;
         }
 
+        var startTicks = Stopwatch.GetTimestamp();
+
         var conflictSolver = handler != null ? GetConflictSolver() : null;
         var context = new CommitContext { IsRollback = false, Solver = conflictSolver };
 
@@ -1536,6 +1541,11 @@ public unsafe class Transaction : IDisposable
 
         // New state
         State = TransactionState.Committed;
+
+        // Record commit duration for observability
+        var elapsedUs = (Stopwatch.GetTimestamp() - startTicks) * 1_000_000 / Stopwatch.Frequency;
+        _dbe?.RecordCommitDuration(elapsedUs);
+
         return true;
     }
 }

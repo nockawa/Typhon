@@ -137,11 +137,11 @@ public partial class PagedMMF : IDisposable
     protected readonly ILogger<PagedMMF> Logger;
     
     private readonly TimeManager _tmg;
-    private byte[] _memPages;
+    protected byte[] MemPages;
     private GCHandle _memPagesHandle;
     private unsafe byte* _memPagesAddr;
-    
-    private readonly int _memPagesCount;
+
+    protected readonly int MemPagesCount;
     private int _clockSweepCurrentIndex;
     private PageInfo[] _memPagesInfo;
     
@@ -164,13 +164,13 @@ public partial class PagedMMF : IDisposable
 
         // Create the cache of the page, pin it and keeps its address
         var cacheSize = Options.DatabaseCacheSize;
-        _memPages = new byte[cacheSize];
-        _memPagesHandle = GCHandle.Alloc(_memPages, GCHandleType.Pinned);
+        MemPages = new byte[cacheSize];
+        _memPagesHandle = GCHandle.Alloc(MemPages, GCHandleType.Pinned);
         _memPagesAddr = (byte*)_memPagesHandle.AddrOfPinnedObject();
 
         // Create the Memory Page info table
-        _memPagesCount = (int)(cacheSize >> PageSizePow2);
-        var pageCount = _memPagesCount;
+        MemPagesCount = (int)(cacheSize >> PageSizePow2);
+        var pageCount = MemPagesCount;
         _memPagesInfo = new PageInfo[pageCount];
         _clockSweepCurrentIndex = 0;
 
@@ -181,7 +181,7 @@ public partial class PagedMMF : IDisposable
         
         _memPageIndexByFilePageIndex = new ConcurrentDictionary<int, int>();
 
-        _metrics = new Metrics (this, _memPagesCount);
+        _metrics = new Metrics (this, MemPagesCount);
 
         try
         {
@@ -282,7 +282,7 @@ public partial class PagedMMF : IDisposable
 
         _memPagesHandle.Free();
         _memPagesAddr = null;
-        _memPages = null;
+        MemPages = null;
 
         IsDisposed = true;
 
@@ -377,7 +377,7 @@ public partial class PagedMMF : IDisposable
                 ++_metrics.ReadFromDiskCount;
                 
                 var pi = _memPagesInfo[memPageIndex];
-                pi.SetIOReadTask(RandomAccess.ReadAsync(_fileHandle, _memPages.AsMemory(memPageIndex * PageSize, PageSize), pageOffset, cancellationToken));
+                pi.SetIOReadTask(RandomAccess.ReadAsync(_fileHandle, MemPages.AsMemory(memPageIndex * PageSize, PageSize), pageOffset, cancellationToken));
             }            
         }
         else
@@ -397,11 +397,11 @@ public partial class PagedMMF : IDisposable
     private int AdvanceClockHand()
     {
         var curValue = _clockSweepCurrentIndex;
-        var newValue = (curValue + 1) % _memPagesCount;
+        var newValue = (curValue + 1) % MemPagesCount;
         while (Interlocked.CompareExchange(ref _clockSweepCurrentIndex, newValue, curValue) != curValue)
         {
             curValue = _clockSweepCurrentIndex;
-            newValue = (curValue + 1) % _memPagesCount;
+            newValue = (curValue + 1) % MemPagesCount;
         }
 
         return curValue;
@@ -444,7 +444,7 @@ public partial class PagedMMF : IDisposable
             // If we already have a MemPage fetch for the FilePage just before the one we allocate, then we try to take the MemPage that follows
             // We request FilePage 123, there's a FilePage 122 allocated to MemPage 34, then we try to allocate 35 for 123, which will allow, if needed,
             //  one file write operation for both pages
-            if (filePageIndex > 0 && _memPageIndexByFilePageIndex.TryGetValue(filePageIndex - 1, out var prevMemPageIndex) && ((prevMemPageIndex + 1) < _memPagesCount))
+            if (filePageIndex > 0 && _memPageIndexByFilePageIndex.TryGetValue(filePageIndex - 1, out var prevMemPageIndex) && ((prevMemPageIndex + 1) < MemPagesCount))
             {
                 memPageIndex = prevMemPageIndex + 1;
                 pi = _memPagesInfo[memPageIndex];
@@ -462,7 +462,7 @@ public partial class PagedMMF : IDisposable
             if (found == false)
             {
                 int attempts = 0;
-                int maxAttempts = _memPagesCount * 2;
+                int maxAttempts = MemPagesCount * 2;
 
                 while (attempts < maxAttempts)
                 {
@@ -486,7 +486,7 @@ public partial class PagedMMF : IDisposable
                 if (found == false)
                 {
                     attempts = 0;
-                    maxAttempts = _memPagesCount;
+                    maxAttempts = MemPagesCount;
 
                     while (attempts < maxAttempts)
                     {
@@ -540,7 +540,7 @@ public partial class PagedMMF : IDisposable
 
             if (Options.PagesDebugPattern)
             {
-                var pageAddr = _memPages.AsMemory(memPageIndex * PageSize).Span.Cast<byte, int>();
+                var pageAddr = MemPages.AsMemory(memPageIndex * PageSize).Span.Cast<byte, int>();
                 int i;
                 for (i = 0; i < PageHeaderSize >> 2; i++)
                 {
@@ -933,7 +933,7 @@ public partial class PagedMMF : IDisposable
         var filePageIndex = pi.FilePageIndex;
         var pageOffset = filePageIndex * (long)PageSize;
         var lengthToWrite = PageSize * length;
-        var pageData = _memPages.AsMemory(firstMemPageIndex * PageSize, lengthToWrite);
+        var pageData = MemPages.AsMemory(firstMemPageIndex * PageSize, lengthToWrite);
 
         _fileSize = Math.Max(_fileSize, pageOffset + lengthToWrite);
         
