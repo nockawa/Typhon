@@ -34,7 +34,8 @@
       "Bash(findstr:*)",
       "Bash(dir:*)",
       "Bash(git -C \"C:/Dev/github/Typhon\" diff --stat claude/design/resources/01-registry.md)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "mcp__rider__list_directory_tree"
     ],
     "deny": [],
     "ask": []
