@@ -17,12 +17,21 @@ public unsafe abstract class BlockAllocatorBase : IDisposable
     private readonly int _pageShift;
     private Lock _lock;
 
-    protected BlockAllocatorBase(int stride, int entryCountPerPage)
+    /// <summary>
+    /// Creates a block allocator with the specified stride and page capacity.
+    /// </summary>
+    /// <param name="stride">Size of each block in bytes.</param>
+    /// <param name="entryCountPerPage">Number of entries per page (must be power of 2).</param>
+    /// <param name="parent">Parent resource for the internal bitmap (defaults to Allocation subsystem).</param>
+    protected BlockAllocatorBase(int stride, int entryCountPerPage, IResource parent = null)
     {
         if (MathHelpers.IsPow2(entryCountPerPage) == false)
         {
-            throw new Exception($"Entry count per page must be a power of 2 but {entryCountPerPage} was given");
+            throw new ArgumentException($"Entry count per page must be a power of 2 but {entryCountPerPage} was given", nameof(entryCountPerPage));
         }
+
+        // Default to Allocation subsystem if no parent specified
+        parent ??= TyphonServices.ResourceRegistry.Allocation;
 
         var size = stride * entryCountPerPage;
         var page = GC.AllocateUninitializedArray<byte>(size, true);
@@ -33,7 +42,7 @@ public unsafe abstract class BlockAllocatorBase : IDisposable
         _pages = new (IntPtr, byte[])[1];
         _pages[0] = (Marshal.UnsafeAddrOfPinnedArrayElement(page, 0), page);
 
-        _blockMap = new ConcurrentBitmapL3All(entryCountPerPage);
+        _blockMap = new ConcurrentBitmapL3All($"{GetType().Name}BlockMap", parent, entryCountPerPage);
         _lock = new Lock();
     }
 

@@ -19,25 +19,53 @@ public class MemoryAllocatorOptions
     public string Name { get; set; } = "Default";
 }
 
+/// <summary>
+/// Base class for service resources that auto-register under a subsystem.
+/// Services are long-lived, typically singleton components in the engine.
+/// </summary>
+[PublicAPI]
 public abstract class ServiceBase : IResource
 {
-    protected ServiceBase(string id, IResourceRegistry owner)
+    /// <summary>
+    /// Creates a service and registers it under the specified subsystem.
+    /// </summary>
+    /// <param name="id">Unique identifier for this service.</param>
+    /// <param name="owner">The resource registry to register with.</param>
+    /// <param name="subsystem">Which subsystem to register under.</param>
+    protected ServiceBase(string id, IResourceRegistry owner, ResourceSubsystem subsystem)
     {
-        Id = id;
-        Owner = owner;
-        Parent = Owner.RegisterService(this);
+        Id = id ?? throw new ArgumentNullException(nameof(id));
+        Owner = owner ?? throw new ArgumentNullException(nameof(owner));
+        Parent = Owner.Register(this, subsystem);
         CreatedAt = DateTime.UtcNow;
     }
+
+    /// <inheritdoc />
     public abstract void Dispose();
 
+    /// <inheritdoc />
     public string Id { get; }
+
+    /// <inheritdoc />
     public ResourceType Type => ResourceType.Service;
+
+    /// <inheritdoc />
     public IResource Parent { get; }
+
+    /// <inheritdoc />
     public IEnumerable<IResource> Children => [];
+
+    /// <inheritdoc />
     public DateTime CreatedAt { get; }
+
+    /// <inheritdoc />
     public IResourceRegistry Owner { get; }
-    public bool RegisterChild(IResource child) => throw new NotImplementedException();
-    public bool RemoveChild(IResource resource) => throw new NotImplementedException();
+
+    /// <inheritdoc />
+    public bool RegisterChild(IResource child) => false;
+
+    /// <inheritdoc />
+    public bool RemoveChild(IResource resource) => false;
 }
 
 [PublicAPI]
@@ -45,8 +73,8 @@ public class MemoryAllocator : ServiceBase, IMemoryAllocator
 {
     private ConcurrentCollection<MemoryBlockBase> _blocks;
 
-    public MemoryAllocator(IResourceRegistry resourceRegistry, MemoryAllocatorOptions options) : 
-        base(options?.Name ?? "DefaultMemoryAllocator", resourceRegistry)
+    public MemoryAllocator(IResourceRegistry resourceRegistry, MemoryAllocatorOptions options) :
+        base(options?.Name ?? "DefaultMemoryAllocator", resourceRegistry, ResourceSubsystem.Allocation)
     {
         _blocks = new ConcurrentCollection<MemoryBlockBase>();
     }
