@@ -122,11 +122,6 @@ public partial class ManagedPagedMMF : PagedMMF, IResource, IMetricSource, ICont
 
     #endregion
 
-    public ManagedPagedMMF(IServiceProvider serviceProvider, PagedMMFOptions options, TimeManager timeManager, ILogger<PagedMMF> logger)
-        : this(serviceProvider, options, timeManager, logger, TyphonServices.ResourceRegistry)
-    {
-    }
-
     public ManagedPagedMMF(IServiceProvider serviceProvider, PagedMMFOptions options, TimeManager timeManager,
         ILogger<PagedMMF> logger, IResourceRegistry resourceRegistry, string name = null)
         : base(serviceProvider, options, timeManager, logger)

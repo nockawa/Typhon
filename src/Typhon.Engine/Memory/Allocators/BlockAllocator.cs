@@ -2,17 +2,14 @@
 
 using JetBrains.Annotations;
 using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Runtime.InteropServices;
-using System.Threading;
 
 namespace Typhon.Engine;
 
 [PublicAPI]
 public unsafe class BlockAllocator : BlockAllocatorBase
 {
-    public BlockAllocator(int stride, int entryCountPerPage) : base(stride, entryCountPerPage)
+    public BlockAllocator(int stride, int entryCountPerPage, IResource parent, IMemoryAllocator memoryAllocator) : 
+        base(stride, entryCountPerPage, parent, memoryAllocator)
     {
     }
 

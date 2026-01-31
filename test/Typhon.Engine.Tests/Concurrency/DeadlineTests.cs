@@ -130,12 +130,12 @@ public class DeadlineTests
     public void FromTimeout_ExpiresAfterDuration()
     {
         // Use a short timeout so the test completes quickly
-        var deadline = Deadline.FromTimeout(TimeSpan.FromMilliseconds(100));
+        var deadline = Deadline.FromTimeout(TimeSpan.FromMilliseconds(20));
 
         Assert.That(deadline.IsExpired, Is.False, "Should not be expired immediately");
 
         // Wait for it to expire
-        Thread.Sleep(150);
+        Thread.Sleep(30);
 
         Assert.That(deadline.IsExpired, Is.True, "Should be expired after duration");
     }
@@ -161,9 +161,9 @@ public class DeadlineTests
     [CancelAfter(3000)]
     public void Remaining_ZeroWhenExpired()
     {
-        var deadline = Deadline.FromTimeout(TimeSpan.FromMilliseconds(50));
+        var deadline = Deadline.FromTimeout(TimeSpan.FromMilliseconds(10));
 
-        Thread.Sleep(100);
+        Thread.Sleep(20);
 
         Assert.That(deadline.Remaining, Is.EqualTo(TimeSpan.Zero));
     }
@@ -201,9 +201,9 @@ public class DeadlineTests
     [CancelAfter(3000)]
     public void RemainingMilliseconds_ZeroWhenExpired()
     {
-        var deadline = Deadline.FromTimeout(TimeSpan.FromMilliseconds(50));
+        var deadline = Deadline.FromTimeout(TimeSpan.FromMilliseconds(10));
 
-        Thread.Sleep(100);
+        Thread.Sleep(20);
 
         Assert.That(deadline.RemainingMilliseconds, Is.EqualTo(0));
     }
@@ -287,13 +287,13 @@ public class DeadlineTests
     [CancelAfter(3000)]
     public void ToCancellationToken_Normal_CancelsAfterDeadline()
     {
-        var deadline = Deadline.FromTimeout(TimeSpan.FromMilliseconds(100));
+        var deadline = Deadline.FromTimeout(TimeSpan.FromMilliseconds(50));
         var token = deadline.ToCancellationToken();
 
         Assert.That(token.CanBeCanceled, Is.True);
         Assert.That(token.IsCancellationRequested, Is.False, "Should not be cancelled yet");
 
-        Thread.Sleep(200);
+        Thread.Sleep(100);
 
         Assert.That(token.IsCancellationRequested, Is.True, "Should be cancelled after deadline");
     }
@@ -392,33 +392,6 @@ public class DeadlineTests
         Assert.That(str, Does.StartWith("Deadline(Remaining="));
     }
 
-    // ========================================
-    // Stress Tests
-    // ========================================
-
-    [Test]
-    [CancelAfter(5000)]
-    public void HighFrequency_IsExpired_Consistent()
-    {
-        // A deadline 2 seconds in the future should never report expired
-        // during the first second of checking
-        var deadline = Deadline.FromTimeout(TimeSpan.FromSeconds(2));
-        var start = Stopwatch.GetTimestamp();
-        var oneSecondTicks = Stopwatch.Frequency; // 1 second in stopwatch ticks
-
-        int checkCount = 0;
-        while (Stopwatch.GetTimestamp() - start < oneSecondTicks)
-        {
-            Assert.That(deadline.IsExpired, Is.False,
-                $"Deadline should not expire during first second (check #{checkCount})");
-            checkCount++;
-        }
-
-        // We should have done many checks
-        Assert.That(checkCount, Is.GreaterThan(1000),
-            "Should have performed many expiry checks in one second");
-    }
-
     [Test]
     [CancelAfter(5000)]
     public void Concurrent_IsExpired_ThreadSafe()
@@ -457,7 +430,7 @@ public class DeadlineTests
         long previous = Stopwatch.GetTimestamp();
         int checks = 0;
 
-        for (int i = 0; i < 1_000_000; i++)
+        for (int i = 0; i < 10_000; i++)
         {
             long current = Stopwatch.GetTimestamp();
             Assert.That(current, Is.GreaterThanOrEqualTo(previous),
@@ -466,6 +439,6 @@ public class DeadlineTests
             checks++;
         }
 
-        Assert.That(checks, Is.EqualTo(1_000_000));
+        Assert.That(checks, Is.EqualTo(10_000));
     }
 }

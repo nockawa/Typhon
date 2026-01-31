@@ -33,6 +33,7 @@ public unsafe class ConcurrentBitmapL3All : IResource, IMetricSource, IDebugProp
     private readonly int _l2Size;
     private readonly int _l0Shift;
     private readonly int _indexInBankMask;
+    private readonly IMemoryAllocator _memoryAllocator;
 
     // Operation counters (use plain ++ per §7.3 - hot path, accept occasional misses)
     private long _setL0Count;
@@ -55,16 +56,15 @@ public unsafe class ConcurrentBitmapL3All : IResource, IMetricSource, IDebugProp
         public Bank(ConcurrentBitmapL3All owner, int bankIndex)
         {
             _owner = owner;
-            var ma = TyphonServices.MemoryAllocator;
             var sizeAsLong = _owner._l0Size + (_owner._l1Size * 2) + _owner._l2Size;
-            MemoryBlock = ma.AllocatePinned($"Bank{bankIndex}", owner, sizeAsLong * sizeof(long), true, 64);
+            MemoryBlock = _owner._memoryAllocator.AllocatePinned($"Bank{bankIndex}", owner, sizeAsLong * sizeof(long), true, 64);
 
             L0All = (long*)MemoryBlock.DataAsIntPtr.ToPointer();
-            L1All = L0All + _owner._l0Size; 
+            L1All = L0All + _owner._l0Size;
             L1Any = L1All + _owner._l1Size;
             L2All = L1Any + _owner._l1Size;
         }
-        
+
         public void Dispose()
         {
             L0All = L1All = L1Any = L2All = null;
@@ -89,10 +89,11 @@ public unsafe class ConcurrentBitmapL3All : IResource, IMetricSource, IDebugProp
     /// </summary>
     /// <param name="id">Unique identifier for this resource.</param>
     /// <param name="parent">Parent resource (required, cannot be null).</param>
+    /// <param name="memoryAllocator">Memory allocator for bank storage (required, cannot be null).</param>
     /// <param name="bankBitCountCapacity">Capacity per bank (must be power of 2).</param>
-    /// <exception cref="ArgumentNullException">Thrown if parent is null.</exception>
+    /// <exception cref="ArgumentNullException">Thrown if parent or memoryAllocator is null.</exception>
     /// <exception cref="ArgumentException">Thrown if capacity is not a power of 2.</exception>
-    public ConcurrentBitmapL3All(string id, IResource parent, int bankBitCountCapacity)
+    public ConcurrentBitmapL3All(string id, IResource parent, IMemoryAllocator memoryAllocator, int bankBitCountCapacity)
     {
         if (!MathHelpers.IsPow2(bankBitCountCapacity))
         {
@@ -100,6 +101,7 @@ public unsafe class ConcurrentBitmapL3All : IResource, IMetricSource, IDebugProp
         }
 
         Parent = parent ?? throw new ArgumentNullException(nameof(parent), "Parent resource cannot be null. Resources must have an explicit parent.");
+        _memoryAllocator = memoryAllocator ?? throw new ArgumentNullException(nameof(memoryAllocator));
         Id = id ?? Guid.NewGuid().ToString();
         Owner = Parent.Owner;
         CreatedAt = DateTime.UtcNow;

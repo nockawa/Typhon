@@ -120,7 +120,10 @@ public unsafe abstract class ChainedBlockAllocatorBase : BlockAllocatorBase
     /// <param name="stride">The size of each allocated block. An extra 8 bytes will be added to store the block header</param>
     /// <param name="entryCountPerPage">The count of block to allocate memory as one bulk (1 GC block allocated
     /// for <paramref name="entryCountPerPage"/> blocks).</param>
-    protected ChainedBlockAllocatorBase(int stride, int entryCountPerPage) : base(stride+BlockHeaderSize, entryCountPerPage)
+    /// <param name="parent">Parent resource for the internal bitmap.</param>
+    /// <param name="memoryAllocator">Memory allocator for internal bitmap storage.</param>
+    protected ChainedBlockAllocatorBase(int stride, int entryCountPerPage, IResource parent, IMemoryAllocator memoryAllocator)
+        : base(stride + BlockHeaderSize, entryCountPerPage, parent, memoryAllocator)
     {
         // Reserve block 0 as sentinel - 0 means "no next block" in the chain header
         AllocateBlockInternal(out _);

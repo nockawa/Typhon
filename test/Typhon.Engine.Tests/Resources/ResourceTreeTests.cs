@@ -10,18 +10,10 @@ public class ResourceTreeTests
     private ResourceRegistry _registry;
 
     [SetUp]
-    public void Setup()
-    {
-        TyphonServices.Reset();
-        _registry = new ResourceRegistry(new ResourceRegistryOptions { Name = "TestRegistry" });
-    }
+    public void Setup() => _registry = new ResourceRegistry(new ResourceRegistryOptions { Name = "TestRegistry" });
 
     [TearDown]
-    public void TearDown()
-    {
-        _registry?.Dispose();
-        TyphonServices.Reset();
-    }
+    public void TearDown() => _registry?.Dispose();
 
     #region Basic Tree Structure Tests
 
@@ -53,10 +45,7 @@ public class ResourceTreeTests
     }
 
     [Test]
-    public void Root_HasNoParent()
-    {
-        Assert.That(_registry.Root.Parent, Is.Null);
-    }
+    public void Root_HasNoParent() => Assert.That(_registry.Root.Parent, Is.Null);
 
     #endregion
 
@@ -72,10 +61,7 @@ public class ResourceTreeTests
     }
 
     [Test]
-    public void GetSubsystem_InvalidSubsystem_Throws()
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(() => _registry.GetSubsystem((ResourceSubsystem)999));
-    }
+    public void GetSubsystem_InvalidSubsystem_Throws() => Assert.Throws<ArgumentOutOfRangeException>(() => _registry.GetSubsystem((ResourceSubsystem)999));
 
     #endregion
 
@@ -263,16 +249,10 @@ public class ResourceTreeTests
     #region GetDepth Tests
 
     [Test]
-    public void GetDepth_RootIsZero()
-    {
-        Assert.That(_registry.Root.GetDepth(), Is.EqualTo(0));
-    }
+    public void GetDepth_RootIsZero() => Assert.That(_registry.Root.GetDepth(), Is.EqualTo(0));
 
     [Test]
-    public void GetDepth_SubsystemIsOne()
-    {
-        Assert.That(_registry.DataEngine.GetDepth(), Is.EqualTo(1));
-    }
+    public void GetDepth_SubsystemIsOne() => Assert.That(_registry.DataEngine.GetDepth(), Is.EqualTo(1));
 
     [Test]
     public void GetDepth_ChildOfSubsystem()

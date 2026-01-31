@@ -1,25 +1,53 @@
+using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
+
 // ReSharper disable AccessToDisposedClosure
 
-namespace Typhon.Engine.Tests.Misc;
+namespace Typhon.Engine.Tests.Memory;
+
+/// <summary>
+/// Shared DI helper for chained allocator tests.
+/// </summary>
+internal static class ChainedAllocatorTestServices
+{
+    private static readonly Lazy<IServiceProvider> _serviceProvider = new(() =>
+    {
+        var services = new ServiceCollection()
+            .AddResourceRegistry()
+            .AddMemoryAllocator()
+            .BuildServiceProvider();
+        return services;
+    });
+
+    public static IResourceRegistry ResourceRegistry => _serviceProvider.Value.GetRequiredService<IResourceRegistry>();
+    public static IMemoryAllocator MemoryAllocator => _serviceProvider.Value.GetRequiredService<IMemoryAllocator>();
+    public static IResource AllocationResource => ResourceRegistry.Allocation;
+}
 
 [TestFixture]
 public class ChainedBlockAllocatorTests
 {
+    // Helper methods to create ChainedBlockAllocator with required DI dependencies
+    private static ChainedBlockAllocator CreateChainedBlockAllocator(int stride, int entryCountPerPage)
+        => new(stride, entryCountPerPage, ChainedAllocatorTestServices.AllocationResource, ChainedAllocatorTestServices.MemoryAllocator);
+
+    private static ChainedBlockAllocator<T> CreateChainedBlockAllocator<T>(int entryCountPerPage) where T : unmanaged
+        => new(entryCountPerPage, ChainedAllocatorTestServices.AllocationResource, ChainedAllocatorTestServices.MemoryAllocator);
+
     #region Constructor and Properties Tests
 
     [Test]
     public void Constructor_ValidParameters_CreatesAllocator()
     {
         // Arrange & Act
-        using var allocator = new ChainedBlockAllocator(16, 64);
+        using var allocator = CreateChainedBlockAllocator(16, 64);
 
         // Assert
         Assert.That(allocator.Stride, Is.EqualTo(16));
@@ -33,7 +61,7 @@ public class ChainedBlockAllocatorTests
     {
         // The internal stride is stride+4 for the chain header
         // But the public Stride property should return the user-specified stride
-        using var allocator = new ChainedBlockAllocator(32, 64);
+        using var allocator = CreateChainedBlockAllocator(32, 64);
 
         Assert.That(allocator.Stride, Is.EqualTo(32));
     }
@@ -44,7 +72,7 @@ public class ChainedBlockAllocatorTests
     [TestCase(128)]
     public void Constructor_DifferentStrides_WorksCorrectly(int stride)
     {
-        using var allocator = new ChainedBlockAllocator(stride, 64);
+        using var allocator = CreateChainedBlockAllocator(stride, 64);
         Assert.That(allocator.Stride, Is.EqualTo(stride));
     }
 
@@ -55,7 +83,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Allocate_SingleBlock_ReturnsValidPointerAndId()
     {
-        using var allocator = new ChainedBlockAllocator(16, 64);
+        using var allocator = CreateChainedBlockAllocator(16, 64);
 
         allocator.AllocateBlock(out var blockId, true);
 
@@ -66,7 +94,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Allocate_MultipleBlocks_ReturnsUniqueIds()
     {
-        using var allocator = new ChainedBlockAllocator(16, 64);
+        using var allocator = CreateChainedBlockAllocator(16, 64);
         var ids = new HashSet<int>();
 
         for (int i = 0; i < 32; i++)
@@ -81,7 +109,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Allocate_DataIntegrity_PreservesWrittenData()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(long), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(long), 64);
         var allocations = new (StoreSpan ptr, int id, long value)[50];
 
         // Allocate multiple blocks and write unique values
@@ -107,7 +135,7 @@ public class ChainedBlockAllocatorTests
     public void Allocate_TriggerResize_ExpandsCapacity()
     {
         const int initialPageSize = 4;
-        using var allocator = new ChainedBlockAllocator(16, initialPageSize);
+        using var allocator = CreateChainedBlockAllocator(16, initialPageSize);
 
         Assert.That(allocator.Capacity, Is.EqualTo(initialPageSize));
 
@@ -127,7 +155,7 @@ public class ChainedBlockAllocatorTests
         const int pageSize = 16;
         const int allocationCount = 256;
 
-        using var allocator = new ChainedBlockAllocator(sizeof(int), pageSize);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), pageSize);
         var allocations = new (int id, int value)[allocationCount];
 
         for (int i = 0; i < allocationCount; i++)
@@ -148,7 +176,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Allocate_AsChainRoot_SetsCorrectMetadata()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockId, true);
 
@@ -161,7 +189,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Allocate_NotAsChainRoot_HasZeroChainGeneration()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockId, false);
 
@@ -176,7 +204,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetAddress_ZeroBlockId_ReturnsNull()
     {
-        using var allocator = new ChainedBlockAllocator(16, 64);
+        using var allocator = CreateChainedBlockAllocator(16, 64);
 
         var ptr = allocator.GetBlockData(0);
 
@@ -186,7 +214,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetAddress_ValidBlockId_ReturnsSameAsAllocate()
     {
-        using var allocator = new ChainedBlockAllocator(16, 64);
+        using var allocator = CreateChainedBlockAllocator(16, 64);
 
         allocator.AllocateBlock(out var blockId, true);
         var allocatedAddr = allocator.AsIntPtr(blockId);
@@ -198,7 +226,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetAddress_MultipleBlocks_ReturnsCorrectAddresses()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(long), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(long), 64);
         var blocks = new (IntPtr ptr, int id)[20];
 
         for (int i = 0; i < 20; i++)
@@ -223,7 +251,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetChainLength_SingleBlock_ReturnsOne()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockId, true);
 
@@ -233,7 +261,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetChainLength_TwoBlocksChained_ReturnsTwo()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockA, true);
         allocator.AllocateBlock(out var blockB, false);
@@ -245,7 +273,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetChainLength_MultipleBlocksChainedSequentially_ReturnsCorrectLength()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockA, true);
         allocator.AllocateBlock(out var blockB, false);
@@ -262,7 +290,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetChainLength_AfterMergingChains_ReturnsCombinedLength()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         // Chain 1: A -> B (length 2)
         allocator.AllocateBlock(out var blockA, true);
@@ -285,7 +313,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetChainLength_WithZeroBlockId_ThrowsInvalidOperationException()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         Assert.Throws<InvalidOperationException>(() => allocator.GetChainLength(0));
     }
@@ -293,7 +321,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetChainLength_WithNonRootBlock_ThrowsInvalidOperationException()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockA, true);
         allocator.AllocateBlock(out var blockB, false);
@@ -309,7 +337,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetBlockChainGeneration_ChainRoot_ReturnsNonZero()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockId, true);
 
@@ -319,7 +347,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetBlockChainGeneration_AllBlocksInChain_ReturnSameGeneration()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockA, true);
         allocator.AllocateBlock(out var blockB, false);
@@ -338,7 +366,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetBlockChainGeneration_DifferentChains_ReturnDifferentGenerations()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var chainA, true);
         allocator.AllocateBlock(out var chainB, true);
@@ -352,7 +380,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetBlockChainGeneration_AfterMerge_AllBlocksShareSameGeneration()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         // Chain 1
         allocator.AllocateBlock(out var blockA, true);
@@ -379,7 +407,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetBlockChainGeneration_WithZeroBlockId_ThrowsInvalidOperationException()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         Assert.Throws<InvalidOperationException>(() => allocator.GetBlockChainGeneration(0));
     }
@@ -391,7 +419,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetLastBlockInChain_SingleBlock_ReturnsItself()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockId, true);
 
@@ -401,7 +429,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetLastBlockInChain_TwoBlocksChained_ReturnsSecond()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockA, true);
         allocator.AllocateBlock(out var blockB, false);
@@ -413,7 +441,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetLastBlockInChain_LongChain_ReturnsLastBlock()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
         const int chainLength = 10;
         var blocks = new int[chainLength];
 
@@ -433,7 +461,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetLastBlockInChain_AfterMergingChains_ReturnsCorrectLast()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         // Chain 1: A -> B
         allocator.AllocateBlock(out var blockA, true);
@@ -455,7 +483,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetLastBlockInChain_WithZeroBlockId_ThrowsInvalidOperationException()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         Assert.Throws<InvalidOperationException>(() => allocator.GetLastBlockInChain(0));
     }
@@ -463,7 +491,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetLastBlockInChain_WithNonRootBlock_ThrowsInvalidOperationException()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockA, true);
         allocator.AllocateBlock(out var blockB, false);
@@ -479,7 +507,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetChainRoot_ChainRootBlock_ReturnsItself()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockId, true);
 
@@ -489,7 +517,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetChainRoot_NonRootBlock_ReturnsRootBlockId()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockA, true);
         allocator.AllocateBlock(out var blockB, false);
@@ -504,7 +532,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetChainRoot_AfterMerge_AllBlocksReturnNewRoot()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         // Chain 1: A -> B
         allocator.AllocateBlock(out var blockA, true);
@@ -529,7 +557,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void GetChainRoot_WithZeroBlockId_ThrowsInvalidOperationException()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         Assert.Throws<InvalidOperationException>(() => allocator.GetChainRoot(0));
     }
@@ -541,7 +569,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Chain_TwoBlocks_CreatesValidChain()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         var ptrA = allocator.AllocateBlock(out var blockA, true);
         var ptrB = allocator.AllocateBlock(out var blockB, false);
@@ -563,7 +591,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Chain_ThreeBlocksSequentially_CreatesLongChain()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         var ptrA = allocator.AllocateBlock(out var blockA, true);
         var ptrB = allocator.AllocateBlock(out var blockB, false);
@@ -595,7 +623,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Chain_InsertBlockIntoExistingChain_InsertsCorrectly()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         // Create chain A -> B -> C
         var ptrA = allocator.AllocateBlock(out var blockA, true);
@@ -633,7 +661,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Chain_MultipleBlockAtOnce_CreateCorrectly()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         // Create chain 1: A -> B -> C
         var ptrA = allocator.AllocateBlock(out var blockA, true);
@@ -662,7 +690,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Chain_MultipleBlockAtOnce_SingleBlock_DoesNothing()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockA, true);
 
@@ -674,7 +702,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Chain_MultipleBlockAtOnce_FiveBlocks_CorrectOrder()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockA, true).Cast<byte, int>()[0] = 1;
         allocator.AllocateBlock(out var blockB, false).Cast<byte, int>()[0] = 2;
@@ -711,7 +739,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Chain_ChainWithZero_BreaksChainAndCreatesOrphan()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         var ptrA = allocator.AllocateBlock(out var blockA, true);
         var ptrB = allocator.AllocateBlock(out var blockB, false);
@@ -749,7 +777,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Chain_BreakMiddleOfChain_CreatesCorrectOrphan()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockA, true).Cast<byte, int>()[0] = 1;
         allocator.AllocateBlock(out var blockB, false).Cast<byte, int>()[0] = 2;
@@ -774,7 +802,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Chain_BreakAtEnd_LastBlockBecomesOrphan()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockA, true);
         allocator.AllocateBlock(out var blockB, false);
@@ -793,7 +821,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Chain_MergeTwoChains_CreatesCorrectOrder()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         // Create chain 1: A -> B -> C
         var ptrA = allocator.AllocateBlock(out var blockA, true);
@@ -850,7 +878,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Chain_AppendToEndOfChain_UpdatesLastBlock()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockA, true);
         allocator.AllocateBlock(out var blockB, false);
@@ -867,7 +895,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Chain_WithZeroBlockId_ThrowsInvalidOperationException()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockA, true);
 
@@ -877,7 +905,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Chain_DataIntegrity_PreservesAllBlockData()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(long), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(long), 64);
         const int blockCount = 10;
         var blocks = new (int id, long value)[blockCount];
 
@@ -913,7 +941,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Chain_InsertSingleBlockChainIntoMiddle_CorrectOrder()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockA, true).Cast<byte, int>()[0] = 1;
         allocator.AllocateBlock(out var blockB, false).Cast<byte, int>()[0] = 2;
@@ -938,7 +966,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Chain_MultipleChainOperations_MaintainsCorrectMetadata()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockA, true);
         allocator.AllocateBlock(out var blockB, false);
@@ -980,7 +1008,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void NextBlock_UnchainedBlock_ReturnsNull()
     {
-        using var allocator = new ChainedBlockAllocator(16, 64);
+        using var allocator = CreateChainedBlockAllocator(16, 64);
 
         allocator.AllocateBlock(out var blockId, true);
 
@@ -992,7 +1020,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void NextBlock_ChainedBlock_ReturnsNextBlockAddress()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         var ptrA = allocator.AllocateBlock(out var blockA, true);
         allocator.AllocateBlock(out var blockB, false);
@@ -1007,7 +1035,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void NextBlock_NavigateEntireChain_Works()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         var ptrA = allocator.AllocateBlock(out var blockA, true);
         var ptrB = allocator.AllocateBlock(out var blockB, false);
@@ -1040,7 +1068,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Free_SingleBlock_DecreasesAllocatedCount()
     {
-        using var allocator = new ChainedBlockAllocator(16, 64);
+        using var allocator = CreateChainedBlockAllocator(16, 64);
 
         allocator.AllocateBlock(out var blockId, true);
         Assert.That(allocator.AllocatedCount, Is.EqualTo(2)); // 1 reserved + 1 allocated
@@ -1052,7 +1080,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Free_ChainedBlocks_FreesAllInChain()
     {
-        using var allocator = new ChainedBlockAllocator(16, 64);
+        using var allocator = CreateChainedBlockAllocator(16, 64);
 
         allocator.AllocateBlock(out var blockA, true);
         allocator.AllocateBlock(out var blockB, false);
@@ -1071,7 +1099,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Free_PartialChain_FreesOnlyFromStartBlock()
     {
-        using var allocator = new ChainedBlockAllocator(16, 64);
+        using var allocator = CreateChainedBlockAllocator(16, 64);
 
         allocator.AllocateBlock(out var blockA, true);
         allocator.AllocateBlock(out var blockB, false);
@@ -1094,7 +1122,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Free_MultipleChains_FreesCorrectly()
     {
-        using var allocator = new ChainedBlockAllocator(16, 64);
+        using var allocator = CreateChainedBlockAllocator(16, 64);
 
         // Chain 1: A -> B
         allocator.AllocateBlock(out var blockA, true);
@@ -1118,7 +1146,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Free_ZeroBlockId_DoesNothing()
     {
-        using var allocator = new ChainedBlockAllocator(16, 64);
+        using var allocator = CreateChainedBlockAllocator(16, 64);
 
         allocator.AllocateBlock(out var blockA, true);
 
@@ -1130,7 +1158,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Free_NonRootBlock_ThrowsInvalidOperationException()
     {
-        using var allocator = new ChainedBlockAllocator(16, 64);
+        using var allocator = CreateChainedBlockAllocator(16, 64);
 
         allocator.AllocateBlock(out var blockA, true);
         allocator.AllocateBlock(out var blockB, false);
@@ -1142,7 +1170,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Free_Append()
     {
-        using var allocator = new ChainedBlockAllocator<ulong>(1024);
+        using var allocator = CreateChainedBlockAllocator<ulong>(1024);
 
         ref var cur = ref allocator.Allocate(out var blockId, true);
 
@@ -1162,7 +1190,7 @@ public class ChainedBlockAllocatorTests
     public void Free_ThenReallocate_Works()
     {
         const int pageSize = 4;
-        using var allocator = new ChainedBlockAllocator(sizeof(int), pageSize);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), pageSize);
 
         // Fill up initial page
         var ids = new int[pageSize];
@@ -1199,7 +1227,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Enumerator_EmptyChain_NoIterations()
     {
-        using var allocator = new ChainedBlockAllocator(16, 64);
+        using var allocator = CreateChainedBlockAllocator(16, 64);
 
         var count = 0;
         foreach (var _ in allocator.EnumerateChainedBlock(0))
@@ -1213,7 +1241,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Enumerator_SingleBlock_OneIteration()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         var span = allocator.AllocateBlock(out var blockId, true);
         span.Cast<byte, int>()[0] = 42;
@@ -1235,7 +1263,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Enumerator_ChainedBlocks_IteratesAll()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         var ptrA = allocator.AllocateBlock(out var blockA, true);
         var ptrB = allocator.AllocateBlock(out var blockB, false);
@@ -1260,7 +1288,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Enumerator_CurrentBlockId_ReturnsCorrectIds()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockA, true);
         allocator.AllocateBlock(out var blockB, false);
@@ -1280,7 +1308,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Enumerator_LongChain_IteratesAll()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
         const int chainLength = 50;
 
         var blocks = new int[chainLength];
@@ -1312,7 +1340,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Enumerator_StartFromMiddleOfChain_IteratesFromThere()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         var ptrA = allocator.AllocateBlock(out var blockA, true);
         var ptrB = allocator.AllocateBlock(out var blockB, false);
@@ -1342,7 +1370,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Dispose_AfterOperations_WorksCorrectly()
     {
-        var allocator = new ChainedBlockAllocator(16, 64);
+        var allocator = CreateChainedBlockAllocator(16, 64);
 
         allocator.AllocateBlock(out var blockA, true);
         allocator.AllocateBlock(out var blockB, false);
@@ -1358,7 +1386,7 @@ public class ChainedBlockAllocatorTests
     public void LargeStride_WorksCorrectly()
     {
         const int largeStride = 1024;
-        using var allocator = new ChainedBlockAllocator(largeStride, 16);
+        using var allocator = CreateChainedBlockAllocator(largeStride, 16);
 
         var ptr = allocator.AllocateBlock(out var blockId, true);
 
@@ -1380,7 +1408,7 @@ public class ChainedBlockAllocatorTests
     public void SmallStride_WorksCorrectly()
     {
         const int smallStride = 1;
-        using var allocator = new ChainedBlockAllocator(smallStride, 64);
+        using var allocator = CreateChainedBlockAllocator(smallStride, 64);
 
         var span = allocator.AllocateBlock(out var blockId, true);
         span[0] = 42;
@@ -1393,7 +1421,7 @@ public class ChainedBlockAllocatorTests
     public void InterleavedAllocateAndFree_MaintainsIntegrity()
     {
         // Small page size (4) triggers multiple _blockMap.Resize calls - edge case bug
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 4);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 4);
         var activeBlocks = new Dictionary<int, int>();
 
         for (int iteration = 0; iteration < 50; iteration++)
@@ -1436,7 +1464,7 @@ public class ChainedBlockAllocatorTests
     public void ChainOperations_AfterResize_WorkCorrectly()
     {
         const int pageSize = 4;
-        using var allocator = new ChainedBlockAllocator(sizeof(int), pageSize);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), pageSize);
 
         // Allocate beyond initial capacity to trigger resize
         var blocks = new List<int>();
@@ -1472,7 +1500,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void ComplexChainManipulation_MaintainsIntegrity()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         // Allocate 6 blocks
         var blocks = new int[6];
@@ -1514,7 +1542,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void ChainBreakAndRejoin_MaintainsCorrectMetadata()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
 
         allocator.AllocateBlock(out var blockA, true).Cast<byte, int>()[0] = 1;
         allocator.AllocateBlock(out var blockB, false).Cast<byte, int>()[0] = 2;
@@ -1549,7 +1577,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void MultipleBreaksAndMerges_StressTest()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
         const int chainLength = 20;
 
         var blocks = new int[chainLength];
@@ -1598,7 +1626,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Concurrent_Allocation_MultipleThreadsAllocateSimultaneously()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(long), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(long), 64);
         var allocatedIds = new ConcurrentBag<int>();
         var exceptions = new ConcurrentBag<Exception>();
 
@@ -1633,7 +1661,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Concurrent_Allocation_DataIntegrityAfterParallelWrites()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(long), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(long), 64);
         var allocations = new ConcurrentDictionary<int, long>();
 
         Parallel.For(0, HeavyThreadCount, new ParallelOptions { MaxDegreeOfParallelism = HeavyThreadCount }, threadIndex =>
@@ -1659,7 +1687,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Concurrent_Chaining_MultipleThreadsChainToSeparateRoots()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
         var chainRoots = new int[HeavyThreadCount];
         var exceptions = new ConcurrentBag<Exception>();
 
@@ -1706,7 +1734,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Concurrent_SafeAppend_MultipleThreadsAppendToSameChain()
     {
-        using var allocator = new ChainedBlockAllocator<long>(64);
+        using var allocator = CreateChainedBlockAllocator<long>(64);
         var exceptions = new ConcurrentBag<Exception>();
         var appendedValues = new ConcurrentBag<long>();
 
@@ -1759,7 +1787,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Concurrent_Enumeration_SafeDuringConcurrentModification()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
         var exceptions = new ConcurrentBag<Exception>();
 
         // Create an initial chain
@@ -1822,7 +1850,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Concurrent_RequestEnumeration_ProtectsAgainstFree()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
         var exceptions = new ConcurrentBag<Exception>();
 
         // Create multiple chains
@@ -1874,7 +1902,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Concurrent_FreeChain_WhileOtherChainsActive()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
         var exceptions = new ConcurrentBag<Exception>();
         var activeChains = new ConcurrentDictionary<int, bool>();
 
@@ -1921,7 +1949,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Concurrent_MixedOperations_StressTest()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(long), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(long), 64);
         var exceptions = new ConcurrentBag<Exception>();
         var activeChains = new ConcurrentDictionary<int, int>(); // rootId -> expected length
         var rng = new ThreadLocal<Random>(() => new Random(Thread.CurrentThread.ManagedThreadId));
@@ -2023,7 +2051,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Concurrent_ChainMetadata_ConsistencyUnderLoad()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
         var exceptions = new ConcurrentBag<Exception>();
 
         // Create chains that will be extended by multiple threads
@@ -2088,7 +2116,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Concurrent_BreakAndRejoin_StressTest()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
         var exceptions = new ConcurrentBag<Exception>();
 
         // Each thread manages its own chain with break/rejoin operations
@@ -2162,7 +2190,7 @@ public class ChainedBlockAllocatorTests
     [Test]
     public void Concurrent_GetChainRoot_ConsistencyDuringMerge()
     {
-        using var allocator = new ChainedBlockAllocator(sizeof(int), 64);
+        using var allocator = CreateChainedBlockAllocator(sizeof(int), 64);
         var exceptions = new ConcurrentBag<Exception>();
 
         // Each thread creates chains and merges them

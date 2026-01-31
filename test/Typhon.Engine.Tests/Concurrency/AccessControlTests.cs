@@ -76,7 +76,7 @@ public class AccessControlTests
         {
             control.EnterExclusiveAccess(ref WaitContext.Null);
             barrier.SignalAndWait();
-            Thread.Sleep(500);  // Hold lock
+            Thread.Sleep(100);  // Hold lock
             control.ExitExclusiveAccess();
         });
 
@@ -123,7 +123,7 @@ public class AccessControlTests
         {
             control.EnterExclusiveAccess(ref WaitContext.Null);
             barrier.SignalAndWait();
-            Thread.Sleep(300);  // Hold lock longer than timeout
+            Thread.Sleep(100);  // Hold lock longer than timeout
             control.ExitExclusiveAccess();
         });
 
@@ -151,7 +151,7 @@ public class AccessControlTests
         {
             control.EnterExclusiveAccess(ref WaitContext.Null);
             barrier.SignalAndWait();
-            Thread.Sleep(300);
+            Thread.Sleep(100);
             control.ExitExclusiveAccess();
         });
 
@@ -212,7 +212,7 @@ public class AccessControlTests
         {
             control.EnterExclusiveAccess(ref WaitContext.Null);
             barrier.SignalAndWait();
-            Thread.Sleep(500);
+            Thread.Sleep(100);
             control.ExitExclusiveAccess();
         });
 
@@ -309,7 +309,7 @@ public class AccessControlTests
         {
             control.EnterExclusiveAccess(ref WaitContext.Null);
             barrier.SignalAndWait();
-            Thread.Sleep(500);
+            Thread.Sleep(100);
             control.ExitExclusiveAccess();
         });
 

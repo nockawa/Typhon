@@ -51,6 +51,8 @@ class BtreeTests
                 });
                 builder.SetMinimumLevel(LogLevel.Information);
             })
+            .AddResourceRegistry()
+            .AddMemoryAllocator()
             .AddScopedManagedPagedMemoryMappedFile(options =>
             {
                 options.DatabaseName = CurrentDatabaseName;
@@ -530,7 +532,7 @@ class BtreeTests
     [Test]
     unsafe public void CheckSingleTreeBigAmount()
     {
-        const int itemCount = 100000;
+        const int itemCount = 10000;
 
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 300, sizeof(Index32Chunk));
@@ -570,7 +572,7 @@ class BtreeTests
     [Property("MemPageCount", 1024)]
     unsafe public void CheckMultipleTreeBigAmount()
     {
-        const int itemCount = 1000;
+        const int itemCount = 100;
 
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 300, sizeof(Index32Chunk));

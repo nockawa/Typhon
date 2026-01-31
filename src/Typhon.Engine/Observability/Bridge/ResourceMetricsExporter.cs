@@ -2,7 +2,6 @@ using JetBrains.Annotations;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.Metrics;
-using System.Threading;
 
 namespace Typhon.Engine;
 

@@ -10,7 +10,8 @@ public unsafe class UnmanagedStructAllocator<T> : BlockAllocatorBase where T : u
     public ref T Get(int blockId) => ref Unsafe.AsRef<T>(GetBlockInternal(blockId));
     public void Free(int blockId) => FreeBlockInternal(blockId);
 
-    public UnmanagedStructAllocator(int entryCountPerPage) : base(sizeof(T), entryCountPerPage)
+    public UnmanagedStructAllocator(int entryCountPerPage, IResource parent, IMemoryAllocator memoryAllocator)
+        : base(sizeof(T), entryCountPerPage, parent, memoryAllocator)
     {
     }
 }

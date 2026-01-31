@@ -18,17 +18,12 @@ public class ObservabilityBridgeTests
     [SetUp]
     public void Setup()
     {
-        TyphonServices.Reset();
         _registry = new ResourceRegistry(new ResourceRegistryOptions { Name = "TestRegistry" });
         _graph = new ResourceGraph(_registry);
     }
 
     [TearDown]
-    public void TearDown()
-    {
-        _registry?.Dispose();
-        TyphonServices.Reset();
-    }
+    public void TearDown() => _registry?.Dispose();
 
     #region Test Infrastructure
 

@@ -6,19 +6,27 @@ using System.Threading;
 namespace Typhon.Engine;
 
 /// <summary>
-/// Global allocator for deep-mode operation logs.
+/// Allocator for deep-mode operation logs.
 /// Each resource in deep mode owns a chain of blocks in this allocator.
 /// Chain grows unbounded until resource disables deep mode and frees the chain.
 /// </summary>
-public static class ResourceTelemetryAllocator
+public class ResourceTelemetryAllocator : IDisposable
 {
-    private static readonly ChainedBlockAllocator<ResourceOperationBlock> _allocator;
+    private readonly ChainedBlockAllocator<ResourceOperationBlock> _allocator;
 
-    static ResourceTelemetryAllocator()
+    /// <summary>
+    /// Creates a new instance of the telemetry allocator.
+    /// </summary>
+    /// <param name="parent">Parent resource for resource tree registration.</param>
+    /// <param name="memoryAllocator">Memory allocator for internal storage.</param>
+    public ResourceTelemetryAllocator(IResource parent, IMemoryAllocator memoryAllocator)
     {
+        ArgumentNullException.ThrowIfNull(parent);
+        ArgumentNullException.ThrowIfNull(memoryAllocator);
+
         // 64K blocks, each block can hold 6 entries
         // 6 entries x 16 bytes = 96 bytes per block (plus header)
-        _allocator = new ChainedBlockAllocator<ResourceOperationBlock>(65536);
+        _allocator = new ChainedBlockAllocator<ResourceOperationBlock>(65536, parent, memoryAllocator);
     }
 
     /// <summary>
@@ -26,7 +34,7 @@ public static class ResourceTelemetryAllocator
     /// </summary>
     /// <param name="blockId">The allocated block ID (chain root).</param>
     /// <returns>True if allocation succeeded.</returns>
-    public static bool AllocateChain(out int blockId)
+    public bool AllocateChain(out int blockId)
     {
         _allocator.Allocate(out blockId, rootChain: true);
         return blockId != 0;
@@ -35,13 +43,13 @@ public static class ResourceTelemetryAllocator
     /// <summary>
     /// Frees an entire chain when a resource exits deep mode.
     /// </summary>
-    public static void FreeChain(int blockId)
+    public void FreeChain(int blockId)
         => _allocator.FreeChain(blockId);
 
     /// <summary>
     /// Gets a reference to a specific block.
     /// </summary>
-    internal static ref ResourceOperationBlock GetBlock(int blockId)
+    internal ref ResourceOperationBlock GetBlock(int blockId)
         => ref _allocator.Get(blockId);
 
     /// <summary>
@@ -49,7 +57,7 @@ public static class ResourceTelemetryAllocator
     /// </summary>
     /// <param name="blockId">Root block ID of the chain. May be updated if chain needs to be allocated.</param>
     /// <param name="entry">The operation entry to append.</param>
-    public static void AppendOperation(ref int blockId, in ResourceOperationEntry entry)
+    public void AppendOperation(ref int blockId, in ResourceOperationEntry entry)
     {
         if (blockId == 0)
         {
@@ -85,7 +93,7 @@ public static class ResourceTelemetryAllocator
     /// Enumerates all operation entries in a chain.
     /// Note: This is not thread-safe for concurrent writes.
     /// </summary>
-    public static List<ResourceOperationEntry> GetChainEntries(int blockId)
+    public List<ResourceOperationEntry> GetChainEntries(int blockId)
     {
         var result = new List<ResourceOperationEntry>();
         if (blockId == 0)
@@ -108,5 +116,7 @@ public static class ResourceTelemetryAllocator
     /// <summary>
     /// Gets the number of allocated blocks (for diagnostics).
     /// </summary>
-    public static int AllocatedCount => _allocator.AllocatedCount;
+    public int AllocatedCount => _allocator.AllocatedCount;
+
+    public void Dispose() => _allocator.Dispose();
 }

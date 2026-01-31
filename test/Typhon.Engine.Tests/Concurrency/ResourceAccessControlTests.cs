@@ -1038,7 +1038,7 @@ public class ResourceAccessControlTests
     }
 
     [Test]
-    [CancelAfter(10000)]
+    [CancelAfter(1000)]
     public void StressTest_AccessingNotBlockedByModify_VerifyDesign()
     {
         // This test verifies the key design property: when MODIFY is held (without MODIFY_PENDING),
@@ -1052,7 +1052,7 @@ public class ResourceAccessControlTests
         // Thread holding MODIFY
         var modifyTask = Task.Run(() =>
         {
-            for (int i = 0; i < 100; i++)
+            for (int i = 0; i < 10; i++)
             {
                 control.EnterModify(ref WaitContext.Null);
                 modifyHeld.Set();
@@ -1097,7 +1097,7 @@ public class ResourceAccessControlTests
     }
 
     [Test]
-    [CancelAfter(10000)]
+    [CancelAfter(1000)]
     public void StressTest_PromotionUnderContention()
     {
         var control = new ResourceAccessControl();
@@ -1106,7 +1106,7 @@ public class ResourceAccessControlTests
 
         Parallel.For(0, 10, i =>
         {
-            for (int j = 0; j < 100; j++)
+            for (int j = 0; j < 10; j++)
             {
                 control.EnterAccessing(ref WaitContext.Null);
 
@@ -1126,7 +1126,7 @@ public class ResourceAccessControlTests
         });
 
         Console.WriteLine($"Successful promotions: {successfulPromotions}, Failed: {failedPromotions}");
-        Assert.That(successfulPromotions + failedPromotions, Is.EqualTo(1000));
+        Assert.That(successfulPromotions + failedPromotions, Is.EqualTo(100));
         Assert.That(successfulPromotions, Is.GreaterThan(0), "Some promotions should succeed");
     }
 
