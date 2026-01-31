@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics.Metrics;
 using System.Linq;
 
-namespace Typhon.Engine.Tests.Observability.Bridge;
+namespace Typhon.Engine.Tests.Bridge;
 
 /// <summary>
 /// Tests for the Observability Bridge components.

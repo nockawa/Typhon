@@ -8,7 +8,7 @@ using System.Diagnostics;
 using System.Linq;
 using Typhon.Engine.BPTree;
 
-namespace Typhon.Engine.Tests.Database_Engine;
+namespace Typhon.Engine.Tests;
 
 class BtreeTests
 {

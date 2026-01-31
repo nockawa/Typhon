@@ -3,7 +3,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Typhon.Engine.Tests.Concurrency;
+namespace Typhon.Engine.Tests;
 
 /// <summary>
 /// Tests for AccessControl with WaitContext API.

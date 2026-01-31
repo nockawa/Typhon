@@ -4,7 +4,7 @@ using NUnit.Framework;
 using System;
 using System.Threading;
 
-namespace Typhon.Engine.Tests.Database_Engine;
+namespace Typhon.Engine.Tests;
 
 class TransactionTests : TestBase<TransactionTests>
 {

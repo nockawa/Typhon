@@ -2,7 +2,7 @@ using NUnit.Framework;
 using System;
 using System.Linq;
 
-namespace Typhon.Engine.Tests.Resources;
+namespace Typhon.Engine.Tests;
 
 [TestFixture]
 public class ResourceTreeTests

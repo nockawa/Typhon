@@ -1,5 +1,7 @@
 // unset
 
+using Microsoft.Extensions.DependencyInjection;
+using NUnit.Framework;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -7,10 +9,8 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Extensions.DependencyInjection;
-using NUnit.Framework;
 
-namespace Typhon.Engine.Tests.Collections;
+namespace Typhon.Engine.Tests;
 
 /// <summary>
 /// Shared DI services for bitmap tests (singleton per process, thread-safe).

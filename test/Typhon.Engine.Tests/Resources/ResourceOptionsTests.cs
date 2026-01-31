@@ -1,8 +1,7 @@
 using NUnit.Framework;
 using System;
-using System.Collections.Generic;
 
-namespace Typhon.Engine.Tests.Resources;
+namespace Typhon.Engine.Tests;
 
 /// <summary>
 /// Tests for ResourceOptions, ExhaustionPolicy, ResourceExhaustedException, and FindRootCause.

@@ -1,7 +1,7 @@
 using NUnit.Framework;
 using System;
 
-namespace Typhon.Engine.Tests.Misc;
+namespace Typhon.Engine.Tests;
 
 class VariantTests
 {
