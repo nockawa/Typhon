@@ -24,10 +24,10 @@ env:
   # Field IDs for Status field
   STATUS_FIELD_ID: PVTSSF_lAHOAud1ac4BNdCjzg8cXYI
   # Status option IDs
-  STATUS_BACKLOG: 47fc9ee4
-  STATUS_IN_PROGRESS: a0a7aab6
-  STATUS_REVIEW: fadead67
-  STATUS_DONE: 12503e99
+  STATUS_BACKLOG: "47fc9ee4"
+  STATUS_IN_PROGRESS: "a0a7aab6"
+  STATUS_REVIEW: "fadead67"
+  STATUS_DONE: "12503e99"
 
 jobs:
   # Automatically add new issues to the project
