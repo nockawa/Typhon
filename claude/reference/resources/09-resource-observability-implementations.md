@@ -3,21 +3,21 @@
 > **Part of the [Resource System Design](README.md) series**
 
 **Date:** January 2026
-**Status:** Design complete
+**Status:** ✅ Implemented (Issues #29, #30)
 **Prerequisites:** [03-metric-source.md](03-metric-source.md), [04-metric-kinds.md](04-metric-kinds.md), [05-granularity-strategy.md](05-granularity-strategy.md)
 
 ---
 
 ## Overview
 
-Currently, only `ComponentTable` implements the full observability interface set (`IMetricSource`, `IContentionTarget`, `IDebugPropertiesProvider`). This document specifies how to extend observability to the remaining `IResource` implementations:
+This document describes the observability implementation for all significant `IResource` types. All implementations are now complete:
 
-- **ManagedPagedMMF** — Page cache and file I/O metrics
-- **DatabaseEngine** — Transaction lifecycle metrics
-- **MemoryAllocator** — Allocation tracking
-- **ConcurrentBitmapL3All** — Bitmap utilization
+- **ManagedPagedMMF** — Page cache and file I/O metrics ✅
+- **DatabaseEngine** — Transaction lifecycle metrics ✅
+- **MemoryAllocator** — Allocation tracking ✅
+- **ConcurrentBitmapL3All** — Bitmap utilization ✅
 
-> **Key goal:** Consistent observability across all significant resources enables unified dashboards, alerts, and capacity planning.
+> **Result:** Consistent observability across all significant resources enables unified dashboards, alerts, and capacity planning.
 
 ---
 
@@ -35,17 +35,9 @@ Currently, only `ComponentTable` implements the full observability interface set
 
 ---
 
-## 1. Current State
+## 1. Implementation Status
 
-| Type | `IResource` | `IMetricSource` | `IContentionTarget` | `IDebugPropertiesProvider` |
-|------|:-----------:|:---------------:|:-------------------:|:--------------------------:|
-| **ComponentTable** | ✅ | ✅ | ✅ | ✅ |
-| **ManagedPagedMMF** | ✅ | ❌ | ❌ | ❌ |
-| **DatabaseEngine** | ✅ | ❌ | ❌ | ❌ |
-| **MemoryAllocator** | ✅ | ❌ | ❌ | ❌ |
-| **ConcurrentBitmapL3All** | ✅ | ❌ | ❌ | ❌ |
-
-### Target State (This Design)
+> **✅ Fully Implemented** — All observability interfaces are now implemented per the design below.
 
 | Type | `IResource` | `IMetricSource` | `IContentionTarget` | `IDebugPropertiesProvider` |
 |------|:-----------:|:---------------:|:-------------------:|:--------------------------:|
@@ -58,16 +50,17 @@ Currently, only `ComponentTable` implements the full observability interface set
 ¹ Uses `ConcurrentDictionary`/`Interlocked` (lock-free); `TransactionChain`'s contention is encapsulated.
 ² Lock-free data structures; no thread waits to track.
 
-### Existing Infrastructure
+### Implementation Summary
 
-Several types already track metrics internally but don't expose them via the observability interfaces:
+All types now expose their internal metrics via the observability interfaces:
 
-| Type | Internal Tracking | Exposure Gap |
-|------|-------------------|--------------|
-| **PagedMMF** | `_metrics` object with cache hits/misses, I/O counts | Not exposed via `IMetricSource` |
-| **ManagedPagedMMF** | Inherits `_metrics`; has `lock (_occupancyMap)` synchronization | Replace with `AccessControl` for contention tracking |
-| **DatabaseEngine** | `TransactionChain` has active transaction count; uses `ConcurrentDictionary` (lock-free) | No metrics interface |
-| **ConcurrentBitmapL3All** | `TotalBitSet` per bank | No aggregated metrics |
+| Type | Internal Tracking | Observability Status |
+|------|-------------------|----------------------|
+| **PagedMMF** | `_metrics` object with cache hits/misses, I/O counts | ✅ Exposed via `IMetricSource` |
+| **ManagedPagedMMF** | Inherits `_metrics`; uses `AccessControl` for synchronization | ✅ Full observability (`IMetricSource`, `IContentionTarget`, `IDebugPropertiesProvider`) |
+| **DatabaseEngine** | `TransactionChain` has active transaction count; uses `ConcurrentDictionary` (lock-free) | ✅ `IMetricSource` + `IDebugPropertiesProvider` |
+| **MemoryAllocator** | Tracks allocated bytes, block counts | ✅ `IMetricSource` + `IDebugPropertiesProvider` |
+| **ConcurrentBitmapL3All** | `TotalBitSet` per bank, operation counters | ✅ `IMetricSource` + `IDebugPropertiesProvider` |
 
 ---
 
@@ -701,29 +694,29 @@ public void Grow()
 
 ## 6. Implementation Priority & Phasing
 
-### Phase 1: Critical Path (Transaction + Storage)
+### Phase 1: Critical Path (Transaction + Storage) — ✅ Complete (Issue #29)
 
-| Priority | Type | Justification |
-|----------|------|---------------|
-| **1** | ManagedPagedMMF | Page cache metrics are essential for capacity planning |
-| **2** | DatabaseEngine | Transaction metrics are essential for performance tuning |
+| Priority | Type | Status |
+|----------|------|--------|
+| **1** | ManagedPagedMMF | ✅ Implemented |
+| **2** | DatabaseEngine | ✅ Implemented |
 
 **Phase 1 deliverables:**
-- Full `IMetricSource`, `IDebugPropertiesProvider` for both types
-- `IContentionTarget` for ManagedPagedMMF only (DatabaseEngine uses lock-free structures)
-- Integration tests verifying metrics appear in snapshots
-- OTel export verification
+- ✅ Full `IMetricSource`, `IDebugPropertiesProvider` for both types
+- ✅ `IContentionTarget` for ManagedPagedMMF only (DatabaseEngine uses lock-free structures)
+- ✅ Integration tests verifying metrics appear in snapshots
+- ✅ OTel export verification
 
-### Phase 2: Complete Coverage
+### Phase 2: Complete Coverage — ✅ Complete (Issue #30)
 
-| Priority | Type | Justification |
-|----------|------|---------------|
-| **3** | MemoryAllocator | Allocation tracking aids leak detection |
-| **4** | ConcurrentBitmapL3All | Bitmap utilization aids fragmentation analysis |
+| Priority | Type | Status |
+|----------|------|--------|
+| **3** | MemoryAllocator | ✅ Implemented |
+| **4** | ConcurrentBitmapL3All | ✅ Implemented |
 
 **Phase 2 deliverables:**
-- `IMetricSource` and `IDebugPropertiesProvider` for both types
-- No `IContentionTarget` needed (lock-free data structures)
+- ✅ `IMetricSource` and `IDebugPropertiesProvider` for both types
+- ✅ No `IContentionTarget` needed (lock-free data structures)
 
 ---
 
@@ -1015,6 +1008,7 @@ var cacheHits = node.Throughput?.GetValueOrDefault("CacheHits") ?? 0;
 
 ---
 
-*Document Version: 1.0*
+*Document Version: 2.0*
 *Last Updated: January 2026*
-*Part of the Resource System Design series*
+*Implementation completed: Issues #29 (Phase 1), #30 (Phase 2)*
+*Part of the Resource System Reference series*

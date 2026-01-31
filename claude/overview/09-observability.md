@@ -23,11 +23,15 @@ The Observability component provides four tracks of visibility into Typhon's ope
 
 ---
 
-## Status: 🔧 In Progress
+## Status: ✅ Implemented
 
-Track 1 (static readonly) and Track 3 (static readonly deep diagnostics) are implemented. Track 2 (DI options) has infrastructure but no consumers yet. **Track 4** (per-resource telemetry via `IContentionTarget`) is implemented in `AccessControl`. Metrics emission and sink integration are designed but not yet wired.
+All four telemetry tracks are implemented:
+- **Track 1** (static readonly): JIT-eliminated hot-path guards ✅
+- **Track 2** (DI options): Cold-path configuration via `IOptions<TelemetryOptions>` ✅
+- **Track 3** (deep diagnostics): Lock-centric operation history ✅
+- **Track 4** (per-resource): `IContentionTarget` callbacks with `TelemetryLevel` ✅
 
-> **Migration in progress**: Track 3 is transitioning from `#if TELEMETRY` preprocessor directives to `static readonly bool` fields for simpler build configuration.
+The Resource System integration (metrics emission, snapshot API, OTel bridge) is complete. Health checks and sink integration are designed.
 
 ---
 

@@ -22,9 +22,9 @@ The resource graph is:
 
 ---
 
-## Status: 🔧 In Progress
+## Status: ✅ Implemented
 
-The tree structure (`IResource`, `ResourceNode`, `ResourceRegistry`) and memory tracking (`IMemoryResource`, `MemoryAllocator`, `PinnedMemoryBlock`) exist. Counter infrastructure exists in `PagedMMF.Metrics`. What's missing: standardized metric declarations per node, the snapshot mechanism, and the query/analysis API.
+The Resource System is fully implemented. The tree structure (`IResource`, `ResourceNode`, `ResourceRegistry`), memory tracking (`IMemoryResource`, `MemoryAllocator`, `PinnedMemoryBlock`), metric interfaces (`IMetricSource`, `IMetricWriter`), snapshot mechanism (`IResourceGraph`, `ResourceSnapshot`), budget configuration (`ResourceOptions`), and observability bridge (`OTelMetricsExporter`) are all complete.
 
 ---
 
@@ -32,15 +32,15 @@ The tree structure (`IResource`, `ResourceNode`, `ResourceRegistry`) and memory 
 
 | # | Name | Purpose | Status |
 |---|------|---------|--------|
-| **8.1** | [Motivation & Problem Statement](#81-motivation--problem-statement) | Why we need this, what it enables | 📐 Designed |
-| **8.2** | [Resource Graph Model](#82-resource-graph-model) | Runtime tree, node types, evolution of IResource | 🔧 Partial |
-| **8.3** | [Metric Kinds](#83-metric-kinds) | The 6 measurement types a node can declare | 📐 Designed |
-| **8.4** | [Granularity Strategy](#84-granularity-strategy) | What gets a node vs what gets aggregated | 📐 Designed |
-| **8.5** | [Resource Inventory](#85-resource-inventory) | Complete tree of all engine resources | 🔧 Partial |
-| **8.6** | [Resource Lifecycle](#86-resource-lifecycle) | Creation, consumption, release patterns | 📐 Designed |
-| **8.7** | [Budgets & Exhaustion](#87-budgets--exhaustion) | Limits, policies, back-pressure, cascade detection | ⚠️ Partial |
-| **8.8** | [Snapshot & Query API](#88-snapshot--query-api) | Pull-based reads, aggregation, bottleneck analysis | 🆕 Designed |
-| **8.9** | [Bridge to Observability](#89-bridge-to-observability) | How graph feeds metrics, health checks, traces | 📐 Designed |
+| **8.1** | [Motivation & Problem Statement](#81-motivation--problem-statement) | Why we need this, what it enables | ✅ Done |
+| **8.2** | [Resource Graph Model](#82-resource-graph-model) | Runtime tree, node types, evolution of IResource | ✅ Implemented |
+| **8.3** | [Metric Kinds](#83-metric-kinds) | The 6 measurement types a node can declare | ✅ Implemented |
+| **8.4** | [Granularity Strategy](#84-granularity-strategy) | What gets a node vs what gets aggregated | ✅ Implemented |
+| **8.5** | [Resource Inventory](#85-resource-inventory) | Complete tree of all engine resources | ✅ Implemented |
+| **8.6** | [Resource Lifecycle](#86-resource-lifecycle) | Creation, consumption, release patterns | ✅ Implemented |
+| **8.7** | [Budgets & Exhaustion](#87-budgets--exhaustion) | Limits, policies, back-pressure, cascade detection | ✅ Implemented |
+| **8.8** | [Snapshot & Query API](#88-snapshot--query-api) | Pull-based reads, aggregation, bottleneck analysis | ✅ Implemented |
+| **8.9** | [Bridge to Observability](#89-bridge-to-observability) | How graph feeds metrics, health checks, traces | ✅ Implemented |
 
 ---
 
@@ -927,11 +927,11 @@ The observability layer does NOT:
 | **LockOperation** | `src/Typhon.Engine/Observability/LockOperation.cs` | ✅ Exists |
 | **ResourceOperationEntry** | `src/Typhon.Engine/Observability/ResourceOperationEntry.cs` | ✅ Exists |
 | **ResourceTelemetryAllocator** | `src/Typhon.Engine/Observability/ResourceTelemetryAllocator.cs` | ✅ Exists |
-| IMetricSource | `src/Typhon.Engine/Resources/IMetricSource.cs` | 🆕 New |
-| IResourceGraph | `src/Typhon.Engine/Resources/IResourceGraph.cs` | 🆕 New |
-| ResourceSnapshot | `src/Typhon.Engine/Resources/ResourceSnapshot.cs` | 🆕 New |
-| ResourceOptions | `src/Typhon.Engine/Resources/ResourceOptions.cs` | 🆕 New |
-| IExhaustionPolicy | `src/Typhon.Engine/Resources/IExhaustionPolicy.cs` | 🆕 New |
+| IMetricSource | `src/Typhon.Engine/Resources/IMetricSource.cs` | ✅ Exists |
+| IResourceGraph | `src/Typhon.Engine/Resources/IResourceGraph.cs` | ✅ Exists |
+| ResourceSnapshot | `src/Typhon.Engine/Resources/ResourceSnapshot.cs` | ✅ Exists |
+| ResourceOptions | `src/Typhon.Engine/Resources/ResourceOptions.cs` | ✅ Exists |
+| IExhaustionPolicy | `src/Typhon.Engine/Resources/IExhaustionPolicy.cs` | ✅ Exists |
 
 ---
 

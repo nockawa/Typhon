@@ -111,6 +111,12 @@ What becomes easier or more difficult because of this decision?
 | [029](029-reverse-delta-incremental-snapshots.md) | Reverse-Delta Incremental Snapshots | Accepted | 2025-01 |
 | [030](030-dual-limit-retention-policy.md) | Dual-Limit Retention Policy for Backup Snapshots | Accepted | 2025-01 |
 
+### Resource System & Observability (032)
+
+| # | Title | Status | Date |
+|---|-------|--------|------|
+| [032](032-resource-system-architecture.md) | Resource System Architecture (Pull-Based Metrics, Owner Aggregates, Snapshot API) | Accepted | 2026-01 |
+
 ---
 
 ## Relationship to Other Documentation
