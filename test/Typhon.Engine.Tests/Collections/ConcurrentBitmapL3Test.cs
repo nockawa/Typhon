@@ -2,7 +2,7 @@ using NUnit.Framework;
 using System;
 using System.Collections.Generic;
 
-namespace Typhon.Engine.Tests.Collections;
+namespace Typhon.Engine.Tests;
 
 public class ConcurrentBitmapL3Test
 {

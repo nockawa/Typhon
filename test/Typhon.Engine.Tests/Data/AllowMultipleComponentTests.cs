@@ -2,7 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using System;
 
-namespace Typhon.Engine.Tests.Database_Engine;
+namespace Typhon.Engine.Tests;
 
 /// <summary>
 /// Comprehensive tests for the AllowMultiple component feature.

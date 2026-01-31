@@ -1,9 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using System.Collections.Generic;
-using System.Linq;
 
-namespace Typhon.Engine.Tests.Resources;
+namespace Typhon.Engine.Tests;
 
 /// <summary>
 /// Tests for the Owner Aggregates pattern where ComponentTable aggregates metrics

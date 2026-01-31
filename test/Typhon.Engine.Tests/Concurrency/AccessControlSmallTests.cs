@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 #pragma warning disable CS0219 // Variable is assigned but never used - intentional for race condition testing
 
-namespace Typhon.Engine.Tests.Misc;
+namespace Typhon.Engine.Tests;
 
 [TestFixture]
 public class AccessControlSmallTests

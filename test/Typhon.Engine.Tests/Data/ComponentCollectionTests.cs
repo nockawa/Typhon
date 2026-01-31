@@ -2,11 +2,9 @@
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using System;
-using System.Collections;
-using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
-namespace Typhon.Engine.Tests.Database_Engine;
+namespace Typhon.Engine.Tests;
 
 [Component(SchemaName, 1)]
 [StructLayout(LayoutKind.Sequential)]

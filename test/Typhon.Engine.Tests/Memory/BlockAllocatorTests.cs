@@ -10,7 +10,7 @@ using System.Threading.Tasks;
 
 // ReSharper disable AccessToDisposedClosure
 
-namespace Typhon.Engine.Tests.Memory;
+namespace Typhon.Engine.Tests;
 
 /// <summary>
 /// Shared DI helper for allocator tests. Provides singleton IResourceRegistry and IMemoryAllocator.

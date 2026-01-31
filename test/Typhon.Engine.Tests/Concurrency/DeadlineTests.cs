@@ -6,7 +6,7 @@ using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Typhon.Engine.Tests.Concurrency;
+namespace Typhon.Engine.Tests;
 
 [TestFixture]
 public class DeadlineTests

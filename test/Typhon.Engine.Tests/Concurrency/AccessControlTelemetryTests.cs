@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Typhon.Engine.Tests.Concurrency;
+namespace Typhon.Engine.Tests;
 
 [TestFixture]
 public class AccessControlTelemetryTests

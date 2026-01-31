@@ -3,7 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace Typhon.Engine.Tests.Resources;
+namespace Typhon.Engine.Tests;
 
 [TestFixture]
 public class MetricSourceTests

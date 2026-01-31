@@ -1,6 +1,6 @@
 using NUnit.Framework;
 
-namespace Typhon.Engine.Tests.Resources;
+namespace Typhon.Engine.Tests;
 
 [TestFixture]
 public class MetricTypesTests

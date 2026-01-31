@@ -3,7 +3,7 @@ using System;
 using System.Linq;
 using System.Threading;
 
-namespace Typhon.Engine.Tests.Resources;
+namespace Typhon.Engine.Tests;
 
 /// <summary>
 /// Tests for the ResourceSnapshot and query API.

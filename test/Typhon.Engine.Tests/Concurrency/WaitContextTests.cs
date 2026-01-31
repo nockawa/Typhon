@@ -5,7 +5,7 @@ using System;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
-namespace Typhon.Engine.Tests.Concurrency;
+namespace Typhon.Engine.Tests;
 
 [TestFixture]
 public class WaitContextTests
