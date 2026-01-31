@@ -11,18 +11,10 @@ public class MetricSourceTests
     private ResourceRegistry _registry;
 
     [SetUp]
-    public void Setup()
-    {
-        TyphonServices.Reset();
-        _registry = new ResourceRegistry(new ResourceRegistryOptions { Name = "TestRegistry" });
-    }
+    public void Setup() => _registry = new ResourceRegistry(new ResourceRegistryOptions { Name = "TestRegistry" });
 
     [TearDown]
-    public void TearDown()
-    {
-        _registry?.Dispose();
-        TyphonServices.Reset();
-    }
+    public void TearDown() => _registry?.Dispose();
 
     #region Test Infrastructure
 
@@ -89,15 +81,9 @@ public class MetricSourceTests
             ContentionTimeoutCount = timeoutCount;
         }
 
-        public void WriteThroughput(string name, long count)
-        {
-            ThroughputCounters.Add((name, count));
-        }
+        public void WriteThroughput(string name, long count) => ThroughputCounters.Add((name, count));
 
-        public void WriteDuration(string name, long lastUs, long avgUs, long maxUs)
-        {
-            DurationMetrics.Add((name, lastUs, avgUs, maxUs));
-        }
+        public void WriteDuration(string name, long lastUs, long avgUs, long maxUs) => DurationMetrics.Add((name, lastUs, avgUs, maxUs));
 
         public void Reset()
         {
@@ -174,15 +160,9 @@ public class MetricSourceTests
         public MemoryOnlyMetricResource(string id, IResource parent)
             : base(id, ResourceType.Memory, parent) { }
 
-        public void ReadMetrics(IMetricWriter writer)
-        {
-            writer.WriteMemory(AllocatedBytes, PeakBytes);
-        }
+        public void ReadMetrics(IMetricWriter writer) => writer.WriteMemory(AllocatedBytes, PeakBytes);
 
-        public void ResetPeaks()
-        {
-            PeakBytes = AllocatedBytes;
-        }
+        public void ResetPeaks() => PeakBytes = AllocatedBytes;
     }
 
     /// <summary>
@@ -493,10 +473,7 @@ public class MetricSourceTests
     /// </summary>
     private class StandaloneMetricSource : IMetricSource
     {
-        public void ReadMetrics(IMetricWriter writer)
-        {
-            writer.WriteMemory(100, 200);
-        }
+        public void ReadMetrics(IMetricWriter writer) => writer.WriteMemory(100, 200);
 
         public void ResetPeaks()
         {

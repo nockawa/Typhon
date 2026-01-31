@@ -7,17 +7,35 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
-using Typhon.Engine;
 
 namespace Typhon.Engine.Tests.Collections;
+
+/// <summary>
+/// Shared DI services for bitmap tests (singleton per process, thread-safe).
+/// </summary>
+internal static class BitmapTestServices
+{
+    private static readonly Lazy<IServiceProvider> _serviceProvider = new(() =>
+    {
+        var services = new ServiceCollection()
+            .AddResourceRegistry()
+            .AddMemoryAllocator();
+        return services.BuildServiceProvider();
+    });
+
+    public static IResourceRegistry ResourceRegistry => _serviceProvider.Value.GetRequiredService<IResourceRegistry>();
+    public static IMemoryAllocator MemoryAllocator => _serviceProvider.Value.GetRequiredService<IMemoryAllocator>();
+    public static IResource AllocationResource => ResourceRegistry.Allocation;
+}
 
 [TestFixture]
 public class ConcurrentBitmapL3AllTests
 {
     // Helper to create bitmap with default parent for tests
     private static ConcurrentBitmapL3All CreateBitmap(int capacity)
-        => new ConcurrentBitmapL3All("TestBitmap", TyphonServices.ResourceRegistry.Allocation, capacity);
+        => new ConcurrentBitmapL3All("TestBitmap", BitmapTestServices.AllocationResource, BitmapTestServices.MemoryAllocator, capacity);
 
     [Test]
     [Explicit("Performance test - run manually")]

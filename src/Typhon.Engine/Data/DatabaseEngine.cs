@@ -187,11 +187,6 @@ public class DatabaseEngine : IResource, IMetricSource, IDebugPropertiesProvider
         return TransactionChain.CreateTransaction(this);
     }
 
-    public DatabaseEngine(DatabaseEngineOptions options, ManagedPagedMMF mmf, ILogger<DatabaseEngine> log)
-        : this(options, mmf, log, TyphonServices.ResourceRegistry)
-    {
-    }
-
     public DatabaseEngine(DatabaseEngineOptions options, ManagedPagedMMF mmf, ILogger<DatabaseEngine> log,
         IResourceRegistry resourceRegistry, string name = null)
     {

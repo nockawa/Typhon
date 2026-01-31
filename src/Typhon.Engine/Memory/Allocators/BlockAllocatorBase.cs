@@ -22,16 +22,18 @@ public unsafe abstract class BlockAllocatorBase : IDisposable
     /// </summary>
     /// <param name="stride">Size of each block in bytes.</param>
     /// <param name="entryCountPerPage">Number of entries per page (must be power of 2).</param>
-    /// <param name="parent">Parent resource for the internal bitmap (defaults to Allocation subsystem).</param>
-    protected BlockAllocatorBase(int stride, int entryCountPerPage, IResource parent = null)
+    /// <param name="parent">Parent resource for the internal bitmap (required).</param>
+    /// <param name="memoryAllocator">Memory allocator for internal bitmap storage (required).</param>
+    /// <exception cref="ArgumentNullException">Thrown if parent or memoryAllocator is null.</exception>
+    protected BlockAllocatorBase(int stride, int entryCountPerPage, IResource parent, IMemoryAllocator memoryAllocator)
     {
         if (MathHelpers.IsPow2(entryCountPerPage) == false)
         {
             throw new ArgumentException($"Entry count per page must be a power of 2 but {entryCountPerPage} was given", nameof(entryCountPerPage));
         }
 
-        // Default to Allocation subsystem if no parent specified
-        parent ??= TyphonServices.ResourceRegistry.Allocation;
+        ArgumentNullException.ThrowIfNull(parent);
+        ArgumentNullException.ThrowIfNull(memoryAllocator);
 
         var size = stride * entryCountPerPage;
         var page = GC.AllocateUninitializedArray<byte>(size, true);
@@ -42,7 +44,7 @@ public unsafe abstract class BlockAllocatorBase : IDisposable
         _pages = new (IntPtr, byte[])[1];
         _pages[0] = (Marshal.UnsafeAddrOfPinnedArrayElement(page, 0), page);
 
-        _blockMap = new ConcurrentBitmapL3All($"{GetType().Name}BlockMap", parent, entryCountPerPage);
+        _blockMap = new ConcurrentBitmapL3All($"{GetType().Name}BlockMap", parent, memoryAllocator, entryCountPerPage);
         _lock = new Lock();
     }
 

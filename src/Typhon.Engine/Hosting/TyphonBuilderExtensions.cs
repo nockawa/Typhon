@@ -48,19 +48,18 @@ public static class ServiceCollectionExtensions
 
     private static void ConfigureMemoryAllocatorOptions(IServiceCollection services, Action<MemoryAllocatorOptions> configure)
     {
-        if (configure == null)
-        {
-            return;
-        }
-
         var optionsBuilder = services.AddOptions<MemoryAllocatorOptions>();
-        optionsBuilder.Configure(configure);
 
-        optionsBuilder.Validate(_ =>
+        if (configure != null)
         {
-            // TODO Add validation logic
-            return true;
-        });
+            optionsBuilder.Configure(configure);
+
+            optionsBuilder.Validate(_ =>
+            {
+                // TODO Add validation logic
+                return true;
+            });
+        }
     }
 
     public static IServiceCollection AddResourceRegistry(this IServiceCollection services, Action<ResourceRegistryOptions> configure = null)
@@ -77,7 +76,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddScopedResourceRegistry(this IServiceCollection services, Action<ResourceRegistryOptions> configure = null)
     {
         ConfigureResourceRegistryOptions(services, configure);
-        services.Add(ServiceDescriptor.Scoped(sp =>
+        services.Add(ServiceDescriptor.Scoped<IResourceRegistry, ResourceRegistry>(sp =>
         {
             var options = sp.GetRequiredService<IOptions<ResourceRegistryOptions>>();
             return new ResourceRegistry(options.Value);
@@ -88,7 +87,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddTransientResourceRegistry(this IServiceCollection services, Action<ResourceRegistryOptions> configure = null)
     {
         ConfigureResourceRegistryOptions(services, configure);
-        services.Add(ServiceDescriptor.Transient(sp =>
+        services.Add(ServiceDescriptor.Transient<IResourceRegistry, ResourceRegistry>(sp =>
         {
             var options = sp.GetRequiredService<IOptions<ResourceRegistryOptions>>();
             return new ResourceRegistry(options.Value);
@@ -98,50 +97,49 @@ public static class ServiceCollectionExtensions
 
     private static void ConfigureResourceRegistryOptions(IServiceCollection services, Action<ResourceRegistryOptions> configure)
     {
-        if (configure == null)
-        {
-            return;
-        }
-
         var optionsBuilder = services.AddOptions<ResourceRegistryOptions>();
-        optionsBuilder.Configure(configure);
 
-        optionsBuilder.Validate(_ =>
+        if (configure != null)
         {
-            // TODO Add validation logic 
-            return true;
-        });
+            optionsBuilder.Configure(configure);
+
+            optionsBuilder.Validate(_ =>
+            {
+                // TODO Add validation logic
+                return true;
+            });
+        }
     }
 
     public static IServiceCollection AddPagedMemoryMappedFiled(
         this IServiceCollection services,
         Action<PagedMMFOptions> configure = null) =>
-        AddPagedMMF<PagedMMF, PagedMMFOptions>(services, ServiceLifetime.Singleton, configure);
+        services.AddPagedMMF<PagedMMF, PagedMMFOptions>(ServiceLifetime.Singleton, configure);
 
     public static IServiceCollection AddScopedPagedMemoryMappedFile(
         this IServiceCollection services,
         Action<PagedMMFOptions> configure = null) =>
-        AddPagedMMF<PagedMMF, PagedMMFOptions>(services, ServiceLifetime.Scoped, configure);
+        services.AddPagedMMF<PagedMMF, PagedMMFOptions>(ServiceLifetime.Scoped, configure);
 
     public static IServiceCollection AddTransientPagedMemoryMappedFile(
         this IServiceCollection services,
         Action<PagedMMFOptions> configure = null) =>
-        AddPagedMMF<PagedMMF, PagedMMFOptions>(services, ServiceLifetime.Transient, configure);
+        services.AddPagedMMF<PagedMMF, PagedMMFOptions>(ServiceLifetime.Transient, configure);
 
     public static IServiceCollection AddManagedPagedMMF(
         this IServiceCollection services,
         Action<ManagedPagedMMFOptions> configure = null) =>
-        AddPagedMMF<ManagedPagedMMF, ManagedPagedMMFOptions>(services, ServiceLifetime.Singleton, configure);
+        services.AddPagedMMF<ManagedPagedMMF, ManagedPagedMMFOptions>(ServiceLifetime.Singleton, configure);
 
     public static IServiceCollection AddScopedManagedPagedMemoryMappedFile(
         this IServiceCollection services,
         Action<ManagedPagedMMFOptions> configure = null) =>
-        AddPagedMMF<ManagedPagedMMF, ManagedPagedMMFOptions>(services, ServiceLifetime.Scoped, configure);
+        services.AddPagedMMF<ManagedPagedMMF, ManagedPagedMMFOptions>(ServiceLifetime.Scoped, configure);
 
     public static IServiceCollection AddTransientManagedPagedMemoryMappedFile(
         this IServiceCollection services,
         Action<ManagedPagedMMFOptions> configure = null) =>
-        AddPagedMMF<ManagedPagedMMF, ManagedPagedMMFOptions>(services, ServiceLifetime.Transient, configure);
+        services.AddPagedMMF<ManagedPagedMMF, ManagedPagedMMFOptions>(ServiceLifetime.Transient, configure);
 
     public static IServiceCollection AddDatabaseEngine(
         this IServiceCollection services,
@@ -197,8 +195,22 @@ public static class ServiceCollectionExtensions
         {
             var options = serviceProvider.GetRequiredService<IOptions<TO>>();
             var timeManager = serviceProvider.GetRequiredService<TimeManager>();
-            var logger = serviceProvider.GetRequiredService<ILogger<TS>>();
-            
+            var logger = serviceProvider.GetRequiredService<ILogger<PagedMMF>>();
+
+            // Directly instantiate ManagedPagedMMF which requires IResourceRegistry
+            if (typeof(TS) == typeof(ManagedPagedMMF))
+            {
+                var resourceRegistry = serviceProvider.GetRequiredService<IResourceRegistry>();
+                return (TS)(object)new ManagedPagedMMF(serviceProvider, options.Value, timeManager, logger, resourceRegistry);
+            }
+
+            // For base PagedMMF - doesn't require IResourceRegistry
+            if (typeof(TS) == typeof(PagedMMF))
+            {
+                return (TS)new PagedMMF(serviceProvider, options.Value, timeManager, logger);
+            }
+
+            // Fallback to Activator for other derived types (if any)
             return (TS)Activator.CreateInstance(typeof(TS), serviceProvider, options.Value, timeManager, logger);
         }
         catch (Exception e)
@@ -243,8 +255,9 @@ public static class ServiceCollectionExtensions
             var options = serviceProvider.GetRequiredService<IOptions<DatabaseEngineOptions>>();
             var mpmmf = serviceProvider.GetRequiredService<ManagedPagedMMF>();
             var logger = serviceProvider.GetRequiredService<ILogger<DatabaseEngine>>();
+            var resourceRegistry = serviceProvider.GetRequiredService<IResourceRegistry>();
 
-            return new DatabaseEngine(options.Value, mpmmf, logger);
+            return new DatabaseEngine(options.Value, mpmmf, logger, resourceRegistry);
         }
         catch (Exception e)
         {

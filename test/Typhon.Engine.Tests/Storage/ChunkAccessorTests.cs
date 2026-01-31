@@ -83,6 +83,8 @@ public class ChunkAccessorTests
                 });
                 builder.SetMinimumLevel(LogLevel.Information);
             })
+            .AddResourceRegistry()
+            .AddMemoryAllocator()
             .AddScopedManagedPagedMemoryMappedFile(options =>
             {
                 options.DatabaseName = CurrentDatabaseName;

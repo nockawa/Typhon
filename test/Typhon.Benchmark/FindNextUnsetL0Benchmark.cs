@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Order;
+using Microsoft.Extensions.DependencyInjection;
 using Typhon.Engine;
 
 namespace Typhon.Benchmark;
@@ -25,10 +26,23 @@ public class FindNextUnsetL0Benchmark
     private ConcurrentBitmapL3All _bitmap = null!;
     private ConcurrentBitmapL3AllOld _bitmapOld = null!;
 
+    // DI services for benchmarks
+    private IServiceProvider _serviceProvider = null!;
+    private IResourceRegistry _resourceRegistry = null!;
+    private IMemoryAllocator _memoryAllocator = null!;
+
     [GlobalSetup]
     public void Setup()
     {
-        _bitmap = new ConcurrentBitmapL3All("BenchmarkBitmap", TyphonServices.ResourceRegistry.Allocation, BitSize);
+        // Initialize DI services
+        _serviceProvider = new ServiceCollection()
+            .AddResourceRegistry()
+            .AddMemoryAllocator()
+            .BuildServiceProvider();
+        _resourceRegistry = _serviceProvider.GetRequiredService<IResourceRegistry>();
+        _memoryAllocator = _serviceProvider.GetRequiredService<IMemoryAllocator>();
+
+        _bitmap = new ConcurrentBitmapL3All("BenchmarkBitmap", _resourceRegistry.Allocation, _memoryAllocator, BitSize);
         _bitmapOld = new ConcurrentBitmapL3AllOld(BitSize);
 
         switch (Pattern)

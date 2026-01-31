@@ -17,17 +17,12 @@ public class ResourceSnapshotTests
     [SetUp]
     public void Setup()
     {
-        TyphonServices.Reset();
         _registry = new ResourceRegistry(new ResourceRegistryOptions { Name = "TestRegistry" });
         _graph = new ResourceGraph(_registry);
     }
 
     [TearDown]
-    public void TearDown()
-    {
-        _registry?.Dispose();
-        TyphonServices.Reset();
-    }
+    public void TearDown() => _registry?.Dispose();
 
     #region Test Infrastructure
 
@@ -443,10 +438,7 @@ public class ResourceSnapshotTests
     #region IResourceGraph Tests
 
     [Test]
-    public void Root_ReturnsRegistryRoot()
-    {
-        Assert.That(_graph.Root, Is.SameAs(_registry.Root));
-    }
+    public void Root_ReturnsRegistryRoot() => Assert.That(_graph.Root, Is.SameAs(_registry.Root));
 
     [Test]
     public void FindByPath_FindsExistingResource()

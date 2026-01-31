@@ -234,17 +234,12 @@ public class ResourceOptionsTests
     [SetUp]
     public void Setup()
     {
-        TyphonServices.Reset();
         _registry = new ResourceRegistry(new ResourceRegistryOptions { Name = "TestRegistry" });
         _graph = new ResourceGraph(_registry);
     }
 
     [TearDown]
-    public void TearDown()
-    {
-        _registry?.Dispose();
-        TyphonServices.Reset();
-    }
+    public void TearDown() => _registry?.Dispose();
 
     /// <summary>
     /// Test resource with configurable capacity metrics.
@@ -460,10 +455,7 @@ public class ResourceOptionsTests
     }
 
     [Test]
-    public void FindRootCause_DefaultThreshold_Is80Percent()
-    {
-        Assert.That(ResourceSnapshot.DefaultHighUtilizationThreshold, Is.EqualTo(0.8));
-    }
+    public void FindRootCause_DefaultThreshold_Is80Percent() => Assert.That(ResourceSnapshot.DefaultHighUtilizationThreshold, Is.EqualTo(0.8));
 
     #endregion
 

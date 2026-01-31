@@ -3,14 +3,14 @@ using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Threading;
 
 namespace Typhon.Engine;
 
 [PublicAPI]
 public class ChainedBlockAllocator : ChainedBlockAllocatorBase
 {
-    public ChainedBlockAllocator(int stride, int entryCountPerPage) : base(stride, entryCountPerPage)
+    public ChainedBlockAllocator(int stride, int entryCountPerPage, IResource parent, IMemoryAllocator memoryAllocator)
+        : base(stride, entryCountPerPage, parent, memoryAllocator)
     {
     }
     public new Span<byte> AllocateBlock(out int blockId, bool rootChain) => base.AllocateBlock(out blockId, rootChain);
@@ -27,7 +27,8 @@ public class ChainedBlockAllocator : ChainedBlockAllocatorBase
 [PublicAPI]
 public class ChainedBlockAllocator<T> : ChainedBlockAllocatorBase where T : struct
 {
-    public ChainedBlockAllocator(int entryCountPerPage, int? strideOverride = null) : base(strideOverride ?? Unsafe.SizeOf<T>(), entryCountPerPage)
+    public ChainedBlockAllocator(int entryCountPerPage, IResource parent, IMemoryAllocator memoryAllocator, int? strideOverride = null)
+        : base(strideOverride ?? Unsafe.SizeOf<T>(), entryCountPerPage, parent, memoryAllocator)
     {
         Debug.Assert(Stride >= Unsafe.SizeOf<T>(), "If you override the stride, it must be at least the size of the type you want to allocate");
     }

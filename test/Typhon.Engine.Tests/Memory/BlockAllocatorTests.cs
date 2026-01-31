@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using System;
 using System.Collections.Concurrent;
@@ -6,19 +7,43 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
+
 // ReSharper disable AccessToDisposedClosure
 
-namespace Typhon.Engine.Tests.Misc;
+namespace Typhon.Engine.Tests.Memory;
+
+/// <summary>
+/// Shared DI helper for allocator tests. Provides singleton IResourceRegistry and IMemoryAllocator.
+/// </summary>
+internal static class AllocatorTestServices
+{
+    private static readonly Lazy<IServiceProvider> _serviceProvider = new(() =>
+    {
+        var services = new ServiceCollection()
+            .AddResourceRegistry()
+            .AddMemoryAllocator()
+            .BuildServiceProvider();
+        return services;
+    });
+
+    public static IResourceRegistry ResourceRegistry => _serviceProvider.Value.GetRequiredService<IResourceRegistry>();
+    public static IMemoryAllocator MemoryAllocator => _serviceProvider.Value.GetRequiredService<IMemoryAllocator>();
+    public static IResource AllocationResource => ResourceRegistry.Allocation;
+}
 
 [TestFixture]
 public class BlockAllocatorTests
 {
+    // Helper methods to create allocators with required DI dependencies
+    private static BlockAllocator CreateBlockAllocator(int stride, int entryCountPerPage)
+        => new(stride, entryCountPerPage, AllocatorTestServices.AllocationResource, AllocatorTestServices.MemoryAllocator);
+
     #region Constructor and Properties Tests
 
     [Test]
     public void Constructor_ValidParameters_CreatesAllocator()
     {
-        using var allocator = new BlockAllocator(16, 64);
+        using var allocator = CreateBlockAllocator(16, 64);
 
         Assert.That(allocator.Capacity, Is.EqualTo(64));
         Assert.That(allocator.AllocatedCount, Is.EqualTo(0));
@@ -37,7 +62,7 @@ public class BlockAllocatorTests
     [TestCase(1024)]
     public void Constructor_PowerOfTwoEntryCounts_Succeeds(int entryCountPerPage)
     {
-        using var allocator = new BlockAllocator(8, entryCountPerPage);
+        using var allocator = CreateBlockAllocator(8, entryCountPerPage);
         Assert.That(allocator.Capacity, Is.EqualTo(entryCountPerPage));
     }
 
@@ -53,7 +78,7 @@ public class BlockAllocatorTests
     public void Constructor_NonPowerOfTwoEntryCount_ThrowsException(int entryCountPerPage)
         => Assert.Throws<ArgumentException>(() =>
         {
-            _ = new BlockAllocator(8, entryCountPerPage);
+            _ = CreateBlockAllocator(8, entryCountPerPage);
         });
 
     [TestCase(1)]
@@ -67,7 +92,7 @@ public class BlockAllocatorTests
     [TestCase(1024)]
     public void Constructor_DifferentStrides_WorksCorrectly(int stride)
     {
-        using var allocator = new BlockAllocator(stride, 64);
+        using var allocator = CreateBlockAllocator(stride, 64);
 
         var span = allocator.AllocateBlock(out _);
         Assert.That(span.Length, Is.EqualTo(stride));
@@ -77,7 +102,7 @@ public class BlockAllocatorTests
     public void Capacity_InitialValue_MatchesEntryCount()
     {
         const int entryCount = 128;
-        using var allocator = new BlockAllocator(16, entryCount);
+        using var allocator = CreateBlockAllocator(16, entryCount);
 
         Assert.That(allocator.Capacity, Is.EqualTo(entryCount));
     }
@@ -85,7 +110,7 @@ public class BlockAllocatorTests
     [Test]
     public void AllocatedCount_InitialValue_IsZero()
     {
-        using var allocator = new BlockAllocator(16, 64);
+        using var allocator = CreateBlockAllocator(16, 64);
 
         Assert.That(allocator.AllocatedCount, Is.EqualTo(0));
     }
@@ -97,7 +122,7 @@ public class BlockAllocatorTests
     [Test]
     public void AllocateBlock_SingleBlock_ReturnsValidSpanAndId()
     {
-        using var allocator = new BlockAllocator(16, 64);
+        using var allocator = CreateBlockAllocator(16, 64);
 
         var span = allocator.AllocateBlock(out var blockId);
 
@@ -109,7 +134,7 @@ public class BlockAllocatorTests
     [Test]
     public void AllocateBlock_MultipleBlocks_ReturnsUniqueIds()
     {
-        using var allocator = new BlockAllocator(16, 64);
+        using var allocator = CreateBlockAllocator(16, 64);
         var ids = new HashSet<int>();
 
         for (int i = 0; i < 50; i++)
@@ -124,7 +149,7 @@ public class BlockAllocatorTests
     [Test]
     public void AllocateBlock_DataIntegrity_PreservesWrittenData()
     {
-        using var allocator = new BlockAllocator(sizeof(long), 64);
+        using var allocator = CreateBlockAllocator(sizeof(long), 64);
         var allocations = new (int id, long value)[50];
 
         // Allocate multiple blocks and write unique values
@@ -149,7 +174,7 @@ public class BlockAllocatorTests
     [Test]
     public void AllocateBlock_SpanCanBeWrittenAndRead()
     {
-        using var allocator = new BlockAllocator(sizeof(int) * 4, 64);
+        using var allocator = CreateBlockAllocator(sizeof(int) * 4, 64);
 
         var span = allocator.AllocateBlock(out var blockId);
         var intSpan = MemoryMarshal.Cast<byte, int>(span);
@@ -171,7 +196,7 @@ public class BlockAllocatorTests
     [Test]
     public void AllocateBlock_SequentialAllocations_HaveSequentialIds()
     {
-        using var allocator = new BlockAllocator(8, 64);
+        using var allocator = CreateBlockAllocator(8, 64);
         var ids = new List<int>();
 
         for (int i = 0; i < 10; i++)
@@ -194,7 +219,7 @@ public class BlockAllocatorTests
     [Test]
     public void GetBlock_ValidBlockId_ReturnsSameDataAsAllocate()
     {
-        using var allocator = new BlockAllocator(sizeof(long), 64);
+        using var allocator = CreateBlockAllocator(sizeof(long), 64);
 
         var allocatedSpan = allocator.AllocateBlock(out var blockId);
         var value = 0x123456789ABCDEFL;
@@ -209,7 +234,7 @@ public class BlockAllocatorTests
     [Test]
     public void GetBlock_MultipleBlocks_ReturnsCorrectData()
     {
-        using var allocator = new BlockAllocator(sizeof(int), 64);
+        using var allocator = CreateBlockAllocator(sizeof(int), 64);
         var blocks = new (int id, int value)[20];
 
         for (int i = 0; i < 20; i++)
@@ -232,7 +257,7 @@ public class BlockAllocatorTests
     public void GetBlock_SpanLengthMatchesStride()
     {
         const int stride = 32;
-        using var allocator = new BlockAllocator(stride, 64);
+        using var allocator = CreateBlockAllocator(stride, 64);
 
         allocator.AllocateBlock(out var blockId);
         var span = allocator.GetBlock(blockId);
@@ -243,7 +268,7 @@ public class BlockAllocatorTests
     [Test]
     public void GetBlock_ModifyingSpan_PersistsChanges()
     {
-        using var allocator = new BlockAllocator(sizeof(long), 64);
+        using var allocator = CreateBlockAllocator(sizeof(long), 64);
 
         allocator.AllocateBlock(out var blockId);
 
@@ -272,7 +297,7 @@ public class BlockAllocatorTests
     [Test]
     public void FreeBlock_SingleBlock_DecreasesAllocatedCount()
     {
-        using var allocator = new BlockAllocator(16, 64);
+        using var allocator = CreateBlockAllocator(16, 64);
 
         allocator.AllocateBlock(out var blockId);
         Assert.That(allocator.AllocatedCount, Is.EqualTo(1));
@@ -284,7 +309,7 @@ public class BlockAllocatorTests
     [Test]
     public void FreeBlock_MultipleBlocks_DecreasesAllocatedCountCorrectly()
     {
-        using var allocator = new BlockAllocator(16, 64);
+        using var allocator = CreateBlockAllocator(16, 64);
         var ids = new int[10];
 
         for (int i = 0; i < 10; i++)
@@ -309,7 +334,7 @@ public class BlockAllocatorTests
     [Test]
     public void FreeBlock_ThenReallocate_ReusesFreedSlots()
     {
-        using var allocator = new BlockAllocator(sizeof(int), 64);
+        using var allocator = CreateBlockAllocator(sizeof(int), 64);
 
         // Allocate blocks
         allocator.AllocateBlock(out int _);
@@ -327,7 +352,7 @@ public class BlockAllocatorTests
     [Test]
     public void FreeBlock_AllBlocks_ResetsAllocatedCount()
     {
-        using var allocator = new BlockAllocator(16, 64);
+        using var allocator = CreateBlockAllocator(16, 64);
         var ids = new List<int>();
 
         for (int i = 0; i < 32; i++)
@@ -347,7 +372,7 @@ public class BlockAllocatorTests
     [Test]
     public void FreeBlock_InterleavedAllocateAndFree_MaintainsIntegrity()
     {
-        using var allocator = new BlockAllocator(sizeof(int), 64);
+        using var allocator = CreateBlockAllocator(sizeof(int), 64);
         var activeBlocks = new Dictionary<int, int>();
 
         for (int iteration = 0; iteration < 50; iteration++)
@@ -386,7 +411,7 @@ public class BlockAllocatorTests
     public void Resize_TriggerByAllocation_ExpandsCapacity()
     {
         const int initialPageSize = 4;
-        using var allocator = new BlockAllocator(16, initialPageSize);
+        using var allocator = CreateBlockAllocator(16, initialPageSize);
 
         Assert.That(allocator.Capacity, Is.EqualTo(initialPageSize));
 
@@ -406,7 +431,7 @@ public class BlockAllocatorTests
         const int pageSize = 4;
         const int allocationCount = 64; // Will trigger multiple resizes
 
-        using var allocator = new BlockAllocator(sizeof(long), pageSize);
+        using var allocator = CreateBlockAllocator(sizeof(long), pageSize);
         var allocations = new (int id, long value)[allocationCount];
 
         for (int i = 0; i < allocationCount; i++)
@@ -431,7 +456,7 @@ public class BlockAllocatorTests
     public void Resize_CapacityGrowsInPowerOfTwo()
     {
         const int pageSize = 8;
-        using var allocator = new BlockAllocator(16, pageSize);
+        using var allocator = CreateBlockAllocator(16, pageSize);
 
         // Fill up first page
         for (int i = 0; i < pageSize; i++)
@@ -451,7 +476,7 @@ public class BlockAllocatorTests
     public void Resize_AfterFreeAndReallocate_NoUnnecessaryGrowth()
     {
         const int pageSize = 8;
-        using var allocator = new BlockAllocator(16, pageSize);
+        using var allocator = CreateBlockAllocator(16, pageSize);
         var ids = new int[pageSize];
 
         // Fill up first page
@@ -482,7 +507,7 @@ public class BlockAllocatorTests
         const int pageSize = 16;
         const int allocationCount = 1024;
 
-        using var allocator = new BlockAllocator(sizeof(int), pageSize);
+        using var allocator = CreateBlockAllocator(sizeof(int), pageSize);
 
         for (int i = 0; i < allocationCount; i++)
         {
@@ -501,7 +526,7 @@ public class BlockAllocatorTests
     [Test]
     public void Dispose_NormalDispose_DoesNotThrow()
     {
-        var allocator = new BlockAllocator(16, 64);
+        var allocator = CreateBlockAllocator(16, 64);
 
         allocator.AllocateBlock(out _);
         allocator.AllocateBlock(out _);
@@ -512,7 +537,7 @@ public class BlockAllocatorTests
     [Test]
     public void Dispose_DoubleDispose_DoesNotThrow()
     {
-        var allocator = new BlockAllocator(16, 64);
+        var allocator = CreateBlockAllocator(16, 64);
 
         allocator.Dispose();
 
@@ -522,7 +547,7 @@ public class BlockAllocatorTests
     [Test]
     public void Dispose_WithActiveAllocations_DoesNotThrow()
     {
-        var allocator = new BlockAllocator(16, 64);
+        var allocator = CreateBlockAllocator(16, 64);
 
         for (int i = 0; i < 10; i++)
         {
@@ -540,7 +565,7 @@ public class BlockAllocatorTests
     public void EdgeCase_LargeStride_WorksCorrectly()
     {
         const int largeStride = 4096;
-        using var allocator = new BlockAllocator(largeStride, 16);
+        using var allocator = CreateBlockAllocator(largeStride, 16);
 
         var span = allocator.AllocateBlock(out var blockId);
         Assert.That(span.Length, Is.EqualTo(largeStride));
@@ -563,7 +588,7 @@ public class BlockAllocatorTests
     public void EdgeCase_MinimalStride_WorksCorrectly()
     {
         const int minimalStride = 1;
-        using var allocator = new BlockAllocator(minimalStride, 64);
+        using var allocator = CreateBlockAllocator(minimalStride, 64);
 
         var span = allocator.AllocateBlock(out var blockId);
         span[0] = 42;
@@ -576,7 +601,7 @@ public class BlockAllocatorTests
     public void EdgeCase_MinimalPageSize_WorksCorrectly()
     {
         const int minimalPageSize = 1;
-        using var allocator = new BlockAllocator(16, minimalPageSize);
+        using var allocator = CreateBlockAllocator(16, minimalPageSize);
 
         // Should trigger resize on second allocation
         allocator.AllocateBlock(out var id1);
@@ -589,7 +614,7 @@ public class BlockAllocatorTests
     [Test]
     public void EdgeCase_AllocateFreeAllocatePattern_WorksCorrectly()
     {
-        using var allocator = new BlockAllocator(sizeof(int), 64);
+        using var allocator = CreateBlockAllocator(sizeof(int), 64);
 
         for (int round = 0; round < 100; round++)
         {
@@ -609,7 +634,7 @@ public class BlockAllocatorTests
     public void EdgeCase_AllocateAllThenFreeAll_WorksCorrectly()
     {
         const int count = 256;
-        using var allocator = new BlockAllocator(sizeof(long), 32);
+        using var allocator = CreateBlockAllocator(sizeof(long), 32);
         var ids = new int[count];
 
         // Allocate all
@@ -641,6 +666,10 @@ public class BlockAllocatorTests
 [TestFixture]
 public class StructAllocatorTests
 {
+    // Helper to create StructAllocator with required DI dependencies
+    private static StructAllocator<T> CreateStructAllocator<T>(int entryCountPerPage) where T : struct, ICleanable
+        => new(entryCountPerPage, AllocatorTestServices.AllocationResource, AllocatorTestServices.MemoryAllocator);
+
     [StructLayout(LayoutKind.Sequential)]
     public struct TestCleanableStruct : ICleanable
     {
@@ -679,7 +708,7 @@ public class StructAllocatorTests
     [Test]
     public void Constructor_ValidEntryCount_CreatesAllocator()
     {
-        using var allocator = new StructAllocator<SimpleCleanableStruct>(64);
+        using var allocator = CreateStructAllocator<SimpleCleanableStruct>(64);
 
         Assert.That(allocator.Capacity, Is.EqualTo(64));
         Assert.That(allocator.AllocatedCount, Is.EqualTo(0));
@@ -694,7 +723,7 @@ public class StructAllocatorTests
     [TestCase(256)]
     public void Constructor_PowerOfTwoEntryCounts_Succeeds(int entryCount)
     {
-        using var allocator = new StructAllocator<SimpleCleanableStruct>(entryCount);
+        using var allocator = CreateStructAllocator<SimpleCleanableStruct>(entryCount);
         Assert.That(allocator.Capacity, Is.EqualTo(entryCount));
     }
 
@@ -705,7 +734,7 @@ public class StructAllocatorTests
     [Test]
     public void Allocate_ReturnsValidRef()
     {
-        using var allocator = new StructAllocator<SimpleCleanableStruct>(64);
+        using var allocator = CreateStructAllocator<SimpleCleanableStruct>(64);
 
         ref var item = ref allocator.Allocate(out var blockId);
         item.A = 100;
@@ -718,7 +747,7 @@ public class StructAllocatorTests
     [Test]
     public void Allocate_MultipleItems_ReturnsUniqueIds()
     {
-        using var allocator = new StructAllocator<SimpleCleanableStruct>(64);
+        using var allocator = CreateStructAllocator<SimpleCleanableStruct>(64);
         var ids = new HashSet<int>();
 
         for (int i = 0; i < 32; i++)
@@ -735,7 +764,7 @@ public class StructAllocatorTests
     [Test]
     public void Get_ReturnsCorrectData()
     {
-        using var allocator = new StructAllocator<SimpleCleanableStruct>(64);
+        using var allocator = CreateStructAllocator<SimpleCleanableStruct>(64);
 
         ref var allocated = ref allocator.Allocate(out var blockId);
         allocated.A = 42;
@@ -750,7 +779,7 @@ public class StructAllocatorTests
     [Test]
     public void Get_ModifyingRef_PersistsChanges()
     {
-        using var allocator = new StructAllocator<SimpleCleanableStruct>(64);
+        using var allocator = CreateStructAllocator<SimpleCleanableStruct>(64);
 
         allocator.Allocate(out var blockId);
 
@@ -770,7 +799,7 @@ public class StructAllocatorTests
     [Test]
     public void Allocate_DataIntegrity_PreservesWrittenData()
     {
-        using var allocator = new StructAllocator<TestCleanableStruct>(64);
+        using var allocator = CreateStructAllocator<TestCleanableStruct>(64);
         var allocations = new (int id, int value, float floatValue, long longValue)[30];
 
         for (int i = 0; i < 30; i++)
@@ -798,7 +827,7 @@ public class StructAllocatorTests
     [Test]
     public void Free_CallsCleanup()
     {
-        using var allocator = new StructAllocator<SimpleCleanableStruct>(64);
+        using var allocator = CreateStructAllocator<SimpleCleanableStruct>(64);
 
         ref var item = ref allocator.Allocate(out var blockId);
         item.A = 100;
@@ -816,7 +845,7 @@ public class StructAllocatorTests
     [Test]
     public void Free_DecreasesAllocatedCount()
     {
-        using var allocator = new StructAllocator<SimpleCleanableStruct>(64);
+        using var allocator = CreateStructAllocator<SimpleCleanableStruct>(64);
 
         allocator.Allocate(out var id1);
         allocator.Allocate(out var id2);
@@ -832,7 +861,7 @@ public class StructAllocatorTests
     [Test]
     public void Free_ThenReallocate_ReusesSlot()
     {
-        using var allocator = new StructAllocator<SimpleCleanableStruct>(64);
+        using var allocator = CreateStructAllocator<SimpleCleanableStruct>(64);
 
         allocator.Allocate(out int _);
         allocator.Allocate(out var id2);
@@ -847,7 +876,7 @@ public class StructAllocatorTests
     [Test]
     public void Free_InterleavedOperations_MaintainsIntegrity()
     {
-        using var allocator = new StructAllocator<SimpleCleanableStruct>(64);
+        using var allocator = CreateStructAllocator<SimpleCleanableStruct>(64);
         var active = new Dictionary<int, (int a, int b)>();
 
         for (int iteration = 0; iteration < 50; iteration++)
@@ -887,7 +916,7 @@ public class StructAllocatorTests
     public void Resize_TriggeredByAllocation_MaintainsData()
     {
         const int pageSize = 4;
-        using var allocator = new StructAllocator<SimpleCleanableStruct>(pageSize);
+        using var allocator = CreateStructAllocator<SimpleCleanableStruct>(pageSize);
         var allocations = new (int id, int a, int b)[pageSize * 4];
 
         for (int i = 0; i < allocations.Length; i++)
@@ -913,6 +942,10 @@ public class StructAllocatorTests
 [TestFixture]
 public class UnmanagedStructAllocatorTests
 {
+    // Helper to create UnmanagedStructAllocator with required DI dependencies
+    private static UnmanagedStructAllocator<T> CreateUnmanagedStructAllocator<T>(int entryCountPerPage) where T : unmanaged
+        => new(entryCountPerPage, AllocatorTestServices.AllocationResource, AllocatorTestServices.MemoryAllocator);
+
     public struct TestUnmanagedStruct
     {
         public int Value;
@@ -933,7 +966,7 @@ public class UnmanagedStructAllocatorTests
     [Test]
     public void Constructor_ValidEntryCount_CreatesAllocator()
     {
-        using var allocator = new UnmanagedStructAllocator<SimpleUnmanagedStruct>(64);
+        using var allocator = CreateUnmanagedStructAllocator<SimpleUnmanagedStruct>(64);
 
         Assert.That(allocator.Capacity, Is.EqualTo(64));
         Assert.That(allocator.AllocatedCount, Is.EqualTo(0));
@@ -948,7 +981,7 @@ public class UnmanagedStructAllocatorTests
     [TestCase(256)]
     public void Constructor_PowerOfTwoEntryCounts_Succeeds(int entryCount)
     {
-        using var allocator = new UnmanagedStructAllocator<SimpleUnmanagedStruct>(entryCount);
+        using var allocator = CreateUnmanagedStructAllocator<SimpleUnmanagedStruct>(entryCount);
         Assert.That(allocator.Capacity, Is.EqualTo(entryCount));
     }
 
@@ -959,7 +992,7 @@ public class UnmanagedStructAllocatorTests
     [Test]
     public void Allocate_ReturnsValidRef()
     {
-        using var allocator = new UnmanagedStructAllocator<SimpleUnmanagedStruct>(64);
+        using var allocator = CreateUnmanagedStructAllocator<SimpleUnmanagedStruct>(64);
 
         ref var item = ref allocator.Allocate(out var blockId);
         item.X = 10;
@@ -973,7 +1006,7 @@ public class UnmanagedStructAllocatorTests
     [Test]
     public void Allocate_MultipleItems_ReturnsUniqueIds()
     {
-        using var allocator = new UnmanagedStructAllocator<SimpleUnmanagedStruct>(64);
+        using var allocator = CreateUnmanagedStructAllocator<SimpleUnmanagedStruct>(64);
         var ids = new HashSet<int>();
 
         for (int i = 0; i < 32; i++)
@@ -989,7 +1022,7 @@ public class UnmanagedStructAllocatorTests
     [Test]
     public void Get_ReturnsCorrectData()
     {
-        using var allocator = new UnmanagedStructAllocator<TestUnmanagedStruct>(64);
+        using var allocator = CreateUnmanagedStructAllocator<TestUnmanagedStruct>(64);
 
         ref var allocated = ref allocator.Allocate(out var blockId);
         allocated.Value = 42;
@@ -1008,7 +1041,7 @@ public class UnmanagedStructAllocatorTests
     [Test]
     public void Get_ModifyingRef_PersistsChanges()
     {
-        using var allocator = new UnmanagedStructAllocator<SimpleUnmanagedStruct>(64);
+        using var allocator = CreateUnmanagedStructAllocator<SimpleUnmanagedStruct>(64);
 
         allocator.Allocate(out var blockId);
 
@@ -1026,7 +1059,7 @@ public class UnmanagedStructAllocatorTests
     [Test]
     public void Allocate_DataIntegrity_PreservesWrittenData()
     {
-        using var allocator = new UnmanagedStructAllocator<TestUnmanagedStruct>(64);
+        using var allocator = CreateUnmanagedStructAllocator<TestUnmanagedStruct>(64);
         var allocations = new (int id, int value, float floatValue, long longValue, double doubleValue)[30];
 
         for (int i = 0; i < 30; i++)
@@ -1056,7 +1089,7 @@ public class UnmanagedStructAllocatorTests
     [Test]
     public void Free_DecreasesAllocatedCount()
     {
-        using var allocator = new UnmanagedStructAllocator<SimpleUnmanagedStruct>(64);
+        using var allocator = CreateUnmanagedStructAllocator<SimpleUnmanagedStruct>(64);
 
         allocator.Allocate(out var id1);
         allocator.Allocate(out var id2);
@@ -1072,7 +1105,7 @@ public class UnmanagedStructAllocatorTests
     [Test]
     public void Free_ThenReallocate_ReusesSlot()
     {
-        using var allocator = new UnmanagedStructAllocator<SimpleUnmanagedStruct>(64);
+        using var allocator = CreateUnmanagedStructAllocator<SimpleUnmanagedStruct>(64);
 
         allocator.Allocate(out int _);
         allocator.Allocate(out var id2);
@@ -1087,7 +1120,7 @@ public class UnmanagedStructAllocatorTests
     [Test]
     public void Free_InterleavedOperations_MaintainsIntegrity()
     {
-        using var allocator = new UnmanagedStructAllocator<SimpleUnmanagedStruct>(64);
+        using var allocator = CreateUnmanagedStructAllocator<SimpleUnmanagedStruct>(64);
         var active = new Dictionary<int, (int x, int y, int z)>();
 
         for (int iteration = 0; iteration < 50; iteration++)
@@ -1129,7 +1162,7 @@ public class UnmanagedStructAllocatorTests
     public void Resize_TriggeredByAllocation_MaintainsData()
     {
         const int pageSize = 4;
-        using var allocator = new UnmanagedStructAllocator<SimpleUnmanagedStruct>(pageSize);
+        using var allocator = CreateUnmanagedStructAllocator<SimpleUnmanagedStruct>(pageSize);
         var allocations = new (int id, int x, int y, int z)[pageSize * 4];
 
         for (int i = 0; i < allocations.Length; i++)
@@ -1157,6 +1190,10 @@ public class UnmanagedStructAllocatorTests
 [TestFixture]
 public class BlockAllocatorThreadSafetyTests
 {
+    // Helper to create BlockAllocator with required DI dependencies
+    private static BlockAllocator CreateBlockAllocator(int stride, int entryCountPerPage)
+        => new(stride, entryCountPerPage, AllocatorTestServices.AllocationResource, AllocatorTestServices.MemoryAllocator);
+
     #region Concurrent Allocation Tests
 
     [Test]
@@ -1165,7 +1202,7 @@ public class BlockAllocatorThreadSafetyTests
         const int threadCount = 8;
         const int allocationsPerThread = 100;
 
-        using var allocator = new BlockAllocator(sizeof(long), 64);
+        using var allocator = CreateBlockAllocator(sizeof(long), 64);
         var allAllocations = new ConcurrentBag<(int id, long value)>();
         var errors = new ConcurrentBag<string>();
 
@@ -1217,7 +1254,7 @@ public class BlockAllocatorThreadSafetyTests
         const int threadCount = 8;
         const int allocationsPerThread = 100;
 
-        using var allocator = new BlockAllocator(16, 64);
+        using var allocator = CreateBlockAllocator(16, 64);
         var allIds = new ConcurrentBag<int>();
         var barrier = new Barrier(threadCount);
 
@@ -1256,7 +1293,7 @@ public class BlockAllocatorThreadSafetyTests
         const int allocationsPerThread = 500;
         const int smallPageSize = 8; // Force many resizes
 
-        using var allocator = new BlockAllocator(sizeof(int), smallPageSize);
+        using var allocator = CreateBlockAllocator(sizeof(int), smallPageSize);
         var allAllocations = new ConcurrentDictionary<int, int>();
         var barrier = new Barrier(threadCount);
 
@@ -1304,7 +1341,7 @@ public class BlockAllocatorThreadSafetyTests
         const int totalAllocations = 1000;
         const int threadCount = 4;
 
-        using var allocator = new BlockAllocator(16, 64);
+        using var allocator = CreateBlockAllocator(16, 64);
         var ids = new int[totalAllocations];
 
         // Allocate all first
@@ -1353,7 +1390,7 @@ public class BlockAllocatorThreadSafetyTests
         const int threadCount = 8;
         const int operationsPerThread = 500;
 
-        using var allocator = new BlockAllocator(sizeof(int), 64);
+        using var allocator = CreateBlockAllocator(sizeof(int), 64);
         var activeBlocks = new ConcurrentDictionary<int, int>();
         var barrier = new Barrier(threadCount);
 
@@ -1415,7 +1452,7 @@ public class BlockAllocatorThreadSafetyTests
         const int iterationsPerThread = 1000;
         const int blockCount = 100;
 
-        using var allocator = new BlockAllocator(sizeof(long), 64);
+        using var allocator = CreateBlockAllocator(sizeof(long), 64);
         var ids = new int[blockCount];
 
         // Pre-allocate blocks
@@ -1481,7 +1518,7 @@ public class BlockAllocatorThreadSafetyTests
         const int threadCount = 16;
         const int operationsPerThread = 1000;
 
-        using var allocator = new BlockAllocator(sizeof(int), 8); // Small page to force contention
+        using var allocator = CreateBlockAllocator(sizeof(int), 8); // Small page to force contention
         var activeBlocks = new ConcurrentDictionary<int, int>();
         var completedOperations = 0;
         var barrier = new Barrier(threadCount);
@@ -1549,7 +1586,7 @@ public class BlockAllocatorThreadSafetyTests
         const int taskCount = 16;
         const int operationsPerTask = 500;
 
-        using var allocator = new BlockAllocator(sizeof(long), 64);
+        using var allocator = CreateBlockAllocator(sizeof(long), 64);
         var activeBlocks = new ConcurrentDictionary<int, long>();
         var errors = new ConcurrentBag<string>();
 
@@ -1606,7 +1643,7 @@ public class BlockAllocatorThreadSafetyTests
     {
         const int iterations = 10000;
 
-        using var allocator = new BlockAllocator(sizeof(int), 64);
+        using var allocator = CreateBlockAllocator(sizeof(int), 64);
 
         for (int i = 0; i < iterations; i++)
         {
@@ -1625,7 +1662,7 @@ public class BlockAllocatorThreadSafetyTests
         const int batchCount = 50;
         const int threadCount = 4;
 
-        using var allocator = new BlockAllocator(sizeof(long), 32);
+        using var allocator = CreateBlockAllocator(sizeof(long), 32);
         var allIds = new ConcurrentBag<int>();
         var barrier = new Barrier(threadCount);
 
@@ -1695,6 +1732,16 @@ public class BlockAllocatorThreadSafetyTests
 [TestFixture]
 public class TypedAllocatorThreadSafetyTests
 {
+    // Helper methods to create allocators with required DI dependencies
+    private static BlockAllocator CreateBlockAllocator(int stride, int entryCountPerPage)
+        => new(stride, entryCountPerPage, AllocatorTestServices.AllocationResource, AllocatorTestServices.MemoryAllocator);
+
+    private static UnmanagedStructAllocator<T> CreateUnmanagedStructAllocator<T>(int entryCountPerPage) where T : unmanaged
+        => new(entryCountPerPage, AllocatorTestServices.AllocationResource, AllocatorTestServices.MemoryAllocator);
+
+    private static StructAllocator<T> CreateStructAllocator<T>(int entryCountPerPage) where T : struct, ICleanable
+        => new(entryCountPerPage, AllocatorTestServices.AllocationResource, AllocatorTestServices.MemoryAllocator);
+
     public struct ThreadTestStruct
     {
         public long ThreadId;
@@ -1722,7 +1769,7 @@ public class TypedAllocatorThreadSafetyTests
         const int threadCount = 8;
         const int operationsPerThread = 200;
 
-        using var allocator = new UnmanagedStructAllocator<ThreadTestStruct>(64);
+        using var allocator = CreateUnmanagedStructAllocator<ThreadTestStruct>(64);
         var activeBlocks = new ConcurrentDictionary<int, (long threadId, long iteration)>();
         var errors = new ConcurrentBag<string>();
         var barrier = new Barrier(threadCount);
@@ -1785,7 +1832,7 @@ public class TypedAllocatorThreadSafetyTests
         const int threadCount = 4;
         const int operationsPerThread = 100;
 
-        using var allocator = new StructAllocator<CleanableThreadTestStruct>(64);
+        using var allocator = CreateStructAllocator<CleanableThreadTestStruct>(64);
         var activeBlocks = new ConcurrentDictionary<int, (long threadId, long iteration)>();
         var barrier = new Barrier(threadCount);
 
@@ -1878,9 +1925,9 @@ public class TypedAllocatorThreadSafetyTests
         const int threadCount = 12;
         const int operationsPerThread = 300;
 
-        using var blockAllocator = new BlockAllocator(sizeof(long), 32);
-        using var unmanagedAllocator = new UnmanagedStructAllocator<ThreadTestStruct>(32);
-        using var structAllocator = new StructAllocator<CleanableThreadTestStruct>(32);
+        using var blockAllocator = CreateBlockAllocator(sizeof(long), 32);
+        using var unmanagedAllocator = CreateUnmanagedStructAllocator<ThreadTestStruct>(32);
+        using var structAllocator = CreateStructAllocator<CleanableThreadTestStruct>(32);
 
         var completedOperations = 0;
         var barrier = new Barrier(threadCount);

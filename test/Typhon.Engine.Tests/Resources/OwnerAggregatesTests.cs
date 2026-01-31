@@ -68,15 +68,9 @@ class OwnerAggregatesTests : TestBase<OwnerAggregatesTests>
             ContentionTimeoutCount = timeoutCount;
         }
 
-        public void WriteThroughput(string name, long count)
-        {
-            ThroughputCounters.Add((name, count));
-        }
+        public void WriteThroughput(string name, long count) => ThroughputCounters.Add((name, count));
 
-        public void WriteDuration(string name, long lastUs, long avgUs, long maxUs)
-        {
-            DurationMetrics.Add((name, lastUs, avgUs, maxUs));
-        }
+        public void WriteDuration(string name, long lastUs, long avgUs, long maxUs) => DurationMetrics.Add((name, lastUs, avgUs, maxUs));
 
         public void Reset()
         {

@@ -15,7 +15,8 @@ public unsafe class StructAllocator<T> : BlockAllocatorBase where T : struct, IC
         FreeBlockInternal(blockId);
     }
 
-    public StructAllocator(int entryCountPerPage) : base(Unsafe.SizeOf<T>(), entryCountPerPage)
+    public StructAllocator(int entryCountPerPage, IResource parent, IMemoryAllocator memoryAllocator)
+        : base(Unsafe.SizeOf<T>(), entryCountPerPage, parent, memoryAllocator)
     {
     }
 }

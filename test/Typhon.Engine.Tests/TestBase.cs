@@ -250,6 +250,11 @@ abstract class TestBase<T> : TestBase
     protected ServiceCollection ServiceCollection;
     protected ILogger<T> Logger;
 
+    // Convenience accessors for DI-provided resources
+    protected IResourceRegistry ResourceRegistry => ServiceProvider.GetRequiredService<IResourceRegistry>();
+    protected IMemoryAllocator MemoryAllocator => ServiceProvider.GetRequiredService<IMemoryAllocator>();
+    protected IResource AllocationResource => ResourceRegistry.Allocation;
+
     [SetUp]
     public virtual void Setup()
     {
@@ -288,6 +293,8 @@ abstract class TestBase<T> : TestBase
                 });
                 builder.SetMinimumLevel(LogLevel.Information);
             })
+            .AddResourceRegistry()
+            .AddMemoryAllocator()
             .AddScopedManagedPagedMemoryMappedFile(options =>
             {
                 options.DatabaseName = CurrentDatabaseName;
