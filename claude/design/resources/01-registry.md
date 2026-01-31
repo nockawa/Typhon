@@ -930,7 +930,11 @@ public class ResourceInspector
 ```csharp
 public interface IDebugPropertiesProvider
 {
-    Dictionary<string, Func<object>> DebugProperties { get; }
+    /// <summary>
+    /// Returns debug properties for diagnostic inspection.
+    /// Called infrequently (debugging, snapshots) — not on hot path.
+    /// </summary>
+    IReadOnlyDictionary<string, object> GetDebugProperties();
 }
 
 public static class ResourceExtensions
@@ -963,16 +967,16 @@ public static class ResourceExtensions
         // Add debug properties if available
         if (resource is IDebugPropertiesProvider provider)
         {
-            foreach (var (key, getter) in provider.DebugProperties)
+            try
             {
-                try
+                foreach (var (key, value) in provider.GetDebugProperties())
                 {
-                    properties[key] = getter();
+                    properties[key] = value;
                 }
-                catch (Exception ex)
-                {
-                    properties[key] = $"<error: {ex.Message}>";
-                }
+            }
+            catch (Exception ex)
+            {
+                properties["_debugPropertiesError"] = ex.Message;
             }
         }
 
@@ -988,13 +992,16 @@ public static class ResourceExtensions
 // Usage in a resource:
 public class ComponentTable : IResource, IDebugPropertiesProvider
 {
-    public Dictionary<string, Func<object>> DebugProperties => new()
+    public IReadOnlyDictionary<string, object> GetDebugProperties()
     {
-        ["EntityCount"] = () => _primaryKeyIndex.Count,
-        ["RevisionCount"] = () => _revisionSegment.AllocatedChunks,
-        ["IndexCount"] = () => _secondaryIndexes.Count,
-        ["SegmentPageCount"] = () => _componentSegment.PageCount
-    };
+        return new Dictionary<string, object>
+        {
+            ["EntityCount"] = _primaryKeyIndex.Count,
+            ["RevisionCount"] = _revisionSegment.AllocatedChunks,
+            ["IndexCount"] = _secondaryIndexes.Count,
+            ["SegmentPageCount"] = _componentSegment.PageCount
+        };
+    }
 }
 ```
 
@@ -1283,12 +1290,15 @@ _componentSegment = new ChunkBasedSegment(
 ```csharp
 public class ComponentTable : IResource, IDebugPropertiesProvider
 {
-    public Dictionary<string, Func<object>> DebugProperties => new()
+    public IReadOnlyDictionary<string, object> GetDebugProperties()
     {
-        ["EntityCount"] = () => _primaryKeyIndex.Count,
-        ["RevisionCount"] = () => _revisionSegment.AllocatedChunks,
-        ["MemoryUsageMB"] = () => EstimateMemoryUsage() / (1024.0 * 1024.0)
-    };
+        return new Dictionary<string, object>
+        {
+            ["EntityCount"] = _primaryKeyIndex.Count,
+            ["RevisionCount"] = _revisionSegment.AllocatedChunks,
+            ["MemoryUsageMB"] = EstimateMemoryUsage() / (1024.0 * 1024.0)
+        };
+    }
 }
 ```
 

@@ -1,8 +1,8 @@
 ﻿using JetBrains.Annotations;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Numerics;
+using System.Threading;
 
 namespace Typhon.Engine;
 
@@ -69,9 +69,15 @@ public abstract class ServiceBase : IResource
 }
 
 [PublicAPI]
-public class MemoryAllocator : ServiceBase, IMemoryAllocator
+public class MemoryAllocator : ServiceBase, IMemoryAllocator, IMetricSource, IDebugPropertiesProvider
 {
     private ConcurrentCollection<MemoryBlockBase> _blocks;
+
+    // Allocation tracking
+    private long _totalAllocatedBytes;
+    private long _peakAllocatedBytes;
+    private long _cumulativeAllocations;
+    private long _cumulativeDeallocations;
 
     public MemoryAllocator(IResourceRegistry resourceRegistry, MemoryAllocatorOptions options) :
         base(options?.Name ?? "DefaultMemoryAllocator", resourceRegistry, ResourceSubsystem.Allocation)
@@ -94,6 +100,15 @@ public class MemoryAllocator : ServiceBase, IMemoryAllocator
 
         var mb = new MemoryBlockArray(this, block, id, parent);
         _blocks.Add(mb);
+
+        // Update allocation tracking
+        var newTotal = Interlocked.Add(ref _totalAllocatedBytes, size);
+        if (newTotal > _peakAllocatedBytes)
+        {
+            _peakAllocatedBytes = newTotal;
+        }
+        Interlocked.Increment(ref _cumulativeAllocations);
+
         return mb;
     }
     
@@ -113,14 +128,87 @@ public class MemoryAllocator : ServiceBase, IMemoryAllocator
         {
             throw new ArgumentException("Alignment must be a power of 2", nameof(alignment));
         }
-        
+
         var unalignedSize = size + (alignment - 1);
         var block = zeroed ? GC.AllocateArray<byte>(unalignedSize, true) : GC.AllocateUninitializedArray<byte>(unalignedSize, true);
-        
+
         var mb = new PinnedMemoryBlock(this, block, size, alignment, id, parent);
         _blocks.Add(mb);
+
+        // Update allocation tracking
+        var newTotal = Interlocked.Add(ref _totalAllocatedBytes, size);
+        if (newTotal > _peakAllocatedBytes)
+        {
+            _peakAllocatedBytes = newTotal;
+        }
+        Interlocked.Increment(ref _cumulativeAllocations);
+
         return mb;
     }
     
-    internal void Remove(MemoryBlockBase block) => _blocks.Remove(block);
+    internal void Remove(MemoryBlockBase block)
+    {
+        Interlocked.Add(ref _totalAllocatedBytes, -block.Size);
+        Interlocked.Increment(ref _cumulativeDeallocations);
+        _blocks.Remove(block);
+    }
+
+    /// <inheritdoc />
+    public void ReadMetrics(IMetricWriter writer)
+    {
+        // Memory: total bytes across all blocks
+        writer.WriteMemory(_totalAllocatedBytes, _peakAllocatedBytes);
+
+        // Capacity: active block count (no hard limit)
+        long blockCount = _blocks.Count;
+        writer.WriteCapacity(blockCount, long.MaxValue);
+
+        // Throughput: allocation lifecycle
+        writer.WriteThroughput("Allocations", _cumulativeAllocations);
+        writer.WriteThroughput("Deallocations", _cumulativeDeallocations);
+    }
+
+    /// <inheritdoc />
+    public void ResetPeaks() => _peakAllocatedBytes = _totalAllocatedBytes;
+
+    /// <inheritdoc />
+    public IReadOnlyDictionary<string, object> GetDebugProperties()
+    {
+        var blocks = _blocks.ToArray(); // Snapshot for consistency
+
+        long arrayBlocks = 0, pinnedBlocks = 0;
+        long arrayBytes = 0, pinnedBytes = 0;
+
+        foreach (var block in blocks)
+        {
+            if (block is MemoryBlockArray)
+            {
+                arrayBlocks++;
+                arrayBytes += block.Size;
+            }
+            else if (block is PinnedMemoryBlock)
+            {
+                pinnedBlocks++;
+                pinnedBytes += block.Size;
+            }
+        }
+
+        return new Dictionary<string, object>
+        {
+            // Overall stats
+            ["Blocks.Total"] = blocks.Length,
+            ["Bytes.Total"] = _totalAllocatedBytes,
+            ["Bytes.Peak"] = _peakAllocatedBytes,
+
+            // By type breakdown
+            ["ArrayBlocks.Count"] = arrayBlocks,
+            ["ArrayBlocks.Bytes"] = arrayBytes,
+            ["PinnedBlocks.Count"] = pinnedBlocks,
+            ["PinnedBlocks.Bytes"] = pinnedBytes,
+
+            // Lifecycle counters
+            ["Cumulative.Allocations"] = _cumulativeAllocations,
+            ["Cumulative.Deallocations"] = _cumulativeDeallocations,
+        };
+    }
 }

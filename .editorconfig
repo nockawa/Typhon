@@ -158,6 +158,42 @@ csharp_space_between_square_brackets = false
 csharp_preserve_single_line_blocks = true
 csharp_preserve_single_line_statements = true
 
+#### Line Length and Wrapping ####
+
+# Maximum line length (Rider/ReSharper)
+max_line_length = 160
+resharper_max_line_length = 160
+resharper_wrap_lines = true
+
+# Method/constructor parameters — wrap if line exceeds max
+resharper_csharp_wrap_parameters_style = chop_if_long
+resharper_csharp_wrap_before_declaration_lpar = false
+resharper_csharp_wrap_after_declaration_lpar = true
+resharper_csharp_wrap_before_declaration_rpar = false
+
+# Method call arguments — wrap if line exceeds max
+resharper_csharp_wrap_arguments_style = chop_if_long
+resharper_csharp_wrap_before_invocation_lpar = false
+resharper_csharp_wrap_after_invocation_lpar = true
+resharper_csharp_wrap_before_invocation_rpar = false
+
+# Chained method calls — wrap before dot if long
+resharper_csharp_wrap_chained_method_calls = chop_if_long
+resharper_csharp_wrap_before_first_method_call = false
+resharper_csharp_wrap_after_dot_in_method_calls = false
+
+# Binary expressions (long conditions) — wrap if long
+resharper_csharp_wrap_before_binary_opsign = true
+resharper_csharp_wrap_chained_binary_expressions = chop_if_long
+
+# Array/collection initializers — wrap if long
+resharper_csharp_wrap_array_initializer_style = chop_if_long
+
+# Extends/implements lists — wrap if long
+resharper_csharp_wrap_extends_list_style = chop_if_long
+resharper_csharp_wrap_before_extends_colon = false
+resharper_csharp_wrap_after_extends_colon = true
+
 #### Naming styles ####
 
 # Naming rules
