@@ -25,7 +25,7 @@ namespace Typhon.Engine;
 /// - Resize creates a new state with recounted TotalBitSet, then atomically swaps
 /// - TotalBitSet is always exact: each state owns its counter, orphaned states don't matter
 /// </summary>
-public unsafe class ConcurrentBitmapL3All : IResource
+public unsafe class ConcurrentBitmapL3All : IResource, IMetricSource, IDebugPropertiesProvider
 {
     private Bank[] _banks;
     private readonly int _l0Size;
@@ -33,6 +33,12 @@ public unsafe class ConcurrentBitmapL3All : IResource
     private readonly int _l2Size;
     private readonly int _l0Shift;
     private readonly int _indexInBankMask;
+
+    // Operation counters (use plain ++ per §7.3 - hot path, accept occasional misses)
+    private long _setL0Count;
+    private long _clearL0Count;
+    private long _setL1Count;
+    private long _growCount;
 
     private class Bank : IDisposable
     {
@@ -113,7 +119,11 @@ public unsafe class ConcurrentBitmapL3All : IResource
         Array.Copy(banks, newBanks, banks.Length);
         newBanks[banks.Length] = new Bank(this, banks.Length);
 
-        if (Interlocked.CompareExchange(ref _banks, newBanks, banks) != banks)
+        if (Interlocked.CompareExchange(ref _banks, newBanks, banks) == banks)
+        {
+            _growCount++; // Plain ++ - rare operation, no contention
+        }
+        else
         {
             // CAS failed - another thread already grew the array
             // Dispose the bank we created to avoid leaking memory
@@ -201,6 +211,7 @@ public unsafe class ConcurrentBitmapL3All : IResource
 
         // State unchanged - increment counter
         Interlocked.Increment(ref bank.TotalBitSet);
+        _setL0Count++; // Plain ++ - hot path, accept occasional misses
 
         return true;
     }
@@ -262,6 +273,8 @@ public unsafe class ConcurrentBitmapL3All : IResource
 
         // State unchanged - increment counter
         Interlocked.Add(ref bank.TotalBitSet, 64);
+        _setL1Count++; // Plain ++ - hot path, accept occasional misses
+
         return true;
     }
 
@@ -324,6 +337,7 @@ public unsafe class ConcurrentBitmapL3All : IResource
 
         // Decrement THIS state's counter
         Interlocked.Decrement(ref bank.TotalBitSet);
+        _clearL0Count++; // Plain ++ - hot path, accept occasional misses
 
         return true;
     }
@@ -527,4 +541,59 @@ public unsafe class ConcurrentBitmapL3All : IResource
     public bool RegisterChild(IResource child) => false;
 
     public bool RemoveChild(IResource resource) => false;
+
+    /// <inheritdoc />
+    public void ReadMetrics(IMetricWriter writer)
+    {
+        // Capacity: bits set vs total capacity
+        writer.WriteCapacity(TotalBitSet, Capacity);
+
+        // Throughput: bitmap operations
+        writer.WriteThroughput("SetL0", _setL0Count);
+        writer.WriteThroughput("ClearL0", _clearL0Count);
+        writer.WriteThroughput("SetL1", _setL1Count);
+        writer.WriteThroughput("Grows", _growCount);
+    }
+
+    /// <inheritdoc />
+    public void ResetPeaks()
+    {
+        // No high-water marks to reset
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyDictionary<string, object> GetDebugProperties()
+    {
+        var banks = _banks;
+        var props = new Dictionary<string, object>
+        {
+            // Overall stats
+            ["Banks.Count"] = banks?.Length ?? 0,
+            ["Capacity.Total"] = Capacity,
+            ["Capacity.Used"] = TotalBitSet,
+            ["Capacity.Utilization"] = Capacity > 0 ? (double)TotalBitSet / Capacity : 0.0,
+            ["IsFull"] = IsFull,
+
+            // Per-bank capacity
+            ["BankBitCountCapacity"] = BankBitCountCapacity,
+
+            // Operation counters
+            ["Operations.SetL0"] = _setL0Count,
+            ["Operations.ClearL0"] = _clearL0Count,
+            ["Operations.SetL1"] = _setL1Count,
+            ["Operations.Grows"] = _growCount,
+        };
+
+        // Per-bank breakdown (if not too many banks)
+        if (banks != null && banks.Length <= 8)
+        {
+            for (int i = 0; i < banks.Length; i++)
+            {
+                props[$"Bank[{i}].TotalBitSet"] = banks[i].TotalBitSet;
+                props[$"Bank[{i}].IsFull"] = banks[i].IsFull;
+            }
+        }
+
+        return props;
+    }
 }
