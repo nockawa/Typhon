@@ -18,7 +18,7 @@ public static class ResourceExtensions
     /// <returns>Ancestors from parent to root (nearest first).</returns>
     public static IEnumerable<IResource> GetAncestors(this IResource resource)
     {
-        if (resource == null) throw new ArgumentNullException(nameof(resource));
+        ArgumentNullException.ThrowIfNull(resource);
 
         var current = resource.Parent;
         while (current != null)
@@ -35,7 +35,7 @@ public static class ResourceExtensions
     /// <returns>All descendants (children, grandchildren, etc.).</returns>
     public static IEnumerable<IResource> GetDescendants(this IResource resource)
     {
-        if (resource == null) throw new ArgumentNullException(nameof(resource));
+        ArgumentNullException.ThrowIfNull(resource);
 
         foreach (var child in resource.Children)
         {
@@ -55,7 +55,7 @@ public static class ResourceExtensions
     /// <returns>Full path string (e.g., "Root/DataEngine/DatabaseEngine_abc123").</returns>
     public static string GetPath(this IResource resource, string separator = "/")
     {
-        if (resource == null) throw new ArgumentNullException(nameof(resource));
+        ArgumentNullException.ThrowIfNull(resource);
 
         var ancestors = resource.GetAncestors().Reverse().ToList();
         ancestors.Add(resource);
@@ -71,16 +71,24 @@ public static class ResourceExtensions
     /// <returns>The resource at the path, or null if not found.</returns>
     public static IResource FindByPath(this IResource resource, string path, string separator = "/")
     {
-        if (resource == null) throw new ArgumentNullException(nameof(resource));
-        if (string.IsNullOrEmpty(path)) return resource;
+        ArgumentNullException.ThrowIfNull(resource);
 
-        var parts = path.Split(new[] { separator }, StringSplitOptions.RemoveEmptyEntries);
+        if (string.IsNullOrEmpty(path))
+        {
+            return resource;
+        }
+
+        var parts = path.Split([separator], StringSplitOptions.RemoveEmptyEntries);
         var current = resource;
 
         foreach (var part in parts)
         {
             var child = current.Children.FirstOrDefault(c => c.Id == part);
-            if (child == null) return null;
+            if (child == null)
+            {
+                return null;
+            }
+
             current = child;
         }
 
@@ -95,8 +103,9 @@ public static class ResourceExtensions
     /// <returns>All matching descendants.</returns>
     public static IEnumerable<IResource> FindAll(this IResource resource, Func<IResource, bool> predicate)
     {
-        if (resource == null) throw new ArgumentNullException(nameof(resource));
-        if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+        ArgumentNullException.ThrowIfNull(resource);
+
+        ArgumentNullException.ThrowIfNull(predicate);
 
         return resource.GetDescendants().Where(predicate);
     }
@@ -109,8 +118,9 @@ public static class ResourceExtensions
     /// <returns>First matching descendant, or null if none found.</returns>
     public static IResource FindFirst(this IResource resource, Func<IResource, bool> predicate)
     {
-        if (resource == null) throw new ArgumentNullException(nameof(resource));
-        if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+        ArgumentNullException.ThrowIfNull(resource);
+
+        ArgumentNullException.ThrowIfNull(predicate);
 
         return resource.GetDescendants().FirstOrDefault(predicate);
     }
@@ -122,7 +132,7 @@ public static class ResourceExtensions
     /// <returns>Depth from root.</returns>
     public static int GetDepth(this IResource resource)
     {
-        if (resource == null) throw new ArgumentNullException(nameof(resource));
+        ArgumentNullException.ThrowIfNull(resource);
 
         int depth = 0;
         var current = resource.Parent;
@@ -142,8 +152,9 @@ public static class ResourceExtensions
     /// <returns>True if this resource is an ancestor of other.</returns>
     public static bool IsAncestorOf(this IResource resource, IResource other)
     {
-        if (resource == null) throw new ArgumentNullException(nameof(resource));
-        if (other == null) throw new ArgumentNullException(nameof(other));
+        ArgumentNullException.ThrowIfNull(resource);
+
+        ArgumentNullException.ThrowIfNull(other);
 
         return other.GetAncestors().Any(a => ReferenceEquals(a, resource));
     }
@@ -156,8 +167,9 @@ public static class ResourceExtensions
     /// <returns>True if this resource is a descendant of other.</returns>
     public static bool IsDescendantOf(this IResource resource, IResource other)
     {
-        if (resource == null) throw new ArgumentNullException(nameof(resource));
-        if (other == null) throw new ArgumentNullException(nameof(other));
+        ArgumentNullException.ThrowIfNull(resource);
+
+        ArgumentNullException.ThrowIfNull(other);
 
         return resource.GetAncestors().Any(a => ReferenceEquals(a, other));
     }
@@ -169,8 +181,44 @@ public static class ResourceExtensions
     /// <returns>Total number of descendants.</returns>
     public static int GetDescendantCount(this IResource resource)
     {
-        if (resource == null) throw new ArgumentNullException(nameof(resource));
+        ArgumentNullException.ThrowIfNull(resource);
 
         return resource.GetDescendants().Count();
+    }
+
+    /// <summary>
+    /// Finds all metric sources in the subtree rooted at this resource.
+    /// </summary>
+    /// <param name="resource">The starting resource.</param>
+    /// <returns>All <see cref="IMetricSource"/> implementations in the subtree, including self if applicable.</returns>
+    /// <remarks>
+    /// <para>
+    /// Uses runtime <c>is</c> checks during depth-first traversal to discover metric sources.
+    /// This approach is acceptable because:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>Snapshots are taken every 1-5 seconds, not on the hot path</description></item>
+    /// <item><description>Tree walk is already required for path building and hierarchy</description></item>
+    /// <item><description>For 100 nodes: ~1.5μs per snapshot — negligible overhead</description></item>
+    /// </list>
+    /// </remarks>
+    public static IEnumerable<IMetricSource> GetMetricSources(this IResource resource)
+    {
+        ArgumentNullException.ThrowIfNull(resource);
+
+        // Check self
+        if (resource is IMetricSource source)
+        {
+            yield return source;
+        }
+
+        // Recurse into children
+        foreach (var child in resource.Children)
+        {
+            foreach (var childSource in child.GetMetricSources())
+            {
+                yield return childSource;
+            }
+        }
     }
 }

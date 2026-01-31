@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 using Typhon.Engine.BPTree;
 
 namespace Typhon.Engine;
@@ -143,7 +144,7 @@ public enum ComponentTableFlags
 /// </para>
 /// </remarks>
 [PublicAPI]
-public unsafe class ComponentTable : IDisposable, IResource
+public unsafe class ComponentTable : IResource, IMetricSource, IContentionTarget, IDebugPropertiesProvider
 {
     private const int ComponentSegmentStartingSize = 4;
     private const int MainIndexSegmentStartingSize = 4;
@@ -180,6 +181,11 @@ public unsafe class ComponentTable : IDisposable, IResource
 
     private ComponentTableFlags _flags;
 
+    // Contention tracking (aggregated from all latches)
+    private long _contentionWaitCount;
+    private long _contentionTotalWaitUs;
+    private long _contentionMaxWaitUs;
+
     #region IResource Implementation
 
     /// <inheritdoc />
@@ -205,6 +211,107 @@ public unsafe class ComponentTable : IDisposable, IResource
 
     /// <inheritdoc />
     public bool RemoveChild(IResource resource) => false;  // No children allowed
+
+    #endregion
+
+    #region IContentionTarget Implementation
+
+    /// <inheritdoc />
+    public TelemetryLevel TelemetryLevel => TelemetryLevel.Light;
+
+    /// <inheritdoc />
+    public IResource OwningResource => this;
+
+    /// <inheritdoc />
+    public void RecordContention(long waitUs)
+    {
+        Interlocked.Increment(ref _contentionWaitCount);
+        Interlocked.Add(ref _contentionTotalWaitUs, waitUs);
+
+        // Plain check-and-write for high-water mark (occasional lost max is acceptable)
+        if (waitUs > _contentionMaxWaitUs)
+            _contentionMaxWaitUs = waitUs;
+    }
+
+    /// <inheritdoc />
+    public void LogLockOperation(LockOperation operation, long durationUs)
+    {
+        // Light mode only - no operation logging
+    }
+
+    #endregion
+
+    #region IMetricSource Implementation
+
+    /// <inheritdoc />
+    public void ReadMetrics(IMetricWriter writer)
+    {
+        // Aggregate capacity from all segments
+        long totalAllocatedChunks =
+            ComponentSegment.AllocatedChunkCount +
+            CompRevTableSegment.AllocatedChunkCount +
+            DefaultIndexSegment.AllocatedChunkCount +
+            (String64IndexSegment?.AllocatedChunkCount ?? 0);
+
+        long totalCapacityChunks =
+            ComponentSegment.ChunkCapacity +
+            CompRevTableSegment.ChunkCapacity +
+            DefaultIndexSegment.ChunkCapacity +
+            (String64IndexSegment?.ChunkCapacity ?? 0);
+
+        writer.WriteCapacity(totalAllocatedChunks, totalCapacityChunks);
+
+        // Report contention from latches
+        writer.WriteContention(
+            _contentionWaitCount,
+            _contentionTotalWaitUs,
+            _contentionMaxWaitUs,
+            0);  // No timeout tracking yet
+    }
+
+    /// <inheritdoc />
+    public void ResetPeaks()
+    {
+        _contentionMaxWaitUs = 0;
+    }
+
+    #endregion
+
+    #region IDebugPropertiesProvider Implementation
+
+    /// <inheritdoc />
+    public IReadOnlyDictionary<string, object> GetDebugProperties()
+    {
+        var props = new Dictionary<string, object>
+        {
+            // ComponentSegment breakdown
+            ["ComponentSegment.AllocatedChunks"] = ComponentSegment.AllocatedChunkCount,
+            ["ComponentSegment.Capacity"] = ComponentSegment.ChunkCapacity,
+            ["ComponentSegment.ChunkSize"] = ComponentTotalSize,
+
+            // CompRevTableSegment breakdown
+            ["CompRevTableSegment.AllocatedChunks"] = CompRevTableSegment.AllocatedChunkCount,
+            ["CompRevTableSegment.Capacity"] = CompRevTableSegment.ChunkCapacity,
+
+            // DefaultIndexSegment breakdown
+            ["DefaultIndexSegment.AllocatedChunks"] = DefaultIndexSegment.AllocatedChunkCount,
+            ["DefaultIndexSegment.Capacity"] = DefaultIndexSegment.ChunkCapacity,
+
+            // Contention details
+            ["Contention.WaitCount"] = _contentionWaitCount,
+            ["Contention.TotalWaitUs"] = _contentionTotalWaitUs,
+            ["Contention.MaxWaitUs"] = _contentionMaxWaitUs,
+        };
+
+        // String64IndexSegment (may be null if no String64 indexes)
+        if (String64IndexSegment != null)
+        {
+            props["String64IndexSegment.AllocatedChunks"] = String64IndexSegment.AllocatedChunkCount;
+            props["String64IndexSegment.Capacity"] = String64IndexSegment.ChunkCapacity;
+        }
+
+        return props;
+    }
 
     #endregion
     

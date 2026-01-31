@@ -17,9 +17,18 @@ internal class TransactionChain : IDisposable
     internal long MinTSN { get; private set; }
     internal long NextFreeId => _nextFreeId;
 
+    /// <summary>
+    /// Gets the count of active transactions in the chain.
+    /// </summary>
+    /// <remarks>
+    /// Maintained via atomic increment/decrement in PushHead/Remove for O(1) access.
+    /// </remarks>
+    internal int ActiveCount => _activeCount;
+
     private AccessControl _control;
     private readonly Queue<Transaction> _pool;
     private long _nextFreeId;
+    private int _activeCount;
     
     public TransactionChain()
     {
@@ -36,6 +45,7 @@ internal class TransactionChain : IDisposable
     // Under lock of the caller
     public void PushHead(Transaction transaction)
     {
+        Interlocked.Increment(ref _activeCount);
         var curHead = Head;
         Head = transaction;
         transaction.Next = curHead;
@@ -68,6 +78,7 @@ internal class TransactionChain : IDisposable
     public void Remove(Transaction transaction)
     {
         _control.EnterExclusiveAccess(ref WaitContext.Null);
+        Interlocked.Decrement(ref _activeCount);
 
         if (transaction.Next != null)
         {
