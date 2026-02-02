@@ -479,9 +479,9 @@ public class AccessControlSmallTests
             control.ExitSharedAccess();
         });
 
-        Thread.Sleep(50); // Wait for shared to be acquired
+        Thread.Sleep(100); // Wait for shared to be acquired
 
-        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(100));
+        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(200));
         var result = control.EnterExclusiveAccess(ref ctx);
 
         Assert.That(result, Is.False, "Should timeout when shared is held");

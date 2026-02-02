@@ -1068,6 +1068,8 @@ class TransactionTests : TestBase<TransactionTests>
         tw.AddStage(stage0, thread1, _ =>
         {
             // ReSharper disable once AccessToDisposedClosure
+            t2?.Dispose();
+            // ReSharper disable once AccessToDisposedClosure
             t2 = dbe.CreateTransaction();
             Logger.LogInformation("T2 creation time {tick}", t2.TSN);
         });
@@ -1097,7 +1099,7 @@ class TransactionTests : TestBase<TransactionTests>
         });
         
         tw.Run();
-        
+        t2?.Dispose();
         dbe.Dispose();
     }
     

@@ -2,6 +2,105 @@
 
 Custom Roslyn analyzers for the Typhon database engine project.
 
+## Analyzer Summary
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| TYPHON001 | Error | ChunkAccessor parameters must use `ref` modifier |
+| TYPHON002 | Error | ChunkAccessor field usage in unsafe methods |
+| TYPHON003 | Error | ChunkAccessor must not be copied |
+| TYPHON004 | Error | IDisposable result must be disposed |
+
+---
+
+## DisposableNotDisposedAnalyzer (TYPHON004)
+
+**Severity:** Error
+
+**Description:** Detects IDisposable instances returned from method calls that are not properly disposed.
+
+### Why This Rule Exists
+
+Failing to dispose IDisposable resources causes resource leaks. In Typhon, this is especially critical:
+
+| Type | Consequence if not disposed |
+|------|----------------------------|
+| `ChunkAccessor` | **Page cache deadlock** - pages remain in Shared state indefinitely |
+| `Transaction` | **Data corruption** - uncommitted changes leak, resource exhaustion |
+| `PageAccessor` | **Page lock leak** - pages cannot be evicted |
+
+This analyzer addresses limitations in CA2000 which lacks inter-procedural analysis, misses tuple returns, and ignores exception flow paths.
+
+### Detected Patterns
+
+```csharp
+// ❌ ERROR TYPHON004 - Discarded result
+CreateTransaction();
+
+// ❌ ERROR TYPHON004 - Explicitly discarded
+_ = CreateTransaction();
+
+// ❌ ERROR TYPHON004 - Variable never disposed
+var t = CreateTransaction();
+t.DoWork();
+// end of method without dispose
+
+// ❌ ERROR TYPHON004 - Reassignment without disposing first
+var t = CreateTransaction();
+t = CreateTransaction();  // First value leaked!
+t.Dispose();
+```
+
+### Correct Usage
+
+```csharp
+// ✅ CORRECT - Using declaration (preferred)
+using var t = CreateTransaction();
+t.DoWork();
+// Automatically disposed at end of scope
+
+// ✅ CORRECT - Using statement
+using (var t = CreateTransaction())
+{
+    t.DoWork();
+}
+
+// ✅ CORRECT - Explicit Dispose() call
+var t = CreateTransaction();
+try
+{
+    t.DoWork();
+}
+finally
+{
+    t.Dispose();
+}
+
+// ✅ CORRECT - Return transfers ownership to caller
+public Transaction CreateAndReturn()
+{
+    return CreateTransaction();
+}
+
+// ✅ CORRECT - Field assignment transfers ownership
+private Transaction _transaction;
+public void Initialize()
+{
+    _transaction = CreateTransaction();
+}
+```
+
+### Code Fix
+
+The analyzer includes automatic code fixes. In Visual Studio or Rider:
+1. Place cursor on the error
+2. Press `Ctrl+.` (or `Alt+Enter` in Rider)
+3. Select one of:
+   - **"Add 'using' declaration"** - Converts `var x = Method();` to `using var x = Method();`
+   - **"Add Dispose() call"** - Adds `x.Dispose();` at end of the containing block
+
+---
+
 ## ChunkAccessorRefAnalyzer (TYPHON001)
 
 **Severity:** Error
@@ -60,13 +159,60 @@ The analyzer includes an automatic code fix that adds or replaces with the `ref`
 2. Press `Ctrl+.` (or `Alt+Enter` in Rider)
 3. Select "Add 'ref' modifier" or "Replace 'in' with 'ref'"
 
+---
+
+## ChunkAccessorFieldAnalyzer (TYPHON002)
+
+**Severity:** Error
+
+**Description:** Detects usage of ChunkAccessor fields within methods marked as unsafe.
+
+---
+
+## ChunkAccessorCopyAnalyzer (TYPHON003)
+
+**Severity:** Error
+
+**Description:** Detects copying of ChunkAccessor instances, which defeats its zero-allocation design and creates unexpected behavior due to duplicated internal state.
+
+### Why This Rule Exists
+
+ChunkAccessor is a large ~1KB struct designed for zero-allocation. Copying it:
+- Creates expensive ~1KB stack copies
+- Duplicates internal state (cache, pins, etc.)
+- Can lead to double-dispose or inconsistent state
+
+The only valid creation is via `ChunkBasedSegment.CreateChunkAccessor()`.
+
+### Incorrect Usage
+
+```csharp
+// ❌ ERROR TYPHON003 - Copying via assignment
+var copy = existingAccessor;
+
+// ❌ ERROR TYPHON003 - Copying via return
+return existingAccessor;
+```
+
+### Correct Usage
+
+```csharp
+// ✅ CORRECT - Create new accessor
+using var accessor = segment.CreateChunkAccessor();
+
+// ✅ CORRECT - Pass by ref
+ProcessData(ref accessor);
+```
+
+---
+
 ## Adding to Other Projects
 
-To enable this analyzer in additional projects, add to the `.csproj` file:
+To enable these analyzers in additional projects, add to the `.csproj` file:
 
 ```xml
 <ItemGroup>
-  <!-- Reference the Roslyn analyzer for ChunkAccessor enforcement -->
+  <!-- Reference the Roslyn analyzers for Typhon enforcement -->
   <ProjectReference Include="path\to\Typhon.Analyzers\Typhon.Analyzers.csproj"
                     ReferenceOutputAssembly="false"
                     OutputItemType="Analyzer" />
@@ -77,14 +223,6 @@ To enable this analyzer in additional projects, add to the `.csproj` file:
 
 - **Target Framework:** netstandard2.0 (compatible with all modern .NET versions)
 - **Dependencies:**
-  - Microsoft.CodeAnalysis.CSharp 4.8.0
-  - Microsoft.CodeAnalysis.CSharp.Workspaces 4.8.0
-  - Microsoft.CodeAnalysis.Analyzers 3.3.4
-
-## Future Analyzers
-
-This project can be extended with additional Typhon-specific analyzers:
-- Component blittability validation
-- Transaction disposal enforcement
-- MVCC pattern verification
-- And more...
+  - Microsoft.CodeAnalysis.CSharp 5.0.0
+  - Microsoft.CodeAnalysis.CSharp.Workspaces 5.0.0
+  - Microsoft.CodeAnalysis.Analyzers 3.11.0

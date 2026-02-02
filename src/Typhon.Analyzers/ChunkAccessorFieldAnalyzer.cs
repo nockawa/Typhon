@@ -1,10 +1,8 @@
 using System.Collections.Immutable;
-using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Diagnostics;
-using Microsoft.CodeAnalysis.Operations;
 
 namespace Typhon.Analyzers;
 
@@ -54,100 +52,58 @@ public class ChunkAccessorFieldAnalyzer : DiagnosticAnalyzer
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
         context.EnableConcurrentExecution();
 
-        // Analyze entire type declarations (class/struct) to check field usage
-        context.RegisterSymbolAction(AnalyzeNamedType, SymbolKind.NamedType);
+        // Analyze invocation expressions directly - the context provides the semantic model
+        context.RegisterSyntaxNodeAction(AnalyzeInvocation, SyntaxKind.InvocationExpression);
     }
 
-    private static void AnalyzeNamedType(SymbolAnalysisContext context)
+    private static void AnalyzeInvocation(SyntaxNodeAnalysisContext context)
     {
-        var namedType = (INamedTypeSymbol)context.Symbol;
+        var invocation = (InvocationExpressionSyntax)context.Node;
 
-        // Only analyze reference types (classes)
-        if (!namedType.IsReferenceType)
+        // Quick syntactic check before using semantic model
+        // GetChunkHandleUnsafe is always called via member access: field.GetChunkHandleUnsafe()
+        if (invocation.Expression is not MemberAccessExpressionSyntax memberAccess)
             return;
 
-        // Find all ChunkAccessor fields in this type
-        var chunkAccessorFields = namedType.GetMembers()
-            .OfType<IFieldSymbol>()
-            .Where(f => IsChunkAccessorType(f.Type))
-            .ToList();
-
-        if (chunkAccessorFields.Count == 0)
+        // Quick name check to avoid unnecessary semantic analysis
+        if (memberAccess.Name.Identifier.Text != "GetChunkHandleUnsafe")
             return;
 
-        // Get all method bodies in this type to search for GetChunkHandleUnsafe calls
-        var compilation = context.Compilation;
+        // Now use the semantic model provided by the context (no RS1030 violation)
+        var semanticModel = context.SemanticModel;
 
-        foreach (var syntaxRef in namedType.DeclaringSyntaxReferences)
-        {
-            var typeDecl = syntaxRef.GetSyntax(context.CancellationToken) as TypeDeclarationSyntax;
-            if (typeDecl == null)
-                continue;
+        // Verify this is actually ChunkAccessor.GetChunkHandleUnsafe()
+        var symbolInfo = semanticModel.GetSymbolInfo(invocation, context.CancellationToken);
+        if (symbolInfo.Symbol is not IMethodSymbol method)
+            return;
 
-            var semanticModel = compilation.GetSemanticModel(typeDecl.SyntaxTree);
+        if (!IsChunkAccessorType(method.ContainingType))
+            return;
 
-            // Search for all invocations in this type
-            var invocations = typeDecl.DescendantNodes()
-                .OfType<InvocationExpressionSyntax>();
+        // Check what GetChunkHandleUnsafe() is being called on
+        var targetInfo = semanticModel.GetSymbolInfo(memberAccess.Expression, context.CancellationToken);
 
-            foreach (var invocation in invocations)
-            {
-                // Check if this is a call to GetChunkHandleUnsafe()
-                if (!IsGetChunkHandleUnsafeCall(invocation, semanticModel))
-                    continue;
+        // We're looking for field access on a reference type (class)
+        if (targetInfo.Symbol is not IFieldSymbol field)
+            return;
 
-                // Check if it's called on one of our ChunkAccessor fields
-                var memberAccess = invocation.Expression as MemberAccessExpressionSyntax;
-                if (memberAccess == null)
-                    continue;
+        // Only flag if the field is in a reference type (class) - not structs
+        // Structs can be pinned or are on the stack, so the pointer is stable
+        if (!field.ContainingType.IsReferenceType)
+            return;
 
-                var symbolInfo = semanticModel.GetSymbolInfo(memberAccess.Expression, context.CancellationToken);
-                var fieldSymbol = symbolInfo.Symbol as IFieldSymbol;
+        // Verify the field type is ChunkAccessor
+        if (!IsChunkAccessorType(field.Type))
+            return;
 
-                if (fieldSymbol == null)
-                    continue;
+        // Found a violation: GetChunkHandleUnsafe() called on a ChunkAccessor field in a class
+        var diagnostic = Diagnostic.Create(
+            Rule,
+            invocation.GetLocation(),
+            field.Name,
+            field.ContainingType.Name);
 
-                // Check if this field is one of the ChunkAccessor fields we found
-                var matchingField = chunkAccessorFields.FirstOrDefault(f => SymbolEqualityComparer.Default.Equals(f, fieldSymbol));
-                if (matchingField != null)
-                {
-                    // Found a violation! Report it on the field declaration
-                    foreach (var fieldRef in matchingField.DeclaringSyntaxReferences)
-                    {
-                        var fieldDecl = fieldRef.GetSyntax(context.CancellationToken);
-
-                        // Get the specific variable declarator for this field
-                        var variableDeclarator = fieldDecl.AncestorsAndSelf()
-                            .OfType<VariableDeclaratorSyntax>()
-                            .FirstOrDefault();
-
-                        if (variableDeclarator != null)
-                        {
-                            var diagnostic = Diagnostic.Create(
-                                Rule,
-                                variableDeclarator.GetLocation(),
-                                matchingField.Name,
-                                namedType.Name);
-
-                            context.ReportDiagnostic(diagnostic);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private static bool IsGetChunkHandleUnsafeCall(InvocationExpressionSyntax invocation, SemanticModel semanticModel)
-    {
-        var symbolInfo = semanticModel.GetSymbolInfo(invocation);
-        var method = symbolInfo.Symbol as IMethodSymbol;
-
-        if (method == null)
-            return false;
-
-        // Check if the method is GetChunkHandleUnsafe on ChunkAccessor
-        return method.Name == "GetChunkHandleUnsafe" &&
-               IsChunkAccessorType(method.ContainingType);
+        context.ReportDiagnostic(diagnostic);
     }
 
     private static bool IsChunkAccessorType(ITypeSymbol typeSymbol)

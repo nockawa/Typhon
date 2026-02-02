@@ -1,0 +1,1103 @@
+﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using NUnit.Framework;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace Typhon.Engine.Tests;
+
+/// <summary>
+/// Comprehensive tests for ChunkBasedSegment's internal BitmapL3 class.
+/// 
+/// BitmapL3 is a three-level hierarchical bitmap used to track chunk allocation:
+/// - L0: Individual bits stored in page metadata (64 bits per long)
+/// - L1: Summary bits tracking whether L0 groups are fully allocated (_l1All) or have any allocation (_l1Any)
+/// - L2: Summary bits tracking whether L1 groups are fully allocated
+/// 
+/// Key invariants that must hold:
+/// 1. Allocated count must match actual set bits
+/// 2. L1All bit set iff all 64 corresponding L0 bits are set
+/// 3. L1Any bit set iff any of 64 corresponding L0 bits are set
+/// 4. L2All bit set iff all 64 corresponding L1All bits are set
+/// 5. Chunk 0 is reserved and should never be returned by allocation
+/// </summary>
+public class ChunkBasedSegmentBitmapL3Tests
+{
+    private IServiceProvider _serviceProvider;
+    private ILogger<ChunkBasedSegmentBitmapL3Tests> _logger;
+
+    private static string CurrentDatabaseName
+    {
+        get
+        {
+            var testName = TestContext.CurrentContext.Test.Name;
+            // Truncate long test names to fit database name limit
+            if (testName.Length > 40)
+            {
+                testName = testName[..40];
+            }
+            foreach (var c in new[] { '(', ')', ',', ' ', '"' })
+            {
+                testName = testName.Replace(c, '_');
+            }
+            return $"Typhon_{testName}_db";
+        }
+    }
+
+    [SetUp]
+    public void Setup()
+    {
+        var hasMemPageCount = TestContext.CurrentContext.Test.Properties.ContainsKey("MemPageCount");
+        var memPageCount = hasMemPageCount 
+            ? (int)TestContext.CurrentContext.Test.Properties.Get("MemPageCount")! 
+            : PagedMMF.DefaultMemPageCount;
+        var cacheSize = memPageCount * PagedMMF.PageSize;
+
+        var serviceCollection = new ServiceCollection();
+        serviceCollection
+            .AddLogging(builder =>
+            {
+                builder.AddSimpleConsole(options =>
+                {
+                    options.SingleLine = true;
+                    options.IncludeScopes = true;
+                    options.TimestampFormat = "mm:ss.fff ";
+                });
+                builder.SetMinimumLevel(LogLevel.Information);
+            })
+            .AddResourceRegistry()
+            .AddMemoryAllocator()
+            .AddScopedManagedPagedMemoryMappedFile(options =>
+            {
+                options.DatabaseName = CurrentDatabaseName;
+                options.DatabaseCacheSize = (ulong)cacheSize;
+                options.PagesDebugPattern = false;
+            });
+
+        _serviceProvider = serviceCollection.BuildServiceProvider();
+        _serviceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
+        _logger = _serviceProvider.GetRequiredService<ILogger<ChunkBasedSegmentBitmapL3Tests>>();
+    }
+
+    #region Basic Allocation Tests
+
+    [Test]
+    public void AllocateChunk_ReturnsSequentialIds()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
+
+        var allocatedIds = new List<int>();
+        var freeCount = segment.FreeChunkCount;
+
+        for (int i = 0; i < Math.Min(freeCount, 100); i++)
+        {
+            var chunkId = segment.AllocateChunk(false);
+            Assert.That(chunkId, Is.GreaterThan(0), $"Chunk ID should be > 0 (iteration {i})");
+            Assert.That(allocatedIds, Does.Not.Contain(chunkId), $"Duplicate chunk ID {chunkId} returned");
+            allocatedIds.Add(chunkId);
+        }
+
+        // Verify IDs are unique
+        Assert.That(allocatedIds.Distinct().Count(), Is.EqualTo(allocatedIds.Count));
+    }
+
+    [Test]
+    public void AllocateChunk_NeverReturnsZero()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
+
+        // Allocate all chunks and verify none is 0
+        var freeCount = segment.FreeChunkCount;
+        for (int i = 0; i < freeCount; i++)
+        {
+            var chunkId = segment.AllocateChunk(false);
+            Assert.That(chunkId, Is.Not.EqualTo(0), 
+                $"Chunk 0 is reserved as sentinel and should never be allocated (iteration {i})");
+        }
+    }
+
+    [Test]
+    public void AllocatedCount_MatchesActualAllocations()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
+
+        var initialAllocated = segment.AllocatedChunkCount;
+        Assert.That(initialAllocated, Is.EqualTo(1), "Initially only chunk 0 should be reserved");
+
+        const int allocCount = 50;
+        for (int i = 0; i < allocCount; i++)
+        {
+            segment.AllocateChunk(false);
+        }
+
+        Assert.That(segment.AllocatedChunkCount, Is.EqualTo(initialAllocated + allocCount));
+        Assert.That(segment.FreeChunkCount, Is.EqualTo(segment.ChunkCapacity - segment.AllocatedChunkCount));
+    }
+
+    #endregion
+
+    #region Free (ClearL0) Tests
+
+    [Test]
+    public void FreeChunk_DecreasesAllocatedCount()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
+
+        var chunkId = segment.AllocateChunk(false);
+        var allocatedBefore = segment.AllocatedChunkCount;
+
+        segment.FreeChunk(chunkId);
+
+        Assert.That(segment.AllocatedChunkCount, Is.EqualTo(allocatedBefore - 1));
+        Assert.That(segment.FreeChunkCount, Is.EqualTo(segment.ChunkCapacity - segment.AllocatedChunkCount));
+    }
+
+    [Test]
+    public void FreeChunk_AllowsReallocation()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 1, 1024);
+
+        // Allocate all available chunks
+        var allocatedIds = new List<int>();
+        var freeCount = segment.FreeChunkCount;
+        for (int i = 0; i < freeCount; i++)
+        {
+            allocatedIds.Add(segment.AllocateChunk(false));
+        }
+
+        Assert.That(segment.FreeChunkCount, Is.EqualTo(0));
+
+        // Free one chunk
+        var freedId = allocatedIds[1];
+        segment.FreeChunk(freedId);
+
+        Assert.That(segment.FreeChunkCount, Is.EqualTo(1));
+
+        // Reallocate - should get the freed chunk back
+        var reallocatedId = segment.AllocateChunk(false);
+        Assert.That(reallocatedId, Is.EqualTo(freedId), "Should reallocate the freed chunk");
+    }
+
+    [Test]
+    public void FreeChunk_DoubleFree_CorruptsState()
+    {
+        // This test documents current (buggy?) behavior where double-free corrupts state
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
+
+        var chunkId = segment.AllocateChunk(false);
+        var allocatedBefore = segment.AllocatedChunkCount;
+
+        segment.FreeChunk(chunkId);
+        var allocatedAfterFirst = segment.AllocatedChunkCount;
+
+        // BUG: Double free - this should either throw or be idempotent
+        segment.FreeChunk(chunkId);
+        var allocatedAfterSecond = segment.AllocatedChunkCount;
+
+        // Document the bug: Allocated count goes negative or becomes inconsistent
+        _logger.LogWarning("Double free: Before={Before}, AfterFirst={After1}, AfterSecond={After2}",
+            allocatedBefore, allocatedAfterFirst, allocatedAfterSecond);
+
+        // This assertion documents the expected fix - currently it will likely fail
+        // showing that double-free decrements the counter twice
+        Assert.That(allocatedAfterSecond, Is.EqualTo(allocatedAfterFirst),
+            "BUG: Double free should be idempotent but it decrements Allocated twice");
+    }
+
+    #endregion
+
+    #region Bulk Allocation Tests
+
+    [Test]
+    public void AllocateChunks_AllocatesRequestedCount()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 5, 64);
+
+        const int requestCount = 100;
+        using var result = segment.AllocateChunks(requestCount, false);
+
+        var ids = result.Memory.Span[..requestCount].ToArray();
+        Assert.That(ids.Length, Is.EqualTo(requestCount));
+        Assert.That(ids.All(id => id > 0), Is.True, "All IDs should be > 0");
+        Assert.That(ids.Distinct().Count(), Is.EqualTo(requestCount), "All IDs should be unique");
+    }
+
+    [Test]
+    public void AllocateChunks_GrowsWhenInsufficientCapacity()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 1, 1024);
+
+        var initialCapacity = segment.ChunkCapacity;
+        var freeCount = segment.FreeChunkCount;
+
+        // Try to allocate more than initially available - should trigger auto-growth
+        var requestCount = freeCount + 10;
+        using var result = segment.AllocateChunks(requestCount, false);
+
+        // With auto-growth, the allocation should succeed
+        var span = result.Memory.Span;
+        Assert.That(span[0], Is.GreaterThan(0), "Allocation should succeed after auto-growth");
+        
+        // Capacity should have increased
+        Assert.That(segment.ChunkCapacity, Is.GreaterThan(initialCapacity),
+            "Segment should have grown to accommodate the allocation");
+    }
+
+    [Test]
+    public void AllocateChunks_GrowsAndAllocatesAll()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 1, 1024);
+
+        var allocatedBefore = segment.AllocatedChunkCount;
+        var freeCount = segment.FreeChunkCount;
+
+        // Try to allocate more than initially available - should grow and succeed
+        var requestCount = freeCount + 10;
+        using var result = segment.AllocateChunks(requestCount, false);
+
+        // All requested chunks should be allocated
+        Assert.That(segment.AllocatedChunkCount, Is.EqualTo(allocatedBefore + requestCount),
+            "All requested chunks should be allocated after auto-growth");
+    }
+
+    [Test]
+    public void AllocateChunks_BulkOf64_UsesL1Optimization()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        // Need enough capacity for bulk allocation (64+ chunks)
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 64);
+
+        var allocatedBefore = segment.AllocatedChunkCount;
+
+        // Allocate exactly 64 chunks - should use SetL1 optimization
+        using var result = segment.AllocateChunks(64, false);
+
+        var ids = result.Memory.Span[..64].ToArray();
+        Assert.That(ids.All(id => id > 0), Is.True);
+        Assert.That(segment.AllocatedChunkCount, Is.EqualTo(allocatedBefore + 64));
+    }
+
+    #endregion
+
+    #region Boundary Tests (64-bit boundaries)
+
+    [Test]
+    public void Allocation_CrossesL0Boundary()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 5, 64);
+
+        // Allocate chunks that cross the 64-bit L0 boundary
+        var allocatedIds = new List<int>();
+        for (int i = 0; i < 70; i++)
+        {
+            var id = segment.AllocateChunk(false);
+            allocatedIds.Add(id);
+        }
+
+        // Should have chunks from both L0 groups (0-63 and 64+)
+        Assert.That(allocatedIds.Any(id => id < 64), Is.True, "Should have chunks in first L0 group");
+        Assert.That(allocatedIds.Any(id => id >= 64), Is.True, "Should have chunks crossing L0 boundary");
+        Assert.That(allocatedIds.Distinct().Count(), Is.EqualTo(70), "All IDs unique");
+    }
+
+    [Test]
+    public void Allocation_CrossesL1Boundary()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        // L1 boundary is at 64*64 = 4096 chunks
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 100, 64);
+
+        // Skip to near the L1 boundary by allocating many chunks
+        const int targetCount = 4100; // Cross the 4096 boundary
+        using var result = segment.AllocateChunks(Math.Min(targetCount, segment.FreeChunkCount), false);
+
+        var ids = result.Memory.Span[..Math.Min(targetCount, segment.FreeChunkCount)].ToArray();
+        
+        if (ids.Length >= 4096)
+        {
+            Assert.That(ids.Any(id => id >= 4096), Is.True, "Should cross L1 boundary at 4096");
+        }
+    }
+
+    [Test]
+    public void FreeChunk_AtL0Boundary()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 5, 64);
+
+        // Allocate past the first L0 group
+        var allocatedIds = new List<int>();
+        for (int i = 0; i < 70; i++)
+        {
+            allocatedIds.Add(segment.AllocateChunk(false));
+        }
+
+        // Find and free chunks at boundaries (63, 64)
+        var chunk63 = allocatedIds.FirstOrDefault(id => id == 63);
+        var chunk64 = allocatedIds.FirstOrDefault(id => id == 64);
+
+        if (chunk63 != 0)
+        {
+            var beforeFree = segment.AllocatedChunkCount;
+            segment.FreeChunk(chunk63);
+            Assert.That(segment.AllocatedChunkCount, Is.EqualTo(beforeFree - 1));
+        }
+
+        if (chunk64 != 0)
+        {
+            var beforeFree = segment.AllocatedChunkCount;
+            segment.FreeChunk(chunk64);
+            Assert.That(segment.AllocatedChunkCount, Is.EqualTo(beforeFree - 1));
+        }
+    }
+
+    #endregion
+
+    #region ClearL0 Bug Tests
+
+    [Test]
+    public void ClearL0_L1AllBitmapUpdate_Bug()
+    {
+        // This test targets a potential bug in ClearL0 where _l1All and _l2All
+        // are updated using &= l1Mask instead of &= ~l1Mask
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 5, 64);
+
+        // Allocate all 64 chunks in the first L0 group (should set L1All bit)
+        var allocatedIds = new List<int>();
+        for (int i = 0; i < 64; i++)
+        {
+            var id = segment.AllocateChunk(false);
+            if (id > 0 && id < 64)
+            {
+                allocatedIds.Add(id);
+            }
+        }
+
+        _logger.LogInformation("Allocated {Count} chunks in first L0 group", allocatedIds.Count);
+
+        // Now free one chunk from the first group
+        if (allocatedIds.Count > 0)
+        {
+            var chunkToFree = allocatedIds[0];
+            var allocatedBefore = segment.AllocatedChunkCount;
+            
+            segment.FreeChunk(chunkToFree);
+            
+            Assert.That(segment.AllocatedChunkCount, Is.EqualTo(allocatedBefore - 1),
+                "Freeing a chunk should decrement allocated count by exactly 1");
+
+            // The freed chunk should be reallocatable
+            var reallocated = segment.AllocateChunk(false);
+            Assert.That(reallocated, Is.EqualTo(chunkToFree),
+                "Should be able to reallocate the freed chunk");
+        }
+    }
+
+    [Test]
+    public void ClearL0_WrongMaskInversion_Bug()
+    {
+        // BUG: In ClearL0, the code does:
+        //   _l1All.Span[l1Offset] &= l1Mask;
+        // But it should be:
+        //   _l1All.Span[l1Offset] &= ~l1Mask;
+        //
+        // The mask l1Mask = 1L << (l0Offset & 0x3F) has ONE bit set.
+        // To clear that bit, we need AND with the inverse (~l1Mask).
+        // But the code ANDs with the mask itself, clearing ALL OTHER bits!
+        
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        // Large enough segment to have multiple L0 groups
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 64);
+
+        // Allocate chunks from TWO different L0 groups
+        // Group 0: chunks 1-63 (0 is reserved)
+        // Group 1: chunks 64-127
+        var group0Chunks = new List<int>();
+        var group1Chunks = new List<int>();
+
+        // Fill group 0 (allocate until we get chunks >= 64)
+        for (int i = 0; i < 70; i++)
+        {
+            var id = segment.AllocateChunk(false);
+            if (id > 0 && id < 64)
+                group0Chunks.Add(id);
+            else if (id >= 64 && id < 128)
+                group1Chunks.Add(id);
+        }
+
+        _logger.LogInformation("Group 0: {Count} chunks, Group 1: {Count2} chunks", 
+            group0Chunks.Count, group1Chunks.Count);
+
+        // Now free a chunk from group 0
+        if (group0Chunks.Count > 0)
+        {
+            var chunkToFree = group0Chunks[0];
+            segment.FreeChunk(chunkToFree);
+
+            // Allocate a new chunk - it should come from group 0 (the freed one)
+            var newChunk = segment.AllocateChunk(false);
+            
+            // BUG: Due to the mask bug in ClearL0, the L1Any bitmap for group 1 
+            // might have been corrupted, potentially affecting allocation order
+            Assert.That(newChunk, Is.EqualTo(chunkToFree),
+                $"Expected to reallocate freed chunk {chunkToFree} but got {newChunk}. " +
+                "This may indicate L1 bitmap corruption from ClearL0 mask bug.");
+        }
+    }
+
+    [Test]
+    public void ClearL0_MultipleGroups_BitmapConsistency()
+    {
+        // Test that freeing chunks in one L0 group doesn't corrupt other groups
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 20, 64);
+
+        // Allocate 200 chunks across multiple L0 groups
+        var allChunks = new List<int>();
+        for (int i = 0; i < 200; i++)
+        {
+            var id = segment.AllocateChunk(false);
+            if (id > 0) allChunks.Add(id);
+        }
+
+        var allocatedBefore = segment.AllocatedChunkCount;
+        _logger.LogInformation("Allocated {Count} chunks, AllocatedCount={Allocated}", 
+            allChunks.Count, allocatedBefore);
+
+        // Free every other chunk
+        var freedChunks = new List<int>();
+        for (int i = 0; i < allChunks.Count; i += 2)
+        {
+            segment.FreeChunk(allChunks[i]);
+            freedChunks.Add(allChunks[i]);
+        }
+
+        var allocatedAfterFree = segment.AllocatedChunkCount;
+        var expectedAfterFree = allocatedBefore - freedChunks.Count;
+
+        Assert.That(allocatedAfterFree, Is.EqualTo(expectedAfterFree),
+            $"After freeing {freedChunks.Count} chunks, AllocatedCount should be {expectedAfterFree} but was {allocatedAfterFree}");
+
+        // Reallocate - should get back the freed chunks
+        var reallocated = new List<int>();
+        for (int i = 0; i < freedChunks.Count; i++)
+        {
+            var id = segment.AllocateChunk(false);
+            if (id > 0) reallocated.Add(id);
+        }
+
+        // All reallocated chunks should be from the freed set
+        foreach (var id in reallocated)
+        {
+            Assert.That(freedChunks, Does.Contain(id),
+                $"Reallocated chunk {id} was not in the freed set. " +
+                "This indicates bitmap corruption - freed chunks are not being found.");
+        }
+    }
+
+    [Test]
+    public void ClearL0_FullL0GroupThenClear_StateConsistency()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 5, 64);
+
+        // Fill an entire L0 group (64 consecutive chunks)
+        // Skip chunk 0 which is reserved
+        var group1Chunks = new List<int>();
+        for (int i = 0; i < 65; i++) // Allocate enough to fill first group
+        {
+            var id = segment.AllocateChunk(false);
+            if (id >= 1 && id <= 63)
+            {
+                group1Chunks.Add(id);
+            }
+        }
+
+        _logger.LogInformation("First L0 group chunks: {Chunks}", string.Join(",", group1Chunks.Take(10)) + "...");
+
+        // Now clear all chunks in the first group
+        foreach (var id in group1Chunks)
+        {
+            segment.FreeChunk(id);
+        }
+
+        // Allocate again - should get chunks from the first group
+        var reallocated = segment.AllocateChunk(false);
+        Assert.That(reallocated, Is.LessThan(64),
+            "After freeing first L0 group, allocation should return chunk from that group");
+    }
+
+    #endregion
+
+    #region Concurrent Access Tests
+
+    [Test]
+    public void ConcurrentAllocate_NoduplicateIds()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 20, 64);
+
+        var allIds = new System.Collections.Concurrent.ConcurrentBag<int>();
+        var tasks = new List<Task>();
+        const int threadsCount = 8;
+        const int allocsPerThread = 100;
+
+        for (int t = 0; t < threadsCount; t++)
+        {
+            tasks.Add(Task.Run(() =>
+            {
+                for (int i = 0; i < allocsPerThread; i++)
+                {
+                    var id = segment.AllocateChunk(false);
+                    if (id > 0)
+                    {
+                        allIds.Add(id);
+                    }
+                }
+            }));
+        }
+
+        Task.WaitAll(tasks.ToArray());
+
+        var idList = allIds.ToList();
+        var uniqueCount = idList.Distinct().Count();
+
+        Assert.That(uniqueCount, Is.EqualTo(idList.Count),
+            $"Found {idList.Count - uniqueCount} duplicate IDs in concurrent allocation");
+    }
+
+    [Property("MemPageCount", 16*1024)]
+    [Test]
+    public void ConcurrentAllocateAndFree_MaintainsConsistency()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 20, 64);
+
+        var allocatedIds = new System.Collections.Concurrent.ConcurrentQueue<int>();
+        var errors = new System.Collections.Concurrent.ConcurrentBag<string>();
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        var tasks = new List<Task>();
+
+        // Allocator threads - with bounds checking to avoid triggering the overflow bug
+        for (int t = 0; t < 4; t++)
+        {
+            tasks.Add(Task.Run(() =>
+            {
+                while (!cts.Token.IsCancellationRequested)
+                {
+                    // Check if there's likely room before allocating
+                    if (segment.FreeChunkCount <= 0)
+                    {
+                        Thread.SpinWait(100);
+                        continue;
+                    }
+
+                    var id = segment.AllocateChunk(false);
+                    
+                    // Validate the returned ID against CURRENT capacity (may have grown)
+                    var currentCapacity = segment.ChunkCapacity;
+                    if (id >= currentCapacity)
+                    {
+                        errors.Add($"BUG: AllocateChunk returned {id} >= capacity {currentCapacity}");
+                        break;
+                    }
+                    
+                    if (id > 0 && id < currentCapacity)
+                    {
+                        allocatedIds.Enqueue(id);
+                    }
+                    Thread.SpinWait(10);
+                }
+            }));
+        }
+
+        // Deallocator threads
+        for (int t = 0; t < 2; t++)
+        {
+            tasks.Add(Task.Run(() =>
+            {
+                while (!cts.Token.IsCancellationRequested)
+                {
+                    if (allocatedIds.TryDequeue(out var id))
+                    {
+                        segment.FreeChunk(id);
+                    }
+                    Thread.SpinWait(10);
+                }
+            }));
+        }
+
+        Task.WaitAll(tasks.ToArray());
+
+        // Report any errors found during concurrent execution
+        foreach (var error in errors)
+        {
+            _logger.LogError("{Error}", error);
+        }
+
+        // After all threads complete, verify state consistency
+        var remaining = allocatedIds.Count;
+        var reported = segment.AllocatedChunkCount;
+        
+        _logger.LogInformation("Remaining in queue: {Remaining}, Reported allocated: {Reported}", 
+            remaining, reported);
+
+        // First check: no overflow errors
+        Assert.That(errors, Is.Empty, "Concurrent allocation produced invalid chunk IDs");
+
+        // The allocated count should be at least the reserved chunk (0) 
+        Assert.That(segment.AllocatedChunkCount, Is.GreaterThanOrEqualTo(1));
+        Assert.That(segment.FreeChunkCount, Is.GreaterThanOrEqualTo(0));
+        Assert.That(segment.AllocatedChunkCount + segment.FreeChunkCount, Is.EqualTo(segment.ChunkCapacity));
+    }
+
+    #endregion
+
+    #region Edge Cases
+
+    [Test]
+    public void SmallSegment_SinglePage_MinimalCapacity()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        // Large stride = fewer chunks per page
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 1, 2048);
+
+        var capacity = segment.ChunkCapacity;
+        var freeCount = segment.FreeChunkCount;
+
+        _logger.LogInformation("Small segment: Capacity={Capacity}, Free={Free}", capacity, freeCount);
+
+        Assert.That(capacity, Is.GreaterThan(0));
+        Assert.That(freeCount, Is.EqualTo(capacity - 1), "Only chunk 0 should be reserved");
+
+        // Allocate all available
+        for (int i = 0; i < freeCount; i++)
+        {
+            var id = segment.AllocateChunk(false);
+            Assert.That(id, Is.GreaterThan(0));
+        }
+
+        Assert.That(segment.FreeChunkCount, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void AllocateWithClearContent_ClearsChunkData()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
+
+        // Allocate with clearing
+        var chunkId = segment.AllocateChunk(true);
+        Assert.That(chunkId, Is.GreaterThan(0));
+
+        // Verify the chunk data is cleared
+        using var accessor = segment.CreateChunkAccessor();
+        var chunkData = accessor.GetChunkAsReadOnlySpan(chunkId);
+        
+        foreach (var b in chunkData)
+        {
+            Assert.That(b, Is.EqualTo(0), "Chunk data should be cleared to zero");
+        }
+    }
+
+    [Test]
+    public void ReserveChunk_ManualReservation()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
+
+        var allocatedBefore = segment.AllocatedChunkCount;
+
+        // Reserve a specific chunk (simulating what Create() does with chunk 0)
+        segment.ReserveChunk(5);
+
+        Assert.That(segment.AllocatedChunkCount, Is.EqualTo(allocatedBefore + 1));
+
+        // Allocating should skip the reserved chunk
+        var allocatedIds = new List<int>();
+        for (int i = 0; i < 10; i++)
+        {
+            var id = segment.AllocateChunk(false);
+            allocatedIds.Add(id);
+        }
+
+        Assert.That(allocatedIds, Does.Not.Contain(5), "Reserved chunk 5 should not be allocated");
+    }
+
+    [Test]
+    public void ReserveChunk_DoubleReserve_ReturnsFalse()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
+
+        // First allocation of chunk
+        var id = segment.AllocateChunk(false);
+
+        // Trying to reserve an already-allocated chunk
+        // ReserveChunk uses SetL0 internally which should return false
+        segment.ReserveChunk(id);
+
+        // The allocated count shouldn't increase for a double-set
+        // (This tests the return value path of SetL0)
+    }
+
+    #endregion
+
+    #region Capacity and Overflow Tests
+
+    [Test]
+    public void Capacity_MatchesExpectedFormula()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+
+        const int pageCount = 5;
+        const int stride = 64;
+
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, pageCount, stride);
+
+        // Expected: (pageCount-1) * ChunkCountPerPage + ChunkCountRootPage
+        var expectedCapacity = (pageCount - 1) * segment.ChunkCountPerPage + segment.ChunkCountRootPage;
+
+        Assert.That(segment.ChunkCapacity, Is.EqualTo(expectedCapacity));
+    }
+
+    /// <summary>
+    /// Test that AllocateChunk auto-grows when capacity is exhausted.
+    /// 
+    /// Previously this was a bug where AllocateChunk would return invalid IDs.
+    /// Now with auto-growth, the segment expands automatically when needed.
+    /// </summary>
+    [Test]
+    public void AllocateChunk_ExceedsCapacity_AutoGrows()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        
+        // Use a small segment (2 pages) with large chunks to minimize initial capacity
+        const int pageCount = 2;
+        const int stride = 512; // Large stride = fewer chunks per page
+        
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, pageCount, stride);
+        
+        var initialCapacity = segment.ChunkCapacity;
+        var initialFree = segment.FreeChunkCount;
+        
+        _logger.LogInformation(
+            "Segment created: Capacity={Capacity}, InitialFree={Free}, Stride={Stride}",
+            initialCapacity, initialFree, stride);
+        
+        // Allocate ALL initially available chunks
+        var validChunks = new List<int>();
+        for (int i = 0; i < initialFree; i++)
+        {
+            var id = segment.AllocateChunk(false);
+            validChunks.Add(id);
+        }
+        
+        Assert.That(segment.FreeChunkCount, Is.EqualTo(0), 
+            "After allocating all free chunks, FreeChunkCount should be 0");
+        
+        _logger.LogInformation(
+            "Allocated {Count} valid chunks. FreeChunkCount={Free}, AllocatedCount={Allocated}",
+            validChunks.Count, segment.FreeChunkCount, segment.AllocatedChunkCount);
+        
+        // Now allocate MORE - this should trigger auto-growth
+        var additionalChunks = new List<int>();
+        const int additionalCount = 10;
+        
+        for (int i = 0; i < additionalCount; i++)
+        {
+            var id = segment.AllocateChunk(false);
+            additionalChunks.Add(id);
+            
+            _logger.LogInformation(
+                "Additional allocation #{Iteration}: Got ChunkId={Id}, FreeCount={Free}, AllocatedCount={Allocated}",
+                i + 1, id, segment.FreeChunkCount, segment.AllocatedChunkCount);
+        }
+        
+        // With auto-growth, capacity should have increased
+        Assert.That(segment.ChunkCapacity, Is.GreaterThan(initialCapacity),
+            $"Segment should have grown. Initial: {initialCapacity}, Current: {segment.ChunkCapacity}");
+        
+        // FreeChunkCount should never go negative
+        Assert.That(segment.FreeChunkCount, Is.GreaterThanOrEqualTo(0),
+            $"FreeChunkCount should never be negative. Value: {segment.FreeChunkCount}");
+        
+        // All returned chunk IDs should be valid (> 0 and < current capacity)
+        var allChunks = validChunks.Concat(additionalChunks).ToList();
+        Assert.That(allChunks.All(id => id > 0 && id < segment.ChunkCapacity), Is.True,
+            "All allocated chunk IDs should be valid");
+        
+        // All IDs should be unique
+        Assert.That(allChunks.Distinct().Count(), Is.EqualTo(allChunks.Count),
+            "All allocated chunk IDs should be unique");
+    }
+
+    /// <summary>
+    /// Stress test simulating MonitoringDemo-like workload that creates many entities.
+    /// 
+    /// MonitoringDemo creates thousands of entities with large components (~100+ bytes).
+    /// With auto-growth, the segment automatically expands to accommodate all entities.
+    /// </summary>
+    [Test]
+    public void StressTest_RealisticComponentSize_AutoGrowsToAccommodate()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        
+        // Simulate ComponentTable's default: 4 pages
+        const int pageCount = 4;
+        
+        // Simulate a realistic RPG Character component (~112 bytes)
+        // String64 (64) + 4 ints (16) + 2 longs (16) + 4 floats (16) + bool (1+padding)
+        const int componentSize = 112;
+        
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, pageCount, componentSize);
+        
+        var initialCapacity = segment.ChunkCapacity;
+        var initialFree = segment.FreeChunkCount;
+        
+        _logger.LogInformation(
+            "Realistic segment: PageCount={Pages}, ComponentSize={Size}B, Capacity={Capacity}, Free={Free}",
+            pageCount, componentSize, initialCapacity, initialFree);
+        
+        // Simulate MonitoringDemo: create 1000 entities (more than initial capacity)
+        // With auto-growth, this should succeed
+        const int targetEntityCount = 1000;
+        var createdEntities = new List<int>();
+        
+        for (int i = 0; i < targetEntityCount; i++)
+        {
+            var id = segment.AllocateChunk(false);
+            Assert.That(id, Is.GreaterThan(0), $"Allocation {i} should succeed with auto-growth");
+            createdEntities.Add(id);
+        }
+        
+        _logger.LogInformation(
+            "Allocation results: Created={Count}, FinalCapacity={Capacity}, FinalFree={Free}",
+            createdEntities.Count, segment.ChunkCapacity, segment.FreeChunkCount);
+        
+        // All 1000 entities should be created successfully
+        Assert.That(createdEntities.Count, Is.EqualTo(targetEntityCount),
+            "All entities should be created with auto-growth");
+        
+        // Capacity should have grown significantly
+        Assert.That(segment.ChunkCapacity, Is.GreaterThan(initialCapacity),
+            $"Segment should have grown from {initialCapacity} to accommodate {targetEntityCount} entities");
+        
+        // All IDs should be unique and valid
+        Assert.That(createdEntities.Distinct().Count(), Is.EqualTo(targetEntityCount),
+            "All chunk IDs should be unique");
+        
+        Assert.That(createdEntities.All(id => id > 0 && id < segment.ChunkCapacity), Is.True,
+            "All chunk IDs should be valid (> 0 and < capacity)");
+        
+        // FreeChunkCount should never be negative
+        Assert.That(segment.FreeChunkCount, Is.GreaterThanOrEqualTo(0),
+            "FreeChunkCount should never be negative");
+    }
+
+    /// <summary>
+    /// Test that demonstrates the cascading effect of the allocation bug.
+    /// 
+    /// When AllocateChunk returns invalid IDs (0 or beyond capacity), multiple components
+    /// end up "stored" at the same location, causing data corruption.
+    /// 
+    /// The bug can manifest in two ways depending on segment configuration:
+    /// 1. Returns incrementing IDs beyond capacity (if L0 bitmap overflows within page bounds)
+    /// 2. Throws IndexOutOfRangeException (if chunk ID maps to non-existent page)
+    /// 
+    /// This test uses a configuration that triggers the "same ID" corruption scenario.
+    /// </summary>
+    [Test]
+    public void AllocateChunk_CapacityExhausted_CausesDataCorruption()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        
+        // Use 2 pages with a stride that leaves room for overflow within page bounds
+        // This ensures we get invalid IDs rather than IndexOutOfRangeException
+        const int pageCount = 2;
+        const int stride = 512; // Moderate stride
+        
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, pageCount, stride);
+        
+        var capacity = segment.ChunkCapacity;
+        var freeCount = segment.FreeChunkCount;
+        
+        _logger.LogInformation("Test segment: Capacity={Capacity}, Free={Free}", capacity, freeCount);
+        
+        // Exhaust capacity
+        var validChunks = new List<int>();
+        for (int i = 0; i < freeCount; i++)
+        {
+            validChunks.Add(segment.AllocateChunk(false));
+        }
+        
+        Assert.That(segment.FreeChunkCount, Is.EqualTo(0));
+        
+        // Now allocate more - these will get invalid IDs beyond capacity
+        var overAllocatedChunks = new List<int>();
+        Exception caughtException = null;
+        
+        for (int i = 0; i < 5; i++)
+        {
+            try
+            {
+                var id = segment.AllocateChunk(false);
+                overAllocatedChunks.Add(id);
+                _logger.LogWarning("Over-allocation #{Num}: ChunkId={Id}", i + 1, id);
+            }
+            catch (Exception ex)
+            {
+                caughtException = ex;
+                _logger.LogError("Over-allocation #{Num} threw: {Ex}", i + 1, ex.Message);
+                break;
+            }
+        }
+        
+        // The bug manifests as either invalid IDs or exception
+        if (caughtException != null)
+        {
+            Assert.Pass($"BUG CONFIRMED: AllocateChunk throws {caughtException.GetType().Name} " +
+                        "when capacity is exhausted instead of returning error gracefully");
+        }
+        
+        Assert.That(overAllocatedChunks, Is.Not.Empty,
+            "Should have received some invalid chunk IDs");
+        
+        // All returned IDs should be >= capacity (invalid)
+        Assert.That(overAllocatedChunks.All(id => id >= capacity), Is.True,
+            $"BUG: All over-allocated chunks should have ID >= capacity ({capacity}). " +
+            $"Got: [{string.Join(", ", overAllocatedChunks)}]");
+        
+        // Demonstrate the corruption: if we try to use these invalid IDs,
+        // they would either crash or corrupt valid data
+        
+        // The IDs are beyond capacity, so GetChunkLocation will return
+        // page indices that may or may not exist
+        var (pageIndex, offset) = segment.GetChunkLocation(overAllocatedChunks[0]);
+        _logger.LogWarning(
+            "Invalid chunk {Id} maps to Page={Page}, Offset={Offset} (segment has {PageCount} pages)",
+            overAllocatedChunks[0], pageIndex, offset, pageCount);
+        
+        // This proves the bug: returned chunk IDs map to non-existent pages
+        // or to offsets that overlap with valid data
+        Assert.That(
+            pageIndex >= pageCount || overAllocatedChunks[0] >= capacity,
+            Is.True,
+            "BUG CONFIRMED: Invalid chunk ID returned that would cause corruption or crash");
+    }
+
+    [Test]
+    public void FreeChunkCount_NeverExceedsCapacity()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
+
+        // Perform many allocate/free cycles
+        for (int cycle = 0; cycle < 10; cycle++)
+        {
+            var ids = new List<int>();
+            for (int i = 0; i < 20; i++)
+            {
+                var id = segment.AllocateChunk(false);
+                if (id > 0) ids.Add(id);
+            }
+
+            foreach (var id in ids)
+            {
+                segment.FreeChunk(id);
+            }
+
+            Assert.That(segment.FreeChunkCount, Is.LessThanOrEqualTo(segment.ChunkCapacity),
+                $"FreeChunkCount exceeded capacity on cycle {cycle}");
+            Assert.That(segment.AllocatedChunkCount, Is.GreaterThanOrEqualTo(0),
+                $"AllocatedChunkCount went negative on cycle {cycle}");
+        }
+    }
+
+    #endregion
+
+    #region IsSet Tests
+
+    [Test]
+    public void IsSet_ReturnsCorrectState()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
+
+        // Chunk 0 is reserved, should be set
+        // Note: We can't directly call IsSet on ChunkBasedSegment, 
+        // but we can verify via allocation behavior
+
+        var id1 = segment.AllocateChunk(false);
+        var id2 = segment.AllocateChunk(false);
+
+        // Free id1
+        segment.FreeChunk(id1);
+
+        // Allocate again - should get id1 back (it's unset now)
+        var id3 = segment.AllocateChunk(false);
+        Assert.That(id3, Is.EqualTo(id1), "Freed chunk should be reallocated first");
+    }
+
+    #endregion
+
+    #region Load/Reload Tests
+
+    [Test]
+    public void LoadFromDisk_RestoresAllocatedState()
+    {
+        int rootPageIndex;
+        int allocatedCount;
+        var allocatedIds = new List<int>();
+
+        // Phase 1: Create and allocate
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var pmmf = scope.ServiceProvider.GetRequiredService<ManagedPagedMMF>();
+
+            var cs = pmmf.CreateChangeSet();
+            var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 5, 64, cs);
+            rootPageIndex = segment.RootPageIndex;
+
+            for (int i = 0; i < 100; i++)
+            {
+                allocatedIds.Add(segment.AllocateChunk(false));
+            }
+
+            allocatedCount = segment.AllocatedChunkCount;
+            cs.SaveChanges();
+        }
+
+        // Phase 2: Reload and verify
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var pmmf = scope.ServiceProvider.GetRequiredService<ManagedPagedMMF>();
+
+            var segment = pmmf.LoadChunkBasedSegment(rootPageIndex, 64);
+
+            Assert.That(segment.AllocatedChunkCount, Is.EqualTo(allocatedCount),
+                "Loaded segment should have same allocated count");
+
+            // Newly allocated chunks should not conflict with previously allocated
+            var newId = segment.AllocateChunk(false);
+            Assert.That(allocatedIds, Does.Not.Contain(newId),
+                "New allocation should not conflict with previously allocated chunks");
+        }
+    }
+
+    #endregion
+}

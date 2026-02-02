@@ -307,7 +307,7 @@ public partial class PagedMMF : IDisposable
     /// If the File Page is being loading from disk to memory, the read is completely independent of this operation, the <see cref="PageAccessor"/> will
     ///  wait for it upon its first content access.
     /// </remarks>
-    public bool RequestPage(int filePageIndex, bool exclusive, out PageAccessor result, 
+    public bool RequestPage(int filePageIndex, bool exclusive, [TransfersOwnership] out PageAccessor result, 
         long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
     {
 #if TELEMETRY
@@ -422,10 +422,10 @@ public partial class PagedMMF : IDisposable
     /// </remarks>
     private bool AllocateMemoryPage(int filePageIndex, out int memPageIndex, long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
     {
-#if TELEMETRY
+#if DEBUG
         int loopCount = 0;
         DateTime start = DateTime.UtcNow;
-#endif        
+#endif
         AdaptiveWaiter waiter = null;
         
         LogAllocatePageEnter();
@@ -508,7 +508,7 @@ public partial class PagedMMF : IDisposable
 
                 if (!found)
                 {
-#if TELEMETRY
+#if DEBUG
                     
                     // We'll get here basically if all memory pages are currently in use, so it's very unlikely, except of complete system usage overload
                     // The best (and easiest) thing is to wait and try again.
@@ -526,6 +526,12 @@ public partial class PagedMMF : IDisposable
                         LogPendingPageAllocation(filePageIndex, loopCount, DateTime.UtcNow - start);
                     }
                     loopCount++;
+                    
+                    // One sec timeout, throw. We should be able to allocate a new memory page within 1 sec.
+                    if (DateTime.UtcNow - start > TimeSpan.FromSeconds(1))
+                    {
+                        throw new OutOfMemoryException($"Unable to allocate a new Memory Page for File Page {filePageIndex}.");
+                    }
 #endif
                     waiter ??= new AdaptiveWaiter();
                     waiter.Spin();
@@ -881,9 +887,14 @@ public partial class PagedMMF : IDisposable
             // Increment the ChangeRevision for the page (File Page 0 is the file header, it's a different format so ignore it)
             if (curPageInfo.FilePageIndex > 0)
             {
-                // Make sure the page to save is properly loaded first
-                var pa = new PageAccessor(this, curPageInfo);
-                pa.EnsureDataReady();
+                // Make sure the page to save is properly loaded first (wait for any pending IO read to complete)
+                // NOTE: We don't use PageAccessor here because SavePages is called after accessors are disposed,
+                // so pages are in IdleAndDirty state, not Shared/Exclusive.
+                var ioTask = curPageInfo.IOReadTask;
+                if (ioTask != null && !ioTask.IsCompletedSuccessfully)
+                {
+                    ioTask.GetAwaiter().GetResult();
+                }
             
                 var headerAddr = (PageBaseHeader*)(memPageBaseAddr + (curPageInfo.MemPageIndex * PageSize));
                 ++headerAddr->ChangeRevision;
@@ -1024,7 +1035,7 @@ public partial class PagedMMF : IDisposable
         Logger.LogTrace(42, "Transition waiting/reloop from {prevNode} to {NewMode} loop count: {loopCount}, duration: {duration}", prevMode, newMode, loopCount, duration);
 
  
-    [Conditional("TELEMETRY")]
+    [Conditional("DEBUG")]
     private void LogPendingPageAllocation(int filePageIndex, int loopCount, TimeSpan duration) => 
         Logger.LogTrace(43, "Page Allocation pending/reloop for page {filePageIndex} loop count: {loopCount}, duration: {duration}", filePageIndex, loopCount, duration);
 

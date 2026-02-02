@@ -674,4 +674,79 @@ Here come the drones!";
         }
         
     }
+
+    /// <summary>
+    /// Verifies that AllocateChunk auto-grows the segment when capacity is exhausted.
+    /// Previously this was a bug confirmation test, but auto-growth is now implemented.
+    /// </summary>
+    [Test]
+    public void AllocateChunk_CapacityExhausted_AutoGrows()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        
+        // Create a small segment with just 1 page to limit initial capacity
+        // Using a large stride (1024 bytes) to minimize chunks per page
+        const int stride = 1024;
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 1, stride);
+        
+        var initialCapacity = segment.ChunkCapacity;
+        var freeCount = segment.FreeChunkCount;
+        
+        _logger.LogInformation("Initial segment capacity: {Capacity}, Free: {Free}, Allocated: {Allocated}", 
+            initialCapacity, freeCount, segment.AllocatedChunkCount);
+        
+        // Allocate all available chunks (FreeChunkCount, since chunk 0 is already reserved)
+        var allocatedChunks = new List<int>();
+        for (int i = 0; i < freeCount; i++)
+        {
+            var chunkId = segment.AllocateChunk(false);
+            
+            _logger.LogInformation("Allocated chunk {ChunkId} (iteration {i}), Free remaining: {Free}", 
+                chunkId, i, segment.FreeChunkCount);
+            
+            // Chunk ID 0 is reserved as "null" sentinel - should never be returned
+            Assert.That(chunkId, Is.Not.EqualTo(0), $"Chunk 0 is reserved and should never be allocated (iteration {i})");
+            Assert.That(chunkId, Is.GreaterThan(0), $"Expected valid chunk ID > 0, got {chunkId}");
+            
+            allocatedChunks.Add(chunkId);
+        }
+        
+        // Verify all chunks are now allocated
+        _logger.LogInformation("After allocation loop: Capacity={Capacity}, Allocated={Allocated}, Free={Free}",
+            segment.ChunkCapacity, segment.AllocatedChunkCount, segment.FreeChunkCount);
+        
+        Assert.That(segment.FreeChunkCount, Is.EqualTo(0), "All chunks should be allocated");
+        Assert.That(segment.AllocatedChunkCount, Is.EqualTo(initialCapacity), "Allocated count should equal initial capacity");
+        
+        // Now allocate beyond initial capacity - should trigger auto-growth
+        var overflowChunkId = segment.AllocateChunk(false);
+        
+        _logger.LogInformation("After auto-growth: ChunkId={ChunkId}, Capacity={Capacity}, Free={Free}", 
+            overflowChunkId, segment.ChunkCapacity, segment.FreeChunkCount);
+        
+        // Verify auto-growth worked correctly
+        // 1. Should return a valid chunk ID
+        Assert.That(overflowChunkId, Is.GreaterThan(0), "Auto-growth should return valid chunk ID > 0");
+        Assert.That(overflowChunkId, Is.Not.EqualTo(0), "Should not return reserved sentinel 0");
+        
+        // 2. Capacity should have increased
+        Assert.That(segment.ChunkCapacity, Is.GreaterThan(initialCapacity), 
+            "Segment capacity should have grown");
+        
+        // 3. FreeChunkCount should be valid (non-negative)
+        Assert.That(segment.FreeChunkCount, Is.GreaterThanOrEqualTo(0),
+            "FreeChunkCount should remain non-negative after growth");
+        
+        // 4. The new chunk ID should be within the new capacity
+        Assert.That(overflowChunkId, Is.LessThan(segment.ChunkCapacity),
+            "New chunk ID should be within expanded capacity");
+        
+        allocatedChunks.Add(overflowChunkId);
+        
+        // Verify we can continue allocating after growth
+        var anotherChunkId = segment.AllocateChunk(false);
+        Assert.That(anotherChunkId, Is.GreaterThan(0), "Should be able to allocate more chunks after growth");
+        
+        _logger.LogInformation("Successfully allocated {Count} chunks with auto-growth", allocatedChunks.Count + 1);
+    }
 }

@@ -43,7 +43,7 @@ internal class TransactionChain : IDisposable
     public ref AccessControl Control => ref _control;
     
     // Under lock of the caller
-    public void PushHead(Transaction transaction)
+    public void PushHead([TransfersOwnership] Transaction transaction)
     {
         Interlocked.Increment(ref _activeCount);
         var curHead = Head;
@@ -110,6 +110,7 @@ internal class TransactionChain : IDisposable
         _control.ExitExclusiveAccess();
     }
 
+    [return: TransfersOwnership] 
     public Transaction CreateTransaction(DatabaseEngine dbe)
     {
         _control.EnterExclusiveAccess(ref WaitContext.Null);

@@ -181,6 +181,16 @@ public unsafe class Transaction : IDisposable
             Rollback();
         }
 
+        // Dispose all ChunkAccessors to release pages back to the page cache.
+        // This is critical! Without this, pages remain in Shared state and cannot
+        // be evicted by the clock-sweep algorithm, leading to page cache exhaustion
+        // and deadlock when segments need to grow.
+        foreach (var info in _componentInfos.Values)
+        {
+            info.CompContentAccessor.Dispose();
+            info.CompRevTableAccessor.Dispose();
+        }
+        
         _dbe.TransactionChain.Remove(this);
         _isDisposed = true;
     }

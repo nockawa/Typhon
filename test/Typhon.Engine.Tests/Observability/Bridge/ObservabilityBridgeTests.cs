@@ -39,6 +39,7 @@ public class ObservabilityBridgeTests
         public long ContentionWaitCount;
         public long ContentionTotalWaitUs;
         public long ContentionMaxWaitUs;
+#pragma warning disable CS0649 // Field is never assigned to, and will always have its default value
         public long DiskReadOps;
         public long DiskWriteOps;
         public long DiskReadBytes;
@@ -48,6 +49,7 @@ public class ObservabilityBridgeTests
         public long CheckpointLastUs;
         public long CheckpointAvgUs;
         public long CheckpointMaxUs;
+#pragma warning restore CS0649 // Field is never assigned to, and will always have its default value
 
         public TestMetricResource(string id, IResource parent)
             : base(id, ResourceType.Node, parent) { }

@@ -35,7 +35,18 @@
       "Bash(dir:*)",
       "Bash(git -C \"C:/Dev/github/Typhon\" diff --stat claude/design/resources/01-registry.md)",
       "Bash(ls:*)",
-      "mcp__rider__list_directory_tree"
+      "mcp__rider__list_directory_tree",
+      "mcp__rider__get_file_text_by_path",
+      "mcp__rider__find_files_by_name_keyword",
+      "mcp__rider__search_in_files_by_text",
+      "mcp__acp__Edit",
+      "mcp__acp__Write",
+      "Bash(dotnet clean:*)",
+      "Bash(tasklist:*)",
+      "mcp__rider__build_project",
+      "mcp__rider__execute_run_configuration",
+      "mcp__rider__get_run_configurations",
+      "mcp__rider__execute_terminal_command"
     ],
     "deny": [],
     "ask": []

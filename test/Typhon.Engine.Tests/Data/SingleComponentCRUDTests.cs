@@ -1,9 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using System;
-using System.Threading;
 
-namespace Typhon.Engine.Tests.Database_Engine;
+namespace Typhon.Engine.Tests;
 
 /// <summary>
 /// Comprehensive unit tests for single (non-AllowMultiple) component CRUD operations.
