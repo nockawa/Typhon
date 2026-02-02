@@ -199,6 +199,12 @@ internal ref struct ComponentRevisionManager
         var hasCollections = ct.HasCollections;
 
         ChunkHandle newChunkHandle = default;
+        
+        // Collect chunk IDs to free AFTER enumeration completes (avoid use-after-free in circular buffer)
+        // Maximum chunks we might need to free is ChainLength - 1 (we keep the first chunk)
+        Span<int> chunksToFree = (firstChunkHeader.ChainLength < 128) ? stackalloc int[firstChunkHeader.ChainLength] : new int[firstChunkHeader.ChainLength];
+        var chunksToFreeCount = 0;
+        
         {
             using var enumerator = new RevisionEnumerator(ref compRevTableAccessor, firstChunkId, false, true);
             var prevChunkId = enumerator.IndexInChunk == 0 ? enumerator.CurChunkId : 0;
@@ -209,19 +215,12 @@ internal ref struct ComponentRevisionManager
                 bool changedChunk = (enumerator.CurChunkId != prevChunkId) && (prevChunkId != 0);
                 if (changedChunk)
                 {
-                    // Remove the previous chunk if we can
-                    if (prevChunkId != 0 && !enumerator.IsFirstChunk)
+                    // Mark the previous revision table chunk for freeing if it's not the first chunk (which we keep and reuse)
+                    // Note: prevChunkId is a revision table chunk ID, not a component content chunk ID
+                    // IMPORTANT: We defer freeing until after enumeration to avoid use-after-free in circular buffers
+                    if (prevChunkId != firstChunkId)
                     {
-                        if (hasCollections)
-                        {
-                            foreach (var kvp in ct.ComponentCollectionVSBSByOffset)
-                            {
-                                var bufferId = info.CompContentAccessor.GetChunkAsReadOnlySpan(prevChunkId).Slice(kvp.Key).Cast<byte, int>()[0];
-                                kvp.Value.VSBS.BufferRelease(bufferId, ref kvp.Value.Accessor);
-                            }
-                        }
-
-                        info.CompContentSegment.FreeChunk(prevChunkId);
+                        chunksToFree[chunksToFreeCount++] = prevChunkId;
                     }
                     prevChunkId = enumerator.CurChunkId;
                 }
@@ -268,10 +267,11 @@ internal ref struct ComponentRevisionManager
                 curDestIndex++;                                                         // One more item in the destination
             
                 // If the current chunk is full, allocate a new one
-                if (curDestIndex == curDestElements.Length)
+                if (curDestIndexInChunk == curDestElements.Length)
                 {
                     curDestIndexInChunk = 0;                                            // Reset the index in chunk
                     tempFirstHeader[0].ChainLength++;                                   // One more chunk in the chain
+                    
                     var newChunkId = info.CompRevTableSegment.AllocateChunk(false); // Allocate a new chunk
                     curNextChunkId[0] = newChunkId;                                     // Set the next chunk ID of the current chunk
                     if (!newChunkHandle.IsDefault)                                      // Release the handle on the previous chunk, if any
@@ -282,6 +282,22 @@ internal ref struct ComponentRevisionManager
                     newChunkHandle.AsSpan().Split(out curNextChunkId, out curDestElements);     // Update our "cur" variables
                 }
             }
+        }
+        
+        // Now that enumeration is complete, free all the collected revision table chunks
+        // This is done AFTER the enumerator is disposed to avoid use-after-free in circular buffers
+        for (var i = 0; i < chunksToFreeCount; i++)
+        {
+            var chunkId = chunksToFree[i];
+            if (hasCollections)
+            {
+                foreach (var kvp in ct.ComponentCollectionVSBSByOffset)
+                {
+                    var bufferId = info.CompContentAccessor.GetChunkAsReadOnlySpan(chunkId).Slice(kvp.Key).Cast<byte, int>()[0];
+                    kvp.Value.VSBS.BufferRelease(bufferId, ref kvp.Value.Accessor);
+                }
+            }
+            info.CompRevTableSegment.FreeChunk(chunkId);
         }
         
         tempFirstHeader[0].FirstItemRevision = firstChunkHeader.FirstItemRevision + skipCount;
@@ -307,7 +323,7 @@ internal ref struct ComponentRevisionManager
         // Special case, the first revision is in the first chunk, we need to walk to the end of the chain and add a new chunk there
         if (firstHeader.FirstItemIndex < CompRevCountInRoot)
         {
-            var enumerator = new RevisionEnumerator(ref compRevTableAccessor, firstChunkId, false, false);
+            using var enumerator = new RevisionEnumerator(ref compRevTableAccessor, firstChunkId, false, false);
             enumerator.StepToChunk(firstHeader.ChainLength - 1, false);         // Walk to the last chunk in the chain
             enumerator.NextChunkId = compRevTable.AllocateChunk(true);          // Allocated, clear content to make sure the next chunk ID is 0, set as next
             compRevTableAccessor.DirtyChunk(enumerator.CurChunkId);
@@ -317,7 +333,7 @@ internal ref struct ComponentRevisionManager
         {
             // Locate the first index in the chain, we add a chunk just before it
             var (firstChunkInChain, firstItemIndexInChunk) = CompRevStorageHeader.GetRevisionLocation(firstHeader.FirstItemIndex);
-            var enumerator = new RevisionEnumerator(ref compRevTableAccessor, firstChunkId, false, false);
+            using var enumerator = new RevisionEnumerator(ref compRevTableAccessor, firstChunkId, false, false);
             enumerator.StepToChunk(firstChunkInChain-1, false);                 // In a circular buffer, the chunk before the first is the last one
 
             // Get the ID of the first chunk in the chain

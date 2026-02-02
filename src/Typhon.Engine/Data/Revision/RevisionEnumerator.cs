@@ -17,6 +17,7 @@ internal ref struct RevisionEnumerator : IDisposable
     private short _indexInChunk;
     private ref int _nextChunkId;
     private readonly bool _exclusiveAccess;
+    private readonly bool _ownsLock;
     private bool _hasLopped;
     private short _revisionIndex;
 
@@ -72,7 +73,8 @@ internal ref struct RevisionEnumerator : IDisposable
         _firstChunkId = compRevFirstChunkId;
         _firstChunkHandle = compRevTableAccessor.GetChunkHandle(compRevFirstChunkId, false);
         _header = ref _firstChunkHandle.AsRef<CompRevStorageHeader>();
-        if (!_header.Control.IsLockedByCurrentThread)
+        _ownsLock = !_header.Control.IsLockedByCurrentThread;
+        if (_ownsLock)
         {
             _header.Control.Enter(_exclusiveAccess, ref WaitContext.Null);
         }
@@ -135,7 +137,7 @@ internal ref struct RevisionEnumerator : IDisposable
 
     public void Dispose()
     {
-        if (!_header.Control.IsLockedByCurrentThread)
+        if (_ownsLock)
         {
             _header.Control.Exit(_exclusiveAccess);
         }

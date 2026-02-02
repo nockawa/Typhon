@@ -16,9 +16,9 @@ public partial class ChunkBasedSegment
         // Magic multiplier for fast division: quotient = (n * _divMagic) >> 32
         private readonly ulong _divMagic;
 
-        private readonly Memory<long> _l1All;
-        private readonly Memory<long> _l2All;
-        private readonly Memory<long> _l1Any;
+        private readonly long[] _l1All;
+        private readonly long[] _l2All;
+        private readonly long[] _l1Any;
 
         public BitmapL3(ChunkBasedSegment segment, bool isLoading)
         {
@@ -31,7 +31,7 @@ public partial class ChunkBasedSegment
 
             var pageCount = segment.Length;
             Capacity = GetChunkCount(pageCount);
-            Allocated = 0;
+            _allocated = 0;
 
             var length = Math.Max(1, (Capacity + 4095) / 4096);
             _l1All = new long[length];
@@ -46,12 +46,60 @@ public partial class ChunkBasedSegment
             }
         }
 
+        /// <summary>
+        /// Creates a new BitmapL3 by extending an existing bitmap with newly allocated pages.
+        /// This avoids re-scanning existing pages (which may be held by the caller), only scanning new pages.
+        /// </summary>
+        /// <param name="segment">The segment (with updated Length after growth)</param>
+        /// <param name="oldBitmap">The previous bitmap to copy state from</param>
+        /// <param name="oldPageCount">The page count before growth (to know where new pages start)</param>
+        public BitmapL3(ChunkBasedSegment segment, BitmapL3 oldBitmap, int oldPageCount)
+        {
+            _segment = segment;
+            _rootChunkCount = segment.ChunkCountRootPage;
+            _otherChunkCount = segment.ChunkCountPerPage;
+
+            // Precompute magic multiplier for fast division by _otherChunkCount
+            _divMagic = (0x1_0000_0000UL + (uint)_otherChunkCount - 1) / (uint)_otherChunkCount;
+
+            var newPageCount = segment.Length;
+            Capacity = GetChunkCount(newPageCount);
+            var oldCapacity = oldBitmap.Capacity;
+            
+            // Copy allocated count from old bitmap - new pages are empty (cleared during Grow)
+            _allocated = oldBitmap._allocated;
+
+            // Allocate new L1/L2 arrays with expanded capacity
+            var newL1Length = Math.Max(1, (Capacity + 4095) / 4096);
+            var oldL1Length = oldBitmap._l1All.Length;
+            
+            _l1All = new long[newL1Length];
+            _l1Any = new long[newL1Length];
+            
+            // Copy existing L1 state
+            Array.Copy(oldBitmap._l1All, _l1All, Math.Min(oldL1Length, newL1Length));
+            Array.Copy(oldBitmap._l1Any, _l1Any, Math.Min(oldL1Length, newL1Length));
+
+            var newL2Length = Math.Max(1, (newL1Length + 63) / 64);
+            var oldL2Length = oldBitmap._l2All.Length;
+            
+            _l2All = new long[newL2Length];
+            
+            // Copy existing L2 state
+            Array.Copy(oldBitmap._l2All, _l2All, Math.Min(oldL2Length, newL2Length));
+            
+            // New pages are already cleared (metadata zeroed in Grow()), so their L0 bits are all 0.
+            // L1All/L1Any/L2All for new pages are already 0 from array initialization.
+            // No need to scan new pages - they're guaranteed empty!
+        }
+
         private void InitFromLoad()
         {
             var pageIndex = -1;
             PageAccessor page = default;
             Span<long> data = default;
             var allocated = 0;
+            var segmentLength = _segment.Length;
             
             for (int i = 0; i < Capacity; i += 64)
             {
@@ -60,6 +108,15 @@ public partial class ChunkBasedSegment
                 int pageOffset = 0;
                 
                 (pageIndex, pageOffset) = GetBitmapMaskLocation(i >> 6);
+                
+                // Bounds check: ensure pageIndex is within segment
+                if (pageIndex >= segmentLength)
+                {
+                    if (page.IsValid) page.Dispose();
+                    throw new InvalidOperationException(
+                        $"BitmapL3.InitFromLoad: pageIndex {pageIndex} >= segmentLength {segmentLength}. " +
+                        $"Capacity={Capacity}, i={i}, l0Offset={l0Offset}");
+                }
                 
                 if (pageIndex != prevIndex)
                 {
@@ -71,6 +128,15 @@ public partial class ChunkBasedSegment
                     data = page.PageMetadata.Cast<byte, long>();
                 }
 
+                // Bounds check: ensure pageOffset is within PageMetadata (16 longs max)
+                if (pageOffset >= 16)
+                {
+                    if (page.IsValid) page.Dispose();
+                    throw new InvalidOperationException(
+                        $"BitmapL3.InitFromLoad: pageOffset {pageOffset} >= 16. " +
+                        $"pageIndex={pageIndex}, i={i}, l0Offset={l0Offset}");
+                }
+
                 var mask = data[pageOffset];
                 allocated += BitOperations.PopCount((ulong)mask);
                 
@@ -79,14 +145,14 @@ public partial class ChunkBasedSegment
                     var l1Offset = l0Offset >> 6;
                     var l1Mask = 1L << (l0Offset & 0x3F);
 
-                    var prevL1 = _l1All.Span[l1Offset];
-                    _l1All.Span[l1Offset] |= l1Mask;
+                    var prevL1 = _l1All[l1Offset];
+                    _l1All[l1Offset] |= l1Mask;
 
                     if (prevL1 != -1 && (prevL1 | l1Mask) == -1)
                     {
                         var l2Offset = l1Offset >> 6;
                         var l2Mask = 1L << (l1Offset & 0x3F);
-                        _l2All.Span[l2Offset] |= l2Mask;
+                        _l2All[l2Offset] |= l2Mask;
                     }
                 }
 
@@ -95,7 +161,7 @@ public partial class ChunkBasedSegment
                     var l1Offset = l0Offset >> 6;
                     var l1Mask = 1L << (l0Offset & 0x3F);
 
-                    _l1Any.Span[l1Offset] |= l1Mask;
+                    _l1Any[l1Offset] |= l1Mask;
                 }
                 
             }
@@ -103,7 +169,7 @@ public partial class ChunkBasedSegment
             {
                 page.Dispose();
             }
-            Allocated = allocated;
+            _allocated = allocated;
         }
 
         private int GetChunkCount(int pageCount) => (pageCount-1) * _otherChunkCount + _rootChunkCount;
@@ -160,26 +226,25 @@ public partial class ChunkBasedSegment
                     var l1Offset = l0Offset >> 6;
                     var l1Mask = 1L << (l0Offset & 0x3F);
 
-                    var prevL1 = _l1All.Span[l1Offset];
-                    _l1All.Span[l1Offset] |= l1Mask;
+                    var prevL1 = Interlocked.Or(ref _l1All[l1Offset], l1Mask);
 
                     if (prevL1 != -1 && (prevL1 | l1Mask) == -1)
                     {
                         var l2Offset = l1Offset >> 6;
                         var l2Mask = 1L << (l1Offset & 0x3F);
-                        _l2All.Span[l2Offset] |= l2Mask;
+                        Interlocked.Or(ref _l2All[l2Offset], l2Mask);
                     }
                 }
 
-                if (prevL0 == 0 && (prevL0 | l0Mask) != 0)
+                if (prevL0 == 0)
                 {
                     var l1Offset = l0Offset >> 6;
                     var l1Mask = 1L << (l0Offset & 0x3F);
 
-                    _l1Any.Span[l1Offset] |= l1Mask;
+                    Interlocked.Or(ref _l1Any[l1Offset], l1Mask);
                 }
 
-                ++Allocated;
+                Interlocked.Increment(ref _allocated);
                 return true;
             }
         }
@@ -203,31 +268,30 @@ public partial class ChunkBasedSegment
                     return false;
                 }
 
-                if (prevL0 != -1 && (prevL0 | l0Mask) == -1)
+                // prevL0 was 0, now it's -1, so L0 group is full -> set L1All
                 {
                     var l1Offset = l0Offset >> 6;
                     var l1Mask = 1L << (l0Offset & 0x3F);
 
-                    var prevL1 = _l1All.Span[l1Offset];
-                    _l1All.Span[l1Offset] |= l1Mask;
+                    var prevL1 = Interlocked.Or(ref _l1All[l1Offset], l1Mask);
 
                     if (prevL1 != -1 && (prevL1 | l1Mask) == -1)
                     {
                         var l2Offset = l1Offset >> 6;
                         var l2Mask = 1L << (l1Offset & 0x3F);
-                        _l2All.Span[l2Offset] |= l2Mask;
+                        Interlocked.Or(ref _l2All[l2Offset], l2Mask);
                     }
                 }
 
-                if (prevL0 == 0 && (prevL0 | l0Mask) != 0)
+                // prevL0 was 0, now it has bits -> set L1Any
                 {
                     var l1Offset = l0Offset >> 6;
                     var l1Mask = 1L << (l0Offset & 0x3F);
 
-                    _l1Any.Span[l1Offset] |= l1Mask;
+                    Interlocked.Or(ref _l1Any[l1Offset], l1Mask);
                 }
 
-                Allocated += 64;
+                Interlocked.Add(ref _allocated, 64);
                 return true;
             }
         }
@@ -236,7 +300,8 @@ public partial class ChunkBasedSegment
         public void ClearL0(int index)
         {
             var l0Offset = index >> 6;
-            var l0Mask = ~(1L << (index & 0x3F));
+            var bitMask = 1L << (index & 0x3F);
+            var l0Mask = ~bitMask;
 
             var (pageIndex, pageOffset) = GetBitmapMaskLocation(l0Offset);
             _segment.GetPageSharedAccessor(pageIndex, out var page);
@@ -244,32 +309,42 @@ public partial class ChunkBasedSegment
             {
                 var data = page.PageMetadata.Cast<byte, long>();
                 var prevL0 = Interlocked.And(ref data[pageOffset], l0Mask);
-                page.SetPageDirty();                                                                // TODO dirty only if changed
-                if ((prevL0 == -1) && ((prevL0 & l0Mask) != -1))
+
+                // Guard against double-free - only proceed if the bit was actually set
+                if ((prevL0 & bitMask) == 0)
+                {
+                    // Bit wasn't set - this is a double-free or invalid free, ignore
+                    return;
+                }
+
+                page.SetPageDirty();
+
+                // Update L1All: clear bit when L0 group transitions from full to not-full
+                if (prevL0 == -1)
                 {
                     var l1Offset = l0Offset >> 6;
                     var l1Mask = 1L << (l0Offset & 0x3F);
 
-                    var prevL1 = _l1All.Span[l1Offset];
-                    _l1All.Span[l1Offset] &= l1Mask;
+                    var prevL1 = Interlocked.And(ref _l1All[l1Offset], ~l1Mask);
 
                     if (prevL1 == -1)
                     {
                         var l2Offset = l1Offset >> 6;
                         var l2Mask = 1L << (l1Offset & 0x3F);
-                        _l2All.Span[l2Offset] &= l2Mask;
+                        Interlocked.And(ref _l2All[l2Offset], ~l2Mask);
                     }
                 }
 
-                if ((prevL0 != 0) && ((prevL0 & l0Mask) == 0))
+                // Update L1Any: clear bit when L0 group transitions from has-some to empty
+                if ((prevL0 & l0Mask) == 0)
                 {
                     var l1Offset = l0Offset >> 6;
                     var l1Mask = 1L << (l0Offset & 0x3F);
 
-                    _l1Any.Span[l1Offset] &= l1Mask;
+                    Interlocked.And(ref _l1Any[l1Offset], ~l1Mask);
                 }
 
-                --Allocated;
+                Interlocked.Decrement(ref _allocated);
             }
         }
 
@@ -328,11 +403,18 @@ public partial class ChunkBasedSegment
                             break;
                         }
                         c0 = ++i0 << 6;
+                        
+                        // Bounds check after skip
+                        if (c0 >= capacity)
+                        {
+                            curPage.Dispose();
+                            return false;
+                        }
 
                         // Check if we can skip the rest of the level 1
                         for (int i1 = c0 >> 12; i1 < ll1; i1 = c0 >> 12)
                         {
-                            var v1 = _l1All.Span[i1] >> (i0 & 0x3F);
+                            var v1 = _l1All[i1] >> (i0 & 0x3F);
                             if (v1 != -1)
                             {
                                 break;
@@ -340,25 +422,56 @@ public partial class ChunkBasedSegment
 
                             i0 = 0;
                             c0 = ++i1 << 12;
+                            
+                            // Bounds check after skip
+                            if (c0 >= capacity)
+                            {
+                                curPage.Dispose();
+                                return false;
+                            }
 
                             // Check if we can skip the rest of the level 2
                             for (int i2 = c0 >> 18; i2 < ll2; i2 = c0 >> 18)
                             {
-                                var v2 = _l2All.Span[i2] >> (i1 & 0x3F);
+                                var v2 = _l2All[i2] >> (i1 & 0x3F);
                                 if (v2 != -1)
                                 {
                                     break;
                                 }
                                 i1 = 0;
                                 c0 = ++i2 << 18;
+                                
+                                // Bounds check after skip
+                                if (c0 >= capacity)
+                                {
+                                    curPage.Dispose();
+                                    return false;
+                                }
                             }
                         }
                     }
                 }
+                
+                // Recheck bounds after potential skip operations before computing candidate
+                if (c0 >= capacity)
+                {
+                    curPage.Dispose();
+                    return false;
+                }
 
                 var bitPos = BitOperations.TrailingZeroCount(~v0);
+                var candidateIndex = (c0 & ~0x3F) + bitPos;
+                
+                // Critical: verify the candidate index is within capacity bounds
+                // The last L0 group may have bits beyond capacity that appear "free"
+                if (candidateIndex >= capacity)
+                {
+                    curPage.Dispose();
+                    return false;
+                }
+                
                 v0 |= (1L << bitPos);
-                index = (c0 & ~0x3F) + bitPos;
+                index = candidateIndex;
                 mask = v0;
                 curPage.Dispose();
                 return true;
@@ -371,12 +484,22 @@ public partial class ChunkBasedSegment
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         private bool FindNextUnsetL1(ref int index, ref long mask)
         {
+            var capacity = Capacity;
+            
+            // Calculate the maximum valid L1 index (each L1 represents 64 chunks)
+            // We need at least 64 chunks available from the L1 start position
+            var maxL1Index = (capacity - 64) >> 6;  // Highest L1 that has a full 64 chunks
+            if (maxL1Index < 0)
+            {
+                return false;  // Not enough capacity for even one L1 allocation
+            }
+            
             var c1 = ++index;
             long v1 = mask;
             var ll1 = _l1All.Length;
             var ll2 = _l2All.Length;
 
-            while (c1 < (ll1 << 6))
+            while (c1 <= maxL1Index)
             {
                 if (((c1 & 0x3F) == 0) || (v1 == -1))
                 {
@@ -385,18 +508,24 @@ public partial class ChunkBasedSegment
                     for (i1 = c1 >> 6; i1 < ll1; i1 = c1 >> 6)
                     {
                         var t1 = 1L << (c1 & 0x3F);
-                        v1 = _l1All.Span[i1] | (t1 - 1);
+                        v1 = _l1All[i1] | (t1 - 1);
                         if (v1 != -1)
                         {
                             break;
                         }
 
                         c1 = ++i1 << 6;
+                        
+                        // Early exit if we've exceeded the valid range
+                        if (c1 > maxL1Index)
+                        {
+                            return false;
+                        }
 
                         // Check if we can skip the rest of the level 2
                         for (int i2 = c1 >> 12; i2 < ll2; i2 = c1 >> 12)
                         {
-                            var v2 = _l2All.Span[i2] >> (i1 & 0x3F);
+                            var v2 = _l2All[i2] >> (i1 & 0x3F);
                             if (v2 != -1)
                             {
                                 break;
@@ -404,15 +533,35 @@ public partial class ChunkBasedSegment
 
                             i1 = 0;
                             c1 = ++i2 << 12;
+                            
+                            // Early exit if we've exceeded the valid range
+                            if (c1 > maxL1Index)
+                            {
+                                return false;
+                            }
                         }
                     }
                 }
+                
+                // Recheck bounds after potential skip operations
+                if (c1 > maxL1Index)
+                {
+                    return false;
+                }
 
                 var t = 1L << (c1 & 0x3F);
-                v1 = _l1Any.Span[c1 >> 6] | (t - 1);
+                v1 = Volatile.Read(ref _l1Any[c1 >> 6]) | (t - 1);
                 var bitPos = BitOperations.TrailingZeroCount(~v1);
+                var candidateIndex = (c1 & ~0x3F) + bitPos;
+                
+                // Verify the candidate L1 index is within bounds
+                if (candidateIndex > maxL1Index)
+                {
+                    return false;
+                }
+                
                 v1 |= (1L << bitPos);
-                index = (c1 & ~0x3F) + bitPos;
+                index = candidateIndex;
                 mask = v1;
                 return true;
             }
@@ -498,7 +647,10 @@ public partial class ChunkBasedSegment
         }
 
         public int Capacity { get; }
-        public int Allocated { get; private set; }
+        
+        private int _allocated;
+        public int Allocated => _allocated;
+        public int FreeChunkCount => Capacity - _allocated;
     }
     
 }

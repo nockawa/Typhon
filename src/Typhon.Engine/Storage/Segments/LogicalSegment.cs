@@ -56,7 +56,8 @@ public class LogicalSegment : IDisposable
     internal const int NextHeadersIndexSectionCount = PagedMMF.PageRawDataSize / sizeof(int);
 
     private readonly ManagedPagedMMF _manager;
-    private int[] _pages;
+    private readonly Lock _growLock = new();
+    private volatile int[] _pages;
 
     public int RootPageIndex
     {
@@ -73,11 +74,11 @@ public class LogicalSegment : IDisposable
 
     public int Length => _pages.Length;
     public ReadOnlySpan<int> Pages => _pages;
-    public bool GetPageExclusiveAccessor(int segmentFilePageIndex, out PageAccessor result,
+    public bool GetPageExclusiveAccessor(int segmentFilePageIndex, [TransfersOwnership] out PageAccessor result,
         long timeout = Timeout.Infinite, CancellationToken cancellationToken = default) 
         => _manager.RequestPage(Pages[segmentFilePageIndex], true, out result, timeout, cancellationToken);
     
-    public bool GetPageSharedAccessor(int segmentFilePageIndex, out PageAccessor result,
+    public bool GetPageSharedAccessor(int segmentFilePageIndex, [TransfersOwnership] out PageAccessor result,
         long timeout = Timeout.Infinite, CancellationToken cancellationToken = default) 
         => _manager.RequestPage(Pages[segmentFilePageIndex], false, out result, timeout, cancellationToken);
 
@@ -136,24 +137,38 @@ public class LogicalSegment : IDisposable
         }
     }
     
+    /// <summary>
+    /// Grows the logical segment to the specified new length.
+    /// </summary>
+    /// <param name="newLength">The new length (must be greater than current length).</param>
+    /// <param name="clearNewPages">Whether to clear the content of newly allocated pages.</param>
+    /// <param name="changeSet">Optional change set for tracking modifications.</param>
+    /// <remarks>
+    /// This method is thread-safe. Concurrent reads of existing pages remain valid during growth.
+    /// The <see cref="_pages"/> field is volatile, ensuring visibility of the new array after growth.
+    /// </remarks>
     public void Grow(int newLength, bool clearNewPages, ChangeSet changeSet = null)
     {
-        var curPages = _pages;
-        if (curPages == null)
+        lock (_growLock)
         {
-            throw new InvalidOperationException("Logical segment has not been initialized.");
-        }
-        if (newLength <= curPages.Length)
-        {
-            throw new ArgumentException($"New length {newLength} must be greater than current size {curPages.Length}.", nameof(newLength));
-        }
+            var curPages = _pages;
+            if (curPages == null)
+            {
+                throw new InvalidOperationException("Logical segment has not been initialized.");
+            }
+            if (newLength <= curPages.Length)
+            {
+                // Already at or above requested size (may have been grown by another thread)
+                return;
+            }
 
-        var newPages = new int[newLength];
-        var newPagesAsSpan = newPages.AsSpan();
-        curPages.CopyTo(newPagesAsSpan);
-        _manager.AllocatePages(ref newPagesAsSpan, curPages.Length, changeSet);
+            var newPages = new int[newLength];
+            var newPagesAsSpan = newPages.AsSpan();
+            curPages.CopyTo(newPagesAsSpan);
+            _manager.AllocatePages(ref newPagesAsSpan, curPages.Length, changeSet);
 
-        CreateOrGrow(PageBlockType.None, newPages, Length, ref NoNextMap, clearNewPages, changeSet);
+            CreateOrGrow(PageBlockType.None, newPages, curPages.Length, ref NoNextMap, clearNewPages, changeSet);
+        }
     }
     
     internal LogicalSegment(ManagedPagedMMF manager)
@@ -197,7 +212,7 @@ public class LogicalSegment : IDisposable
         return Create(type, ids, clear, changeSet);
     }
 
-    private static int NoNextMap = 0;
+    private static int NoNextMap;
     
     internal virtual bool Create(PageBlockType type, Span<int> filePageIndices, bool clear, ChangeSet changeSet = null) 
         => CreateOrGrow(type, filePageIndices, 0, ref NoNextMap, clear, changeSet);
@@ -229,7 +244,7 @@ public class LogicalSegment : IDisposable
                 // Need to rebuild the indices pages
                 if (growFrom > 0)
                 {
-                    WalkIndicesMap((int i, ref PageAccessor accessor, Span<int> span) =>
+                    WalkIndicesMap((i, ref accessor, span) =>
                     {
                         span[i] = accessor.FilePageIndex;
                         mapIndexAllocStartFrom = i + 1;                 // Update the start index for the first page to allocate

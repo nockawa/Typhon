@@ -181,6 +181,7 @@ public class DatabaseEngine : IResource, IMetricSource, IDebugPropertiesProvider
     /// time when the transaction was created) is used as the reference point, every access will be based on the data that existed up to this point.
     /// Every change will be isolated from other transactions until the content is committed.
     /// </remarks>
+    [return: TransfersOwnership] 
     public Transaction CreateTransaction()
     {
         Interlocked.Increment(ref _transactionsCreated);
