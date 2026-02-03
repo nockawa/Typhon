@@ -588,6 +588,13 @@ public unsafe struct ChunkAccessor : IDisposable
     /// </summary>
     public void Dispose()
     {
+        // Guard against disposing a default-constructed or already-disposed accessor
+        // A properly constructed accessor always has _segment set
+        if (_segment == null)
+        {
+            return;
+        }
+        
         for (int i = 0, used = 0; used < _usedSlots; i++)
         {
             if (_pageIndices[i] == InvalidPageIndex)

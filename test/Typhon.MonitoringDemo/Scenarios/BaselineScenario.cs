@@ -23,10 +23,6 @@ public class BaselineScenario : IScenario
         // Run synchronously on the current thread - exactly like unit tests
         while (!ct.IsCancellationRequested)
         {
-            if (loopCount == 283)
-            {
-                int pipo = 0;
-            }
             var sw = Stopwatch.GetTimestamp();
             try
             {

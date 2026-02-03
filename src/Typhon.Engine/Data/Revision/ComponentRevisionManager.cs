@@ -317,7 +317,7 @@ internal ref struct ComponentRevisionManager
 
     private static void GrowChain(Transaction.ComponentInfoBase info, int firstChunkId, ref CompRevStorageHeader firstHeader)
     {
-        var compRevTableAccessor = info.CompRevTableAccessor;
+        ref var compRevTableAccessor = ref info.CompRevTableAccessor;
         var compRevTable = info.CompRevTableSegment;
         
         // Special case, the first revision is in the first chunk, we need to walk to the end of the chain and add a new chunk there

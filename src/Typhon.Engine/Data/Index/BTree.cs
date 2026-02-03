@@ -513,12 +513,19 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         {
             // TODO use a thread-local ChunkRandomAccessor to avoid creating a new one every time.
             var ca = this._segment.CreateChunkAccessor();
-            if (!TryGet(key, out var value, ref ca))
+            try
             {
-                throw new KeyNotFoundException();
-            }
+                if (!TryGet(key, out var value, ref ca))
+                {
+                    throw new KeyNotFoundException();
+                }
 
-            return value;
+                return value;
+            }
+            finally
+            {
+                ca.Dispose();
+            }
         }
     }
 
@@ -600,7 +607,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     private void RemoveCore(ref RemoveArguments args)
     {
-        var accessor = args.Accessor;
+        ref var accessor = ref args.Accessor;
         if (IsEmpty(ref accessor))
         {
             return;
@@ -669,34 +676,38 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     private void AddOrUpdateCore(ref InsertArguments args)
     {
-        var accessor = args.Accessor;
+        ref var accessor = ref args.Accessor;
         
         if (IsEmpty(ref accessor))
         {
-            Root = AllocNode(NodeStates.IsLeaf, ref args.Accessor);
-            SetRootChunkId(ref args.Accessor, Root.ChunkId);
+            Root = AllocNode(NodeStates.IsLeaf, ref accessor);
+            SetRootChunkId(ref accessor, Root.ChunkId);
             LinkList = Root;
             ReverseLinkList = LinkList;
             Height++;
-        }
-
-        int CreateBufferAndAddValue(ref InsertArguments iargs)
-        {
-            var bufferId = _storage.CreateBuffer(ref accessor);
-            iargs.ElementId =_storage.Append(bufferId, iargs.GetValue(), ref accessor);
-            return bufferId;
         }
 
         // append optimization: if item key is in order, this may add item in O(1) operation.
         int order = IsEmpty(ref accessor) ? 1 : args.Compare(args.Key, GetLast(ref accessor).Key);
         if (order > 0 && !ReverseLinkList.GetIsFull(ref accessor))
         {
-            var value = AllowMultiple ? CreateBufferAndAddValue(ref args) : args.GetValue();
+            int value;
+            if (AllowMultiple)
+            {
+                var bufferId = _storage.CreateBuffer(ref accessor);
+                args.ElementId = _storage.Append(bufferId, args.GetValue(), ref accessor);
+                value = bufferId;
+            }
+            else
+            {
+                value = args.GetValue();
+            }
             ReverseLinkList.PushLast(new KeyValueItem(args.Key, value), ref accessor);
             IncCount(ref accessor);
             return;
         }
-        else if (order == 0)
+
+        if (order == 0)
         {
             if (AllowMultiple)
             {
@@ -709,12 +720,23 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         order = args.Compare(args.Key, GetFirst(ref accessor).Key);
         if (order < 0 && !LinkList.GetIsFull(ref accessor))
         {
-            var value = AllowMultiple ? CreateBufferAndAddValue(ref args) : args.GetValue();
+            int value;
+            if (AllowMultiple)
+            {
+                var bufferId = _storage.CreateBuffer(ref accessor);
+                args.ElementId = _storage.Append(bufferId, args.GetValue(), ref accessor);
+                value = bufferId;
+            }
+            else
+            {
+                value = args.GetValue();
+            }
             LinkList.PushFirst(new KeyValueItem(args.Key, value), ref accessor);
             IncCount(ref accessor);
             return;
         }
-        else if (order == 0)
+
+        if (order == 0)
         {
             if (AllowMultiple)
             {
@@ -734,12 +756,12 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         // if split occurred at root, make a new root and increase height.
         if (rightSplit != null)
         {
-            var newRoot = AllocNode(NodeStates.None, ref args.Accessor);
+            var newRoot = AllocNode(NodeStates.None, ref accessor);
             newRoot.SetLeft(Root, ref accessor);
 
             newRoot.Insert(0, rightSplit.Value, ref accessor);
             Root = newRoot;
-            SetRootChunkId(ref args.Accessor, Root.ChunkId);
+            SetRootChunkId(ref accessor, Root.ChunkId);
             Height++;
         }
 

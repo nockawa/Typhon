@@ -686,7 +686,14 @@ public abstract partial class BTree<TKey>
                 get
                 {
                     var accessor = _node._storage.Segment.CreateChunkAccessor();
-                    return _node.GetPrevious(ref accessor);
+                    try
+                    {
+                        return _node.GetPrevious(ref accessor);
+                    }
+                    finally
+                    {
+                        accessor.Dispose();
+                    }
                 }
             }
 
@@ -695,7 +702,14 @@ public abstract partial class BTree<TKey>
                 get
                 {
                     var accessor = _node._storage.Segment.CreateChunkAccessor();
-                    return _node.GetNext(ref accessor);
+                    try
+                    {
+                        return _node.GetNext(ref accessor);
+                    }
+                    finally
+                    {
+                        accessor.Dispose();
+                    }
                 }
             }
 
@@ -704,7 +718,14 @@ public abstract partial class BTree<TKey>
                 get
                 {
                     var accessor = _node._storage.Segment.CreateChunkAccessor();
-                    return _node.GetLeft(ref accessor);
+                    try
+                    {
+                        return _node.GetLeft(ref accessor);
+                    }
+                    finally
+                    {
+                        accessor.Dispose();
+                    }
                 }
             }
 
@@ -713,14 +734,21 @@ public abstract partial class BTree<TKey>
                 get
                 {
                     var accessor = _node._storage.Segment.CreateChunkAccessor();
-                    var count = _node.GetCount(ref accessor);
-                    var res = new KeyValueItem[count];
-                    for (int i = 0; i < count; i++)
+                    try
                     {
-                        res[i] = _node.GetItem(i, ref accessor);
-                    }
+                        var count = _node.GetCount(ref accessor);
+                        var res = new KeyValueItem[count];
+                        for (int i = 0; i < count; i++)
+                        {
+                            res[i] = _node.GetItem(i, ref accessor);
+                        }
 
-                    return res;
+                        return res;
+                    }
+                    finally
+                    {
+                        accessor.Dispose();
+                    }
                 }
             }
 

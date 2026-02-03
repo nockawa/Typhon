@@ -60,6 +60,17 @@ public unsafe class Transaction : IDisposable
         public ChunkAccessor CompContentAccessor;
         public ChunkAccessor CompRevTableAccessor;
         public abstract void AddNew(long pk, CompRevInfo entry);
+        
+        /// <summary>
+        /// Disposes the ChunkAccessor fields by reference to avoid struct copying.
+        /// ChunkAccessor is a ~1KB struct - accessing it through a class field creates a copy.
+        /// This method ensures the actual fields are disposed, not copies.
+        /// </summary>
+        public void DisposeAccessors()
+        {
+            CompContentAccessor.Dispose();
+            CompRevTableAccessor.Dispose();
+        }
     }
 
     internal class ComponentInfoSingle : ComponentInfoBase
@@ -185,10 +196,12 @@ public unsafe class Transaction : IDisposable
         // This is critical! Without this, pages remain in Shared state and cannot
         // be evicted by the clock-sweep algorithm, leading to page cache exhaustion
         // and deadlock when segments need to grow.
+        // NOTE: We call DisposeAccessors() instead of accessing the fields directly
+        // because ChunkAccessor is a struct - accessing it through a class field
+        // would create a copy, disposing the copy but leaving the original untouched.
         foreach (var info in _componentInfos.Values)
         {
-            info.CompContentAccessor.Dispose();
-            info.CompRevTableAccessor.Dispose();
+            info.DisposeAccessors();
         }
         
         _dbe.TransactionChain.Remove(this);
@@ -1001,7 +1014,7 @@ public unsafe class Transaction : IDisposable
 
     private bool GetCompRevInfoFromIndex(long pk, ComponentInfoMultiple info, long tick, out List<ComponentInfoBase.CompRevInfo> compRevInfoList)
     {
-        var compRevTableAccessor = info.CompRevTableAccessor;
+        ref var compRevTableAccessor = ref info.CompRevTableAccessor;
 
         var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
         using var vsba = info.PrimaryKeyIndex.TryGetMultiple(pk, ref accessor);

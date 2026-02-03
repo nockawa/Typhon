@@ -7,9 +7,9 @@ using System.Text;
 
 namespace Typhon.Engine;
 
-public class StringTableSegment
+public class StringTableSegment : IDisposable
 {
-    public struct ChunkHeader
+    private struct ChunkHeader
     {
         public int SizeLeft;
         public int NextChunkId;
@@ -24,6 +24,12 @@ public class StringTableSegment
     {
         ChunkAccessor = segment.CreateChunkAccessor();
         Stride = Segment.Stride;
+    }
+
+    public void Dispose()
+    {
+        ChunkAccessor.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     unsafe public int StoreString(string str)
