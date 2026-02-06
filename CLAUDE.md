@@ -401,6 +401,8 @@ Work tracking is managed via the [Typhon dev GitHub Project](https://github.com/
 | Skill | Purpose |
 |-------|---------|
 | `/dev-status` | Show current development status from GitHub Project |
+| `/start-research #XX` | Start research on an issue (creates research doc, links ideas, updates status) |
+| `/start-design #XX` | Start design for an issue (creates design doc from research/ideas, updates status to Ready) |
 | `/start-work #XX` | Begin work on an issue (updates status, creates branch, verifies design) |
 | `/complete-work #XX` | Finish work (close issue, prompt for doc updates, archive design) |
 | `/create-issue` | Create new GitHub issue with project fields |
@@ -414,8 +416,8 @@ Backlog → Research → Ready → In Progress → Review → Done
 ```
 
 1. **Backlog**: Captured but not yet prioritized
-2. **Research**: Needs exploration before design (creates `claude/research/` doc)
-3. **Ready**: Design complete, ready to implement (has `claude/design/` doc)
+2. **Research**: Needs exploration before design (use `/start-research #XX`, creates `claude/research/` doc)
+3. **Ready**: Design complete, ready to implement (use `/start-design #XX`, creates `claude/design/` doc)
 4. **In Progress**: Active development (use `/start-work #XX`)
 5. **Review**: PR open, awaiting merge
 6. **Done**: Complete (use `/complete-work #XX`)

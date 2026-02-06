@@ -513,8 +513,8 @@ Use this template for the README.md entry point in directory-based documents:
 
 1. **Capture the idea** → Create a file in `ideas/` (or just discuss it)
 2. **Create GitHub Issue** → Use `/create-issue` to track it in the GitHub Project
-3. **Research if needed** → Create `research/[topic].md` for complex decisions (Status: Research)
-4. **Design it** → Create `design/[feature].md` when ready to plan implementation (Status: Ready)
+3. **Research if needed** → Use `/start-research #XX` to create research doc from ideas (Status: Research)
+4. **Design it** → Use `/start-design #XX` to create design doc from research (Status: Ready)
 5. **Implement** → Use `/start-work #XX` to begin (Status: In Progress)
 6. **Complete** → Use `/complete-work #XX` to finalize (Status: Done)
 7. **Document** → Move/update design docs to `reference/` for ongoing documentation
@@ -628,7 +628,9 @@ Design Doc: claude/design/FeatureName.md
 
 | Skill | Purpose |
 |-------|---------|
-| `/status` | Show current development status from GitHub Project |
+| `/dev-status` | Show current development status from GitHub Project |
+| `/start-research #XX` | Start research on an issue (creates research doc, links ideas, updates status) |
+| `/start-design #XX` | Start design for an issue (creates design doc from research/ideas, updates status to Ready) |
 | `/start-work #XX` | Begin work on an issue (creates branch, updates status) |
 | `/complete-work #XX` | Finish work (close issue, prompt for doc updates) |
 | `/create-issue` | Create new GitHub issue with project fields |
