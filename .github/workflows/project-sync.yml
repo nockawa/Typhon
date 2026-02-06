@@ -181,11 +181,11 @@ jobs:
           PR_BRANCH="${{ github.event.pull_request.head.ref }}"
 
           # Try to extract from title first (e.g., "Fix #123: description")
-          ISSUE_NUM=$(echo "$PR_TITLE" | grep -oE '#[0-9]+' | head -1 | tr -d '#')
+          ISSUE_NUM=$(echo "$PR_TITLE" | grep -oE '#[0-9]+' | head -1 | tr -d '#' || true)
 
           # If not found, try branch name (e.g., "feature/123-name" or "fix/123-name")
           if [ -z "$ISSUE_NUM" ]; then
-            ISSUE_NUM=$(echo "$PR_BRANCH" | grep -oE '(feature|fix)/[0-9]+' | grep -oE '[0-9]+')
+            ISSUE_NUM=$(echo "$PR_BRANCH" | grep -oE '(feature|fix)/[0-9]+' | grep -oE '[0-9]+' || true)
           fi
 
           if [ -n "$ISSUE_NUM" ]; then
@@ -253,9 +253,9 @@ jobs:
           PR_BRANCH="${{ github.event.pull_request.head.ref }}"
 
           # Extract issue number
-          ISSUE_NUM=$(echo "$PR_TITLE" | grep -oE '#[0-9]+' | head -1 | tr -d '#')
+          ISSUE_NUM=$(echo "$PR_TITLE" | grep -oE '#[0-9]+' | head -1 | tr -d '#' || true)
           if [ -z "$ISSUE_NUM" ]; then
-            ISSUE_NUM=$(echo "$PR_BRANCH" | grep -oE '(feature|fix)/[0-9]+' | grep -oE '[0-9]+')
+            ISSUE_NUM=$(echo "$PR_BRANCH" | grep -oE '(feature|fix)/[0-9]+' | grep -oE '[0-9]+' || true)
           fi
 
           if [ -n "$ISSUE_NUM" ]; then
@@ -307,4 +307,6 @@ jobs:
                 echo "✅ Issue #$ISSUE_NUM marked as Done"
               fi
             fi
+          else
+            echo "ℹ️ No issue number found in PR title or branch name"
           fi
