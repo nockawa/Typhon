@@ -1,0 +1,358 @@
+---
+name: start-research
+description: Start research on a GitHub issue - creates research doc, links ideas, updates status
+argument-hint: [issue number or title] [--deep]
+---
+
+# Start Research on a GitHub Issue
+
+Transition an issue into the Research phase by creating a research document, optionally seeded from existing ideas, and updating the project board.
+
+## Input
+
+$ARGUMENTS may contain:
+- An **issue number** (e.g., `42` or `#42`) → proceed directly to the workflow
+- A **title/text** (non-numeric) → offer to create a new issue with that title
+- **Nothing** (empty) → show available issues to pick from, or offer to create one
+- The **`--deep`** flag (anywhere in arguments) → create a directory structure instead of a single file
+
+Extract `--deep` from arguments first, then process the remainder as issue number or title.
+
+## Handling No Issue Number
+
+### Case 1: No arguments provided
+
+Fetch Backlog and Research items from the project:
+
+```bash
+gh project item-list 7 --owner nockawa --format json
+```
+
+Filter for items with Status = "Backlog" (prioritize these — they're the ones most likely to need research). Then use `AskUserQuestion` to present a choice:
+
+**Question:** "Which issue would you like to start research on?"
+**Header:** "Issue"
+**Options** (up to 4, prioritize Backlog items by priority):
+- `#<number> - <title>` (description: "[Status] [Priority] [Area]") — for each candidate issue
+- `Create a new issue` (description: "I'll help you create one right now")
+
+If the user picks an existing issue, continue with the normal workflow below using that issue number.
+
+If the user picks "Create a new issue", proceed to **Inline Issue Creation** below.
+
+### Case 2: Non-numeric argument (looks like a title)
+
+If $ARGUMENTS (after removing `--deep`) is not empty and not a number (doesn't match `^\d+$` after stripping `#`), use `AskUserQuestion`:
+
+**Question:** "It looks like you provided a title instead of an issue number. Would you like to:"
+**Header:** "Action"
+**Options:**
+- `Create a new issue with this title` (description: "I'll create '$ARGUMENTS' and start research on it")
+- `Search existing issues` (description: "Search for issues matching '$ARGUMENTS' to pick one")
+
+If "Create a new issue": proceed to **Inline Issue Creation** with the title pre-filled.
+
+If "Search existing issues": run `gh issue list --repo nockawa/Typhon --search "$ARGUMENTS" --json number,title,state --limit 5` and present matching issues via `AskUserQuestion`.
+
+## Inline Issue Creation
+
+When an issue needs to be created, do it inline rather than redirecting the user to `/create-issue`.
+
+Follow the `/create-issue` skill workflow directly:
+
+1. **Gather info** — Use `AskUserQuestion` to collect:
+   - Title (if not already provided from $ARGUMENTS)
+   - Description (ask the user to describe what needs to be done)
+   - Type labels, Area, Priority, Phase, Estimate (use the same questions as `/create-issue`)
+
+2. **Create the issue** — Execute the full `/create-issue` workflow:
+   ```bash
+   gh issue create --repo nockawa/Typhon --title "TITLE" --body "DESCRIPTION" --label "LABELS" --assignee nockawa
+   ```
+
+3. **Add to project and set fields** — Follow `/create-issue` steps 3-5
+
+4. **Continue** — Once the issue is created, continue with the normal `/start-research` workflow below using the new issue number.
+
+## Workflow
+
+### 1. Fetch Issue Details
+
+```bash
+gh issue view <number> --json number,title,body,labels
+```
+
+### 2. Status Guard
+
+Check the issue's current project status. If the issue is already **past** "Research" (i.e., status is "Ready", "In Progress", "Review", or "Done"), warn the user:
+
+**Question:** "Issue #<number> is already at '<current status>'. Starting research would move it back to 'Research'. Proceed?"
+**Header:** "Status"
+**Options:**
+- `Proceed anyway` (description: "Move status back to Research and create the research doc")
+- `Cancel` (description: "Don't change anything")
+
+If "Cancel", stop and report that no changes were made.
+
+### 3. Check for Existing Ideas Documents
+
+List all files under `claude/ideas/`:
+
+```
+Glob: claude/ideas/**/*.md
+```
+
+If any ideas documents exist, present them to the user via `AskUserQuestion`:
+
+**Question:** "I found these ideas documents. Which ones (if any) should feed into this research?"
+**Header:** "Ideas"
+**Options** (up to 4, pick the most likely related ones based on name/path similarity to the issue title):
+- `claude/ideas/<path>` (description: first line or title from the file) — for each candidate
+- `None — start fresh` (description: "Create the research doc from scratch using only the issue context")
+**MultiSelect:** true
+
+If the user selects one or more ideas docs, read their full content for use in step 5.
+
+If no ideas documents exist at all, skip this step silently.
+
+### 4. Determine Research Doc Location
+
+**First, try to infer the category** from the selected ideas document(s):
+- If one or more ideas docs were selected, use their parent directory path as the category.
+  - Example: ideas doc at `claude/ideas/database-engine/QueryCaching.md` → category = `database-engine/`
+  - Example: ideas doc at `claude/ideas/async-uow/README.md` → category = root level, doc name = `async-uow`
+  - If multiple ideas docs are from different categories, use the most specific common ancestor.
+
+**If no category can be inferred** (no ideas docs selected, or docs are at root level with no clear category), ask the user:
+
+List existing directories under `claude/research/` and present:
+
+**Question:** "Where should this research doc go?"
+**Header:** "Location"
+**Options** (up to 4):
+- `research/ (root level)` (description: "No category, just a file at the top level")
+- `research/<existing-category>/` (description: "Existing category") — for each existing subdirectory
+- `Other` (description: "Specify a custom path / create new category")
+**MultiSelect:** false
+
+### 5. Create Research Document
+
+Derive the **document name** from the issue title, using PascalCase (e.g., issue "Add spatial indexing support" → `SpatialIndexingSupport`).
+
+#### Standard Mode (no `--deep`)
+
+Create a single file: `claude/research/<category>/<Name>.md`
+
+Use the **research template** from `claude/README.md`, pre-filling:
+
+```markdown
+# <Issue Title>
+
+**Date:** <today YYYY-MM-DD>
+**Status:** In progress
+**GitHub Issue:** #<number>
+**Outcome:** [To be determined]
+
+## Context
+
+<Pre-fill from the issue body. If an ideas doc was selected, also incorporate its core idea and motivation here.>
+
+## Questions to Answer
+
+<If the ideas doc had "Open Questions", migrate them here. Otherwise, extract implicit questions from the issue body. If neither provides questions, leave placeholder items:>
+1. [Question derived from issue context]
+2. [Question derived from issue context]
+
+## Analysis
+
+### Option A: [Name]
+
+**Description:** [How it works]
+
+**Pros:**
+-
+
+**Cons:**
+-
+
+### Option B: [Name]
+
+[Same structure]
+
+## Recommendation
+
+[To be filled after analysis]
+
+## Next Steps
+
+- [ ] [Action items to be determined]
+
+## References
+
+- GitHub Issue: #<number>
+<If ideas doc was used:>
+- Source idea: `claude/ideas/<path>`
+<If issue body has links:>
+- [Extracted references]
+```
+
+#### Deep Mode (`--deep`)
+
+Create a directory: `claude/research/<category>/<Name>/`
+
+**README.md** (entry point):
+
+```markdown
+# <Issue Title>
+
+<One-line description derived from issue body>
+
+**Date:** <today YYYY-MM-DD>
+**Status:** In progress
+**GitHub Issue:** #<number>
+**Outcome:** [To be determined]
+
+## Overview
+
+<2-3 paragraphs from issue body and ideas doc context, explaining scope and purpose of this research.>
+
+## Document Series
+
+| Part | Title | Focus |
+|------|-------|-------|
+| [01](./01-context-and-questions.md) | **Context & Questions** | Problem statement, questions to answer |
+
+## Key Insights
+
+[To be filled as research progresses]
+
+## References
+
+- GitHub Issue: #<number>
+<If ideas doc was used:>
+- Source idea: `claude/ideas/<path>`
+```
+
+**01-context-and-questions.md** (first part):
+
+```markdown
+# Context & Questions
+
+## Context
+
+<Pre-fill from the issue body and ideas doc, same as standard mode.>
+
+## Questions to Answer
+
+1. [Question derived from issue context]
+2. [Question derived from issue context]
+
+## Initial Thoughts
+
+<If ideas doc had analysis or exploration, bring key points here. Otherwise leave empty.>
+```
+
+Additional numbered parts can be added later with "add new part <title>".
+
+### 6. Handle Source Ideas Documents
+
+If one or more ideas documents were selected in step 3, ask **for each one**:
+
+**Question:** "The ideas doc `claude/ideas/<path>` was used. What should happen to it?"
+**Header:** "Ideas doc"
+**Options:**
+- `Archive it` (description: "Move to claude/archive/ — the content lives on in the research doc")
+- `Keep and cross-reference` (description: "Leave in ideas/ but add a link pointing to the new research doc")
+- `Leave as-is` (description: "Don't change the ideas doc at all")
+
+**If "Archive it":**
+- Move the file (or directory) to `claude/archive/` preserving its name
+- Add a note at the top: `> **Archived:** Promoted to research — see claude/research/<path>`
+
+**If "Keep and cross-reference":**
+- Add to the ideas doc under `## Related`:
+  ```markdown
+  - **Research doc:** `claude/research/<path>` (started <today>)
+  ```
+
+**If "Leave as-is":**
+- Do nothing.
+
+### 7. Update GitHub Issue
+
+#### Update Project Status to Research
+
+Get the project item ID and update Status to "Research":
+
+```bash
+# Get item ID from project
+gh project item-list 7 --owner nockawa --format json
+
+# Update status field
+gh project item-edit --project-id PVT_kwHOAud1ac4BNdCj --id <item_id> \
+  --field-id PVTSSF_lAHOAud1ac4BNdCjzg8cXYI \
+  --single-select-option-id 6aea77c6  # "Research"
+```
+
+#### Link Research Doc in Issue Body
+
+Append a "Related Documents" section to the issue body (if not already present), or add to the existing one:
+
+```bash
+# Get current body
+gh issue view <number> --json body -q .body
+
+# Append research doc link
+gh issue edit <number> --body "<existing body>
+
+## Related Documents
+
+- Research: \`claude/research/<path>\`
+"
+```
+
+If the issue body already has a "Related Documents" section, append the research doc link to it instead of creating a new section.
+
+### 8. Report Summary
+
+```
+Starting research on #<number>: <title>
+
+📄 Research doc: claude/research/<path>
+   └─ Mode: Standard / Deep (directory with README.md + 01-context-and-questions.md)
+✅ Status updated: <old> → Research
+📎 Ideas used: claude/ideas/<path> → Archived / Cross-referenced / Left as-is
+   (or "None — started fresh")
+
+Ready to research!
+```
+
+## Status Field Option IDs
+
+For reference:
+- Backlog: `11d8e01f`
+- Research: `6aea77c6`
+- Ready: `303600de`
+- In Progress: `a0a7aab6`
+- Review: `fadead67`
+- Done: `12503e99`
+
+## Field Reference
+
+### Project ID
+- `PVT_kwHOAud1ac4BNdCj`
+
+### Status Field
+- Field ID: `PVTSSF_lAHOAud1ac4BNdCjzg8cXYI`
+
+### Priority Field
+- Field ID: `PVTSSF_lAHOAud1ac4BNdCjzg8c8uQ`
+
+### Phase Field
+- Field ID: `PVTSSF_lAHOAud1ac4BNdCjzg8c8uU`
+
+### Area Field
+- Field ID: `PVTSSF_lAHOAud1ac4BNdCjzg8cX_E`
+
+### Estimate Field
+- Field ID: `PVTSSF_lAHOAud1ac4BNdCjzg8cYEU`
