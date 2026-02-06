@@ -268,3 +268,6 @@ __pycache__/
 /docs/api/.manifest
 .ionide/
 **/BenchmarkDotNet.Artifacts*
+
+# Windows reserved device names (git sees these as phantom untracked files)
+nul
