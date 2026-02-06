@@ -302,9 +302,13 @@ public (int pageIndex, int slotIndex) GetChunkLocation(int chunkIndex)
 }
 ```
 
+### Auto-Growth
+
+When `AllocateChunk()` or `AllocateChunks()` cannot satisfy a request (bitmap full), the segment **automatically grows**:
+
 ### Code Location
 
-`src/Typhon.Engine/Persistence Layer/ChunkBasedSegment.cs` (~150 lines)
+`src/Typhon.Engine/Storage/Segments/ChunkBasedSegment.cs`
 
 ---
 
