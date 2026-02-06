@@ -262,6 +262,9 @@ paket-files/
 __pycache__/
 *.pyc
 
+# Claude Code local settings
+.claude/settings.local.json
+
 # Binary MSBuild Log files
 *.binlog
 /_site/

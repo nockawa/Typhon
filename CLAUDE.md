@@ -17,6 +17,10 @@ Typhon is a real-time, low-latency ACID database engine with microsecond-level p
 ## Key Documentation Resources
 
 Typhon maintains comprehensive documentation in the `claude/` directory. Use these resources to understand architecture, design rationale, and development workflow.
+When working on a new idea, always start by reading relevant documents in `claude/overview`, you can also read files in `claude/reference` to get more context of existing features and APIs.
+
+### Design Doc Alignment
+Before proposing implementations or design changes, ALWAYS read the relevant existing design documents first (in docs/design/) and verify alignment. Never deviate from established specs without explicitly noting the deviation and getting user approval.
 
 ### Quick Navigation
 
@@ -47,6 +51,9 @@ The `claude/overview/` directory is the **authoritative architectural reference*
 | 10 | [Errors](claude/overview/10-errors.md) | Error model, exception hierarchy |
 | 11 | [Utilities](claude/overview/11-utilities.md) | Allocators, disk management, shared utilities |
 
+### Documentation-Heavy Project
+This project is documentation-first. Most work involves creating, updating, or refining markdown design docs, ADRs, and planning documents. When updating docs, preserve existing structure and version headers. Cross-reference related documents. Always check for consistency across the full doc set when making changes.
+
 ## Build & Development Commands
 
 **Build the solution:**
@@ -58,7 +65,6 @@ dotnet build Typhon.slnx
 ```bash
 dotnet build -c Debug
 dotnet build -c Release
-dotnet build -c Telemetry  # Enables verbose logging via TELEMETRY define
 ```
 
 **Run all tests:**
@@ -249,6 +255,9 @@ dotnet run -c Release --filter '*PagedMemoryFile*'
 
 > See also: [ADR-016: Three-Mode ResourceAccessControl](claude/adr/016-three-mode-resource-access-control.md), [ADR-017: 64-Bit Atomic State](claude/adr/017-64bit-access-control-state.md), [ADR-018: Adaptive Spin-Wait](claude/adr/018-adaptive-spin-wait.md)
 
+### .NET API Correctness
+When working with .NET APIs (especially Activity/ActivitySource, System.Threading, Volatile, DI), read the actual source files and existing usage patterns in the codebase BEFORE writing code. Do NOT guess at API signatures or behavior. If unsure, ask the user or search docs first.
+
 ### Page Structure
 ```
 Page (8192 bytes):
@@ -278,6 +287,9 @@ Page (8192 bytes):
 - Custom enricher: CurrentFrameEnricher (adds frame context)
 - Telemetry configuration enables detailed tracing via `TELEMETRY` define
 - Test projects configured with Serilog.Sinks.Seq for structured logging
+
+### Debugging Approach
+When debugging issues, do NOT propose root cause explanations without evidence. Follow the user's diagnostic guidance (traces, logs, specific code paths). Avoid jumping to conclusions — enumerate hypotheses, then systematically verify each one starting with the most likely based on available data.
 
 ## Project Structure
 
@@ -366,10 +378,6 @@ var committed = t.Commit(); // or t.Rollback()
 4. **Page Cache Size**: Default 2MB cache may be insufficient for large datasets. Configure via PagedMMFOptions.
 5. **Telemetry Build**: The Telemetry configuration is for debugging only and significantly impacts performance.
 
-## Documentation
-
-Full documentation available at: https://nockawa.github.io/Typhon/
-
 ## Architecture Diagrams
 
 Visual documentation is maintained in `claude/assets/`:
@@ -411,6 +419,9 @@ Backlog → Research → Ready → In Progress → Review → Done
 4. **In Progress**: Active development (use `/start-work #XX`)
 5. **Review**: PR open, awaiting merge
 6. **Done**: Complete (use `/complete-work #XX`)
+
+#### GitHub Issue Completion Checklist
+When closing a GitHub issue: 1) Check ALL checkboxes in the issue body, 2) Update the project board status, 3) Move any related design docs to the appropriate folder, 4) Verify with `gh issue view` that everything is properly updated.
 
 ### Project Fields
 
