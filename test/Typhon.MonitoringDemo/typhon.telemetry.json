@@ -13,7 +13,8 @@
         "TrackPageAllocations": true,
         "TrackPageEvictions": true,
         "TrackIOOperations": true,
-        "TrackCacheHitRatio": true
+        "TrackCacheHitRatio": true,
+        "SpanLevel": "All"
       },
       "BTree": {
         "Enabled": true,

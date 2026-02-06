@@ -1,0 +1,21 @@
+# Prometheus configuration for SigNoz service
+# Required by the signoz container (--config=/root/config/prometheus.yml)
+# Based on upstream: https://github.com/SigNoz/signoz/blob/main/deploy/common/signoz/prometheus.yml
+
+global:
+  scrape_interval:     5s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+  - static_configs:
+    - targets:
+      - alertmanager:9093
+
+rule_files: []
+
+# No scrape targets — Typhon uses OTLP push, not Prometheus pull
+scrape_configs: []
+
+remote_read:
+  - url: tcp://clickhouse:9000/signoz_metrics

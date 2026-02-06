@@ -413,34 +413,50 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public int Add(TKey key, int value, ref ChunkAccessor accessor)
     {
+        Activity activity = null;
+        if (TelemetryConfig.BTreeActive)
+        {
+            activity = TyphonActivitySource.StartActivity("BTree.Insert");
+        }
+
         var args = new InsertArguments(key, value, Comparer, ref accessor);
         _access.EnterExclusiveAccess(ref WaitContext.Null);
         try
         {
             AddOrUpdateCore(ref args);
+            activity?.SetTag(TyphonSpanAttributes.IndexOperation, "insert");
             return args.ElementId;
         }
         finally
         {
             _storage.CommitChanges(ref accessor);
             _access.ExitExclusiveAccess();
+            activity?.Dispose();
         }
     }
 
     public bool Remove(TKey key, out int value, ref ChunkAccessor accessor)
     {
+        Activity activity = null;
+        if (TelemetryConfig.BTreeActive)
+        {
+            activity = TyphonActivitySource.StartActivity("BTree.Delete");
+        }
+
         var args = new RemoveArguments(key, Comparer, ref accessor);
         _access.EnterExclusiveAccess(ref WaitContext.Null);
         try
         {
             RemoveCore(ref args);
             value = args.Value;
+            activity?.SetTag(TyphonSpanAttributes.IndexOperation, "delete");
             return args.Removed;
         }
         finally
         {
             _storage.CommitChanges(ref accessor);
             _access.ExitExclusiveAccess();
+            activity?.Dispose();
         }
     }
 
@@ -555,6 +571,14 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         {
             return false;
         }
+
+        Activity activity = null;
+        if (TelemetryConfig.BTreeActive)
+        {
+            activity = TyphonActivitySource.StartActivity("BTree.Delete");
+            activity?.SetTag(TyphonSpanAttributes.IndexOperation, "delete");
+        }
+
         _access.EnterExclusiveAccess(ref WaitContext.Null);
         try
         {
@@ -580,6 +604,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         {
             _storage.CommitChanges(ref accessor);
             _access.ExitExclusiveAccess();
+            activity?.Dispose();
         }
 
         return true;

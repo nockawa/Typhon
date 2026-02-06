@@ -2,6 +2,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using Spectre.Console;
 using System.Diagnostics;
 using Typhon.Engine;
@@ -13,49 +15,73 @@ namespace Typhon.MonitoringDemo;
 // ============================================================================
 // Typhon Monitoring Demo
 // ============================================================================
-// This application bootstraps an Aspire Dashboard, connects Typhon's OTel
-// metrics to it, and lets you run various load scenarios to observe the
-// database engine behavior in real-time.
+// This application connects Typhon's OTel metrics to an external OTLP receiver
+// (Jaeger, Aspire Dashboard, etc.) and lets you run various load scenarios to
+// observe the database engine behavior in real-time.
+//
+// Prerequisites:
+//   Start the observability stack:
+//     PLJG:   claude\ops\stack\pljg\start.ps1   → Jaeger :16686, Grafana :3000
+//     SigNoz: claude\ops\stack\signoz\start.ps1  → SigNoz :8080
+//     Or use: claude\ops\stack\select-stack.ps1  → interactive selector
 // ============================================================================
 
 internal static class Program
 {
+    // Default OTLP endpoint (gRPC) - override with OTEL_EXPORTER_OTLP_ENDPOINT env var
+    private const string DefaultOtlpEndpoint = "http://localhost:4317";
+
     private static async Task<int> Main(string[] args)
     {
         AnsiConsole.Write(new FigletText("Typhon Monitor").Color(Color.Cyan1));
         AnsiConsole.MarkupLine("[grey]Real-time observability for the Typhon database engine[/]");
         AnsiConsole.WriteLine();
 
+        // Get OTLP endpoint from environment or use default
+        var otlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT") ?? DefaultOtlpEndpoint;
+
         // Ensure a fresh database for testing (delete any existing file from previous runs)
         var dbOptions = new ManagedPagedMMFOptions { DatabaseName = "TyphonMonitoringDemo" };
         dbOptions.EnsureFileDeleted();
 
-        // Start the Aspire Dashboard container
-        var aspireLauncher = new AspireDashboardLauncher();
-        var dashboardUrl = await aspireLauncher.StartAsync();
-
-        if (dashboardUrl == null)
-        {
-            AnsiConsole.MarkupLine("[red]Failed to start Aspire Dashboard. Exiting.[/]");
-            return 1;
-        }
-
         AnsiConsole.WriteLine();
-        AnsiConsole.Write(new Rule("[green]Dashboard Ready[/]").RuleStyle("grey"));
-        AnsiConsole.MarkupLine($"[bold cyan]Aspire Dashboard:[/] [link={dashboardUrl}]{dashboardUrl}[/]");
-        AnsiConsole.MarkupLine("[grey]Open this URL in your browser to view metrics[/]");
+        AnsiConsole.Write(new Rule("[green]Telemetry Configuration[/]").RuleStyle("grey"));
+        AnsiConsole.MarkupLine($"[bold cyan]OTLP Endpoint:[/] {otlpEndpoint}");
+        AnsiConsole.MarkupLine("[grey]Jaeger UI:[/]     [link=http://localhost:16686]http://localhost:16686[/]");
+        AnsiConsole.MarkupLine("[grey]Grafana:[/]       [link=http://localhost:3000]http://localhost:3000[/] (admin/typhon)");
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[dim]Tip: Start a stack with claude\\ops\\stack\\select-stack.ps1[/]");
         AnsiConsole.WriteLine();
 
         // Initialize Typhon with OpenTelemetry
-        using var host = CreateHost(aspireLauncher.OtlpEndpoint);
+        using var host = CreateHost(otlpEndpoint);
 
         // Start the host to activate OpenTelemetry MeterProvider and other hosted services
         await host.StartAsync();
 
+        // Diagnostic: Verify OpenTelemetry is properly configured
+        var tracerProvider = host.Services.GetService<TracerProvider>();
+        AnsiConsole.MarkupLine($"[grey]TracerProvider:[/] {(tracerProvider != null ? "[green]Registered[/]" : "[red]NOT FOUND[/]")}");
+        AnsiConsole.MarkupLine($"[grey]ActivitySource HasListeners:[/] {(TyphonActivitySource.Instance.HasListeners() ? "[green]Yes[/]" : "[red]No[/]")}");
+
+        // Send a test trace and flush immediately
+        using (var testActivity = TyphonActivitySource.StartActivity("Diagnostic.Startup"))
+        {
+            testActivity?.SetTag("test.type", "startup");
+            AnsiConsole.MarkupLine($"[grey]Test Activity:[/] {(testActivity != null ? $"[green]Created (TraceId: {testActivity.TraceId})[/]" : "[red]NULL[/]")}");
+        }
+        var flushResult = tracerProvider?.ForceFlush(5000) ?? false;
+        AnsiConsole.MarkupLine($"[grey]ForceFlush:[/] {(flushResult ? "[green]Success[/]" : "[red]Failed[/]")}");
+        AnsiConsole.WriteLine();
+
         var typhonContext = host.Services.GetRequiredService<TyphonContext>();
 
-        // Initialize the database
-        typhonContext.Initialize();
+        // Initialize the database (wrap in span so initialization I/O has a parent)
+        using (var initActivity = TyphonActivitySource.StartActivity("Database.Initialize", System.Diagnostics.ActivityKind.Internal))
+        {
+            initActivity?.SetTag("database.name", "TyphonMonitoringDemo");
+            typhonContext.Initialize();
+        }
 
         // Get available scenario factories
         var scenarioFactories = ScenarioRegistry.GetScenarioFactories();
@@ -95,13 +121,15 @@ internal static class Program
 
             // Run the scenario
             await RunScenarioAsync(scenario, config, typhonContext);
+
+            // Force flush traces to ensure they're sent to Jaeger
+            host.Services.GetService<TracerProvider>()?.ForceFlush();
         }
 
         // Cleanup
         AnsiConsole.MarkupLine("[grey]Shutting down...[/]");
         typhonContext.Dispose();
         await host.StopAsync();
-        await aspireLauncher.StopAsync();
         AnsiConsole.MarkupLine("[green]Goodbye![/]");
 
         return 0;
@@ -128,7 +156,7 @@ internal static class Program
             .AddManagedPagedMMF(options =>
             {
                 options.DatabaseName = "TyphonMonitoringDemo";
-                options.DatabaseCacheSize = 16 * 1024 * 1024; // 16MB cache for stress testing
+                options.DatabaseCacheSize = 512 * 1024 * 1024; // 512MB cache for stress testing
                 options.PagesDebugPattern = false;
             })
             .AddDatabaseEngine(_ => { });
@@ -139,18 +167,28 @@ internal static class Program
             options.SnapshotInterval = TimeSpan.FromSeconds(1);
         });
 
-        // Configure OpenTelemetry to send to Aspire Dashboard
-        builder.Services.AddOpenTelemetry()
-            .WithMetrics(metrics =>
+        // Configure OpenTelemetry to send metrics and traces via OTLP
+        // Based on Microsoft example: use gRPC (default) on port 4317
+        var otel = builder.Services.AddOpenTelemetry();
+
+        otel.ConfigureResource(resource => resource
+            .AddService(serviceName: "Typhon.MonitoringDemo"));
+
+        otel.WithMetrics(metrics => metrics
+            .AddMeter(ResourceMetricsExporter.MeterName)
+            .AddOtlpExporter(options =>
             {
-                metrics
-                    .AddMeter(ResourceMetricsExporter.MeterName)
-                    .AddOtlpExporter(options =>
-                    {
-                        options.Endpoint = new Uri(otlpEndpoint);
-                        options.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.Grpc;
-                    });
+                options.Endpoint = new Uri("http://localhost:4317");
+            }));
+
+        otel.WithTracing(tracing =>
+        {
+            tracing.AddSource(TyphonActivitySource.Name);
+            tracing.AddOtlpExporter(options =>
+            {
+                options.Endpoint = new Uri("http://localhost:4317");
             });
+        });
 
         // Register TyphonContext as singleton - same engine for all scenarios
         builder.Services.AddSingleton<TyphonContext>();
@@ -169,7 +207,7 @@ internal static class Program
         var duration = AnsiConsole.Prompt(
             new SelectionPrompt<string>()
                 .Title("How long should the simulation run?")
-                .AddChoices("10 seconds", "30 seconds", "1 minute", "5 minutes", "Cancel"));
+                .AddChoices("1 second", "10 seconds", "30 seconds", "1 minute", "5 minutes", "Cancel"));
 
         if (duration == "Cancel")
         {
@@ -178,6 +216,7 @@ internal static class Program
 
         var durationSeconds = duration switch
         {
+            "1 second" => 1,
             "10 seconds" => 10,
             "30 seconds" => 30,
             "1 minute" => 60,
@@ -260,10 +299,20 @@ internal static class Program
                     progressTask.Value = config.DurationSeconds;
                 });
 
-                // Run the scenario
+                // Run the scenario with tracing
                 try
                 {
+                    using var activity = TyphonActivitySource.StartActivity($"Scenario.{scenario.Name}");
+                    activity?.SetTag("scenario.name", scenario.Name);
+                    activity?.SetTag("scenario.duration_seconds", config.DurationSeconds);
+                    activity?.SetTag("scenario.target_ops_per_second", config.TargetOpsPerSecond);
+                    activity?.SetTag("scenario.worker_count", config.WorkerCount);
+
                     await scenario.RunAsync(typhonContext, config, stats, cts.Token);
+
+                    activity?.SetTag("scenario.total_operations", stats.TotalOperations);
+                    activity?.SetTag("scenario.successful_operations", stats.SuccessfulOperations);
+                    activity?.SetTag("scenario.failed_operations", stats.FailedOperations);
                 }
                 catch (OperationCanceledException)
                 {
@@ -308,7 +357,7 @@ internal static class Program
             }
         }
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[grey]Check the Aspire Dashboard for detailed metrics![/]");
+        AnsiConsole.MarkupLine("[grey]Check Jaeger (localhost:16686) or Grafana (localhost:3000) for detailed metrics![/]");
         AnsiConsole.WriteLine();
 
         // Wait for user before returning to menu

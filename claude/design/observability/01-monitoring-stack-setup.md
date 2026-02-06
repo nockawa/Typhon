@@ -3,7 +3,7 @@
 > **TL;DR — Quick start:** This plan covers setting up the full PLJG observability stack (Prometheus, Loki, Jaeger, Grafana) using Podman on Windows. Jump to [Implementation Tasks](#6-implementation-tasks) for the work breakdown.
 
 **Date:** February 2026
-**Status:** Design
+**Status:** ✅ Core Done (Phases 1, 2, 4 complete; Phase 3 optional — Loki + Alertmanager)
 **Prerequisites:** Podman Desktop installed on Windows
 **Related:** [monitoring-guide.md](../../ops/monitoring-guide.md), [09-observability.md](../../overview/09-observability.md)
 
@@ -74,21 +74,24 @@ With .NET 8+ and OpenTelemetry, all three pillars flow through a **single OTLP e
                                  │
                                  ▼
 ┌───────────────────────────────────────────────────────────────────────────────┐
-│                        Podman Pod: typhon-observability                       │
+│                        Podman Compose Stack                                   │
 │                                                                               │
 │  ┌──────────────────────────────────────────────────────────────────────┐     │
-│  │                         Jaeger (all-in-one)                          │     │
+│  │                       OTel Collector                                 │     │
 │  │                                                                      │     │
 │  │   :4317 (OTLP gRPC) ─────► Receives metrics, logs, AND traces        │     │
-│  │   :16686 (UI)       ─────► Query and visualize                       │     │
-│  └──────────────────────────────────────────────────────────────────────┘     │
-│                                    │                                          │
-│  ┌────────────────┐                │                                          │
-│  │  Prometheus    │ ◄──────────────┤  (optional: scrape Jaeger metrics)       │
-│  │   :9090        │                │                                          │
-│  └───────┬────────┘                │                                          │
-│          │                         │                                          │
-│          └─────────────────────────┘                                          │
+│  │   :8889             ─────► Prometheus metrics endpoint               │     │
+│  └────────────────────────────────┬─────────────────────────────────────┘     │
+│                                   │                                           │
+│              ┌────────────────────┼────────────────────┐                      │
+│              │ traces             │ metrics            │                      │
+│              ▼                    ▼                    │                      │
+│  ┌────────────────┐      ┌────────────────┐            │                      │
+│  │    Jaeger      │      │  Prometheus    │ ◄──────────┘                      │
+│  │   :16686 (UI)  │      │   :9090        │   scrapes :8889                   │
+│  └───────┬────────┘      └───────┬────────┘                                   │
+│          │                       │                                            │
+│          └───────────────────────┘                                            │
 │                         │                                                     │
 │                         ▼                                                     │
 │                ┌────────────────┐                                             │
@@ -100,31 +103,30 @@ With .NET 8+ and OpenTelemetry, all three pillars flow through a **single OTLP e
 
 ### Data Flow (Simplified)
 
-| Pillar | Source | Transport | Destination | Query |
-|--------|--------|-----------|-------------|-------|
-| **Metrics** | `Typhon.Resources` Meter | OTLP gRPC to :4317 | Jaeger | Jaeger UI or Grafana |
-| **Logs** | `ILogger` | OTLP gRPC to :4317 | Jaeger | Jaeger UI or Grafana |
-| **Traces** | `ActivitySource` | OTLP gRPC to :4317 | Jaeger | Jaeger UI or Grafana |
+| Pillar | Source | Transport | Router | Destination | Query |
+|--------|--------|-----------|--------|-------------|-------|
+| **Metrics** | `Typhon.Resources` Meter | OTLP gRPC to :4317 | OTel Collector | Prometheus | Grafana |
+| **Logs** | `ILogger` | OTLP gRPC to :4317 | OTel Collector | Jaeger | Jaeger UI |
+| **Traces** | `ActivitySource` | OTLP gRPC to :4317 | OTel Collector | Jaeger | Jaeger UI or Grafana |
 
-### Why This Simplification?
+### Why This Architecture?
 
-- **Single export path** — All telemetry goes to one endpoint
+- **Single export path** — All telemetry goes to one endpoint (OTel Collector :4317)
 - **Native .NET** — Uses `ILogger` instead of Serilog dependency
-- **Fewer containers** — Jaeger handles all three pillars for development
-- **Still extensible** — Add Prometheus/Loki for production scale if needed
+- **Proper tool for each job** — Prometheus for metrics (PromQL, dashboards), Jaeger for traces (flame graphs)
+- **Extensible** — Add Loki for logs, Alertmanager for alerts
 
 ### Optional: Full Stack for Production
 
-For production with longer retention and scale, add Prometheus and Loki:
+For production with log aggregation and alerting:
 
 ```
-Development:   App ──OTLP──► Jaeger ◄── Grafana
-Production:    App ──OTLP──► OTel Collector ──► Prometheus (metrics)
-                                           ──► Loki (logs)
+Development:   App ──OTLP──► OTel Collector ──► Prometheus (metrics)
                                            ──► Jaeger (traces)
+Production:    + Loki (logs) + Alertmanager (alerts)
 ```
 
-This plan focuses on the **development stack** (Jaeger-centric). Production scaling is a future enhancement.
+This plan focuses on the **development stack** with full metrics and trace capabilities.
 
 ---
 
@@ -132,37 +134,32 @@ This plan focuses on the **development stack** (Jaeger-centric). Production scal
 
 ```
 claude/ops/
-├── README.md                         # Overview (exists)
-├── monitoring-guide.md               # Setup guide (to be updated)
-├── grafana-typhon-overview.json      # Dashboard (exists)
+├── README.md                         # Overview
+├── monitoring-guide.md               # Setup guide
 │
-└── stack/                            # NEW - Compose stack
-    ├── compose.yaml                  # Main compose file (Jaeger + Grafana)
-    ├── compose.full.yaml             # Full stack (+ Prometheus + Loki)
-    ├── start.ps1                     # Windows startup script
-    ├── stop.ps1                      # Windows shutdown script
-    ├── .env                          # Environment variables
+└── stack/                            # Observability stacks
+    ├── README.md                     # Stack chooser docs
+    ├── select-stack.ps1              # Interactive launcher
     │
-    ├── grafana/
-    │   └── provisioning/
-    │       ├── datasources/
-    │       │   └── datasources.yml   # Auto-configure Jaeger
-    │       └── dashboards/
-    │           ├── dashboards.yml    # Dashboard provisioning
-    │           └── typhon-overview.json  # Copy of existing dashboard
+    ├── pljg/                         # PLJG stack (Prometheus + Jaeger + Grafana)
+    │   ├── compose.yaml
+    │   ├── otel-collector-config.yaml
+    │   ├── start.ps1 / stop.ps1
+    │   ├── .env
+    │   ├── README.md
+    │   ├── prometheus/prometheus.yml
+    │   └── grafana/provisioning/...
     │
-    └── full/                         # Optional: Full stack configs
-        ├── prometheus/
-        │   ├── prometheus.yml
-        │   └── rules/
-        │       └── typhon-alerts.yml
-        ├── loki/
-        │   └── loki-config.yml
-        └── alertmanager/
-            └── alertmanager.yml
+    └── signoz/                       # SigNoz stack (ClickHouse)
+        ├── compose.yaml
+        ├── otel-collector-config.yaml
+        ├── start.ps1 / stop.ps1
+        ├── .env
+        ├── README.md
+        └── clickhouse/...
 ```
 
-**Note:** The minimal stack (`compose.yaml`) contains only Jaeger + Grafana. The full stack (`compose.full.yaml`) adds Prometheus, Loki, and Alertmanager for production use.
+**Note:** The stack includes Prometheus because Grafana dashboards require a time-series database for metrics visualization. For log aggregation, add Loki in a future phase.
 
 ---
 
@@ -247,11 +244,11 @@ claude/ops/
 
 | Tier | Components | Use Case |
 |------|------------|----------|
-| **Minimal** | Jaeger + Grafana | Development debugging (this plan) |
-| **Standard** | + Prometheus | Add metrics retention and alerting |
-| **Full** | + Loki + Alertmanager | Production observability |
+| **Minimal** | OTel Collector + Jaeger + Prometheus + Grafana | Development debugging (this plan) |
+| **Standard** | + Alertmanager | Add alerting |
+| **Full** | + Loki | Production observability with log aggregation |
 
-This plan implements the **Minimal** tier. Other components can be added incrementally.
+This plan implements the **Minimal** tier. The minimal tier includes Prometheus because Grafana dashboards require a time-series database for metrics visualization. The OTel Collector acts as the telemetry router, receiving OTLP from the application and forwarding traces to Jaeger and metrics to Prometheus.
 
 ---
 
@@ -297,12 +294,13 @@ Default ports used by the stack:
 | Port | Service | Stack | Conflict Check |
 |------|---------|-------|----------------|
 | 3000 | Grafana | Minimal | Common (dev servers) |
-| 4317 | Jaeger OTLP gRPC | Minimal | Uncommon |
-| 4318 | Jaeger OTLP HTTP | Minimal | Uncommon |
+| 4317 | OTel Collector OTLP gRPC | Minimal | Uncommon |
+| 4318 | OTel Collector OTLP HTTP | Minimal | Uncommon |
+| 8889 | OTel Collector Prometheus | Minimal | Uncommon |
+| 9090 | Prometheus | Minimal | Uncommon |
 | 16686 | Jaeger UI | Minimal | Uncommon |
 | 3100 | Loki | Full | Uncommon |
-| 9090 | Prometheus | Full | Uncommon |
-| 9093 | Alertmanager | Full | Uncommon |
+| 9093 | Alertmanager | Standard | Uncommon |
 
 If port 3000 conflicts, use `.env` to override:
 ```env
@@ -427,22 +425,24 @@ await host.RunAsync();
 
 ### Phase 1: Core Stack Files (Minimal)
 
-| # | Task | Description | Effort |
-|---|------|-------------|--------|
-| 1.1 | Create directory structure | `claude/ops/stack/` with subdirectories | S |
-| 1.2 | Write `compose.yaml` | Jaeger + Grafana (minimal stack) | S |
-| 1.3 | Write `datasources.yml` | Auto-provision Jaeger datasource in Grafana | S |
-| 1.4 | Write `dashboards.yml` | Auto-provision Typhon dashboard | S |
-| 1.5 | Copy dashboard JSON | Copy existing `grafana-typhon-overview.json` to provisioning | S |
+| # | Task | Description | Effort | Status |
+|---|------|-------------|--------|--------|
+| 1.1 | Create directory structure | `claude/ops/stack/` with subdirectories | S | ✅ Done |
+| 1.2 | Write `compose.yaml` | OTel Collector + Jaeger + Prometheus + Grafana | S | ✅ Done |
+| 1.3 | Write `otel-collector-config.yaml` | OTLP receiver, Jaeger+Prometheus exporters | S | ✅ Done |
+| 1.4 | Write `prometheus/prometheus.yml` | Scrape config for OTel Collector | S | ✅ Done |
+| 1.5 | Write `datasources.yml` | Auto-provision Prometheus + Jaeger in Grafana | S | ✅ Done |
+| 1.6 | Write `dashboards.yml` | Auto-provision Typhon dashboard | S | ✅ Done |
+| 1.7 | Create dashboard JSON | Typhon overview dashboard for Prometheus metrics | S | ✅ Done |
 
 ### Phase 2: Windows Integration
 
-| # | Task | Description | Effort |
-|---|------|-------------|--------|
-| 2.1 | Write `start.ps1` | One-click startup script with validation | S |
-| 2.2 | Write `stop.ps1` | Clean shutdown script | S |
-| 2.3 | Write `.env` | Environment variables for port overrides | S |
-| 2.4 | Test on Podman Desktop | Verify stack starts and telemetry flows | M |
+| # | Task | Description | Effort | Status |
+|---|------|-------------|--------|--------|
+| 2.1 | Write `start.ps1` | One-click startup script with validation | S | ✅ Done |
+| 2.2 | Write `stop.ps1` | Clean shutdown script | S | ✅ Done |
+| 2.3 | Write `.env` | Environment variables for port overrides | S | ✅ Done |
+| 2.4 | Test on Podman Desktop | Verify stack starts and telemetry flows | M | ✅ Done |
 
 ### Phase 3: Full Stack (Optional)
 
@@ -456,10 +456,10 @@ await host.RunAsync();
 
 ### Phase 4: Documentation
 
-| # | Task | Description | Effort |
-|---|------|-------------|--------|
-| 4.1 | Update `monitoring-guide.md` | Reflect native .NET approach, new stack location | M |
-| 4.2 | Write `stack/README.md` | Quick reference for the stack directory | S |
+| # | Task | Description | Effort | Status |
+|---|------|-------------|--------|--------|
+| 4.1 | Update `monitoring-guide.md` | Reflect native .NET approach, new stack location | M | ✅ Done |
+| 4.2 | Write `stack/README.md` | Quick reference for the stack directory | S | ✅ Done |
 
 ---
 
@@ -468,10 +468,12 @@ await host.RunAsync();
 After implementation, verify:
 
 ### Stack Health (Minimal)
-- [ ] `podman compose ps` shows Jaeger + Grafana running
+- [ ] `podman compose ps` shows 4 containers running (otel-collector, jaeger, prometheus, grafana)
 - [ ] Grafana accessible at http://localhost:3000
 - [ ] Jaeger UI accessible at http://localhost:16686
-- [ ] Jaeger health: http://localhost:16686 loads
+- [ ] Prometheus accessible at http://localhost:9090
+- [ ] OTel Collector metrics endpoint: http://localhost:8889/metrics
+- [ ] Prometheus targets: http://localhost:9090/targets shows OTel Collector as UP
 
 ### Data Flow
 - [ ] Run Typhon app with OTLP export to :4317

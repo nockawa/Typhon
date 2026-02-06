@@ -8,6 +8,37 @@ using System.Runtime.CompilerServices;
 namespace Typhon.Engine;
 
 /// <summary>
+/// Defines the level of span instrumentation for PagedMMF/PageCache operations.
+/// Higher levels include all spans from lower levels.
+/// </summary>
+[PublicAPI]
+public enum PageCacheSpanLevel
+{
+    /// <summary>
+    /// No spans for page cache operations (default, zero overhead).
+    /// </summary>
+    None = 0,
+
+    /// <summary>
+    /// Spans for disk I/O operations only (reads and writes).
+    /// Suitable for production - disk ops are already slow.
+    /// </summary>
+    IOOnly = 1,
+
+    /// <summary>
+    /// Adds spans for cache allocation and eviction events.
+    /// Useful for investigating cache behavior.
+    /// </summary>
+    CacheMiss = 2,
+
+    /// <summary>
+    /// Spans for every RequestPage call (dangerous for performance!).
+    /// Use only for deep diagnostics.
+    /// </summary>
+    All = 3
+}
+
+/// <summary>
 /// Global telemetry configuration for Typhon Engine.
 ///
 /// <para>
@@ -119,6 +150,29 @@ public static class TelemetryConfig
     /// </summary>
     public static readonly bool PagedMMFActive;
 
+    /// <summary>
+    /// The configured span instrumentation level for PagedMMF operations.
+    /// </summary>
+    public static readonly PageCacheSpanLevel PagedMMFSpanLevel;
+
+    /// <summary>
+    /// True if span level is IOOnly or higher (Level >= 1).
+    /// Use for disk read/write span guards.
+    /// </summary>
+    public static readonly bool PagedMMFSpanIOOnly;
+
+    /// <summary>
+    /// True if span level is CacheMiss or higher (Level >= 2).
+    /// Use for allocation/eviction span guards.
+    /// </summary>
+    public static readonly bool PagedMMFSpanCacheMiss;
+
+    /// <summary>
+    /// True if span level is All (Level == 3).
+    /// Use for every RequestPage span guard (dangerous!).
+    /// </summary>
+    public static readonly bool PagedMMFSpanAll;
+
     // ═══════════════════════════════════════════════════════════════════════════
     // BTREE TELEMETRY
     // ═══════════════════════════════════════════════════════════════════════════
@@ -222,6 +276,15 @@ public static class TelemetryConfig
         PagedMMFTrackCacheHitRatio = mmfSection.GetValue("TrackCacheHitRatio", true);
         PagedMMFActive = Enabled && PagedMMFEnabled;
 
+        // PagedMMF span level (for distributed tracing)
+        var spanLevelStr = mmfSection.GetValue("SpanLevel", "None");
+        PagedMMFSpanLevel = System.Enum.TryParse<PageCacheSpanLevel>(spanLevelStr, true, out var parsedLevel)
+            ? parsedLevel
+            : PageCacheSpanLevel.None;
+        PagedMMFSpanIOOnly = Enabled && PagedMMFSpanLevel >= PageCacheSpanLevel.IOOnly;
+        PagedMMFSpanCacheMiss = Enabled && PagedMMFSpanLevel >= PageCacheSpanLevel.CacheMiss;
+        PagedMMFSpanAll = Enabled && PagedMMFSpanLevel >= PageCacheSpanLevel.All;
+
         // BTree
         var btreeSection = section.GetSection("BTree");
         BTreeEnabled = btreeSection.GetValue("Enabled", false);
@@ -309,6 +372,7 @@ public static class TelemetryConfig
            PagedMMF: Active={PagedMMFActive}
              Enabled={PagedMMFEnabled}, Allocations={PagedMMFTrackPageAllocations},
              Evictions={PagedMMFTrackPageEvictions}, IO={PagedMMFTrackIOOperations}, CacheRatio={PagedMMFTrackCacheHitRatio}
+             SpanLevel={PagedMMFSpanLevel} (IOOnly={PagedMMFSpanIOOnly}, CacheMiss={PagedMMFSpanCacheMiss}, All={PagedMMFSpanAll})
 
            BTree: Active={BTreeActive}
              Enabled={BTreeEnabled}, Splits={BTreeTrackNodeSplits}, Merges={BTreeTrackNodeMerges},

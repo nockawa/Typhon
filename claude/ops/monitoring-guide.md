@@ -46,12 +46,12 @@ Complete observability requires three complementary data types:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           Your Application                                   │
+│                           Your Application                                  │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐              │
 │  │    Metrics      │  │      Logs       │  │     Traces      │              │
 │  │  (OTel Meter)   │  │   (Serilog)     │  │   (Activity)    │              │
 │  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘              │
-└───────────┼─────────────────────┼─────────────────────┼──────────────────────┘
+└───────────┼─────────────────────┼─────────────────────┼─────────────────────┘
             │ /metrics            │ HTTP POST           │ OTLP gRPC
             ▼                     ▼                     ▼
      ┌────────────┐        ┌────────────┐        ┌────────────┐
@@ -355,9 +355,18 @@ podman-compose up -d
 
 ---
 
-## Tier 4: Full Observability Stack (Prometheus + Loki + Jaeger + Grafana)
+## Tier 4: Full Observability Stack
 
 **Goal:** Complete observability with metrics, structured logs, and traces (with flame graph visualization).
+
+Two pre-built stacks are available in `claude/ops/stack/`. Both accept OTLP on port 4317 — only run one at a time.
+
+| Stack | Path | RAM | UIs |
+|-------|------|-----|-----|
+| **PLJG** | `claude/ops/stack/pljg/` | ~1 GB | Grafana :3000, Jaeger :16686, Prometheus :9090 |
+| **SigNoz** | `claude/ops/stack/signoz/` | ~4 GB | SigNoz :8080 |
+
+Use `claude/ops/stack/select-stack.ps1` to interactively pick a stack, or `cd` into either directory and run `.\start.ps1`.
 
 ### The PLJG Stack
 
@@ -1025,5 +1034,19 @@ Log.Information("Transaction committed {@Transaction}", new
 | 3 - Prom+Grafana | ✅ | ❌ | ❌ | ❌ | 30 min |
 | 4 - Full Stack | ✅ | ✅ | ✅ | ✅ (Jaeger) | 45 min |
 | 5 - Enterprise | ✅ | ✅ | ✅ | Varies | Varies |
+
+### SigNoz Alternative
+
+SigNoz provides unified logs, metrics, and traces in a **single UI** backed by ClickHouse.
+It requires more RAM (~4 GB) but offers a simpler developer experience with built-in log aggregation.
+
+```powershell
+# Quick start
+cd claude\ops\stack\signoz
+.\start.ps1
+# Open http://localhost:8080
+```
+
+See the [SigNoz Evaluation](../design/observability/04-signoz-stack-evaluation.md) for a detailed comparison.
 
 **Recommendation:** Start with Tier 2 (Aspire) for development, deploy Tier 4 (Full Stack) for production.

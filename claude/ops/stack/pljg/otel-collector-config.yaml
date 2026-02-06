@@ -1,0 +1,55 @@
+# OpenTelemetry Collector Configuration
+# Receives OTLP from the .NET app and exports to Jaeger (traces) + Prometheus (metrics)
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    # Batch traces and metrics before exporting
+    timeout: 1s
+    send_batch_size: 1024
+
+exporters:
+  # Forward traces to Jaeger via OTLP/gRPC
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+    # Retry settings for when Jaeger starts after collector
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+
+  # Expose metrics for Prometheus scraping
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    namespace: ""  # Don't add prefix, metrics already have "typhon_" prefix
+    resource_to_telemetry_conversion:
+      enabled: true
+
+  # Debug output (optional, comment out in production)
+  debug:
+    verbosity: basic
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/jaeger, debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus, debug]

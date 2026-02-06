@@ -45,10 +45,10 @@ The Resource System integration (metrics emission, snapshot API, OTel bridge) is
 | **9.1.3** | [Track 3: Deep Diagnostics](#track-3-deep-diagnostics-static-readonly-bool) | Lock-centric operation history | ✅ Implemented |
 | **9.1.4** | [Track 4: Per-Resource](#track-4-per-resource-telemetry-icontentiontarget) | Resource-centric callbacks | ✅ Implemented |
 | **9.2** | [Metrics](#92-metrics) | Counters, histograms, gauges | 🆕 Designed |
-| **9.3** | [Traces](#93-traces) | Distributed tracing spans | 🆕 Designed |
+| **9.3** | [Traces](#93-traces) | Distributed tracing spans | 🔨 Partially Implemented |
 | **9.4** | [Structured Logging](#94-structured-logging) | Serilog-based logs | ✅ Exists |
 | **9.5** | [Health Checks](#95-health-checks) | Resource-aware system health | 🆕 Designed |
-| **9.6** | [Telemetry Sinks](#96-telemetry-sinks) | Dev and production export | 🆕 Designed |
+| **9.6** | [Telemetry Sinks](#96-telemetry-sinks) | Dev and production export | 🔨 Partially Implemented |
 
 ---
 
@@ -442,18 +442,38 @@ Metrics expose resource utilization defined in [Resources](08-resources.md). The
 
 Track operation flow through the engine for debugging and performance analysis. Traces connect to the [Resource Lifecycle](08-resources.md#86-resource-lifecycle) — each lifecycle transition can be a span boundary.
 
-### Trace Spans
+### Implementation Status
+
+Distributed tracing uses `System.Diagnostics.Activity` API with a centralized `TyphonActivitySource` (source name: `Typhon.Engine`). Span creation is gated by `TelemetryConfig` static readonly flags for zero-overhead when disabled.
+
+| Category | Status | Details |
+|----------|--------|---------|
+| Transaction spans | ✅ Implemented | Commit, Rollback, CreateEntity, ReadEntity, UpdateEntity |
+| Index spans (mutations) | ✅ Implemented | BTree.Insert, BTree.Delete, BTree.NodeSplit, BTree.NodeMerge |
+| Index spans (reads) | ⏸️ Deferred | Lookup, RangeScan — by design (only tracing mutations) |
+| Storage spans | ✅ Implemented | PagedMMF.GetPage with cache hit/miss, disk load |
+| WAL / Checkpoint spans | 🆕 Designed | Not yet implemented |
+| Deep diagnostics spans | 🆕 Designed | Lock.Contention — see [03-deep-diagnostics](../design/observability/03-deep-diagnostics.md) |
+
+### Implemented Trace Spans
+
+| Span Name | Attributes | Gating Flag | Description |
+|-----------|------------|-------------|-------------|
+| `Transaction.Commit` | `tsn`, `component_count`, `conflict_detected`, `status` | `TransactionActive` | Two-phase commit execution |
+| `Transaction.Rollback` | `tsn`, `status` | `TransactionActive` | Transaction rollback |
+| `Entity.Create` | `entity_id`, `component_type` | `TransactionActive` | Entity creation within transaction |
+| `Entity.Read` | `entity_id`, `component_type`, `revision`, `found` | `TransactionActive` | Component read within transaction |
+| `Entity.Update` | `entity_id`, `component_type` | `TransactionActive` | Component update within transaction |
+| `BTree.Insert` | `index.operation=insert` | `BTreeActive` | B+Tree key insertion |
+| `BTree.Delete` | `index.operation=delete` | `BTreeActive` | B+Tree key deletion |
+| `BTree.NodeSplit` | `index.node_split=true` | `BTreeActive` | Child span when node splits during insert |
+| `BTree.NodeMerge` | `index.node_merge=true` | `BTreeActive` | Child span when nodes merge during delete |
+| `PagedMMF.GetPage` | `page.id`, `cache.hit`, `page.source` | `PagedMMFActive` | Page cache access with hit/miss tracking |
+
+### Designed Trace Spans (Not Yet Implemented)
 
 | Span | Attributes | Description |
 |------|------------|-------------|
-| `typhon.transaction` | `tsn`, `duration_us`, `status` | Transaction lifecycle (create → commit/rollback) |
-| `typhon.read` | `entity_id`, `component`, `revision` | Component read within transaction |
-| `typhon.write` | `entity_id`, `component`, `revision` | Component write within transaction |
-| `typhon.commit` | `changes_count`, `conflicts` | Two-phase commit execution |
-| `typhon.index.lookup` | `index_name`, `key`, `result_count` | B+Tree point lookup |
-| `typhon.index.range_scan` | `index_name`, `from`, `to`, `results` | Range scan operation |
-| `typhon.page.load` | `page_id`, `segment`, `source` | Page load from disk into cache |
-| `typhon.page.evict` | `page_id`, `was_dirty` | Page eviction from clock-sweep |
 | `typhon.wal.flush` | `lsn_range`, `record_count`, `bytes` | WAL FUA write |
 | `typhon.checkpoint` | `pages_count`, `duration_ms`, `epoch` | Checkpoint operation |
 | `typhon.uow` | `epoch`, `mode`, `txn_count` | UnitOfWork lifecycle |
@@ -677,6 +697,8 @@ TYPHON__TELEMETRY__BTREE__TRACKKEYCOMPARISONS=true
 | TelemetryConfig | `src/Typhon.Engine/Observability/TelemetryConfig.cs` | ✅ Implemented |
 | TelemetryOptions | `src/Typhon.Engine/Observability/TelemetryOptions.cs` | ✅ Implemented |
 | TelemetryServiceExtensions | `src/Typhon.Engine/Observability/TelemetryServiceExtensions.cs` | ✅ Implemented |
+| TyphonActivitySource | `src/Typhon.Engine/Observability/TyphonActivitySource.cs` | ✅ Implemented |
+| TyphonSpanAttributes | `src/Typhon.Engine/Observability/TyphonSpanAttributes.cs` | ✅ Implemented |
 | AccessControl Telemetry | `src/Typhon.Engine/Concurrency/AccessControl.Telemetry.cs` | ✅ Implemented |
 | AccessOperation | `src/Typhon.Engine/Concurrency/AccessOperation.cs` | ✅ Implemented |
 | OperationType enum | `src/Typhon.Engine/Concurrency/AccessOperation.cs` | ✅ Implemented |
@@ -732,8 +754,8 @@ TYPHON__TELEMETRY__BTREE__TRACKKEYCOMPARISONS=true
 | Question | Decision | Rationale |
 |----------|----------|-----------|
 | **Metrics framework** | OpenTelemetry `System.Diagnostics.Metrics` | .NET native, vendor-neutral, low overhead |
-| **Production sink** | Grafana LGTM | Full-stack solution (logs + metrics + traces), good visualization |
-| **Development sink** | Seq + Aspire | Rich structured log querying + real-time OTel dashboard |
+| **Production sink** | Grafana LGTM or SigNoz | Full-stack solution (logs + metrics + traces), good visualization |
+| **Development sink** | PLJG or SigNoz stack | Two options: PLJG (Prometheus+Jaeger+Grafana, ~1GB) or SigNoz (ClickHouse, ~4GB, unified UI). See `claude/ops/stack/` |
 | **Sampling** | Per-span-type configurable rates | High-volume spans (page loads) need aggressive sampling; rare spans (checkpoints) always captured |
 | **Health model** | Worst-of composite | Simple, conservative — any degraded component degrades the whole engine |
 | **Key comparisons** | Default disabled | Marked as high overhead in BTreeTelemetryOptions — only for targeted investigation |
@@ -757,13 +779,13 @@ TYPHON__TELEMETRY__BTREE__TRACKKEYCOMPARISONS=true
 
 ## Open Questions
 
-1. **Grafana dashboards** — Should Typhon ship pre-built dashboard JSON files? (Pro: immediate value. Con: maintenance burden, version coupling.)
+1. ~~**Grafana dashboards** — Should Typhon ship pre-built dashboard JSON files?~~ **Resolved:** Yes. A Typhon overview dashboard JSON is auto-provisioned with the PLJG stack. See `claude/ops/stack/pljg/grafana/provisioning/dashboards/`.
 
 2. **Alerting rules** — Should default Prometheus/Alertmanager rules be provided? What thresholds are universally applicable vs workload-dependent?
 
 3. **dotnet-counters integration** — Should we expose `EventCounters` / `Meters` for `dotnet-counters monitor` without requiring OTel collector? (Useful for quick triage.)
 
-4. **Trace context propagation** — How should Typhon traces correlate with the application's distributed trace? Should `Transaction.Create()` accept a parent `ActivityContext`?
+4. ~~**Trace context propagation** — How should Typhon traces correlate with the application's distributed trace?~~ **Resolved:** Natural parent-child via `Activity.Current` (AsyncLocal propagation). Transaction spans become children of whatever Activity is active in the caller. No explicit `ActivityContext` parameter needed.
 
 5. **Metric cardinality** — Per-index metrics (`typhon.index.{name}.lookups`) could explode cardinality. Use labels/tags or separate meters?
 

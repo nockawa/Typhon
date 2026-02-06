@@ -22,9 +22,11 @@
 
 | # | Document | Purpose | Status |
 |---|----------|---------|--------|
-| 01 | [Monitoring Stack Setup](01-monitoring-stack-setup.md) | Jaeger + Grafana stack with Podman, native .NET OTel | 📐 Designed |
-| 02 | [Span Instrumentation](02-span-instrumentation.md) | Transaction, Index, Storage tracing with `Activity` API | 📐 Designed |
+| 01 | [Monitoring Stack Setup](01-monitoring-stack-setup.md) | Jaeger + Grafana stack with Podman, native .NET OTel | ✅ Core Done (Phase 3 optional) |
+| 02 | [Span Instrumentation](02-span-instrumentation.md) | Transaction, Index, Storage tracing with `Activity` API | ✅ Done (read-path spans deferred by design) |
 | 03 | [Deep Diagnostics](03-deep-diagnostics.md) | Lock contention forensics via Jaeger spans | 📐 Designed |
+| 04 | [SigNoz Stack Evaluation](04-signoz-stack-evaluation.md) | Evaluation of SigNoz as PLJG replacement | ✅ Evaluated + Implemented |
+| 05 | [SigNoz Features Deep Dive](05-signoz-features-deep-dive.md) | Comprehensive SigNoz feature reference | 📖 Reference |
 
 ---
 
@@ -59,12 +61,26 @@ README.md ◄─── Entry point (you are here)
     │       │   Flame graph visualization in Jaeger
     │       │
     │       ▼
-    └── 03-deep-diagnostics.md ──────── Lock Forensics
+    ├── 03-deep-diagnostics.md ──────── Lock Forensics
+    │       │
+    │       │   Contention-only capture
+    │       │   Stack traces at wait points
+    │       │   Natural parent-child with transactions
+    │       │   30-60 minute ring buffer retention
+    │
+    ├── 04-signoz-stack-evaluation.md ─ Alternative Stack Evaluation
+    │       │
+    │       │   SigNoz vs PLJG comparison
+    │       │   Licensing analysis (100% free)
+    │       │   Gap analysis & recommendations
+    │       │
+    │       ▼
+    └── 05-signoz-features-deep-dive.md ─ SigNoz Feature Reference
             │
-            │   Contention-only capture
-            │   Stack traces at wait points
-            │   Natural parent-child with transactions
-            │   30-60 minute ring buffer retention
+            │   Panel types & visualizations
+            │   Query builder & aggregations
+            │   Service dependency map
+            │   APM, tracing, logs, alerting
 ```
 
 **Reading order:**
@@ -83,6 +99,9 @@ README.md ◄─── Entry point (you are here)
 | **Debug lock contention** | 03-deep-diagnostics.md |
 | **Understand flame graphs** | 02-span-instrumentation.md §4 |
 | **Configure the stack for Windows/Podman** | 01-monitoring-stack-setup.md §5 |
+| **Evaluate SigNoz as alternative** | 04-signoz-stack-evaluation.md |
+| **Explore SigNoz features in depth** | 05-signoz-features-deep-dive.md |
+| **Build custom SigNoz dashboards** | 05-signoz-features-deep-dive.md §2-4 |
 | **Run the demo stress test** | (Demo project TBD) |
 
 ---
@@ -174,14 +193,19 @@ Transaction.Commit (12ms) ──────────────────
 
 ---
 
-## Artifacts to be Created
+## Artifacts
 
 | Artifact | Location | Purpose |
 |----------|----------|---------|
-| Compose stack | `claude/ops/stack/` | Jaeger + Grafana containers |
+| PLJG compose stack | `claude/ops/stack/pljg/` | Prometheus + Jaeger + Grafana containers |
+| SigNoz compose stack | `claude/ops/stack/signoz/` | SigNoz + ClickHouse containers |
+| Stack selector | `claude/ops/stack/select-stack.ps1` | Interactive stack launcher |
 | Demo project | `test/Typhon.MonitoringDemo/` | Stress test with OTel wiring |
-| `TyphonTracing` | `src/Typhon.Engine/Observability/` | ActivitySource for tracing |
-| `ContentionRingBuffer` | `src/Typhon.Engine/Observability/` | Deep diagnostics storage |
+| `TyphonActivitySource` | `src/Typhon.Engine/Observability/` | ActivitySource for tracing |
+| `TyphonSpanAttributes` | `src/Typhon.Engine/Observability/` | Span attribute name constants |
+| `TraceIdEnricher` | `src/Typhon.Engine/Observability/` | Serilog enricher for log-trace correlation |
+| `TelemetryConfig` | `src/Typhon.Engine/Observability/` | Static readonly gating for JIT dead-code elimination |
+| `ContentionRingBuffer` | `src/Typhon.Engine/Observability/` | Deep diagnostics storage (not yet implemented) |
 
 ---
 

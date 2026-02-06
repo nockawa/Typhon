@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<!-- Single-node ClickHouse cluster for SigNoz dev deployment -->
+<clickhouse>
+    <zookeeper>
+        <node index="1">
+            <host>zookeeper-1</host>
+            <port>2181</port>
+        </node>
+    </zookeeper>
+
+    <remote_servers>
+        <cluster>
+            <shard>
+                <replica>
+                    <host>clickhouse</host>
+                    <port>9000</port>
+                </replica>
+            </shard>
+        </cluster>
+    </remote_servers>
+</clickhouse>

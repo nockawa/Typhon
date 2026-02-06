@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using Typhon.Engine;
 
 namespace Typhon.MonitoringDemo.Scenarios;
 
@@ -86,7 +85,7 @@ public class BaselineScenario : IScenario
             {
                 stats.RecordFailure(ex);
             }
-            
+
             ++loopCount;
         }
 

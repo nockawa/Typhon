@@ -215,7 +215,12 @@ public unsafe class Transaction : IDisposable
             return -1;
         }
         State = TransactionState.InProgress;
+
+        using var activity = TyphonActivitySource.StartActivity("Transaction.CreateEntity");
+        activity?.SetTag(TyphonSpanAttributes.ComponentType, typeof(T).Name);
+
         var pk = _dbe.GetNewPrimaryKey();
+        activity?.SetTag(TyphonSpanAttributes.EntityId, pk);
 
         CreateComponent(pk, ref t);
         return pk;
@@ -264,7 +269,16 @@ public unsafe class Transaction : IDisposable
         return pk;
     }
 
-    public bool ReadEntity<T>(long pk, out T t) where T : unmanaged => ReadComponent(pk, out t);
+    public bool ReadEntity<T>(long pk, out T t) where T : unmanaged
+    {
+        using var activity = TyphonActivitySource.StartActivity("Transaction.ReadEntity");
+        activity?.SetTag(TyphonSpanAttributes.EntityId, pk);
+        activity?.SetTag(TyphonSpanAttributes.ComponentType, typeof(T).Name);
+
+        var result = ReadComponent(pk, out t);
+        activity?.SetTag(TyphonSpanAttributes.ReadFound, result);
+        return result;
+    }
 
     public bool ReadEntity<TC1, TC2>(long pk, out TC1 t, out TC2 u) where TC1 : unmanaged where TC2 : unmanaged
     {
@@ -295,6 +309,10 @@ public unsafe class Transaction : IDisposable
             return false;
         }
         State = TransactionState.InProgress;
+
+        using var activity = TyphonActivitySource.StartActivity("Transaction.UpdateEntity");
+        activity?.SetTag(TyphonSpanAttributes.EntityId, pk);
+        activity?.SetTag(TyphonSpanAttributes.ComponentType, typeof(T).Name);
 
         return UpdateComponent(pk, ref t);
     }
@@ -346,6 +364,10 @@ public unsafe class Transaction : IDisposable
             return false;
         }
         State = TransactionState.InProgress;
+
+        using var activity = TyphonActivitySource.StartActivity("Transaction.DeleteEntity");
+        activity?.SetTag(TyphonSpanAttributes.EntityId, pk);
+        activity?.SetTag(TyphonSpanAttributes.ComponentType, typeof(T).Name);
 
         return UpdateComponent(pk, ref Unsafe.NullRef<T>());
     }
@@ -1329,6 +1351,10 @@ public unsafe class Transaction : IDisposable
             return false;
         }
 
+        using var activity = TyphonActivitySource.StartActivity("Transaction.Rollback");
+        activity?.SetTag(TyphonSpanAttributes.TransactionTsn, TSN);
+        activity?.SetTag(TyphonSpanAttributes.TransactionComponentCount, _componentInfos.Count);
+
         // Get the minimum tick of all transactions because we'll remove component versions that are older
         var context = new CommitContext { IsRollback = true };
 
@@ -1395,6 +1421,7 @@ public unsafe class Transaction : IDisposable
 
         // New state
         State = TransactionState.Rollbacked;
+        activity?.SetTag(TyphonSpanAttributes.TransactionStatus, "rolledback");
         _dbe?.RecordRollback();
         return true;
     }
@@ -1511,15 +1538,26 @@ public unsafe class Transaction : IDisposable
             return false;
         }
 
+        using var activity = TyphonActivitySource.StartActivity("Transaction.Commit");
+        activity?.SetTag(TyphonSpanAttributes.TransactionTsn, TSN);
+        activity?.SetTag(TyphonSpanAttributes.TransactionComponentCount, _componentInfos.Count);
+
         var startTicks = Stopwatch.GetTimestamp();
 
         var conflictSolver = handler != null ? GetConflictSolver() : null;
         var context = new CommitContext { IsRollback = false, Solver = conflictSolver };
+        var hasConflict = false;
 
         // Process every Component Type and their components
-        foreach (var componentInfo in _componentInfos.Values)
+        foreach (var kvp in _componentInfos)
         {
+            var componentType = kvp.Key;
+            var componentInfo = kvp.Value;
             context.Info = componentInfo;
+
+            // Start a sub-span for this component type
+            using var componentActivity = TyphonActivitySource.StartActivity("Transaction.CommitComponent");
+            componentActivity?.SetTag(TyphonSpanAttributes.ComponentType, componentType.Name);
 
             switch (componentInfo)
             {
@@ -1561,6 +1599,16 @@ public unsafe class Transaction : IDisposable
                     break;
             }
         }
+
+        // Check if any conflicts were detected (recorded via _dbe.RecordConflict() in CommitComponent)
+        // Note: We track conflicts at the engine level, not per-commit, so we rely on the conflict solver
+        if (conflictSolver != null && conflictSolver.EntryCount > 0)
+        {
+            hasConflict = true;
+        }
+
+        activity?.SetTag(TyphonSpanAttributes.TransactionConflictDetected, hasConflict);
+        activity?.SetTag(TyphonSpanAttributes.TransactionStatus, "committed");
 
         // New state
         State = TransactionState.Committed;

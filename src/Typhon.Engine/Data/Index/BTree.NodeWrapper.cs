@@ -71,7 +71,24 @@ public abstract partial class BTree<TKey>
 
         public void PushFirst(KeyValueItem item, ref ChunkAccessor accessor) => _storage.PushFirst(this, item, ref accessor);
         public void PushLast(KeyValueItem item, ref ChunkAccessor accessor) => _storage.PushLast(this, item, ref accessor);
-        public void MergeLeft(NodeWrapper right, ref ChunkAccessor accessor) => _storage.MergeLeft(this, right, ref accessor);
+        public void MergeLeft(NodeWrapper right, ref ChunkAccessor accessor)
+        {
+            Activity activity = null;
+            if (TelemetryConfig.BTreeActive)
+            {
+                activity = TyphonActivitySource.StartActivity("BTree.NodeMerge");
+                activity?.SetTag(TyphonSpanAttributes.IndexNodeMerge, true);
+            }
+
+            try
+            {
+                _storage.MergeLeft(this, right, ref accessor);
+            }
+            finally
+            {
+                activity?.Dispose();
+            }
+        }
 
         public NodeWrapper GetChild(int index, ref ChunkAccessor accessor) => _storage.GetChild(this, index, ref accessor);
 
@@ -560,7 +577,24 @@ public abstract partial class BTree<TKey>
 
         private KeyValueItem RemoveAtInternal(int index, ref ChunkAccessor accessor) => _storage.RemoveAt(this, index, ref accessor);
 
-        private NodeWrapper SplitRight(NodeStates states, ref ChunkAccessor accessor) => _storage.SplitRight(this, states, ref accessor);
+        private NodeWrapper SplitRight(NodeStates states, ref ChunkAccessor accessor)
+        {
+            Activity activity = null;
+            if (TelemetryConfig.BTreeActive)
+            {
+                activity = TyphonActivitySource.StartActivity("BTree.NodeSplit");
+                activity?.SetTag(TyphonSpanAttributes.IndexNodeSplit, true);
+            }
+
+            try
+            {
+                return _storage.SplitRight(this, states, ref accessor);
+            }
+            finally
+            {
+                activity?.Dispose();
+            }
+        }
 
         [Conditional("DEBUG")]
         private static void Validate(NodeWrapper node, ref ChunkAccessor accessor)
