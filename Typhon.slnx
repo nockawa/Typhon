@@ -16,5 +16,6 @@
     <Folder Name="/test/">
         <Project Path="test/Typhon.Benchmark/Typhon.Benchmark.csproj" />
         <Project Path="test/Typhon.Engine.Tests/Typhon.Engine.Tests.csproj" />
+        <Project Path="test/Typhon.MonitoringDemo/Typhon.MonitoringDemo.csproj" />
     </Folder>
 </Solution>

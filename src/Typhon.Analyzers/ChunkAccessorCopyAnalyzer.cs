@@ -13,6 +13,11 @@ namespace Typhon.Analyzers;
 /// ChunkAccessor is a large ~1KB struct designed for zero-allocation. Copying it defeats
 /// its performance design and can create unexpected behavior since it maintains internal state.
 /// The only valid creation is via ChunkBasedSegment.CreateChunkAccessor().
+/// 
+/// This analyzer detects:
+/// 1. Direct assignment copies: var x = existingAccessor;
+/// 2. Ref field dereference copies: var x = refStruct.RefField; (where RefField is 'ref ChunkAccessor')
+/// 3. Return statement copies
 /// </summary>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public class ChunkAccessorCopyAnalyzer : DiagnosticAnalyzer
@@ -51,7 +56,7 @@ public class ChunkAccessorCopyAnalyzer : DiagnosticAnalyzer
 
         // Analyze assignments and initializations
         context.RegisterOperationAction(AnalyzeAssignment, OperationKind.SimpleAssignment);
-        context.RegisterOperationAction(AnalyzeVariableInitializer, OperationKind.VariableInitializer);
+        context.RegisterOperationAction(AnalyzeVariableDeclarator, OperationKind.VariableDeclarator);
 
         // Analyze return statements
         context.RegisterOperationAction(AnalyzeReturn, OperationKind.Return);
@@ -87,38 +92,75 @@ public class ChunkAccessorCopyAnalyzer : DiagnosticAnalyzer
         context.ReportDiagnostic(diagnostic);
     }
 
-    private static void AnalyzeVariableInitializer(OperationAnalysisContext context)
+    private static void AnalyzeVariableDeclarator(OperationAnalysisContext context)
     {
-        var initializer = (IVariableInitializerOperation)context.Operation;
-
-        // Get the variable being initialized
-        var variableDeclarator = initializer.Syntax.Parent as VariableDeclaratorSyntax;
-        if (variableDeclarator == null)
+        var declarator = (IVariableDeclaratorOperation)context.Operation;
+        
+        // Get the local symbol being declared
+        var localSymbol = declarator.Symbol;
+        if (localSymbol == null)
             return;
 
-        var variableSymbol = context.ContainingSymbol as ILocalSymbol;
-        if (variableSymbol == null)
+        // Check if it's a ChunkAccessor type
+        if (!IsChunkAccessorType(localSymbol.Type))
             return;
 
-        // Check if it's a ChunkAccessor
-        if (!IsChunkAccessorType(variableSymbol.Type))
+        // If this is a ref local (ref var x = ref ...), it's allowed - no copy occurs
+        if (localSymbol.RefKind != RefKind.None)
+            return;
+
+        // Get the initializer
+        var initializer = declarator.Initializer;
+        if (initializer == null)
+            return;
+
+        var initValue = initializer.Value;
+        if (initValue == null)
             return;
 
         // Allow initialization from CreateChunkAccessor() calls
-        if (IsCreateChunkAccessorCall(initializer.Value))
+        if (IsCreateChunkAccessorCall(initValue))
             return;
 
         // Allow initialization from default(ChunkAccessor) or new ChunkAccessor()
-        if (IsDefaultOrNewExpression(initializer.Value))
+        if (IsDefaultOrNewExpression(initValue))
             return;
 
         // This is a copy - report it
+        // Include extra context if this is a ref field dereference
+        var expressionName = GetExpressionName(initValue);
+        if (IsRefFieldAccess(initValue))
+        {
+            expressionName += " (ref field dereference - use 'ref var' instead of 'var')";
+        }
+
         var diagnostic = Diagnostic.Create(
             Rule,
-            initializer.Syntax.GetLocation(),
-            GetExpressionName(initializer.Value));
+            declarator.Syntax.GetLocation(),
+            expressionName);
 
         context.ReportDiagnostic(diagnostic);
+    }
+
+    /// <summary>
+    /// Checks if the operation is accessing a ref field (which would cause a copy if not using ref on the LHS).
+    /// </summary>
+    private static bool IsRefFieldAccess(IOperation operation)
+    {
+        // Unwrap conversions
+        var unwrapped = operation;
+        while (unwrapped is IConversionOperation conversion)
+        {
+            unwrapped = conversion.Operand;
+        }
+
+        // Check if it's a field reference where the field is a ref field
+        if (unwrapped is IFieldReferenceOperation fieldRef)
+        {
+            return fieldRef.Field.RefKind != RefKind.None;
+        }
+
+        return false;
     }
 
     private static void AnalyzeReturn(OperationAnalysisContext context)
@@ -176,8 +218,27 @@ public class ChunkAccessorCopyAnalyzer : DiagnosticAnalyzer
         }
 
         // Check for default(ChunkAccessor), default, new ChunkAccessor()
-        return unwrapped is IDefaultValueOperation ||
-               unwrapped is IObjectCreationOperation;
+        if (unwrapped is IDefaultValueOperation || unwrapped is IObjectCreationOperation)
+            return true;
+
+        // Handle conditional expressions: condition ? trueValue : falseValue
+        // Both branches must be allowed (CreateChunkAccessor or default/new)
+        if (unwrapped is IConditionalOperation conditional)
+        {
+            return IsAllowedInitializer(conditional.WhenTrue) && 
+                   IsAllowedInitializer(conditional.WhenFalse);
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Checks if an operation is an allowed initializer for ChunkAccessor
+    /// (CreateChunkAccessor call, default, or new expression).
+    /// </summary>
+    private static bool IsAllowedInitializer(IOperation operation)
+    {
+        return IsCreateChunkAccessorCall(operation) || IsDefaultOrNewExpression(operation);
     }
 
     private static bool IsChunkAccessorType(ITypeSymbol typeSymbol)

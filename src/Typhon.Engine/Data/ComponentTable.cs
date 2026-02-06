@@ -419,6 +419,16 @@ public unsafe class ComponentTable : IResource, IMetricSource, IContentionTarget
         // Unregister from parent (DatabaseEngine)
         Parent?.RemoveChild(this);
 
+        // Dispose ComponentCollectionInfo accessors to release page references
+        if (ComponentCollectionVSBSByOffset != null)
+        {
+            foreach (var info in ComponentCollectionVSBSByOffset.Values)
+            {
+                info.Accessor.Dispose();
+            }
+            ComponentCollectionVSBSByOffset.Clear();
+        }
+
         String64IndexSegment?.Dispose();
         DefaultIndexSegment.Dispose();
         CompRevTableSegment.Dispose();

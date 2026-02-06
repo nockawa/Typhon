@@ -311,8 +311,5 @@ abstract class TestBase<T> : TestBase
     }
 
     [TearDown]
-    public virtual void TearDown()
-    {
-        Log.CloseAndFlush();
-    }
+    public virtual void TearDown() => Log.CloseAndFlush();
 }
