@@ -638,6 +638,9 @@ public ref struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanag
     {
         if (!IsValid)
         {
+            // Still need to dispose accessor if it was created
+            // The accessor is created in constructor before IsValid check
+            _accessor.Dispose();
             return;
         }
 

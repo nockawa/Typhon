@@ -307,7 +307,7 @@ public partial class PagedMMF : IDisposable
     /// If the File Page is being loading from disk to memory, the read is completely independent of this operation, the <see cref="PageAccessor"/> will
     ///  wait for it upon its first content access.
     /// </remarks>
-    public bool RequestPage(int filePageIndex, bool exclusive, [TransfersOwnership] out PageAccessor result, 
+    public bool RequestPage(int filePageIndex, bool exclusive, [TransfersOwnership] out PageAccessor result,
         long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
     {
 #if TELEMETRY
@@ -316,28 +316,44 @@ public partial class PagedMMF : IDisposable
         LogRequestPage(filePageIndex, exclusive);
 #endif
 
-        // Race condition can occur during TransitionPageToAccessAsync (e.g. waiting for the lock while the memory page is being reallocated for another disk page)
-        // So we loop until we get the page in the right state
-        AdaptiveWaiter waiter = null;
-        while (true)
+        Activity requestPageActivity = null;
+        if (TelemetryConfig.PagedMMFSpanAll)
         {
-            // If this returns false, it means we can't request a page right now: we return false
-            if (!FetchPageToMemory(filePageIndex, out var memPageIndex, timeout, cancellationToken))
+            // RequestPage is a child of the current activity (Transaction operation)
+            // This gives full call hierarchy visibility at the cost of larger traces
+            requestPageActivity = TyphonActivitySource.StartActivity("PageCache.RequestPage", ActivityKind.Internal);
+            requestPageActivity?.SetTag(TyphonSpanAttributes.PageId, filePageIndex);
+        }
+
+        try
+        {
+            // Race condition can occur during TransitionPageToAccessAsync (e.g. waiting for the lock while the memory page is being reallocated for another disk page)
+            // So we loop until we get the page in the right state
+            AdaptiveWaiter waiter = null;
+            while (true)
             {
-                result = default;
-                return false;
+                // If this returns false, it means we can't request a page right now: we return false
+                if (!FetchPageToMemory(filePageIndex, out var memPageIndex, timeout, cancellationToken))
+                {
+                    result = default;
+                    return false;
+                }
+                var pi = _memPagesInfo[memPageIndex];
+
+                // If this return false, it's most likely a race condition where the Memory Page was reallocated for another File Page
+                if (!TransitionPageToAccess(filePageIndex, pi, exclusive, timeout, cancellationToken))
+                {
+                    waiter ??= new AdaptiveWaiter();
+                    waiter.Spin();
+                    continue;
+                }
+                result = new PageAccessor(this, pi);
+                return true;
             }
-            var pi = _memPagesInfo[memPageIndex];
-        
-            // If this return false, it's most likely a race condition where the Memory Page was reallocated for another File Page
-            if (!TransitionPageToAccess(filePageIndex, pi, exclusive, timeout, cancellationToken))
-            {
-                waiter ??= new AdaptiveWaiter();
-                waiter.Spin();
-                continue;
-            }
-            result = new PageAccessor(this, pi);
-            return true;
+        }
+        finally
+        {
+            requestPageActivity?.Dispose();
         }
     }
 
@@ -361,12 +377,23 @@ public partial class PagedMMF : IDisposable
             ++_metrics.MemPageCacheMiss;
             LogMemPageCacheMiss();
 
+            // At CacheMiss level: create rootless Fetch parent span with link to trigger
+            // At CacheMiss level: Fetch is a child of the current activity (RequestPage or Transaction)
+            // DiskRead will become a child of Fetch
+            Activity fetchActivity = null;
+            if (TelemetryConfig.PagedMMFSpanCacheMiss)
+            {
+                fetchActivity = TyphonActivitySource.StartActivity("PageCache.Fetch", ActivityKind.Internal);
+                fetchActivity?.SetTag(TyphonSpanAttributes.PageId, filePageIndex);
+            }
+
             // Page is not cached, we assign an available Memory Page to it
             if (!AllocateMemoryPage(filePageIndex, out memPageIndex, timeout, cancellationToken))
             {
+                fetchActivity?.Dispose();
                 return false;
             }
-            
+
             // Load the page from disk, if it's stored there already. (won't be the case for new pages)
             // The load is async and not part of the returned task but stored in the PageInfo
             var pageOffset = filePageIndex * (long)PageSize;
@@ -375,10 +402,42 @@ public partial class PagedMMF : IDisposable
             {
                 LogAllocatePageLoad();
                 ++_metrics.ReadFromDiskCount;
-                
+
+                // At IOOnly level: DiskRead is a child of the current activity
+                // - If Fetch exists (CacheMiss level): child of Fetch
+                // - If no Fetch (IOOnly only): child of RequestPage or Transaction
+                Activity diskReadActivity = null;
+                if (TelemetryConfig.PagedMMFSpanIOOnly)
+                {
+                    diskReadActivity = TyphonActivitySource.StartActivity("PageCache.DiskRead", ActivityKind.Internal);
+                    diskReadActivity?.SetTag(TyphonSpanAttributes.PageId, filePageIndex);
+                }
+
                 var pi = _memPagesInfo[memPageIndex];
-                pi.SetIOReadTask(RandomAccess.ReadAsync(_fileHandle, MemPages.AsMemory(memPageIndex * PageSize, PageSize), pageOffset, cancellationToken));
-            }            
+                var readTask = RandomAccess.ReadAsync(_fileHandle, MemPages.AsMemory(memPageIndex * PageSize, PageSize), pageOffset, cancellationToken);
+
+                // Wrap the task to dispose activities when complete
+                if (diskReadActivity != null || fetchActivity != null)
+                {
+                    var wrappedTask = readTask.AsTask().ContinueWith(t =>
+                    {
+                        diskReadActivity?.Dispose();
+                        fetchActivity?.Dispose();
+                        return t.Result;
+                    }, TaskContinuationOptions.ExecuteSynchronously);
+                    pi.SetIOReadTask(new ValueTask<int>(wrappedTask));
+                }
+                else
+                {
+                    pi.SetIOReadTask(readTask);
+                }
+            }
+            else
+            {
+                // No disk read needed - dispose Fetch span now
+                // Dispose() automatically restores Activity.Current to the parent
+                fetchActivity?.Dispose();
+            }
         }
         else
         {
@@ -422,12 +481,31 @@ public partial class PagedMMF : IDisposable
     /// </remarks>
     private bool AllocateMemoryPage(int filePageIndex, out int memPageIndex, long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
     {
+        Activity allocateActivity = null;
+        if (TelemetryConfig.PagedMMFSpanCacheMiss)
+        {
+            allocateActivity = TyphonActivitySource.StartActivity("PageCache.AllocatePage");
+            allocateActivity?.SetTag(TyphonSpanAttributes.PageId, filePageIndex);
+        }
+
+        try
+        {
+            return AllocateMemoryPageCore(filePageIndex, out memPageIndex, timeout, cancellationToken);
+        }
+        finally
+        {
+            allocateActivity?.Dispose();
+        }
+    }
+
+    private bool AllocateMemoryPageCore(int filePageIndex, out int memPageIndex, long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
+    {
 #if DEBUG
         int loopCount = 0;
         DateTime start = DateTime.UtcNow;
 #endif
         AdaptiveWaiter waiter = null;
-        
+
         LogAllocatePageEnter();
         while (true)
         {
@@ -440,6 +518,7 @@ public partial class PagedMMF : IDisposable
             bool found = false;
             PageInfo pi = null;
             memPageIndex = -1;
+            int evictedFilePageIndex = -1;
 
             // If we already have a MemPage fetch for the FilePage just before the one we allocate, then we try to take the MemPage that follows
             // We request FilePage 123, there's a FilePage 122 allocated to MemPage 34, then we try to allocate 35 for 123, which will allow, if needed,
@@ -448,6 +527,7 @@ public partial class PagedMMF : IDisposable
             {
                 memPageIndex = prevMemPageIndex + 1;
                 pi = _memPagesInfo[memPageIndex];
+                evictedFilePageIndex = pi.FilePageIndex;
                 if (TryAcquire(pi))
                 {
                     LogAllocatePageSequential();
@@ -470,10 +550,14 @@ public partial class PagedMMF : IDisposable
                     pi = _memPagesInfo[memPageIndex];
 
                     // If the counter is 0, the page is candidate for eviction, try to acquire it
-                    if (pi.ClockSweepCounter == 0 && TryAcquire(pi))
+                    if (pi.ClockSweepCounter == 0)
                     {
-                        found = true;
-                        break;
+                        evictedFilePageIndex = pi.FilePageIndex;
+                        if (TryAcquire(pi))
+                        {
+                            found = true;
+                            break;
+                        }
                     }
 
                     // Decrement the counter for this page and loop
@@ -494,6 +578,7 @@ public partial class PagedMMF : IDisposable
                         pi = _memPagesInfo[memPageIndex];
 
                         // If the counter is 0, the page is candidate for eviction, try to acquire it
+                        evictedFilePageIndex = pi.FilePageIndex;
                         if (TryAcquire(pi))
                         {
                             found = true;
@@ -543,6 +628,16 @@ public partial class PagedMMF : IDisposable
             
             ++_metrics.TotalMemPageAllocatedCount;
             LogAllocatePageFound(memPageIndex);
+
+            // Record eviction event on the parent AllocatePage span when a cached page was displaced
+            if (TelemetryConfig.PagedMMFSpanCacheMiss && evictedFilePageIndex >= 0)
+            {
+                Activity.Current?.AddEvent(new ActivityEvent("PageEvicted",
+                    tags: new ActivityTagsCollection
+                    {
+                        { TyphonSpanAttributes.PageId, evictedFilePageIndex }
+                    }));
+            }
 
             if (Options.PagesDebugPattern)
             {
@@ -873,6 +968,15 @@ public partial class PagedMMF : IDisposable
 
     unsafe internal Task SavePages(int[] memPageIndices)
     {
+        // Flush is a child of the current activity (typically Transaction.Commit or UnitOfWork)
+        // DiskWrite spans will become children of Flush
+        Activity flushActivity = null;
+        if (TelemetryConfig.PagedMMFSpanIOOnly)
+        {
+            flushActivity = TyphonActivitySource.StartActivity("PageCache.Flush", ActivityKind.Internal);
+            flushActivity?.SetTag(TyphonSpanAttributes.PageCount, memPageIndices.Length);
+        }
+
         // We want to generate as few IO operations as possible, so we sort the pages to identify the ones that are contiguous in the file
         Array.Sort(memPageIndices, (x, y) => x - y);
 
@@ -895,11 +999,11 @@ public partial class PagedMMF : IDisposable
                 {
                     ioTask.GetAwaiter().GetResult();
                 }
-            
+
                 var headerAddr = (PageBaseHeader*)(memPageBaseAddr + (curPageInfo.MemPageIndex * PageSize));
                 ++headerAddr->ChangeRevision;
             }
-            
+
             var nextMemPageIndex = memPageIndices[i];
             var nextPageInfo = _memPagesInfo[nextMemPageIndex];
             if ((curPageInfo.MemPageIndex+1)==nextPageInfo.MemPageIndex && (curPageInfo.FilePageIndex+1)==nextPageInfo.FilePageIndex)
@@ -916,14 +1020,21 @@ public partial class PagedMMF : IDisposable
 
             curPageInfo = nextPageInfo;
         }
-        
+
         // Don't forget to add the last operation
         operations.Add(curOperation);
-        
+
         var tasks = new Task[operations.Count];
         for (int i = 0; i < operations.Count; i++)
         {
             tasks[i] = SavePageInternal(operations[i].memPageIndex, operations[i].length).AsTask();
+        }
+
+        // Restore Activity.Current to parent (Flush set it to itself during StartActivity)
+        // This ensures subsequent code doesn't accidentally become children of Flush
+        if (flushActivity != null)
+        {
+            Activity.Current = flushActivity.Parent;
         }
 
         var saveTask = Task.WhenAll(tasks).ContinueWith(_ =>
@@ -932,6 +1043,8 @@ public partial class PagedMMF : IDisposable
             {
                 DecrementDirty(memPageIndex);
             }
+            // Dispose the Flush span when all writes complete
+            flushActivity?.Dispose();
         });
         return saveTask;
     }
@@ -939,7 +1052,7 @@ public partial class PagedMMF : IDisposable
     internal ValueTask SavePageInternal(int firstMemPageIndex, int length)
     {
         var pi = _memPagesInfo[firstMemPageIndex];
-        
+
         // Save the page to disk
         var filePageIndex = pi.FilePageIndex;
         var pageOffset = filePageIndex * (long)PageSize;
@@ -947,10 +1060,28 @@ public partial class PagedMMF : IDisposable
         var pageData = MemPages.AsMemory(firstMemPageIndex * PageSize, lengthToWrite);
 
         _fileSize = Math.Max(_fileSize, pageOffset + lengthToWrite);
-        
+
         _metrics.PageWrittenToDiskCount += length;
         _metrics.WrittenOperationCount++;
-        return RandomAccess.WriteAsync(_fileHandle, pageData, pageOffset);
+
+        // DiskWrite is a child of Flush (or whatever is current if Flush is disabled)
+        Activity diskWriteActivity = null;
+        if (TelemetryConfig.PagedMMFSpanIOOnly)
+        {
+            diskWriteActivity = TyphonActivitySource.StartActivity("PageCache.DiskWrite", ActivityKind.Internal);
+            diskWriteActivity?.SetTag(TyphonSpanAttributes.PageId, filePageIndex);
+            diskWriteActivity?.SetTag(TyphonSpanAttributes.PageCount, length);
+        }
+
+        var writeTask = RandomAccess.WriteAsync(_fileHandle, pageData, pageOffset);
+
+        // Wrap the task to dispose the activity when complete
+        if (diskWriteActivity != null)
+        {
+            return new ValueTask(writeTask.AsTask().ContinueWith(_ => diskWriteActivity.Dispose(), TaskContinuationOptions.ExecuteSynchronously));
+        }
+
+        return writeTask;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]

@@ -1,0 +1,100 @@
+# Typhon Observability Stack
+#
+# Usage:
+#   podman compose up -d     (start)
+#   podman compose down      (stop)
+#   podman compose logs -f   (view logs)
+#
+# Components:
+#   - OTel Collector: Receives OTLP from .NET app, routes traces/metrics
+#   - Jaeger: Trace storage and visualization
+#   - Prometheus: Metrics storage and querying
+#   - Grafana: Dashboards and visualization
+
+services:
+  # OpenTelemetry Collector - Entry point for all telemetry
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: typhon-otel-collector
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "${OTEL_GRPC_PORT:-4317}:4317"   # OTLP gRPC receiver (from .NET app)
+      - "${OTEL_HTTP_PORT:-4318}:4318"   # OTLP HTTP receiver
+      - "8889:8889"                       # Prometheus metrics endpoint
+      - "13133:13133"                     # Health check endpoint
+    restart: unless-stopped
+    # Note: Distroless container has no shell/wget/curl, so we disable the
+    # internal healthcheck and use start_period to allow time for startup.
+    # The health_check extension exposes :13133 for external monitoring.
+    healthcheck:
+      disable: true
+
+  # Jaeger - Distributed tracing backend
+  jaeger:
+    image: jaegertracing/jaeger:2.14.1
+    container_name: typhon-jaeger
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"        # Jaeger UI
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    depends_on:
+      otel-collector:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:16686"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Prometheus - Metrics storage
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: typhon-prometheus
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    depends_on:
+      otel-collector:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: typhon-grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=typhon
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+    depends_on:
+      jaeger:
+        condition: service_healthy
+      prometheus:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
