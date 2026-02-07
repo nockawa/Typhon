@@ -492,12 +492,13 @@ public unsafe class Transaction : IDisposable
     internal ChunkHandle GetCompRevStorageHeader<T>(long entity)
     {
         var ci = GetComponentInfoSingle(typeof(T));
-        if (!GetCompRevTableFirstChunkId(entity, ci, out var firstChunkId))
+        var result = GetCompRevTableFirstChunkId(entity, ci);
+        if (result.IsFailure)
         {
             return default;
         }
-        
-        return ci.CompRevTableAccessor.GetChunkHandle(firstChunkId, false);
+
+        return ci.CompRevTableAccessor.GetChunkHandle(result.Value, false);
     }
 
     internal int GetRevisionCount<T>(long entity)
@@ -688,12 +689,14 @@ public unsafe class Transaction : IDisposable
         if (!exists)
         {
             // Couldn't find in the cache, get it from the index
-            if (!GetCompRevInfoFromIndex(pk, info, TSN, out compRevInfo))
+            var result = GetCompRevInfoFromIndex(pk, info, TSN);
+            if (result.IsFailure)
             {
+                // NotFound, SnapshotInvisible, or Deleted — all mean no readable component
                 t = default;
                 return false;
             }
-
+            compRevInfo = result.Value;
             compRevInfo.Operations |= ComponentInfoBase.OperationType.Read;
         }
 
@@ -709,7 +712,7 @@ public unsafe class Transaction : IDisposable
         int size = info.ComponentTable.ComponentStorageSize;
         using var handle = info.CompContentAccessor.GetChunkHandle(compRevInfo.CurCompContentChunkId, false);
         handle.AsSpan().Slice(info.ComponentTable.ComponentOverhead).CopyTo(new Span<byte>(Unsafe.AsPointer(ref t), size));
-        
+
         return true;
     }
     
@@ -801,10 +804,12 @@ public unsafe class Transaction : IDisposable
         {
             // Fetch the cache by getting the revision closest to the transaction tick, if we fail it means there's no revision, so no component for this
             //  PK, we return false
-            if (!GetCompRevInfoFromIndex(pk, info, TSN, out compRevInfo))
+            var result = GetCompRevInfoFromIndex(pk, info, TSN);
+            if (result.Status == RevisionReadStatus.NotFound || result.Status == RevisionReadStatus.SnapshotInvisible)
             {
                 return false;
             }
+            compRevInfo = result.Value; // Works for both Success AND Deleted (3-arg constructor)
         }
 
         // Update the operation types
@@ -957,32 +962,31 @@ public unsafe class Transaction : IDisposable
         return true;
     }
 
-    private bool GetCompRevTableFirstChunkId(long pk, ComponentInfoSingle info, out int firstChunkId)
+    private Result<int, BTreeLookupStatus> GetCompRevTableFirstChunkId(long pk, ComponentInfoSingle info)
     {
         var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
-        var res = info.PrimaryKeyIndex.TryGet(pk, out firstChunkId, ref accessor);
+        var result = info.PrimaryKeyIndex.TryGet(pk, ref accessor);
         accessor.Dispose();
-        return res;
+        return result;
     }
 
-    private bool GetCompRevInfoFromIndex(long pk, ComponentInfoSingle info, long tick, out ComponentInfoBase.CompRevInfo compRevInfo)
+    private Result<ComponentInfoBase.CompRevInfo, RevisionReadStatus> GetCompRevInfoFromIndex(
+        long pk, ComponentInfoSingle info, long tick)
     {
         ref var compRevTableAccessor = ref info.CompRevTableAccessor;
 
         int compRevFirstChunkId;
         {
             var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
-            if (!info.PrimaryKeyIndex.TryGet(pk, out compRevFirstChunkId, ref accessor))
-            {
-                accessor.Dispose();
-                compRevInfo = default;
-                return false;
-            }
+            var lookupResult = info.PrimaryKeyIndex.TryGet(pk, ref accessor);
             accessor.Dispose();
+            if (lookupResult.IsFailure)
+            {
+                return new Result<ComponentInfoBase.CompRevInfo, RevisionReadStatus>(RevisionReadStatus.NotFound);
+            }
+            compRevFirstChunkId = lookupResult.Value;
         }
 
-        var res = true;
-        compRevInfo = default;
         short prevCompRevisionIndex = -1;
         short curCompRevisionIndex = -1;
         int prevCompChunkId = 0;
@@ -1016,11 +1020,10 @@ public unsafe class Transaction : IDisposable
 
         if (curCompRevisionIndex == -1)
         {
-            res = false;
-            goto Exit;
+            return new Result<ComponentInfoBase.CompRevInfo, RevisionReadStatus>(RevisionReadStatus.SnapshotInvisible);
         }
 
-        compRevInfo = new ComponentInfoBase.CompRevInfo
+        var compRevInfo = new ComponentInfoBase.CompRevInfo
         {
             Operations = ComponentInfoBase.OperationType.Undefined,
             CompRevTableFirstChunkId = compRevFirstChunkId,
@@ -1030,8 +1033,13 @@ public unsafe class Transaction : IDisposable
             PrevRevisionIndex = prevCompRevisionIndex
         };
 
-        Exit:
-        return res;
+        // Tombstoned entity: carry the value (callers like UpdateComponent need revision metadata) but signal Deleted
+        if (curCompChunkId == 0)
+        {
+            return new Result<ComponentInfoBase.CompRevInfo, RevisionReadStatus>(compRevInfo, RevisionReadStatus.Deleted);
+        }
+
+        return new Result<ComponentInfoBase.CompRevInfo, RevisionReadStatus>(compRevInfo);
     }
 
     private bool GetCompRevInfoFromIndex(long pk, ComponentInfoMultiple info, long tick, out List<ComponentInfoBase.CompRevInfo> compRevInfoList)

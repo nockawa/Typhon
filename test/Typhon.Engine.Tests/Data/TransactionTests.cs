@@ -1161,7 +1161,7 @@ class TransactionTests : TestBase<TransactionTests>
 
         {
             var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-            var exists = ct.PrimaryKeyIndex.TryGet(e1, out _, ref accessor);
+            var exists = ct.PrimaryKeyIndex.TryGet(e1, ref accessor).IsSuccess;
             Assert.That(exists, Is.True, "Entity should exist in primary key index after creation");
             accessor.Dispose();
         }
@@ -1187,7 +1187,7 @@ class TransactionTests : TestBase<TransactionTests>
         // Currently this will FAIL because the cleanup code is commented out (TOFIX in Transaction.cs line ~971)
         {
             var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-            var existsAfterDelete = ct.PrimaryKeyIndex.TryGet(e1, out _, ref accessor);
+            var existsAfterDelete = ct.PrimaryKeyIndex.TryGet(e1, ref accessor).IsSuccess;
             Assert.That(existsAfterDelete, Is.False,
                 "Primary key index entry should be removed when component is deleted and all revisions cleaned up");
             
@@ -1223,7 +1223,7 @@ class TransactionTests : TestBase<TransactionTests>
         // Verify entity exists in primary key index after creation
         {
             var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-            var exists = ct.PrimaryKeyIndex.TryGet(e1, out _, ref accessor);
+            var exists = ct.PrimaryKeyIndex.TryGet(e1, ref accessor).IsSuccess;
             Assert.That(exists, Is.True, "Entity should exist in primary key index after creation");
             
             accessor.Dispose();
@@ -1249,7 +1249,7 @@ class TransactionTests : TestBase<TransactionTests>
         // NOTE: This assertion documents the EXPECTED behavior.
         {
             var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-            var exists = ct.PrimaryKeyIndex.TryGet(e1, out _, ref accessor);
+            var exists = ct.PrimaryKeyIndex.TryGet(e1, ref accessor).IsSuccess;
             Assert.That(exists, Is.False,
                 "Primary key index should not contain entry after entity is deleted");
             
@@ -1299,7 +1299,7 @@ class TransactionTests : TestBase<TransactionTests>
         // The primary key index should still have the entry because long-running transaction prevents cleanup
         {
             var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-            var existsDuringLongTxn = ct.PrimaryKeyIndex.TryGet(e1, out _, ref accessor);
+            var existsDuringLongTxn = ct.PrimaryKeyIndex.TryGet(e1, ref accessor).IsSuccess;
             Assert.That(existsDuringLongTxn, Is.True,
                 "Primary key index should retain entry while long-running transaction holds old revisions");
             
@@ -1322,7 +1322,7 @@ class TransactionTests : TestBase<TransactionTests>
         // NOTE: This assertion documents the EXPECTED behavior.
         {
             var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-            var existsAfterCleanup = ct.PrimaryKeyIndex.TryGet(e1, out _, ref accessor);
+            var existsAfterCleanup = ct.PrimaryKeyIndex.TryGet(e1, ref accessor).IsSuccess;
             Assert.That(existsAfterCleanup, Is.False,
                 "Primary key index entry should be removed after long-running transaction completes and cleanup runs");
             
@@ -1356,7 +1356,7 @@ class TransactionTests : TestBase<TransactionTests>
             var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
             for (int i = 0; i < 5; i++)
             {
-                var exists = ct.PrimaryKeyIndex.TryGet(entityIds[i], out _, ref accessor);
+                var exists = ct.PrimaryKeyIndex.TryGet(entityIds[i], ref accessor).IsSuccess;
                 Assert.That(exists, Is.True, $"Entity {i} should exist in primary key index");
             }
             accessor.Dispose();
@@ -1393,14 +1393,14 @@ class TransactionTests : TestBase<TransactionTests>
             // Remaining entities should exist
             for (int i = 1; i < 5; i += 2)
             {
-                var exists = ct.PrimaryKeyIndex.TryGet(entityIds[i], out _, ref accessor);
+                var exists = ct.PrimaryKeyIndex.TryGet(entityIds[i], ref accessor).IsSuccess;
                 Assert.That(exists, Is.True, $"Entity {i} should exist in primary key index");
             }
 
             // Deleted entities should not exist (expected behavior after cleanup)
             for (int i = 0; i < 5; i += 2)
             {
-                var exists = ct.PrimaryKeyIndex.TryGet(entityIds[i], out _, ref accessor);
+                var exists = ct.PrimaryKeyIndex.TryGet(entityIds[i], ref accessor).IsSuccess;
                 Assert.That(exists, Is.False,
                     $"Entity {i} should be removed from primary key index after deletion and cleanup");
             }
@@ -1444,7 +1444,7 @@ class TransactionTests : TestBase<TransactionTests>
 
         {
             var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-            var exists = ct.PrimaryKeyIndex.TryGet(e1, out _, ref accessor);
+            var exists = ct.PrimaryKeyIndex.TryGet(e1, ref accessor).IsSuccess;
             Assert.That(exists, Is.False,
                 "Primary key index should not contain entry for rolled back creation");
             
