@@ -19,28 +19,27 @@ flowchart TB
     subgraph ErrorHandling["Error Handling"]
         EXCEPT[Exception Hierarchy<br/>Typed exceptions]
         RESULT[Result Types<br/>Error-or-value]
-        RETRY[Retry Policies<br/>Transient failures]
+        HINT[IsTransient Hint<br/>Caller-owned retry]
     end
 
     subgraph Recovery["Recovery Actions"]
         ROLLBACK[Transaction Rollback]
-        RECONNECT[Resource Reconnect]
-        FAILOVER[Graceful Degradation]
+        DEGRADE[Graceful Degradation]
     end
 
     DATA --> EXCEPT
     STORAGE --> EXCEPT
     QUERY --> EXCEPT
+    EXCEPT --> HINT
     EXCEPT --> ROLLBACK
-    EXCEPT --> RECONNECT
-    EXCEPT --> FAILOVER
+    EXCEPT --> DEGRADE
 ```
 
 ---
 
-## Status: ⚠️ Scattered
+## Status: 📐 Design Complete
 
-Error handling exists throughout the codebase but lacks a unified approach. Exceptions are thrown but not organized into a coherent hierarchy.
+Error handling exists throughout the codebase but lacks a unified hierarchy. Research ([ErrorFoundationTimeoutActivation.md](../research/timeout/ErrorFoundationTimeoutActivation.md)) produced 12 design decisions. Four detailed design documents ([design/errors/](../design/errors/)) cover the exception hierarchy (#37), deadline propagation (#38), exhaustion policy (#39), and Result types (#40). Ready for implementation (Issue #36).
 
 ---
 
@@ -48,8 +47,8 @@ Error handling exists throughout the codebase but lacks a unified approach. Exce
 
 | # | Name | Purpose | Status |
 |---|------|---------|--------|
-| **10.1** | [Exception Hierarchy](#101-exception-hierarchy) | Typed exceptions for different failures | ⚠️ Scattered |
-| **10.2** | [Error Categories](#102-error-categories) | Classification of error types | 🆕 New |
+| **10.1** | [Exception Hierarchy](#101-exception-hierarchy) | Typed exceptions for different failures | 📐 Designed (Issue #37) |
+| **10.2** | [Error Codes & Classification](#102-error-codes--classification) | Numeric codes by subsystem range | 📐 Designed (Issue #37) |
 | **10.3** | [Recovery Strategies](#103-recovery-strategies) | Handling and retry patterns | 🆕 New |
 
 ---
@@ -62,40 +61,49 @@ Provide a clear hierarchy of exceptions that callers can catch and handle approp
 
 ### Proposed Hierarchy
 
+> **Tier 1** classes (Issue #36) are marked with ★. Other classes are defined but reserved for later tiers.
+
 ```
-TyphonException (base)
-├── TransactionException
+TyphonException (base) ★
+├── TyphonTimeoutException ★              catch (TyphonTimeoutException) → all timeouts
+│   ├── LockTimeoutException ★            Tier 1 — lock acquisition timeout
+│   ├── TransactionTimeoutException ★     Tier 1 class — throw sites activated in Tier 2
+│   └── QueryTimeoutException             (reserved — Tier 7)
+├── StorageException ★
+│   ├── PageNotFoundException             (reserved)
+│   ├── DiskIOException                   (reserved)
+│   ├── CorruptionException ★             Tier 1
+│   └── CapacityExceededException         (reserved)
+├── ResourceExhaustedException ★          Tier 1 — re-parented directly under TyphonException
+├── TransactionException                  (reserved — Tier 2+)
 │   ├── TransactionConflictException
-│   ├── TransactionTimeoutException
 │   ├── TransactionAbortedException
 │   └── TransactionStateException
-├── StorageException
-│   ├── PageNotFoundException
-│   ├── DiskIOException
-│   ├── CorruptionException
-│   └── CapacityExceededException
-├── ComponentException
+├── ComponentException                    (reserved — Tier 3)
 │   ├── ComponentNotFoundException
 │   ├── ComponentSchemaException
 │   └── ComponentValidationException
-├── IndexException
+├── IndexException                        (reserved — Tier 4)
 │   ├── IndexKeyNotFoundException
 │   ├── DuplicateKeyException
 │   └── IndexCorruptionException
-├── QueryException
+├── QueryException                        (reserved — Tier 5)
 │   ├── InvalidPredicateException
-│   ├── QueryTimeoutException
 │   └── ViewExpiredException
-├── DurabilityException
+├── DurabilityException                   (reserved — Tier 7)
 │   ├── WalWriteException
 │   ├── WalCorruptionException
 │   ├── CheckpointFailedException
 │   └── EpochVoidedException
-└── ResourceException
-    ├── ResourceExhaustedException
-    ├── DeadlockDetectedException
-    └── LockTimeoutException
+└── ResourceException                     (reserved — added when DeadlockDetectedException arrives)
+    └── DeadlockDetectedException
 ```
+
+**Key Tier 1 design decisions** (see [research doc](../research/timeout/ErrorFoundationTimeoutActivation.md)):
+- `TyphonTimeoutException` intermediate enables `catch (TyphonTimeoutException)` for all timeout types (D10)
+- `ResourceExhaustedException` re-parented directly under `TyphonException`, no `ResourceException` intermediate in Tier 1 (D2)
+- `LockTimeoutException` moved from `ResourceException` to `TyphonTimeoutException` (D10)
+- No `Context` dictionary on base class — each subclass defines typed properties (D8)
 
 ### Base Exception
 
@@ -105,48 +113,51 @@ public class TyphonException : Exception
     // Error code for programmatic handling
     public TyphonErrorCode ErrorCode { get; }
 
-    // Category for logging/metrics
-    public ErrorCategory Category { get; }
-
     // Is this error transient (might succeed on retry)?
-    public bool IsTransient { get; }
+    // Default: false — subclasses opt in explicitly via override.
+    // TyphonTimeoutException → true, ResourceExhaustedException → true
+    public virtual bool IsTransient => false;
 
-    // Additional context
-    public IReadOnlyDictionary<string, object> Context { get; }
+    // No Context dictionary — each subclass defines typed properties (D8):
+    //   LockTimeoutException → string ResourceName, TimeSpan WaitDuration
+    //   ResourceExhaustedException → string ResourcePath, ResourceType, long CurrentUsage, long Limit
+    //   CorruptionException → string ComponentName, int PageIndex
 
-    public TyphonException(
-        string message,
-        TyphonErrorCode code,
-        Exception? innerException = null)
+    // No ErrorCategory enum — the type hierarchy IS the classification (D1).
+    // Callers catch specific types: catch (TyphonTimeoutException), catch (StorageException), etc.
+
+    public TyphonException(TyphonErrorCode errorCode, string message)
+        : base(message)
+    {
+        ErrorCode = errorCode;
+    }
+
+    public TyphonException(TyphonErrorCode errorCode, string message, Exception innerException)
         : base(message, innerException)
     {
-        ErrorCode = code;
-        Category = code.GetCategory();
-        IsTransient = code.IsTransient();
+        ErrorCode = errorCode;
     }
 }
 ```
 
 ---
 
-## 10.2 Error Categories
+## 10.2 Error Codes & Classification
 
 ### Purpose
 
-Classify errors to enable consistent handling and metrics.
+Provide numeric error codes organized by subsystem range for programmatic handling, logging, and metrics grouping. The exception type hierarchy provides classification — no separate `ErrorCategory` enum exists.
 
-### Categories
+### Classification via Type Hierarchy
 
-| Category | Description | Typical Response |
-|----------|-------------|------------------|
-| **Transient** | Temporary failures, retry may succeed | Automatic retry |
-| **Conflict** | Concurrent modification conflicts | Transaction retry |
-| **Resource** | Resource limits exceeded | Wait or fail |
-| **Validation** | Invalid input or state | Report to caller |
-| **Corruption** | Data integrity failure | Alert, stop |
-| **Durability** | WAL/checkpoint failures | Retry or shutdown |
-| **Configuration** | Setup/config problems | Fix and restart |
-| **Internal** | Bugs, unexpected states | Log, report |
+Instead of an `ErrorCategory` enum, the exception hierarchy itself provides classification:
+
+| Catch Pattern | What It Catches | Typical Response |
+|---------------|-----------------|------------------|
+| `catch (TyphonTimeoutException)` | All timeouts (lock, transaction, query) | Caller retry (IsTransient = true) |
+| `catch (StorageException)` | I/O, corruption, capacity | Log, alert if corruption |
+| `catch (ResourceExhaustedException)` | Resource limits exceeded | Wait or fail (IsTransient = true) |
+| `catch (TyphonException)` | Any engine error | Generic handler |
 
 ### Error Codes
 
@@ -201,63 +212,80 @@ public enum TyphonErrorCode
 
 ### Purpose
 
-Define how to handle errors at different levels.
+Define how errors are classified, escalated, and handled. The engine's role is to **throw structured exceptions** with enough information for callers to make retry decisions. The engine does **not** provide built-in retry loops.
 
-### Transient Error Retry
+### Design Principle: Throw, Don't Retry
+
+The engine follows a strict separation of concerns:
+
+- **Engine internals** throw `TyphonException` subclasses with `IsTransient` and `ErrorCode`. They never retry transaction-level operations.
+- **Micro-retries** (spin-waits, page eviction loops) exist inside the engine for resource-level contention, bounded by `WaitContext` deadlines. These are safe because they retry *before* any mutation occurs.
+- **Transaction-level retry** is the **caller's responsibility**. Only the caller knows their full state: external side effects, allocated resources, ordering dependencies. A generic retry wrapper cannot safely undo effects outside the transaction scope.
+
+### Why Not a Built-In Retry Loop?
+
+A generic `ExecuteWithRetry(Func<Transaction, T>)` helper assumes the lambda is pure — that rolling back the transaction resets *all* state. This is often false:
 
 ```csharp
-public interface IRetryPolicy
+// UNSAFE to auto-retry: external side effect before the failure point
+ExecuteWithRetry(tx =>
 {
-    // Should we retry this error?
-    bool ShouldRetry(TyphonException ex, int attemptNumber);
+    var id = tx.CreateEntity(ref player);
+    networkLayer.BroadcastSpawn(id);     // already sent on attempt 1!
+    tx.CreateEntity(ref inventory);       // ← timeout here
+    // Retry: different entity ID, BroadcastSpawn fires again
+});
 
-    // How long to wait before retry?
-    TimeSpan GetDelay(int attemptNumber);
-
-    // Max attempts
-    int MaxAttempts { get; }
-}
-
-public class ExponentialBackoffPolicy : IRetryPolicy
+// UNSAFE to auto-retry: caller state not reset by tx rollback
+var slot = AllocateSlot();               // finite resource
+ExecuteWithRetry(tx =>
 {
-    public int MaxAttempts { get; } = 3;
-    public TimeSpan BaseDelay { get; } = TimeSpan.FromMilliseconds(100);
-
-    public bool ShouldRetry(TyphonException ex, int attempt)
-        => ex.IsTransient && attempt < MaxAttempts;
-
-    public TimeSpan GetDelay(int attempt)
-        => BaseDelay * Math.Pow(2, attempt - 1);
-}
+    tx.CreateEntity(ref new SlotComp { SlotId = slot });  // ← conflict
+    // Retry: slot already consumed, but lambda doesn't re-allocate
+});
 ```
 
-### Transaction Retry Pattern
+For a sample retry pattern the caller can adapt to their own needs, see [Appendix: Retry Pattern](#appendix-retry-pattern) at the end of this document.
+
+### IsTransient: Information, Not Automation
+
+`IsTransient` is a **hint** on the exception telling callers "this failure is temporary — retrying might succeed." The caller uses it to make their own decision:
 
 ```csharp
-public async Task<T> ExecuteWithRetryAsync<T>(
-    Func<Transaction, T> operation,
-    IRetryPolicy policy)
+int attempts = 0;
+while (true)
 {
-    int attempt = 0;
-    while (true)
+    try
     {
-        attempt++;
-        using var tx = _db.CreateTransaction();
-
-        try
-        {
-            var result = operation(tx);
-            tx.Commit();
-            return result;
-        }
-        catch (TransactionConflictException ex) when (policy.ShouldRetry(ex, attempt))
-        {
-            // Rollback happens on dispose
-            await Task.Delay(policy.GetDelay(attempt));
-        }
+        using var tx = dbe.CreateTransaction();
+        var id = tx.CreateEntity(ref comp);
+        tx.Commit();
+        // Side effects AFTER commit — safe, won't re-execute on retry
+        networkLayer.BroadcastSpawn(id);
+        break;
+    }
+    catch (TyphonException ex) when (ex.IsTransient && ++attempts < 3)
+    {
+        // Caller controls what to undo and how long to wait
+        Thread.Sleep(50 * attempts);
     }
 }
 ```
+
+The caller decides:
+- Whether to retry at all (check `IsTransient`)
+- How many attempts (their policy, not the engine's)
+- What side effects to undo between retries (only they know)
+- When to place side effects (after commit, not before)
+
+### Two Levels of Retry in Typhon
+
+| Level | Where | Mechanism | Example |
+|-------|-------|-----------|---------|
+| **Micro-retry** | Inside engine | `ExhaustionPolicy` + `WaitContext` | Page cache eviction loop, lock spin-wait |
+| **Transaction retry** | Caller / UoW | Caller's own loop using `IsTransient` | Conflict retry, lock timeout retry |
+
+Micro-retries are safe because they operate before mutations. Transaction retries require caller involvement because the caller owns external state.
 
 ### Error Escalation
 
@@ -282,7 +310,7 @@ public async Task<T> ExecuteWithRetryAsync<T>(
 | WAL write I/O failure | `WalWriteException` | Transient — retry, escalate to shutdown |
 | Ring buffer full | `RingBufferFullException` | Back-pressure — wait or fail transaction |
 | Epoch voided on recovery | `EpochVoidedException` | Informational — rolled back uncommitted UoW |
-| Internal bug | `TyphonException` (Internal) | Log and investigate |
+| Internal bug | `TyphonException` | Log and investigate |
 
 ### When NOT to Throw
 
@@ -290,31 +318,99 @@ public async Task<T> ExecuteWithRetryAsync<T>(
 |----------|-------------|-----------|
 | Expected empty result | Return `false` or empty | Normal operation |
 | Timeout with fallback | Return `default` | Graceful degradation |
-| Validation in hot path | Return `Result<T>` | Avoid exception overhead |
+| Expected lookup miss | Return `Result<TValue, TStatus>` | Avoid exception overhead (see below) |
 
 ### Result Types for Hot Paths
 
-```csharp
-// For performance-critical paths, avoid exceptions
-public readonly struct Result<T>
-{
-    public bool IsSuccess { get; }
-    public T Value { get; }
-    public TyphonError Error { get; }
+For performance-critical paths, use `Result<TValue, TStatus>` instead of exceptions. The struct carries a value on success or a status code on failure — zero heap allocation in either case.
 
-    public static Result<T> Success(T value) => new(true, value, default);
-    public static Result<T> Failure(TyphonError error) => new(false, default, error);
+**Design principle:** Each subsystem defines its own `TStatus` enum with only the failure modes that method can produce. This makes the method signature self-documenting — the caller knows exactly what outcomes are possible without reading external documentation. Actual errors (corruption, I/O failure) remain exceptions; `Result` only handles expected, non-error outcomes.
+
+```csharp
+// ── Core struct ─────────────────────────────────────────────
+// Convention: Success = 0 in all status enums
+[StructLayout(LayoutKind.Sequential)]
+public readonly struct Result<TValue, TStatus>
+    where TValue : unmanaged
+    where TStatus : unmanaged, Enum
+{
+    public readonly TValue Value;
+    public readonly TStatus Status;
+
+    // Constructor: success (status defaults to 0)
+    public Result(TValue value) { Value = value; Status = default; }
+
+    // Constructor: failure
+    public Result(TStatus status) { Value = default; Status = status; }
+
+    // Constructor: explicit both
+    public Result(TValue value, TStatus status) { Value = value; Status = status; }
+
+    public bool IsSuccess => Unsafe.As<TStatus, byte>(ref Unsafe.AsRef(in Status)) == 0;
+    public bool IsFailure => !IsSuccess;
 }
 
-// Usage
-public Result<PlayerComponent> TryReadPlayer(long entityId)
-{
-    if (!_table.TryGetRevision(entityId, out var revision))
-        return Result<PlayerComponent>.Failure(TyphonError.NotFound);
+// ── Per-subsystem status enums ──────────────────────────────
 
-    return Result<PlayerComponent>.Success(ReadComponent(revision));
+public enum BTreeLookupStatus : byte
+{
+    Success = 0,
+    NotFound = 1,
+}
+
+public enum RevisionReadStatus : byte
+{
+    Success = 0,
+    NotFound = 1,          // entity never existed
+    SnapshotInvisible = 2, // exists but created/modified after our snapshot
+    Deleted = 3,           // tombstoned
 }
 ```
+
+**Design choice: public readonly fields, not validated properties.** The `Value` field is accessed directly after an `IsSuccess` check — no throwing getter, no branch overhead on the hot path. Callers must check `IsSuccess` before accessing `Value` (same discipline as `Nullable<T>`). This avoids adding a branch to every value access in tight loops. See [design/errors/04-result-type.md](../design/errors/04-result-type.md) for benchmark validation.
+
+**Method signatures are the documentation:**
+
+```csharp
+// Caller sees exactly two outcomes (B+Tree always stores int chunk IDs)
+Result<int, BTreeLookupStatus> TryGet(TKey key, ref ChunkAccessor accessor);
+
+// Caller sees four outcomes — all specific to MVCC revision reads
+Result<ComponentInfoBase.CompRevInfo, RevisionReadStatus> GetCompRevInfoFromIndex(
+    long pk, ComponentInfoSingle info, long tick);
+```
+
+**Note:** Chunk access (`ChunkBasedSegment.GetChunkLocation`) is pure arithmetic — bounds violations are hard errors (corruption/programming bug), not expected outcomes. It remains an exception, not a `Result`.
+
+**Usage:**
+
+```csharp
+var result = GetCompRevInfoFromIndex(pk, info, tick);
+if (result.IsSuccess)
+{
+    var compRevInfo = result.Value;  // direct field access — no throwing getter
+    // ... use compRevInfo
+}
+else
+{
+    switch (result.Status)
+    {
+        case RevisionReadStatus.NotFound:
+            break; // entity never existed
+        case RevisionReadStatus.SnapshotInvisible:
+            break; // exists but not in our snapshot
+        case RevisionReadStatus.Deleted:
+            break; // tombstoned
+    }
+}
+```
+
+**Struct sizes** (all cache-friendly, per [ADR-027](../adr/027-even-sized-hot-path-structs.md)):
+
+| Result Type | Value Size | Status | Padded Total |
+|------------|-----------|--------|-------------|
+| `Result<int, BTreeLookupStatus>` | 4 | 1 | 8 bytes |
+| `Result<CompRevInfo, RevisionReadStatus>` | varies | 1 | varies |
 
 ---
 
@@ -330,12 +426,11 @@ try
 catch (TyphonException ex)
 {
     _logger.LogError(ex,
-        "Operation failed: {ErrorCode} {Category}. Context: {@Context}",
+        "Operation failed: {ErrorCode} IsTransient={IsTransient}",
         ex.ErrorCode,
-        ex.Category,
-        ex.Context);
+        ex.IsTransient);
 
-    if (ex.Category == ErrorCategory.Corruption)
+    if (ex is CorruptionException)
     {
         // Alert operations team
         _alertService.RaiseAlert(AlertLevel.Critical, ex);
@@ -351,10 +446,14 @@ catch (TyphonException ex)
 
 | Component | Planned Location |
 |-----------|------------------|
-| Exception Hierarchy | `src/Typhon.Engine/Errors/Exceptions/` |
+| Exception Hierarchy | `src/Typhon.Engine/Errors/` (TyphonException, LockTimeoutException, etc.) |
 | Error Codes | `src/Typhon.Engine/Errors/TyphonErrorCode.cs` |
-| Retry Policies | `src/Typhon.Engine/Errors/RetryPolicies/` |
+| ThrowHelper | `src/Typhon.Engine/Errors/ThrowHelper.cs` (extracted from ChunkAccessor.cs) |
 | Result Types | `src/Typhon.Engine/Errors/Result.cs` |
+| BTreeLookupStatus | `src/Typhon.Engine/Data/Index/BTreeLookupStatus.cs` |
+| RevisionReadStatus | `src/Typhon.Engine/Data/Revision/RevisionReadStatus.cs` |
+| TimeoutOptions | `src/Typhon.Engine/Data/TimeoutOptions.cs` |
+| TestWaitContext | `test/Typhon.Engine.Tests/Helpers/TestWaitContext.cs` |
 
 ---
 
@@ -365,14 +464,92 @@ catch (TyphonException ex)
 | **Exception vs Result** | Exceptions for errors, Result for hot paths | Balance clarity with performance |
 | **Hierarchy depth** | 2-3 levels | Enough specificity, not overwhelming |
 | **Error codes** | Numeric by category | Easy logging, metrics grouping |
-| **Retry policy** | Exponential backoff | Industry standard for transient errors |
+| **Retry ownership** | Caller, not engine | Engine throws; only the caller knows their side effects and can retry safely |
 
 ---
 
 ## Open Questions
 
-1. **Structured error responses?** - Should we have a `TyphonError` type for non-exception error handling?
+1. ~~**Structured error responses?** - Should we have a `TyphonError` type for non-exception error handling?~~ **Closed: `Result<TValue, TStatus>` fills this role.** For hot-path methods, `Result` carries a status enum instead of throwing. See §10.1 "Result Types for Hot Paths".
 
-2. **Circuit breaker?** - Should we implement circuit breaker for repeated failures?
+2. ~~**Circuit breaker?** - Should we implement circuit breaker for repeated failures?~~ **Closed: No — not in the engine.** Typhon's internal failures are either self-resolving at microsecond scale (lock contention, resolved by `ExhaustionPolicy` + `WaitContext`) or fatal (corruption, disk failure → escalation to shutdown). Circuit breaker targets a middle ground ("dependency might recover in seconds") that doesn't exist inside an embedded engine. Circuit-breaking callers would actually prevent recovery by stopping the operations that free resources. Application-level circuit breaker (game server wrapping Typhon) is a valid pattern but is the caller's concern.
 
 3. **Error telemetry?** - How detailed should error metrics be?
+
+---
+
+## Appendix: Retry Pattern
+
+> **Note:** This is a **sample pattern** for application developers, not an engine-provided API. It is included here as a reference for callers who want a reusable retry helper for simple, pure-transaction workloads.
+
+### When This Pattern Is Safe
+
+The `ExecuteWithRetry` pattern below works **only** when:
+- The lambda contains **only** Typhon transaction operations (no external side effects)
+- Or all side effects are **idempotent** (safe to repeat)
+- Or side effects are placed **after** `Commit()` (never re-executed on retry)
+
+### IRetryPolicy Interface
+
+```csharp
+// Application-side interface — NOT part of Typhon.Engine
+public interface IRetryPolicy
+{
+    bool ShouldRetry(TyphonException ex, int attemptNumber);
+    TimeSpan GetDelay(int attemptNumber);
+    int MaxAttempts { get; }
+}
+
+public class ExponentialBackoffPolicy : IRetryPolicy
+{
+    public int MaxAttempts { get; } = 3;
+    public TimeSpan BaseDelay { get; } = TimeSpan.FromMilliseconds(50);
+
+    public bool ShouldRetry(TyphonException ex, int attempt)
+        => ex.IsTransient && attempt < MaxAttempts;
+
+    public TimeSpan GetDelay(int attempt)
+        => BaseDelay * Math.Pow(2, attempt - 1);
+}
+```
+
+### ExecuteWithRetry Helper
+
+```csharp
+// Application-side helper — NOT part of Typhon.Engine
+public T ExecuteWithRetry<T>(
+    DatabaseEngine dbe,
+    Func<Transaction, T> operation,
+    IRetryPolicy policy)
+{
+    int attempt = 0;
+    while (true)
+    {
+        attempt++;
+        using var tx = dbe.CreateTransaction();
+
+        try
+        {
+            var result = operation(tx);
+            tx.Commit();
+            return result;
+        }
+        catch (TyphonException ex) when (policy.ShouldRetry(ex, attempt))
+        {
+            // Transaction rolled back by using-disposal.
+            // Wait, then loop creates a fresh transaction.
+            Thread.Sleep(policy.GetDelay(attempt));
+        }
+        // If ShouldRetry returns false, exception propagates — escalation.
+    }
+}
+```
+
+### Limitations
+
+This helper **cannot** safely handle:
+- External side effects (network calls, file writes, in-memory cache updates) performed inside the lambda before the failure point
+- Caller-owned state (allocated slots, counters, IDs) that isn't reset by transaction rollback
+- Non-idempotent operations where the retry would produce different results
+
+For these cases, write a manual retry loop where you control undo logic between attempts. See §10.3 "IsTransient: Information, Not Automation" for the recommended manual pattern.

@@ -24,6 +24,7 @@ This series explores the design patterns, data structures, and implementation de
 | [05](./05-mysql-innodb-internals.md) | **MySQL/InnoDB Internals** | THD, trx_t, background timeout thread, two-layer architecture |
 | [06](./06-comparative-analysis.md) | **Comparative Analysis** | Side-by-side comparison, pros/cons, decision matrix |
 | [07](./07-design-guidelines.md) | **Design Guidelines** | Principles for building your own timeout systems |
+| [Error Foundation](./ErrorFoundationTimeoutActivation.md) | **Error Foundation & Timeout Activation** | Research for #36: exception hierarchy, WaitContext.Null replacement, Result&lt;T&gt; |
 
 ## Key Insights
 

@@ -304,7 +304,7 @@ public (int pageIndex, int slotIndex) GetChunkLocation(int chunkIndex)
 
 ### Auto-Growth
 
-When `AllocateChunk()` or `AllocateChunks()` cannot satisfy a request (bitmap full), the segment **automatically grows**:
+When `AllocateChunk()` or `AllocateChunks()` cannot satisfy a request (bitmap full), the segment **automatically grows** by allocating new pages from the `ManagedPagedMMF`. Growth continues until the segment reaches its maximum page count. When auto-growth is exhausted (maximum pages reached), the allocation methods throw `ResourceExhaustedException` with the segment's current and maximum chunk counts. See [10-errors.md §10.1](10-errors.md#101-exception-hierarchy) for the exception hierarchy.
 
 ### Code Location
 

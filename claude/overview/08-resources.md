@@ -638,6 +638,13 @@ Total Budget (configurable, default 4 GB)
 └── Working Memory ────────────────── (508 MB) ── Query, compression, misc
 ```
 
+### Configuration Classes
+
+Resource limits and timeout budgets are configured via two sub-objects on `DatabaseEngineOptions`:
+
+- **`ResourceOptions`** — Memory budgets, pool sizes, capacity limits
+- **`TimeoutOptions`** — Per-subsystem lock acquisition timeouts (see [01-concurrency.md](01-concurrency.md), [design/errors/02-deadline-propagation.md](../design/errors/02-deadline-propagation.md))
+
 ### ResourceOptions Configuration
 
 ```csharp
@@ -674,6 +681,8 @@ When a bounded resource reaches its limit:
 | **Wait** | Block caller until freed (respects Deadline) | Page latches, WAL ring |
 | **Evict** | Remove least-used entry, retry | Page cache, chunk accessor cache |
 | **Degrade** | Continue with reduced performance | Transaction pool empty (alloc new) |
+
+Each `ResourceNode` in the graph carries an `ExhaustionPolicy` property documenting which policy applies. This is diagnostic metadata — not used for runtime dispatch (D12). Set at construction/registration time. See [design/errors/03-exhaustion-policy.md](../design/errors/03-exhaustion-policy.md) for the enforcement design.
 
 ### Back-Pressure Patterns
 
@@ -931,7 +940,7 @@ The observability layer does NOT:
 | IResourceGraph | `src/Typhon.Engine/Resources/IResourceGraph.cs` | ✅ Exists |
 | ResourceSnapshot | `src/Typhon.Engine/Resources/ResourceSnapshot.cs` | ✅ Exists |
 | ResourceOptions | `src/Typhon.Engine/Resources/ResourceOptions.cs` | ✅ Exists |
-| IExhaustionPolicy | `src/Typhon.Engine/Resources/IExhaustionPolicy.cs` | ✅ Exists |
+| ExhaustionPolicy | `src/Typhon.Engine/Resources/ExhaustionPolicy.cs` | ✅ Exists |
 
 ---
 

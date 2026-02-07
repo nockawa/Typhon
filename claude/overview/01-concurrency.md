@@ -20,11 +20,11 @@ Every database operation that touches shared data needs synchronization. This co
 
 | # | Name | Size | Purpose | Status |
 |---|------|------|---------|--------|
-| **1.1** | [Deadline](#11-deadline) | 8 bytes | Monotonic timeout tracking | 🆕 New |
+| **1.1** | [Deadline](#11-deadline) | 8 bytes | Monotonic timeout tracking | ✅ Implemented |
 | **1.2** | [Watchdog Thread](#12-watchdog-thread) | N/A | Background expiry monitoring | 🆕 New |
 | **1.3** | [AccessControl](#13-accesscontrol) | 64-bit | Reader-writer lock with telemetry | ✅ Complete |
-| **1.4** | [AccessControlSmall](#14-accesscontrolsmall) | 32-bit | Compact RW lock | ✅ Exists (needs Deadline) |
-| **1.5** | [ResourceAccessControl](#15-resourceaccesscontrol) | 32-bit | 3-mode lifecycle lock | 📐 Designed |
+| **1.4** | [AccessControlSmall](#14-accesscontrolsmall) | 32-bit | Compact RW lock | ✅ Complete |
+| **1.5** | [ResourceAccessControl](#15-resourceaccesscontrol) | 32-bit | 3-mode lifecycle lock | ✅ Implemented |
 | **1.6** | [Cancellation Helpers](#16-cancellation-helpers) | N/A | Yield points, holdoff regions | 🔮 Future |
 
 ---
@@ -92,7 +92,7 @@ public static Deadline FromTimeout(TimeSpan timeout)
 
 ### Code Location
 
-`src/Typhon.Engine/Misc/Deadline.cs` *(to be created)*
+`src/Typhon.Engine/Concurrency/Deadline.cs` ✅
 
 ---
 
@@ -257,7 +257,7 @@ Promotion succeeds only when the promoter is the **sole shared holder** (`Shared
 The `PromoterWaiters` counter in the 64-bit state tracks pending promoters. If two threads both hold Shared and both try to promote, they would deadlock (each waiting for the other to release Shared). Typhon prevents this by:
 
 1. Only one promoter waits at a time — the `WaitForIdleState(WaitFor.Promote)` path increments `PromoterWaiters`, signaling to other would-be promoters that promotion is blocked
-2. Timeout via `DateTime.UtcNow` (to be migrated to `Deadline`) — if promotion can't complete in time, the thread gives up and returns `false`
+2. Timeout via `Deadline` (monotonic) — if promotion can't complete in time, the thread gives up and returns `false`
 3. B+Tree latch-coupling pattern ensures only one thread per traversal path attempts promotion
 
 **Promotion vs Release-and-Reacquire**:
@@ -459,7 +459,7 @@ public struct ResourceAccessControl
 
 ### Code Location
 
-`src/Typhon.Engine/Misc/ResourceAccessControl.cs` *(to be created)*
+`src/Typhon.Engine/Concurrency/ResourceAccessControl.cs`
 
 ---
 
