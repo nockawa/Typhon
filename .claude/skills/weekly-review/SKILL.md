@@ -33,10 +33,14 @@ gh api repos/nockawa/Typhon/commits --jq '.[0:20] | .[] | {sha: .sha[0:7], messa
 
 ### 2. Check Current Work Status
 
+**Never pipe `gh project item-list` directly** — always redirect to a temp file first (see `.claude/skills/_helpers.md`):
+
 ```bash
-# All project items with their status
-gh project item-list 7 --owner nockawa --format json
+# All project items with their status — redirect to file to avoid Windows pipe buffer issues
+gh project item-list 7 --owner nockawa --format json > "$SCRATCHPAD/project-items.json"
 ```
+
+Parse the temp file with Python to filter and categorize items.
 
 Categorize by status:
 - In Progress
@@ -135,7 +139,7 @@ After presenting the report, ask:
 Question: "What would you like to do?"
 Header: "Actions"
 Options:
-  - Start work on top priority (/start-work)
+  - Start work on top priority (/start-task)
   - Close stale items
   - Update documentation
   - Nothing for now

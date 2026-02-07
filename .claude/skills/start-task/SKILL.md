@@ -1,5 +1,5 @@
 ---
-name: start-work
+name: start-task
 description: Start working on a GitHub issue - updates status, creates branch, verifies design
 argument-hint: [issue number or title]
 ---
@@ -19,13 +19,13 @@ $ARGUMENTS may contain:
 
 ### Case 1: No arguments provided
 
-Fetch Ready and Backlog items from the project:
+Fetch Ready and Backlog items from the project. **Never pipe `gh project item-list` directly** — always redirect to a temp file first (see `.claude/skills/_helpers.md`):
 
 ```bash
-gh project item-list 7 --owner nockawa --format json
+gh project item-list 7 --owner nockawa --format json > "$SCRATCHPAD/project-items.json"
 ```
 
-Filter for items with Status = "Ready" or "Backlog". Then use `AskUserQuestion` to present a choice:
+Parse the temp file with Python to filter for items with Status = "Ready" or "Backlog". Then use `AskUserQuestion` to present a choice:
 
 **Question:** "Which issue would you like to start working on?"
 **Header:** "Issue"
@@ -69,9 +69,9 @@ Follow the `/create-issue` skill workflow directly:
 
 3. **Add to project and set fields** — Follow `/create-issue` steps 3-5
 
-4. **Continue** — Once the issue is created, continue with the normal `/start-work` workflow below using the new issue number.
+4. **Continue** — Once the issue is created, continue with the normal `/start-task` workflow below using the new issue number.
 
-This makes `/start-work` a one-stop command: describe what you want to work on, and Claude creates the issue + starts work in a single flow.
+This makes `/start-task` a one-stop command: describe what you want to work on, and Claude creates the issue + starts work in a single flow.
 
 ## Workflow
 
@@ -92,13 +92,25 @@ If no design doc exists and this is an enhancement (not a bug fix):
 
 ### 3. Update Project Status
 
-Get the project item ID and update Status to "In Progress":
+**Project item lookup:** Read `.claude/skills/_helpers.md` for the robust pattern. **Never pipe `gh project item-list` directly** — always redirect to a temp file first, then parse with Python.
 
 ```bash
-# Get item ID from project
-gh project item-list 7 --owner nockawa --format json | grep -A5 '"number":<issue_number>'
+# Step 1: Save project data to temp file (avoids pipe buffer issues on Windows)
+gh project item-list 7 --owner nockawa --format json > "$SCRATCHPAD/project-items.json"
 
-# Update status field
+# Step 2: Find the item ID for this issue
+python -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    items = json.load(f)['items']
+for item in items:
+    if item.get('content', {}).get('number') == int(sys.argv[2]):
+        print(item['id'])
+        sys.exit(0)
+print('NOT_FOUND')
+" "$SCRATCHPAD/project-items.json" <issue_number>
+
+# Step 3: Update status field (using the item ID from step 2)
 gh project item-edit --project-id PVT_kwHOAud1ac4BNdCj --id <item_id> \
   --field-id PVTSSF_lAHOAud1ac4BNdCjzg8cXYI \
   --single-select-option-id a0a7aab6  # "In Progress"

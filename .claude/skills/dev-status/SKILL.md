@@ -16,12 +16,12 @@ Query the GitHub Project for items with Phase field set to identify the active p
 
 ### 2. In Progress Items
 
-Query items where Status = "In Progress":
+Query items where Status = "In Progress". **Never pipe `gh project item-list` directly** — always redirect to a temp file first (see `.claude/skills/_helpers.md`):
 ```bash
-gh project item-list 7 --owner nockawa --format json
+gh project item-list 7 --owner nockawa --format json > "$SCRATCHPAD/project-items.json"
 ```
 
-For each In Progress item, show:
+Parse the temp file with Python to filter and format. For each In Progress item, show:
 - Issue number and title
 - Area, Priority, Estimate
 - Branch (if mentioned in issue body)

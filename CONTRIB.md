@@ -206,7 +206,7 @@ When linking to `claude/` docs in GitHub issues, use the `main` branch:
 "Create a design doc for the WAL system based on the research conclusions"
 "Review the design for QueryEngine — does it cover edge cases and testing?"
 "/create-issue Implement WAL system"  ← with design doc linked
-"/start-work 42"  ← when ready to begin implementation
+"/start-task 42"  ← when ready to begin implementation
 ```
 
 ### Stage 4: Implementation
@@ -226,7 +226,7 @@ When linking to `claude/` docs in GitHub issues, use the `main` branch:
 
 **Example Claude Code Prompts:**
 ```
-"/start-work 42"  ← updates status, creates branch, checks design doc
+"/start-task 42"  ← updates status, creates branch, checks design doc
 "/dev-status"  ← see what's currently in progress
 "What's left to do for #42 according to the design doc?"
 "I'm blocked on #42, update the issue with a note about the concurrency problem"
@@ -251,7 +251,7 @@ When linking to `claude/` docs in GitHub issues, use the `main` branch:
 
 **Example Claude Code Prompts:**
 ```
-"/complete-work 42"  ← closes issue, archives design, updates docs
+"/complete-task 42"  ← closes issue, archives design, updates docs
 "/weekly-review"  ← see what was completed this week
 "/mountain-view"  ← how much work remains overall
 "Create an ADR for the decision to use circular buffers for revision chains"
@@ -335,8 +335,8 @@ Design docs are linked in the issue body's "Related Documents" section (not as a
 
 | | Claude-First | Rider-First |
 |---|---|---|
-| Step 1 | `/start-work #42` — Claude verifies design, updates status, suggests branch | `Alt+Shift+N` in Rider — Open Task creates branch + switches context |
-| Step 2 | Claude creates branch or you use Rider | `/start-work #42` — Claude verifies design, updates project status |
+| Step 1 | `/start-task #42` — Claude verifies design, updates status, suggests branch | `Alt+Shift+N` in Rider — Open Task creates branch + switches context |
+| Step 2 | Claude creates branch or you use Rider | `/start-task #42` — Claude verifies design, updates project status |
 | Best for | New issues, need design check | Quick context switch, branch already planned |
 
 Both approaches end in the same state: issue In Progress, branch created, Rider context loaded.
@@ -345,7 +345,7 @@ Both approaches end in the same state: issue In Progress, branch created, Rider 
 
 1. **Rider:** `Alt+Shift+W` (Close Task) — commits remaining changes, optionally merges branch
 2. **Update issue** with summary of what was done
-3. **Ask Claude:** `/complete-work #42`
+3. **Ask Claude:** `/complete-task #42`
    - Claude moves design doc → reference/archive
    - Claude updates GitHub Project status → Done
    - Claude checks for overview/ updates
@@ -398,11 +398,11 @@ Actions:
 5. Report summary with issue link and field values
 ```
 
-### Skill: `/start-work` — Begin a Work Item
+### Skill: `/start-task` — Begin a Work Item
 
 ```markdown
 ---
-name: start-work
+name: start-task
 description: Start working on a GitHub issue
 argument-hint: [issue number or title]
 ---
@@ -415,6 +415,23 @@ Actions:
 5. Create branch if needed (feature/XX-name or fix/XX-name)
 6. Update design doc with branch name
 7. Report readiness
+```
+
+### Skill: `/start-subtask` — Begin a Sub-Issue
+
+```markdown
+---
+name: start-subtask
+description: Start working on a sub-issue of an umbrella issue
+argument-hint: [sub-issue number]
+---
+
+Actions:
+1. Verify parent umbrella is In Progress
+2. Validate dependencies (warn if prior sub-issues not done)
+3. Update project status → In Progress
+4. Update design doc status → In progress
+5. Report readiness
 ```
 
 ### Skill: `/complete-subtask` — Finish a Sub-Issue
@@ -436,19 +453,21 @@ Actions:
 
 **Typical umbrella workflow:**
 ```
-/start-work #36          ← umbrella, creates branch
+/start-task #36          ← umbrella, creates branch
+/start-subtask #37       ← activate sub-issue
 ... implement ...
 /complete-subtask #37    ← close sub-issue, check checkbox
+/start-subtask #38       ← activate next sub-issue
 ... implement ...
 /complete-subtask #38
-/complete-work #36       ← close umbrella, merge PR
+/complete-task #36       ← close umbrella, merge PR
 ```
 
-### Skill: `/complete-work` — Finish a Work Item
+### Skill: `/complete-task` — Finish a Work Item
 
 ```markdown
 ---
-name: complete-work
+name: complete-task
 description: Mark work complete and update all artifacts
 argument-hint: [issue number]
 ---
@@ -632,7 +651,7 @@ Rider's built-in Task Management connects directly to GitHub Issues and provides
 | Feature branch name format | `feature/${id}-${summary}` | `feature/42-query-engine-foundation` |
 | ☑ Lowercased | checked | (auto-lowercases and replaces spaces with hyphens) |
 
-The branch format matches the convention used by `/start-work` (e.g., `feature/42-query-engine`).
+The branch format matches the convention used by `/start-task` (e.g., `feature/42-query-engine`).
 
 For bug-fix issues, manually adjust to `fix/${id}-${summary}` when prompted, or set up separate task types if desired.
 
@@ -729,7 +748,7 @@ Claude: [Creates research/database-engine/QueryCaching.md]
 
 Developer: "Let's start implementing"
 
-Claude: [Runs /start-work #50]
+Claude: [Runs /start-task #50]
         [Updates status → In Progress, suggests branch]
 
 "Branch: feature/50-query-caching
@@ -817,9 +836,10 @@ The following has been implemented:
 
 ### Claude Code Skills
 - `/dev-status` — Show current development status
-- `/start-work #XX` — Begin work on an issue
+- `/start-task #XX` — Begin work on an issue
+- `/start-subtask #XX` — Start a sub-issue (update status, validate dependencies, update design doc)
 - `/complete-subtask #XX` — Complete a sub-issue (close, check parent checkbox, update design doc)
-- `/complete-work #XX` — Finish work, update artifacts
+- `/complete-task #XX` — Finish work, update artifacts
 - `/create-issue` — Create new issue with all fields
 - `/weekly-review` — Weekly progress summary
 - `/mountain-view` — Full backlog analysis

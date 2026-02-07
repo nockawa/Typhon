@@ -1,7 +1,8 @@
 # Error Foundation & Timeout Activation — Design
 
 **Date:** 2026-02-06
-**Status:** Ready for implementation
+**Status:** In progress
+**Branch:** `feature/36-error-foundation`
 **GitHub Issue:** #36 (umbrella), Sub-issues: #37, #38, #39, #40
 **Research:** [`claude/research/timeout/ErrorFoundationTimeoutActivation.md`](../../research/timeout/ErrorFoundationTimeoutActivation.md)
 

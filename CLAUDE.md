@@ -403,9 +403,10 @@ Work tracking is managed via the [Typhon dev GitHub Project](https://github.com/
 | `/dev-status` | Show current development status from GitHub Project |
 | `/start-research #XX` | Start research on an issue (creates research doc, links ideas, updates status) |
 | `/start-design #XX` | Start design for an issue (creates design doc from research/ideas, updates status to Ready) |
-| `/start-work #XX` | Begin work on an issue (updates status, creates branch, verifies design) |
+| `/start-task #XX` | Begin work on an issue (updates status, creates branch, verifies design) |
+| `/start-subtask #XX` | Start a sub-issue (updates status, validates dependencies, updates design doc) |
 | `/complete-subtask #XX` | Complete a sub-issue (close it, check parent checkbox, update design doc) |
-| `/complete-work #XX` | Finish work (close issue, prompt for doc updates, archive design) |
+| `/complete-task #XX` | Finish work (close issue, prompt for doc updates, archive design) |
 | `/create-issue` | Create new GitHub issue with project fields |
 | `/weekly-review` | Weekly progress summary and stale item detection |
 | `/mountain-view` | Full backlog analysis - see the entire mountain of work |
@@ -419,9 +420,9 @@ Backlog → Research → Ready → In Progress → Review → Done
 1. **Backlog**: Captured but not yet prioritized
 2. **Research**: Needs exploration before design (use `/start-research #XX`, creates `claude/research/` doc)
 3. **Ready**: Design complete, ready to implement (use `/start-design #XX`, creates `claude/design/` doc)
-4. **In Progress**: Active development (use `/start-work #XX`)
+4. **In Progress**: Active development (use `/start-task #XX`)
 5. **Review**: PR open, awaiting merge
-6. **Done**: Complete (use `/complete-work #XX`)
+6. **Done**: Complete (use `/complete-task #XX`)
 
 #### GitHub Issue Completion Checklist
 When closing a GitHub issue: 1) Check ALL checkboxes in the issue body, 2) Update the project board status, 3) Move any related design docs to the appropriate folder, 4) Verify with `gh issue view` that everything is properly updated.
