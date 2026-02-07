@@ -79,7 +79,7 @@ gh issue close <number>
 
 ```bash
 # Step 1: Save project data to temp file (avoids pipe buffer issues on Windows)
-gh project item-list 7 --owner nockawa --format json > "$SCRATCHPAD/project-items.json"
+gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
 
 # Step 2: Find the item ID for this sub-issue
 python -c "
@@ -93,8 +93,11 @@ for item in items:
 print('NOT_FOUND')
 " "$SCRATCHPAD/project-items.json" <sub_issue_number>
 
-# Step 3: Update status to Done (using the item ID from step 2)
-# Note: If NOT_FOUND, the sub-issue may not be on the project board — skip this step
+# Step 2b: If NOT_FOUND, add the sub-issue to the project board first
+# gh project item-add 7 --owner nockawa --url https://github.com/nockawa/Typhon/issues/<sub_issue_number>
+# Then re-fetch and find the new item ID (same as step 1+2)
+
+# Step 3: Update status to Done (using the item ID from step 2 or 2b)
 gh project item-edit --project-id PVT_kwHOAud1ac4BNdCj --id <item_id> \
   --field-id PVTSSF_lAHOAud1ac4BNdCjzg8cXYI \
   --single-select-option-id 12503e99  # "Done"

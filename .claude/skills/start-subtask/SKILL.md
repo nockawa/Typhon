@@ -104,7 +104,7 @@ If all prior sub-issues are checked (or there are none before this one), skip si
 
 ```bash
 # Step 1: Save project data to temp file (avoids pipe buffer issues on Windows)
-gh project item-list 7 --owner nockawa --format json > "$SCRATCHPAD/project-items.json"
+gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
 
 # Step 2: Find the item ID for this sub-issue
 python -c "
@@ -118,8 +118,14 @@ for item in items:
 print('NOT_FOUND')
 " "$SCRATCHPAD/project-items.json" <sub_issue_number>
 
-# Step 3: Update status to In Progress (using the item ID from step 2)
-# Note: If NOT_FOUND, the sub-issue may not be on the project board — skip this step
+# Step 2b: If NOT_FOUND, add the sub-issue to the project board first
+gh project item-add 7 --owner nockawa --url https://github.com/nockawa/Typhon/issues/<sub_issue_number>
+
+# Then re-fetch and find the new item ID
+gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
+# Re-run the Python lookup from Step 2
+
+# Step 3: Update status to In Progress (using the item ID from step 2 or 2b)
 gh project item-edit --project-id PVT_kwHOAud1ac4BNdCj --id <item_id> \
   --field-id PVTSSF_lAHOAud1ac4BNdCjzg8cXYI \
   --single-select-option-id a0a7aab6  # "In Progress"
@@ -166,8 +172,10 @@ If no parent can be detected and the user doesn't provide one:
 
 ### Sub-issue not on project board
 If the project item lookup returns NOT_FOUND:
-- Skip the project status update
-- Report that the sub-issue wasn't found on the project board
+- **Add the sub-issue to the project board** with `gh project item-add 7 --owner nockawa --url <issue_url>`
+- Re-fetch the project data and find the new item ID
+- Then update its status to In Progress as normal
+- Report that the sub-issue was added to the board
 
 ### Design doc not in expected format
 If the design doc doesn't have a `**Status:**` line:

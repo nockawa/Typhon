@@ -22,7 +22,7 @@ $ARGUMENTS may contain:
 Fetch Ready and Backlog items from the project. **Never pipe `gh project item-list` directly** — always redirect to a temp file first (see `.claude/skills/_helpers.md`):
 
 ```bash
-gh project item-list 7 --owner nockawa --format json > "$SCRATCHPAD/project-items.json"
+gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
 ```
 
 Parse the temp file with Python to filter for items with Status = "Ready" or "Backlog". Then use `AskUserQuestion` to present a choice:
@@ -89,6 +89,8 @@ If no design doc exists and this is an enhancement (not a bug fix):
 - Ask: "This issue has no design doc. Should I create one, or proceed without?"
 - If yes, create `claude/design/<IssueName>.md` using the design template
 - Add a link to the design doc in the issue body under "Related Documents"
+  - **IMPORTANT:** Use absolute URLs in issue bodies (see `.claude/skills/_helpers.md` rule #7):
+    `[claude/design/<path>](https://github.com/nockawa/Typhon/blob/main/claude/design/<path>)`
 
 ### 3. Update Project Status
 
@@ -96,7 +98,7 @@ If no design doc exists and this is an enhancement (not a bug fix):
 
 ```bash
 # Step 1: Save project data to temp file (avoids pipe buffer issues on Windows)
-gh project item-list 7 --owner nockawa --format json > "$SCRATCHPAD/project-items.json"
+gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
 
 # Step 2: Find the item ID for this issue
 python -c "

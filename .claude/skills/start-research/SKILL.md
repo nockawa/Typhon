@@ -25,7 +25,7 @@ Extract `--deep` from arguments first, then process the remainder as issue numbe
 Fetch Backlog and Research items from the project. **Never pipe `gh project item-list` directly** — always redirect to a temp file first (see `.claude/skills/_helpers.md`):
 
 ```bash
-gh project item-list 7 --owner nockawa --format json > "$SCRATCHPAD/project-items.json"
+gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
 ```
 
 Parse the temp file with Python to filter for items with Status = "Backlog" (prioritize these — they're the ones most likely to need research). Then use `AskUserQuestion` to present a choice:
@@ -288,7 +288,7 @@ Get the project item ID and update Status to "Research".
 
 ```bash
 # Step 1: Save project data to temp file (avoids pipe buffer issues on Windows)
-gh project item-list 7 --owner nockawa --format json > "$SCRATCHPAD/project-items.json"
+gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
 
 # Step 2: Find the item ID for this issue
 python -c "
@@ -310,18 +310,20 @@ gh project item-edit --project-id PVT_kwHOAud1ac4BNdCj --id <item_id> \
 
 #### Link Research Doc in Issue Body
 
-Append a "Related Documents" section to the issue body (if not already present), or add to the existing one:
+Append a "Related Documents" section to the issue body (if not already present), or add to the existing one.
+
+**IMPORTANT:** Always use absolute URLs in issue bodies — relative paths break when viewed outside the repo (e.g., on the project board). See `.claude/skills/_helpers.md` rule #7.
 
 ```bash
 # Get current body
 gh issue view <number> --json body -q .body
 
-# Append research doc link
+# Append research doc link (use absolute URL, not relative path)
 gh issue edit <number> --body "<existing body>
 
 ## Related Documents
 
-- Research: \`claude/research/<path>\`
+- Research: [`claude/research/<path>`](https://github.com/nockawa/Typhon/blob/main/claude/research/<path>)
 "
 ```
 

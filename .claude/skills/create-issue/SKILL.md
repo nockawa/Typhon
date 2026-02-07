@@ -109,6 +109,8 @@ Options:
 
 Once you have the required information:
 
+**IMPORTANT:** When writing the issue body, always use **absolute URLs** for any links to files in the repo. Relative paths like `[text](claude/foo.md)` break when viewed outside the repo context (e.g., on the project board). Use `https://github.com/nockawa/Typhon/blob/main/<path>` for files and `https://github.com/nockawa/Typhon/tree/main/<path>` for directories. See `.claude/skills/_helpers.md` rule #7.
+
 ### Step 1: Create the issue
 
 ```bash
@@ -131,7 +133,7 @@ gh project item-add 7 --owner nockawa --url ISSUE_URL
 
 ```bash
 # Save to temp file, then find the item ID
-gh project item-list 7 --owner nockawa --format json > "$SCRATCHPAD/project-items.json"
+gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
 
 python -c "
 import json, sys

@@ -32,7 +32,7 @@ gh issue list --repo nockawa/Typhon --state closed --json number,title,labels,cl
 
 # All project items with full field data
 # Never pipe gh project item-list directly — redirect to file first (see _helpers.md)
-gh project item-list 7 --owner nockawa --format json > "$SCRATCHPAD/project-items.json"
+gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
 ```
 
 ### 2. Calculate Totals

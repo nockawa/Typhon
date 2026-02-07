@@ -13,7 +13,8 @@ This is the most common operation — given issue #N, find its project item ID f
 
 ```bash
 # Step 1: Save project data to a temp file (avoids pipe buffer issues)
-gh project item-list 7 --owner nockawa --format json > "$TEMP_FILE"
+# IMPORTANT: Always use --limit 200 — the default limit is 30, which misses items on larger boards
+gh project item-list 7 --owner nockawa --limit 200 --format json > "$TEMP_FILE"
 
 # Step 2: Extract the item ID using Python (reads from file, not pipe)
 python -c "
@@ -86,8 +87,15 @@ Status option IDs:
 
 1. **NEVER pipe `gh project item-list` output directly to another command** — always redirect to a file first
 2. **NEVER use `grep` on JSON** — it's brittle to formatting changes. Use Python's `json` module
-3. **Always check for `NOT_FOUND`** in the output before proceeding
-4. **Reuse the temp file** if multiple lookups are needed in the same skill invocation — don't re-fetch
+3. **Always use `--limit 200`** on `gh project item-list` — the default limit is 30, which misses items on larger boards
+4. **Always check for `NOT_FOUND`** in the output before proceeding
+5. **If NOT_FOUND and the issue should be on the board**, add it with `gh project item-add 7 --owner nockawa --url <issue_url>`, then re-fetch the project data and retry the lookup
+6. **Reuse the temp file** if multiple lookups are needed in the same skill invocation — don't re-fetch
+7. **NEVER use relative paths in GitHub issue bodies** — GitHub renders issue bodies outside the repo context (e.g., on the project board), so relative links like `[text](claude/foo.md)` resolve to 404s. Always use absolute URLs:
+   - **Files:** `https://github.com/nockawa/Typhon/blob/main/<path>` (e.g., `https://github.com/nockawa/Typhon/blob/main/claude/overview/10-errors.md`)
+   - **Directories:** `https://github.com/nockawa/Typhon/tree/main/<path>` (e.g., `https://github.com/nockawa/Typhon/tree/main/claude/design/errors/`)
+   - **Issues:** Use `#NN` shorthand (GitHub auto-links these correctly)
+   - In design docs and local markdown files, relative paths are fine — they're rendered in the repo context
 
 ## Field Reference
 

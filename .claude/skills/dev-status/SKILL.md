@@ -18,7 +18,7 @@ Query the GitHub Project for items with Phase field set to identify the active p
 
 Query items where Status = "In Progress". **Never pipe `gh project item-list` directly** — always redirect to a temp file first (see `.claude/skills/_helpers.md`):
 ```bash
-gh project item-list 7 --owner nockawa --format json > "$SCRATCHPAD/project-items.json"
+gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
 ```
 
 Parse the temp file with Python to filter and format. For each In Progress item, show:
@@ -77,6 +77,6 @@ Calculate totals:
 
 ## Implementation
 
-Use `gh project item-list 7 --owner nockawa --format json` to get all items, then filter and format the output.
+Use `gh project item-list 7 --owner nockawa --limit 200 --format json` to get all items, then filter and format the output.
 
 Check issue activity with `gh issue view <number> --json updatedAt`.

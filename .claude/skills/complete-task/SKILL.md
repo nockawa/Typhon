@@ -46,7 +46,7 @@ gh issue close <number>
 
 ```bash
 # Step 1: Save project data to temp file (avoids pipe buffer issues on Windows)
-gh project item-list 7 --owner nockawa --format json > "$SCRATCHPAD/project-items.json"
+gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
 
 # Step 2: Find the item ID for this issue
 python -c "

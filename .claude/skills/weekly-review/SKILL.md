@@ -37,7 +37,7 @@ gh api repos/nockawa/Typhon/commits --jq '.[0:20] | .[] | {sha: .sha[0:7], messa
 
 ```bash
 # All project items with their status — redirect to file to avoid Windows pipe buffer issues
-gh project item-list 7 --owner nockawa --format json > "$SCRATCHPAD/project-items.json"
+gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
 ```
 
 Parse the temp file with Python to filter and categorize items.
