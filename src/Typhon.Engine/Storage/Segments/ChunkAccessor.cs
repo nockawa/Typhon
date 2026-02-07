@@ -571,6 +571,43 @@ public unsafe struct ChunkAccessor : IDisposable
         return ref Unsafe.AsRef<T>(pageHeaderAddr + offset);
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // State Snapshot (test infrastructure)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    internal struct StateSnapshot
+    {
+        internal byte UsedSlots;
+        internal fixed short PinCounters[16];
+        internal fixed byte PromoteCounters[16];
+    }
+
+    internal StateSnapshot SnapshotInternalState()
+    {
+        var snapshot = new StateSnapshot { UsedSlots = _usedSlots };
+        for (int i = 0; i < Capacity; i++)
+        {
+            ref var slot = ref _slots[i];
+            snapshot.PinCounters[i] = slot.PinCounter;
+            snapshot.PromoteCounters[i] = slot.PromoteCounter;
+        }
+        return snapshot;
+    }
+
+    internal bool CheckInternalState(in StateSnapshot snapshot)
+    {
+        var maxSlots = Math.Max(snapshot.UsedSlots, _usedSlots);
+        for (int i = 0; i < maxSlots; i++)
+        {
+            ref var slot = ref _slots[i];
+            if (slot.PinCounter != snapshot.PinCounters[i] || slot.PromoteCounter != snapshot.PromoteCounters[i])
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /// <summary>
     /// Dispose accessor: flush all dirty pages, release all page locks.
     /// </summary>

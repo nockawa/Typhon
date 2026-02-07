@@ -51,6 +51,9 @@ internal struct CompRevStorageHeader
     /// Index in the chain of the last committed revision, allows us to detect concurrency conflicts
     public short LastCommitRevisionIndex;
 
+    internal void EnterControlLockForTest() => Control.EnterExclusiveAccess(ref WaitContext.Null);
+    internal void ExitControlLockForTest() => Control.ExitExclusiveAccess();
+
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public static (int chunkIndex, int indexInChunk) GetRevisionLocation(int revisionIndex)
     {
@@ -394,22 +397,23 @@ public unsafe class ComponentTable : IResource, IMetricSource, IContentionTarget
     private IBTree CreateIndexForField(DBComponentDefinition.Field field)
     {
         var s = field.Type == FieldType.String64 ? String64IndexSegment : DefaultIndexSegment;
-        switch (field.Type)
+        IBTree index = field.Type switch
         {
-            case FieldType.Byte:        return field.IndexAllowMultiple ? new ByteMultipleBTree(s)     : new ByteSingleBTree(s);
-            case FieldType.Short:       return field.IndexAllowMultiple ? new ShortMultipleBTree(s)    : new ShortSingleBTree(s);
-            case FieldType.Int:         return field.IndexAllowMultiple ? new IntMultipleBTree(s)      : new IntSingleBTree(s);
-            case FieldType.Long:        return field.IndexAllowMultiple ? new LongMultipleBTree(s)     : new LongSingleBTree(s);
-            case FieldType.UByte:       return field.IndexAllowMultiple ? new UByteMultipleBTree(s)    : new UByteSingleBTree(s);
-            case FieldType.UShort:      return field.IndexAllowMultiple ? new UShortMultipleBTree(s)   : new UShortSingleBTree(s);
-            case FieldType.UInt:        return field.IndexAllowMultiple ? new UIntMultipleBTree(s)     : new UIntSingleBTree(s);
-            case FieldType.ULong:       return field.IndexAllowMultiple ? new ULongMultipleBTree(s)    : new ULongSingleBTree(s);
-            case FieldType.Float:       return field.IndexAllowMultiple ? new FloatMultipleBTree(s)    : new FloatSingleBTree(s);
-            case FieldType.Double:      return field.IndexAllowMultiple ? new DoubleMultipleBTree(s)   : new DoubleSingleBTree(s);
-            case FieldType.Char:        return field.IndexAllowMultiple ? new CharMultipleBTree(s)     : new CharSingleBTree(s);
-            case FieldType.String64:    return field.IndexAllowMultiple ? new String64MultipleBTree(s) : new String64SingleBTree(s);
-            default:                    return null;
-        }
+            FieldType.Byte     => field.IndexAllowMultiple ? new ByteMultipleBTree(s)     : new ByteSingleBTree(s),
+            FieldType.Short    => field.IndexAllowMultiple ? new ShortMultipleBTree(s)    : new ShortSingleBTree(s),
+            FieldType.Int      => field.IndexAllowMultiple ? new IntMultipleBTree(s)      : new IntSingleBTree(s),
+            FieldType.Long     => field.IndexAllowMultiple ? new LongMultipleBTree(s)     : new LongSingleBTree(s),
+            FieldType.UByte    => field.IndexAllowMultiple ? new UByteMultipleBTree(s)    : new UByteSingleBTree(s),
+            FieldType.UShort   => field.IndexAllowMultiple ? new UShortMultipleBTree(s)   : new UShortSingleBTree(s),
+            FieldType.UInt     => field.IndexAllowMultiple ? new UIntMultipleBTree(s)     : new UIntSingleBTree(s),
+            FieldType.ULong    => field.IndexAllowMultiple ? new ULongMultipleBTree(s)    : new ULongSingleBTree(s),
+            FieldType.Float    => field.IndexAllowMultiple ? new FloatMultipleBTree(s)    : new FloatSingleBTree(s),
+            FieldType.Double   => field.IndexAllowMultiple ? new DoubleMultipleBTree(s)   : new DoubleSingleBTree(s),
+            FieldType.Char     => field.IndexAllowMultiple ? new CharMultipleBTree(s)     : new CharSingleBTree(s),
+            FieldType.String64 => field.IndexAllowMultiple ? new String64MultipleBTree(s) : new String64SingleBTree(s),
+            _                  => null
+        };
+        return index;
     }
 
     public void Dispose()

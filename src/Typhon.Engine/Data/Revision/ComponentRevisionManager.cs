@@ -61,7 +61,13 @@ internal ref struct ComponentRevisionManager
         var useLock = !firstHeader.Control.IsLockedByCurrentThread;
         if (useLock)
         {
-            firstHeader.Control.EnterSharedAccess(ref WaitContext.Null);
+            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.RevisionChainLockTimeout);
+            if (!firstHeader.Control.EnterSharedAccess(ref wc))
+            {
+                firstHandle.Dispose();
+                curHandle.Dispose();
+                ThrowHelper.ThrowLockTimeout("RevisionChain/GetElement", TimeoutOptions.Current.RevisionChainLockTimeout);
+            }
         }
         while (--chunkIndexInChain >= 0)
         {
@@ -91,7 +97,11 @@ internal ref struct ComponentRevisionManager
         ref var firstHeader = ref stream.PopRef<CompRevStorageHeader>();
 
         // Enter exclusive access for the Revision Table
-        firstHeader.Control.EnterExclusiveAccess(ref WaitContext.Null);
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.RevisionChainLockTimeout);
+        if (!firstHeader.Control.EnterExclusiveAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("RevisionChain/AddRevision", TimeoutOptions.Current.RevisionChainLockTimeout);
+        }
 
         // Check if we need to add one more chunk to the chain
         if (ComputeRevElementCount(firstHeader.ChainLength) == firstHeader.ItemCount)
@@ -178,7 +188,7 @@ internal ref struct ComponentRevisionManager
     /// <remarks>
     /// This method walks through the chain of revision chunks and builds a new one, only the first chunk is kept.
     /// </remarks>
-    internal static bool CleanUpUnusedEntries(Transaction.ComponentInfoBase info, ref Transaction.ComponentInfoBase.CompRevInfo compRevInfo, 
+    internal static bool CleanUpUnusedEntries(Transaction.ComponentInfoBase info, ref Transaction.ComponentInfoBase.CompRevInfo compRevInfo,
         ref ChunkAccessor compRevTableAccessor, long nextMinTSN)
     {
         var firstChunkId = compRevInfo.CompRevTableFirstChunkId;
@@ -378,7 +388,11 @@ internal ref struct ComponentRevisionManager
         var useLock = !first->Control.IsLockedByCurrentThread;
         if (useLock)
         {
-            first->Control.EnterSharedAccess(ref WaitContext.Null);
+            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.RevisionChainLockTimeout);
+            if (!first->Control.EnterSharedAccess(ref wc))
+            {
+                ThrowHelper.ThrowLockTimeout("RevisionChain/GetLocation", TimeoutOptions.Current.RevisionChainLockTimeout);
+            }
         }
         while (--chunkIndexInChain != 0)
         {

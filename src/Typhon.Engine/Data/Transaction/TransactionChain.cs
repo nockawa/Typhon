@@ -29,7 +29,7 @@ internal class TransactionChain : IDisposable
     private readonly Queue<Transaction> _pool;
     private long _nextFreeId;
     private int _activeCount;
-    
+
     public TransactionChain()
     {
         _nextFreeId = 1;
@@ -41,7 +41,7 @@ internal class TransactionChain : IDisposable
     }
 
     public ref AccessControl Control => ref _control;
-    
+
     // Under lock of the caller
     public void PushHead([TransfersOwnership] Transaction transaction)
     {
@@ -113,7 +113,11 @@ internal class TransactionChain : IDisposable
     [return: TransfersOwnership] 
     public Transaction CreateTransaction(DatabaseEngine dbe)
     {
-        _control.EnterExclusiveAccess(ref WaitContext.Null);
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.TransactionChainLockTimeout);
+        if (!_control.EnterExclusiveAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("TransactionChain/CreateTransaction", TimeoutOptions.Current.TransactionChainLockTimeout);
+        }
         if (!_pool.TryDequeue(out var t))
         {
             t = new Transaction();

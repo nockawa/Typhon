@@ -420,7 +420,11 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
 
         var args = new InsertArguments(key, value, Comparer, ref accessor);
-        _access.EnterExclusiveAccess(ref WaitContext.Null);
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
+        if (!_access.EnterExclusiveAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("BTree/Insert", TimeoutOptions.Current.BTreeLockTimeout);
+        }
         try
         {
             AddOrUpdateCore(ref args);
@@ -444,7 +448,11 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
 
         var args = new RemoveArguments(key, Comparer, ref accessor);
-        _access.EnterExclusiveAccess(ref WaitContext.Null);
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
+        if (!_access.EnterExclusiveAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("BTree/Delete", TimeoutOptions.Current.BTreeLockTimeout);
+        }
         try
         {
             RemoveCore(ref args);
@@ -468,7 +476,11 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             return;
         }
 
-        _access.EnterSharedAccess(ref WaitContext.Null);
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
+        if (!_access.EnterSharedAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("BTree/CheckConsistency", TimeoutOptions.Current.BTreeLockTimeout);
+        }
         try
         {
             Root.CheckConsistency(default, NodeWrapper.CheckConsistencyParent.Root, Comparer, Height, ref accessor);
@@ -548,7 +560,11 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public Result<int, BTreeLookupStatus> TryGet(TKey key, ref ChunkAccessor accessor)
     {
-        _access.EnterSharedAccess(ref WaitContext.Null);
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
+        if (!_access.EnterSharedAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("BTree/TryGet", TimeoutOptions.Current.BTreeLockTimeout);
+        }
         try
         {
             var leaf = FindLeaf(key, out var index, ref accessor);
@@ -581,7 +597,11 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             activity?.SetTag(TyphonSpanAttributes.IndexOperation, "delete");
         }
 
-        _access.EnterExclusiveAccess(ref WaitContext.Null);
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
+        if (!_access.EnterExclusiveAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("BTree/DeleteValue", TimeoutOptions.Current.BTreeLockTimeout);
+        }
         try
         {
             var res = _storage.RemoveFromBuffer(bufferId, elementId, value, ref accessor);

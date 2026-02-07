@@ -832,7 +832,7 @@ public unsafe class Transaction : IDisposable
             var src = new Span<byte>(Unsafe.AsPointer(ref comp), componentSize);
             var dst = handle.AsSpan().Slice(info.ComponentTable.ComponentOverhead);
             src.CopyTo(dst);
-            
+
             // If the component has collections, update the RefCounter of unchanged ones
             var ct = info.ComponentTable;
             if (ct.HasCollections)
@@ -884,7 +884,7 @@ public unsafe class Transaction : IDisposable
         var compRevInfoSpan = CollectionsMarshal.AsSpan(compRevInfoList);
         var overlapCount = Math.Min(compList.Length, compRevInfoSpan.Length);
         var i = 0;
-        
+
         // Case 1
         // min(x, y) the item count shared by source and dest
         for ( ; i < overlapCount; i++)
@@ -902,7 +902,7 @@ public unsafe class Transaction : IDisposable
             {
                 info.CompContentSegment.FreeChunk(compRevInfo.CurCompContentChunkId);
             }
-            
+
             // Update the operation types
             compRevInfo.Operations |= (isDelete ? ComponentInfoBase.OperationType.Deleted : ComponentInfoBase.OperationType.Updated);
 
@@ -1231,7 +1231,11 @@ public unsafe class Transaction : IDisposable
 
         // If this transaction is the oldest (the tail), we can remove the previous revision (if any), it is also the right place and time to clean up void
         //  revisions (the entry of a rolled back commit)
-        _dbe.TransactionChain.Control.EnterSharedAccess(ref WaitContext.Null);
+        var wcTail = WaitContext.FromTimeout(TimeoutOptions.Current.TransactionChainLockTimeout);
+        if (!_dbe.TransactionChain.Control.EnterSharedAccess(ref wcTail))
+        {
+            ThrowHelper.ThrowLockTimeout("TransactionChain/CommitTailCheck", TimeoutOptions.Current.TransactionChainLockTimeout);
+        }
         var isTail = _dbe.TransactionChain.Tail == this;
         long nextMinTSN = isTail ? _dbe.TransactionChain.Tail.Next?.TSN ?? _dbe.TransactionChain.NextFreeId : 0;
         _dbe.TransactionChain.Control.ExitSharedAccess();

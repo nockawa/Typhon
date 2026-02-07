@@ -1,7 +1,7 @@
 # #40 — Result\<TValue, TStatus\> for Hot-Path Error Returns
 
 **Date:** 2026-02-06
-**Status:** In progress
+**Status:** Implemented
 **GitHub Issue:** #40
 **Decisions:** D4
 

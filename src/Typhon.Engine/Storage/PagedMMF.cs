@@ -690,7 +690,11 @@ public partial class PagedMMF : IDisposable
         // Second pass, under lock
         try
         {
-            info.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
+            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
+            if (!info.StateSyncRoot.EnterExclusiveAccess(ref wc))
+            {
+                ThrowHelper.ThrowLockTimeout("PageCache/TryAcquire", TimeoutOptions.Current.PageCacheLockTimeout);
+            }
 
             // PageAccessor is responsible to reset the IOMode from read to none for a loading page, but only if the user creates and uses one, (which is
             //  most of the cases, but not all o them). So we take the opportunity to reset the IOMode here, if needed.
@@ -770,7 +774,11 @@ public partial class PagedMMF : IDisposable
             try
             {
                 // We want to change the state, so we need to acquire the lock
-                pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
+                var wcAccess = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
+                if (!pi.StateSyncRoot.EnterExclusiveAccess(ref wcAccess))
+                {
+                    ThrowHelper.ThrowLockTimeout("PageCache/TransitionToAccess", TimeoutOptions.Current.PageCacheLockTimeout);
+                }
 
                 Debug.Assert(pi.PageState != PageState.Free);
                 
@@ -892,7 +900,11 @@ public partial class PagedMMF : IDisposable
     {
         try
         {
-            pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
+            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
+            if (!pi.StateSyncRoot.EnterExclusiveAccess(ref wc))
+            {
+                ThrowHelper.ThrowLockTimeout("PageCache/PromoteToExclusive", TimeoutOptions.Current.PageCacheLockTimeout);
+            }
 
             previousMode = pi.PageState;
 
@@ -949,7 +961,11 @@ public partial class PagedMMF : IDisposable
         var pi = _memPagesInfo[memPageIndex];
         Debug.Assert(pi.PageState is PageState.Shared or PageState.Exclusive, "We can't increment the dirty counter for a page that is not Shared or Exclusive.");
 
-        pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
+        if (!pi.StateSyncRoot.EnterExclusiveAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("PageCache/IncrementDirty", TimeoutOptions.Current.PageCacheLockTimeout);
+        }
         ++pi.DirtyCounter;
         pi.StateSyncRoot.ExitExclusiveAccess();
     }
@@ -1176,4 +1192,52 @@ public partial class PagedMMF : IDisposable
         Logger.LogTrace(44, "Resetting PagedFile instance !!!");
 
     #endregion
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // State Snapshot (test infrastructure)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    internal readonly struct PageSnapshot(PageState state, int sharedCounter, int dirtyCounter)
+    {
+        internal readonly PageState State = state;
+        internal readonly int ConcurrentSharedCounter = sharedCounter;
+        internal readonly int DirtyCounter = dirtyCounter;
+    }
+
+    internal readonly struct StateSnapshot(PageSnapshot[] pages)
+    {
+        internal readonly PageSnapshot[] Pages = pages;
+    }
+
+    internal StateSnapshot SnapshotInternalState()
+    {
+        var pages = new PageSnapshot[_memPagesInfo.Length];
+        for (int i = 0; i < _memPagesInfo.Length; i++)
+        {
+            var pi = _memPagesInfo[i];
+            pages[i] = new PageSnapshot(pi.PageState, pi.ConcurrentSharedCounter, pi.DirtyCounter);
+        }
+        return new StateSnapshot(pages);
+    }
+
+    internal bool CheckInternalState(in StateSnapshot snapshot)
+    {
+        if (snapshot.Pages.Length != _memPagesInfo.Length)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < _memPagesInfo.Length; i++)
+        {
+            var pi = _memPagesInfo[i];
+            ref readonly var snap = ref snapshot.Pages[i];
+            if (pi.PageState != snap.State ||
+                pi.ConcurrentSharedCounter != snap.ConcurrentSharedCounter ||
+                pi.DirtyCounter != snap.DirtyCounter)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
 }

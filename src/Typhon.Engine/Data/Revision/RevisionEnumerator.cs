@@ -76,7 +76,12 @@ internal ref struct RevisionEnumerator : IDisposable
         _ownsLock = !_header.Control.IsLockedByCurrentThread;
         if (_ownsLock)
         {
-            _header.Control.Enter(_exclusiveAccess, ref WaitContext.Null);
+            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.RevisionChainLockTimeout);
+            if (!_header.Control.Enter(_exclusiveAccess, ref wc))
+            {
+                _firstChunkHandle.Dispose();
+                ThrowHelper.ThrowLockTimeout("RevisionChain/Enumerate", TimeoutOptions.Current.RevisionChainLockTimeout);
+            }
         }
         _itemCountLeft = _header.ItemCount;
         _nextChunkId = ref _header.NextChunkId;

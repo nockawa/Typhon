@@ -117,7 +117,7 @@ public class AccessControlSmallTests
     public void ExitExclusiveAccess_FromDifferentThread_ThrowsException()
     {
         var control = new AccessControlSmall();
-        control.EnterExclusiveAccess(ref WaitContext.Null);
+        control.EnterExclusiveAccess(ref TestWaitContext.Default);
         Exception? caughtException = null;
 
         var task = Task.Run(() =>
@@ -158,21 +158,24 @@ public class AccessControlSmallTests
     {
         var control = new AccessControlSmall();
         var isLockedByMain = false;
+        var lockAcquired = new Barrier(2);
+        var canRelease = new ManualResetEventSlim(false);
 
         var task = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
-            // Signal that we've acquired the lock
-            Thread.Sleep(50);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
+            lockAcquired.SignalAndWait();
+            canRelease.Wait();
             control.ExitExclusiveAccess();
         });
 
-        // Wait a bit for the other thread to acquire
-        Thread.Sleep(20);
+        lockAcquired.SignalAndWait();
         isLockedByMain = control.IsLockedByCurrentThread;
-        task.Wait();
 
         Assert.That(isLockedByMain, Is.False);
+
+        canRelease.Set();
+        task.Wait();
     }
 
     [Test]
@@ -195,18 +198,19 @@ public class AccessControlSmallTests
         var control = new AccessControlSmall();
         var sharedAcquired = false;
         var exclusiveReleased = false;
+        var aboutToEnter = new ManualResetEventSlim(false);
 
-        control.EnterExclusiveAccess(ref WaitContext.Null);
+        control.EnterExclusiveAccess(ref TestWaitContext.Default);
 
         var sharedTask = Task.Run(() =>
         {
-            control.EnterSharedAccess(ref WaitContext.Null);
+            aboutToEnter.Set();
+            control.EnterSharedAccess(ref TestWaitContext.Default);
             sharedAcquired = true;
             control.ExitSharedAccess();
         });
 
-        // Give time for the shared task to start waiting
-        Thread.Sleep(50);
+        aboutToEnter.Wait();
         Assert.That(sharedAcquired, Is.False, "Shared access should be blocked while exclusive is held");
 
         control.ExitExclusiveAccess();
@@ -225,18 +229,19 @@ public class AccessControlSmallTests
         var control = new AccessControlSmall();
         var exclusiveAcquired = false;
         var sharedReleased = false;
+        var aboutToEnter = new ManualResetEventSlim(false);
 
-        control.EnterSharedAccess(ref WaitContext.Null);
+        control.EnterSharedAccess(ref TestWaitContext.Default);
 
         var exclusiveTask = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            aboutToEnter.Set();
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             exclusiveAcquired = true;
             control.ExitExclusiveAccess();
         });
 
-        // Give time for the exclusive task to start waiting
-        Thread.Sleep(50);
+        aboutToEnter.Wait();
         Assert.That(exclusiveAcquired, Is.False, "Exclusive access should be blocked while shared is held");
 
         control.ExitSharedAccess();
@@ -254,18 +259,19 @@ public class AccessControlSmallTests
     {
         var control = new AccessControlSmall();
         var secondExclusiveAcquired = false;
+        var aboutToEnter = new ManualResetEventSlim(false);
 
-        control.EnterExclusiveAccess(ref WaitContext.Null);
+        control.EnterExclusiveAccess(ref TestWaitContext.Default);
 
         var exclusiveTask = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            aboutToEnter.Set();
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             secondExclusiveAcquired = true;
             control.ExitExclusiveAccess();
         });
 
-        // Give time for the second exclusive task to start waiting
-        Thread.Sleep(50);
+        aboutToEnter.Wait();
         Assert.That(secondExclusiveAcquired, Is.False, "Second exclusive should be blocked");
 
         control.ExitExclusiveAccess();
@@ -290,7 +296,7 @@ public class AccessControlSmallTests
         {
             tasks[i] = Task.Run(() =>
             {
-                control.EnterSharedAccess(ref WaitContext.Null);
+                control.EnterSharedAccess(ref TestWaitContext.Default);
                 var count = Interlocked.Increment(ref insideCount);
                 if (count == 5)
                 {
@@ -342,19 +348,19 @@ public class AccessControlSmallTests
         // Start another thread that holds shared access
         var otherTask = Task.Run(() =>
         {
-            control.EnterSharedAccess(ref WaitContext.Null);
+            control.EnterSharedAccess(ref TestWaitContext.Default);
             otherAcquired.Set();
             canRelease.Wait();
             control.ExitSharedAccess();
         });
 
         otherAcquired.Wait();
-        control.EnterSharedAccess(ref WaitContext.Null);
+        control.EnterSharedAccess(ref TestWaitContext.Default);
 
         // Now we have 2 shared holders
         Assert.That(control.SharedUsedCounter, Is.EqualTo(2));
 
-        var result = control.TryPromoteToExclusiveAccess(ref WaitContext.Null);
+        var result = control.TryPromoteToExclusiveAccess(ref TestWaitContext.Default);
 
         Assert.That(result, Is.False, "Cannot promote when other shared holders exist");
         Assert.That(control.LockedByThreadId, Is.EqualTo(0), "Should still be in shared mode");
@@ -381,21 +387,23 @@ public class AccessControlSmallTests
     {
         var control = new AccessControlSmall();
         var canRelease = new ManualResetEventSlim(false);
+        var lockAcquired = new Barrier(2);
 
         // Another thread holds exclusive access
         var otherTask = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
+            lockAcquired.SignalAndWait();
             canRelease.Wait();
             control.ExitExclusiveAccess();
         });
 
-        Thread.Sleep(50); // Wait for other thread to acquire exclusive
+        lockAcquired.SignalAndWait();
 
         // This thread tries to promote but doesn't hold shared access
         // Per Q1: "TryPromoteToExclusiveAccess must be called after an EnterSharedAccess"
         // Since we're not in shared mode (counter is 0), it should throw
-        Assert.Throws<InvalidOperationException>(() => control.TryPromoteToExclusiveAccess(ref WaitContext.Null));
+        Assert.Throws<InvalidOperationException>(() => control.TryPromoteToExclusiveAccess(ref TestWaitContext.Default));
 
         canRelease.Set();
         otherTask.Wait();
@@ -447,15 +455,17 @@ public class AccessControlSmallTests
     public void EnterSharedAccess_WithTimeout_WhenReleased_Succeeds()
     {
         var control = new AccessControlSmall();
-        control.EnterExclusiveAccess(ref WaitContext.Null);
+        var aboutToEnter = new ManualResetEventSlim(false);
+        control.EnterExclusiveAccess(ref TestWaitContext.Default);
 
         var sharedTask = Task.Run(() =>
         {
+            aboutToEnter.Set();
             var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(500));
             return control.EnterSharedAccess(ref ctx);
         });
 
-        Thread.Sleep(50);
+        aboutToEnter.Wait();
         control.ExitExclusiveAccess();
 
         var result = sharedTask.Result;
@@ -470,16 +480,18 @@ public class AccessControlSmallTests
     public void EnterExclusiveAccess_WithTimeout_WhenSharedHeld_TimesOut()
     {
         var control = new AccessControlSmall();
+        var lockAcquired = new Barrier(2);
         var canRelease = new ManualResetEventSlim(false);
 
         var sharedTask = Task.Run(() =>
         {
-            control.EnterSharedAccess(ref WaitContext.Null);
+            control.EnterSharedAccess(ref TestWaitContext.Default);
+            lockAcquired.SignalAndWait();
             canRelease.Wait();
             control.ExitSharedAccess();
         });
 
-        Thread.Sleep(100); // Wait for shared to be acquired
+        lockAcquired.SignalAndWait();
 
         var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(200));
         var result = control.EnterExclusiveAccess(ref ctx);
@@ -495,16 +507,18 @@ public class AccessControlSmallTests
     public void EnterExclusiveAccess_WithTimeout_WhenExclusiveHeld_TimesOut()
     {
         var control = new AccessControlSmall();
+        var lockAcquired = new Barrier(2);
         var canRelease = new ManualResetEventSlim(false);
 
         var exclusiveTask = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
+            lockAcquired.SignalAndWait();
             canRelease.Wait();
             control.ExitExclusiveAccess();
         });
 
-        Thread.Sleep(50); // Wait for exclusive to be acquired
+        lockAcquired.SignalAndWait();
 
         var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(100));
         var result = control.EnterExclusiveAccess(ref ctx);
@@ -525,14 +539,14 @@ public class AccessControlSmallTests
 
         var otherTask = Task.Run(() =>
         {
-            control.EnterSharedAccess(ref WaitContext.Null);
+            control.EnterSharedAccess(ref TestWaitContext.Default);
             otherAcquired.Set();
             canRelease.Wait();
             control.ExitSharedAccess();
         });
 
         otherAcquired.Wait();
-        control.EnterSharedAccess(ref WaitContext.Null);
+        control.EnterSharedAccess(ref TestWaitContext.Default);
 
         var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(100));
         var result = control.TryPromoteToExclusiveAccess(ref ctx);
@@ -553,17 +567,19 @@ public class AccessControlSmallTests
     public void EnterSharedAccess_WithCancellation_WhenCanceled_ReturnsFalse()
     {
         var control = new AccessControlSmall();
-        control.EnterExclusiveAccess(ref WaitContext.Null);
+        var aboutToEnter = new ManualResetEventSlim(false);
+        control.EnterExclusiveAccess(ref TestWaitContext.Default);
 
         using var cts = new CancellationTokenSource();
 
         var sharedTask = Task.Run(() =>
         {
+            aboutToEnter.Set();
             var ctx = WaitContext.FromToken(cts.Token);
             return control.EnterSharedAccess(ref ctx);
         });
 
-        Thread.Sleep(50);
+        aboutToEnter.Wait();
         cts.Cancel();
 
         var result = sharedTask.Result;
@@ -579,25 +595,29 @@ public class AccessControlSmallTests
     {
         var control = new AccessControlSmall();
         var canRelease = new ManualResetEventSlim(false);
+        var holderAcquired = new Barrier(2);
+        var aboutToEnter = new ManualResetEventSlim(false);
 
         var holdingTask = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
+            holderAcquired.SignalAndWait();
             canRelease.Wait();
             control.ExitExclusiveAccess();
         });
 
-        Thread.Sleep(50);
+        holderAcquired.SignalAndWait();
 
         using var cts = new CancellationTokenSource();
 
         var exclusiveTask = Task.Run(() =>
         {
+            aboutToEnter.Set();
             var ctx = WaitContext.FromToken(cts.Token);
             return control.EnterExclusiveAccess(ref ctx);
         });
 
-        Thread.Sleep(50);
+        aboutToEnter.Wait();
         cts.Cancel();
 
         var result = exclusiveTask.Result;
@@ -632,15 +652,17 @@ public class AccessControlSmallTests
     {
         var control = new AccessControlSmall();
         var canRelease = new ManualResetEventSlim(false);
+        var holderAcquired = new Barrier(2);
 
         var holdingTask = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
+            holderAcquired.SignalAndWait();
             canRelease.Wait();
             control.ExitExclusiveAccess();
         });
 
-        Thread.Sleep(50);
+        holderAcquired.SignalAndWait();
 
         using var cts = new CancellationTokenSource();
         cts.Cancel();
@@ -664,24 +686,27 @@ public class AccessControlSmallTests
 
         var otherTask = Task.Run(() =>
         {
-            control.EnterSharedAccess(ref WaitContext.Null);
+            control.EnterSharedAccess(ref TestWaitContext.Default);
             otherAcquired.Set();
             canRelease.Wait();
             control.ExitSharedAccess();
         });
 
         otherAcquired.Wait();
-        control.EnterSharedAccess(ref WaitContext.Null);
+        control.EnterSharedAccess(ref TestWaitContext.Default);
 
         using var cts = new CancellationTokenSource();
 
+        var aboutToPromote = new ManualResetEventSlim(false);
+
         var promoteTask = Task.Run(() =>
         {
+            aboutToPromote.Set();
             var ctx = WaitContext.FromToken(cts.Token);
             return control.TryPromoteToExclusiveAccess(ref ctx);
         });
 
-        Thread.Sleep(50);
+        aboutToPromote.Wait();
         cts.Cancel();
 
         var result = promoteTask.Result;
@@ -917,13 +942,13 @@ public class AccessControlSmallTests
                 {
                     if (i % 2 == 0)
                     {
-                        control.EnterExclusiveAccess(ref WaitContext.Null);
+                        control.EnterExclusiveAccess(ref TestWaitContext.Default);
                         Thread.SpinWait(5);
                         control.ExitExclusiveAccess();
                     }
                     else
                     {
-                        control.EnterSharedAccess(ref WaitContext.Null);
+                        control.EnterSharedAccess(ref TestWaitContext.Default);
                         Thread.SpinWait(5);
                         control.ExitSharedAccess();
                     }
@@ -956,12 +981,12 @@ public class AccessControlSmallTests
             {
                 if (j % 2 == 0)
                 {
-                    control.EnterExclusiveAccess(ref WaitContext.Null);
+                    control.EnterExclusiveAccess(ref TestWaitContext.Default);
                     control.ExitExclusiveAccess();
                 }
                 else
                 {
-                    control.EnterSharedAccess(ref WaitContext.Null);
+                    control.EnterSharedAccess(ref TestWaitContext.Default);
                     control.ExitSharedAccess();
                 }
 
@@ -989,13 +1014,13 @@ public class AccessControlSmallTests
 
                 if (i % 3 == 0)
                 {
-                    control.EnterExclusiveAccess(ref WaitContext.Null);
+                    control.EnterExclusiveAccess(ref TestWaitContext.Default);
                     Thread.SpinWait(1);
                     control.ExitExclusiveAccess();
                 }
                 else
                 {
-                    control.EnterSharedAccess(ref WaitContext.Null);
+                    control.EnterSharedAccess(ref TestWaitContext.Default);
                     Thread.SpinWait(1);
                     control.ExitSharedAccess();
                 }
@@ -1020,7 +1045,7 @@ public class AccessControlSmallTests
         {
             for (int j = 0; j < 100; j++)
             {
-                control.EnterSharedAccess(ref WaitContext.Null);
+                control.EnterSharedAccess(ref TestWaitContext.Default);
 
                 var current = Interlocked.Increment(ref currentConcurrent);
                 var maxSeen = maxConcurrent;
@@ -1055,7 +1080,7 @@ public class AccessControlSmallTests
         {
             for (int j = 0; j < 100; j++)
             {
-                control.EnterSharedAccess(ref WaitContext.Null);
+                control.EnterSharedAccess(ref TestWaitContext.Default);
 
                 var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(10));
                 if (control.TryPromoteToExclusiveAccess(ref ctx))
@@ -1119,26 +1144,30 @@ public class AccessControlSmallTests
     {
         var control = new AccessControlSmall();
         var barrier = new Barrier(2);
+        var canRelease = new ManualResetEventSlim(false);
+        var aboutToEnter = new ManualResetEventSlim(false);
 
         // Thread 1 holds exclusive
         var t1 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             barrier.SignalAndWait();
-            Thread.Sleep(100);
+            canRelease.Wait();
             control.ExitExclusiveAccess();
         });
 
         barrier.SignalAndWait();
-        Thread.Sleep(10);  // Ensure T1 has lock
 
         // Thread 2 tries to acquire - will contend
         var t2 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            aboutToEnter.Set();
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             control.ExitExclusiveAccess();
         });
 
+        aboutToEnter.Wait();
+        canRelease.Set();
         Task.WaitAll(t1, t2);
 
         Assert.That(control.WasContended, Is.True, "Exclusive contention should set flag");
@@ -1150,26 +1179,30 @@ public class AccessControlSmallTests
     {
         var control = new AccessControlSmall();
         var barrier = new Barrier(2);
+        var canRelease = new ManualResetEventSlim(false);
+        var aboutToEnter = new ManualResetEventSlim(false);
 
         // Thread 1 holds exclusive
         var t1 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             barrier.SignalAndWait();
-            Thread.Sleep(100);
+            canRelease.Wait();
             control.ExitExclusiveAccess();
         });
 
         barrier.SignalAndWait();
-        Thread.Sleep(10);
 
         // Thread 2 tries shared access - will be blocked by exclusive
         var t2 = Task.Run(() =>
         {
-            control.EnterSharedAccess(ref WaitContext.Null);
+            aboutToEnter.Set();
+            control.EnterSharedAccess(ref TestWaitContext.Default);
             control.ExitSharedAccess();
         });
 
+        aboutToEnter.Wait();
+        canRelease.Set();
         Task.WaitAll(t1, t2);
 
         Assert.That(control.WasContended, Is.True, "Shared blocked by exclusive should set flag");
@@ -1186,14 +1219,14 @@ public class AccessControlSmallTests
         // Another thread holds shared access
         var otherTask = Task.Run(() =>
         {
-            control.EnterSharedAccess(ref WaitContext.Null);
+            control.EnterSharedAccess(ref TestWaitContext.Default);
             otherAcquired.Set();
             canRelease.Wait();
             control.ExitSharedAccess();
         });
 
         otherAcquired.Wait();
-        control.EnterSharedAccess(ref WaitContext.Null);
+        control.EnterSharedAccess(ref TestWaitContext.Default);
 
         // Try to promote with timeout - should fail and set contention flag
         var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(100));
@@ -1215,32 +1248,36 @@ public class AccessControlSmallTests
     {
         var control = new AccessControlSmall();
         var barrier = new Barrier(2);
+        var canRelease = new ManualResetEventSlim(false);
 
         // Create contention
         var t1 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             barrier.SignalAndWait();
-            Thread.Sleep(50);
+            canRelease.Wait();
             control.ExitExclusiveAccess();
         });
 
         barrier.SignalAndWait();
-        Thread.Sleep(10);
+        var aboutToEnter = new ManualResetEventSlim(false);
 
         var t2 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            aboutToEnter.Set();
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             control.ExitExclusiveAccess();
         });
 
+        aboutToEnter.Wait();
+        canRelease.Set();
         Task.WaitAll(t1, t2);
 
         // Flag should persist after all locks released
         Assert.That(control.WasContended, Is.True, "Flag should persist after release");
 
         // More operations shouldn't change it
-        control.EnterSharedAccess(ref WaitContext.Null);
+        control.EnterSharedAccess(ref TestWaitContext.Default);
         control.ExitSharedAccess();
         Assert.That(control.WasContended, Is.True, "Flag should persist through subsequent operations");
     }
@@ -1251,25 +1288,29 @@ public class AccessControlSmallTests
     {
         var control = new AccessControlSmall();
         var barrier = new Barrier(2);
+        var canRelease = new ManualResetEventSlim(false);
 
         // Create contention
         var t1 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             barrier.SignalAndWait();
-            Thread.Sleep(50);
+            canRelease.Wait();
             control.ExitExclusiveAccess();
         });
 
         barrier.SignalAndWait();
-        Thread.Sleep(10);
+        var aboutToEnter = new ManualResetEventSlim(false);
 
         var t2 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            aboutToEnter.Set();
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             control.ExitExclusiveAccess();
         });
 
+        aboutToEnter.Wait();
+        canRelease.Set();
         Task.WaitAll(t1, t2);
 
         Assert.That(control.WasContended, Is.True);
@@ -1323,7 +1364,7 @@ public class AccessControlSmallTests
             var promoteResult = false;
             var newSharedResult = false;
 
-            control.EnterSharedAccess(ref WaitContext.Null); // Initial shared holder
+            control.EnterSharedAccess(ref TestWaitContext.Default); // Initial shared holder
 
             var promoterTask = Task.Run(() =>
             {
@@ -1381,7 +1422,7 @@ public class AccessControlSmallTests
         {
             for (int j = 0; j < 100; j++)
             {
-                control.EnterExclusiveAccess(ref WaitContext.Null);
+                control.EnterExclusiveAccess(ref TestWaitContext.Default);
 
                 // Non-atomic increment - should be safe under exclusive lock
                 var temp = counter;
@@ -1418,7 +1459,7 @@ public class AccessControlSmallTests
         {
             tasks[i] = Task.Run(() =>
             {
-                control.EnterSharedAccess(ref WaitContext.Null);
+                control.EnterSharedAccess(ref TestWaitContext.Default);
                 allInsideShared.Signal();
                 allInsideShared.Wait(); // Wait for all to be inside
 

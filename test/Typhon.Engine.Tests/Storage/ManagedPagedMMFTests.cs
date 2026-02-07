@@ -568,7 +568,7 @@ Here come the drones!";
                     // Write use case
                     if (write)
                     {
-                        rwsl.EnterExclusiveAccess(ref WaitContext.Null);
+                        rwsl.EnterExclusiveAccess(ref TestWaitContext.Default);
 
                         s.A = r.Next(0, 100000);
                         s.B = r.Next(0, 100000);
@@ -581,7 +581,7 @@ Here come the drones!";
                     else
                     {
 
-                        rwsl.EnterSharedAccess(ref WaitContext.Null);
+                        rwsl.EnterSharedAccess(ref TestWaitContext.Default);
 
                         Assert.That(s.R, Is.EqualTo(s.A + s.B));
 

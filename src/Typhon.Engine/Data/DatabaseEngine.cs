@@ -102,6 +102,11 @@ public class DatabaseEngineOptions
     /// </para>
     /// </remarks>
     public ResourceOptions Resources { get; set; } = new();
+
+    /// <summary>
+    /// Lock acquisition timeout configuration for all engine subsystems.
+    /// </summary>
+    public TimeoutOptions Timeouts { get; set; } = new();
 }
 
 /// <summary>
@@ -203,6 +208,7 @@ public class DatabaseEngine : IResource, IMetricSource, IDebugPropertiesProvider
         MMF = mmf;
         _log = log;
         _options = options;
+        TimeoutOptions.Current = _options.Timeouts;
         _componentCollectionSegmentByStride = new ConcurrentDictionary<int, ChunkBasedSegment>();
         _componentCollectionVSBSByType = new ConcurrentDictionary<Type, VariableSizedBufferSegmentBase>();
         TransactionChain = new TransactionChain();
