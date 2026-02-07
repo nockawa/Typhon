@@ -25,7 +25,7 @@ namespace Typhon.Engine;
 /// </example>
 /// </remarks>
 [PublicAPI]
-public class ResourceExhaustedException : Exception
+public class ResourceExhaustedException : TyphonException
 {
     /// <summary>
     /// Full path of the exhausted resource in the resource tree.
@@ -61,7 +61,7 @@ public class ResourceExhaustedException : Exception
     /// <param name="currentUsage">Current usage count.</param>
     /// <param name="limit">Maximum allowed capacity.</param>
     public ResourceExhaustedException(string resourcePath, ResourceType resourceType, long currentUsage, long limit)
-        : base(FormatMessage(resourcePath, currentUsage, limit))
+        : base(TyphonErrorCode.ResourceExhausted, FormatMessage(resourcePath, currentUsage, limit))
     {
         ResourcePath = resourcePath;
         ResourceType = resourceType;
@@ -77,7 +77,8 @@ public class ResourceExhaustedException : Exception
     /// <param name="resourceType">Type of the resource.</param>
     /// <param name="currentUsage">Current usage count.</param>
     /// <param name="limit">Maximum allowed capacity.</param>
-    public ResourceExhaustedException(string message, string resourcePath, ResourceType resourceType, long currentUsage, long limit) : base(message)
+    public ResourceExhaustedException(string message, string resourcePath, ResourceType resourceType, long currentUsage, long limit)
+        : base(TyphonErrorCode.ResourceExhausted, message)
     {
         ResourcePath = resourcePath;
         ResourceType = resourceType;
@@ -95,13 +96,18 @@ public class ResourceExhaustedException : Exception
     /// <param name="currentUsage">Current usage count.</param>
     /// <param name="limit">Maximum allowed capacity.</param>
     public ResourceExhaustedException(string message, Exception innerException, string resourcePath, ResourceType resourceType, long currentUsage, long limit)
-        : base(message, innerException)
+        : base(TyphonErrorCode.ResourceExhausted, message, innerException)
     {
         ResourcePath = resourcePath;
         ResourceType = resourceType;
         CurrentUsage = currentUsage;
         Limit = limit;
     }
+
+    /// <summary>
+    /// Resource exhaustion is transient — the resource may self-heal (eviction, pool drain).
+    /// </summary>
+    public override bool IsTransient => true;
 
     private static string FormatMessage(string resourcePath, long currentUsage, long limit) =>
         $"Resource '{resourcePath}' exhausted: {currentUsage:N0} / {limit:N0} ({(limit > 0 ? (double)currentUsage / limit * 100 : 100):F1}% utilization)";

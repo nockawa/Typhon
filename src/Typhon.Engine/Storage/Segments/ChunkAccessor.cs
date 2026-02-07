@@ -40,18 +40,6 @@ internal struct PageAccessorBuffer
 }
 
 /// <summary>
-/// Helper for throwing exceptions without inlining the throw site.
-/// </summary>
-internal static class ThrowHelper
-{
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    public static void ThrowArgument(string message) => throw new ArgumentException(message);
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    public static void ThrowInvalidOp(string message) => throw new InvalidOperationException(message);
-}
-
-/// <summary>
 /// Stack-allocated chunk accessor combining best of ChunkRandomAccessor and StackChunkAccessor.
 /// - Zero heap allocation (struct, always pass by ref)
 /// - SIMD-optimized hot paths

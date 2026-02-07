@@ -1,7 +1,7 @@
 # #37 — TyphonException Hierarchy
 
 **Date:** 2026-02-06
-**Status:** Ready for implementation
+**Status:** In progress
 **GitHub Issue:** #37
 **Decisions:** D1, D2, D6, D8, D10, D11
 
