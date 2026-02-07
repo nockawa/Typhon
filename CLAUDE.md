@@ -404,6 +404,7 @@ Work tracking is managed via the [Typhon dev GitHub Project](https://github.com/
 | `/start-research #XX` | Start research on an issue (creates research doc, links ideas, updates status) |
 | `/start-design #XX` | Start design for an issue (creates design doc from research/ideas, updates status to Ready) |
 | `/start-work #XX` | Begin work on an issue (updates status, creates branch, verifies design) |
+| `/complete-subtask #XX` | Complete a sub-issue (close it, check parent checkbox, update design doc) |
 | `/complete-work #XX` | Finish work (close issue, prompt for doc updates, archive design) |
 | `/create-issue` | Create new GitHub issue with project fields |
 | `/weekly-review` | Weekly progress summary and stale item detection |

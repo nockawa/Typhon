@@ -417,6 +417,33 @@ Actions:
 7. Report readiness
 ```
 
+### Skill: `/complete-subtask` — Finish a Sub-Issue
+
+```markdown
+---
+name: complete-subtask
+description: Complete a sub-issue of an umbrella issue
+argument-hint: [sub-issue number]
+---
+
+Actions:
+1. Close the sub-issue
+2. Update project status → Done
+3. Check the sub-issue's checkbox in parent issue body
+4. Update design doc status → Implemented
+5. Report progress (X/Y sub-issues complete)
+```
+
+**Typical umbrella workflow:**
+```
+/start-work #36          ← umbrella, creates branch
+... implement ...
+/complete-subtask #37    ← close sub-issue, check checkbox
+... implement ...
+/complete-subtask #38
+/complete-work #36       ← close umbrella, merge PR
+```
+
 ### Skill: `/complete-work` — Finish a Work Item
 
 ```markdown
@@ -791,6 +818,7 @@ The following has been implemented:
 ### Claude Code Skills
 - `/dev-status` — Show current development status
 - `/start-work #XX` — Begin work on an issue
+- `/complete-subtask #XX` — Complete a sub-issue (close, check parent checkbox, update design doc)
 - `/complete-work #XX` — Finish work, update artifacts
 - `/create-issue` — Create new issue with all fields
 - `/weekly-review` — Weekly progress summary
