@@ -37,9 +37,9 @@ flowchart TB
 
 ---
 
-## Status: 📐 Design Complete
+## Status: ✅ Implemented
 
-Error handling exists throughout the codebase but lacks a unified hierarchy. Research ([ErrorFoundationTimeoutActivation.md](../research/timeout/ErrorFoundationTimeoutActivation.md)) produced 12 design decisions. Four detailed design documents ([design/errors/](../design/errors/)) cover the exception hierarchy (#37), deadline propagation (#38), exhaustion policy (#39), and Result types (#40). Ready for implementation (Issue #36).
+The error handling system is fully implemented (Issue #36, completed). Research ([ErrorFoundationTimeoutActivation.md](../research/timeout/ErrorFoundationTimeoutActivation.md)) produced 12 design decisions. Four design documents ([reference/errors/](../reference/errors/)) cover the exception hierarchy (#37), deadline propagation (#38), exhaustion policy (#39), and Result types (#40). All sub-issues are closed and verified with tests.
 
 ---
 
@@ -47,9 +47,9 @@ Error handling exists throughout the codebase but lacks a unified hierarchy. Res
 
 | # | Name | Purpose | Status |
 |---|------|---------|--------|
-| **10.1** | [Exception Hierarchy](#101-exception-hierarchy) | Typed exceptions for different failures | 📐 Designed (Issue #37) |
-| **10.2** | [Error Codes & Classification](#102-error-codes--classification) | Numeric codes by subsystem range | 📐 Designed (Issue #37) |
-| **10.3** | [Recovery Strategies](#103-recovery-strategies) | Handling and retry patterns | 🆕 New |
+| **10.1** | [Exception Hierarchy](#101-exception-hierarchy) | Typed exceptions for different failures | ✅ Implemented (#37) |
+| **10.2** | [Error Codes & Classification](#102-error-codes--classification) | Numeric codes by subsystem range | ✅ Implemented (#37) |
+| **10.3** | [Recovery Strategies](#103-recovery-strategies) | Handling and retry patterns | ✅ Implemented (#38, #39) |
 
 ---
 
@@ -367,7 +367,7 @@ public enum RevisionReadStatus : byte
 }
 ```
 
-**Design choice: public readonly fields, not validated properties.** The `Value` field is accessed directly after an `IsSuccess` check — no throwing getter, no branch overhead on the hot path. Callers must check `IsSuccess` before accessing `Value` (same discipline as `Nullable<T>`). This avoids adding a branch to every value access in tight loops. See [design/errors/04-result-type.md](../design/errors/04-result-type.md) for benchmark validation.
+**Design choice: public readonly fields, not validated properties.** The `Value` field is accessed directly after an `IsSuccess` check — no throwing getter, no branch overhead on the hot path. Callers must check `IsSuccess` before accessing `Value` (same discipline as `Nullable<T>`). This avoids adding a branch to every value access in tight loops. See [reference/errors/04-result-type.md](../reference/errors/04-result-type.md) for benchmark validation.
 
 **Method signatures are the documentation:**
 
@@ -442,18 +442,20 @@ catch (TyphonException ex)
 
 ---
 
-## Code Locations (Planned)
+## Code Locations
 
-| Component | Planned Location |
-|-----------|------------------|
-| Exception Hierarchy | `src/Typhon.Engine/Errors/` (TyphonException, LockTimeoutException, etc.) |
-| Error Codes | `src/Typhon.Engine/Errors/TyphonErrorCode.cs` |
-| ThrowHelper | `src/Typhon.Engine/Errors/ThrowHelper.cs` (extracted from ChunkAccessor.cs) |
-| Result Types | `src/Typhon.Engine/Errors/Result.cs` |
-| BTreeLookupStatus | `src/Typhon.Engine/Data/Index/BTreeLookupStatus.cs` |
-| RevisionReadStatus | `src/Typhon.Engine/Data/Revision/RevisionReadStatus.cs` |
-| TimeoutOptions | `src/Typhon.Engine/Data/TimeoutOptions.cs` |
-| TestWaitContext | `test/Typhon.Engine.Tests/Helpers/TestWaitContext.cs` |
+| Component | Location | Status |
+|-----------|----------|--------|
+| Exception Hierarchy | `src/Typhon.Engine/Errors/` (TyphonException, LockTimeoutException, etc.) | ✅ Exists |
+| Error Codes | `src/Typhon.Engine/Errors/TyphonErrorCode.cs` | ✅ Exists |
+| ThrowHelper | `src/Typhon.Engine/Errors/ThrowHelper.cs` | ✅ Exists |
+| Result Types | `src/Typhon.Engine/Errors/Result.cs` | ✅ Exists |
+| BTreeLookupStatus | `src/Typhon.Engine/Data/Index/BTreeLookupStatus.cs` | ✅ Exists |
+| RevisionReadStatus | `src/Typhon.Engine/Data/Revision/RevisionReadStatus.cs` | ✅ Exists |
+| TimeoutOptions | `src/Typhon.Engine/Concurrency/TimeoutOptions.cs` | ✅ Exists |
+| WaitContext | `src/Typhon.Engine/Concurrency/WaitContext.cs` | ✅ Exists |
+| ExhaustionPolicy | `src/Typhon.Engine/Resources/ExhaustionPolicy.cs` | ✅ Exists |
+| ResourceExhaustedException | `src/Typhon.Engine/Resources/ResourceExhaustedException.cs` | ✅ Exists |
 
 ---
 

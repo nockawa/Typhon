@@ -275,7 +275,7 @@ This design should **NOT** be adopted if any of the following are true:
 | `claude/reference/StackChunkAccessor.md` | **Superseded by**: The scope-based accessor design is replaced by epoch-based protection at the page-cache level, which is more general. |
 | `claude/overview/03-storage.md` | **Will be updated**: Page cache section needs epoch-based eviction description. |
 | `claude/adr/007-clock-sweep-eviction.md` | **Extends**: Clock-sweep stays, but eviction predicate changes. May warrant a new ADR. |
-| `claude/design/errors/` | **Interacts with**: Epoch operations should respect deadline infrastructure from #36. |
+| `claude/reference/errors/` | **Interacts with**: Epoch operations should respect deadline infrastructure from #36. |
 
 ---
 
