@@ -143,7 +143,11 @@ public partial class ManagedPagedMMF : PagedMMF, IResource, IMetricSource, ICont
 
     public void AllocatePages(ref Span<int> pageIds, int startFrom = 0, ChangeSet changeSet = null)
     {
-        _occupancyMapAccess.EnterExclusiveAccess(ref WaitContext.Null, target: this);
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
+        if (!_occupancyMapAccess.EnterExclusiveAccess(ref wc, target: this))
+        {
+            ThrowHelper.ThrowLockTimeout("PageCache/AllocatePages", TimeoutOptions.Current.PageCacheLockTimeout);
+        }
         try
         {
             AllocatePagesCore(ref pageIds, startFrom, changeSet);

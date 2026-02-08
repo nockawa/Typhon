@@ -22,13 +22,13 @@ Extract `--deep` from arguments first, then process the remainder as issue numbe
 
 ### Case 1: No arguments provided
 
-Fetch Backlog and Research items from the project:
+Fetch Backlog and Research items from the project. **Never pipe `gh project item-list` directly** — always redirect to a temp file first (see `.claude/skills/_helpers.md`):
 
 ```bash
-gh project item-list 7 --owner nockawa --format json
+gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
 ```
 
-Filter for items with Status = "Backlog" (prioritize these — they're the ones most likely to need research). Then use `AskUserQuestion` to present a choice:
+Parse the temp file with Python to filter for items with Status = "Backlog" (prioritize these — they're the ones most likely to need research). Then use `AskUserQuestion` to present a choice:
 
 **Question:** "Which issue would you like to start research on?"
 **Header:** "Issue"
@@ -282,13 +282,27 @@ If one or more ideas documents were selected in step 3, ask **for each one**:
 
 #### Update Project Status to Research
 
-Get the project item ID and update Status to "Research":
+Get the project item ID and update Status to "Research".
+
+**Project item lookup:** Read `.claude/skills/_helpers.md` for the robust pattern. **Never pipe `gh project item-list` directly** — always redirect to a temp file first, then parse with Python.
 
 ```bash
-# Get item ID from project
-gh project item-list 7 --owner nockawa --format json
+# Step 1: Save project data to temp file (avoids pipe buffer issues on Windows)
+gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
 
-# Update status field
+# Step 2: Find the item ID for this issue
+python -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    items = json.load(f)['items']
+for item in items:
+    if item.get('content', {}).get('number') == int(sys.argv[2]):
+        print(item['id'])
+        sys.exit(0)
+print('NOT_FOUND')
+" "$SCRATCHPAD/project-items.json" <issue_number>
+
+# Step 3: Update status field (using the item ID from step 2)
 gh project item-edit --project-id PVT_kwHOAud1ac4BNdCj --id <item_id> \
   --field-id PVTSSF_lAHOAud1ac4BNdCjzg8cXYI \
   --single-select-option-id 6aea77c6  # "Research"
@@ -296,18 +310,20 @@ gh project item-edit --project-id PVT_kwHOAud1ac4BNdCj --id <item_id> \
 
 #### Link Research Doc in Issue Body
 
-Append a "Related Documents" section to the issue body (if not already present), or add to the existing one:
+Append a "Related Documents" section to the issue body (if not already present), or add to the existing one.
+
+**IMPORTANT:** Always use absolute URLs in issue bodies — relative paths break when viewed outside the repo (e.g., on the project board). See `.claude/skills/_helpers.md` rule #7.
 
 ```bash
 # Get current body
 gh issue view <number> --json body -q .body
 
-# Append research doc link
+# Append research doc link (use absolute URL, not relative path)
 gh issue edit <number> --body "<existing body>
 
 ## Related Documents
 
-- Research: \`claude/research/<path>\`
+- Research: [`claude/research/<path>`](https://github.com/nockawa/Typhon/blob/main/claude/research/<path>)
 "
 ```
 

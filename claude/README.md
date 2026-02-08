@@ -515,8 +515,8 @@ Use this template for the README.md entry point in directory-based documents:
 2. **Create GitHub Issue** → Use `/create-issue` to track it in the GitHub Project
 3. **Research if needed** → Use `/start-research #XX` to create research doc from ideas (Status: Research)
 4. **Design it** → Use `/start-design #XX` to create design doc from research (Status: Ready)
-5. **Implement** → Use `/start-work #XX` to begin (Status: In Progress)
-6. **Complete** → Use `/complete-work #XX` to finalize (Status: Done)
+5. **Implement** → Use `/start-task #XX` to begin (Status: In Progress)
+6. **Complete** → Use `/complete-task #XX` to finalize (Status: Done)
 7. **Document** → Move/update design docs to `reference/` for ongoing documentation
 
 ### Trigger Phrases
@@ -631,8 +631,10 @@ Design Doc: claude/design/FeatureName.md
 | `/dev-status` | Show current development status from GitHub Project |
 | `/start-research #XX` | Start research on an issue (creates research doc, links ideas, updates status) |
 | `/start-design #XX` | Start design for an issue (creates design doc from research/ideas, updates status to Ready) |
-| `/start-work #XX` | Begin work on an issue (creates branch, updates status) |
-| `/complete-work #XX` | Finish work (close issue, prompt for doc updates) |
+| `/start-task #XX` | Begin work on an issue (creates branch, updates status) |
+| `/start-subtask #XX` | Start a sub-issue (updates status, validates dependencies, updates design doc) |
+| `/complete-subtask #XX` | Complete a sub-issue (close it, check parent checkbox, update design doc) |
+| `/complete-task #XX` | Finish work (close issue, prompt for doc updates) |
 | `/create-issue` | Create new GitHub issue with project fields |
 | `/weekly-review` | Weekly progress summary and stale item detection |
 | `/mountain-view` | Full backlog analysis - see the entire mountain of work |

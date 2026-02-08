@@ -643,7 +643,7 @@ Total Budget (configurable, default 4 GB)
 Resource limits and timeout budgets are configured via two sub-objects on `DatabaseEngineOptions`:
 
 - **`ResourceOptions`** — Memory budgets, pool sizes, capacity limits
-- **`TimeoutOptions`** — Per-subsystem lock acquisition timeouts (see [01-concurrency.md](01-concurrency.md), [design/errors/02-deadline-propagation.md](../design/errors/02-deadline-propagation.md))
+- **`TimeoutOptions`** — Per-subsystem lock acquisition timeouts (see [01-concurrency.md](01-concurrency.md), [reference/errors/02-deadline-propagation.md](../reference/errors/02-deadline-propagation.md))
 
 ### ResourceOptions Configuration
 
@@ -682,7 +682,7 @@ When a bounded resource reaches its limit:
 | **Evict** | Remove least-used entry, retry | Page cache, chunk accessor cache |
 | **Degrade** | Continue with reduced performance | Transaction pool empty (alloc new) |
 
-Each `ResourceNode` in the graph carries an `ExhaustionPolicy` property documenting which policy applies. This is diagnostic metadata — not used for runtime dispatch (D12). Set at construction/registration time. See [design/errors/03-exhaustion-policy.md](../design/errors/03-exhaustion-policy.md) for the enforcement design.
+Each `ResourceNode` in the graph carries an `ExhaustionPolicy` property documenting which policy applies. This is diagnostic metadata — not used for runtime dispatch (D12). Set at construction/registration time. See [reference/errors/03-exhaustion-policy.md](../reference/errors/03-exhaustion-policy.md) for the enforcement design.
 
 ### Back-Pressure Patterns
 

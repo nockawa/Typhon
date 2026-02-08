@@ -84,7 +84,11 @@ public unsafe abstract class ChainedBlockAllocatorBase : BlockAllocatorBase
 
         public bool RequestEnumeration(out int chainGeneration)
         {
-            AccessControl.EnterSharedAccess(ref WaitContext.Null);
+            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.SegmentAllocationLockTimeout);
+            if (!AccessControl.EnterSharedAccess(ref wc))
+            {
+                ThrowHelper.ThrowLockTimeout("SegmentAllocation/RequestEnumeration", TimeoutOptions.Current.SegmentAllocationLockTimeout);
+            }
             var newData = _data;
             if ((newData & FreeRequested) != 0)
             {
@@ -279,8 +283,12 @@ public unsafe abstract class ChainedBlockAllocatorBase : BlockAllocatorBase
         
         var chainRootBlockId = blockHeader.GetChainRootBlockId(blockId);
         ref var chainRootHeader = ref GetBlockAsSpanInternal(chainRootBlockId).Cast<byte, BlockHeader>()[0];
-        chainRootHeader.AccessControl.EnterExclusiveAccess(ref WaitContext.Null);
-        
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.SegmentAllocationLockTimeout);
+        if (!chainRootHeader.AccessControl.EnterExclusiveAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("SegmentAllocation/Chain", TimeoutOptions.Current.SegmentAllocationLockTimeout);
+        }
+
         var oldNextBlockId = blockHeader.NextBlockId;
         var chainGen = chainRootHeader.ChainGeneration;
 
@@ -358,7 +366,11 @@ public unsafe abstract class ChainedBlockAllocatorBase : BlockAllocatorBase
     public Span<byte> SafeAppend(int blockId, out int newBlockId)
     {
         ref var rootHeader = ref GetBlockAsSpanInternal(blockId).Cast<byte, BlockHeader>()[0];
-        rootHeader.AccessControl.EnterExclusiveAccess(ref WaitContext.Null);
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.SegmentAllocationLockTimeout);
+        if (!rootHeader.AccessControl.EnterExclusiveAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("SegmentAllocation/SafeAppend", TimeoutOptions.Current.SegmentAllocationLockTimeout);
+        }
 
         Span<byte> span;
         if (rootHeader.NextBlockId == 0)
@@ -444,7 +456,11 @@ public unsafe abstract class ChainedBlockAllocatorBase : BlockAllocatorBase
         
         // Signal we want to free the block
         rootHeader.RequestFree();
-        rootHeader.AccessControl.EnterExclusiveAccess(ref WaitContext.Null);
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.SegmentAllocationLockTimeout);
+        if (!rootHeader.AccessControl.EnterExclusiveAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("SegmentAllocation/FreeChain", TimeoutOptions.Current.SegmentAllocationLockTimeout);
+        }
 
         if (generation == rootHeader.ChainGeneration)
         {

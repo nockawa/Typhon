@@ -183,23 +183,31 @@ public class AccessControlTelemetryTests
         var control = new AccessControl();
         var target = new MockContentionTarget { TelemetryLevel = TelemetryLevel.Light };
         var barrier = new Barrier(2);
+        var canRelease = new ManualResetEventSlim(false);
+        var t2Started = new ManualResetEventSlim(false);
 
-        // Thread 1 holds exclusive, Thread 2 waits
+        // Thread 1 holds exclusive lock
         var t1 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null, target: target);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default, target: target);
             barrier.SignalAndWait();
-            Thread.Sleep(50);  // Hold lock
+            canRelease.Wait();
             control.ExitExclusiveAccess(target: target);
         });
 
         barrier.SignalAndWait();
-        Thread.Sleep(10);  // Ensure T1 has lock
 
-        control.EnterExclusiveAccess(ref WaitContext.Null, target: target);  // Should wait and record contention
-        control.ExitExclusiveAccess(target: target);
+        // Thread 2 tries to acquire — will contend
+        var t2 = Task.Run(() =>
+        {
+            t2Started.Set();
+            control.EnterExclusiveAccess(ref TestWaitContext.Default, target: target);
+            control.ExitExclusiveAccess(target: target);
+        });
 
-        t1.Wait();
+        t2Started.Wait();
+        canRelease.Set();
+        Task.WaitAll(t1, t2);
 
         // At least one thread should have recorded contention
         Console.WriteLine($"Contention count: {target.ContentionCount}");
@@ -216,23 +224,31 @@ public class AccessControlTelemetryTests
         var control = new AccessControl();
         var target = new MockContentionTarget { TelemetryLevel = TelemetryLevel.Light };
         var barrier = new Barrier(2);
+        var canRelease = new ManualResetEventSlim(false);
+        var t2Started = new ManualResetEventSlim(false);
 
-        // Thread 1 holds exclusive, Thread 2 tries shared
+        // Thread 1 holds exclusive lock
         var t1 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null, target: target);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default, target: target);
             barrier.SignalAndWait();
-            Thread.Sleep(50);  // Hold lock
+            canRelease.Wait();
             control.ExitExclusiveAccess(target: target);
         });
 
         barrier.SignalAndWait();
-        Thread.Sleep(10);  // Ensure T1 has lock
 
-        control.EnterSharedAccess(ref WaitContext.Null, target: target);  // Should wait and record contention
-        control.ExitSharedAccess(target: target);
+        // Thread 2 tries shared — will contend against exclusive
+        var t2 = Task.Run(() =>
+        {
+            t2Started.Set();
+            control.EnterSharedAccess(ref TestWaitContext.Default, target: target);
+            control.ExitSharedAccess(target: target);
+        });
 
-        t1.Wait();
+        t2Started.Wait();
+        canRelease.Set();
+        Task.WaitAll(t1, t2);
 
         Console.WriteLine($"Contention count: {target.ContentionCount}");
         Console.WriteLine($"Total wait: {target.TotalWaitUs} µs");
@@ -372,20 +388,20 @@ public class AccessControlTelemetryTests
         var control = new AccessControl();
         var target = new MockContentionTarget { TelemetryLevel = TelemetryLevel.Deep };
         var barrier = new Barrier(2);
+        var canRelease = new ManualResetEventSlim(false);
 
-        // Thread 1 holds exclusive indefinitely
+        // Thread 1 holds exclusive lock until signaled
         var t1 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             barrier.SignalAndWait();
-            Thread.Sleep(500);  // Hold lock longer than timeout
+            canRelease.Wait();
             control.ExitExclusiveAccess();
         });
 
         barrier.SignalAndWait();
-        Thread.Sleep(10);  // Ensure T1 has lock
 
-        // Thread 2 should timeout
+        // Thread 2 should timeout (50ms timeout while lock is held)
         var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(50));
         var result = control.EnterExclusiveAccess(ref ctx, target: target);
 
@@ -393,6 +409,7 @@ public class AccessControlTelemetryTests
         Assert.That(target.Operations, Has.Some.Matches<(LockOperation Op, long DurationUs)>(x => x.Op == LockOperation.ExclusiveWaitStart));
         Assert.That(target.Operations, Has.Some.Matches<(LockOperation Op, long DurationUs)>(x => x.Op == LockOperation.TimedOut));
 
+        canRelease.Set();
         t1.Wait();
     }
 }

@@ -1,0 +1,31 @@
+using System;
+using System.Runtime.CompilerServices;
+
+namespace Typhon.Engine;
+
+/// <summary>
+/// Centralized throw helpers with <see cref="MethodImplOptions.NoInlining"/> to keep hot-path method bodies small.
+/// The JIT won't inline throw paths into callers, preserving cache-friendly code layout.
+/// </summary>
+internal static class ThrowHelper
+{
+    // --- Existing (moved from ChunkAccessor.cs) ---
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowArgument(string message) => throw new ArgumentException(message);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowInvalidOp(string message) => throw new InvalidOperationException(message);
+
+    // --- New — Tier 1 ---
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowLockTimeout(string resourceName, TimeSpan waitDuration) => throw new LockTimeoutException(resourceName, waitDuration);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowResourceExhausted(string resourcePath, ResourceType resourceType, long currentUsage, long limit)
+        => throw new ResourceExhaustedException(resourcePath, resourceType, currentUsage, limit);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowCorruption(string componentName, int pageIndex, string detail) => throw new CorruptionException(componentName, pageIndex, detail);
+}

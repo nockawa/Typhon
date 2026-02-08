@@ -550,7 +550,7 @@ public partial class ChunkBasedSegment
                 }
 
                 var t = 1L << (c1 & 0x3F);
-                v1 = Volatile.Read(ref _l1Any[c1 >> 6]) | (t - 1);
+                v1 = _l1Any[c1 >> 6] | (t - 1);
                 var bitPos = BitOperations.TrailingZeroCount(~v1);
                 var candidateIndex = (c1 & ~0x3F) + bitPos;
                 

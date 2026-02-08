@@ -632,4 +632,17 @@ public partial struct AccessControl
             ExclusiveState => "Exclusive",
             _ => "Unknown"
         };
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // State Snapshot (test infrastructure)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    internal readonly struct StateSnapshot(ulong data)
+    {
+        internal readonly ulong Data = data;
+    }
+
+    internal StateSnapshot SnapshotInternalState() => new(_data & ~ContentionFlagMask);
+
+    internal bool CheckInternalState(in StateSnapshot snapshot) => (_data & ~ContentionFlagMask) == snapshot.Data;
 }

@@ -124,14 +124,15 @@ public class ResourceOptionsTests
     public void ExhaustionPolicy_AllValuesExist()
     {
         // Verify all expected policies exist
+        Assert.That(Enum.IsDefined(typeof(ExhaustionPolicy), ExhaustionPolicy.None));
         Assert.That(Enum.IsDefined(typeof(ExhaustionPolicy), ExhaustionPolicy.FailFast));
         Assert.That(Enum.IsDefined(typeof(ExhaustionPolicy), ExhaustionPolicy.Wait));
         Assert.That(Enum.IsDefined(typeof(ExhaustionPolicy), ExhaustionPolicy.Evict));
         Assert.That(Enum.IsDefined(typeof(ExhaustionPolicy), ExhaustionPolicy.Degrade));
 
-        // Verify we have exactly 4 policies
+        // Verify we have exactly 5 policies (None + 4 behavioral)
         var values = Enum.GetValues<ExhaustionPolicy>();
-        Assert.That(values, Has.Length.EqualTo(4));
+        Assert.That(values, Has.Length.EqualTo(5));
     }
 
     #endregion

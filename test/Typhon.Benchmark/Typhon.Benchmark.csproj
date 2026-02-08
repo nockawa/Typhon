@@ -6,6 +6,7 @@
     <StartupObject>Typhon.Benchmark.Program</StartupObject>
     <Platforms>AnyCPU</Platforms>
     <LangVersion>default</LangVersion>
+    <Nullable>disable</Nullable>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">

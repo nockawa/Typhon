@@ -20,6 +20,16 @@ namespace Typhon.Engine;
 public enum ExhaustionPolicy
 {
     /// <summary>
+    /// No policy — used for intermediate/structural nodes that don't own a bounded resource.
+    /// </summary>
+    /// <remarks>
+    /// <para>This is the default value (<c>default(ExhaustionPolicy) == None</c>).</para>
+    /// <para>Subsystem grouping nodes (e.g., "Storage", "DataEngine") use this sentinel
+    /// because they don't directly manage capacity — their children do.</para>
+    /// </remarks>
+    None = 0,
+
+    /// <summary>
     /// Throw <see cref="ResourceExhaustedException"/> immediately.
     /// </summary>
     /// <remarks>
@@ -31,7 +41,7 @@ public enum ExhaustionPolicy
     /// </list>
     /// <para>Examples: Transaction creation beyond max, query memory allocation beyond limit.</para>
     /// </remarks>
-    FailFast,
+    FailFast = 1,
 
     /// <summary>
     /// Block caller until resource becomes available. Respects <c>Deadline</c>.
@@ -45,7 +55,7 @@ public enum ExhaustionPolicy
     /// </list>
     /// <para>Examples: Page latch acquisition, WAL ring buffer space.</para>
     /// </remarks>
-    Wait,
+    Wait = 2,
 
     /// <summary>
     /// Remove least-recently-used entry, retry.
@@ -59,7 +69,7 @@ public enum ExhaustionPolicy
     /// </list>
     /// <para>Examples: Page cache (evict clean pages first), chunk accessor MRU cache.</para>
     /// </remarks>
-    Evict,
+    Evict = 3,
 
     /// <summary>
     /// Continue with reduced performance or functionality.
@@ -73,5 +83,5 @@ public enum ExhaustionPolicy
     /// </list>
     /// <para>Examples: Transaction pool empty → allocate new, compression buffer unavailable → skip compression.</para>
     /// </remarks>
-    Degrade
+    Degrade = 4
 }
