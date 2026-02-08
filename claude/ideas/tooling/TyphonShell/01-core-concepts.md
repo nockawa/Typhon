@@ -50,6 +50,34 @@ The shell is a single-threaded REPL loop:
 
 The single-threaded model is intentional for an interactive tool. Typhon's concurrency primitives are designed for multi-threaded in-process access, but an interactive shell doesn't need parallelism — clarity and predictability matter more.
 
+### Terminal Ownership Model
+
+The shell uses multiple libraries that each take control of the terminal at different times. They run **sequentially**, never simultaneously:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Terminal Ownership Timeline                  │
+│                                                                 │
+│  PrettyPrompt          Spectre.Console        Terminal.Gui      │
+│  (input phase)         (output phase)         (interactive)     │
+│                                                                 │
+│  ┌──────────┐          ┌─────────────┐                          │
+│  │ tsh:mydb>│ ──Enter──│ table output │ ──done──► prompt again  │
+│  └──────────┘          └─────────────┘                          │
+│                                                                 │
+│  ┌──────────┐          ┌──────────────────────┐                 │
+│  │ tsh:mydb>│ ──Enter──│ Terminal.Gui session  │──q──► prompt   │
+│  │resources │          │ (alternate screen)    │      again     │
+│  └──────────┘          └──────────────────────┘                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+- **PrettyPrompt** owns the terminal during input (prompt, editing, completions, highlighting)
+- **Spectre.Console** owns the terminal during output (tables, colors, progress bars)
+- **Terminal.Gui** owns the terminal during interactive sessions (resource tree explorer)
+
+Terminal.Gui uses the **alternate screen buffer** — the same mechanism used by `vim`, `less`, and `htop`. When the `resources` command launches, the REPL scrollback is preserved on the normal screen. When the user exits the interactive session (pressing `q`), the normal screen is restored and the REPL prompt reappears exactly where it was.
+
 **Exception**: Long-running commands (e.g., `verify` on a large database) could optionally run on a background thread with a progress indicator, cancellable via Ctrl+C.
 
 ## Session Lifecycle
@@ -94,11 +122,14 @@ The prompt is informational — it tells you where you are at a glance:
 # Interactive mode (default)
 tsh
 
-# Open a database immediately
+# Open (or create) a database immediately
 tsh mydb.typhon
 
 # Open + load schema assembly
 tsh mydb.typhon --schema MyGame.Components.dll
+
+# Create a new database, load schema, ready to go
+tsh newgame.typhon --schema Typhon.ARPG.Schema.dll
 
 # Batch mode: execute commands from file
 tsh --exec commands.tsh
@@ -111,6 +142,9 @@ echo "open mydb.typhon\ncount CompA\nclose" | tsh
 
 # Output format override
 tsh mydb.typhon --format json
+
+# Install as global tool
+dotnet tool install -g typhon-shell
 ```
 
 ### Configuration File (Optional, Future)
@@ -146,7 +180,9 @@ Errors display in a distinct style (color if terminal supports it) but never dum
 - [x] **Syntax highlighting: yes** — PrettyPrompt provides ANSI-based syntax highlighting. Keywords, component names, string literals, and numeric values each get distinct colors.
 - [x] **Ctrl+C behavior** — PrettyPrompt provides `CancellationToken` support. Ctrl+C cancels the current input line (clears it); during command execution, it cancels the running command. Ctrl+C on an empty prompt does not exit (use `exit` command).
 
+- [x] **Prompt: fixed format, not configurable** — The built-in prompt (`tsh:dbname[tx:N*]>`) encodes all essential state: database name, transaction tick, dirty flag. No template engine or PS1-style customization. If more state is needed later (e.g., schema name), the fixed format is updated in code. Database shells (psql, sqlite3, mongosh) ship one prompt format — nobody configures them.
+- [x] **Color: one built-in scheme, no theme customization** — A single hardcoded color scheme (keywords=blue, components=green, strings=yellow, errors=red, diagnostics=cyan). PrettyPrompt and Spectre.Console handle terminal capability detection (TrueColor/256/16/none) automatically. No theme files, no user-facing color configuration. The escape hatch is `set color off` for colorblind users or minimal terminals.
+
 ## Open Questions
 
-- [ ] Should the prompt be configurable (like `PS1` in bash)?
-- [ ] Color/theme support: should users be able to customize the syntax highlighting theme?
+*(None remaining — all resolved.)*

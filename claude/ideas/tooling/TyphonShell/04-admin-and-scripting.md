@@ -83,13 +83,15 @@ tsh> restore "mydb-backup-20260208.typhon" "mydb-restored.typhon"
 
 #### Design Rationale
 
-The script format deliberately follows the **sqlite3 model**: one command per line, composable with Unix pipes and shell scripts. This was chosen over two alternatives:
+The base `.tsh` script format deliberately follows the **sqlite3 model**: one command per line, composable with Unix pipes and shell scripts. Three approaches were evaluated for scripting support:
 
-1. **Block-aware DSL** (variables, `if`/`foreach`): Rejected because it creates scope creep toward a full language. Every variable system needs conditionals, every conditional needs loops, every loop needs functions. Typhon already has a real language — C#. CI/CD pipelines already have bash/PowerShell. A `.tsh`-level scripting language would be an ad-hoc, inferior version of both.
+1. **Custom DSL** (hand-built variables, `if`/`foreach`): Rejected — building a bespoke scripting language invites Greenspun's tenth rule: every custom DSL converges toward an ad-hoc, bug-ridden reimplementation of half a real language. Variable systems need type coercion, conditionals need scoping, loops need break/continue, and soon you're maintaining a language instead of a database tool.
 
-2. **External host language** (embedded Lua/Python): Rejected as massive implementation effort that duplicates what the C# API already provides. The shell is a dev tool, not a programming environment.
+2. **External host language** (embedded Lua/Python via native bindings): Rejected — native dependencies (KeraLua, IronPython) break NuGet global tool deployment, and the syntax gap between the host language and tsh commands creates a "two languages in one file" problem.
 
-The **one concession** to pure line-orientation is **data block directives** (`@compact`, `@json`). These are justified because they solve a data ergonomics problem — not a control flow problem. They are parser mode switches ("the next N lines follow grammar X") rather than programming constructs.
+3. **Embedded scripting engine** (Scriban): **Accepted as post-v1 enhancement.** Scriban provides variables, loops, conditionals, and expressions with zero native dependencies. Its `ScriptOnly` syntax blends with tsh command keywords, and its sandboxing model controls what scripts can access. See [Future: Advanced Scripting via Scriban](#future-advanced-scripting-via-scriban) below.
+
+The base `.tsh` format's **one concession** to pure line-orientation is **data block directives** (`@compact`, `@json`). These are justified because they solve a data ergonomics problem — not a control flow problem. They are parser mode switches ("the next N lines follow grammar X") rather than programming constructs.
 
 #### Format Grammar
 
@@ -211,7 +213,7 @@ tsh mydb.typhon --format json -c "query PlayerStats" > players.json
 
 ### Composability Over Built-in Scripting
 
-The deliberate absence of variables and control flow means CI/CD logic lives in the host shell, where it belongs:
+The deliberate absence of variables and control flow in `.tsh` scripts means CI/CD logic lives in the host shell, where it belongs:
 
 ```bash
 #!/bin/bash
@@ -235,6 +237,102 @@ fi
 ```
 
 This is strictly more powerful than any embedded scripting because the host shell provides variables, loops, conditionals, pipes, subshells, parallelism, and error handling — all tested and debugged for decades.
+
+### Future: Advanced Scripting via Scriban
+
+> **Status:** Not for v1 — this is a planned enhancement once the core shell is stable and the `.tsh` line-oriented format has proven its limits in practice.
+
+#### The Gap
+
+The line-oriented `.tsh` format handles two ends of the complexity spectrum well:
+
+- **Simple scripts** — data loading, integrity checks, CI smoke tests. One command per line is perfect.
+- **Complex automation** — bash/PowerShell scripts that invoke `tsh -c` per command. Full language power.
+
+But there's a **painful middle ground**: scripts that need a loop or a variable but don't warrant a full bash wrapper with per-command process spawning overhead. Examples:
+
+```
+# "Create 1000 entities with sequential IDs" — can't do this in .tsh
+# "Insert entity, capture its ID, use it in the next create" — impossible
+# "Run a query, assert the count, branch on result" — requires bash escape
+```
+
+Each of these is a 3-line task conceptually, but becomes a 15-line polyglot bash+tsh script with subshell overhead.
+
+#### Why Scriban
+
+[Scriban](https://github.com/scriban/scriban) (3.8K ⭐, BSD-2-Clause, actively maintained) is a lightweight scripting language and engine for .NET. It was evaluated against several alternatives:
+
+| Library | Stars | Deps | Startup | Verdict |
+|---------|-------|------|---------|---------|
+| **[Scriban](https://github.com/scriban/scriban)** | 3.8K | **Zero** | Instant (interpreter) | **Best fit** — zero deps, clean syntax, sandboxable, `ScriptOnly` mode |
+| [Lua-CSharp](https://github.com/nuskey8/Lua-CSharp) | 710 | Zero (pure C#) | Instant | Good, but Lua syntax is alien to .NET developers (1-indexed, `~=`, `..`) |
+| [NLua](https://github.com/NLua/NLua) | 2.2K | **Native binaries** (KeraLua) | Instant | Native deps break NuGet global tool deployment |
+| [Roslyn Scripting](https://www.nuget.org/packages/Microsoft.CodeAnalysis.CSharp.Scripting/) | Microsoft | ~15MB | **1.5s cold start** | Way too heavy — loads 28 assemblies, unacceptable for a CLI tool |
+| [ExpressionEvaluator](https://github.com/codingseb/ExpressionEvaluator) | 627 | Zero | Instant | Maintenance-only, author says no new features planned |
+| [Schemy](https://github.com/microsoft/schemy) | 306 | Zero | Instant | **Archived** (2021). Scheme syntax unsuitable for target audience |
+
+Scriban wins because:
+
+1. **Zero dependencies.** A single NuGet package with no transitive deps. Critical for a global tool.
+2. **The syntax blends with tsh.** Scriban's `ScriptOnly` mode uses `if`/`end`, `for`/`end`, `func`/`end` — the same plain-English keyword style as tsh commands. A Scriban-enhanced script reads like a natural extension of `.tsh`, not a different language.
+3. **Built-in sandboxing.** Scriban's `TemplateContext` controls exactly which functions and objects are accessible. `tsh` commands get registered as Scriban functions; filesystem/network access stays blocked.
+4. **Custom function registration is trivial.** Every tsh command becomes a callable Scriban function.
+5. **Battle-tested.** Powers [kalk](https://github.com/xoofx/kalk) (developer calculator) and dozens of other tools.
+
+#### How It Would Work
+
+**Dual-mode script execution:**
+
+- `.tsh` files are parsed line-by-line as before (backward compatible, always the default)
+- Files with a `#!scriban` header, or invoked with `tsh --script`, are parsed by Scriban's `ScriptOnly` mode
+- All tsh commands are registered as Scriban custom functions
+- Block directives (`@compact`, `@json`) remain available as Scriban functions
+- The REPL stays line-oriented — Scriban scripting is for *files only*, not interactive use
+
+**Syntax example (`.tsh` with `#!scriban` header):**
+
+```ruby
+#!scriban
+open "test.typhon"
+begin
+
+for i in 1..1000
+  create "SampleA" { Id: i, Value: i * 100, Score: 95.5 - i * 0.01 }
+end
+
+commit
+
+result = count "SampleA"
+if result < 1000
+  echo "FAIL: expected 1000, got " + result
+  exit 1
+end
+
+close
+```
+
+**What this gives us over `.tsh`:**
+- **Variables** — `result = count "SampleA"` captures return values
+- **Loops** — `for i in 1..1000` generates bulk data without `@compact` blocks
+- **Conditionals** — `if result < 1000` for assertions
+- **Expressions** — `i * 100`, `95.5 - i * 0.01` for computed values
+- **Functions** — `func setup_player(id, health)` for reusable patterns
+
+**What we deliberately DON'T expose:**
+- No filesystem access (no `File.Read`, no `Directory.List`)
+- No network access
+- No `System` namespace exposure
+- No assembly loading from scripts
+- Only tsh commands + math/string builtins are available
+
+#### Implementation Priority
+
+This is explicitly **deferred to post-v1**. The reasons:
+
+1. The line-oriented `.tsh` format must ship first and prove itself. If 90% of scripts work fine without variables, the Scriban layer may never be needed — and that's a good outcome.
+2. Adding Scriban is purely additive. It doesn't change the `.tsh` format, the REPL, or the command model. It's a new execution path for a new file mode.
+3. The integration surface is small: register tsh commands as Scriban functions, parse with `ScriptOnly` mode, run. Estimated effort: 2-3 days once the command model is stable.
 
 ### Exit Codes
 
@@ -335,16 +433,6 @@ Spectre.Console.Cli handles the **outer** layer (process arguments → which mod
 
 PrettyPrompt is a `Console.ReadLine` replacement extracted from [CSharpRepl](https://github.com/waf/CSharpRepl) (3.3K ⭐). It provides syntax highlighting, autocompletion with documentation tooltips, persistent history with filtering, multi-line input with word-wrap, and cross-platform clipboard support. Its single dependency is `TextCopy` (clipboard).
 
-**Why PrettyPrompt over alternatives:**
-
-| Library | Status | Verdict |
-|---------|--------|---------|
-| **[PrettyPrompt](https://github.com/waf/PrettyPrompt)** | 195 ⭐, .NET 6+, v4.1.1 (Sep 2023) | **Selected** — feature-rich, battle-tested, callback-driven customization |
-| [ReadLine](https://github.com/tonerdo/readline) | 825 ⭐, last commit **2017** | Abandoned. netstandard1.3, no syntax highlighting, no multi-line |
-| [ReadLine.Ext](https://github.com/rafntor/readline.ext) | 5 ⭐, net7.0, Sep 2023 | Custom `IConsole` is nice but minimal community, no highlighting |
-| [InteractiveReadLine](https://github.com/mattj23/InteractiveReadLine) | 6 ⭐, last commit **2020** | Good architecture (delegate composition) but abandoned |
-| Console.ReadLine | Built-in | No history, no completion, no editing — unusable for a REPL |
-
 **Integration with `tsh`:**
 
 PrettyPrompt's `IPromptCallbacks` interface is the customization point. `tsh` provides callbacks for:
@@ -355,12 +443,12 @@ PrettyPrompt's `IPromptCallbacks` interface is the customization point. `tsh` pr
 | **Syntax highlighting** | Keywords (`begin`, `commit`, `query`, `where`) in one color, component names in another, string literals in a third, numeric values distinct |
 | **History filtering** | Persistent across sessions (`~/.tsh_history`), filterable by prefix typing |
 
-**Layer separation:** PrettyPrompt owns the *input line* (prompt, editing, completions, highlighting). Spectre.Console owns *everything below* (tables, diagnostics, progress bars). They don't conflict — PrettyPrompt yields control after the user presses Enter, then Spectre.Console renders the output.
+**Layer separation:** PrettyPrompt owns the *input line* (prompt, editing, completions, highlighting). Spectre.Console owns *output* (tables, diagnostics, progress bars). Terminal.Gui owns *interactive sessions* (resource tree explorer, full-screen TUI). All three run sequentially — PrettyPrompt yields after Enter, then either Spectre.Console renders output or Terminal.Gui launches a full-screen session via alternate screen buffer. See [Part 01](./01-core-concepts.md) for the terminal ownership model.
 
 ## Project Structure
 
 ```
-test/Typhon.Shell/                 # or src/Typhon.Shell/ — TBD
+src/Typhon.Shell/
 ├── Typhon.Shell.csproj
 ├── Program.cs                     # Entry point, arg parsing, REPL loop
 ├── Commands/
@@ -385,6 +473,13 @@ test/Typhon.Shell/                 # or src/Typhon.Shell/ — TBD
 ├── Schema/
 │   ├── AssemblySchemaLoader.cs    # Load components from DLL
 │   └── BuiltInComponents.cs       # Test components shipped with shell
+├── Interactive/                    # Terminal.Gui full-screen sessions
+│   ├── ResourceTreeView.cs        # Resource navigator (TreeView<IResource>)
+│   ├── ResourceDetailPanel.cs     # Right-hand detail pane (reads IMetricSource)
+│   └── InteractiveSession.cs      # Terminal.Gui init/shutdown, alternate screen buffer
+├── Scripting/                     # (post-v1) Scriban integration
+│   ├── ScribanScriptRunner.cs     # Scriban ScriptOnly mode executor
+│   └── TshFunctionRegistry.cs     # Registers tsh commands as Scriban functions
 └── Session/
     ├── ShellSession.cs            # Session state (db, tx, settings)
     └── PromptBuilder.cs           # Dynamic prompt generation
@@ -392,13 +487,13 @@ test/Typhon.Shell/                 # or src/Typhon.Shell/ — TBD
 
 ## Decisions
 
-- [x] **No script variables** — Variables (`$count = count CompA`) are not supported. CI/CD pipelines use host shell variables (`COUNT=$(tsh ... -c "count CompA")`), which are strictly more powerful.
-- [x] **No script control flow** — No `if`, `foreach`, or any control flow constructs. The host shell provides loops, conditionals, and error handling. This avoids Greenspun's tenth rule: every custom DSL converges toward a bad reimplementation of a real language.
-- [x] **Script format = line-oriented + data block directives** — One command per line (sqlite3 model), with `@compact`/`@json`/`@end` as the only structural extension for bulk data ergonomics. Block directives are parser mode switches, not programming constructs.
+- [x] **`.tsh` script format = line-oriented + data block directives** — One command per line (sqlite3 model), with `@compact`/`@json`/`@end` as the only structural extension for bulk data ergonomics. Block directives are parser mode switches, not programming constructs. No variables or control flow in the base format.
 - [x] **REPL line editing: [PrettyPrompt](https://github.com/waf/PrettyPrompt)** — Syntax highlighting, autocompletion, persistent history, multi-line input. Customized via `IPromptCallbacks`. Chosen over `ReadLine` (abandoned 2017), `ReadLine.Ext` (minimal community), `InteractiveReadLine` (abandoned 2020).
+- [x] **First-class product in `src/`** — `Typhon.Shell` lives at `src/Typhon.Shell/`, not `test/`. It's a shipped artifact, not a dev-only tool. It provides the primary user interface for interacting with Typhon databases outside of the C# API.
+- [x] **NuGet global tool distribution** — Published as a .NET global tool: `dotnet tool install -g typhon-shell`. This gives users `tsh` on their PATH after install. The `.csproj` uses `<PackAsTool>true</PackAsTool>` and `<ToolCommandName>tsh</ToolCommandName>`.
+- [x] **Database creation via `open`** — `open` creates a new database if the file doesn't exist (like `sqlite3 newdb.sqlite`). No separate `--create` flag needed — this matches the sqlite3 convention and is the path of least surprise. If the file exists, it opens it; if not, it creates it.
+- [x] **Advanced scripting (post-v1): [Scriban](https://github.com/scriban/scriban)** — Adds variables, loops, conditionals, and expressions to `.tsh` scripts via `#!scriban` header or `--script` flag. Zero dependencies, BSD-2-Clause, 3.8K ⭐. Chosen over Lua-CSharp (alien syntax for .NET devs), NLua (native deps), Roslyn Scripting (1.5s cold start, 15MB), ExpressionEvaluator (maintenance-only). See the "Future: Advanced Scripting via Scriban" section above for full rationale and design.
 
 ## Open Questions
 
-- [ ] Should `Typhon.Shell` live in `test/` (dev tool) or `src/` (first-class product)?
-- [ ] NuGet package distribution? Global tool (`dotnet tool install -g typhon-shell`)?
-- [ ] Should `tsh` be able to create a new empty database (`open --create newdb.typhon`)?
+*(None remaining — all resolved.)*

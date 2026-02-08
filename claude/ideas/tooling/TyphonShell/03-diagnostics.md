@@ -57,7 +57,45 @@ tsh:mydb> cache-pages where segment=CompA.Data
   ...
 ```
 
-### `cache-watch` — Live Monitoring (Stretch Goal)
+### `page-dump` — Raw Page Inspection
+
+```
+tsh:mydb> page-dump 3
+  Page 3 — Structured View
+  ══════════════════════════════════════
+
+  PageBaseHeader (64 bytes)
+  ──────────────────────────────────────
+  PageIndex:       3
+  ChangeRevision:  101
+  SegmentId:       2 (CompA.RevTable)
+  Flags:           0x01 (InUse)
+  Checksum:        0xA3F7_1C02
+
+  PageMetadata (128 bytes)
+  ──────────────────────────────────────
+  ChunkSize:       64 B
+  Chunks used:     98 / 125 (78.4%)
+  L1 bitmap:       0xFF_FF_FF_E0_00_00_00_00
+
+  PageRawData (8000 bytes)
+  ──────────────────────────────────────
+  0000: 01 00 00 00 2A 00 00 00  64 00 00 00 00 00 00 00  |....*...d.......|
+  0010: 03 00 00 00 00 00 80 42  0F 00 00 00 00 00 00 00  |.......B........|
+  0020: 00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  |................|
+  ...
+  (truncated — full 8000 bytes shown in actual output)
+
+# Pure hex dump for piping
+tsh:mydb> page-dump 3 --raw
+  0000: 03 00 00 00 65 00 00 00  02 00 00 00 01 00 00 00  ...
+  (full 8192 bytes)
+
+# Pipe to external tool
+tsh mydb.typhon -c "page-dump 3 --raw" | xxd
+```
+
+### `cache-watch` — Live Monitoring (Post-v1)
 
 ```
 tsh:mydb> cache-watch --interval 1s
@@ -229,13 +267,124 @@ tsh:mydb> memory
   Total managed:    ~2.2 MB
 ```
 
+## Resource Tree Navigator
+
+### `resources` — Interactive Full-Screen Explorer
+
+The `resources` command is the flagship diagnostic feature. It launches a **full-screen interactive TUI** (powered by [Terminal.Gui](https://github.com/gui-cs/Terminal.Gui)) that lets you explore the engine's entire [Resource Graph](../../overview/08-resources.md) through keyboard-driven drill-down navigation.
+
+This is a fundamentally different interaction model from the other diagnostic commands. Instead of asking specific questions (`cache-stats`, `btree CompA.PlayerId`), you **discover** the engine's internals by navigating the resource tree — seeing what exists, how it's structured, and what each node's current state looks like.
+
+#### Layout
+
+```
+┌─ Resource Tree ──────────────────┬─ Details ─────────────────────────┐
+│ ▼ Root                           │ Name: PageCache                   │
+│   ▼ Storage                      │ Type: A.1 Page Cache              │
+│     ► PageCache            ◄──   │ Resource Type: Memory, Capacity,  │
+│     ► SegmentManager             │   DiskIO, Contention              │
+│     ► ChunkAccessorCache         │                                   │
+│   ▼ DataEngine                   │ ── Capacity ──────────────────    │
+│     ► TransactionPool            │ Current:    185 / 256 pages       │
+│     ► ComponentTable<CompA>      │ Utilization: 72.3%                │
+│     ► ComponentTable<CompB>      │                                   │
+│   ► Durability                   │ ── Memory ────────────────────    │
+│   ► Backup                       │ Allocated:  2.0 MB                │
+│   ► Execution                    │ Peak:       2.0 MB                │
+│   ▼ Allocation                   │                                   │
+│     ► MemoryAllocator            │ ── DiskIO ────────────────────    │
+│     ► BlockAllocators            │ Reads:  12,847  (102.4 MB)        │
+│     ► OccupancyBitmaps           │ Writes: 1,204   (9.6 MB)          │
+│                                  │                                   │
+│                                  │ ── Contention ────────────────    │
+│                                  │ Waits: 23   Total: 145 μs         │
+│                                  │ Max:   42 μs  Timeouts: 0         │
+└──────────────────────────────────┴───────────────────────────────────┘
+ ↑↓ Navigate  →/Enter Expand  ← Collapse  / Filter  q Quit
+```
+
+#### Keyboard Controls
+
+| Key | Action |
+|-----|--------|
+| **↑ / ↓** | Move selection between visible nodes |
+| **→ / Enter** | Expand selected node (reveal children) |
+| **←** | Collapse selected node (hide children) |
+| **Ctrl+→** | Expand all children recursively |
+| **Ctrl+←** | Collapse all children recursively |
+| **/** | Filter nodes by name (type-ahead search) |
+| **Home / End** | Jump to first / last node |
+| **Page Up / Down** | Scroll by page |
+| **q / Esc** | Exit back to REPL |
+
+#### How It Works
+
+1. The user types `resources` at the REPL prompt (PrettyPrompt handles input)
+2. PrettyPrompt yields control after Enter
+3. The command handler initializes Terminal.Gui, which switches to the **alternate screen buffer**
+4. Terminal.Gui's `TreeView<T>` is populated from `ResourceRegistry.Root` and its children
+5. The `SelectionChanged` event updates the right-hand detail pane with the selected node's metrics (read via `IMetricSource.ReadMetrics()`)
+6. The user navigates the tree interactively
+7. When the user presses `q`, Terminal.Gui exits and restores the normal screen buffer
+8. The REPL prompt reappears — scrollback is fully preserved
+
+#### Detail Pane Content
+
+The detail pane adapts to the selected node's metric kinds. Each `IMetricSource` node reports its metrics via `ReadMetrics(IMetricWriter)`, and the detail pane renders whichever kinds are present:
+
+| Metric Kind | What's Shown |
+|-------------|-------------|
+| **Memory** | Allocated bytes, peak bytes |
+| **Capacity** | Current / maximum, utilization percentage |
+| **DiskIO** | Read/write ops, read/write bytes |
+| **Contention** | Wait count, total/max wait μs, timeouts |
+| **Throughput** | Named counters (e.g., "Lookups: 12,847") |
+| **Duration** | Last/avg/max μs for named operations |
+
+For structural nodes (pure grouping, like "Storage" or "Root") that don't implement `IMetricSource`, the detail pane shows aggregate info: child count, total memory of subtree, and a list of immediate children with their types.
+
+#### Lazy Loading
+
+Terminal.Gui's `ITreeBuilder<T>` interface supports on-demand child loading. For large trees (many ComponentTables, many indexes), children are loaded when the user expands a node — not all at once. This keeps the initial render fast.
+
+#### Why Full-Screen TUI?
+
+The resource graph (see [Overview 08](../../overview/08-resources.md) §8.5) has 35+ nodes across 6 subsystems with 3+ levels of depth. A static `resources` command printing all nodes as a flat table or even a Spectre.Console `Tree` would be:
+
+1. **Overwhelming** — too much information at once, most of it irrelevant to the current investigation
+2. **One-directional** — you can't ask follow-up questions without running another command
+3. **Context-free** — seeing "PageCache: 72.3%" doesn't naturally lead you to explore its children or siblings
+
+The interactive navigator solves all three: you see only the expanded nodes, you drill into whatever catches your attention, and the tree structure itself is the navigation context. It's the difference between reading a table of contents and having a file browser.
+
+### `resources --flat` — Non-Interactive Fallback
+
+For batch/pipe mode and CI/CD, a non-interactive flat view is also available:
+
+```
+tsh:mydb> resources --flat
+  Resource                            Type            Memory    Capacity   Contention
+  ──────────────────────              ──────          ──────    ────────   ──────────
+  Root                                Node            2.2 MB    —          —
+  Root/Storage                        Node            2.1 MB    —          —
+  Root/Storage/PageCache              Memory+Cap      2.0 MB    72.3%      23 waits
+  Root/Storage/SegmentManager         Cap+Thru        —         —          —
+  Root/Storage/SegmentManager/CompA   Memory+Cap      48 KB     72.3%      —
+  Root/DataEngine                     Node            128 KB    —          —
+  Root/DataEngine/TransactionPool     Cap+Thru+Dur    —         12.5%      —
+  ...
+```
+
+This is a standard Spectre.Console table — no Terminal.Gui needed. It's the fallback for non-interactive contexts and for users who prefer text output.
+
 ## Diagnostic Command Summary
 
 | Command | What It Shows |
 |---------|---------------|
 | `cache-stats` | Page cache hit rate, state breakdown, eviction count |
 | `cache-pages` | Per-page state, segment assignment, dirty flags |
-| `cache-watch` | Live cache metrics over time |
+| `cache-watch` | Live cache metrics over time *(post-v1)* |
+| `page-dump` | Raw page bytes: structured (header + hex) or `--raw` (pure hex) |
 | `segments` | All segments with type, occupancy, page ranges |
 | `segment-detail` | Deep dive into one segment's per-page occupancy |
 | `btree` | Index statistics: depth, fill factor, key range |
@@ -245,10 +394,17 @@ tsh:mydb> memory
 | `transactions` | Active transactions, MinTick, pool state |
 | `mvcc-stats` | Revision distribution, chain lengths, GC candidates |
 | `memory` | Memory usage breakdown by subsystem |
+| **`resources`** | **Interactive full-screen resource tree explorer (Terminal.Gui TUI)** |
+| `resources --flat` | Non-interactive flat resource table (Spectre.Console, CI/CD friendly) |
+
+## Decisions
+
+- [x] **`page-dump` included in v1** — Two modes: `page-dump <N>` (structured view: decoded `PageBaseHeader` + `PageMetadata` fields, then hex+ASCII dump of `PageRawData`) and `page-dump <N> --raw` (pure 8192-byte hex dump for piping to external tools). Trivial to implement (page is already an 8KB buffer in memory), uniquely valuable for engine developers verifying storage layout at the byte level. Verbosity is self-resolving — nobody stumbles into this command accidentally.
+- [x] **`cache-watch` is a post-v1 stretch goal** — Requires background thread, Spectre.Console `Live` display cooperating with PrettyPrompt's terminal state, and graceful Ctrl+C cancellation. The static `cache-stats` command covers 95% of the use case. For v1, users can run `cache-stats` repeatedly or use a host shell loop (`while true; do tsh mydb.typhon -c "cache-stats"; sleep 1; done`).
+- [x] **`profile` command is post-v1** — The concept (snapshot engine counters → run commands → diff) is sound, but `set timing on` + manual `cache-stats` before/after covers 80% of the use case. When implemented post-v1, it should capture all engine-internal counters (matching the Metrics Catalog in [Overview 09](../../overview/09-observability.md) §9.2), run the commands, and produce a clean diff table.
+- [x] **Interactive resource navigator via [Terminal.Gui](https://github.com/gui-cs/Terminal.Gui)** — The `resources` command launches a full-screen TUI session using Terminal.Gui's `TreeView<T>` widget. Keyboard-driven navigation (↑↓→←), detail pane updated via `SelectionChanged` event, lazy child loading via `ITreeBuilder<T>`. Terminal.Gui runs sequentially with Spectre.Console/PrettyPrompt using the alternate screen buffer (like `vim`). Spectre.Console was evaluated and rejected for this use case: its `Tree` widget is display-only, its `Live` display prohibits keyboard input, and its prompt internals (`ListPrompt<T>`, `IListPromptStrategy<T>`) are private API. Consolonia (Avalonia-based TUI) was rejected as too heavy and beta quality.
+- [x] **Data source: Resource Graph + direct struct access, not the telemetry layer** — The shell and the [Observability layer](../../overview/09-observability.md) are peers — both read from the [Resource Graph](../../overview/08-resources.md) (`IResource` tree + `IMetricSource.ReadMetrics()`), but for different audiences. The shell never goes through the OTel/telemetry layer (Tracks 1-4). Rationale: (1) the telemetry layer is disabled by default for zero overhead — shell diagnostics must work out of the box with no configuration; (2) telemetry provides aggregates over time, while the shell needs current-state snapshots; (3) the shell has full in-process access to the same data telemetry reads from. Two data sources, cleanly separated: **Resource Graph** for aggregate metrics and tree navigation (`resources`, `cache-stats`, `memory` — via `IMetricSource`), **direct struct access** for structural inspection (`btree-dump`, `page-dump`, `revisions`, `segment-detail` — reading internal data structures the resource graph doesn't expose).
 
 ## Open Questions
 
-- [ ] Should diagnostics expose raw page bytes (`page-dump <N>`)? Useful for debugging but verbose.
-- [ ] Should `cache-watch` exist at v1 or is it a stretch goal? (Requires background thread + terminal handling)
-- [ ] How much of this info should be queryable via the engine's existing observability (telemetry/metrics) vs. direct struct access?
-- [ ] Should there be a `profile` command that runs a workload and reports cache/segment stats before and after?
+*(None remaining — all resolved.)*

@@ -43,18 +43,21 @@ tsh> describe PlayerStats
 5. **Build field map** — Store a `ComponentSchema` object per type: field names → (offset, size, `FieldType` enum) for runtime text-to-binary conversion
 
 **Reload workflow:**
-When the user recompiles their assembly, they should be able to reload:
+When the user recompiles their assembly, they can reload via full engine restart:
 
 ```
 tsh:mydb> reload-schema
-  Reloading MyGame.Components.dll...
+  Warning: database will be closed and reopened. Continue? (y/n) y
+  Closing database...
+  Reloading assemblies...
+  Reopening mydb.typhon...
   ✓ PlayerStats: unchanged
   ✓ Inventory: unchanged
   ⚠ Position: field added (Rotation: QuaternionF) — existing data not affected
-  Reload complete
+  5 components loaded. Database ready.
 ```
 
-> **Note:** Hot-reloading assemblies in .NET is non-trivial (`AssemblyLoadContext` unloading, type identity changes). This may require restarting the engine instance. Worth researching during design phase.
+`reload-schema` performs a full engine restart: close the database, dispose the engine, reload assemblies from disk, reopen the database. This is reliable and takes milliseconds. `AssemblyLoadContext` unloading was rejected — it requires no lingering references to types from the old context, which is nearly impossible when types are registered as generic parameters throughout the engine (`ComponentTable<T>`, indexes, etc.).
 
 **Multiple assemblies:**
 A user may have components split across multiple DLLs:
@@ -144,9 +147,9 @@ For `.tsh` script files, the brace format works but gets verbose for bulk data. 
 # script.tsh — bulk insert
 # @compact tells the parser to use positional field order from schema
 @compact PlayerStats
-create 1, 100.0, 0
-create 2, 85.5, 12
-create 3, 92.0, 5
+1, 100.0, 0
+2, 85.5, 12
+3, 92.0, 5
 @end
 ```
 
@@ -184,34 +187,6 @@ JSON is unambiguous, machine-readable, and familiar to CI pipelines. It's the na
 
 > **Script integration:** In `.tsh` script files, the compact and JSON formats are accessed via `@compact ComponentName` / `@json ComponentName` / `@end` block directives. These are parser mode switches — the only structural extension to the otherwise line-oriented script format. See [Part 04](./04-admin-and-scripting.md) for the full script format specification.
 
-### Approach 2: Built-in Test Components
-
-Ship a set of simple components directly in the `Typhon.Shell` project for immediate experimentation:
-
-```csharp
-// Built into Typhon.Shell
-[Component]
-public struct SampleA
-{
-    [Field] [Index] public int Id;
-    [Field] public int Value;
-    [Field] public float Score;
-}
-
-[Component]
-public struct SampleB
-{
-    [Field] [Index] public long Key;
-    [Field] public String64 Name;
-}
-```
-
-Available out-of-the-box without loading any assembly. Useful for:
-- Learning the engine
-- Quick experiments
-- CI/CD smoke tests
-- Benchmarking
-
 ## Data Operations
 
 ### Transaction Control
@@ -240,16 +215,19 @@ tsh:mydb> create PlayerStats { PlayerId=1, Health=100.0, Score=0 }
 ### Create
 
 ```
+# Engine assigns entity ID automatically
 tsh:mydb[tx:100]> create PlayerStats { PlayerId=1, Health=100.0, Score=0 }
-  Entity 1 created
+  Entity 7 created
 
-# Create multiple entities
-tsh:mydb[tx:100]> create PlayerStats { PlayerId=2, Health=85.5, Score=12 }
-  Entity 2 created
+# Explicit entity ID via #ID prefix
+tsh:mydb[tx:100]> create #42 PlayerStats { PlayerId=2, Health=85.5, Score=12 }
+  Entity 42 created
 
-# Multi-component entity (same entity ID, different component tables)
-tsh:mydb[tx:100]> create PlayerStats { PlayerId=1, Health=100.0, Score=0 } + Inventory { Slots=20 }
-  Entity 3 created (PlayerStats + Inventory)
+# Multi-component entity: same explicit ID, separate commands
+tsh:mydb[tx:100]> create #50 PlayerStats { PlayerId=3, Health=100.0, Score=0 }
+  Entity 50 created
+tsh:mydb[tx:100]> create #50 Inventory { Slots=20 }
+  Entity 50 updated (Inventory added)
 ```
 
 ### Read
@@ -353,13 +331,16 @@ tsh:mydb> query PlayerStats
   2,2,85.5,12
 ```
 
+## Decisions
+
+- [x] **Entity ID: engine-assigned by default, user-overridable via `#ID` prefix** — `create PlayerStats { ... }` lets the engine assign the next ID. `create #42 PlayerStats { ... }` creates with explicit entity ID 42. The `#ID` prefix is optional, unambiguous, and covers both interactive exploration (auto-assign) and scripted fixtures/migrations (explicit IDs).
+- [x] **Multi-component create: separate commands for v1** — Multi-component entities are created by issuing multiple `create` commands with the same explicit entity ID (`create #42 PlayerStats { ... }` then `create #42 Inventory { ... }`). The `+` operator syntax (`create PlayerStats { ... } + Inventory { ... }`) is deferred as ergonomic sugar — it requires multi-expression parsing complexity that isn't justified for v1.
+- [x] **No cross-component joins in the shell** — Cross-component queries ("all entities with both CompA and CompB") are a query engine feature, not a shell feature. When the engine's [query system](../../overview/05-query.md) supports multi-table queries, the shell will expose them. The shell doesn't invent query semantics the engine doesn't support.
+- [x] **Pagination: manual `limit`/`offset`, `page-size` as default limit** — The `set page-size 20` setting acts as the default `limit` for query results. Users override with explicit `limit`/`offset` in the query syntax. No automatic "press Enter for next page" pager. In pipe/batch mode, `page-size` is effectively unlimited (no terminal pagination).
+- [x] **Assembly hot-reload: full engine restart for v1** — `reload-schema` closes the database, disposes the engine, reloads assemblies, and reopens. `AssemblyLoadContext` unloading is fragile in .NET — it requires no lingering references to types from the old context, which is nearly impossible when those types are registered as generic parameters throughout the engine (`ComponentTable<T>`, indexes, etc.). A brief engine restart is completely reliable and takes milliseconds.
+- [x] **Compact format: positional-by-schema-order only** — No named-but-terse variant. Positional ordering is how CSV, SQL `INSERT ... VALUES`, and every bulk loader works. If named fields are needed, use the brace format or JSON format.
+- [x] **JSON input: auto-detect JSON array vs. NDJSON** — The `@json` block accepts both formats. If the first non-whitespace character is `[`, parse as JSON array; otherwise parse line-by-line as NDJSON (one JSON object per line). NDJSON is the streaming standard — simpler to parse, simpler to generate, and many data tools emit it natively.
+
 ## Open Questions
 
-- [ ] Should `create` return the entity ID, or should the user be able to specify it?
-- [ ] Multi-component create syntax: `+` operator, or separate commands?
-- [ ] Should queries support joins across component tables? (Entities with both CompA and CompB)
-- [ ] Pagination for large result sets: automatic or manual (`limit`/`offset`)?
-- [ ] Assembly hot-reload: full engine restart or `AssemblyLoadContext` unloading? Needs research.
-- [ ] Compact format: is positional-by-schema-order sufficient, or do we need named-but-terse syntax too?
-- [ ] Collection and nested Component fields: how to represent in text input? (May be deferred to v2)
-- [ ] Should the JSON input format support streaming (NDJSON — one JSON object per line) for large imports?
+- [ ] Collection and nested Component fields: how to represent in text input? Deferred — not relevant to v1. Entity ID references are simple integers (`WeaponId=42`), and AllowMultiple components are separate `create` commands. Special syntax for collections needs implementation experience to get right.
