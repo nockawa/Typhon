@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using Typhon.Engine;
+using Typhon.Schema.Definition;
 
 namespace Typhon.MonitoringDemo;
 

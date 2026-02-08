@@ -6,6 +6,7 @@ using Serilog;
 using System;
 using System.Runtime.InteropServices;
 using System.Text;
+using Typhon.Schema.Definition;
 
 namespace Typhon.Engine.Tests;
 

@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Typhon.Engine.BPTree;
+using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
 

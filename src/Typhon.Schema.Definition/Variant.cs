@@ -2,7 +2,7 @@
 using System;
 using System.Runtime.InteropServices;
 
-namespace Typhon.Engine;
+namespace Typhon.Schema.Definition;
 
 /// <summary>
 /// Store data of a type determined at construction and formatted as a string
@@ -28,14 +28,14 @@ public readonly struct Variant : IComparable<Variant>, IEquatable<Variant>
     public Variant(sbyte value)     => _text.SetVariant(value);
     public Variant(short value)     => _text.SetVariant(value);
     public Variant(int value)       => _text.SetVariant(value);
-    
+
     public Variant(long value)      => _text.SetVariant(value);
 
     public Variant(string value, bool truncate)
     {
         _text.SetVariant(value, truncate);
     }
-    
+
     public static explicit operator string(Variant v) => v.AsString();
     public static explicit operator bool(Variant v) => v.AsBool();
     public static explicit operator sbyte(Variant v) => v.AsByte();
@@ -134,7 +134,7 @@ public readonly struct Variant : IComparable<Variant>, IEquatable<Variant>
             {
                 return FieldType.None;
             }
-            
+
             return (ushort)((header[0] << 8) | header[1]) switch
             {
                 (byte)'b' << 8 | (byte)'o' => FieldType.Boolean,
