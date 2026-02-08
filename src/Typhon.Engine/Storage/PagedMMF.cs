@@ -500,10 +500,7 @@ public partial class PagedMMF : IDisposable
 
     private bool AllocateMemoryPageCore(int filePageIndex, out int memPageIndex, long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
     {
-#if DEBUG
-        int loopCount = 0;
-        DateTime start = DateTime.UtcNow;
-#endif
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
         AdaptiveWaiter waiter = null;
 
         LogAllocatePageEnter();
@@ -593,31 +590,12 @@ public partial class PagedMMF : IDisposable
 
                 if (!found)
                 {
-#if DEBUG
-                    
-                    // We'll get here basically if all memory pages are currently in use, so it's very unlikely, except of complete system usage overload
-                    // The best (and easiest) thing is to wait and try again.
-                    
-                    // /!\ BUT, it may not be enough to solve all the issues, some perfectly good usages can lead to this situation, if that happens we need to
-                    //      1. Make sure it doesn't happen by making sure the upper layer monitors the metrics and throttles the usages to prevent catastrophe.
-                    //      2. Change this implementation and allocate emergency resources to prevent the starvation, but honestly it feels to me like we
-                    //         are just delaying the inevitable or lowering the chances of catastrophe.
-                    //
-                    // TL;DR: what we have right now and need to do:
-                    // The upper layer must monitor the metrics and throttle the usages to prevent starvation.
+                    if (wc.ShouldStop)
+                    {
+                        ThrowHelper.ThrowResourceExhausted("Storage/PagedMMF/AllocateMemoryPage", ResourceType.Memory, 
+                            MemPagesCount - _metrics.FreeMemPageCount, MemPagesCount);
+                    }
 
-                    if (loopCount.IsPowerOf2())
-                    {
-                        LogPendingPageAllocation(filePageIndex, loopCount, DateTime.UtcNow - start);
-                    }
-                    loopCount++;
-                    
-                    // One sec timeout, throw. We should be able to allocate a new memory page within 1 sec.
-                    if (DateTime.UtcNow - start > TimeSpan.FromSeconds(1))
-                    {
-                        throw new OutOfMemoryException($"Unable to allocate a new Memory Page for File Page {filePageIndex}.");
-                    }
-#endif
                     waiter ??= new AdaptiveWaiter();
                     waiter.Spin();
                     continue;
@@ -1180,11 +1158,6 @@ public partial class PagedMMF : IDisposable
     [Conditional("TELEMETRY")]
     private void LogTransitionWaitAndLoop(PageState prevMode, PageState newMode, int loopCount, TimeSpan duration) => 
         Logger.LogTrace(42, "Transition waiting/reloop from {prevNode} to {NewMode} loop count: {loopCount}, duration: {duration}", prevMode, newMode, loopCount, duration);
-
- 
-    [Conditional("DEBUG")]
-    private void LogPendingPageAllocation(int filePageIndex, int loopCount, TimeSpan duration) => 
-        Logger.LogTrace(43, "Page Allocation pending/reloop for page {filePageIndex} loop count: {loopCount}, duration: {duration}", filePageIndex, loopCount, duration);
 
  
     [Conditional("TELEMETRY")]

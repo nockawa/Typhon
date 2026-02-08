@@ -211,7 +211,7 @@ public class DatabaseEngine : IResource, IMetricSource, IDebugPropertiesProvider
         TimeoutOptions.Current = _options.Timeouts;
         _componentCollectionSegmentByStride = new ConcurrentDictionary<int, ChunkBasedSegment>();
         _componentCollectionVSBSByType = new ConcurrentDictionary<Type, VariableSizedBufferSegmentBase>();
-        TransactionChain = new TransactionChain();
+        TransactionChain = new TransactionChain(_options.Resources.MaxActiveTransactions);
 
         DBD = new DatabaseDefinitions();
         ConstructComponentStore();

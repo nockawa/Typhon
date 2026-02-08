@@ -1,7 +1,7 @@
 # #39 — ExhaustionPolicy Enforcement
 
 **Date:** 2026-02-06
-**Status:** Ready for implementation
+**Status:** In progress
 **GitHub Issue:** #39
 **Decisions:** D9, D12
 
