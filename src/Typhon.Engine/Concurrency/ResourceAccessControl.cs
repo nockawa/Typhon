@@ -12,13 +12,11 @@ namespace Typhon.Engine;
 
 /// <summary>
 /// A 32-bit synchronization primitive for resource lifecycle management with 3 modes:
-/// ACCESSING (multiple concurrent), MODIFY (single holder, compatible with ACCESSING),
-/// and DESTROY (terminal, exclusive).
+/// ACCESSING (multiple concurrent), MODIFY (single holder, compatible with ACCESSING), and DESTROY (terminal, exclusive).
 /// </summary>
 /// <remarks>
-/// <para><b>Key difference from RW locks</b>: MODIFY is compatible with ACCESSING. Modifiers can
-/// execute while accessors are active (for append-only/extend-only operations). Only DESTROY
-/// is truly exclusive.</para>
+/// <para><b>Key difference from RW locks</b>: MODIFY is compatible with ACCESSING. Modifiers can execute while accessors are active
+/// (for append-only/extend-only operations). Only DESTROY is truly exclusive.</para>
 ///
 /// <para><b>Bit layout (32 bits)</b>:</para>
 /// <list type="bullet">
@@ -47,15 +45,15 @@ public struct ResourceAccessControl
     // Bit Layout Constants
     // ═══════════════════════════════════════════════════════════════════════
 
-    private const int ACCESSING_COUNT_MASK = 0x0000_00FF;  // Bits 0-7
-    private const int THREAD_ID_MASK = 0x00FF_FF00;        // Bits 8-23
-    private const int MODIFY_PENDING_FLAG = 0x0100_0000;   // Bit 24
-    private const int DESTROY_FLAG = 0x0200_0000;          // Bit 25
-    private const int CONTENTION_FLAG = 0x0400_0000;       // Bit 26
+    private const int AccessingCountMask  = 0x0000_00FF;  // Bits 0-7
+    private const int ThreadIdMask        = 0x00FF_FF00;  // Bits 8-23
+    private const int ModifyPendingFlag   = 0x0100_0000;  // Bit 24
+    private const int DestroyFlag         = 0x0200_0000;  // Bit 25
+    private const int ContentionFlag      = 0x0400_0000;  // Bit 26
 
-    private const int THREAD_ID_SHIFT = 8;
-    private const int MAX_ACCESSING_COUNT = 255;
-    private const int THREAD_ID_BITS_MASK = 0xFFFF;        // 16 bits for thread ID
+    private const int ThreadIdShift       = 8;
+    private const int MaxAccessingCount   = 255;
+    private const int ThreadIdBitsMask    = 0xFFFF;       // 16 bits for thread ID
 
     // ═══════════════════════════════════════════════════════════════════════
     // State Field
@@ -68,25 +66,25 @@ public struct ResourceAccessControl
     // ═══════════════════════════════════════════════════════════════════════
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int GetAccessingCount(int state) => state & ACCESSING_COUNT_MASK;
+    private static int GetAccessingCount(int state) => state & AccessingCountMask;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int GetThreadId(int state) => (state & THREAD_ID_MASK) >> THREAD_ID_SHIFT;
+    private static int GetThreadId(int state) => (state & ThreadIdMask) >> ThreadIdShift;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool IsModifyHeld(int state) => GetThreadId(state) != 0;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool HasModifyPending(int state) => (state & MODIFY_PENDING_FLAG) != 0;
+    private static bool HasModifyPending(int state) => (state & ModifyPendingFlag) != 0;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool HasDestroyFlag(int state) => (state & DESTROY_FLAG) != 0;
+    private static bool HasDestroyFlag(int state) => (state & DestroyFlag) != 0;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool HasPendingOrDestroy(int state) => (state & (MODIFY_PENDING_FLAG | DESTROY_FLAG)) != 0;
+    private static bool HasPendingOrDestroy(int state) => (state & (ModifyPendingFlag | DestroyFlag)) != 0;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int GetCurrentThreadIdBits() => Environment.CurrentManagedThreadId & THREAD_ID_BITS_MASK;
+    private static int GetCurrentThreadIdBits() => Environment.CurrentManagedThreadId & ThreadIdBitsMask;
 
     /// <summary>
     /// Computes elapsed time in microseconds from a Stopwatch start tick.
@@ -104,7 +102,7 @@ public struct ResourceAccessControl
 
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void ThrowTimeout() => throw new TimeoutException("Failed to acquire ResourceAccessControl lock within the specified timeout.");
+    private static void ThrowTimeout() => ThrowHelper.ThrowLockTimeout("ResourceAccessControl", TimeSpan.Zero);
 
     // ═══════════════════════════════════════════════════════════════════════
     // ACCESSING Mode - Multiple concurrent, prevents destruction
@@ -119,7 +117,7 @@ public struct ResourceAccessControl
     {
         var level = target?.TelemetryLevel ?? TelemetryLevel.None;
 
-        int state = Volatile.Read(ref _state);
+        int state = _state;
 
         // Check if blocked by pending/destroy
         if (HasPendingOrDestroy(state))
@@ -129,7 +127,7 @@ public struct ResourceAccessControl
 
         // Check overflow
         int count = GetAccessingCount(state);
-        if (count >= MAX_ACCESSING_COUNT)
+        if (count >= MaxAccessingCount)
         {
             ThrowInvalidOperation("Max ACCESSING count (1023) exceeded.");
         }
@@ -177,7 +175,7 @@ public struct ResourceAccessControl
                 return false;
             }
 
-            int state = Volatile.Read(ref _state);
+            int state = _state;
 
             if (HasPendingOrDestroy(state))
             {
@@ -191,14 +189,14 @@ public struct ResourceAccessControl
                     }
 
                     // Set contention flag (sticky, atomic) - we had to wait
-                    Interlocked.Or(ref _state, CONTENTION_FLAG);
+                    Interlocked.Or(ref _state, ContentionFlag);
                 }
                 spin.SpinOnce();
                 continue;
             }
 
             int count = GetAccessingCount(state);
-            if (count >= MAX_ACCESSING_COUNT)
+            if (count >= MaxAccessingCount)
             {
                 ThrowInvalidOperation("Max ACCESSING count (1023) exceeded.");
             }
@@ -235,7 +233,7 @@ public struct ResourceAccessControl
 
         while (true)
         {
-            int state = Volatile.Read(ref _state);
+            int state = _state;
 
             if (GetAccessingCount(state) == 0)
             {
@@ -272,7 +270,7 @@ public struct ResourceAccessControl
     {
         var level = target?.TelemetryLevel ?? TelemetryLevel.None;
 
-        int state = Volatile.Read(ref _state);
+        int state = _state;
 
         // Cannot acquire if destroyed
         if (HasDestroyFlag(state))
@@ -293,7 +291,7 @@ public struct ResourceAccessControl
         }
 
         int threadId = GetCurrentThreadIdBits();
-        int newState = (state & ~THREAD_ID_MASK) | (threadId << THREAD_ID_SHIFT);
+        int newState = (state & ~ThreadIdMask) | (threadId << ThreadIdShift);
 
         if (Interlocked.CompareExchange(ref _state, newState, state) != state)
         {
@@ -344,7 +342,7 @@ public struct ResourceAccessControl
                 return false;
             }
 
-            int state = Volatile.Read(ref _state);
+            int state = _state;
 
             // Cannot proceed if DESTROY is set
             if (HasDestroyFlag(state))
@@ -359,7 +357,7 @@ public struct ResourceAccessControl
                     }
 
                     // Set contention flag (sticky, atomic) - we had to wait
-                    Interlocked.Or(ref _state, CONTENTION_FLAG);
+                    Interlocked.Or(ref _state, ContentionFlag);
                 }
                 spin.SpinOnce();
                 continue;
@@ -378,7 +376,7 @@ public struct ResourceAccessControl
                     }
 
                     // Set contention flag (sticky, atomic) - we had to wait
-                    Interlocked.Or(ref _state, CONTENTION_FLAG);
+                    Interlocked.Or(ref _state, ContentionFlag);
                 }
                 spin.SpinOnce();
                 continue;
@@ -388,8 +386,7 @@ public struct ResourceAccessControl
             if (GetAccessingCount(state) == 0)
             {
                 // Clear MODIFY_PENDING (if set) and set ThreadId
-                int newState = (state & ~(MODIFY_PENDING_FLAG | THREAD_ID_MASK))
-                             | (threadId << THREAD_ID_SHIFT);
+                int newState = (state & ~(ModifyPendingFlag | ThreadIdMask)) | (threadId << ThreadIdShift);
 
                 if (Interlocked.CompareExchange(ref _state, newState, state) == state)
                 {
@@ -421,12 +418,12 @@ public struct ResourceAccessControl
                 }
 
                 // Set contention flag (sticky, atomic) - we had to wait
-                Interlocked.Or(ref _state, CONTENTION_FLAG);
+                Interlocked.Or(ref _state, ContentionFlag);
             }
 
             if (!HasModifyPending(state))
             {
-                int newState = state | MODIFY_PENDING_FLAG;
+                int newState = state | ModifyPendingFlag;
                 if (Interlocked.CompareExchange(ref _state, newState, state) == state)
                 {
                     weSetPending = true;
@@ -449,14 +446,14 @@ public struct ResourceAccessControl
 
         while (true)
         {
-            int state = Volatile.Read(ref _state);
+            int state = _state;
 
             if (GetThreadId(state) != expectedThreadId)
             {
                 ThrowInvalidOperation("ExitModify called by thread that doesn't hold MODIFY.");
             }
 
-            int newState = state & ~THREAD_ID_MASK; // Clear ThreadId
+            int newState = state & ~ThreadIdMask; // Clear ThreadId
 
             if (Interlocked.CompareExchange(ref _state, newState, state) == state)
             {
@@ -511,7 +508,7 @@ public struct ResourceAccessControl
                 return false;
             }
 
-            int state = Volatile.Read(ref _state);
+            int state = _state;
             int count = GetAccessingCount(state);
 
             // Must hold ACCESSING to promote
@@ -546,9 +543,7 @@ public struct ResourceAccessControl
             if (count == 1)
             {
                 // Atomic: ACCESSING -= 1, ThreadId = current, clear MODIFY_PENDING
-                int newState = (state - 1)  // Decrement ACCESSING
-                             & ~(MODIFY_PENDING_FLAG | THREAD_ID_MASK)
-                             | (threadId << THREAD_ID_SHIFT);
+                int newState = (state - 1) & ~(ModifyPendingFlag | ThreadIdMask) | (threadId << ThreadIdShift);     // Decrement ACCESSING
 
                 if (Interlocked.CompareExchange(ref _state, newState, state) == state)
                 {
@@ -580,12 +575,12 @@ public struct ResourceAccessControl
                 }
 
                 // Set contention flag (sticky, atomic) - we had to wait
-                Interlocked.Or(ref _state, CONTENTION_FLAG);
+                Interlocked.Or(ref _state, ContentionFlag);
             }
 
             if (!HasModifyPending(state))
             {
-                int newState = state | MODIFY_PENDING_FLAG;
+                int newState = state | ModifyPendingFlag;
                 if (Interlocked.CompareExchange(ref _state, newState, state) == state)
                 {
                     weSetPending = true;
@@ -605,13 +600,13 @@ public struct ResourceAccessControl
         SpinWait spin = default;
         for (int i = 0; i < 10; i++) // Limited retries
         {
-            int state = Volatile.Read(ref _state);
+            int state = _state;
             if (!HasModifyPending(state))
             {
                 return; // Already cleared
             }
 
-            int newState = state & ~MODIFY_PENDING_FLAG;
+            int newState = state & ~ModifyPendingFlag;
             if (Interlocked.CompareExchange(ref _state, newState, state) == state)
             {
                 return;
@@ -633,7 +628,7 @@ public struct ResourceAccessControl
 
         while (true)
         {
-            int state = Volatile.Read(ref _state);
+            int state = _state;
 
             if (GetThreadId(state) != expectedThreadId)
             {
@@ -641,7 +636,7 @@ public struct ResourceAccessControl
             }
 
             // Atomic: clear ThreadId, increment ACCESSING
-            int newState = (state & ~THREAD_ID_MASK) + 1;
+            int newState = (state & ~ThreadIdMask) + 1;
 
             if (Interlocked.CompareExchange(ref _state, newState, state) == state)
             {
@@ -695,7 +690,7 @@ public struct ResourceAccessControl
                 return false;
             }
 
-            int state = Volatile.Read(ref _state);
+            int state = _state;
 
             if (HasDestroyFlag(state))
             {
@@ -713,10 +708,10 @@ public struct ResourceAccessControl
                 }
 
                 // Set contention flag (sticky, atomic) - we had to wait
-                Interlocked.Or(ref _state, CONTENTION_FLAG);
+                Interlocked.Or(ref _state, ContentionFlag);
             }
 
-            int newState = state | DESTROY_FLAG;
+            int newState = state | DestroyFlag;
 
             if (Interlocked.CompareExchange(ref _state, newState, state) == state)
             {
@@ -746,7 +741,7 @@ public struct ResourceAccessControl
                 return false;
             }
 
-            int state = Volatile.Read(ref _state);
+            int state = _state;
 
             if (GetAccessingCount(state) == 0 && !IsModifyHeld(state))
             {
@@ -829,33 +824,33 @@ public struct ResourceAccessControl
     {
         get
         {
-            int threadId = GetThreadId(Volatile.Read(ref _state));
+            int threadId = GetThreadId(_state);
             return threadId != 0 && threadId == GetCurrentThreadIdBits();
         }
     }
 
     /// <summary>Thread ID holding MODIFY (truncated to 10 bits), or 0 if not held.</summary>
-    public int ModifyHolderThreadId => GetThreadId(Volatile.Read(ref _state));
+    public int ModifyHolderThreadId => GetThreadId(_state);
 
     /// <summary>Current ACCESSING count.</summary>
-    public int AccessingCount => GetAccessingCount(Volatile.Read(ref _state));
+    public int AccessingCount => GetAccessingCount(_state);
 
     /// <summary>True if MODIFY_PENDING is set (a thread is waiting for MODIFY).</summary>
-    public bool IsModifyPending => HasModifyPending(Volatile.Read(ref _state));
+    public bool IsModifyPending => HasModifyPending(_state);
 
     /// <summary>True if DESTROY has been acquired (terminal state).</summary>
-    public bool IsDestroyed => HasDestroyFlag(Volatile.Read(ref _state));
+    public bool IsDestroyed => HasDestroyFlag(_state);
 
     /// <summary>
     /// Returns true if this lock has ever experienced contention (a thread had to wait).
     /// This flag is sticky - once set, it remains set until <see cref="Reset"/> is called.
     /// </summary>
-    public bool WasContended => (Volatile.Read(ref _state) & CONTENTION_FLAG) != 0;
+    public bool WasContended => (_state & ContentionFlag) != 0;
 
     /// <summary>Gets a complete diagnostic state snapshot.</summary>
     public ResourceAccessControlState GetDiagnosticState()
     {
-        int state = Volatile.Read(ref _state);
+        int state = _state;
         return new ResourceAccessControlState
         {
             AccessingCount = GetAccessingCount(state),
@@ -876,6 +871,19 @@ public struct ResourceAccessControl
                    $"Pending={state.ModifyPending}, Destroyed={state.Destroyed}{contention}";
         }
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // State Snapshot (test infrastructure)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    internal readonly struct StateSnapshot(int state)
+    {
+        internal readonly int State = state;
+    }
+
+    internal StateSnapshot SnapshotInternalState() => new(_state & ~ContentionFlag);
+
+    internal bool CheckInternalState(in StateSnapshot snapshot) => (_state & ~ContentionFlag) == snapshot.State;
 
     // ═══════════════════════════════════════════════════════════════════════
     // Scoped Guard Structs
@@ -909,7 +917,7 @@ public struct ResourceAccessControl
 
             while (true)
             {
-                int state = Volatile.Read(ref *_statePtr);
+                int state = *_statePtr;
 
                 if (GetAccessingCount(state) == 0)
                 {
@@ -961,14 +969,14 @@ public struct ResourceAccessControl
 
             while (true)
             {
-                int state = Volatile.Read(ref *_statePtr);
+                int state = *_statePtr;
 
                 if (GetThreadId(state) != expectedThreadId)
                 {
                     ThrowInvalidOperation("ModifyGuard.Dispose called by thread that doesn't hold MODIFY.");
                 }
 
-                int newState = state & ~THREAD_ID_MASK;
+                int newState = state & ~ThreadIdMask;
 
                 if (Interlocked.CompareExchange(ref *_statePtr, newState, state) == state)
                 {

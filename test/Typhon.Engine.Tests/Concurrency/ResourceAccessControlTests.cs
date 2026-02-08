@@ -100,7 +100,7 @@ public class ResourceAccessControlTests
         {
             tasks[i] = Task.Run(() =>
             {
-                control.EnterAccessing(ref WaitContext.Null);
+                control.EnterAccessing(ref TestWaitContext.Default);
                 var count = Interlocked.Increment(ref insideCount);
                 if (count == 5)
                 {
@@ -167,7 +167,7 @@ public class ResourceAccessControlTests
     public void ExitModify_FromDifferentThread_ThrowsException()
     {
         var control = new ResourceAccessControl();
-        control.EnterModify(ref WaitContext.Null);
+        control.EnterModify(ref TestWaitContext.Default);
         Exception? caughtException = null;
 
         var task = Task.Run(() =>
@@ -209,7 +209,7 @@ public class ResourceAccessControlTests
     public void TryEnterModify_WhenModifyHeld_ReturnsFalse()
     {
         var control = new ResourceAccessControl();
-        control.EnterModify(ref WaitContext.Null);
+        control.EnterModify(ref TestWaitContext.Default);
 
         bool otherResult = false;
         var task = Task.Run(() =>
@@ -239,7 +239,7 @@ public class ResourceAccessControlTests
         // Thread 1: Hold MODIFY
         var modifyTask = Task.Run(() =>
         {
-            control.EnterModify(ref WaitContext.Null);
+            control.EnterModify(ref TestWaitContext.Default);
             modifyHeld.Set();
             canExit.Wait();
             control.ExitModify();
@@ -275,31 +275,41 @@ public class ResourceAccessControlTests
         var control = new ResourceAccessControl();
         var accessingHeld = new ManualResetEventSlim(false);
         var modifyAttempted = new ManualResetEventSlim(false);
+        var canReleaseAccessing = new ManualResetEventSlim(false);
         var modifyAcquired = false;
 
-        // Thread 1: Hold ACCESSING
+        // Thread 1: Hold ACCESSING until signaled
         var accessTask = Task.Run(() =>
         {
-            control.EnterAccessing(ref WaitContext.Null);
+            control.EnterAccessing(ref TestWaitContext.Default);
             accessingHeld.Set();
             modifyAttempted.Wait();
-            Thread.Sleep(100); // Hold for a bit
+            canReleaseAccessing.Wait();
             control.ExitAccessing();
         });
 
         accessingHeld.Wait();
 
         // Thread 2: Try to acquire MODIFY - should wait for ACCESSING to drain
+        var aboutToEnterModify = new ManualResetEventSlim(false);
         var modifyTask = Task.Run(() =>
         {
             modifyAttempted.Set();
             var ctx = WaitContext.FromTimeout(TimeSpan.FromSeconds(2));
+            aboutToEnterModify.Set();
             modifyAcquired = control.EnterModify(ref ctx);
             if (modifyAcquired)
             {
                 control.ExitModify();
             }
         });
+
+        aboutToEnterModify.Wait();
+        // Wait until EnterModify has set MODIFY_PENDING (proves it's blocking on drain)
+        SpinWait.SpinUntil(() => control.IsModifyPending, TimeSpan.FromSeconds(1));
+
+        // Now release ACCESSING so MODIFY can drain and acquire
+        canReleaseAccessing.Set();
 
         Task.WaitAll(accessTask, modifyTask);
 
@@ -316,14 +326,13 @@ public class ResourceAccessControlTests
     {
         var control = new ResourceAccessControl();
         var firstAccessHeld = new ManualResetEventSlim(false);
-        var modifyWaiting = new ManualResetEventSlim(false);
         var canRelease = new ManualResetEventSlim(false);
         var secondAccessResult = false;
 
         // Thread 1: Hold ACCESSING
         var firstAccessTask = Task.Run(() =>
         {
-            control.EnterAccessing(ref WaitContext.Null);
+            control.EnterAccessing(ref TestWaitContext.Default);
             firstAccessHeld.Set();
             canRelease.Wait();
             control.ExitAccessing();
@@ -332,19 +341,21 @@ public class ResourceAccessControlTests
         firstAccessHeld.Wait();
 
         // Thread 2: Try to acquire MODIFY - will set MODIFY_PENDING
+        var aboutToEnterModify = new ManualResetEventSlim(false);
         var modifyTask = Task.Run(() =>
         {
             var ctx = WaitContext.FromTimeout(TimeSpan.FromSeconds(2));
-            modifyWaiting.Set();
-            var acquired = control.EnterModify(ref ctx);
+            aboutToEnterModify.Set();
+            var acquired = control.EnterModify(ref ctx); // blocks because ACCESSING is held; sets MODIFY_PENDING first
             if (acquired)
             {
                 control.ExitModify();
             }
         });
 
-        modifyWaiting.Wait();
-        Thread.Sleep(50); // Give time for MODIFY_PENDING to be set
+        aboutToEnterModify.Wait();
+        // Spin until MODIFY_PENDING is actually set by the EnterModify spin loop
+        SpinWait.SpinUntil(() => control.IsModifyPending, TimeSpan.FromSeconds(1));
 
         // Thread 3: Try to acquire ACCESSING - should be blocked by MODIFY_PENDING
         var secondAccessTask = Task.Run(() =>
@@ -367,7 +378,6 @@ public class ResourceAccessControlTests
     {
         var control = new ResourceAccessControl();
         var accessorsReady = new CountdownEvent(3);
-        var modifyWaiting = new ManualResetEventSlim(false);
         var canRelease = new ManualResetEventSlim(false);
         var modifyAcquired = false;
 
@@ -377,7 +387,7 @@ public class ResourceAccessControlTests
         {
             accessTasks[i] = Task.Run(() =>
             {
-                control.EnterAccessing(ref WaitContext.Null);
+                control.EnterAccessing(ref TestWaitContext.Default);
                 accessorsReady.Signal();
                 canRelease.Wait();
                 control.ExitAccessing();
@@ -388,9 +398,10 @@ public class ResourceAccessControlTests
         Assert.That(control.AccessingCount, Is.EqualTo(3));
 
         // Start MODIFY waiter
+        var aboutToEnterModify = new ManualResetEventSlim(false);
         var modifyTask = Task.Run(() =>
         {
-            modifyWaiting.Set();
+            aboutToEnterModify.Set();
             var ctx = WaitContext.FromTimeout(TimeSpan.FromSeconds(2));
             modifyAcquired = control.EnterModify(ref ctx);
             if (modifyAcquired)
@@ -399,8 +410,8 @@ public class ResourceAccessControlTests
             }
         });
 
-        modifyWaiting.Wait();
-        Thread.Sleep(50);
+        aboutToEnterModify.Wait();
+        SpinWait.SpinUntil(() => control.IsModifyPending, TimeSpan.FromSeconds(1));
 
         Assert.That(control.IsModifyPending, Is.True, "MODIFY_PENDING should be set");
         Assert.That(modifyAcquired, Is.False, "MODIFY should not be acquired yet");
@@ -443,14 +454,14 @@ public class ResourceAccessControlTests
         // Another thread holds ACCESSING
         var otherTask = Task.Run(() =>
         {
-            control.EnterAccessing(ref WaitContext.Null);
+            control.EnterAccessing(ref TestWaitContext.Default);
             otherAcquired.Set();
             canRelease.Wait();
             control.ExitAccessing();
         });
 
         otherAcquired.Wait();
-        control.EnterAccessing(ref WaitContext.Null);
+        control.EnterAccessing(ref TestWaitContext.Default);
 
         // Now we have 2 ACCESSING holders
         Assert.That(control.AccessingCount, Is.EqualTo(2));
@@ -498,7 +509,7 @@ public class ResourceAccessControlTests
     public void DemoteFromModify_FromDifferentThread_ThrowsException()
     {
         var control = new ResourceAccessControl();
-        control.EnterModify(ref WaitContext.Null);
+        control.EnterModify(ref TestWaitContext.Default);
         Exception? caughtException = null;
 
         var task = Task.Run(() =>
@@ -576,27 +587,34 @@ public class ResourceAccessControlTests
     {
         var control = new ResourceAccessControl();
         var accessingHeld = new ManualResetEventSlim(false);
-        var destroyStarted = new ManualResetEventSlim(false);
+        var canReleaseAccessing = new ManualResetEventSlim(false);
         var destroyCompleted = false;
 
-        // Hold ACCESSING
+        // Hold ACCESSING until signaled
         var accessTask = Task.Run(() =>
         {
-            control.EnterAccessing(ref WaitContext.Null);
+            control.EnterAccessing(ref TestWaitContext.Default);
             accessingHeld.Set();
-            destroyStarted.Wait();
-            Thread.Sleep(100);
+            canReleaseAccessing.Wait();
             control.ExitAccessing();
         });
 
         accessingHeld.Wait();
 
-        // Try to destroy - should wait
+        // Try to destroy - should wait for ACCESSING to drain
+        var aboutToDestroy = new ManualResetEventSlim(false);
         var destroyTask = Task.Run(() =>
         {
-            destroyStarted.Set();
-            destroyCompleted = control.EnterDestroy(ref WaitContext.Null);
+            aboutToDestroy.Set();
+            destroyCompleted = control.EnterDestroy(ref TestWaitContext.Default);
         });
+
+        aboutToDestroy.Wait();
+        // Wait until DESTROY flag is set (Phase 1 of EnterDestroy), proving it's waiting for drain
+        SpinWait.SpinUntil(() => control.IsDestroyed, TimeSpan.FromSeconds(1));
+
+        // Now release ACCESSING so destroy can complete
+        canReleaseAccessing.Set();
 
         Task.WaitAll(accessTask, destroyTask);
 
@@ -610,27 +628,34 @@ public class ResourceAccessControlTests
     {
         var control = new ResourceAccessControl();
         var modifyHeld = new ManualResetEventSlim(false);
-        var destroyStarted = new ManualResetEventSlim(false);
+        var canReleaseModify = new ManualResetEventSlim(false);
         var destroyCompleted = false;
 
-        // Hold MODIFY
+        // Hold MODIFY until signaled
         var modifyTask = Task.Run(() =>
         {
-            control.EnterModify(ref WaitContext.Null);
+            control.EnterModify(ref TestWaitContext.Default);
             modifyHeld.Set();
-            destroyStarted.Wait();
-            Thread.Sleep(100);
+            canReleaseModify.Wait();
             control.ExitModify();
         });
 
         modifyHeld.Wait();
 
-        // Try to destroy - should wait
+        // Try to destroy - should wait for MODIFY to drain
+        var aboutToDestroy = new ManualResetEventSlim(false);
         var destroyTask = Task.Run(() =>
         {
-            destroyStarted.Set();
-            destroyCompleted = control.EnterDestroy(ref WaitContext.Null);
+            aboutToDestroy.Set();
+            destroyCompleted = control.EnterDestroy(ref TestWaitContext.Default);
         });
+
+        aboutToDestroy.Wait();
+        // Wait until DESTROY flag is set (Phase 1 of EnterDestroy), proving it's waiting for drain
+        SpinWait.SpinUntil(() => control.IsDestroyed, TimeSpan.FromSeconds(1));
+
+        // Now release MODIFY so destroy can complete
+        canReleaseModify.Set();
 
         Task.WaitAll(modifyTask, destroyTask);
 
@@ -648,7 +673,7 @@ public class ResourceAccessControlTests
         // Hold ACCESSING indefinitely
         var accessTask = Task.Run(() =>
         {
-            control.EnterAccessing(ref WaitContext.Null);
+            control.EnterAccessing(ref TestWaitContext.Default);
             canRelease.Wait();
             control.ExitAccessing();
         });
@@ -685,7 +710,7 @@ public class ResourceAccessControlTests
         // Hold ACCESSING to cause MODIFY to set MODIFY_PENDING
         var firstAccessTask = Task.Run(() =>
         {
-            control.EnterAccessing(ref WaitContext.Null);
+            control.EnterAccessing(ref TestWaitContext.Default);
             firstAccessHeld.Set();
             canRelease.Wait();
             control.ExitAccessing();
@@ -694,14 +719,17 @@ public class ResourceAccessControlTests
         firstAccessHeld.Wait();
 
         // Start MODIFY waiter to set MODIFY_PENDING
+        var aboutToEnterModify = new ManualResetEventSlim(false);
         var modifyTask = Task.Run(() =>
         {
             var ctx = WaitContext.FromTimeout(TimeSpan.FromSeconds(2));
-            control.EnterModify(ref ctx);
+            aboutToEnterModify.Set();
+            control.EnterModify(ref ctx); // blocks because ACCESSING is held; sets MODIFY_PENDING first
             control.ExitModify();
         });
 
-        Thread.Sleep(50); // Wait for MODIFY_PENDING to be set
+        aboutToEnterModify.Wait();
+        SpinWait.SpinUntil(() => control.IsModifyPending, TimeSpan.FromSeconds(1));
 
         // Now try ACCESSING with timeout - should fail due to MODIFY_PENDING
         var ctx2 = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(100));
@@ -719,15 +747,17 @@ public class ResourceAccessControlTests
     {
         var control = new ResourceAccessControl();
         var canRelease = new ManualResetEventSlim(false);
+        var accessingHeld = new ManualResetEventSlim(false);
 
         var accessTask = Task.Run(() =>
         {
-            control.EnterAccessing(ref WaitContext.Null);
+            control.EnterAccessing(ref TestWaitContext.Default);
+            accessingHeld.Set();
             canRelease.Wait();
             control.ExitAccessing();
         });
 
-        Thread.Sleep(50);
+        accessingHeld.Wait();
 
         var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(100));
         var result = control.EnterModify(ref ctx);
@@ -750,7 +780,7 @@ public class ResourceAccessControlTests
 
         var firstAccessTask = Task.Run(() =>
         {
-            control.EnterAccessing(ref WaitContext.Null);
+            control.EnterAccessing(ref TestWaitContext.Default);
             firstAccessHeld.Set();
             canRelease.Wait();
             control.ExitAccessing();
@@ -759,17 +789,17 @@ public class ResourceAccessControlTests
         firstAccessHeld.Wait();
 
         // Start MODIFY waiter to set MODIFY_PENDING
-        var modifyStarted = new ManualResetEventSlim(false);
+        var aboutToEnterModify = new ManualResetEventSlim(false);
         var modifyTask = Task.Run(() =>
         {
-            modifyStarted.Set();
+            aboutToEnterModify.Set();
             var ctx = WaitContext.FromTimeout(TimeSpan.FromSeconds(5));
-            control.EnterModify(ref ctx);
+            control.EnterModify(ref ctx); // blocks because ACCESSING is held; sets MODIFY_PENDING first
             control.ExitModify();
         });
 
-        modifyStarted.Wait();
-        Thread.Sleep(50);
+        aboutToEnterModify.Wait();
+        SpinWait.SpinUntil(() => control.IsModifyPending, TimeSpan.FromSeconds(1));
 
         using var cts = new CancellationTokenSource();
         var accessingTask = Task.Run(() =>
@@ -822,13 +852,13 @@ public class ResourceAccessControlTests
 
     [Test]
     [CancelAfter(1000)]
-    public void EnterAccessingScoped_OnTimeout_ThrowsTimeoutException()
+    public void EnterAccessingScoped_OnTimeout_ThrowsLockTimeoutException()
     {
         var control = new ResourceAccessControl();
         control.EnterDestroy(ref WaitContext.Null); // Block all access
 
         var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(10));
-        Assert.Throws<TimeoutException>(() =>
+        Assert.Throws<LockTimeoutException>(() =>
         {
             control.EnterAccessingScoped(ref ctx);
         });
@@ -836,13 +866,13 @@ public class ResourceAccessControlTests
 
     [Test]
     [CancelAfter(1000)]
-    public void EnterModifyScoped_OnTimeout_ThrowsTimeoutException()
+    public void EnterModifyScoped_OnTimeout_ThrowsLockTimeoutException()
     {
         var control = new ResourceAccessControl();
         control.EnterDestroy(ref WaitContext.Null); // Block all access
 
         var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(10));
-        Assert.Throws<TimeoutException>(() =>
+        Assert.Throws<LockTimeoutException>(() =>
         {
             control.EnterModifyScoped(ref ctx);
         });
@@ -938,15 +968,17 @@ public class ResourceAccessControlTests
     {
         var control = new ResourceAccessControl();
         var canRelease = new ManualResetEventSlim(false);
+        var modifyHeld = new ManualResetEventSlim(false);
 
         var task = Task.Run(() =>
         {
-            control.EnterModify(ref WaitContext.Null);
+            control.EnterModify(ref TestWaitContext.Default);
+            modifyHeld.Set();
             canRelease.Wait();
             control.ExitModify();
         });
 
-        Thread.Sleep(50);
+        modifyHeld.Wait();
 
         Assert.That(control.IsModifyHeldByCurrentThread, Is.False);
 
@@ -972,7 +1004,7 @@ public class ResourceAccessControlTests
             {
                 try
                 {
-                    control.EnterAccessing(ref WaitContext.Null);
+                    control.EnterAccessing(ref TestWaitContext.Default);
                     Thread.SpinWait(5);
                     control.ExitAccessing();
                     Interlocked.Increment(ref operationCount);
@@ -1054,7 +1086,7 @@ public class ResourceAccessControlTests
         {
             for (int i = 0; i < 10; i++)
             {
-                control.EnterModify(ref WaitContext.Null);
+                control.EnterModify(ref TestWaitContext.Default);
                 modifyHeld.Set();
                 Thread.Sleep(10);
                 control.ExitModify();
@@ -1108,7 +1140,7 @@ public class ResourceAccessControlTests
         {
             for (int j = 0; j < 10; j++)
             {
-                control.EnterAccessing(ref WaitContext.Null);
+                control.EnterAccessing(ref TestWaitContext.Default);
 
                 var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(10));
                 if (control.TryPromoteToModify(ref ctx))
@@ -1200,26 +1232,35 @@ public class ResourceAccessControlTests
     public void WasContended_TrueAfterModifyContention()
     {
         var control = new ResourceAccessControl();
-        var barrier = new Barrier(2);
+        var modifyHeld = new ManualResetEventSlim(false);
+        var canRelease = new ManualResetEventSlim(false);
 
-        // Thread 1 holds MODIFY
+        // Thread 1 holds MODIFY until signaled
         var t1 = Task.Run(() =>
         {
-            control.EnterModify(ref WaitContext.Null);
-            barrier.SignalAndWait();
-            Thread.Sleep(100);
+            control.EnterModify(ref TestWaitContext.Default);
+            modifyHeld.Set();
+            canRelease.Wait();
             control.ExitModify();
         });
 
-        barrier.SignalAndWait();
-        Thread.Sleep(10);
+        modifyHeld.Wait();
 
         // Thread 2 tries MODIFY - will contend
+        var aboutToEnterModify = new ManualResetEventSlim(false);
         var t2 = Task.Run(() =>
         {
-            control.EnterModify(ref WaitContext.Null);
+            aboutToEnterModify.Set();
+            control.EnterModify(ref TestWaitContext.Default);
             control.ExitModify();
         });
+
+        aboutToEnterModify.Wait();
+        // Wait until contention is actually recorded (EnterModify sets CONTENTION_FLAG when it can't acquire)
+        SpinWait.SpinUntil(() => control.WasContended, TimeSpan.FromSeconds(1));
+
+        // Allow t1 to release so t2 can acquire
+        canRelease.Set();
 
         Task.WaitAll(t1, t2);
 
@@ -1232,13 +1273,12 @@ public class ResourceAccessControlTests
     {
         var control = new ResourceAccessControl();
         var firstAccessHeld = new ManualResetEventSlim(false);
-        var modifyWaiting = new ManualResetEventSlim(false);
         var canRelease = new ManualResetEventSlim(false);
 
         // Thread 1 holds ACCESSING
         var firstAccessTask = Task.Run(() =>
         {
-            control.EnterAccessing(ref WaitContext.Null);
+            control.EnterAccessing(ref TestWaitContext.Default);
             firstAccessHeld.Set();
             canRelease.Wait();
             control.ExitAccessing();
@@ -1247,16 +1287,17 @@ public class ResourceAccessControlTests
         firstAccessHeld.Wait();
 
         // Thread 2 tries MODIFY - sets MODIFY_PENDING
+        var aboutToEnterModify = new ManualResetEventSlim(false);
         var modifyTask = Task.Run(() =>
         {
             var ctx = WaitContext.FromTimeout(TimeSpan.FromSeconds(2));
-            modifyWaiting.Set();
-            control.EnterModify(ref ctx);
+            aboutToEnterModify.Set();
+            control.EnterModify(ref ctx); // blocks because ACCESSING is held; sets MODIFY_PENDING first
             control.ExitModify();
         });
 
-        modifyWaiting.Wait();
-        Thread.Sleep(50);
+        aboutToEnterModify.Wait();
+        SpinWait.SpinUntil(() => control.IsModifyPending, TimeSpan.FromSeconds(1));
 
         // Thread 3 tries ACCESSING - blocked by MODIFY_PENDING
         var secondAccessTask = Task.Run(() =>
@@ -1285,7 +1326,7 @@ public class ResourceAccessControlTests
         // Thread 1 holds ACCESSING
         var accessTask = Task.Run(() =>
         {
-            control.EnterAccessing(ref WaitContext.Null);
+            control.EnterAccessing(ref TestWaitContext.Default);
             accessingHeld.Set();
             modifyAttempted.Wait();
             Thread.Sleep(100);
@@ -1313,25 +1354,32 @@ public class ResourceAccessControlTests
     public void WasContended_PersistsAfterRelease()
     {
         var control = new ResourceAccessControl();
-        var barrier = new Barrier(2);
+        var modifyHeld = new ManualResetEventSlim(false);
+        var canRelease = new ManualResetEventSlim(false);
 
-        // Create contention
+        // Create contention: t1 holds MODIFY, t2 contends
         var t1 = Task.Run(() =>
         {
-            control.EnterModify(ref WaitContext.Null);
-            barrier.SignalAndWait();
-            Thread.Sleep(50);
+            control.EnterModify(ref TestWaitContext.Default);
+            modifyHeld.Set();
+            canRelease.Wait();
             control.ExitModify();
         });
 
-        barrier.SignalAndWait();
-        Thread.Sleep(10);
+        modifyHeld.Wait();
 
+        var aboutToEnterModify = new ManualResetEventSlim(false);
         var t2 = Task.Run(() =>
         {
-            control.EnterModify(ref WaitContext.Null);
+            aboutToEnterModify.Set();
+            control.EnterModify(ref TestWaitContext.Default);
             control.ExitModify();
         });
+
+        aboutToEnterModify.Wait();
+        SpinWait.SpinUntil(() => control.WasContended, TimeSpan.FromSeconds(1));
+
+        canRelease.Set();
 
         Task.WaitAll(t1, t2);
 
@@ -1349,25 +1397,32 @@ public class ResourceAccessControlTests
     public void WasContended_ClearedByReset()
     {
         var control = new ResourceAccessControl();
-        var barrier = new Barrier(2);
+        var modifyHeld = new ManualResetEventSlim(false);
+        var canRelease = new ManualResetEventSlim(false);
 
-        // Create contention
+        // Create contention: t1 holds MODIFY, t2 contends
         var t1 = Task.Run(() =>
         {
-            control.EnterModify(ref WaitContext.Null);
-            barrier.SignalAndWait();
-            Thread.Sleep(50);
+            control.EnterModify(ref TestWaitContext.Default);
+            modifyHeld.Set();
+            canRelease.Wait();
             control.ExitModify();
         });
 
-        barrier.SignalAndWait();
-        Thread.Sleep(10);
+        modifyHeld.Wait();
 
+        var aboutToEnterModify = new ManualResetEventSlim(false);
         var t2 = Task.Run(() =>
         {
-            control.EnterModify(ref WaitContext.Null);
+            aboutToEnterModify.Set();
+            control.EnterModify(ref TestWaitContext.Default);
             control.ExitModify();
         });
+
+        aboutToEnterModify.Wait();
+        SpinWait.SpinUntil(() => control.WasContended, TimeSpan.FromSeconds(1));
+
+        canRelease.Set();
 
         Task.WaitAll(t1, t2);
 
@@ -1389,7 +1444,7 @@ public class ResourceAccessControlTests
         // Thread holds ACCESSING
         var accessTask = Task.Run(() =>
         {
-            control.EnterAccessing(ref WaitContext.Null);
+            control.EnterAccessing(ref TestWaitContext.Default);
             accessingHeld.Set();
             destroyStarted.Wait();
             Thread.Sleep(100);
@@ -1402,7 +1457,7 @@ public class ResourceAccessControlTests
         var destroyTask = Task.Run(() =>
         {
             destroyStarted.Set();
-            control.EnterDestroy(ref WaitContext.Null);
+            control.EnterDestroy(ref TestWaitContext.Default);
         });
 
         Task.WaitAll(accessTask, destroyTask);
@@ -1426,7 +1481,7 @@ public class ResourceAccessControlTests
         {
             for (int j = 0; j < 100; j++)
             {
-                control.EnterModify(ref WaitContext.Null);
+                control.EnterModify(ref TestWaitContext.Default);
 
                 // Non-atomic increment - should be safe under MODIFY lock
                 var temp = counter;
@@ -1461,7 +1516,7 @@ public class ResourceAccessControlTests
         {
             tasks[i] = Task.Run(() =>
             {
-                control.EnterAccessing(ref WaitContext.Null);
+                control.EnterAccessing(ref TestWaitContext.Default);
                 allInsideAccessing.Signal();
                 allInsideAccessing.Wait();
 
@@ -1488,18 +1543,18 @@ public class ResourceAccessControlTests
     public void RaceCondition_DestroyBlocksAllNewAcquisitions()
     {
         var control = new ResourceAccessControl();
-        var destroyStarted = new ManualResetEventSlim(false);
         var attemptResults = new ConcurrentBag<bool>();
 
         // Start destroy
+        var aboutToDestroy = new ManualResetEventSlim(false);
         var destroyTask = Task.Run(() =>
         {
-            destroyStarted.Set();
-            control.EnterDestroy(ref WaitContext.Null);
+            aboutToDestroy.Set();
+            control.EnterDestroy(ref TestWaitContext.Default);
         });
 
-        destroyStarted.Wait();
-        Thread.Sleep(10); // Give time for DESTROY flag to be set
+        aboutToDestroy.Wait();
+        SpinWait.SpinUntil(() => control.IsDestroyed, TimeSpan.FromSeconds(1));
 
         // Multiple threads try to acquire locks
         var attemptTasks = new Task[10];

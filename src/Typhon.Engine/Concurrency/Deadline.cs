@@ -87,10 +87,14 @@ public readonly struct Deadline : IEquatable<Deadline>
     public static Deadline FromTimeout(TimeSpan timeout)
     {
         if (timeout == Timeout.InfiniteTimeSpan)
+        {
             return Infinite;
+        }
 
         if (timeout <= TimeSpan.Zero)
+        {
             return Zero;
+        }
 
         var ticks = Stopwatch.GetTimestamp() + timeout.Ticks * TickRatio;
         return new Deadline(ticks);
@@ -127,12 +131,13 @@ public readonly struct Deadline : IEquatable<Deadline>
     {
         get
         {
-            if (IsInfinite) return Timeout.InfiniteTimeSpan;
+            if (IsInfinite)
+            {
+                return Timeout.InfiniteTimeSpan;
+            }
 
             var remaining = _ticks - Stopwatch.GetTimestamp();
-            return remaining <= 0
-                ? TimeSpan.Zero
-                : new TimeSpan(remaining / TickRatio);
+            return (remaining <= 0) ? TimeSpan.Zero : new TimeSpan(remaining / TickRatio);
         }
     }
 
@@ -145,10 +150,16 @@ public readonly struct Deadline : IEquatable<Deadline>
     {
         get
         {
-            if (IsInfinite) return -1;
+            if (IsInfinite)
+            {
+                return -1;
+            }
 
             var remainingStopwatchTicks = _ticks - Stopwatch.GetTimestamp();
-            if (remainingStopwatchTicks <= 0) return 0;
+            if (remainingStopwatchTicks <= 0)
+            {
+                return 0;
+            }
 
             // Convert Stopwatch ticks → TimeSpan ticks → milliseconds (all integer)
             return (int)(remainingStopwatchTicks / TickRatio / TimeSpan.TicksPerMillisecond);
@@ -179,11 +190,21 @@ public readonly struct Deadline : IEquatable<Deadline>
     /// </remarks>
     public CancellationToken ToCancellationToken()
     {
-        if (IsInfinite) return CancellationToken.None;
-        if (IsExpired) return new CancellationToken(true);
+        if (IsInfinite)
+        {
+            return CancellationToken.None;
+        }
+
+        if (IsExpired)
+        {
+            return new CancellationToken(true);
+        }
 
         var remaining = Remaining;
-        if (remaining <= TimeSpan.Zero) return new CancellationToken(true);
+        if (remaining <= TimeSpan.Zero)
+        {
+            return new CancellationToken(true);
+        }
 
         var cts = new CancellationTokenSource();
         cts.CancelAfter(remaining);
@@ -204,8 +225,16 @@ public readonly struct Deadline : IEquatable<Deadline>
     /// <inheritdoc />
     public override string ToString()
     {
-        if (_ticks == 0) return "Deadline(Expired)";
-        if (_ticks == long.MaxValue) return "Deadline(Infinite)";
+        if (_ticks == 0)
+        {
+            return "Deadline(Expired)";
+        }
+
+        if (_ticks == long.MaxValue)
+        {
+            return "Deadline(Infinite)";
+        }
+
         return $"Deadline(Remaining={Remaining})";
     }
 }

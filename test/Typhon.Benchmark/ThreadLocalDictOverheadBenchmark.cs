@@ -28,7 +28,7 @@ public unsafe class ThreadLocalDictOverheadBenchmark
 
     // Thread-local dictionary for tracking
     [ThreadStatic]
-    private static Dictionary<nint, ThreadLockState>? t_lockStates;
+    private static Dictionary<nint, ThreadLockState> t_lockStates;
 
     private struct ThreadLockState
     {

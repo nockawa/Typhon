@@ -27,11 +27,13 @@ internal class TransactionChain : IDisposable
 
     private AccessControl _control;
     private readonly Queue<Transaction> _pool;
+    private readonly int _maxActiveTransactions;
     private long _nextFreeId;
     private int _activeCount;
-    
-    public TransactionChain()
+
+    public TransactionChain(int maxActiveTransactions)
     {
+        _maxActiveTransactions = maxActiveTransactions;
         _nextFreeId = 1;
         _pool = new Queue<Transaction>();
         for (int i = 0; i < PoolMaxSize; i++)
@@ -41,7 +43,7 @@ internal class TransactionChain : IDisposable
     }
 
     public ref AccessControl Control => ref _control;
-    
+
     // Under lock of the caller
     public void PushHead([TransfersOwnership] Transaction transaction)
     {
@@ -113,7 +115,18 @@ internal class TransactionChain : IDisposable
     [return: TransfersOwnership] 
     public Transaction CreateTransaction(DatabaseEngine dbe)
     {
-        _control.EnterExclusiveAccess(ref WaitContext.Null);
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.TransactionChainLockTimeout);
+        if (!_control.EnterExclusiveAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("TransactionChain/CreateTransaction", TimeoutOptions.Current.TransactionChainLockTimeout);
+        }
+
+        if (_activeCount >= _maxActiveTransactions)
+        {
+            _control.ExitExclusiveAccess();
+            ThrowHelper.ThrowResourceExhausted("Data/TransactionChain/CreateTransaction", ResourceType.Service, _activeCount, _maxActiveTransactions);
+        }
+
         if (!_pool.TryDequeue(out var t))
         {
             t = new Transaction();

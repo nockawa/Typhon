@@ -6,11 +6,11 @@ argument-hint: [sub-issue number]
 
 # Complete a Sub-Issue (Subtask)
 
-Mark a sub-issue as done within an umbrella issue workflow. This is the lightweight counterpart to `/complete-work` — it handles subtask completion without branch cleanup, PR checks, or ADR prompts.
+Mark a sub-issue as done within an umbrella issue workflow. This is the lightweight counterpart to `/complete-task` — it handles subtask completion without branch cleanup, PR checks, or ADR prompts.
 
 **Typical workflow:**
 ```
-/start-work #36          ← umbrella issue, creates branch
+/start-task #36          ← umbrella issue, creates branch
 ... implement #37 ...
 /complete-subtask #37    ← this skill
 ... implement #38 ...
@@ -18,7 +18,7 @@ Mark a sub-issue as done within an umbrella issue workflow. This is the lightwei
 ... implement #39, #40 ...
 /complete-subtask #39
 /complete-subtask #40
-/complete-work #36       ← closes umbrella, merges PR, cleans up
+/complete-task #36       ← closes umbrella, merges PR, cleans up
 ```
 
 ## Input
@@ -75,14 +75,29 @@ gh issue close <number>
 
 ### 4. Update Project Status to Done
 
-```bash
-# Get the project item ID for the sub-issue
-gh project item-list 7 --owner nockawa --format json
-```
-
-Find the item matching the sub-issue number, then update:
+**Project item lookup:** Read `.claude/skills/_helpers.md` for the robust pattern. **Never pipe `gh project item-list` directly** — always redirect to a temp file first, then parse with Python.
 
 ```bash
+# Step 1: Save project data to temp file (avoids pipe buffer issues on Windows)
+gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
+
+# Step 2: Find the item ID for this sub-issue
+python -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    items = json.load(f)['items']
+for item in items:
+    if item.get('content', {}).get('number') == int(sys.argv[2]):
+        print(item['id'])
+        sys.exit(0)
+print('NOT_FOUND')
+" "$SCRATCHPAD/project-items.json" <sub_issue_number>
+
+# Step 2b: If NOT_FOUND, add the sub-issue to the project board first
+# gh project item-add 7 --owner nockawa --url https://github.com/nockawa/Typhon/issues/<sub_issue_number>
+# Then re-fetch and find the new item ID (same as step 1+2)
+
+# Step 3: Update status to Done (using the item ID from step 2 or 2b)
 gh project item-edit --project-id PVT_kwHOAud1ac4BNdCj --id <item_id> \
   --field-id PVTSSF_lAHOAud1ac4BNdCjzg8cXYI \
   --single-select-option-id 12503e99  # "Done"

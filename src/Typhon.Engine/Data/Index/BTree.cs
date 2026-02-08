@@ -94,7 +94,7 @@ public interface IBTree
     // int Count { get; }
     unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor);
     unsafe bool Remove(void* keyAddr, out int value, ref ChunkAccessor accessor);
-    unsafe bool TryGet(void* keyAddr, out int value, ref ChunkAccessor accessor);
+    unsafe Result<int, BTreeLookupStatus> TryGet(void* keyAddr, ref ChunkAccessor accessor);
     unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref ChunkAccessor accessor);
     unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ref ChunkAccessor accessor);
     void CheckConsistency(ref ChunkAccessor accessor);
@@ -405,7 +405,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor) => Add(Unsafe.AsRef<TKey>(keyAddr), value, ref accessor);
     public unsafe bool Remove(void* keyAddr, out int value, ref ChunkAccessor accessor) => Remove(Unsafe.AsRef<TKey>(keyAddr), out value, ref accessor);
-    public unsafe bool TryGet(void* keyAddr, out int value, ref ChunkAccessor accessor) => TryGet(Unsafe.AsRef<TKey>(keyAddr), out value, ref accessor);
+    public unsafe Result<int, BTreeLookupStatus> TryGet(void* keyAddr, ref ChunkAccessor accessor) => TryGet(Unsafe.AsRef<TKey>(keyAddr), ref accessor);
     public unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref ChunkAccessor accessor) 
         => RemoveValue(Unsafe.AsRef<TKey>(keyAddr), elementId, value, ref accessor);
     public unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ref ChunkAccessor accessor)
@@ -420,7 +420,11 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
 
         var args = new InsertArguments(key, value, Comparer, ref accessor);
-        _access.EnterExclusiveAccess(ref WaitContext.Null);
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
+        if (!_access.EnterExclusiveAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("BTree/Insert", TimeoutOptions.Current.BTreeLockTimeout);
+        }
         try
         {
             AddOrUpdateCore(ref args);
@@ -444,7 +448,11 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
 
         var args = new RemoveArguments(key, Comparer, ref accessor);
-        _access.EnterExclusiveAccess(ref WaitContext.Null);
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
+        if (!_access.EnterExclusiveAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("BTree/Delete", TimeoutOptions.Current.BTreeLockTimeout);
+        }
         try
         {
             RemoveCore(ref args);
@@ -468,7 +476,11 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             return;
         }
 
-        _access.EnterSharedAccess(ref WaitContext.Null);
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
+        if (!_access.EnterSharedAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("BTree/CheckConsistency", TimeoutOptions.Current.BTreeLockTimeout);
+        }
         try
         {
             Root.CheckConsistency(default, NodeWrapper.CheckConsistencyParent.Root, Comparer, Height, ref accessor);
@@ -531,12 +543,13 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             var ca = this._segment.CreateChunkAccessor();
             try
             {
-                if (!TryGet(key, out var value, ref ca))
+                var result = TryGet(key, ref ca);
+                if (result.IsFailure)
                 {
                     throw new KeyNotFoundException();
                 }
 
-                return value;
+                return result.Value;
             }
             finally
             {
@@ -545,19 +558,22 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
     }
 
-    public bool TryGet(TKey key, out int value, ref ChunkAccessor accessor)
+    public Result<int, BTreeLookupStatus> TryGet(TKey key, ref ChunkAccessor accessor)
     {
-        value = default;
-        _access.EnterSharedAccess(ref WaitContext.Null);
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
+        if (!_access.EnterSharedAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("BTree/TryGet", TimeoutOptions.Current.BTreeLockTimeout);
+        }
         try
         {
             var leaf = FindLeaf(key, out var index, ref accessor);
             if (index >= 0)
             {
-                value = leaf.GetItem(index, ref accessor).Value;
+                return new Result<int, BTreeLookupStatus>(leaf.GetItem(index, ref accessor).Value);
             }
 
-            return index >= 0;
+            return new Result<int, BTreeLookupStatus>(BTreeLookupStatus.NotFound);
         }
         finally
         {
@@ -567,10 +583,12 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public bool RemoveValue(TKey key, int elementId, int value, ref ChunkAccessor accessor)
     {
-        if (!TryGet(key, out var bufferId, ref accessor))
+        var result = TryGet(key, ref accessor);
+        if (result.IsFailure)
         {
             return false;
         }
+        var bufferId = result.Value;
 
         Activity activity = null;
         if (TelemetryConfig.BTreeActive)
@@ -579,7 +597,11 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             activity?.SetTag(TyphonSpanAttributes.IndexOperation, "delete");
         }
 
-        _access.EnterExclusiveAccess(ref WaitContext.Null);
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
+        if (!_access.EnterExclusiveAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("BTree/DeleteValue", TimeoutOptions.Current.BTreeLockTimeout);
+        }
         try
         {
             var res = _storage.RemoveFromBuffer(bufferId, elementId, value, ref accessor);
@@ -612,11 +634,12 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public VariableSizedBufferAccessor<int> TryGetMultiple(TKey key, ref ChunkAccessor accessor)
     {
-        if (!TryGet(key, out var bufferId, ref accessor))
+        var result = TryGet(key, ref accessor);
+        if (result.IsFailure)
         {
             return default;
         }
-        return _storage.GetBufferReadOnlyAccessor(bufferId, ref accessor);
+        return _storage.GetBufferReadOnlyAccessor(result.Value, ref accessor);
     }
 
     #endregion

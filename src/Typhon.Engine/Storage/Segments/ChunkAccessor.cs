@@ -40,18 +40,6 @@ internal struct PageAccessorBuffer
 }
 
 /// <summary>
-/// Helper for throwing exceptions without inlining the throw site.
-/// </summary>
-internal static class ThrowHelper
-{
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    public static void ThrowArgument(string message) => throw new ArgumentException(message);
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    public static void ThrowInvalidOp(string message) => throw new InvalidOperationException(message);
-}
-
-/// <summary>
 /// Stack-allocated chunk accessor combining best of ChunkRandomAccessor and StackChunkAccessor.
 /// - Zero heap allocation (struct, always pass by ref)
 /// - SIMD-optimized hot paths
@@ -581,6 +569,43 @@ public unsafe struct ChunkAccessor : IDisposable
         // Walk back from chunk data to page header
         var pageHeaderAddr = addr - _rootHeaderOffset - PagedMMF.PageHeaderSize;
         return ref Unsafe.AsRef<T>(pageHeaderAddr + offset);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // State Snapshot (test infrastructure)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    internal struct StateSnapshot
+    {
+        internal byte UsedSlots;
+        internal fixed short PinCounters[16];
+        internal fixed byte PromoteCounters[16];
+    }
+
+    internal StateSnapshot SnapshotInternalState()
+    {
+        var snapshot = new StateSnapshot { UsedSlots = _usedSlots };
+        for (int i = 0; i < Capacity; i++)
+        {
+            ref var slot = ref _slots[i];
+            snapshot.PinCounters[i] = slot.PinCounter;
+            snapshot.PromoteCounters[i] = slot.PromoteCounter;
+        }
+        return snapshot;
+    }
+
+    internal bool CheckInternalState(in StateSnapshot snapshot)
+    {
+        var maxSlots = Math.Max(snapshot.UsedSlots, _usedSlots);
+        for (int i = 0; i < maxSlots; i++)
+        {
+            ref var slot = ref _slots[i];
+            if (slot.PinCounter != snapshot.PinCounters[i] || slot.PromoteCounter != snapshot.PromoteCounters[i])
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     /// <summary>

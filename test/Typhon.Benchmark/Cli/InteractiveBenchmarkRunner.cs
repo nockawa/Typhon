@@ -122,7 +122,7 @@ public class InteractiveBenchmarkRunner
         AnsiConsole.WriteLine();
     }
 
-    private string? SelectCategory()
+    private string SelectCategory()
     {
         var categories = _categorizedBenchmarks.Keys.ToList();
 
@@ -151,7 +151,7 @@ public class InteractiveBenchmarkRunner
         return selection;
     }
 
-    private BenchmarkInfo? SelectBenchmark(string category)
+    private BenchmarkInfo SelectBenchmark(string category)
     {
         IReadOnlyList<BenchmarkInfo> benchmarksToShow;
         string title;
@@ -213,7 +213,7 @@ public class InteractiveBenchmarkRunner
     /// Configures benchmark settings with back navigation option.
     /// </summary>
     /// <returns>Tuple of (settings, goBack). If goBack is true, user wants to return to selection.</returns>
-    private (BenchmarkSettings? Settings, bool GoBack) ConfigureSettings()
+    private (BenchmarkSettings Settings, bool GoBack) ConfigureSettings()
     {
         AnsiConsole.WriteLine();
         AnsiConsole.Write(new Rule("[yellow]Configure Settings[/]").RuleStyle("grey").LeftJustified());
@@ -414,7 +414,7 @@ public class InteractiveBenchmarkRunner
         if (string.IsNullOrEmpty(resultsDir) || !Directory.Exists(resultsDir))
             return;
 
-        string? fileToOpen = null;
+        string fileToOpen = null;
 
         // Prefer HTML if available
         if (settings.ExportHtml)

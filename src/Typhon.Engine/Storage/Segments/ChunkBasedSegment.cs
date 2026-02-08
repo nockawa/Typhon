@@ -189,7 +189,7 @@ public partial class ChunkBasedSegment : LogicalSegment
     /// </summary>
     /// <param name="clearContent">Whether to clear the chunk content after allocation.</param>
     /// <returns>The allocated chunk ID.</returns>
-    /// <exception cref="InvalidOperationException">Thrown when the segment is at maximum capacity and cannot grow.</exception>
+    /// <exception cref="ResourceExhaustedException">Thrown when the segment is at maximum capacity and cannot grow.</exception>
     /// <remarks>
     /// This method automatically grows the segment when capacity is exhausted.
     /// The allocation itself is lock-free; only growth operations require synchronization.
@@ -210,7 +210,7 @@ public partial class ChunkBasedSegment : LogicalSegment
             // Allocation failed - need to grow
             if (!GrowIfNeeded())
             {
-                throw new InvalidOperationException($"ChunkBasedSegment has reached maximum capacity. Cannot allocate more chunks.");
+                ThrowHelper.ThrowResourceExhausted("Storage/ChunkBasedSegment/AllocateChunk", ResourceType.Memory, AllocatedChunkCount, ChunkCapacity);
             }
             // Retry with the new (grown) map
         }
@@ -222,7 +222,7 @@ public partial class ChunkBasedSegment : LogicalSegment
     /// <param name="count">The number of chunks to allocate.</param>
     /// <param name="clearContent">Whether to clear the chunk content after allocation.</param>
     /// <returns>A memory owner containing the allocated chunk IDs.</returns>
-    /// <exception cref="InvalidOperationException">Thrown when the segment cannot accommodate the requested chunks.</exception>
+    /// <exception cref="ResourceExhaustedException">Thrown when the segment cannot accommodate the requested chunks.</exception>
     /// <remarks>
     /// This method automatically grows the segment when capacity is exhausted.
     /// Growth is attempted iteratively until the request can be satisfied or maximum capacity is reached.
@@ -249,7 +249,7 @@ public partial class ChunkBasedSegment : LogicalSegment
             if (!Grow(minNewPageCount))
             {
                 res.Dispose();
-                throw new InvalidOperationException($"ChunkBasedSegment cannot accommodate {count} chunks. Maximum capacity reached.");
+                ThrowHelper.ThrowResourceExhausted("Storage/ChunkBasedSegment/AllocateChunks", ResourceType.Memory, AllocatedChunkCount, ChunkCapacity);
             }
             // Retry with the new (grown) map
         }

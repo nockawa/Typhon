@@ -19,6 +19,9 @@ internal struct VariableSizedBufferRootHeader
     public int TotalCount;
     public short TotalFreeChunk;
     public short RefCounter;
+
+    internal void EnterBufferLockForTest() => Lock.EnterExclusiveAccess(ref WaitContext.Null);
+    internal void ExitBufferLockForTest() => Lock.ExitExclusiveAccess();
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -149,7 +152,14 @@ public unsafe class VariableSizedBufferSegmentBase
         }
     }
 
-    internal void LockBuffer(ref VariableSizedBufferRootHeader rh) => rh.Lock.EnterExclusiveAccess(ref WaitContext.Null);
+    internal void LockBuffer(ref VariableSizedBufferRootHeader rh)
+    {
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.SegmentAllocationLockTimeout);
+        if (!rh.Lock.EnterExclusiveAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("SegmentAllocation/LockBuffer", TimeoutOptions.Current.SegmentAllocationLockTimeout);
+        }
+    }
     internal void ReleaseLockOnBuffer(ref VariableSizedBufferRootHeader header) => header.Lock.ExitExclusiveAccess();
 }
 
@@ -508,7 +518,13 @@ public ref struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanag
         ref var rh = ref _rootChunkHandle.AsRef<VariableSizedBufferRootHeader>();
 
         // Enter read mode
-        rh.Lock.EnterSharedAccess(ref WaitContext.Null);
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.SegmentAllocationLockTimeout);
+        if (!rh.Lock.EnterSharedAccess(ref wc))
+        {
+            _rootChunkHandle.Dispose();
+            _accessor.Dispose();
+            ThrowHelper.ThrowLockTimeout("SegmentAllocation/BufferRead", TimeoutOptions.Current.SegmentAllocationLockTimeout);
+        }
 
         // Switch to the first chunk that contains stored data
         _curChunkId = _rootChunkId;
@@ -548,7 +564,8 @@ public ref struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanag
             ref var rootChunk = ref _rootChunkHandle.AsRef<VariableSizedBufferRootHeader>();
 
             // Try to promote the Buffer from read to read/write because we need to make changes
-            if (rootChunk.Lock.TryPromoteToExclusiveAccess(ref WaitContext.Null))
+            var wcPromote = WaitContext.FromTimeout(TimeoutOptions.Current.SegmentAllocationLockTimeout);
+            if (rootChunk.Lock.TryPromoteToExclusiveAccess(ref wcPromote))
             {
                 // Try to promote the root chunk to read/write access
                 if (_accessor.TryPromoteChunk(_rootChunkId))

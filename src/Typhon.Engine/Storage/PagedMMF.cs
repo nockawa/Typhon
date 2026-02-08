@@ -500,10 +500,7 @@ public partial class PagedMMF : IDisposable
 
     private bool AllocateMemoryPageCore(int filePageIndex, out int memPageIndex, long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
     {
-#if DEBUG
-        int loopCount = 0;
-        DateTime start = DateTime.UtcNow;
-#endif
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
         AdaptiveWaiter waiter = null;
 
         LogAllocatePageEnter();
@@ -593,31 +590,12 @@ public partial class PagedMMF : IDisposable
 
                 if (!found)
                 {
-#if DEBUG
-                    
-                    // We'll get here basically if all memory pages are currently in use, so it's very unlikely, except of complete system usage overload
-                    // The best (and easiest) thing is to wait and try again.
-                    
-                    // /!\ BUT, it may not be enough to solve all the issues, some perfectly good usages can lead to this situation, if that happens we need to
-                    //      1. Make sure it doesn't happen by making sure the upper layer monitors the metrics and throttles the usages to prevent catastrophe.
-                    //      2. Change this implementation and allocate emergency resources to prevent the starvation, but honestly it feels to me like we
-                    //         are just delaying the inevitable or lowering the chances of catastrophe.
-                    //
-                    // TL;DR: what we have right now and need to do:
-                    // The upper layer must monitor the metrics and throttle the usages to prevent starvation.
+                    if (wc.ShouldStop)
+                    {
+                        ThrowHelper.ThrowResourceExhausted("Storage/PagedMMF/AllocateMemoryPage", ResourceType.Memory, 
+                            MemPagesCount - _metrics.FreeMemPageCount, MemPagesCount);
+                    }
 
-                    if (loopCount.IsPowerOf2())
-                    {
-                        LogPendingPageAllocation(filePageIndex, loopCount, DateTime.UtcNow - start);
-                    }
-                    loopCount++;
-                    
-                    // One sec timeout, throw. We should be able to allocate a new memory page within 1 sec.
-                    if (DateTime.UtcNow - start > TimeSpan.FromSeconds(1))
-                    {
-                        throw new OutOfMemoryException($"Unable to allocate a new Memory Page for File Page {filePageIndex}.");
-                    }
-#endif
                     waiter ??= new AdaptiveWaiter();
                     waiter.Spin();
                     continue;
@@ -690,7 +668,11 @@ public partial class PagedMMF : IDisposable
         // Second pass, under lock
         try
         {
-            info.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
+            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
+            if (!info.StateSyncRoot.EnterExclusiveAccess(ref wc))
+            {
+                ThrowHelper.ThrowLockTimeout("PageCache/TryAcquire", TimeoutOptions.Current.PageCacheLockTimeout);
+            }
 
             // PageAccessor is responsible to reset the IOMode from read to none for a loading page, but only if the user creates and uses one, (which is
             //  most of the cases, but not all o them). So we take the opportunity to reset the IOMode here, if needed.
@@ -770,7 +752,11 @@ public partial class PagedMMF : IDisposable
             try
             {
                 // We want to change the state, so we need to acquire the lock
-                pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
+                var wcAccess = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
+                if (!pi.StateSyncRoot.EnterExclusiveAccess(ref wcAccess))
+                {
+                    ThrowHelper.ThrowLockTimeout("PageCache/TransitionToAccess", TimeoutOptions.Current.PageCacheLockTimeout);
+                }
 
                 Debug.Assert(pi.PageState != PageState.Free);
                 
@@ -892,7 +878,11 @@ public partial class PagedMMF : IDisposable
     {
         try
         {
-            pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
+            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
+            if (!pi.StateSyncRoot.EnterExclusiveAccess(ref wc))
+            {
+                ThrowHelper.ThrowLockTimeout("PageCache/PromoteToExclusive", TimeoutOptions.Current.PageCacheLockTimeout);
+            }
 
             previousMode = pi.PageState;
 
@@ -949,7 +939,11 @@ public partial class PagedMMF : IDisposable
         var pi = _memPagesInfo[memPageIndex];
         Debug.Assert(pi.PageState is PageState.Shared or PageState.Exclusive, "We can't increment the dirty counter for a page that is not Shared or Exclusive.");
 
-        pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
+        if (!pi.StateSyncRoot.EnterExclusiveAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("PageCache/IncrementDirty", TimeoutOptions.Current.PageCacheLockTimeout);
+        }
         ++pi.DirtyCounter;
         pi.StateSyncRoot.ExitExclusiveAccess();
     }
@@ -1166,14 +1160,57 @@ public partial class PagedMMF : IDisposable
         Logger.LogTrace(42, "Transition waiting/reloop from {prevNode} to {NewMode} loop count: {loopCount}, duration: {duration}", prevMode, newMode, loopCount, duration);
 
  
-    [Conditional("DEBUG")]
-    private void LogPendingPageAllocation(int filePageIndex, int loopCount, TimeSpan duration) => 
-        Logger.LogTrace(43, "Page Allocation pending/reloop for page {filePageIndex} loop count: {loopCount}, duration: {duration}", filePageIndex, loopCount, duration);
-
- 
     [Conditional("TELEMETRY")]
     private void LogReset() => 
         Logger.LogTrace(44, "Resetting PagedFile instance !!!");
 
     #endregion
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // State Snapshot (test infrastructure)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    internal readonly struct PageSnapshot(PageState state, int sharedCounter, int dirtyCounter)
+    {
+        internal readonly PageState State = state;
+        internal readonly int ConcurrentSharedCounter = sharedCounter;
+        internal readonly int DirtyCounter = dirtyCounter;
+    }
+
+    internal readonly struct StateSnapshot(PageSnapshot[] pages)
+    {
+        internal readonly PageSnapshot[] Pages = pages;
+    }
+
+    internal StateSnapshot SnapshotInternalState()
+    {
+        var pages = new PageSnapshot[_memPagesInfo.Length];
+        for (int i = 0; i < _memPagesInfo.Length; i++)
+        {
+            var pi = _memPagesInfo[i];
+            pages[i] = new PageSnapshot(pi.PageState, pi.ConcurrentSharedCounter, pi.DirtyCounter);
+        }
+        return new StateSnapshot(pages);
+    }
+
+    internal bool CheckInternalState(in StateSnapshot snapshot)
+    {
+        if (snapshot.Pages.Length != _memPagesInfo.Length)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < _memPagesInfo.Length; i++)
+        {
+            var pi = _memPagesInfo[i];
+            ref readonly var snap = ref snapshot.Pages[i];
+            if (pi.PageState != snap.State ||
+                pi.ConcurrentSharedCounter != snap.ConcurrentSharedCounter ||
+                pi.DirtyCounter != snap.DirtyCounter)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
 }

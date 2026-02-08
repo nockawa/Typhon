@@ -45,7 +45,7 @@ public class BenchmarkSettings
     /// <summary>
     /// Creates command-line arguments for BenchmarkDotNet based on current settings.
     /// </summary>
-    public string[] ToArgs(string? filter = null)
+    public string[] ToArgs(string filter = null)
     {
         var args = new List<string>();
 

@@ -70,18 +70,18 @@ public class AccessControlTests
     {
         var control = new AccessControl();
         var barrier = new Barrier(2);
+        var canRelease = new ManualResetEventSlim(false);
 
         // Thread 1 holds exclusive
         var t1 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             barrier.SignalAndWait();
-            Thread.Sleep(100);  // Hold lock
+            canRelease.Wait();
             control.ExitExclusiveAccess();
         });
 
         barrier.SignalAndWait();
-        Thread.Sleep(10);  // Ensure T1 has lock
 
         // default(WaitContext) has Deadline.Zero (already expired) - should fail immediately
         var ctx = default(WaitContext);
@@ -89,6 +89,7 @@ public class AccessControlTests
 
         Assert.That(result, Is.False, "default(WaitContext) should fail immediately when lock is contended");
 
+        canRelease.Set();
         t1.Wait();
     }
 
@@ -117,18 +118,18 @@ public class AccessControlTests
     {
         var control = new AccessControl();
         var barrier = new Barrier(2);
+        var canRelease = new ManualResetEventSlim(false);
 
         // Thread 1 holds exclusive for longer than timeout
         var t1 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             barrier.SignalAndWait();
-            Thread.Sleep(100);  // Hold lock longer than timeout
+            canRelease.Wait();
             control.ExitExclusiveAccess();
         });
 
         barrier.SignalAndWait();
-        Thread.Sleep(10);  // Ensure T1 has lock
 
         // Create context with 50ms timeout
         var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(50));
@@ -136,6 +137,7 @@ public class AccessControlTests
 
         Assert.That(result, Is.False, "Should timeout after deadline");
 
+        canRelease.Set();
         t1.Wait();
     }
 
@@ -145,24 +147,25 @@ public class AccessControlTests
     {
         var control = new AccessControl();
         var barrier = new Barrier(2);
+        var canRelease = new ManualResetEventSlim(false);
 
         // Thread 1 holds exclusive for longer than timeout
         var t1 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             barrier.SignalAndWait();
-            Thread.Sleep(100);
+            canRelease.Wait();
             control.ExitExclusiveAccess();
         });
 
         barrier.SignalAndWait();
-        Thread.Sleep(10);
 
         var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(50));
         var result = control.EnterSharedAccess(ref ctx);
 
         Assert.That(result, Is.False, "Shared access should timeout when exclusive is held");
 
+        canRelease.Set();
         t1.Wait();
     }
 
@@ -176,14 +179,13 @@ public class AccessControlTests
         // Thread 1 holds exclusive briefly
         var t1 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             barrier.SignalAndWait();
             Thread.Sleep(30);  // Hold lock briefly
             control.ExitExclusiveAccess();
         });
 
         barrier.SignalAndWait();
-        Thread.Sleep(10);
 
         // Long timeout should succeed
         var ctx = WaitContext.FromTimeout(TimeSpan.FromSeconds(2));
@@ -205,19 +207,19 @@ public class AccessControlTests
     {
         var control = new AccessControl();
         var barrier = new Barrier(2);
+        var canRelease = new ManualResetEventSlim(false);
         var cts = new CancellationTokenSource();
 
         // Thread 1 holds exclusive
         var t1 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             barrier.SignalAndWait();
-            Thread.Sleep(100);
+            canRelease.Wait();
             control.ExitExclusiveAccess();
         });
 
         barrier.SignalAndWait();
-        Thread.Sleep(10);
 
         // Cancel after a short delay
         Task.Run(() =>
@@ -231,6 +233,7 @@ public class AccessControlTests
 
         Assert.That(result, Is.False, "Should fail when cancellation is requested");
 
+        canRelease.Set();
         t1.Wait();
     }
 
@@ -248,7 +251,7 @@ public class AccessControlTests
         // Even uncontended, pre-canceled token should be checked
         // Note: This depends on implementation - if fast path doesn't check,
         // it may succeed on uncontended lock. Let's test contended case.
-        control.EnterExclusiveAccess(ref WaitContext.Null);  // Hold lock
+        control.EnterExclusiveAccess(ref TestWaitContext.Default);  // Hold lock
 
         var t = Task.Run(() =>
         {
@@ -272,19 +275,19 @@ public class AccessControlTests
     {
         var control = new AccessControl();
         var barrier = new Barrier(2);
+        var canRelease = new ManualResetEventSlim(false);
         var cts = new CancellationTokenSource();
 
-        // Thread 1 holds exclusive for long time
+        // Thread 1 holds exclusive until signaled
         var t1 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             barrier.SignalAndWait();
-            Thread.Sleep(500);
+            canRelease.Wait();
             control.ExitExclusiveAccess();
         });
 
         barrier.SignalAndWait();
-        Thread.Sleep(10);
 
         // Timeout is short, cancellation would happen later (but won't be triggered)
         var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(50), cts.Token);
@@ -293,6 +296,7 @@ public class AccessControlTests
         Assert.That(result, Is.False, "Should fail due to timeout");
         Assert.That(cts.IsCancellationRequested, Is.False, "Cancellation should not have been triggered");
 
+        canRelease.Set();
         t1.Wait();
     }
 
@@ -302,19 +306,19 @@ public class AccessControlTests
     {
         var control = new AccessControl();
         var barrier = new Barrier(2);
+        var canRelease = new ManualResetEventSlim(false);
         var cts = new CancellationTokenSource();
 
-        // Thread 1 holds exclusive for long time
+        // Thread 1 holds exclusive until signaled
         var t1 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             barrier.SignalAndWait();
-            Thread.Sleep(100);
+            canRelease.Wait();
             control.ExitExclusiveAccess();
         });
 
         barrier.SignalAndWait();
-        Thread.Sleep(10);
 
         // Cancel quickly, timeout is long
         Task.Run(() =>
@@ -329,6 +333,7 @@ public class AccessControlTests
         Assert.That(result, Is.False, "Should fail due to cancellation");
         Assert.That(cts.IsCancellationRequested, Is.True, "Cancellation should have been triggered");
 
+        canRelease.Set();
         t1.Wait();
     }
 
@@ -418,7 +423,7 @@ public class AccessControlTests
     {
         var control = new AccessControl();
 
-        control.EnterExclusiveAccess(ref WaitContext.Null);
+        control.EnterExclusiveAccess(ref TestWaitContext.Default);
 
         var t = Task.Run(() => control.TryEnterExclusiveAccess());
         var result = t.Result;
@@ -503,25 +508,30 @@ public class AccessControlTests
     {
         var control = new AccessControl();
         var barrier = new Barrier(2);
+        var canRelease = new ManualResetEventSlim(false);
+        var aboutToEnter = new ManualResetEventSlim(false);
 
         // Thread 1 holds exclusive
         var t1 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             barrier.SignalAndWait();
-            Thread.Sleep(100);
+            canRelease.Wait();
             control.ExitExclusiveAccess();
         });
 
         barrier.SignalAndWait();
-        Thread.Sleep(10);  // Ensure T1 has lock
 
         // Thread 2 tries to acquire - will contend
         var t2 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            aboutToEnter.Set();
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             control.ExitExclusiveAccess();
         });
+
+        aboutToEnter.Wait();
+        canRelease.Set();
 
         Task.WaitAll(t1, t2);
 
@@ -534,25 +544,30 @@ public class AccessControlTests
     {
         var control = new AccessControl();
         var barrier = new Barrier(2);
+        var canRelease = new ManualResetEventSlim(false);
+        var aboutToEnter = new ManualResetEventSlim(false);
 
         // Thread 1 holds exclusive
         var t1 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             barrier.SignalAndWait();
-            Thread.Sleep(100);
+            canRelease.Wait();
             control.ExitExclusiveAccess();
         });
 
         barrier.SignalAndWait();
-        Thread.Sleep(10);
 
         // Thread 2 tries shared access - will be blocked by exclusive
         var t2 = Task.Run(() =>
         {
-            control.EnterSharedAccess(ref WaitContext.Null);
+            aboutToEnter.Set();
+            control.EnterSharedAccess(ref TestWaitContext.Default);
             control.ExitSharedAccess();
         });
+
+        aboutToEnter.Wait();
+        canRelease.Set();
 
         Task.WaitAll(t1, t2);
 
@@ -565,24 +580,29 @@ public class AccessControlTests
     {
         var control = new AccessControl();
         var barrier = new Barrier(2);
+        var canRelease = new ManualResetEventSlim(false);
+        var aboutToEnter = new ManualResetEventSlim(false);
 
         // Create contention
         var t1 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             barrier.SignalAndWait();
-            Thread.Sleep(50);
+            canRelease.Wait();
             control.ExitExclusiveAccess();
         });
 
         barrier.SignalAndWait();
-        Thread.Sleep(10);
 
         var t2 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            aboutToEnter.Set();
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             control.ExitExclusiveAccess();
         });
+
+        aboutToEnter.Wait();
+        canRelease.Set();
 
         Task.WaitAll(t1, t2);
 
@@ -596,28 +616,34 @@ public class AccessControlTests
     }
 
     [Test]
+    [CancelAfter(5000)]
     public void WasContended_ClearedByReset()
     {
         var control = new AccessControl();
         var barrier = new Barrier(2);
+        var canRelease = new ManualResetEventSlim(false);
+        var aboutToEnter = new ManualResetEventSlim(false);
 
         // Create contention
         var t1 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             barrier.SignalAndWait();
-            Thread.Sleep(50);
+            canRelease.Wait();
             control.ExitExclusiveAccess();
         });
 
         barrier.SignalAndWait();
-        Thread.Sleep(10);
 
         var t2 = Task.Run(() =>
         {
-            control.EnterExclusiveAccess(ref WaitContext.Null);
+            aboutToEnter.Set();
+            control.EnterExclusiveAccess(ref TestWaitContext.Default);
             control.ExitExclusiveAccess();
         });
+
+        aboutToEnter.Wait();
+        canRelease.Set();
 
         Task.WaitAll(t1, t2);
 

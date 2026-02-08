@@ -546,4 +546,17 @@ public struct AccessControlSmall
             ExitSharedAccess(target);
         }
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // State Snapshot (test infrastructure)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    internal readonly struct StateSnapshot(int data)
+    {
+        internal readonly int Data = data;
+    }
+
+    internal StateSnapshot SnapshotInternalState() => new(_data & ~ContentionFlagMask);
+
+    internal bool CheckInternalState(in StateSnapshot snapshot) => (_data & ~ContentionFlagMask) == snapshot.Data;
 }
