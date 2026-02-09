@@ -11,7 +11,7 @@ namespace Typhon.ARPG.Schema;
 [StructLayout(LayoutKind.Sequential)]
 public struct MonsterAI
 {
-    [Field] [Index(AllowMultiple = true)] public int AIArchetypeId;
+    [Field] /*[Index(AllowMultiple = true)]*/ public int AIArchetypeId;
 
     [Field] public int BehaviorState;
     [Field] public long TargetEntityId;

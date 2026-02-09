@@ -13,6 +13,7 @@
         <Project Path="src/Typhon.Analyzers/Typhon.Analyzers.csproj" />
         <Project Path="src/Typhon.Engine/Typhon.Engine.csproj" />
         <Project Path="src/Typhon.Schema.Definition/Typhon.Schema.Definition.csproj" />
+        <Project Path="src/Typhon.Shell/Typhon.Shell.csproj" />
     </Folder>
     <Folder Name="/test/">
         <Project Path="test/Typhon.ARPG.Schema/Typhon.ARPG.Schema.csproj" />

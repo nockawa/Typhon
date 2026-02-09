@@ -11,7 +11,7 @@ namespace Typhon.ARPG.Schema;
 [StructLayout(LayoutKind.Sequential)]
 public struct ResourceNode
 {
-    [Field] [Index(AllowMultiple = true)] public int ResourceTypeId;
+    [Field] /*[Index(AllowMultiple = true)]*/ public int ResourceTypeId;
 
     [Field] public int CurrentAmount;
     [Field] public int MaxAmount;
@@ -20,7 +20,7 @@ public struct ResourceNode
     [Field] public int HarvestSkillReq;
     [Field] public float HarvestTimeBase;
 
-    [Field] [Index] public bool IsDepleted;
+    [Field] /*[Index]*/ public bool IsDepleted;
 
     [Field] public long LastHarvestTick;
 }

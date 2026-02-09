@@ -12,10 +12,10 @@ namespace Typhon.ARPG.Schema;
 [StructLayout(LayoutKind.Sequential)]
 public struct CraftingStation
 {
-    [Field] [Index(AllowMultiple = true)] public int StationTypeId;
+    [Field] /*[Index(AllowMultiple = true)]*/ public int StationTypeId;
     [Field] public String64 StationName;
 
-    [Field] [Index] public long OwnerEntityId;
+    [Field] /*[Index]*/ public long OwnerEntityId;
 
     [Field] public float CraftingSpeedMultiplier;
 
@@ -24,12 +24,12 @@ public struct CraftingStation
     [Field] public float Progress;
 
     // Automation
-    [Field] [Index] public bool IsAutomatic;
+    [Field] /*[Index]*/ public bool IsAutomatic;
 
     // Fuel (0 = no fuel needed, e.g. workbench)
     [Field] public int FuelTypeId;
     [Field] public float FuelRemaining;
     [Field] public float FuelBurnRate;
 
-    [Field] [Index] public bool IsActive;
+    [Field] /*[Index]*/ public bool IsActive;
 }

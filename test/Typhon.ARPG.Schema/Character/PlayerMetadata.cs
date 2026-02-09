@@ -13,8 +13,8 @@ public struct PlayerMetadata
 {
     [Field] public String64 CharacterName;
 
-    [Field] [Index] public long AccountId;
-    [Field] [Index(AllowMultiple = true)] public int CharacterClass;
+    [Field] /*[Index]*/ public long AccountId;
+    [Field] /*[Index(AllowMultiple = true)]*/ public int CharacterClass;
 
     [Field] public long CreationTimestamp;
     [Field] public long LastLoginTimestamp;

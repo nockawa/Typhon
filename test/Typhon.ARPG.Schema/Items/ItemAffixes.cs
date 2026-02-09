@@ -11,7 +11,7 @@ namespace Typhon.ARPG.Schema;
 [StructLayout(LayoutKind.Sequential)]
 public struct ItemAffixes
 {
-    [Field] [Index(AllowMultiple = true)] public int AffixTypeId;
+    [Field] /*[Index(AllowMultiple = true)]*/ public int AffixTypeId;
 
     [Field] public int MinValue;
     [Field] public int MaxValue;

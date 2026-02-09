@@ -1,0 +1,1189 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Text;
+using Typhon.Engine;
+using Typhon.Shell.Formatting;
+using Typhon.Shell.Parsing;
+using Typhon.Shell.Schema;
+using Typhon.Shell.Session;
+
+namespace Typhon.Shell.Commands;
+
+/// <summary>
+/// Central command dispatcher. Parses tokenized input and routes to the appropriate handler.
+/// Each handler interacts with ShellSession and the Typhon engine.
+/// </summary>
+internal sealed class CommandExecutor
+{
+    private readonly ShellSession _session;
+    private readonly Dictionary<string, IOutputFormatter> _formatters;
+    private readonly List<string> _history = [];
+
+    // Cached reflection method infos for generic Transaction methods
+    private static readonly MethodInfo CreateEntityMethod = typeof(Transaction)
+        .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+        .First(m => m.Name == "CreateEntity" && m.GetGenericArguments().Length == 1 && m.GetParameters().Length == 1);
+
+    private static readonly MethodInfo ReadEntityMethod = typeof(Transaction)
+        .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+        .First(m => m.Name == "ReadEntity" && m.GetGenericArguments().Length == 1 && m.GetParameters().Length == 2);
+
+    private static readonly MethodInfo UpdateEntityMethod = typeof(Transaction)
+        .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+        .First(m => m.Name == "UpdateEntity" && m.GetGenericArguments().Length == 1 && m.GetParameters().Length == 2);
+
+    private static readonly MethodInfo DeleteEntityMethod = typeof(Transaction)
+        .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+        .First(m => m.Name == "DeleteEntity" && m.GetGenericArguments().Length == 1 && m.GetParameters().Length == 1);
+
+    public CommandExecutor(ShellSession session)
+    {
+        _session = session;
+        _formatters = new Dictionary<string, IOutputFormatter>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["table"] = new TableFormatter(),
+            ["full-table"] = new FullTableFormatter(),
+            ["json"] = new JsonFormatter(),
+            ["csv"] = new CsvFormatter(),
+        };
+    }
+
+    public IReadOnlyList<string> History => _history;
+
+    /// <summary>
+    /// Executes a single command line. Returns a result with output text and status.
+    /// </summary>
+    public CommandResult Execute(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return CommandResult.Ok();
+        }
+
+        var trimmed = input.Trim();
+
+        // Skip comments
+        if (trimmed.StartsWith('#'))
+        {
+            return CommandResult.Ok();
+        }
+
+        _history.Add(trimmed);
+
+        var sw = _session.Timing ? Stopwatch.StartNew() : null;
+
+        CommandResult result;
+        try
+        {
+            var tokens = Tokenizer.Tokenize(trimmed);
+            result = Dispatch(tokens);
+        }
+        catch (Exception ex)
+        {
+            result = _session.Verbose
+                ? CommandResult.Error($"Error: {ex.Message}\n{ex.StackTrace}")
+                : CommandResult.Error($"Error: {ex.Message}");
+        }
+
+        if (sw != null)
+        {
+            sw.Stop();
+            var timing = $"  ({sw.Elapsed.TotalMilliseconds:F2} ms)";
+            result = result.WithAppendedOutput(timing);
+        }
+
+        return result;
+    }
+
+    private CommandResult Dispatch(List<Token> tokens)
+    {
+        if (tokens.Count == 0 || tokens[0].Kind == TokenKind.End)
+        {
+            return CommandResult.Ok();
+        }
+
+        var cmd = tokens[0];
+        if (cmd.Kind != TokenKind.Identifier)
+        {
+            return CommandResult.Error($"Syntax error: expected command name, got '{cmd.Value}'");
+        }
+
+        return cmd.Value.ToLowerInvariant() switch
+        {
+            "open"          => ExecuteOpen(tokens, 1),
+            "close"         => ExecuteClose(),
+            "info"          => ExecuteInfo(),
+            "load-schema"   => ExecuteLoadSchema(tokens, 1),
+            "reload-schema" => ExecuteReloadSchema(),
+            "schema"        => ExecuteSchema(),
+            "describe"      => ExecuteDescribe(tokens, 1),
+            "begin"         => ExecuteBegin(),
+            "commit"        => ExecuteCommit(),
+            "rollback"      => ExecuteRollback(),
+            "create"        => ExecuteCreate(tokens, 1),
+            "read"          => ExecuteRead(tokens, 1),
+            "update"        => ExecuteUpdate(tokens, 1),
+            "delete"        => ExecuteDelete(tokens, 1),
+            "set"           => ExecuteSet(tokens, 1),
+            "help"          => ExecuteHelp(tokens, 1),
+            "history"       => ExecuteHistory(),
+            "exit" or "quit" => CommandResult.Exit(),
+            _               => CommandResult.Error($"Unknown command: '{cmd.Value}'. Type 'help' for available commands.")
+        };
+    }
+
+    // ── Database Commands ──────────────────────────────────────
+
+    private CommandResult ExecuteOpen(List<Token> tokens, int pos)
+    {
+        var path = ExpectPath(tokens, ref pos);
+        if (path == null)
+        {
+            return CommandResult.Error("Syntax error: open <path>");
+        }
+
+        var message = _session.OpenDatabase(path);
+        return CommandResult.Ok($"  {message}");
+    }
+
+    private CommandResult ExecuteClose()
+    {
+        if (!_session.IsOpen)
+        {
+            return CommandResult.Error("Error: No database is open.");
+        }
+
+        _session.CloseDatabase();
+        return CommandResult.Ok("  Database closed.");
+    }
+
+    private CommandResult ExecuteInfo()
+    {
+        if (!_session.IsOpen)
+        {
+            return CommandResult.Error("Error: No database is open. Use 'open <path>' first.");
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"  Database: {_session.DatabaseName}");
+        sb.AppendLine($"  Path:     {_session.DatabasePath}");
+        sb.AppendLine($"  Components: {_session.ComponentSchemas.Count}");
+
+        if (_session.ComponentSchemas.Count > 0)
+        {
+            var names = string.Join(", ", _session.ComponentSchemas.Keys);
+            sb.AppendLine($"  Loaded:   {names}");
+        }
+
+        if (_session.HasTransaction)
+        {
+            sb.Append($"  Transaction: TSN {_session.Transaction.TSN}");
+            if (_session.IsDirty)
+            {
+                sb.Append(" (dirty)");
+            }
+        }
+
+        return CommandResult.Ok(sb.ToString().TrimEnd());
+    }
+
+    // ── Schema Commands ────────────────────────────────────────
+
+    private CommandResult ExecuteLoadSchema(List<Token> tokens, int pos)
+    {
+        var path = ExpectPath(tokens, ref pos);
+        if (path == null)
+        {
+            return CommandResult.Error("Syntax error: load-schema <path>");
+        }
+
+        var components = AssemblySchemaLoader.LoadAssembly(path);
+        if (components.Count == 0)
+        {
+            return CommandResult.Ok($"  No [Component] types found in {System.IO.Path.GetFileName(path)}");
+        }
+
+        _session.AddAssemblyPath(path);
+
+        foreach (var (name, type, schema) in components)
+        {
+            _session.RegisterComponent(name, type, schema);
+        }
+
+        var names = string.Join(", ", components.Select(c => c.Name));
+        return CommandResult.Ok($"  Loaded {components.Count} component{(components.Count != 1 ? "s" : "")}: {names}");
+    }
+
+    private CommandResult ExecuteReloadSchema()
+    {
+        if (!_session.IsOpen)
+        {
+            return CommandResult.Error("Error: No database is open.");
+        }
+
+        var dbPath = _session.DatabasePath;
+        var assemblyPaths = _session.AssemblyPaths.ToList();
+
+        if (assemblyPaths.Count == 0)
+        {
+            return CommandResult.Error("Error: No schema assemblies loaded. Use 'load-schema' first.");
+        }
+
+        // Close database
+        _session.CloseDatabase();
+        _session.ClearSchemas();
+
+        // Reload assemblies
+        var totalComponents = 0;
+        foreach (var asmPath in assemblyPaths)
+        {
+            var components = AssemblySchemaLoader.LoadAssembly(asmPath);
+            _session.AddAssemblyPath(asmPath);
+            foreach (var (name, type, schema) in components)
+            {
+                _session.RegisterComponent(name, type, schema);
+                totalComponents++;
+            }
+        }
+
+        // Reopen database
+        _session.OpenDatabase(dbPath);
+
+        return CommandResult.Ok($"  Reloaded {totalComponents} component{(totalComponents != 1 ? "s" : "")} from {assemblyPaths.Count} assembl{(assemblyPaths.Count != 1 ? "ies" : "y")}. Database ready.");
+    }
+
+    private CommandResult ExecuteSchema()
+    {
+        var schemas = _session.ComponentSchemas;
+        if (schemas.Count == 0)
+        {
+            return CommandResult.Ok("  No components loaded. Use 'load-schema <path>' to load a schema assembly.");
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"  {schemas.Count} component{(schemas.Count != 1 ? "s" : "")} loaded:");
+
+        foreach (var kvp in schemas)
+        {
+            var schema = kvp.Value;
+            sb.AppendLine($"    {schema.Name,-20} [{schema.StructSize} bytes, {schema.Fields.Count} fields]");
+        }
+
+        return CommandResult.Ok(sb.ToString().TrimEnd());
+    }
+
+    private CommandResult ExecuteDescribe(List<Token> tokens, int pos)
+    {
+        if (pos >= tokens.Count || tokens[pos].Kind == TokenKind.End)
+        {
+            return CommandResult.Error("Syntax error: describe <component>");
+        }
+
+        var componentName = tokens[pos].Value;
+        if (!_session.ComponentSchemas.TryGetValue(componentName, out var schema))
+        {
+            var known = _session.ComponentSchemas.Count > 0
+                ? string.Join(", ", _session.ComponentSchemas.Keys)
+                : "(none)";
+            return CommandResult.Error($"Error: Component '{componentName}' not found. Loaded: {known}");
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"  {schema.Name} [{schema.StructSize} bytes]");
+        sb.AppendLine("  ──────────────────────────────");
+
+        foreach (var field in schema.Fields)
+        {
+            var indexInfo = field.HasIndex
+                ? (field.IndexAllowMultiple ? " [indexed, multi]" : " [indexed, unique]")
+                : "";
+            sb.AppendLine($"  {field.Name,-16} {field.Type,-12} offset={field.Offset,-4} size={field.Size}{indexInfo}");
+        }
+
+        return CommandResult.Ok(sb.ToString().TrimEnd());
+    }
+
+    // ── Transaction Commands ───────────────────────────────────
+
+    private CommandResult ExecuteBegin()
+    {
+        if (!_session.IsOpen)
+        {
+            return CommandResult.Error("Error: No database is open. Use 'open <path>' first.");
+        }
+
+        if (_session.HasTransaction)
+        {
+            return CommandResult.Error($"Error: A transaction is already active (TSN {_session.Transaction.TSN}). Use 'commit' or 'rollback' first.");
+        }
+
+        var tx = _session.BeginTransaction();
+        return CommandResult.Ok($"  Transaction started (TSN {tx.TSN})");
+    }
+
+    private CommandResult ExecuteCommit()
+    {
+        if (!_session.IsOpen)
+        {
+            return CommandResult.Error("Error: No database is open.");
+        }
+
+        if (!_session.HasTransaction)
+        {
+            return CommandResult.Error("Error: No active transaction. Use 'begin' to start one.");
+        }
+
+        var committed = _session.CommitTransaction();
+        return committed
+            ? CommandResult.Ok("  Committed.")
+            : CommandResult.Error("  Conflict: Transaction could not be committed. Use 'rollback' to discard changes.");
+    }
+
+    private CommandResult ExecuteRollback()
+    {
+        if (!_session.IsOpen)
+        {
+            return CommandResult.Error("Error: No database is open.");
+        }
+
+        if (!_session.HasTransaction)
+        {
+            return CommandResult.Error("Error: No active transaction.");
+        }
+
+        _session.RollbackTransaction();
+        return CommandResult.Ok("  Rolled back.");
+    }
+
+    // ── Data Commands ──────────────────────────────────────────
+
+    private CommandResult ExecuteCreate(List<Token> tokens, int pos)
+    {
+        if (!RequireDatabase())
+        {
+            return CommandResult.Error("Error: No database is open. Use 'open <path>' first.");
+        }
+
+        // Parse optional #entityId
+        long explicitId = -1;
+        if (pos < tokens.Count && tokens[pos].Kind == TokenKind.Hash)
+        {
+            pos++;
+            if (pos >= tokens.Count || tokens[pos].Kind != TokenKind.Integer)
+            {
+                return CommandResult.Error("Syntax error: expected entity ID after '#'");
+            }
+
+            explicitId = long.Parse(tokens[pos].Value, CultureInfo.InvariantCulture);
+            pos++;
+        }
+
+        // Parse component name
+        if (pos >= tokens.Count || tokens[pos].Kind == TokenKind.End)
+        {
+            return CommandResult.Error("Syntax error: create [#id] <component> { field=value, ... }");
+        }
+
+        var componentName = tokens[pos].Value;
+        pos++;
+
+        if (!ResolveComponent(componentName, out var componentType, out var schema, out var error))
+        {
+            return CommandResult.Error(error);
+        }
+
+        // Parse brace expression
+        var fieldValues = ParseBraceExpression(tokens, ref pos, out var parseError);
+        if (fieldValues == null)
+        {
+            return CommandResult.Error(parseError);
+        }
+
+        if (explicitId >= 0)
+        {
+            return CommandResult.Error("Error: Explicit entity IDs (create #id) are not yet supported by the engine. Omit the #id to auto-assign.");
+        }
+
+        // Get or create transaction
+        var tx = GetTransactionForWrite(out var isAutoCommit, out var txError);
+        if (tx == null)
+        {
+            return CommandResult.Error(txError);
+        }
+
+        try
+        {
+            var entityId = CreateEntityReflection(tx, componentType, schema, fieldValues);
+            _session.MarkDirty();
+
+            var suffix = isAutoCommit ? " (auto-committed)" : "";
+            if (isAutoCommit)
+            {
+                tx.Commit();
+                tx.Dispose();
+            }
+
+            return CommandResult.Ok($"  Entity {entityId} created{suffix}");
+        }
+        catch (Exception ex)
+        {
+            if (isAutoCommit)
+            {
+                tx.Rollback();
+                tx.Dispose();
+            }
+
+            return _session.Verbose
+                ? CommandResult.Error($"Error: {ex.Message}\n{ex.StackTrace}")
+                : CommandResult.Error($"Error: {ex.Message}");
+        }
+    }
+
+    private CommandResult ExecuteRead(List<Token> tokens, int pos)
+    {
+        if (!RequireDatabase())
+        {
+            return CommandResult.Error("Error: No database is open. Use 'open <path>' first.");
+        }
+
+        // Parse entity ID
+        if (pos >= tokens.Count || tokens[pos].Kind != TokenKind.Integer)
+        {
+            return CommandResult.Error("Syntax error: read <entityId> <component>");
+        }
+
+        var entityId = long.Parse(tokens[pos].Value, CultureInfo.InvariantCulture);
+        pos++;
+
+        // Parse component name
+        if (pos >= tokens.Count || tokens[pos].Kind == TokenKind.End)
+        {
+            return CommandResult.Error("Syntax error: read <entityId> <component>");
+        }
+
+        var componentName = tokens[pos].Value;
+
+        if (!ResolveComponent(componentName, out var componentType, out var schema, out var error))
+        {
+            return CommandResult.Error(error);
+        }
+
+        // Read can work without an explicit transaction
+        var tx = _session.Transaction;
+        var tempTx = false;
+        if (tx == null)
+        {
+            tx = _session.Engine.CreateTransaction();
+            tempTx = true;
+        }
+
+        try
+        {
+            var fieldValues = ReadEntityReflection(tx, entityId, componentType, schema, out var found);
+            if (!found)
+            {
+                return CommandResult.Error($"Error: Entity {entityId} not found in {componentName}");
+            }
+
+            var formatter = GetFormatter();
+            var output = formatter.FormatEntity(entityId, componentName, schema, fieldValues);
+            return CommandResult.Ok(output);
+        }
+        finally
+        {
+            if (tempTx)
+            {
+                tx.Rollback();
+                tx.Dispose();
+            }
+        }
+    }
+
+    private CommandResult ExecuteUpdate(List<Token> tokens, int pos)
+    {
+        if (!RequireDatabase())
+        {
+            return CommandResult.Error("Error: No database is open. Use 'open <path>' first.");
+        }
+
+        // Parse entity ID
+        if (pos >= tokens.Count || tokens[pos].Kind != TokenKind.Integer)
+        {
+            return CommandResult.Error("Syntax error: update <entityId> <component> { field=value, ... }");
+        }
+
+        var entityId = long.Parse(tokens[pos].Value, CultureInfo.InvariantCulture);
+        pos++;
+
+        // Parse component name
+        if (pos >= tokens.Count || tokens[pos].Kind == TokenKind.End)
+        {
+            return CommandResult.Error("Syntax error: update <entityId> <component> { field=value, ... }");
+        }
+
+        var componentName = tokens[pos].Value;
+        pos++;
+
+        if (!ResolveComponent(componentName, out var componentType, out var schema, out var error))
+        {
+            return CommandResult.Error(error);
+        }
+
+        // Parse brace expression
+        var fieldValues = ParseBraceExpression(tokens, ref pos, out var parseError);
+        if (fieldValues == null)
+        {
+            return CommandResult.Error(parseError);
+        }
+
+        var tx = GetTransactionForWrite(out var isAutoCommit, out var txError);
+        if (tx == null)
+        {
+            return CommandResult.Error(txError);
+        }
+
+        try
+        {
+            // Read-then-write: read current values, overlay specified fields, write back
+            var success = UpdateEntityReflection(tx, entityId, componentType, schema, fieldValues);
+            if (!success)
+            {
+                if (isAutoCommit)
+                {
+                    tx.Rollback();
+                    tx.Dispose();
+                }
+                return CommandResult.Error($"Error: Entity {entityId} not found in {componentName}");
+            }
+
+            _session.MarkDirty();
+
+            var suffix = isAutoCommit ? " (auto-committed)" : "";
+            if (isAutoCommit)
+            {
+                tx.Commit();
+                tx.Dispose();
+            }
+
+            return CommandResult.Ok($"  Entity {entityId} updated{suffix}");
+        }
+        catch (Exception ex)
+        {
+            if (isAutoCommit)
+            {
+                tx.Rollback();
+                tx.Dispose();
+            }
+
+            return _session.Verbose
+                ? CommandResult.Error($"Error: {ex.Message}\n{ex.StackTrace}")
+                : CommandResult.Error($"Error: {ex.Message}");
+        }
+    }
+
+    private CommandResult ExecuteDelete(List<Token> tokens, int pos)
+    {
+        if (!RequireDatabase())
+        {
+            return CommandResult.Error("Error: No database is open. Use 'open <path>' first.");
+        }
+
+        // Parse entity ID
+        if (pos >= tokens.Count || tokens[pos].Kind != TokenKind.Integer)
+        {
+            return CommandResult.Error("Syntax error: delete <entityId> <component>");
+        }
+
+        var entityId = long.Parse(tokens[pos].Value, CultureInfo.InvariantCulture);
+        pos++;
+
+        // Parse component name
+        if (pos >= tokens.Count || tokens[pos].Kind == TokenKind.End)
+        {
+            return CommandResult.Error("Syntax error: delete <entityId> <component>");
+        }
+
+        var componentName = tokens[pos].Value;
+
+        if (!ResolveComponent(componentName, out var componentType, out var schema, out var error))
+        {
+            return CommandResult.Error(error);
+        }
+
+        var tx = GetTransactionForWrite(out var isAutoCommit, out var txError);
+        if (tx == null)
+        {
+            return CommandResult.Error(txError);
+        }
+
+        try
+        {
+            var deleted = DeleteEntityReflection(tx, entityId, componentType);
+            if (!deleted)
+            {
+                if (isAutoCommit)
+                {
+                    tx.Rollback();
+                    tx.Dispose();
+                }
+                return CommandResult.Error($"Error: Entity {entityId} not found in {componentName}");
+            }
+
+            _session.MarkDirty();
+
+            var suffix = isAutoCommit ? " (auto-committed)" : "";
+            if (isAutoCommit)
+            {
+                tx.Commit();
+                tx.Dispose();
+            }
+
+            return CommandResult.Ok($"  Entity {entityId} {componentName} deleted{suffix}");
+        }
+        catch (Exception ex)
+        {
+            if (isAutoCommit)
+            {
+                tx.Rollback();
+                tx.Dispose();
+            }
+
+            return _session.Verbose
+                ? CommandResult.Error($"Error: {ex.Message}\n{ex.StackTrace}")
+                : CommandResult.Error($"Error: {ex.Message}");
+        }
+    }
+
+    // ── Shell Commands ─────────────────────────────────────────
+
+    private CommandResult ExecuteSet(List<Token> tokens, int pos)
+    {
+        // No args → show all settings
+        if (pos >= tokens.Count || tokens[pos].Kind == TokenKind.End)
+        {
+            return ShowAllSettings();
+        }
+
+        var key = tokens[pos].Value.ToLowerInvariant();
+        pos++;
+
+        // Key only → show single setting
+        if (pos >= tokens.Count || tokens[pos].Kind == TokenKind.End)
+        {
+            return ShowSetting(key);
+        }
+
+        var value = tokens[pos].Value.ToLowerInvariant();
+
+        return key switch
+        {
+            "format"      => SetFormat(value),
+            "auto-commit" => SetBool(value, v => _session.AutoCommit = v, "auto-commit"),
+            "verbose"     => SetBool(value, v => _session.Verbose = v, "verbose"),
+            "page-size"   => SetPageSize(value),
+            "color"       => SetColor(value),
+            "timing"      => SetBool(value, v => _session.Timing = v, "timing"),
+            _             => CommandResult.Error($"Error: Unknown setting '{key}'. Known: format, auto-commit, verbose, page-size, color, timing")
+        };
+    }
+
+    private CommandResult ShowAllSettings()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("  Current settings:");
+        sb.AppendLine($"    format:       {_session.Format}");
+        sb.AppendLine($"    auto-commit:  {(_session.AutoCommit ? "on" : "off")}");
+        sb.AppendLine($"    verbose:      {(_session.Verbose ? "on" : "off")}");
+        sb.AppendLine($"    page-size:    {_session.PageSize}");
+        sb.AppendLine($"    color:        {_session.Color}");
+        sb.Append($"    timing:       {(_session.Timing ? "on" : "off")}");
+        return CommandResult.Ok(sb.ToString());
+    }
+
+    private CommandResult ShowSetting(string key)
+    {
+        var value = key switch
+        {
+            "format"      => _session.Format,
+            "auto-commit" => _session.AutoCommit ? "on" : "off",
+            "verbose"     => _session.Verbose ? "on" : "off",
+            "page-size"   => _session.PageSize.ToString(),
+            "color"       => _session.Color,
+            "timing"      => _session.Timing ? "on" : "off",
+            _             => null
+        };
+
+        return value != null
+            ? CommandResult.Ok($"  {key}: {value}")
+            : CommandResult.Error($"Error: Unknown setting '{key}'");
+    }
+
+    private CommandResult SetFormat(string value)
+    {
+        if (!_formatters.ContainsKey(value))
+        {
+            return CommandResult.Error($"Error: Unknown format '{value}'. Valid: table, full-table, json, csv");
+        }
+
+        _session.Format = value;
+        return CommandResult.Ok();
+    }
+
+    private static CommandResult SetBool(string value, Action<bool> setter, string name)
+    {
+        if (value is "on" or "true" or "1")
+        {
+            setter(true);
+            return CommandResult.Ok();
+        }
+
+        if (value is "off" or "false" or "0")
+        {
+            setter(false);
+            return CommandResult.Ok();
+        }
+
+        return CommandResult.Error($"Error: Invalid value for '{name}'. Use 'on' or 'off'.");
+    }
+
+    private CommandResult SetPageSize(string value)
+    {
+        if (!int.TryParse(value, out var size) || size < 1)
+        {
+            return CommandResult.Error("Error: page-size must be a positive integer.");
+        }
+
+        _session.PageSize = size;
+        return CommandResult.Ok();
+    }
+
+    private static CommandResult SetColor(string value)
+    {
+        if (value is not ("auto" or "on" or "off"))
+        {
+            return CommandResult.Error("Error: color must be 'auto', 'on', or 'off'.");
+        }
+
+        // Color control is handled by Spectre.Console; we store the preference
+        return CommandResult.Ok();
+    }
+
+    private CommandResult ExecuteHelp(List<Token> tokens, int pos)
+    {
+        if (pos < tokens.Count && tokens[pos].Kind != TokenKind.End)
+        {
+            return ShowCommandHelp(tokens[pos].Value.ToLowerInvariant());
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("  Available commands:");
+        sb.AppendLine();
+        sb.AppendLine("  Database:");
+        sb.AppendLine("    open <path>                      Open (or create) a database");
+        sb.AppendLine("    close                            Close current database");
+        sb.AppendLine("    info                             Show database summary");
+        sb.AppendLine();
+        sb.AppendLine("  Schema:");
+        sb.AppendLine("    load-schema <path>               Load component types from assembly");
+        sb.AppendLine("    reload-schema                    Close, reload assemblies, reopen");
+        sb.AppendLine("    schema                           List loaded components");
+        sb.AppendLine("    describe <component>             Show component field layout");
+        sb.AppendLine();
+        sb.AppendLine("  Transaction:");
+        sb.AppendLine("    begin                            Start a new transaction");
+        sb.AppendLine("    commit                           Commit current transaction");
+        sb.AppendLine("    rollback                         Rollback current transaction");
+        sb.AppendLine();
+        sb.AppendLine("  Data:");
+        sb.AppendLine("    create <comp> { field=val, ... } Create an entity");
+        sb.AppendLine("    read <id> <comp>                 Read entity component data");
+        sb.AppendLine("    update <id> <comp> { f=v, ... }  Update entity component data");
+        sb.AppendLine("    delete <id> <comp>               Delete entity component");
+        sb.AppendLine();
+        sb.AppendLine("  Shell:");
+        sb.AppendLine("    set [key [value]]                View/change shell settings");
+        sb.AppendLine("    help [command]                   Show help");
+        sb.AppendLine("    history                          Show command history");
+        sb.Append("    exit / quit                      Exit the shell");
+        return CommandResult.Ok(sb.ToString());
+    }
+
+    private static CommandResult ShowCommandHelp(string command)
+    {
+        var text = command switch
+        {
+            "open"          => "  open <path>\n    Opens a database file. Creates it if it doesn't exist.\n    Closes any currently open database first.",
+            "close"         => "  close\n    Closes the current database and releases the file lock.\n    Warns if a transaction is active.",
+            "info"          => "  info\n    Shows database summary: path, component count, transaction state.",
+            "load-schema"   => "  load-schema <path>\n    Loads component types from a compiled .NET assembly (.dll).\n    Can be called before or after opening a database.\n    Multiple assemblies can be loaded (additive).",
+            "reload-schema" => "  reload-schema\n    Closes the database, reloads all assemblies from disk,\n    and reopens. Use after recompiling your schema assembly.",
+            "schema"        => "  schema\n    Lists all loaded component types with their sizes and field counts.",
+            "describe"      => "  describe <component>\n    Shows the field layout: name, type, offset, size, and index info.",
+            "begin"         => "  begin\n    Starts a new transaction. Error if one is already active.",
+            "commit"        => "  commit\n    Commits the current transaction.\n    Reports conflict if another transaction modified the same entities.",
+            "rollback"      => "  rollback\n    Rolls back the current transaction, discarding all changes.",
+            "create"        => "  create <component> { field=value, ... }\n    Creates an entity with the given component data.\n    Requires an active transaction (or auto-commit on).",
+            "read"          => "  read <entityId> <component>\n    Reads entity data. Works without an active transaction\n    (uses a temporary snapshot).",
+            "update"        => "  update <entityId> <component> { field=value, ... }\n    Updates entity data. Reads current, overlays specified fields, writes back.\n    Unspecified fields are preserved.",
+            "delete"        => "  delete <entityId> <component>\n    Deletes an entity's component data.",
+            "set"           => "  set [key [value]]\n    View or change settings.\n    Settings: format, auto-commit, verbose, page-size, color, timing",
+            "help"          => "  help [command]\n    Shows help for all commands or a specific command.",
+            "history"       => "  history\n    Shows recent command history.",
+            "exit" or "quit" => "  exit / quit\n    Exits the shell.",
+            _               => null,
+        };
+
+        return text != null
+            ? CommandResult.Ok(text)
+            : CommandResult.Error($"Error: Unknown command '{command}'. Type 'help' for available commands.");
+    }
+
+    private CommandResult ExecuteHistory()
+    {
+        if (_history.Count == 0)
+        {
+            return CommandResult.Ok("  (no history)");
+        }
+
+        var sb = new StringBuilder();
+        for (var i = 0; i < _history.Count; i++)
+        {
+            sb.AppendLine($"  {i + 1}: {_history[i]}");
+        }
+
+        return CommandResult.Ok(sb.ToString().TrimEnd());
+    }
+
+    // ── Reflection Bridge ──────────────────────────────────────
+
+    private static unsafe long CreateEntityReflection(
+        Transaction tx,
+        Type componentType,
+        ComponentSchema schema,
+        IReadOnlyDictionary<string, string> fieldValues)
+    {
+        var instance = Activator.CreateInstance(componentType);
+        var handle = GCHandle.Alloc(instance, GCHandleType.Pinned);
+        try
+        {
+            var ptr = (byte*)handle.AddrOfPinnedObject();
+            TextToStructConverter.WriteFields(ptr, schema.StructSize, schema, fieldValues);
+        }
+        finally
+        {
+            handle.Free();
+        }
+
+        var method = CreateEntityMethod.MakeGenericMethod(componentType);
+        var args = new[] { instance };
+        var entityId = (long)method.Invoke(tx, args);
+        return entityId;
+    }
+
+    private static unsafe IReadOnlyDictionary<string, object> ReadEntityReflection(
+        Transaction tx,
+        long entityId,
+        Type componentType,
+        ComponentSchema schema,
+        out bool found)
+    {
+        var instance = Activator.CreateInstance(componentType);
+        var method = ReadEntityMethod.MakeGenericMethod(componentType);
+        var args = new object[] { entityId, instance };
+        found = (bool)method.Invoke(tx, args);
+
+        if (!found)
+        {
+            return null;
+        }
+
+        instance = args[1]; // out parameter updated in the args array
+        var handle = GCHandle.Alloc(instance, GCHandleType.Pinned);
+        try
+        {
+            var ptr = (byte*)handle.AddrOfPinnedObject();
+            return TextToStructConverter.ReadFields(ptr, schema.StructSize, schema);
+        }
+        finally
+        {
+            handle.Free();
+        }
+    }
+
+    private static unsafe bool UpdateEntityReflection(
+        Transaction tx,
+        long entityId,
+        Type componentType,
+        ComponentSchema schema,
+        IReadOnlyDictionary<string, string> fieldValues)
+    {
+        // Step 1: Read current values
+        var instance = Activator.CreateInstance(componentType);
+        var readMethod = ReadEntityMethod.MakeGenericMethod(componentType);
+        var readArgs = new object[] { entityId, instance };
+        var found = (bool)readMethod.Invoke(tx, readArgs);
+
+        if (!found)
+        {
+            return false;
+        }
+
+        // Step 2: Overlay specified fields onto the current struct
+        instance = readArgs[1];
+        var handle = GCHandle.Alloc(instance, GCHandleType.Pinned);
+        try
+        {
+            var ptr = (byte*)handle.AddrOfPinnedObject();
+            TextToStructConverter.WriteFields(ptr, schema.StructSize, schema, fieldValues);
+        }
+        finally
+        {
+            handle.Free();
+        }
+
+        // Step 3: Write updated struct back
+        var updateMethod = UpdateEntityMethod.MakeGenericMethod(componentType);
+        var updateArgs = new object[] { entityId, instance };
+        return (bool)updateMethod.Invoke(tx, updateArgs);
+    }
+
+    private static bool DeleteEntityReflection(Transaction tx, long entityId, Type componentType)
+    {
+        var method = DeleteEntityMethod.MakeGenericMethod(componentType);
+        var args = new object[] { entityId };
+        return (bool)method.Invoke(tx, args);
+    }
+
+    // ── Helpers ────────────────────────────────────────────────
+
+    private bool RequireDatabase() => _session.IsOpen;
+
+    private bool ResolveComponent(string name, out Type componentType, out ComponentSchema schema, out string error)
+    {
+        if (!_session.ComponentSchemas.TryGetValue(name, out schema))
+        {
+            componentType = null;
+            var known = _session.ComponentSchemas.Count > 0
+                ? string.Join(", ", _session.ComponentSchemas.Keys)
+                : "(none)";
+            error = $"Error: Component '{name}' not found. Loaded: {known}";
+            return false;
+        }
+
+        if (!_session.ComponentTypes.TryGetValue(name, out componentType))
+        {
+            error = $"Error: Component type for '{name}' not available.";
+            return false;
+        }
+
+        error = null;
+        return true;
+    }
+
+    private Transaction GetTransactionForWrite(out bool isAutoCommit, out string error)
+    {
+        var tx = _session.GetOrCreateTransaction(out isAutoCommit);
+        if (tx == null)
+        {
+            error = "Error: No active transaction. Use 'begin' to start one, or 'set auto-commit on'.";
+            return null;
+        }
+
+        error = null;
+        return tx;
+    }
+
+    private IOutputFormatter GetFormatter()
+    {
+        return _formatters.TryGetValue(_session.Format, out var formatter)
+            ? formatter
+            : _formatters["table"];
+    }
+
+    /// <summary>
+    /// Extracts a file path from the token stream (quoted string or bare identifier).
+    /// </summary>
+    private static string ExpectPath(List<Token> tokens, ref int pos)
+    {
+        if (pos >= tokens.Count || tokens[pos].Kind == TokenKind.End)
+        {
+            return null;
+        }
+
+        if (tokens[pos].Kind == TokenKind.String)
+        {
+            return tokens[pos++].Value;
+        }
+
+        // Bare path: consume identifier-like tokens (may include dots, dashes)
+        if (tokens[pos].Kind == TokenKind.Identifier)
+        {
+            return tokens[pos++].Value;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Parses a brace expression { Field=Value, Field=Value, ... } into field assignments.
+    /// </summary>
+    private static Dictionary<string, string> ParseBraceExpression(List<Token> tokens, ref int pos, out string error)
+    {
+        if (pos >= tokens.Count || tokens[pos].Kind != TokenKind.OpenBrace)
+        {
+            error = "Syntax error: expected '{' for field assignments";
+            return null;
+        }
+
+        pos++; // skip {
+
+        var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        while (pos < tokens.Count && tokens[pos].Kind != TokenKind.CloseBrace)
+        {
+            // Field name
+            if (tokens[pos].Kind != TokenKind.Identifier)
+            {
+                error = $"Syntax error: expected field name, got '{tokens[pos].Value}'";
+                return null;
+            }
+
+            var fieldName = tokens[pos].Value;
+            pos++;
+
+            // Equals
+            if (pos >= tokens.Count || tokens[pos].Kind != TokenKind.Equals)
+            {
+                error = $"Syntax error: expected '=' after field name '{fieldName}'";
+                return null;
+            }
+
+            pos++; // skip =
+
+            // Value
+            var value = ParseValue(tokens, ref pos, out var valueError);
+            if (value == null)
+            {
+                error = valueError;
+                return null;
+            }
+
+            fields[fieldName] = value;
+
+            // Optional comma
+            if (pos < tokens.Count && tokens[pos].Kind == TokenKind.Comma)
+            {
+                pos++;
+            }
+        }
+
+        if (pos >= tokens.Count || tokens[pos].Kind != TokenKind.CloseBrace)
+        {
+            error = "Syntax error: expected '}' to close field assignments";
+            return null;
+        }
+
+        pos++; // skip }
+        error = null;
+        return fields;
+    }
+
+    /// <summary>
+    /// Parses a single value from the token stream. Returns the text representation.
+    /// </summary>
+    private static string ParseValue(List<Token> tokens, ref int pos, out string error)
+    {
+        if (pos >= tokens.Count || tokens[pos].Kind == TokenKind.End)
+        {
+            error = "Syntax error: expected value";
+            return null;
+        }
+
+        error = null;
+        var token = tokens[pos];
+
+        switch (token.Kind)
+        {
+            case TokenKind.Integer:
+            case TokenKind.Float:
+                pos++;
+                return token.Value;
+
+            case TokenKind.String:
+                pos++;
+                return token.Value; // Already unescaped by tokenizer
+
+            case TokenKind.Char:
+                pos++;
+                return token.Value;
+
+            case TokenKind.Bool:
+                pos++;
+                return token.Value;
+
+            case TokenKind.OpenParen:
+                // Tuple literal: (v1, v2, ...)
+                return ParseTupleLiteral(tokens, ref pos, out error);
+
+            default:
+                // Could be an unquoted identifier used as a value
+                if (token.Kind == TokenKind.Identifier)
+                {
+                    pos++;
+                    return token.Value;
+                }
+
+                error = $"Syntax error: unexpected token '{token.Value}' in value position";
+                return null;
+        }
+    }
+
+    private static string ParseTupleLiteral(List<Token> tokens, ref int pos, out string error)
+    {
+        pos++; // skip (
+        var sb = new StringBuilder("(");
+        var first = true;
+
+        while (pos < tokens.Count && tokens[pos].Kind != TokenKind.CloseParen)
+        {
+            if (!first)
+            {
+                if (tokens[pos].Kind != TokenKind.Comma)
+                {
+                    error = "Syntax error: expected ',' between tuple values";
+                    return null;
+                }
+
+                sb.Append(", ");
+                pos++; // skip ,
+            }
+
+            if (pos >= tokens.Count || (tokens[pos].Kind != TokenKind.Integer && tokens[pos].Kind != TokenKind.Float))
+            {
+                error = "Syntax error: tuple values must be numbers";
+                return null;
+            }
+
+            sb.Append(tokens[pos].Value);
+            pos++;
+            first = false;
+        }
+
+        if (pos >= tokens.Count || tokens[pos].Kind != TokenKind.CloseParen)
+        {
+            error = "Syntax error: expected ')' to close tuple";
+            return null;
+        }
+
+        pos++; // skip )
+        sb.Append(')');
+        error = null;
+        return sb.ToString();
+    }
+
+}

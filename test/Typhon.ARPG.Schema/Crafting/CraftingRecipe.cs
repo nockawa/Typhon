@@ -12,10 +12,10 @@ namespace Typhon.ARPG.Schema;
 [StructLayout(LayoutKind.Sequential)]
 public struct CraftingRecipe
 {
-    [Field] [Index] public int RecipeId;
+    [Field] /*[Index]*/ public int RecipeId;
     [Field] public String64 RecipeName;
 
-    [Field] [Index(AllowMultiple = true)] public int RequiredStationTypeId;
+    [Field] /*[Index(AllowMultiple = true)]*/ public int RequiredStationTypeId;
     [Field] public float CraftingTimeSec;
     [Field] public int SkillLevelReq;
 
@@ -39,5 +39,5 @@ public struct CraftingRecipe
     [Field] public int Input4TypeId;
     [Field] public int Input4Count;
 
-    [Field] [Index] public bool IsDiscovered;
+    [Field] /*[Index]*/ public bool IsDiscovered;
 }

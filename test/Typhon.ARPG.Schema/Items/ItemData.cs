@@ -11,12 +11,12 @@ namespace Typhon.ARPG.Schema;
 [StructLayout(LayoutKind.Sequential)]
 public struct ItemData
 {
-    [Field] [Index(AllowMultiple = true)] public int ItemTypeId;
+    [Field] /*[Index(AllowMultiple = true)]*/ public int ItemTypeId;
     [Field] public String64 ItemName;
-    [Field] [Index(AllowMultiple = true)] public int Rarity;
-    [Field] [Index(AllowMultiple = true)] public int ItemCategory;
+    [Field] /*[Index(AllowMultiple = true)]*/ public int Rarity;
+    [Field] /*[Index(AllowMultiple = true)]*/ public int ItemCategory;
 
-    [Field] [Index] public long OwnerId;
+    [Field] /*[Index]*/ public long OwnerId;
 
     [Field] public int ItemLevel;
     [Field] public int RequiredLevel;

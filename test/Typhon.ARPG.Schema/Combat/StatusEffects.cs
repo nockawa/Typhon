@@ -11,7 +11,7 @@ namespace Typhon.ARPG.Schema;
 [StructLayout(LayoutKind.Sequential)]
 public struct StatusEffects
 {
-    [Field] [Index(AllowMultiple = true)] public int EffectTypeId;
+    [Field] /*[Index(AllowMultiple = true)]*/ public int EffectTypeId;
 
     [Field] public long TargetEntityId;
     [Field] public long SourceEntityId;

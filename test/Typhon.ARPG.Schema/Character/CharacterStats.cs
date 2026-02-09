@@ -30,7 +30,7 @@ public struct CharacterStats
     [Field] public float CriticalMultiplier;
 
     // Progression
-    [Field] [Index] public int Level;
+    [Field] /*[Index]*/ public int Level;
     [Field] public long Experience;
     [Field] public long ExperienceToNextLevel;
 }
