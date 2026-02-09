@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using Spectre.Console;
 using Typhon.Shell.Commands;
 using Typhon.Shell.Schema;
 using Typhon.Shell.Session;
@@ -81,10 +81,7 @@ internal sealed class ScriptParser
 
             // Regular command
             var cmdResult = _executor.Execute(line);
-            if (!string.IsNullOrEmpty(cmdResult.Output))
-            {
-                Console.WriteLine(cmdResult.Output);
-            }
+            WriteOutput(cmdResult);
 
             if (!cmdResult.Success)
             {
@@ -146,10 +143,7 @@ internal sealed class ScriptParser
             var cmd = $"create {componentName} {braceExpr}";
             var result = _executor.Execute(cmd);
 
-            if (!string.IsNullOrEmpty(result.Output))
-            {
-                Console.WriteLine(result.Output);
-            }
+            WriteOutput(result);
 
             if (!result.Success)
             {
@@ -299,6 +293,27 @@ internal sealed class ScriptParser
         }
 
         return fields;
+    }
+
+    private static void WriteOutput(CommandResult result)
+    {
+        if (string.IsNullOrEmpty(result.Output))
+        {
+            return;
+        }
+
+        if (!result.Success)
+        {
+            AnsiConsole.MarkupLine($"[red]{Markup.Escape(result.Output)}[/]");
+        }
+        else if (result.UseMarkup)
+        {
+            AnsiConsole.MarkupLine(result.Output);
+        }
+        else
+        {
+            Console.WriteLine(result.Output);
+        }
     }
 
     private static string BuildBraceExpression(Dictionary<string, string> fields)

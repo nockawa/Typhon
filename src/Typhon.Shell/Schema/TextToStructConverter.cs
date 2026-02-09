@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
-using System.Runtime.InteropServices;
 using Typhon.Schema.Definition;
 
 namespace Typhon.Shell.Schema;
@@ -209,9 +208,8 @@ internal static class TextToStructConverter
         }
     }
 
-    private static unsafe object ReadField(byte* ptr, ComponentSchema.FieldInfo field)
-    {
-        return field.Type switch
+    private static unsafe object ReadField(byte* ptr, ComponentSchema.FieldInfo field) =>
+        field.Type switch
         {
             FieldType.Boolean  => *(bool*)ptr,
             FieldType.Byte     => *(sbyte*)ptr,
@@ -238,7 +236,6 @@ internal static class TextToStructConverter
             FieldType.Variant      => (*(Variant*)ptr).ToString(),
             _                      => $"<unsupported:{field.Type}>"
         };
-    }
 
     private static string StripNumericSuffix(string text)
     {
@@ -269,9 +266,8 @@ internal static class TextToStructConverter
     /// <summary>
     /// Formats a field value for display.
     /// </summary>
-    public static string FormatValue(object value, FieldType fieldType)
-    {
-        return fieldType switch
+    public static string FormatValue(object value, FieldType fieldType) =>
+        fieldType switch
         {
             FieldType.Float        => ((float)value).ToString("G", CultureInfo.InvariantCulture),
             FieldType.Double       => ((double)value).ToString("G", CultureInfo.InvariantCulture),
@@ -289,7 +285,6 @@ internal static class TextToStructConverter
             FieldType.Variant      => $"\"{value}\"",
             _                      => value?.ToString() ?? "null"
         };
-    }
 
     private static string[] ParseTupleComponents(string text, int expectedCount, string fieldName)
     {

@@ -202,7 +202,7 @@ internal sealed class TshPromptCallbacks : PromptCallbacks
                 else if (start == 0)
                 {
                     // Comment — grey (only at start of line)
-                    spans.Add(new FormatSpan(start, text.Length - start, AnsiColor.BrightBlack));
+                    spans.Add(new FormatSpan(start, text.Length, AnsiColor.BrightBlack));
                     break;
                 }
             }
@@ -252,9 +252,8 @@ internal sealed class TshPromptCallbacks : PromptCallbacks
         return Task.FromResult<IReadOnlyCollection<FormatSpan>>(spans);
     }
 
-    private static string GetCommandDescription(string cmd)
-    {
-        return cmd switch
+    private static string GetCommandDescription(string cmd) =>
+        cmd switch
         {
             "open"          => "Open (or create) a database",
             "close"         => "Close current database",
@@ -277,5 +276,4 @@ internal sealed class TshPromptCallbacks : PromptCallbacks
             "quit"          => "Exit the shell",
             _               => ""
         };
-    }
 }

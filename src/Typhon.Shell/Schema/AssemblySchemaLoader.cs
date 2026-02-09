@@ -67,7 +67,7 @@ internal static class AssemblySchemaLoader
             var indexAttr = fieldInfo.GetCustomAttribute<IndexAttribute>();
             var fieldType = MapDotNetTypeToFieldType(fieldInfo.FieldType);
             var offset = (int)Marshal.OffsetOf(type, fieldInfo.Name);
-            var size = GetFieldSize(fieldInfo.FieldType, fieldType);
+            var size = GetFieldSize(fieldInfo.FieldType);
 
             fields.Add(new ComponentSchema.FieldInfo
             {
@@ -122,7 +122,7 @@ internal static class AssemblySchemaLoader
         return FieldType.None;
     }
 
-    private static int GetFieldSize(Type dotNetType, FieldType fieldType)
+    private static int GetFieldSize(Type dotNetType)
     {
         // For known types, return the exact size; for unknowns, use Marshal.SizeOf
         try

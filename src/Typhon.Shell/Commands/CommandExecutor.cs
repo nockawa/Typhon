@@ -6,6 +6,7 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using Spectre.Console;
 using Typhon.Engine;
 using Typhon.Shell.Formatting;
 using Typhon.Shell.Parsing;
@@ -148,7 +149,7 @@ internal sealed class CommandExecutor
         }
 
         var message = _session.OpenDatabase(path);
-        return CommandResult.Ok($"  {message}");
+        return CommandResult.Markup($"  [green]{Markup.Escape(message)}[/]");
     }
 
     private CommandResult ExecuteClose()
@@ -159,7 +160,7 @@ internal sealed class CommandExecutor
         }
 
         _session.CloseDatabase();
-        return CommandResult.Ok("  Database closed.");
+        return CommandResult.Markup("  [grey]Database closed.[/]");
     }
 
     private CommandResult ExecuteInfo()
@@ -170,26 +171,26 @@ internal sealed class CommandExecutor
         }
 
         var sb = new StringBuilder();
-        sb.AppendLine($"  Database: {_session.DatabaseName}");
-        sb.AppendLine($"  Path:     {_session.DatabasePath}");
-        sb.AppendLine($"  Components: {_session.ComponentSchemas.Count}");
+        sb.AppendLine($"  [grey]Database:[/]    [white]{Markup.Escape(_session.DatabaseName)}[/]");
+        sb.AppendLine($"  [grey]Path:[/]        [white]{Markup.Escape(_session.DatabasePath)}[/]");
+        sb.AppendLine($"  [grey]Components:[/]  [white]{_session.ComponentSchemas.Count}[/]");
 
         if (_session.ComponentSchemas.Count > 0)
         {
-            var names = string.Join(", ", _session.ComponentSchemas.Keys);
-            sb.AppendLine($"  Loaded:   {names}");
+            var names = string.Join("[grey],[/] ", _session.ComponentSchemas.Keys.Select(k => $"[green]{Markup.Escape(k)}[/]"));
+            sb.AppendLine($"  [grey]Loaded:[/]      {names}");
         }
 
         if (_session.HasTransaction)
         {
-            sb.Append($"  Transaction: TSN {_session.Transaction.TSN}");
+            sb.Append($"  [grey]Transaction:[/] [cyan]TSN {_session.Transaction.TSN}[/]");
             if (_session.IsDirty)
             {
-                sb.Append(" (dirty)");
+                sb.Append(" [yellow](dirty)[/]");
             }
         }
 
-        return CommandResult.Ok(sb.ToString().TrimEnd());
+        return CommandResult.Markup(sb.ToString().TrimEnd());
     }
 
     // ── Schema Commands ────────────────────────────────────────
@@ -215,8 +216,8 @@ internal sealed class CommandExecutor
             _session.RegisterComponent(name, type, schema);
         }
 
-        var names = string.Join(", ", components.Select(c => c.Name));
-        return CommandResult.Ok($"  Loaded {components.Count} component{(components.Count != 1 ? "s" : "")}: {names}");
+        var names = string.Join("[grey],[/] ", components.Select(c => $"[green]{Markup.Escape(c.Name)}[/]"));
+        return CommandResult.Markup($"  [white]Loaded {components.Count} component{(components.Count != 1 ? "s" : "")}:[/] {names}");
     }
 
     private CommandResult ExecuteReloadSchema()
@@ -254,7 +255,7 @@ internal sealed class CommandExecutor
         // Reopen database
         _session.OpenDatabase(dbPath);
 
-        return CommandResult.Ok($"  Reloaded {totalComponents} component{(totalComponents != 1 ? "s" : "")} from {assemblyPaths.Count} assembl{(assemblyPaths.Count != 1 ? "ies" : "y")}. Database ready.");
+        return CommandResult.Markup($"  [green]Reloaded {totalComponents} component{(totalComponents != 1 ? "s" : "")} from {assemblyPaths.Count} assembl{(assemblyPaths.Count != 1 ? "ies" : "y")}. Database ready.[/]");
     }
 
     private CommandResult ExecuteSchema()
@@ -266,15 +267,15 @@ internal sealed class CommandExecutor
         }
 
         var sb = new StringBuilder();
-        sb.AppendLine($"  {schemas.Count} component{(schemas.Count != 1 ? "s" : "")} loaded:");
+        sb.AppendLine($"  [white]{schemas.Count} component{(schemas.Count != 1 ? "s" : "")} loaded:[/]");
 
         foreach (var kvp in schemas)
         {
             var schema = kvp.Value;
-            sb.AppendLine($"    {schema.Name,-20} [{schema.StructSize} bytes, {schema.Fields.Count} fields]");
+            sb.AppendLine($"    [green]{Markup.Escape(schema.Name),-20}[/] [grey][[{schema.StructSize} bytes, {schema.Fields.Count} fields]][/]");
         }
 
-        return CommandResult.Ok(sb.ToString().TrimEnd());
+        return CommandResult.Markup(sb.ToString().TrimEnd());
     }
 
     private CommandResult ExecuteDescribe(List<Token> tokens, int pos)
@@ -294,18 +295,18 @@ internal sealed class CommandExecutor
         }
 
         var sb = new StringBuilder();
-        sb.AppendLine($"  {schema.Name} [{schema.StructSize} bytes]");
-        sb.AppendLine("  ──────────────────────────────");
+        sb.AppendLine($"  [green]{Markup.Escape(schema.Name)}[/] [grey][[{schema.StructSize} bytes]][/]");
+        sb.AppendLine("  [grey]──────────────────────────────[/]");
 
         foreach (var field in schema.Fields)
         {
             var indexInfo = field.HasIndex
-                ? (field.IndexAllowMultiple ? " [indexed, multi]" : " [indexed, unique]")
+                ? (field.IndexAllowMultiple ? " [magenta][[indexed, multi]][/]" : " [magenta][[indexed, unique]][/]")
                 : "";
-            sb.AppendLine($"  {field.Name,-16} {field.Type,-12} offset={field.Offset,-4} size={field.Size}{indexInfo}");
+            sb.AppendLine($"  [yellow]{Markup.Escape(field.Name),-16}[/] [cyan]{field.Type,-12}[/] [grey]offset={field.Offset,-4} size={field.Size}[/]{indexInfo}");
         }
 
-        return CommandResult.Ok(sb.ToString().TrimEnd());
+        return CommandResult.Markup(sb.ToString().TrimEnd());
     }
 
     // ── Transaction Commands ───────────────────────────────────
@@ -323,7 +324,7 @@ internal sealed class CommandExecutor
         }
 
         var tx = _session.BeginTransaction();
-        return CommandResult.Ok($"  Transaction started (TSN {tx.TSN})");
+        return CommandResult.Markup($"  [cyan]Transaction started (TSN {tx.TSN})[/]");
     }
 
     private CommandResult ExecuteCommit()
@@ -340,8 +341,8 @@ internal sealed class CommandExecutor
 
         var committed = _session.CommitTransaction();
         return committed
-            ? CommandResult.Ok("  Committed.")
-            : CommandResult.Error("  Conflict: Transaction could not be committed. Use 'rollback' to discard changes.");
+            ? CommandResult.Markup("  [green]Committed.[/]")
+            : CommandResult.Error("Conflict: Transaction could not be committed. Use 'rollback' to discard changes.");
     }
 
     private CommandResult ExecuteRollback()
@@ -357,7 +358,7 @@ internal sealed class CommandExecutor
         }
 
         _session.RollbackTransaction();
-        return CommandResult.Ok("  Rolled back.");
+        return CommandResult.Markup("  [yellow]Rolled back.[/]");
     }
 
     // ── Data Commands ──────────────────────────────────────────
@@ -421,14 +422,14 @@ internal sealed class CommandExecutor
             var entityId = CreateEntityReflection(tx, componentType, schema, fieldValues);
             _session.MarkDirty();
 
-            var suffix = isAutoCommit ? " (auto-committed)" : "";
+            var suffix = isAutoCommit ? " [grey](auto-committed)[/]" : "";
             if (isAutoCommit)
             {
                 tx.Commit();
                 tx.Dispose();
             }
 
-            return CommandResult.Ok($"  Entity {entityId} created{suffix}");
+            return CommandResult.Markup($"  [green]Entity[/] [cyan]{entityId}[/] [green]created[/]{suffix}");
         }
         catch (Exception ex)
         {
@@ -563,14 +564,14 @@ internal sealed class CommandExecutor
 
             _session.MarkDirty();
 
-            var suffix = isAutoCommit ? " (auto-committed)" : "";
+            var suffix = isAutoCommit ? " [grey](auto-committed)[/]" : "";
             if (isAutoCommit)
             {
                 tx.Commit();
                 tx.Dispose();
             }
 
-            return CommandResult.Ok($"  Entity {entityId} updated{suffix}");
+            return CommandResult.Markup($"  [green]Entity[/] [cyan]{entityId}[/] [green]updated[/]{suffix}");
         }
         catch (Exception ex)
         {
@@ -610,7 +611,7 @@ internal sealed class CommandExecutor
 
         var componentName = tokens[pos].Value;
 
-        if (!ResolveComponent(componentName, out var componentType, out var schema, out var error))
+        if (!ResolveComponent(componentName, out var componentType, out ComponentSchema _, out var error))
         {
             return CommandResult.Error(error);
         }
@@ -636,14 +637,14 @@ internal sealed class CommandExecutor
 
             _session.MarkDirty();
 
-            var suffix = isAutoCommit ? " (auto-committed)" : "";
+            var suffix = isAutoCommit ? " [grey](auto-committed)[/]" : "";
             if (isAutoCommit)
             {
                 tx.Commit();
                 tx.Dispose();
             }
 
-            return CommandResult.Ok($"  Entity {entityId} {componentName} deleted{suffix}");
+            return CommandResult.Markup($"  [green]Entity[/] [cyan]{entityId}[/] [green]{Markup.Escape(componentName)} deleted[/]{suffix}");
         }
         catch (Exception ex)
         {
@@ -695,14 +696,14 @@ internal sealed class CommandExecutor
     private CommandResult ShowAllSettings()
     {
         var sb = new StringBuilder();
-        sb.AppendLine("  Current settings:");
-        sb.AppendLine($"    format:       {_session.Format}");
-        sb.AppendLine($"    auto-commit:  {(_session.AutoCommit ? "on" : "off")}");
-        sb.AppendLine($"    verbose:      {(_session.Verbose ? "on" : "off")}");
-        sb.AppendLine($"    page-size:    {_session.PageSize}");
-        sb.AppendLine($"    color:        {_session.Color}");
-        sb.Append($"    timing:       {(_session.Timing ? "on" : "off")}");
-        return CommandResult.Ok(sb.ToString());
+        sb.AppendLine("  [white]Current settings:[/]");
+        sb.AppendLine($"    [grey]format:[/]       [white]{Markup.Escape(_session.Format)}[/]");
+        sb.AppendLine($"    [grey]auto-commit:[/]  [white]{(_session.AutoCommit ? "on" : "off")}[/]");
+        sb.AppendLine($"    [grey]verbose:[/]      [white]{(_session.Verbose ? "on" : "off")}[/]");
+        sb.AppendLine($"    [grey]page-size:[/]    [white]{_session.PageSize}[/]");
+        sb.AppendLine($"    [grey]color:[/]        [white]{Markup.Escape(_session.Color)}[/]");
+        sb.Append($"    [grey]timing:[/]       [white]{(_session.Timing ? "on" : "off")}[/]");
+        return CommandResult.Markup(sb.ToString());
     }
 
     private CommandResult ShowSetting(string key)
@@ -719,7 +720,7 @@ internal sealed class CommandExecutor
         };
 
         return value != null
-            ? CommandResult.Ok($"  {key}: {value}")
+            ? CommandResult.Markup($"  [grey]{Markup.Escape(key)}:[/] [white]{Markup.Escape(value)}[/]")
             : CommandResult.Error($"Error: Unknown setting '{key}'");
     }
 
@@ -781,36 +782,36 @@ internal sealed class CommandExecutor
         }
 
         var sb = new StringBuilder();
-        sb.AppendLine("  Available commands:");
+        sb.AppendLine("  [white]Available commands:[/]");
         sb.AppendLine();
-        sb.AppendLine("  Database:");
-        sb.AppendLine("    open <path>                      Open (or create) a database");
-        sb.AppendLine("    close                            Close current database");
-        sb.AppendLine("    info                             Show database summary");
+        sb.AppendLine("  [yellow]Database:[/]");
+        sb.AppendLine("    [cyan]open[/] <path>                      Open (or create) a database");
+        sb.AppendLine("    [cyan]close[/]                            Close current database");
+        sb.AppendLine("    [cyan]info[/]                             Show database summary");
         sb.AppendLine();
-        sb.AppendLine("  Schema:");
-        sb.AppendLine("    load-schema <path>               Load component types from assembly");
-        sb.AppendLine("    reload-schema                    Close, reload assemblies, reopen");
-        sb.AppendLine("    schema                           List loaded components");
-        sb.AppendLine("    describe <component>             Show component field layout");
+        sb.AppendLine("  [yellow]Schema:[/]");
+        sb.AppendLine("    [cyan]load-schema[/] <path>               Load component types from assembly");
+        sb.AppendLine("    [cyan]reload-schema[/]                    Close, reload assemblies, reopen");
+        sb.AppendLine("    [cyan]schema[/]                           List loaded components");
+        sb.AppendLine("    [cyan]describe[/] <component>             Show component field layout");
         sb.AppendLine();
-        sb.AppendLine("  Transaction:");
-        sb.AppendLine("    begin                            Start a new transaction");
-        sb.AppendLine("    commit                           Commit current transaction");
-        sb.AppendLine("    rollback                         Rollback current transaction");
+        sb.AppendLine("  [yellow]Transaction:[/]");
+        sb.AppendLine("    [cyan]begin[/]                            Start a new transaction");
+        sb.AppendLine("    [cyan]commit[/]                           Commit current transaction");
+        sb.AppendLine("    [cyan]rollback[/]                         Rollback current transaction");
         sb.AppendLine();
-        sb.AppendLine("  Data:");
-        sb.AppendLine("    create <comp> { field=val, ... } Create an entity");
-        sb.AppendLine("    read <id> <comp>                 Read entity component data");
-        sb.AppendLine("    update <id> <comp> { f=v, ... }  Update entity component data");
-        sb.AppendLine("    delete <id> <comp>               Delete entity component");
+        sb.AppendLine("  [yellow]Data:[/]");
+        sb.AppendLine("    [cyan]create[/] <comp> { field=val, ... } Create an entity");
+        sb.AppendLine("    [cyan]read[/] <id> <comp>                 Read entity component data");
+        sb.AppendLine("    [cyan]update[/] <id> <comp> { f=v, ... }  Update entity component data");
+        sb.AppendLine("    [cyan]delete[/] <id> <comp>               Delete entity component");
         sb.AppendLine();
-        sb.AppendLine("  Shell:");
-        sb.AppendLine("    set [key [value]]                View/change shell settings");
-        sb.AppendLine("    help [command]                   Show help");
-        sb.AppendLine("    history                          Show command history");
-        sb.Append("    exit / quit                      Exit the shell");
-        return CommandResult.Ok(sb.ToString());
+        sb.AppendLine("  [yellow]Shell:[/]");
+        sb.AppendLine("    [cyan]set[/] [[key [[value]]]]                View/change shell settings");
+        sb.AppendLine("    [cyan]help[/] [[command]]                   Show help");
+        sb.AppendLine("    [cyan]history[/]                          Show command history");
+        sb.Append("    [cyan]exit[/] / [cyan]quit[/]                      Exit the shell");
+        return CommandResult.Markup(sb.ToString());
     }
 
     private static CommandResult ShowCommandHelp(string command)
@@ -894,7 +895,7 @@ internal sealed class CommandExecutor
     {
         var instance = Activator.CreateInstance(componentType);
         var method = ReadEntityMethod.MakeGenericMethod(componentType);
-        var args = new object[] { entityId, instance };
+        var args = new[] { entityId, instance };
         found = (bool)method.Invoke(tx, args);
 
         if (!found)
@@ -925,7 +926,7 @@ internal sealed class CommandExecutor
         // Step 1: Read current values
         var instance = Activator.CreateInstance(componentType);
         var readMethod = ReadEntityMethod.MakeGenericMethod(componentType);
-        var readArgs = new object[] { entityId, instance };
+        var readArgs = new[] { entityId, instance };
         var found = (bool)readMethod.Invoke(tx, readArgs);
 
         if (!found)
@@ -948,7 +949,7 @@ internal sealed class CommandExecutor
 
         // Step 3: Write updated struct back
         var updateMethod = UpdateEntityMethod.MakeGenericMethod(componentType);
-        var updateArgs = new object[] { entityId, instance };
+        var updateArgs = new[] { entityId, instance };
         return (bool)updateMethod.Invoke(tx, updateArgs);
     }
 
@@ -998,12 +999,7 @@ internal sealed class CommandExecutor
         return tx;
     }
 
-    private IOutputFormatter GetFormatter()
-    {
-        return _formatters.TryGetValue(_session.Format, out var formatter)
-            ? formatter
-            : _formatters["table"];
-    }
+    private IOutputFormatter GetFormatter() => _formatters.TryGetValue(_session.Format, out var formatter) ? formatter : _formatters["table"];
 
     /// <summary>
     /// Extracts a file path from the token stream (quoted string or bare identifier).

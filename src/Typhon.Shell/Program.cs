@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.Linq;
 using System.Threading;
 using PrettyPrompt;
 using PrettyPrompt.Highlighting;
@@ -16,14 +15,22 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
-        var app = new CommandApp<TshCommand>();
-        app.Configure(config =>
+        try
         {
-            config.SetApplicationName("tsh");
-            config.SetApplicationVersion("0.1.0");
-        });
+            var app = new CommandApp<TSHCommand>();
+            app.Configure(config =>
+            {
+                config.SetApplicationName("tsh");
+                config.SetApplicationVersion("0.1.0");
+            });
 
-        return app.Run(args);
+            return app.Run(args);
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Fatal: {Markup.Escape(ex.Message)}[/]");
+            return 10;
+        }
     }
 }
 
@@ -31,7 +38,7 @@ internal static class Program
 /// The single Spectre.Console.Cli command that handles all tsh invocation modes:
 /// interactive REPL, single-command (-c), script (--exec), and pipe mode.
 /// </summary>
-internal sealed class TshCommand : Command<TshCommand.Settings>
+internal sealed class TSHCommand : Command<TSHCommand.Settings>
 {
     public sealed class Settings : CommandSettings
     {
@@ -68,11 +75,10 @@ internal sealed class TshCommand : Command<TshCommand.Settings>
         {
             foreach (var schemaPath in settings.Schema)
             {
-                var result = executor.Execute($"load-schema \"{schemaPath}\"");
-                if (!string.IsNullOrEmpty(result.Output))
-                {
-                    Console.WriteLine(result.Output);
-                }
+                // Escape backslashes so the tokenizer doesn't treat them as C-style escapes
+                var escaped = schemaPath.Replace("\\", "\\\\");
+                var result = executor.Execute($"load-schema \"{escaped}\"");
+                WriteResult(result);
 
                 if (!result.Success)
                 {
@@ -84,11 +90,9 @@ internal sealed class TshCommand : Command<TshCommand.Settings>
         // Pre-open database
         if (!string.IsNullOrEmpty(settings.Database))
         {
-            var result = executor.Execute($"open \"{settings.Database}\"");
-            if (!string.IsNullOrEmpty(result.Output))
-            {
-                Console.WriteLine(result.Output);
-            }
+            var escaped = settings.Database.Replace("\\", "\\\\");
+            var result = executor.Execute($"open \"{escaped}\"");
+            WriteResult(result);
 
             if (!result.Success)
             {
@@ -118,18 +122,7 @@ internal sealed class TshCommand : Command<TshCommand.Settings>
     private static int ExecuteSingleCommand(ShellSession session, CommandExecutor executor, string command)
     {
         var result = executor.Execute(command);
-        if (!string.IsNullOrEmpty(result.Output))
-        {
-            if (result.Success)
-            {
-                Console.WriteLine(result.Output);
-            }
-            else
-            {
-                AnsiConsole.MarkupLine($"[red]{Markup.Escape(result.Output)}[/]");
-            }
-        }
-
+        WriteResult(result);
         return result.Success ? 0 : 1;
     }
 
@@ -209,18 +202,7 @@ internal sealed class TshCommand : Command<TshCommand.Settings>
                 }
 
                 var result = executor.Execute(input);
-
-                if (!string.IsNullOrEmpty(result.Output))
-                {
-                    if (result.Success)
-                    {
-                        Console.WriteLine(result.Output);
-                    }
-                    else
-                    {
-                        AnsiConsole.MarkupLine($"[red]{Markup.Escape(result.Output)}[/]");
-                    }
-                }
+                WriteResult(result);
 
                 if (result.ShouldExit)
                 {
@@ -239,5 +221,26 @@ internal sealed class TshCommand : Command<TshCommand.Settings>
         }
 
         return 0;
+    }
+
+    private static void WriteResult(CommandResult result)
+    {
+        if (string.IsNullOrEmpty(result.Output))
+        {
+            return;
+        }
+
+        if (!result.Success)
+        {
+            AnsiConsole.MarkupLine($"[red]{Markup.Escape(result.Output)}[/]");
+        }
+        else if (result.UseMarkup)
+        {
+            AnsiConsole.MarkupLine(result.Output);
+        }
+        else
+        {
+            Console.WriteLine(result.Output);
+        }
     }
 }

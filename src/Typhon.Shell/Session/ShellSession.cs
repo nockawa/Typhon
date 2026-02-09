@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using Typhon.Engine;
 
@@ -63,6 +64,7 @@ internal sealed class ShellSession : IDisposable
         _databaseName = Path.GetFileNameWithoutExtension(fullPath);
 
         // The actual file on disk is always {DatabaseName}.bin (engine convention)
+        Debug.Assert(directory != null, nameof(directory) + " != null");
         _databasePath = Path.Combine(directory, $"{_databaseName}.bin");
         var isNew = !File.Exists(_databasePath);
 
@@ -252,8 +254,5 @@ internal sealed class ShellSession : IDisposable
         generic.Invoke(_engine, null);
     }
 
-    public void Dispose()
-    {
-        CloseDatabase();
-    }
+    public void Dispose() => CloseDatabase();
 }

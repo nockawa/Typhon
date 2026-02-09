@@ -1,3 +1,4 @@
+using JetBrains.Annotations;
 using System.Collections.Generic;
 using Typhon.Shell.Schema;
 
@@ -6,6 +7,7 @@ namespace Typhon.Shell.Formatting;
 /// <summary>
 /// Renders entity data in a specific output format (table, full-table, JSON, CSV).
 /// </summary>
+[PublicAPI]
 internal interface IOutputFormatter
 {
     string Name { get; }
