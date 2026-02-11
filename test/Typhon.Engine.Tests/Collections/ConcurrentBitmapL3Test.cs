@@ -23,8 +23,6 @@ public class ConcurrentBitmapL3Test
         {
             Assert.That(bitIndex, Is.EqualTo(values[i++]));
         }
-
-        Console.WriteLine($"Iterated {values.Count} bits set over capacity of {c.Capacity} bits, in {c.LastEnumLoopCount} iterations");
     }
 
 }

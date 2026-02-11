@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
 
@@ -13,6 +14,9 @@ public class DatabaseDefinitions
 {
     private readonly Dictionary<string, DBComponentDefinition> _components;
     private Dictionary<string, DBObjectDefinition> _objects;
+
+    public int ComponentCount => _components.Count;
+    public IEnumerable<string> ComponentNames => _components.Keys;
 
     public DatabaseDefinitions()
     {

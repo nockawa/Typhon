@@ -1,4 +1,5 @@
 using JetBrains.Annotations;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32.SafeHandles;
 using System;
@@ -7,18 +8,13 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
-
-#if TELEMETRY
-    using Serilog.Context;
-#endif
 
 namespace Typhon.Engine;
 
 [PublicAPI]
-public partial class PagedMMF : IDisposable
+public partial class PagedMMF : ResourceNode, IMemoryResource
 {
     public const int DefaultMemPageCount = 256;
 
@@ -136,9 +132,7 @@ public partial class PagedMMF : IDisposable
     protected readonly IServiceProvider ServiceProvider;
     protected readonly ILogger<PagedMMF> Logger;
     
-    private readonly TimeManager _tmg;
-    protected byte[] MemPages;
-    private GCHandle _memPagesHandle;
+    protected readonly PinnedMemoryBlock MemPages;
     private unsafe byte* _memPagesAddr;
 
     protected readonly int MemPagesCount;
@@ -150,7 +144,8 @@ public partial class PagedMMF : IDisposable
 
     private readonly ConcurrentDictionary<int, int> _memPageIndexByFilePageIndex;
 
-    unsafe public PagedMMF(IServiceProvider serviceProvider, PagedMMFOptions options, TimeManager timeManager, ILogger<PagedMMF> logger)
+    unsafe public PagedMMF(IServiceProvider serviceProvider, PagedMMFOptions options, IResource parent, string resourceName, ILogger<PagedMMF> logger) :
+        base(resourceName, ResourceType.File, parent)
     {
         if (!options.Validate(true, out var errors))
         {
@@ -159,14 +154,13 @@ public partial class PagedMMF : IDisposable
         
         ServiceProvider = serviceProvider;
         Options = options;
-        _tmg = timeManager;
         Logger = logger;
 
         // Create the cache of the page, pin it and keeps its address
         var cacheSize = Options.DatabaseCacheSize;
-        MemPages = new byte[cacheSize];
-        _memPagesHandle = GCHandle.Alloc(MemPages, GCHandleType.Pinned);
-        _memPagesAddr = (byte*)_memPagesHandle.AddrOfPinnedObject();
+        var ma = ServiceProvider.GetRequiredService<IMemoryAllocator>();
+        MemPages = ma.AllocatePinned("PageCache", this, (int)cacheSize, true, 64);
+        _memPagesAddr = MemPages.DataAsPointer;
 
         // Create the Memory Page info table
         MemPagesCount = (int)(cacheSize >> PageSizePow2);
@@ -258,35 +252,29 @@ public partial class PagedMMF : IDisposable
 
     public bool IsDisposed { get; private set; }
 
-    public void Dispose()
-    {
-        OnDispose();
-        GC.SuppressFinalize(this);
-    }
-
-    unsafe protected virtual void OnDispose()
+    protected unsafe override void Dispose(bool disposing)
     {
         if (IsDisposed)
         {
             return;
         }
 
-        Logger.LogInformation("Disposing Virtual Disk Manager");
-        if (_fileHandle != null)
+        if (disposing)
         {
-            _fileHandle.Dispose();
-            _fileHandle = null;
-        }
+            Logger.LogInformation("Disposing Virtual Disk Manager");
+            if (_fileHandle != null)
+            {
+                _fileHandle.Dispose();
+                _fileHandle = null;
+            }
         
-        _memPagesInfo = null;
+            _memPagesInfo = null;
+            _memPagesAddr = null;
 
-        _memPagesHandle.Free();
-        _memPagesAddr = null;
-        MemPages = null;
-
+            Logger.LogInformation("Virtual Disk Manager disposed");
+        }
         IsDisposed = true;
-
-        Logger.LogInformation("Virtual Disk Manager disposed");
+        base.Dispose(disposing);
     }
     
     /// <summary>
@@ -321,7 +309,7 @@ public partial class PagedMMF : IDisposable
         {
             // RequestPage is a child of the current activity (Transaction operation)
             // This gives full call hierarchy visibility at the cost of larger traces
-            requestPageActivity = TyphonActivitySource.StartActivity("PageCache.RequestPage", ActivityKind.Internal);
+            requestPageActivity = TyphonActivitySource.StartActivity("PageCache.RequestPage");
             requestPageActivity?.SetTag(TyphonSpanAttributes.PageId, filePageIndex);
         }
 
@@ -383,7 +371,7 @@ public partial class PagedMMF : IDisposable
             Activity fetchActivity = null;
             if (TelemetryConfig.PagedMMFSpanCacheMiss)
             {
-                fetchActivity = TyphonActivitySource.StartActivity("PageCache.Fetch", ActivityKind.Internal);
+                fetchActivity = TyphonActivitySource.StartActivity("PageCache.Fetch");
                 fetchActivity?.SetTag(TyphonSpanAttributes.PageId, filePageIndex);
             }
 
@@ -409,12 +397,12 @@ public partial class PagedMMF : IDisposable
                 Activity diskReadActivity = null;
                 if (TelemetryConfig.PagedMMFSpanIOOnly)
                 {
-                    diskReadActivity = TyphonActivitySource.StartActivity("PageCache.DiskRead", ActivityKind.Internal);
+                    diskReadActivity = TyphonActivitySource.StartActivity("PageCache.DiskRead");
                     diskReadActivity?.SetTag(TyphonSpanAttributes.PageId, filePageIndex);
                 }
 
                 var pi = _memPagesInfo[memPageIndex];
-                var readTask = RandomAccess.ReadAsync(_fileHandle, MemPages.AsMemory(memPageIndex * PageSize, PageSize), pageOffset, cancellationToken);
+                var readTask = RandomAccess.ReadAsync(_fileHandle, MemPages.DataAsMemory.Slice(memPageIndex * PageSize, PageSize), pageOffset, cancellationToken);
 
                 // Wrap the task to dispose activities when complete
                 if (diskReadActivity != null || fetchActivity != null)
@@ -619,7 +607,7 @@ public partial class PagedMMF : IDisposable
 
             if (Options.PagesDebugPattern)
             {
-                var pageAddr = MemPages.AsMemory(memPageIndex * PageSize).Span.Cast<byte, int>();
+                var pageAddr = MemPages.DataAsMemory.Slice(memPageIndex * PageSize).Span.Cast<byte, int>();
                 int i;
                 for (i = 0; i < PageHeaderSize >> 2; i++)
                 {
@@ -967,7 +955,7 @@ public partial class PagedMMF : IDisposable
         Activity flushActivity = null;
         if (TelemetryConfig.PagedMMFSpanIOOnly)
         {
-            flushActivity = TyphonActivitySource.StartActivity("PageCache.Flush", ActivityKind.Internal);
+            flushActivity = TyphonActivitySource.StartActivity("PageCache.Flush");
             flushActivity?.SetTag(TyphonSpanAttributes.PageCount, memPageIndices.Length);
         }
 
@@ -1051,7 +1039,7 @@ public partial class PagedMMF : IDisposable
         var filePageIndex = pi.FilePageIndex;
         var pageOffset = filePageIndex * (long)PageSize;
         var lengthToWrite = PageSize * length;
-        var pageData = MemPages.AsMemory(firstMemPageIndex * PageSize, lengthToWrite);
+        var pageData = MemPages.DataAsMemory.Slice(firstMemPageIndex * PageSize, lengthToWrite);
 
         _fileSize = Math.Max(_fileSize, pageOffset + lengthToWrite);
 
@@ -1062,7 +1050,7 @@ public partial class PagedMMF : IDisposable
         Activity diskWriteActivity = null;
         if (TelemetryConfig.PagedMMFSpanIOOnly)
         {
-            diskWriteActivity = TyphonActivitySource.StartActivity("PageCache.DiskWrite", ActivityKind.Internal);
+            diskWriteActivity = TyphonActivitySource.StartActivity("PageCache.DiskWrite");
             diskWriteActivity?.SetTag(TyphonSpanAttributes.PageId, filePageIndex);
             diskWriteActivity?.SetTag(TyphonSpanAttributes.PageCount, length);
         }
@@ -1172,14 +1160,14 @@ public partial class PagedMMF : IDisposable
 
     internal readonly struct PageSnapshot(PageState state, int sharedCounter, int dirtyCounter)
     {
-        internal readonly PageState State = state;
-        internal readonly int ConcurrentSharedCounter = sharedCounter;
-        internal readonly int DirtyCounter = dirtyCounter;
+        internal readonly PageState _state = state;
+        internal readonly int _concurrentSharedCounter = sharedCounter;
+        internal readonly int _dirtyCounter = dirtyCounter;
     }
 
     internal readonly struct StateSnapshot(PageSnapshot[] pages)
     {
-        internal readonly PageSnapshot[] Pages = pages;
+        internal readonly PageSnapshot[] _pages = pages;
     }
 
     internal StateSnapshot SnapshotInternalState()
@@ -1195,7 +1183,7 @@ public partial class PagedMMF : IDisposable
 
     internal bool CheckInternalState(in StateSnapshot snapshot)
     {
-        if (snapshot.Pages.Length != _memPagesInfo.Length)
+        if (snapshot._pages.Length != _memPagesInfo.Length)
         {
             return false;
         }
@@ -1203,14 +1191,22 @@ public partial class PagedMMF : IDisposable
         for (int i = 0; i < _memPagesInfo.Length; i++)
         {
             var pi = _memPagesInfo[i];
-            ref readonly var snap = ref snapshot.Pages[i];
-            if (pi.PageState != snap.State ||
-                pi.ConcurrentSharedCounter != snap.ConcurrentSharedCounter ||
-                pi.DirtyCounter != snap.DirtyCounter)
+            ref readonly var snap = ref snapshot._pages[i];
+            if (pi.PageState != snap._state ||
+                pi.ConcurrentSharedCounter != snap._concurrentSharedCounter ||
+                pi.DirtyCounter != snap._dirtyCounter)
             {
                 return false;
             }
         }
         return true;
+    }
+
+    public int EstimatedMemorySize
+    {
+        get
+        {
+            return Unsafe.SizeOf<PageInfo>() * _memPagesInfo.Length;
+        }
     }
 }

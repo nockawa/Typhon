@@ -380,6 +380,60 @@ graph TD
 
 ### 3.2 Ownership Relationships
 
+Every resource has **exactly one parent** (no orphans) and ownership is **strictly hierarchical** — the tree is acyclic with single-point-of-ownership. Disposing a parent cascades disposal to all children depth-first.
+
+#### Subsystem-Level Ownership
+
+| Owner | Owns | ResourceType | Relationship | Lifecycle |
+|-------|------|--------------|--------------|-----------|
+| **Root** | Storage, DataEngine, Durability, Allocation | `Node` | Structural | Fixed at registry startup |
+| **Storage** | PagedMMF, ManagedPagedMMF | `File` | Composition | Created at engine init |
+| **DataEngine** | DatabaseEngine(s) | `Engine` | Composition | Created at engine init |
+| **Durability** | WALRingBuffer, WALSegments, Checkpoint | `WAL`, `Checkpoint` | Composition | Created at engine init |
+| **Allocation** | MemoryAllocator, ConcurrentBitmapL3All | `Service`, `Bitmap` | Composition | Created at engine init |
+
+#### Engine-Level Ownership
+
+| Owner | Owns | ResourceType | Relationship | Lifecycle |
+|-------|------|--------------|--------------|-----------|
+| **DatabaseEngine** | ManagedPagedMMF | `File` | Composition | Tied to engine lifetime |
+| **DatabaseEngine** | TransactionChain | `TransactionPool` | Composition | Tied to engine lifetime |
+| **DatabaseEngine** | ComponentTable[] | `ComponentTable` | Dynamic | Created per `RegisterComponent<T>()` |
+| **DatabaseEngine** | DatabaseDefinitions | `Schema` | Composition | Tied to engine lifetime |
+| **TransactionChain** | Transaction[] (active) | `Transaction` | Dynamic (pooled) | Appear on `CreateTransaction()`, disappear on `Commit()`/`Rollback()` |
+| **DatabaseDefinitions** | DBComponentDefinition[] | `Schema` | Dynamic | Created per registered component type |
+
+#### Component Storage Ownership
+
+| Owner | Owns | ResourceType | Relationship | Lifecycle |
+|-------|------|--------------|--------------|-----------|
+| **ComponentTable** | PrimaryKeyIndex | `Index` | Composition | Tied to table lifetime |
+| **ComponentTable** | SecondaryIndex[] | `Index` | Dynamic | One per `[Index]`-annotated field |
+| **ComponentTable** | Segments | *(not IResource)* | **Aggregation** | Owner Aggregates pattern — metrics via `IMetricSource` |
+
+#### Memory Ownership
+
+| Owner | Owns | ResourceType | Relationship | Lifecycle |
+|-------|------|--------------|--------------|-----------|
+| **MemoryAllocator** | *(tracks all blocks)* | — | Factory tracking | Allocator is factory; blocks register with their **consumer** parent |
+| **Any IResource** (consumer) | PinnedMemoryBlock | `Memory` | Composition | Consumer owns the block; allocator only tracks it |
+| **Any IResource** (consumer) | MemoryBlockArray | `Memory` | Composition | Same dual-ownership pattern as PinnedMemoryBlock |
+| **ConcurrentBitmapL3All** | PinnedMemoryBlock[] (banks) | `Memory` | Composition | One block per bank; bitmap is the consumer/parent |
+
+> **Dual ownership (Memory blocks):** Memory blocks have a special pattern — they hold references to both their **parent** (for tree structure) and their **allocator** (for lifetime tracking). On disposal, the block calls both `Parent.RemoveChild(this)` and `Allocator.Remove(this)`. The tree reflects *usage* hierarchy, not allocation origin.
+
+#### Ownership Invariants
+
+| Rule | Enforcement | Rationale |
+|------|-------------|-----------|
+| Every resource has exactly one Parent | Constructor throws `ArgumentNullException` on null | Single point of ownership, no orphans |
+| Parent holds reference to all Children | `RegisterChild()` in constructor | Tree navigable parent → children |
+| Child holds reference to Parent | `IResource.Parent` property (immutable after construction) | Tree navigable child → parent |
+| Owner inherited from Parent | `Owner = Parent.Owner` in constructor | Single registry per tree |
+| Disposal cascades depth-first | `Dispose()` iterates children before self-cleanup | Complete resource cleanup |
+
+#### Class Diagram
+
 ```mermaid
 classDiagram
     class IResource {
@@ -403,10 +457,22 @@ classDiagram
         +Allocation: IResource
     }
 
+    class DatabaseEngine {
+        +MMF: ManagedPagedMMF
+        +TransactionChain: TransactionChain
+        +ComponentTables: ConcurrentDictionary
+        +Definitions: DatabaseDefinitions
+    }
+
     class ComponentTable {
         +PrimaryKeyIndex: BTree
         +SecondaryIndexes: BTree[]
         -_segments: "(aggregated)"
+    }
+
+    class MemoryAllocator {
+        +Blocks: ConcurrentCollection
+        +AllocatePinned(): PinnedMemoryBlock
     }
 
     class ConcurrentBitmapL3All {
@@ -417,20 +483,25 @@ classDiagram
         +Buffer: PinnedMemoryBlock
     }
 
+    IResource <|.. DatabaseEngine
     IResource <|.. ComponentTable
     IResource <|.. ConcurrentBitmapL3All
     IResource <|.. PinnedMemoryBlock
     IResource <|.. WALRingBuffer
+    IResource <|.. MemoryAllocator
 
     ResourceRegistry --> IResource : Root
+    DatabaseEngine --> ComponentTable : owns *
+    DatabaseEngine --> TransactionChain : owns
     ComponentTable --> BTree : owns *
     ComponentTable ..> Segment : aggregates (not IResource)
+    MemoryAllocator ..> PinnedMemoryBlock : tracks (factory)
     ConcurrentBitmapL3All --> PinnedMemoryBlock : owns *
     WALRingBuffer --> PinnedMemoryBlock : owns
 
     class Segment {
         <<not IResource>>
-        (Owner Aggregates pattern)
+        Owner Aggregates pattern
     }
 ```
 
@@ -444,11 +515,8 @@ classDiagram
 
 | Type | ResourceType | Parent | Children | Priority |
 |------|--------------|--------|----------|----------|
-| `DatabaseEngine` | `Engine` | Services | MMF, TransactionChain, ComponentTables[], DatabaseDefinitions | **P0** |
-| `TransactionChain` | `TransactionPool` | DatabaseEngine | Transaction[] (active) | **P1** |
-| `Transaction` | `Transaction` | TransactionChain | ChangeSet (optional) | **P2** |
-| `DatabaseDefinitions` | `Schema` | DatabaseEngine | DBComponentDefinition[] | **P2** |
-| `DBComponentDefinition` | `Schema` | DatabaseDefinitions | (leaf) | **P2** |
+| `DatabaseEngine` | `Engine` | Services | MMF, TransactionChain, ComponentTables[] | **P0** |
+| `TransactionChain` | `TransactionPool` | DatabaseEngine | (leaf — transactions are Owner Aggregated) | **P1** |
 
 #### 4.1.2 Component Storage Layer
 
@@ -462,7 +530,6 @@ classDiagram
 |------|--------------|--------|----------|----------|
 | `PagedMMF` | `File` | DatabaseEngine | PageCache memory | **P0** |
 | `ManagedPagedMMF` | `File` | DatabaseEngine | OccupancyBitmap | **P0** |
-| `ChangeSet` | `ChangeSet` | Transaction | (leaf) | **P3** |
 
 > **Note:** Segments (LogicalSegment, ChunkBasedSegment, etc.) do NOT implement IResource. They follow the **Owner Aggregates** pattern — see [05-granularity-strategy.md](05-granularity-strategy.md). ComponentTable aggregates segment metrics via `IMetricSource` and provides drill-down via `IDebugPropertiesProvider`.
 
@@ -494,6 +561,12 @@ classDiagram
 
 | Type | Reason |
 |------|--------|
+| **Pooled / short-lived (Owner Aggregates)** | |
+| `Transaction` | Pooled, microsecond-to-millisecond lifetime. Hot-path `RegisterChild`/`RemoveChild` overhead not justified. `TransactionChain` exposes diagnostics (active count, contention) via `IDebugPropertiesProvider` instead. |
+| `ChangeSet` | Ephemeral, transaction-scoped. Even shorter-lived than Transaction. No diagnostic value as a tree node. |
+| **Static metadata** | |
+| `DatabaseDefinitions` | Static registry of schemas, created once at startup. No managed resources, no lifecycle. `DatabaseEngine` exposes schema count and names via `IDebugPropertiesProvider`. |
+| `DBComponentDefinition` | Immutable schema metadata per component type. Pure data, no resources to track. |
 | **Segments (Owner Aggregates)** | |
 | `LogicalSegment` | Owner Aggregates — ComponentTable aggregates via `IMetricSource` |
 | `ChunkBasedSegment` | Owner Aggregates — see [05-granularity-strategy.md](05-granularity-strategy.md) |

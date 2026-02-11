@@ -7,42 +7,13 @@ using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Typhon.Schema.Definition;
 
 [assembly: InternalsVisibleTo("Typhon.Engine.Tests")]
 [assembly: InternalsVisibleTo("Typhon.Benchmark")]
+[assembly: InternalsVisibleTo("tsh")]
 
 namespace Typhon.Engine;
-
-[AttributeUsage(AttributeTargets.Struct)]
-[PublicAPI]
-public sealed class ComponentAttribute : Attribute
-{
-    public string Name { get; }
-    public int Revision { get; }
-    public bool AllowMultiple { get; }
-
-    public ComponentAttribute(string name, int revision, bool allowMultiple = false)
-    {
-        Name = name;
-        Revision = revision;
-        AllowMultiple = allowMultiple;
-    }
-}
-
-[AttributeUsage(AttributeTargets.Field)]
-[PublicAPI]
-public sealed class FieldAttribute : Attribute
-{
-    public int? FieldId { get; set; }
-    public string Name { get; set; }
-}
-
-[AttributeUsage(AttributeTargets.Field)]
-[PublicAPI]
-public sealed class IndexAttribute : Attribute
-{
-    public bool AllowMultiple { get; set; }
-}
 
 [Component(SchemaName, 1, true)]
 [StructLayout(LayoutKind.Sequential)]
@@ -119,11 +90,10 @@ public class DatabaseEngineOptions
 /// </para>
 /// </remarks>
 [PublicAPI]
-public class DatabaseEngine : IResource, IMetricSource, IDebugPropertiesProvider
+public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvider
 {
     private readonly DatabaseEngineOptions      _options;
     private readonly ILogger<DatabaseEngine>    _log;
-    private readonly ConcurrentDictionary<string, IResource> _children;
 
     // Transaction counters for observability
     private long _transactionsCreated;
@@ -149,34 +119,6 @@ public class DatabaseEngine : IResource, IMetricSource, IDebugPropertiesProvider
 
     internal TransactionChain TransactionChain { get; }
 
-    #region IResource Implementation
-
-    /// <inheritdoc />
-    public string Id { get; }
-
-    /// <inheritdoc />
-    public ResourceType Type => ResourceType.Node;
-
-    /// <inheritdoc />
-    public IResource Parent { get; }
-
-    /// <inheritdoc />
-    public IEnumerable<IResource> Children => _children.Values;
-
-    /// <inheritdoc />
-    public DateTime CreatedAt { get; }
-
-    /// <inheritdoc />
-    public IResourceRegistry Owner { get; }
-
-    /// <inheritdoc />
-    public bool RegisterChild(IResource child) => _children.TryAdd(child.Id, child);
-
-    /// <inheritdoc />
-    public bool RemoveChild(IResource resource) => _children.TryRemove(resource.Id, out _);
-
-    #endregion
-
     /// <summary>
     /// Create a transaction in order to make Queries and CRUD operation on the database
     /// </summary>
@@ -193,17 +135,9 @@ public class DatabaseEngine : IResource, IMetricSource, IDebugPropertiesProvider
         return TransactionChain.CreateTransaction(this);
     }
 
-    public DatabaseEngine(DatabaseEngineOptions options, ManagedPagedMMF mmf, ILogger<DatabaseEngine> log,
-        IResourceRegistry resourceRegistry, string name = null)
+    public DatabaseEngine(DatabaseEngineOptions options, ManagedPagedMMF mmf, ILogger<DatabaseEngine> log, IResourceRegistry resourceRegistry, 
+        string name = null) : base(name ?? $"DatabaseEngine_{Guid.NewGuid():N}", ResourceType.Engine, resourceRegistry.DataEngine)
     {
-        // IResource initialization
-        Id = name ?? $"DatabaseEngine_{Guid.NewGuid():N}";
-        Owner = resourceRegistry ?? throw new ArgumentNullException(nameof(resourceRegistry));
-        Parent = Owner.DataEngine;
-        CreatedAt = DateTime.UtcNow;
-        _children = new ConcurrentDictionary<string, IResource>();
-        Parent.RegisterChild(this);
-
         // Engine initialization
         MMF = mmf;
         _log = log;
@@ -211,7 +145,7 @@ public class DatabaseEngine : IResource, IMetricSource, IDebugPropertiesProvider
         TimeoutOptions.Current = _options.Timeouts;
         _componentCollectionSegmentByStride = new ConcurrentDictionary<int, ChunkBasedSegment>();
         _componentCollectionVSBSByType = new ConcurrentDictionary<Type, VariableSizedBufferSegmentBase>();
-        TransactionChain = new TransactionChain(_options.Resources.MaxActiveTransactions);
+        TransactionChain = new TransactionChain(_options.Resources.MaxActiveTransactions, this);
 
         DBD = new DatabaseDefinitions();
         ConstructComponentStore();
@@ -224,29 +158,22 @@ public class DatabaseEngine : IResource, IMetricSource, IDebugPropertiesProvider
 
     public bool IsDisposed { get; private set; }
 
-    public void Dispose()
+    protected override void Dispose(bool disposing)
     {
         if (IsDisposed)
         {
             return;
         }
 
-        // Dispose children (ComponentTables)
-        foreach (var child in _children.Values)
+        if (disposing)
         {
-            child.Dispose();
+            TransactionChain.Dispose();
+            MMF.Dispose();
         }
-        _children.Clear();
-
-        // Unregister from parent
-        Parent?.RemoveChild(this);
-
-        TransactionChain.Dispose();
-        MMF.Dispose();
-
+        base.Dispose(disposing);
         IsDisposed = true;
-        GC.SuppressFinalize(this);
     }
+    
     private void ConstructComponentStore()
     {
         _componentTableByType = new ConcurrentDictionary<Type, ComponentTable>();
@@ -267,7 +194,7 @@ public class DatabaseEngine : IResource, IMetricSource, IDebugPropertiesProvider
 
     internal VariableSizedBufferSegment<T> GetComponentCollectionVSBS<T>() where T : unmanaged =>
         (VariableSizedBufferSegment<T>)_componentCollectionVSBSByType.GetOrAdd(typeof(T),
-            stride => new VariableSizedBufferSegment<T>(GetComponentCollectionSegment<T>()));
+            _ => new VariableSizedBufferSegment<T>(GetComponentCollectionSegment<T>()));
 
     internal VariableSizedBufferSegmentBase GetComponentCollectionVSBS(Type itemType) =>
         _componentCollectionVSBSByType.GetOrAdd(itemType,
@@ -367,8 +294,7 @@ public class DatabaseEngine : IResource, IMetricSource, IDebugPropertiesProvider
             return false;
         }
 
-        var componentTable = new ComponentTable();
-        componentTable.Create(this, definition);
+        var componentTable = new ComponentTable(this, definition, this);
         _componentTableByType.TryAdd(typeof(T), componentTable);
 
         return true;
@@ -441,6 +367,8 @@ public class DatabaseEngine : IResource, IMetricSource, IDebugPropertiesProvider
             ["TransactionChain.MinTSN"] = TransactionChain.MinTSN,
             ["TransactionChain.CurrentTSN"] = TransactionChain.NextFreeId,
             ["ComponentTables.Count"] = _componentTableByType?.Count ?? 0,
+            ["Schema.ComponentCount"] = DBD.ComponentCount,
+            ["Schema.Components"] = string.Join(", ", DBD.ComponentNames),
             ["PrimaryKey.Current"] = _curPrimaryKey,
             ["Transactions.Created"] = _transactionsCreated,
             ["Transactions.Committed"] = _transactionsCommitted,

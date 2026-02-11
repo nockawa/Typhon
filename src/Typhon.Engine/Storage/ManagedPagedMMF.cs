@@ -67,7 +67,7 @@ public class ManagedPagedMMFOptions : PagedMMFOptions
 /// </para>
 /// </remarks>
 [PublicAPI]
-public partial class ManagedPagedMMF : PagedMMF, IResource, IMetricSource, IContentionTarget, IDebugPropertiesProvider
+public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarget, IDebugPropertiesProvider
 {
     #region Constants
 
@@ -94,44 +94,10 @@ public partial class ManagedPagedMMF : PagedMMF, IResource, IMetricSource, ICont
     // Throughput counters (supplement inherited _metrics)
     private long _evictionCount;
 
-    #region IResource Implementation
-
-    /// <inheritdoc />
-    public string Id { get; private set; }
-
-    /// <inheritdoc />
-    public ResourceType Type => ResourceType.File;
-
-    /// <inheritdoc />
-    public IResource Parent { get; private set; }
-
-    /// <inheritdoc />
-    public IEnumerable<IResource> Children => [];  // Segments are aggregated, not children
-
-    /// <inheritdoc />
-    public DateTime CreatedAt { get; private set; }
-
-    /// <inheritdoc />
-    public IResourceRegistry Owner { get; private set; }
-
-    /// <inheritdoc />
-    public bool RegisterChild(IResource child) => false;
-
-    /// <inheritdoc />
-    public bool RemoveChild(IResource resource) => false;
-
-    #endregion
-
-    public ManagedPagedMMF(IServiceProvider serviceProvider, PagedMMFOptions options, TimeManager timeManager,
-        ILogger<PagedMMF> logger, IResourceRegistry resourceRegistry, string name = null)
-        : base(serviceProvider, options, timeManager, logger)
+    public ManagedPagedMMF(IServiceProvider serviceProvider, PagedMMFOptions options, IResource parent, string resourceName, ILogger<PagedMMF> logger, 
+        IResourceRegistry resourceRegistry) : 
+        base(serviceProvider, options, parent, $"ManagedPagedMMF_{options?.DatabaseName ?? Guid.NewGuid().ToString("N")}", logger)
     {
-        // IResource initialization
-        Id = name ?? $"ManagedPagedMMF_{options?.DatabaseName ?? Guid.NewGuid().ToString("N")}";
-        Owner = resourceRegistry ?? throw new ArgumentNullException(nameof(resourceRegistry));
-        Parent = Owner.Storage;
-        CreatedAt = DateTime.UtcNow;
-        Parent.RegisterChild(this);
     }
 
     public int AllocatePage(ChangeSet changeSet = null)
@@ -373,26 +339,25 @@ public partial class ManagedPagedMMF : PagedMMF, IResource, IMetricSource, ICont
         return segment;
     }
 
-    protected override void OnDispose()
+    protected override void Dispose(bool disposing)
     {
         if (IsDisposed)
         {
             return;
         }
 
-        // Unregister from parent (Storage subsystem)
-        Parent?.RemoveChild(this);
-
-        var dic = Interlocked.Exchange(ref _segments, null);
-        if (dic != null)
+        if (disposing)
         {
-            foreach (var segment in dic.Values)
+            var dic = Interlocked.Exchange(ref _segments, null);
+            if (dic != null)
             {
-                segment.Dispose();
+                foreach (var segment in dic.Values)
+                {
+                    segment.Dispose();
+                }
             }
         }
-
-        base.OnDispose();
+        base.Dispose(disposing);
     }
 
     public ChunkBasedSegment AllocateChunkBasedSegment(PageBlockType type, int length, int stride, ChangeSet changeSet = null)
@@ -471,7 +436,7 @@ public partial class ManagedPagedMMF : PagedMMF, IResource, IMetricSource, ICont
         var metrics = GetMetrics();
 
         // Memory: page cache buffer size
-        long allocatedBytes = MemPages?.Length ?? 0;
+        long allocatedBytes = MemPages?.EstimatedMemorySize ?? 0;
         writer.WriteMemory(allocatedBytes, allocatedBytes);
 
         // Capacity: free vs total memory pages

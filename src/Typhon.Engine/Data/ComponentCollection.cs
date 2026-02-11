@@ -1,15 +1,9 @@
 ﻿using JetBrains.Annotations;
 using System;
 using System.Runtime.InteropServices;
+using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
-
-[PublicAPI]
-[StructLayout(LayoutKind.Sequential)]
-public struct ComponentCollection<T> where T : unmanaged
-{
-    internal int _bufferId;
-}
 
 [PublicAPI]
 public ref struct ComponentCollectionAccessor<T> : IDisposable where T : unmanaged
@@ -41,14 +35,14 @@ public ref struct ComponentCollectionAccessor<T> : IDisposable where T : unmanag
         if (_field._bufferId == 0)
         {
             _field._bufferId = _vsbs.AllocateBuffer(ref _ca);
-        } 
-        
+        }
+
         // Need to clone the buffer as we mutate its content
         else if (_initialBufferId == _field._bufferId)
         {
             _field._bufferId = _vsbs.CloneBuffer(_initialBufferId, ref _ca);
         }
-        
+
         _vsbs.AddElement(_field._bufferId, value, ref _ca);
     }
 
@@ -57,7 +51,7 @@ public ref struct ComponentCollectionAccessor<T> : IDisposable where T : unmanag
         get
         {
             using var a = new VariableSizedBufferAccessor<T>(_vsbs, _field._bufferId);
-            return a.TotalCount;            
+            return a.TotalCount;
         }
     }
 
@@ -78,7 +72,7 @@ public ref struct ComponentCollectionAccessor<T> : IDisposable where T : unmanag
 
         return destI;
     }
-    
+
     public T[] GetAllElements()
     {
         using var a = new VariableSizedBufferAccessor<T>(_vsbs, _field._bufferId);
