@@ -57,19 +57,13 @@ public class ResourceRegistry : IResourceRegistry
         Name = options?.Name ?? "DefaultResourceRegistry";
 
         // Create root node
-        Root = new ResourceNode("Root", ResourceType.Node, this);
+        Root = ResourceNode.CreateRoot(this);
 
-        // Create subsystem nodes under root
+        // Create subsystem nodes under root (self-register via ResourceNode constructor)
         Storage = new ResourceNode("Storage", ResourceType.Node, Root);
         DataEngine = new ResourceNode("DataEngine", ResourceType.Node, Root);
         Durability = new ResourceNode("Durability", ResourceType.Node, Root);
         Allocation = new ResourceNode("Allocation", ResourceType.Node, Root);
-
-        // Register subsystems as children of root
-        Root.RegisterChild(Storage);
-        Root.RegisterChild(DataEngine);
-        Root.RegisterChild(Durability);
-        Root.RegisterChild(Allocation);
     }
 
     /// <inheritdoc />

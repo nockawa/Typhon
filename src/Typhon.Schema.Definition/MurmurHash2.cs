@@ -2,7 +2,7 @@
 
 using System;
 
-namespace Typhon.Engine;
+namespace Typhon.Schema.Definition;
 
 // Ripped from here http://landman-code.blogspot.com/2009/02/c-superfasthash-and-murmurhash2.html
 public unsafe static class MurmurHash2
@@ -25,7 +25,7 @@ public unsafe static class MurmurHash2
             return Hash(a, data.Length, 0xc58f1a7b);
         }
     }
-        
+
     public static uint Hash(byte* dataAddr, int length, uint seed)
     {
         if (length == 0) return 0;

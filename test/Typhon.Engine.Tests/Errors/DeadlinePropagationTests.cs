@@ -184,7 +184,8 @@ public class DeadlinePropagationTests
     [CancelAfter(5000)]
     public void TransactionChain_Constructor_UsesStaticTimeout()
     {
-        var chain = new TransactionChain(1000);
+        using var registry = new ResourceRegistry(new ResourceRegistryOptions { Name = "Test" });
+        var chain = new TransactionChain(1000, registry.DataEngine);
 
         // TransactionChain no longer stores its own timeout — it reads from TimeoutOptions.Current
         Assert.That(TimeoutOptions.Current.TransactionChainLockTimeout, Is.EqualTo(TimeSpan.FromSeconds(10)));

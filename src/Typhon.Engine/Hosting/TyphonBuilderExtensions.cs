@@ -194,24 +194,24 @@ public static class ServiceCollectionExtensions
         try
         {
             var options = serviceProvider.GetRequiredService<IOptions<TO>>();
-            var timeManager = serviceProvider.GetRequiredService<TimeManager>();
             var logger = serviceProvider.GetRequiredService<ILogger<PagedMMF>>();
 
             // Directly instantiate ManagedPagedMMF which requires IResourceRegistry
             if (typeof(TS) == typeof(ManagedPagedMMF))
             {
                 var resourceRegistry = serviceProvider.GetRequiredService<IResourceRegistry>();
-                return (TS)(object)new ManagedPagedMMF(serviceProvider, options.Value, timeManager, logger, resourceRegistry);
+                return (TS)(object)new ManagedPagedMMF(serviceProvider, options.Value, resourceRegistry.Storage, null, logger, resourceRegistry);
             }
 
             // For base PagedMMF - doesn't require IResourceRegistry
             if (typeof(TS) == typeof(PagedMMF))
             {
-                return (TS)new PagedMMF(serviceProvider, options.Value, timeManager, logger);
+                var resourceRegistry = serviceProvider.GetRequiredService<IResourceRegistry>();
+                return (TS)new PagedMMF(serviceProvider, options.Value, resourceRegistry.Storage, null, logger);
             }
 
             // Fallback to Activator for other derived types (if any)
-            return (TS)Activator.CreateInstance(typeof(TS), serviceProvider, options.Value, timeManager, logger);
+            return (TS)Activator.CreateInstance(typeof(TS), serviceProvider, options.Value, logger);
         }
         catch (Exception e)
         {

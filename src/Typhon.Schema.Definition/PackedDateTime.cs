@@ -4,7 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 
-namespace Typhon.Engine;
+namespace Typhon.Schema.Definition;
 
 [StructLayout(LayoutKind.Sequential, Pack = 2)]
 [PublicAPI]
@@ -17,11 +17,11 @@ public readonly struct PackedDateTime48
 
     private readonly uint _high;
     private readonly ushort _low;
-    
+
     public static PackedDateTime48 UtcNow => new(DateTime.UtcNow);
     public static PackedDateTime48 FromDateTimeTicks(long ticks) => new(ticks, false);
     public static PackedDateTime48 FromPackedDateTimeTicks(long ticks) => new(ticks, true);
-    
+
     public static long ToPackedTicks(long dateTimeTicks) => (dateTimeTicks - BaseTicks) >> PackedShift;
     public static long ToDateTimeTicks(long packedTicks) => (packedTicks << PackedShift) + BaseTicks;
     public PackedDateTime48(DateTime dateTime) : this(dateTime.Ticks, false)
@@ -32,17 +32,17 @@ public readonly struct PackedDateTime48
     {
         Debug.Assert(isPacked || value >= BaseTicks, $"Can't store the given value {value}, it is before {MinValue}.");
         var packedTicks = isPacked ? value : ToPackedTicks(value);
-        
+
         _high = (uint)(packedTicks >> 16);
         _low = (ushort)(packedTicks & 0xFFFF);
     }
-    
+
     public long Ticks => ((((long)_high << 16) | _low) << PackedShift) + BaseTicks;
     public long PackedTicks => (((long)_high << 16) | _low);
 
     public static explicit operator DateTime(PackedDateTime48 packed) => new(packed.Ticks);
     public static explicit operator PackedDateTime48(DateTime dateTime) => new(dateTime.Ticks, false);
-    
+
     public override string ToString() => ((DateTime)this).ToString("yyyy-MM-ddTHH:mm:ss.fffffffK", CultureInfo.InvariantCulture);
 }
 
@@ -59,9 +59,9 @@ public readonly struct PackedTimeSpan32
 
     public PackedTimeSpan32(TimeSpan timeSpan) : this(timeSpan.Ticks, false)
     {
-        
+
     }
-    
+
     public PackedTimeSpan32(long value, bool isPacked)
     {
         var ticks = isPacked ? value : (value >> PackedDateTime48.PackedShift);
@@ -97,6 +97,6 @@ public readonly struct PackedTimeSpan48
         _high = (uint)(ticks >> 16);
         _low = (ushort)(ticks & 0xFFFF);
     }
-    
+
     public override string ToString() => ((TimeSpan)this).ToString();
 }

@@ -10,7 +10,6 @@ namespace Typhon.Engine;
 public class BitmapL3Any : IEnumerable<int>
 {
     private readonly Memory<long>[] _data;
-    internal int LastEnumLoopCount;
 
     public BitmapL3Any(int bitCount)
     {
@@ -196,8 +195,6 @@ public class BitmapL3Any : IEnumerable<int>
                 c0++;
                 lc++;
             }
-
-            o.LastEnumLoopCount = lc;
 
             return false;
         }

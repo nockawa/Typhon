@@ -37,6 +37,7 @@
         <ProjectReference Include="..\Typhon.Analyzers\Typhon.Analyzers.csproj"
                           ReferenceOutputAssembly="false"
                           OutputItemType="Analyzer"/>
+        <ProjectReference Include="..\Typhon.Schema.Definition\Typhon.Schema.Definition.csproj"/>
     </ItemGroup>
 
     <ItemGroup>

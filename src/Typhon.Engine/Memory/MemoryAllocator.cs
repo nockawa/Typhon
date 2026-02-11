@@ -16,60 +16,11 @@ public interface IMemoryAllocator
 [PublicAPI]
 public class MemoryAllocatorOptions
 {
-    public string Name { get; set; } = "Default";
-}
-
-/// <summary>
-/// Base class for service resources that auto-register under a subsystem.
-/// Services are long-lived, typically singleton components in the engine.
-/// </summary>
-[PublicAPI]
-public abstract class ServiceBase : IResource
-{
-    /// <summary>
-    /// Creates a service and registers it under the specified subsystem.
-    /// </summary>
-    /// <param name="id">Unique identifier for this service.</param>
-    /// <param name="owner">The resource registry to register with.</param>
-    /// <param name="subsystem">Which subsystem to register under.</param>
-    protected ServiceBase(string id, IResourceRegistry owner, ResourceSubsystem subsystem)
-    {
-        Id = id ?? throw new ArgumentNullException(nameof(id));
-        Owner = owner ?? throw new ArgumentNullException(nameof(owner));
-        Parent = Owner.Register(this, subsystem);
-        CreatedAt = DateTime.UtcNow;
-    }
-
-    /// <inheritdoc />
-    public abstract void Dispose();
-
-    /// <inheritdoc />
-    public string Id { get; }
-
-    /// <inheritdoc />
-    public ResourceType Type => ResourceType.Service;
-
-    /// <inheritdoc />
-    public IResource Parent { get; }
-
-    /// <inheritdoc />
-    public IEnumerable<IResource> Children => [];
-
-    /// <inheritdoc />
-    public DateTime CreatedAt { get; }
-
-    /// <inheritdoc />
-    public IResourceRegistry Owner { get; }
-
-    /// <inheritdoc />
-    public bool RegisterChild(IResource child) => false;
-
-    /// <inheritdoc />
-    public bool RemoveChild(IResource resource) => false;
+    public string Name { get; set; } = "Default Memory Allocator";
 }
 
 [PublicAPI]
-public class MemoryAllocator : ServiceBase, IMemoryAllocator, IMetricSource, IDebugPropertiesProvider
+public class MemoryAllocator : ResourceNode, IMemoryAllocator, IMetricSource, IDebugPropertiesProvider
 {
     private ConcurrentCollection<MemoryBlockBase> _blocks;
 
@@ -80,23 +31,18 @@ public class MemoryAllocator : ServiceBase, IMemoryAllocator, IMetricSource, IDe
     private long _cumulativeDeallocations;
 
     public MemoryAllocator(IResourceRegistry resourceRegistry, MemoryAllocatorOptions options) :
-        base(options?.Name ?? "DefaultMemoryAllocator", resourceRegistry, ResourceSubsystem.Allocation)
+        base(options?.Name ?? "Default Memory Allocator", ResourceType.Service, resourceRegistry.Allocation)
     {
         _blocks = new ConcurrentCollection<MemoryBlockBase>();
     }
 
-    public override void Dispose()
-    {
-        
-    }
-    
     public MemoryBlockArray AllocateArray(string id, IResource parent, int size, bool zeroed = false)
     {
         if (size <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(size), "Size must be positive");
         }
-        var block = zeroed ? GC.AllocateUninitializedArray<byte>(size) : GC.AllocateArray<byte>(size);
+        var block = zeroed ? GC.AllocateArray<byte>(size) : GC.AllocateUninitializedArray<byte>(size);
 
         var mb = new MemoryBlockArray(this, block, id, parent);
         _blocks.Add(mb);
@@ -129,10 +75,11 @@ public class MemoryAllocator : ServiceBase, IMemoryAllocator, IMetricSource, IDe
             throw new ArgumentException("Alignment must be a power of 2", nameof(alignment));
         }
 
-        var unalignedSize = size + (alignment - 1);
-        var block = zeroed ? GC.AllocateArray<byte>(unalignedSize, true) : GC.AllocateUninitializedArray<byte>(unalignedSize, true);
-
-        var mb = new PinnedMemoryBlock(this, block, size, alignment, id, parent);
+        var mb = new PinnedMemoryBlock(this, size, alignment, id, parent);
+        if (zeroed)
+        {
+            mb.DataAsSpan.Clear();
+        }
         _blocks.Add(mb);
 
         // Update allocation tracking
@@ -148,7 +95,7 @@ public class MemoryAllocator : ServiceBase, IMemoryAllocator, IMetricSource, IDe
     
     internal void Remove(MemoryBlockBase block)
     {
-        Interlocked.Add(ref _totalAllocatedBytes, -block.Size);
+        Interlocked.Add(ref _totalAllocatedBytes, -block.MemoryBlockSize);
         Interlocked.Increment(ref _cumulativeDeallocations);
         _blocks.Remove(block);
     }
@@ -184,12 +131,12 @@ public class MemoryAllocator : ServiceBase, IMemoryAllocator, IMetricSource, IDe
             if (block is MemoryBlockArray)
             {
                 arrayBlocks++;
-                arrayBytes += block.Size;
+                arrayBytes += block.EstimatedMemorySize;
             }
             else if (block is PinnedMemoryBlock)
             {
                 pinnedBlocks++;
-                pinnedBytes += block.Size;
+                pinnedBytes += block.EstimatedMemorySize;
             }
         }
 
