@@ -100,6 +100,29 @@ internal sealed class TSHCommand : Command<TSHCommand.Settings>
             }
         }
 
+        // Execute .tshrc files: global (~/.tshrc) first, then local (./.tshrc)
+        var rcFiles = new[]
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".tshrc"),
+            Path.Combine(Directory.GetCurrentDirectory(), ".tshrc"),
+        };
+
+        foreach (var rcFile in rcFiles)
+        {
+            if (File.Exists(rcFile))
+            {
+                AnsiConsole.MarkupLine($"[grey]Loading {Markup.Escape(rcFile)}[/]");
+                var parser = new ScriptParser(session, executor);
+                var (success, error) = parser.ExecuteFile(rcFile);
+
+                if (!success)
+                {
+                    AnsiConsole.MarkupLine($"[yellow]Warning: .tshrc failed: {Markup.Escape(error)}[/]");
+                    AnsiConsole.MarkupLine("[yellow](continuing anyway)[/]");
+                }
+            }
+        }
+
         // Mode precedence: -c → --exec → pipe → interactive
         if (!string.IsNullOrEmpty(settings.SingleCommand))
         {

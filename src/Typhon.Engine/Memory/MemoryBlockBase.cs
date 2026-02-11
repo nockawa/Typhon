@@ -1,30 +1,32 @@
 using JetBrains.Annotations;
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 
 namespace Typhon.Engine;
 
 [PublicAPI]
-public interface IMemoryResource : IResource
-{
-    int Size { get; }
-}
-
-[PublicAPI]
-public abstract class MemoryBlockBase : IMemoryResource
+public abstract class MemoryBlockBase : MemoryManager<byte>, IMemoryResource, IDebugPropertiesProvider
 {
     public MemoryAllocator Allocator { get; }
-    public abstract int Size { get; }
+    public abstract int EstimatedMemorySize { get; }
+    public abstract int MemoryBlockSize { get; }
     public abstract bool IsDisposed { get; }
     public abstract Span<byte> DataAsSpan { get; }
+    public abstract Memory<byte> DataAsMemory { get; }
 
-    public void Dispose()
+    protected override void Dispose(bool disposing)
     {
         Allocator.Remove(this);
         Parent.RemoveChild(this);
-        GC.SuppressFinalize(this);
     }
 
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+    
     public string Id { get; }
     public ResourceType Type => ResourceType.Memory;
     public IResource Parent { get; }
@@ -33,6 +35,9 @@ public abstract class MemoryBlockBase : IMemoryResource
     public IResourceRegistry Owner { get; }
     public bool RegisterChild(IResource child) => false;
     public bool RemoveChild(IResource resource) => false;
+
+    /// <inheritdoc />
+    public abstract IReadOnlyDictionary<string, object> GetDebugProperties();
 
     protected MemoryBlockBase(MemoryAllocator allocator, string id, IResource parent)
     {

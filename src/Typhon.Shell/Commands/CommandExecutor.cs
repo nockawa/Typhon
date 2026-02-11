@@ -22,6 +22,7 @@ namespace Typhon.Shell.Commands;
 internal sealed class CommandExecutor
 {
     private readonly ShellSession _session;
+    private readonly DiagnosticCommandExecutor _diagnostics;
     private readonly Dictionary<string, IOutputFormatter> _formatters;
     private readonly List<string> _history = [];
 
@@ -45,6 +46,7 @@ internal sealed class CommandExecutor
     public CommandExecutor(ShellSession session)
     {
         _session = session;
+        _diagnostics = new DiagnosticCommandExecutor(session);
         _formatters = new Dictionary<string, IOutputFormatter>(StringComparer.OrdinalIgnoreCase)
         {
             ["table"] = new TableFormatter(),
@@ -112,6 +114,13 @@ internal sealed class CommandExecutor
         if (cmd.Kind != TokenKind.Identifier)
         {
             return CommandResult.Error($"Syntax error: expected command name, got '{cmd.Value}'");
+        }
+
+        // Delegate to diagnostic command executor first (Phase 2)
+        var diagResult = _diagnostics.Dispatch(cmd.Value.ToLowerInvariant(), tokens);
+        if (diagResult.HasValue)
+        {
+            return diagResult.Value;
         }
 
         return cmd.Value.ToLowerInvariant() switch
@@ -806,6 +815,21 @@ internal sealed class CommandExecutor
         sb.AppendLine("    [cyan]update[/] <id> <comp> { f=v, ... }  Update entity component data");
         sb.AppendLine("    [cyan]delete[/] <id> <comp>               Delete entity component");
         sb.AppendLine();
+        sb.AppendLine("  [yellow]Diagnostics:[/]");
+        sb.AppendLine("    [cyan]cache-stats[/]                        Page cache hit rate & state breakdown");
+        sb.AppendLine("    [cyan]cache-pages[/] [[where state=...]]      Memory page state summary");
+        sb.AppendLine("    [cyan]page-dump[/] <N> [[--raw]]              Inspect page header + data");
+        sb.AppendLine("    [cyan]segments[/]                           List all segments with occupancy");
+        sb.AppendLine("    [cyan]segment-detail[/] <Comp.Seg>          Detailed segment info");
+        sb.AppendLine("    [cyan]btree[/] <Comp.Field>                 B+Tree index statistics");
+        sb.AppendLine("    [cyan]btree-dump[/] <Comp.Field> [[--level/chunk N]]  Dump B+Tree nodes");
+        sb.AppendLine("    [cyan]btree-validate[/] <Comp.Field>        Validate B+Tree consistency");
+        sb.AppendLine("    [cyan]revisions[/] <id> <comp>              Show entity revision chain");
+        sb.AppendLine("    [cyan]mvcc-stats[/] <comp>                  MVCC revision statistics");
+        sb.AppendLine("    [cyan]transactions[/]                       Active transaction list");
+        sb.AppendLine("    [cyan]memory[/]                             Memory usage by subsystem");
+        sb.AppendLine("    [cyan]resources[/] [[--flat]]                 Resource graph (TUI or flat table)");
+        sb.AppendLine();
         sb.AppendLine("  [yellow]Shell:[/]");
         sb.AppendLine("    [cyan]set[/] [[key [[value]]]]                View/change shell settings");
         sb.AppendLine("    [cyan]help[/] [[command]]                   Show help");
@@ -836,6 +860,19 @@ internal sealed class CommandExecutor
             "help"          => "  help [command]\n    Shows help for all commands or a specific command.",
             "history"       => "  history\n    Shows recent command history.",
             "exit" or "quit" => "  exit / quit\n    Exits the shell.",
+            "cache-stats"    => "  cache-stats\n    Shows page cache hit rate, state breakdown (free/idle/shared/exclusive/dirty),\n    and disk I/O counters.",
+            "cache-pages"    => "  cache-pages [where state=<state>]\n    Summarizes memory page states. Optional filter by state name\n    (free, idle, shared, exclusive, dirty, allocating).",
+            "page-dump"      => "  page-dump <pageNumber> [--raw]\n    Displays structured page header info and a data preview.\n    With --raw, shows a full hex dump of the entire 8KB page.",
+            "segments"       => "  segments\n    Lists all segments (data, revision, index) with chunk size,\n    occupancy percentage, and used/total chunk counts.",
+            "segment-detail" => "  segment-detail <Component.Segment>\n    Shows detailed info for a named segment.\n    Segments: CompName.Data, CompName.RevTable, CompName.PK_Index, CompName.Str64_Index",
+            "btree"          => "  btree <Component.Field>\n    Shows B+Tree index statistics: node count, capacity, fill factor.\n    Use CompName.PK for the primary key index.",
+            "btree-dump"     => "  btree-dump <Component.Field> [--level N | --chunk N]\n    Dumps B+Tree structure. --chunk N shows raw hex of a specific node.",
+            "btree-validate" => "  btree-validate <Component.Field>\n    Runs consistency checks on a B+Tree index.\n    Reports pass/fail with error details.",
+            "revisions"      => "  revisions <entityId> <component>\n    Shows the MVCC revision chain for an entity: chain length,\n    item count, first revision number.",
+            "mvcc-stats"     => "  mvcc-stats <component>\n    Aggregates MVCC statistics: entity count, total revisions,\n    average revisions per entity, max chain length.",
+            "transactions"   => "  transactions\n    Lists active transactions with TSN and state.\n    Shows MinTSN and NextTSN from the transaction chain.",
+            "memory"         => "  memory\n    Shows memory usage grouped by engine subsystem\n    (Storage, DataEngine, Durability, Allocation).",
+            "resources"      => "  resources [--flat]\n    Without --flat: launches interactive Terminal.Gui resource explorer.\n    With --flat: prints all resource nodes as a table.",
             _               => null,
         };
 

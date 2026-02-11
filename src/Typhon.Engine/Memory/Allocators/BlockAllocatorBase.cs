@@ -3,15 +3,14 @@ using System;
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace Typhon.Engine;
 
 [PublicAPI]
-public unsafe abstract class BlockAllocatorBase : IDisposable
+public unsafe abstract class BlockAllocatorBase : ResourceNode, IMemoryResource
 {
-    private ValueTuple<IntPtr, byte[]>[] _pages;
+    private PinnedMemoryBlock[] _pages;
     private readonly ConcurrentBitmapL3All _blockMap;
     private readonly int _entryCountPerPage;
     private readonly int _pageShift;
@@ -26,27 +25,31 @@ public unsafe abstract class BlockAllocatorBase : IDisposable
     /// <param name="memoryAllocator">Memory allocator for internal bitmap storage (required).</param>
     /// <exception cref="ArgumentNullException">Thrown if parent or memoryAllocator is null.</exception>
     protected BlockAllocatorBase(int stride, int entryCountPerPage, IResource parent, IMemoryAllocator memoryAllocator)
+        : base(null, ResourceType.Allocator, parent)
     {
         if (MathHelpers.IsPow2(entryCountPerPage) == false)
         {
             throw new ArgumentException($"Entry count per page must be a power of 2 but {entryCountPerPage} was given", nameof(entryCountPerPage));
         }
 
-        ArgumentNullException.ThrowIfNull(parent);
         ArgumentNullException.ThrowIfNull(memoryAllocator);
 
+        _memoryAllocator = memoryAllocator;
+
         var size = stride * entryCountPerPage;
-        var page = GC.AllocateUninitializedArray<byte>(size, true);
+        var pmb = memoryAllocator.AllocatePinned("Page-0", this, size, true, 64);
 
         Stride = stride;
         _entryCountPerPage = entryCountPerPage;
         _pageShift = BitOperations.Log2((uint)entryCountPerPage);
-        _pages = new (IntPtr, byte[])[1];
-        _pages[0] = (Marshal.UnsafeAddrOfPinnedArrayElement(page, 0), page);
+        _pages = new PinnedMemoryBlock[1];
+        _pages[0] = pmb;
 
-        _blockMap = new ConcurrentBitmapL3All($"{GetType().Name}BlockMap", parent, memoryAllocator, entryCountPerPage);
+        _blockMap = new ConcurrentBitmapL3All($"{GetType().Name}BlockMap", this, memoryAllocator, entryCountPerPage);
         _lock = new Lock();
     }
+
+    private readonly IMemoryAllocator _memoryAllocator;
 
     public int Capacity => _blockMap.Capacity;
     public int AllocatedCount => _blockMap.TotalBitSet;
@@ -92,7 +95,7 @@ public unsafe abstract class BlockAllocatorBase : IDisposable
             }
             var offset = blockId % _entryCountPerPage;
 
-            return (byte*)pages[pageIndex].Item1.ToPointer() + (Stride * offset);
+            return pages[pageIndex].DataAsPointer + (Stride * offset);
         }
     }
 
@@ -109,7 +112,7 @@ public unsafe abstract class BlockAllocatorBase : IDisposable
         var pageIndex = blockId >> _pageShift;
         var offset = blockId & (_entryCountPerPage - 1);
 
-        return (byte*)_pages[pageIndex].Item1.ToPointer() + (Stride * offset);
+        return _pages[pageIndex].DataAsPointer + (Stride * offset);
     }
 
     protected void FreeBlockInternal(int blockId)
@@ -141,31 +144,33 @@ public unsafe abstract class BlockAllocatorBase : IDisposable
                 return;  // Another thread already resized big enough
             }
 
-            var newPages = new (IntPtr, byte[])[length];
-            new Span<(IntPtr, byte[])>(curPages).CopyTo(newPages);
+            var newPages = new PinnedMemoryBlock[length];
+            new Span<PinnedMemoryBlock>(curPages).CopyTo(newPages);
 
             var size = Stride * _entryCountPerPage;
             for (int i = curPages.Length; i < length; i++)
             {
-                var page = GC.AllocateUninitializedArray<byte>(size, true);
-                newPages[i] = (Marshal.UnsafeAddrOfPinnedArrayElement(page, 0), page);
+                newPages[i] = _memoryAllocator.AllocatePinned($"Page-{i}", this, size, true, 64);
             }
 
             _pages = newPages;
         }
     }
 
-    public void Dispose()
-    {
-        if (_pages == null) return;
+    /// <inheritdoc />
+    public int EstimatedMemorySize => 64 + (_pages?.Length ?? 0) * IntPtr.Size;
 
+    protected override void Dispose(bool disposing)
+    {
         var pages = _pages;
-        if (Interlocked.CompareExchange(ref _pages, null, pages) == pages && pages != null)
+        if (pages == null || Interlocked.CompareExchange(ref _pages, null, pages) != pages)
         {
-            for (int i = 0; i < pages.Length; i++)
-            {
-                pages[i].Item2 = null;
-            }
+            return;
         }
+        
+        // _pages instances are disposed through the ResourceNode.Dispose() call 
+
+        // ResourceNode.Dispose disposes children (PinnedMemoryBlocks, ConcurrentBitmapL3All)
+        base.Dispose(disposing);
     }
 }

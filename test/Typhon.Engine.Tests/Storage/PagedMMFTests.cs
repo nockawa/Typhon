@@ -54,6 +54,8 @@ class PagedMMFTests
                 });
                 builder.SetMinimumLevel(LogLevel.Information);
             })
+            .AddResourceRegistry()
+            .AddMemoryAllocator()
             .AddScopedPagedMemoryMappedFile(options =>
             {
                 options.DatabaseName = CurrentDatabaseName;

@@ -14,6 +14,7 @@
         <PackageReference Include="Spectre.Console" Version="0.54.0" />
         <PackageReference Include="Spectre.Console.Cli" Version="0.53.1" />
         <PackageReference Include="PrettyPrompt" Version="4.1.1" />
+        <PackageReference Include="Terminal.Gui" Version="2.0.0-develop.5027" />
         <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.1" />
         <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.1" />
         <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.1" />

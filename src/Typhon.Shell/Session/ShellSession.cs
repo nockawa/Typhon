@@ -34,6 +34,11 @@ internal sealed class ShellSession : IDisposable
     public string Color { get; set; } = "auto";
     public bool Timing { get; set; }
 
+    // Resource graph
+    private IResourceRegistry _resourceRegistry;
+    private ResourceGraph _resourceGraph;
+    private IMemoryAllocator _memoryAllocator;
+
     // State queries
     public bool IsOpen => _engine != null;
     public bool HasTransaction => _transaction != null;
@@ -45,6 +50,8 @@ internal sealed class ShellSession : IDisposable
     public IReadOnlyDictionary<string, Schema.ComponentSchema> ComponentSchemas => _componentSchemas;
     public IReadOnlyDictionary<string, Type> ComponentTypes => _componentTypes;
     public IReadOnlyList<string> AssemblyPaths => _assemblyPaths;
+    public IResourceRegistry ResourceRegistry => _resourceRegistry;
+    public ResourceGraph ResourceGraph => _resourceGraph;
 
     /// <summary>
     /// Opens (or creates) a database file. Disposes any previously open database.
@@ -87,10 +94,14 @@ internal sealed class ShellSession : IDisposable
                 options.DatabaseDirectory = directory;
                 // DatabaseFileName defaults to DatabaseName; engine appends ".bin"
             })
+            .AddMemoryAllocator()
             .AddDatabaseEngine();
 
         _serviceProvider = services.BuildServiceProvider();
         _engine = _serviceProvider.GetRequiredService<DatabaseEngine>();
+        _resourceRegistry = _serviceProvider.GetRequiredService<IResourceRegistry>();
+        _resourceGraph = new ResourceGraph(_resourceRegistry);
+        _memoryAllocator = _serviceProvider.GetRequiredService<IMemoryAllocator>();
 
         // Re-register any previously loaded component types
         foreach (var kvp in _componentTypes)
@@ -128,6 +139,8 @@ internal sealed class ShellSession : IDisposable
             _serviceProvider = null;
         }
 
+        _resourceGraph = null;
+        _resourceRegistry = null;
         _databasePath = null;
         _databaseName = null;
     }

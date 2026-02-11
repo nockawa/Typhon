@@ -10,7 +10,6 @@ public class ConcurrentBitmapL3Any : IEnumerable<int>
 {
     private volatile int _control;
     private readonly Memory<long>[] _data;
-    internal int LastEnumLoopCount;
 
     public ConcurrentBitmapL3Any(int bitCount)
     {
@@ -206,8 +205,6 @@ public class ConcurrentBitmapL3Any : IEnumerable<int>
                 c0++;
                 lc++;
             }
-
-            o.LastEnumLoopCount = lc;
 
             return false;
         }

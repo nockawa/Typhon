@@ -1,7 +1,7 @@
 # Phase 2 — Diagnostics & Inspection
 
 **Date:** February 2026
-**Status:** Draft
+**Status:** In progress
 **Parent:** [Typhon.Shell Design](./README.md)
 **Prerequisites:** [Phase 1](./01-phase1-core.md) (REPL, schema loading, session model)
 

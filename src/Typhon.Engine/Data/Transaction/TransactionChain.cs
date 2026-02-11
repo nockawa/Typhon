@@ -6,7 +6,7 @@ using System.Threading;
 namespace Typhon.Engine;
 
 [PublicAPI]
-internal class TransactionChain : IDisposable
+internal class TransactionChain : ResourceNode, IDebugPropertiesProvider
 {
     private const int PoolMaxSize = 16;
             
@@ -31,7 +31,7 @@ internal class TransactionChain : IDisposable
     private long _nextFreeId;
     private int _activeCount;
 
-    public TransactionChain(int maxActiveTransactions)
+    public TransactionChain(int maxActiveTransactions, IResource parent) : base("TransactionChain", ResourceType.TransactionPool, parent)
     {
         _maxActiveTransactions = maxActiveTransactions;
         _nextFreeId = 1;
@@ -144,16 +144,33 @@ internal class TransactionChain : IDisposable
         return t;
     }
 
-    public void Dispose()
+    protected override void Dispose(bool disposing)
     {
         if (IsDisposed)
         {
             return;
         }
-        _pool.Clear();
+
+        if (disposing)
+        {
+            _pool.Clear();
+        }
+        
+        base.Dispose(disposing);
         IsDisposed = true;
-        GC.SuppressFinalize(this);
     }
 
     public bool IsDisposed { get; private set; }
+
+    /// <inheritdoc />
+    public IReadOnlyDictionary<string, object> GetDebugProperties() =>
+        new Dictionary<string, object>
+        {
+            ["ActiveCount"] = _activeCount,
+            ["MaxActive"] = _maxActiveTransactions,
+            ["MinTSN"] = MinTSN,
+            ["NextFreeId"] = _nextFreeId,
+            ["Pool.Available"] = _pool.Count,
+            ["Pool.MaxSize"] = PoolMaxSize,
+        };
 }

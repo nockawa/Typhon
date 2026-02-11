@@ -31,29 +31,56 @@ public class ResourceNode : IResource
     private ConcurrentDictionary<string, IResource> _children;
 
     public ResourceNode(string id, ResourceType type, IResource parent, ExhaustionPolicy exhaustionPolicy = ExhaustionPolicy.None)
-        : this(id, type, parent.Owner, exhaustionPolicy)
     {
+        Id = id ?? $"{GetType().Name}";
+        Type = type;
         Parent = parent;
+        Owner = parent.Owner;
+        ExhaustionPolicy = exhaustionPolicy;
+        CreatedAt = DateTime.UtcNow;
+        Parent.RegisterChild(this);
+        _children = new ConcurrentDictionary<string, IResource>();
     }
 
-    internal ResourceNode(string id, ResourceType type, IResourceRegistry owner, ExhaustionPolicy exhaustionPolicy = ExhaustionPolicy.None)
+    internal static ResourceNode CreateRoot(ResourceRegistry registry) => new(registry);
+
+    private ResourceNode(ResourceRegistry registry)
     {
-        Id = id;
-        Type = type;
+        Id = "Root";
+        Type = ResourceType.Node;
         Parent = null;
-        Owner = owner;
-        ExhaustionPolicy = exhaustionPolicy;
+        Owner = registry;
+        ExhaustionPolicy = ExhaustionPolicy.None;
         CreatedAt = DateTime.UtcNow;
         _children = new ConcurrentDictionary<string, IResource>();
     }
 
     public void Dispose()
     {
-        foreach (var resource in _children.Values)
-        {
-            resource.Dispose();
-        }
-        _children.Clear();
+        Dispose(true);
         GC.SuppressFinalize(this);
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (_children == null)
+        {
+            return;
+        }
+        
+        if (disposing)
+        {
+            foreach (var resource in _children.Values)
+            {
+                resource.Dispose();
+            }
+            _children.Clear();
+            _children = null;
+        }
+    }
+    
+    ~ResourceNode()
+    {
+        Dispose(false);
     }
 }

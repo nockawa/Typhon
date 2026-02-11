@@ -15,6 +15,9 @@ public class DatabaseDefinitions
     private readonly Dictionary<string, DBComponentDefinition> _components;
     private Dictionary<string, DBObjectDefinition> _objects;
 
+    public int ComponentCount => _components.Count;
+    public IEnumerable<string> ComponentNames => _components.Keys;
+
     public DatabaseDefinitions()
     {
         _components = new Dictionary<string, DBComponentDefinition>();

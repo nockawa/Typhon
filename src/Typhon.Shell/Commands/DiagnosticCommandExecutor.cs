@@ -1,0 +1,961 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
+using Spectre.Console;
+using Typhon.Engine;
+using Typhon.Engine.BPTree;
+using Typhon.Shell.Parsing;
+using Typhon.Shell.Session;
+
+namespace Typhon.Shell.Commands;
+
+/// <summary>
+/// Handles all Phase 2 diagnostic commands: cache, segments, B+Trees, MVCC, memory, resources.
+/// Peer to <see cref="CommandExecutor"/> which handles Phase 1 CRUD/schema/transaction commands.
+/// </summary>
+internal sealed class DiagnosticCommandExecutor
+{
+    private readonly ShellSession _session;
+
+    public DiagnosticCommandExecutor(ShellSession session)
+    {
+        _session = session;
+    }
+
+    /// <summary>
+    /// Dispatches a diagnostic command. Returns null if the command is not recognized as diagnostic.
+    /// </summary>
+    public CommandResult? Dispatch(string command, List<Token> tokens)
+    {
+        return command switch
+        {
+            "cache-stats"      => ExecuteCacheStats(),
+            "cache-pages"      => ExecuteCachePages(tokens, 1),
+            "page-dump"        => ExecutePageDump(tokens, 1),
+            "segments"         => ExecuteSegments(),
+            "segment-detail"   => ExecuteSegmentDetail(tokens, 1),
+            "btree"            => ExecuteBTree(tokens, 1),
+            "btree-dump"       => ExecuteBTreeDump(tokens, 1),
+            "btree-validate"   => ExecuteBTreeValidate(tokens, 1),
+            "revisions"        => ExecuteRevisions(tokens, 1),
+            "transactions"     => ExecuteTransactions(),
+            "mvcc-stats"       => ExecuteMvccStats(tokens, 1),
+            "memory"           => ExecuteMemory(),
+            "resources"        => ExecuteResources(tokens, 1),
+            _                  => null
+        };
+    }
+
+    // ── Page Cache Diagnostics ────────────────────────────────
+
+    private CommandResult ExecuteCacheStats()
+    {
+        if (!RequireDatabase(out var error))
+        {
+            return error;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("  [white]Page Cache[/]");
+        sb.AppendLine("  [grey]──────────────────────────────────────[/]");
+
+        var mmf = _session.Engine.MMF;
+        var metrics = mmf.GetMetrics();
+        metrics.GetMemPageExtraInfo(out var extra);
+
+        var totalPages = extra.FreeMemPageCount + extra.AllocatingMemPageCount +
+                         extra.IdleMemPageCount + extra.SharedMemPageCount +
+                         extra.ExclusiveMemPageCount + extra.IdleAndDirtyMemPageCount;
+        var totalBytes = (long)totalPages * PagedMMF.PageSize;
+        sb.AppendLine($"  [grey]Total pages:[/]     [white]{totalPages}[/] [grey]({FormatBytes(totalBytes)})[/]");
+
+        sb.AppendLine("  [grey]State breakdown:[/]");
+        sb.AppendLine($"    [grey]Free:[/]          [white]{extra.FreeMemPageCount}[/]  [grey]({Pct(extra.FreeMemPageCount, totalPages)})[/]");
+        sb.AppendLine($"    [grey]Idle:[/]          [white]{extra.IdleMemPageCount}[/]  [grey]({Pct(extra.IdleMemPageCount, totalPages)})[/]");
+        sb.AppendLine($"    [grey]Shared:[/]        [white]{extra.SharedMemPageCount}[/]  [grey]({Pct(extra.SharedMemPageCount, totalPages)})[/]");
+        sb.AppendLine($"    [grey]Exclusive:[/]     [white]{extra.ExclusiveMemPageCount}[/]  [grey]({Pct(extra.ExclusiveMemPageCount, totalPages)})[/]");
+        sb.AppendLine($"    [grey]Dirty:[/]         [white]{extra.IdleAndDirtyMemPageCount}[/]  [grey]({Pct(extra.IdleAndDirtyMemPageCount, totalPages)})[/]");
+        sb.AppendLine($"    [grey]Allocating:[/]    [white]{extra.AllocatingMemPageCount}[/]");
+        sb.AppendLine("  [grey]──────────────────────────────────────[/]");
+
+        var totalRequests = metrics.MemPageCacheHit + metrics.MemPageCacheMiss;
+        if (totalRequests > 0)
+        {
+            var hitRate = (double)metrics.MemPageCacheHit / totalRequests;
+            sb.AppendLine($"  [grey]Hit rate:[/]        [white]{hitRate:P1}[/]  [grey]({metrics.MemPageCacheHit:N0} / {totalRequests:N0})[/]");
+        }
+        else
+        {
+            sb.AppendLine("  [grey]Hit rate:[/]        [white]N/A[/]  [grey](no requests)[/]");
+        }
+
+        sb.AppendLine($"  [grey]Reads from disk:[/] [white]{metrics.ReadFromDiskCount:N0}[/]");
+        sb.AppendLine($"  [grey]Writes to disk:[/]  [white]{metrics.PageWrittenToDiskCount:N0}[/]  [grey]({metrics.WrittenOperationCount:N0} ops)[/]");
+
+        return CommandResult.Markup(sb.ToString().TrimEnd());
+    }
+
+    private CommandResult ExecuteCachePages(List<Token> tokens, int pos)
+    {
+        if (!RequireDatabase(out var error))
+        {
+            return error;
+        }
+
+        // Parse optional where clause
+        string filterState = null;
+
+        if (pos < tokens.Count && tokens[pos].Kind == TokenKind.Identifier &&
+            tokens[pos].Value.Equals("where", StringComparison.OrdinalIgnoreCase))
+        {
+            pos++;
+            while (pos < tokens.Count && tokens[pos].Kind == TokenKind.Identifier)
+            {
+                var key = tokens[pos].Value.ToLowerInvariant();
+                pos++;
+                if (pos < tokens.Count && tokens[pos].Kind == TokenKind.Equals)
+                {
+                    pos++;
+                    if (pos < tokens.Count && tokens[pos].Kind != TokenKind.End)
+                    {
+                        var value = tokens[pos].Value;
+                        pos++;
+                        switch (key)
+                        {
+                            case "state":
+                                filterState = value.ToLowerInvariant();
+                                break;
+                            default:
+                                return CommandResult.Error($"Error: Unknown filter key '{key}'. Valid: state");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Use GetMemPageExtraInfo for the state breakdown since we can't iterate memory pages directly
+        var mmf = _session.Engine.MMF;
+        var metrics = mmf.GetMetrics();
+        metrics.GetMemPageExtraInfo(out var extra);
+
+        var sb = new StringBuilder();
+        sb.AppendLine("  [white]Memory Page State Summary[/]");
+        sb.AppendLine("  [grey]──────────────────────────────────────[/]");
+
+        var states = new (string Name, int Count)[]
+        {
+            ("Free", extra.FreeMemPageCount),
+            ("Allocating", extra.AllocatingMemPageCount),
+            ("Idle", extra.IdleMemPageCount),
+            ("Shared", extra.SharedMemPageCount),
+            ("Exclusive", extra.ExclusiveMemPageCount),
+            ("IdleAndDirty", extra.IdleAndDirtyMemPageCount),
+        };
+
+        sb.AppendLine("  [grey]State          Count[/]");
+        sb.AppendLine("  [grey]─────          ─────[/]");
+
+        foreach (var (name, count) in states)
+        {
+            if (filterState != null && !name.Equals(filterState, StringComparison.OrdinalIgnoreCase) &&
+                !name.Replace("And", "").Equals(filterState, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            sb.AppendLine($"  {name,-14} {count}");
+        }
+
+        sb.AppendLine();
+        sb.AppendLine($"  [grey]Pending I/O reads:[/] [white]{extra.PendingIOReadCount}[/]");
+        sb.AppendLine($"  [grey]Clock sweep range:[/] [white]{extra.MinClockSweepCounter}–{extra.MaxClockSweepCounter}[/]");
+
+        return CommandResult.Markup(sb.ToString().TrimEnd());
+    }
+
+    private CommandResult ExecutePageDump(List<Token> tokens, int pos)
+    {
+        if (!RequireDatabase(out var error))
+        {
+            return error;
+        }
+
+        if (pos >= tokens.Count || tokens[pos].Kind != TokenKind.Integer)
+        {
+            return CommandResult.Error("Syntax error: page-dump <pageNumber> [--raw]");
+        }
+
+        var pageIndex = int.Parse(tokens[pos].Value, CultureInfo.InvariantCulture);
+        pos++;
+
+        var raw = false;
+        if (pos < tokens.Count && tokens[pos].Kind == TokenKind.DoubleDash)
+        {
+            pos++;
+            if (pos < tokens.Count && tokens[pos].Value.Equals("raw", StringComparison.OrdinalIgnoreCase))
+            {
+                raw = true;
+            }
+        }
+
+        var mmf = _session.Engine.MMF;
+        if (!mmf.RequestPage(pageIndex, false, out var pa))
+        {
+            return CommandResult.Error($"Error: Could not access page {pageIndex}.");
+        }
+
+        using (pa)
+        {
+            var sb = new StringBuilder();
+
+            if (raw)
+            {
+                // Raw hex dump of the entire page via WholePageReadOnly span
+                var wholePage = pa.WholePageReadOnly;
+                for (var offset = 0; offset < wholePage.Length; offset += 16)
+                {
+                    sb.Append($"  {offset:X4}: ");
+                    var end = Math.Min(offset + 16, wholePage.Length);
+                    for (var j = offset; j < end; j++)
+                    {
+                        sb.Append($"{wholePage[j]:X2} ");
+                        if (j == offset + 7)
+                        {
+                            sb.Append(' ');
+                        }
+                    }
+
+                    sb.Append(' ');
+                    for (var j = offset; j < end; j++)
+                    {
+                        var b = wholePage[j];
+                        sb.Append(b is >= 32 and < 127 ? (char)b : '.');
+                    }
+
+                    sb.AppendLine();
+                }
+            }
+            else
+            {
+                // Structured view: parse the PageBaseHeader from the header span
+                var headerSpan = pa.PageHeaderReadOnly;
+                var baseHeader = MemoryMarshal.Read<PageBaseHeader>(headerSpan);
+
+                sb.AppendLine($"  [white]Page {pageIndex} — Structured View[/]");
+                sb.AppendLine("  [grey]══════════════════════════════════════[/]");
+                sb.AppendLine();
+                sb.AppendLine("  [white]PageBaseHeader[/]");
+                sb.AppendLine("  [grey]──────────────────────────────────────[/]");
+                sb.AppendLine($"  [grey]Flags:[/]           [white]{baseHeader.Flags}[/]");
+                sb.AppendLine($"  [grey]Type:[/]            [white]{baseHeader.Type}[/]");
+                sb.AppendLine($"  [grey]FormatRevision:[/]  [white]{baseHeader.FormatRevision}[/]");
+                sb.AppendLine($"  [grey]ChangeRevision:[/]  [white]{baseHeader.ChangeRevision}[/]");
+                sb.AppendLine();
+
+                // Hex dump of first 128 bytes of raw data area
+                sb.AppendLine("  [white]Data Preview (first 128 bytes)[/]");
+                sb.AppendLine("  [grey]──────────────────────────────────────[/]");
+                var rawData = pa.PageRawDataReadOnly;
+                var previewLen = Math.Min(128, rawData.Length);
+                for (var offset = 0; offset < previewLen; offset += 16)
+                {
+                    sb.Append($"  {offset:X4}: ");
+                    var end = Math.Min(offset + 16, previewLen);
+                    for (var j = offset; j < end; j++)
+                    {
+                        sb.Append($"{rawData[j]:X2} ");
+                        if (j == offset + 7)
+                        {
+                            sb.Append(' ');
+                        }
+                    }
+
+                    sb.Append("  ");
+                    for (var j = offset; j < end; j++)
+                    {
+                        var b = rawData[j];
+                        sb.Append(b is >= 32 and < 127 ? (char)b : '.');
+                    }
+
+                    sb.AppendLine();
+                }
+            }
+
+            return raw ? CommandResult.Ok(sb.ToString().TrimEnd()) : CommandResult.Markup(sb.ToString().TrimEnd());
+        }
+    }
+
+    // ── Segment Diagnostics ───────────────────────────────────
+
+    private CommandResult ExecuteSegments()
+    {
+        if (!RequireDatabase(out var error))
+        {
+            return error;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("  [grey]Segment               ChunkSize  Occupancy  Chunks (used/total)[/]");
+        sb.AppendLine("  [grey]─────────────────     ─────────  ─────────  ───────────────────[/]");
+
+        var tables = GetComponentTables();
+        if (tables.Count == 0)
+        {
+            sb.AppendLine("  [yellow]No component tables registered.[/]");
+            return CommandResult.Markup(sb.ToString().TrimEnd());
+        }
+
+        foreach (var (name, table) in tables)
+        {
+            AppendSegmentRow(sb, $"{name}.Data", table.ComponentSegment);
+            AppendSegmentRow(sb, $"{name}.RevTable", table.CompRevTableSegment);
+
+            if (table.DefaultIndexSegment != null)
+            {
+                AppendSegmentRow(sb, $"{name}.PK_Index", table.DefaultIndexSegment);
+            }
+
+            if (table.String64IndexSegment != null)
+            {
+                AppendSegmentRow(sb, $"{name}.Str64_Index", table.String64IndexSegment);
+            }
+        }
+
+        return CommandResult.Markup(sb.ToString().TrimEnd());
+    }
+
+    private static void AppendSegmentRow(StringBuilder sb, string name, ChunkBasedSegment seg)
+    {
+        if (seg == null)
+        {
+            return;
+        }
+
+        var used = seg.AllocatedChunkCount;
+        var total = seg.ChunkCapacity;
+        var pct = total > 0 ? (double)used / total : 0.0;
+        sb.AppendLine($"  {Markup.Escape(name),-21} {seg.Stride + " B",-10} {pct:P1,-10} {used:N0} / {total:N0}");
+    }
+
+    private CommandResult ExecuteSegmentDetail(List<Token> tokens, int pos)
+    {
+        if (!RequireDatabase(out var error))
+        {
+            return error;
+        }
+
+        if (pos >= tokens.Count || tokens[pos].Kind == TokenKind.End)
+        {
+            return CommandResult.Error("Syntax error: segment-detail <Component.Segment>");
+        }
+
+        var segName = tokens[pos].Value;
+        var seg = ResolveSegment(segName);
+        if (seg == null)
+        {
+            return CommandResult.Error($"Error: Segment '{segName}' not found. Use 'segments' to list available segments.");
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"  [white]{Markup.Escape(segName)} — ChunkBasedSegment[/]");
+        sb.AppendLine("  [grey]──────────────────────────────────────[/]");
+        sb.AppendLine($"  [grey]Chunk size:[/]      [white]{seg.Stride} bytes[/]");
+
+        var used = seg.AllocatedChunkCount;
+        var total = seg.ChunkCapacity;
+        var pct = total > 0 ? (double)used / total : 0.0;
+        sb.AppendLine($"  [grey]Occupancy:[/]       [white]{pct:P1}[/] [grey]({used:N0} / {total:N0} chunks)[/]");
+        sb.AppendLine($"  [grey]Free chunks:[/]     [white]{seg.FreeChunkCount:N0}[/]");
+        sb.AppendLine($"  [grey]Root page cap:[/]   [white]{seg.ChunkCountRootPage} chunks[/]");
+
+        return CommandResult.Markup(sb.ToString().TrimEnd());
+    }
+
+    // ── B+Tree Diagnostics ────────────────────────────────────
+
+    private CommandResult ExecuteBTree(List<Token> tokens, int pos)
+    {
+        if (!RequireDatabase(out var error))
+        {
+            return error;
+        }
+
+        if (pos >= tokens.Count || tokens[pos].Kind == TokenKind.End)
+        {
+            return CommandResult.Error("Syntax error: btree <Component.IndexName>");
+        }
+
+        var indexName = tokens[pos].Value;
+        var (btree, resolveError) = ResolveIndex(indexName);
+        if (btree == null)
+        {
+            return CommandResult.Error(resolveError);
+        }
+
+        var seg = btree.Segment;
+        var sb = new StringBuilder();
+        var multiStr = btree.AllowMultiple ? "multi" : "unique";
+        sb.AppendLine($"  [white]B+Tree: {Markup.Escape(indexName)} ({multiStr})[/]");
+        sb.AppendLine("  [grey]──────────────────────────────────────[/]");
+
+        var used = seg.AllocatedChunkCount;
+        var total = seg.ChunkCapacity;
+        var pct = total > 0 ? (double)used / total : 0.0;
+        sb.AppendLine($"  [grey]Total nodes:[/]     [white]{used:N0}[/]");
+        sb.AppendLine($"  [grey]Chunk capacity:[/]  [white]{total:N0}[/]");
+        sb.AppendLine($"  [grey]Fill factor:[/]     [white]{pct:P1}[/]");
+        sb.AppendLine($"  [grey]Node size:[/]       [white]{seg.Stride} bytes[/]");
+
+        return CommandResult.Markup(sb.ToString().TrimEnd());
+    }
+
+    private CommandResult ExecuteBTreeDump(List<Token> tokens, int pos)
+    {
+        if (!RequireDatabase(out var error))
+        {
+            return error;
+        }
+
+        if (pos >= tokens.Count || tokens[pos].Kind == TokenKind.End)
+        {
+            return CommandResult.Error("Syntax error: btree-dump <Component.IndexName> [--level N | --chunk N]");
+        }
+
+        var indexName = tokens[pos].Value;
+        pos++;
+
+        var (btree, resolveError) = ResolveIndex(indexName);
+        if (btree == null)
+        {
+            return CommandResult.Error(resolveError);
+        }
+
+        // Parse optional --level or --chunk
+        int? level = null;
+        int? chunk = null;
+        if (pos < tokens.Count && tokens[pos].Kind == TokenKind.DoubleDash)
+        {
+            pos++;
+            if (pos < tokens.Count)
+            {
+                var flag = tokens[pos].Value.ToLowerInvariant();
+                pos++;
+                if (pos < tokens.Count && tokens[pos].Kind == TokenKind.Integer)
+                {
+                    var val = int.Parse(tokens[pos].Value, CultureInfo.InvariantCulture);
+                    switch (flag)
+                    {
+                        case "level":
+                            level = val;
+                            break;
+                        case "chunk":
+                            chunk = val;
+                            break;
+                        default:
+                            return CommandResult.Error($"Error: Unknown option '--{flag}'. Use --level or --chunk.");
+                    }
+                }
+            }
+        }
+
+        var seg = btree.Segment;
+        var sb = new StringBuilder();
+        sb.AppendLine($"  [white]B+Tree dump: {Markup.Escape(indexName)}[/]");
+        sb.AppendLine("  [grey]──────────────────────────────────────[/]");
+        sb.AppendLine($"  [grey]Allocated nodes:[/] [white]{seg.AllocatedChunkCount}[/]");
+        sb.AppendLine($"  [grey]Node size:[/]       [white]{seg.Stride} bytes[/]");
+
+        if (level.HasValue)
+        {
+            sb.AppendLine($"  [grey]Filter:[/]          [white]level {level.Value}[/]");
+        }
+        else if (chunk.HasValue)
+        {
+            sb.AppendLine($"  [grey]Filter:[/]          [white]chunk {chunk.Value}[/]");
+
+            // Dump raw chunk data
+            if (chunk.Value >= 0 && chunk.Value < seg.AllocatedChunkCount)
+            {
+                var accessor = seg.CreateChunkAccessor();
+                unsafe
+                {
+                    var ptr = (byte*)accessor.GetChunkAddress(chunk.Value);
+                    sb.AppendLine();
+                    sb.AppendLine("  [white]Raw chunk data:[/]");
+                    var chunkSize = Math.Min(seg.Stride, 128);
+                    for (var offset = 0; offset < chunkSize; offset += 16)
+                    {
+                        sb.Append($"  {offset:X4}: ");
+                        var end = Math.Min(offset + 16, chunkSize);
+                        for (var j = offset; j < end; j++)
+                        {
+                            sb.Append($"{ptr[j]:X2} ");
+                        }
+
+                        sb.AppendLine();
+                    }
+                }
+            }
+        }
+
+        return CommandResult.Markup(sb.ToString().TrimEnd());
+    }
+
+    private CommandResult ExecuteBTreeValidate(List<Token> tokens, int pos)
+    {
+        if (!RequireDatabase(out var error))
+        {
+            return error;
+        }
+
+        if (pos >= tokens.Count || tokens[pos].Kind == TokenKind.End)
+        {
+            return CommandResult.Error("Syntax error: btree-validate <Component.IndexName>");
+        }
+
+        var indexName = tokens[pos].Value;
+        var (btree, resolveError) = ResolveIndex(indexName);
+        if (btree == null)
+        {
+            return CommandResult.Error(resolveError);
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"  Validating B+Tree [white]{Markup.Escape(indexName)}[/]...");
+
+        try
+        {
+            var accessor = btree.Segment.CreateChunkAccessor();
+            btree.CheckConsistency(ref accessor);
+            sb.AppendLine("  [green]Validation passed[/]");
+        }
+        catch (Exception ex)
+        {
+            sb.AppendLine($"  [red]Validation FAILED: {Markup.Escape(ex.Message)}[/]");
+        }
+
+        return CommandResult.Markup(sb.ToString().TrimEnd());
+    }
+
+    // ── MVCC Diagnostics ──────────────────────────────────────
+
+    private CommandResult ExecuteRevisions(List<Token> tokens, int pos)
+    {
+        if (!RequireDatabase(out var error))
+        {
+            return error;
+        }
+
+        if (pos >= tokens.Count || tokens[pos].Kind != TokenKind.Integer)
+        {
+            return CommandResult.Error("Syntax error: revisions <entityId> <component>");
+        }
+
+        var entityId = long.Parse(tokens[pos].Value, CultureInfo.InvariantCulture);
+        pos++;
+
+        if (pos >= tokens.Count || tokens[pos].Kind == TokenKind.End)
+        {
+            return CommandResult.Error("Syntax error: revisions <entityId> <component>");
+        }
+
+        var componentName = tokens[pos].Value;
+
+        if (!_session.ComponentTypes.TryGetValue(componentName, out var componentType))
+        {
+            return CommandResult.Error($"Error: Component '{componentName}' not found.");
+        }
+
+        var table = _session.Engine.GetComponentTable(componentType);
+        if (table == null)
+        {
+            return CommandResult.Error($"Error: No component table for '{componentName}'.");
+        }
+
+        // Look up the entity in the primary key index
+        var pkIndex = table.PrimaryKeyIndex;
+        var accessor = pkIndex.Segment.CreateChunkAccessor();
+        unsafe
+        {
+            var lookupResult = pkIndex.TryGet(&entityId, ref accessor);
+            if (!lookupResult.IsSuccess)
+            {
+                return CommandResult.Error($"Error: Entity {entityId} not found in {componentName}.");
+            }
+
+            var revChunkId = lookupResult.Value;
+            var revAccessor = table.CompRevTableSegment.CreateChunkAccessor();
+            var revPtr = (CompRevStorageHeader*)revAccessor.GetChunkAddress(revChunkId);
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"  [white]Entity {entityId} — {Markup.Escape(componentName)} revision chain[/]");
+            sb.AppendLine("  [grey]──────────────────────────────────────[/]");
+            sb.AppendLine($"  [grey]Chain:[/]           [white]{revPtr->ChainLength} chunk(s), {revPtr->ItemCount} items[/]");
+            sb.AppendLine($"  [grey]First revision:[/]  [white]{revPtr->FirstItemRevision}[/] [grey](index {revPtr->FirstItemIndex})[/]");
+            sb.AppendLine($"  [grey]Next chunk:[/]      [white]{(revPtr->NextChunkId >= 0 ? revPtr->NextChunkId.ToString() : "(none)")}[/]");
+
+            return CommandResult.Markup(sb.ToString().TrimEnd());
+        }
+    }
+
+    private CommandResult ExecuteTransactions()
+    {
+        if (!RequireDatabase(out var error))
+        {
+            return error;
+        }
+
+        var chain = _session.Engine.TransactionChain;
+        var sb = new StringBuilder();
+        sb.AppendLine("  [white]Active Transactions[/]");
+        sb.AppendLine("  [grey]──────────────────────────────────────[/]");
+        sb.AppendLine($"  [grey]Active:[/]    [white]{chain.ActiveCount}[/]");
+        sb.AppendLine($"  [grey]MinTSN:[/]    [white]{chain.MinTSN}[/]");
+        sb.AppendLine($"  [grey]NextTSN:[/]   [white]{chain.NextFreeId}[/]");
+
+        // Walk the chain to list individual transactions
+        var tx = chain.Head;
+        if (tx != null)
+        {
+            sb.AppendLine();
+            sb.AppendLine("  [grey]TSN   State[/]");
+            sb.AppendLine("  [grey]───   ─────[/]");
+            var count = 0;
+            while (tx != null && count < 50)
+            {
+                var isCurrent = _session.Transaction != null && tx.TSN == _session.Transaction.TSN;
+                var marker = isCurrent ? " <- [cyan]current[/]" : "";
+                sb.AppendLine($"  {tx.TSN,-5} {tx.State}{marker}");
+                tx = tx.Next;
+                count++;
+            }
+        }
+
+        return CommandResult.Markup(sb.ToString().TrimEnd());
+    }
+
+    private CommandResult ExecuteMvccStats(List<Token> tokens, int pos)
+    {
+        if (!RequireDatabase(out var error))
+        {
+            return error;
+        }
+
+        if (pos >= tokens.Count || tokens[pos].Kind == TokenKind.End)
+        {
+            return CommandResult.Error("Syntax error: mvcc-stats <component>");
+        }
+
+        var componentName = tokens[pos].Value;
+        if (!_session.ComponentTypes.TryGetValue(componentName, out var componentType))
+        {
+            return CommandResult.Error($"Error: Component '{componentName}' not found.");
+        }
+
+        var table = _session.Engine.GetComponentTable(componentType);
+        if (table == null)
+        {
+            return CommandResult.Error($"Error: No component table for '{componentName}'.");
+        }
+
+        var revSeg = table.CompRevTableSegment;
+        var allocated = revSeg.AllocatedChunkCount;
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"  [white]MVCC Statistics — {Markup.Escape(componentName)}[/]");
+        sb.AppendLine("  [grey]──────────────────────────────────────[/]");
+
+        var dataSeg = table.ComponentSegment;
+        sb.AppendLine($"  [grey]Data chunks:[/]       [white]{dataSeg.AllocatedChunkCount:N0} / {dataSeg.ChunkCapacity:N0}[/]");
+        sb.AppendLine($"  [grey]Revision chunks:[/]   [white]{allocated:N0} / {revSeg.ChunkCapacity:N0}[/]");
+
+        // Walk revision headers to compute statistics
+        if (allocated > 0)
+        {
+            var accessor = revSeg.CreateChunkAccessor();
+            var totalItems = 0L;
+            var maxChain = 0;
+            var singleRevCount = 0;
+            var multiChunkCount = 0;
+            var entityCount = 0;
+
+            unsafe
+            {
+                for (var i = 0; i < allocated; i++)
+                {
+                    try
+                    {
+                        var ptr = (CompRevStorageHeader*)accessor.GetChunkAddress(i);
+                        if (ptr->ItemCount > 0)
+                        {
+                            entityCount++;
+                            totalItems += ptr->ItemCount;
+                            if (ptr->ItemCount > maxChain)
+                            {
+                                maxChain = ptr->ItemCount;
+                            }
+
+                            if (ptr->ItemCount == 1)
+                            {
+                                singleRevCount++;
+                            }
+
+                            if (ptr->ChainLength > 1)
+                            {
+                                multiChunkCount++;
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // Skip inaccessible chunks
+                    }
+                }
+            }
+
+            if (entityCount > 0)
+            {
+                sb.AppendLine($"  [grey]Entities tracked:[/]  [white]{entityCount:N0}[/]");
+                sb.AppendLine($"  [grey]Total revisions:[/]   [white]{totalItems:N0}[/]");
+                sb.AppendLine($"  [grey]Avg revs/entity:[/]   [white]{(double)totalItems / entityCount:F2}[/]");
+                sb.AppendLine($"  [grey]Max chain length:[/]  [white]{maxChain}[/]");
+                sb.AppendLine($"  [grey]Single-revision:[/]   [white]{singleRevCount:N0}[/] [grey]({(double)singleRevCount / entityCount:P1})[/]");
+                sb.AppendLine($"  [grey]Multi-chunk chains:[/] [white]{multiChunkCount:N0}[/]");
+            }
+        }
+
+        return CommandResult.Markup(sb.ToString().TrimEnd());
+    }
+
+    // ── Memory Diagnostics ────────────────────────────────────
+
+    private CommandResult ExecuteMemory()
+    {
+        if (!RequireDatabase(out var error))
+        {
+            return error;
+        }
+
+        var snapshot = _session.ResourceGraph.GetSnapshot();
+        var sb = new StringBuilder();
+        sb.AppendLine("  [white]Memory Usage[/]");
+        sb.AppendLine("  [grey]──────────────────────────────────────[/]");
+
+        // Group by top-level subsystem
+        var subsystems = new[] { "Storage", "DataEngine", "Durability", "Allocation" };
+        var totalBytes = 0L;
+
+        foreach (var subsystem in subsystems)
+        {
+            var path = $"Root/{subsystem}";
+            var mem = snapshot.GetSubtreeMemory(path);
+            if (mem > 0)
+            {
+                sb.AppendLine($"  [grey]{subsystem,-18}[/] [white]{FormatBytes(mem)}[/]");
+                totalBytes += mem;
+            }
+        }
+
+        // Also check for nodes not under known subsystems
+        var allMem = snapshot.Nodes.Values
+            .Where(n => n.Memory.HasValue)
+            .Sum(n => n.Memory.Value.AllocatedBytes);
+
+        if (allMem > totalBytes)
+        {
+            sb.AppendLine($"  [grey]{"Other",-18}[/] [white]{FormatBytes(allMem - totalBytes)}[/]");
+        }
+
+        sb.AppendLine("  [grey]──────────────────────────────────────[/]");
+        sb.AppendLine($"  [grey]{"Total",-18}[/] [white]{FormatBytes(allMem)}[/]");
+
+        return CommandResult.Markup(sb.ToString().TrimEnd());
+    }
+
+    // ── Resource Graph ────────────────────────────────────────
+
+    private CommandResult ExecuteResources(List<Token> tokens, int pos)
+    {
+        if (!RequireDatabase(out var error))
+        {
+            return error;
+        }
+
+        // Check for --flat flag
+        var flat = false;
+        if (pos < tokens.Count && tokens[pos].Kind == TokenKind.DoubleDash)
+        {
+            pos++;
+            if (pos < tokens.Count && tokens[pos].Value.Equals("flat", StringComparison.OrdinalIgnoreCase))
+            {
+                flat = true;
+            }
+        }
+
+        if (!flat)
+        {
+            // Non-flat mode requires interactive terminal
+            if (Console.IsInputRedirected)
+            {
+                return CommandResult.Error("Error: 'resources' (interactive) requires a terminal. Use 'resources --flat' in pipe/batch mode.");
+            }
+
+            // Launch Terminal.Gui TUI
+            try
+            {
+                var explorer = new Tui.ResourceExplorer(_session);
+                explorer.Run();
+                return CommandResult.Ok();
+            }
+            catch (Exception ex)
+            {
+                return CommandResult.Error($"Error launching resource explorer: {ex.Message}");
+            }
+        }
+
+        // Flat mode: enumerate all resources as a table
+        var snapshot = _session.ResourceGraph.GetSnapshot();
+        var sb = new StringBuilder();
+        sb.AppendLine("  [grey]Resource                            Type            Memory    Capacity   Contention[/]");
+        sb.AppendLine("  [grey]──────────────────────              ──────          ──────    ────────   ──────────[/]");
+
+        foreach (var node in snapshot.Nodes.Values.OrderBy(n => n.Path))
+        {
+            var memStr = node.Memory.HasValue ? FormatBytes(node.Memory.Value.AllocatedBytes) : "--";
+            var capStr = node.Capacity.HasValue ? $"{node.Capacity.Value.Utilization:P1}" : "--";
+            var contentionStr = node.Contention.HasValue && node.Contention.Value.WaitCount > 0
+                ? $"{node.Contention.Value.WaitCount} waits"
+                : "--";
+
+            sb.AppendLine($"  {Markup.Escape(node.Path),-35} {node.Type,-15} {memStr,-9} {capStr,-10} {contentionStr}");
+        }
+
+        return CommandResult.Markup(sb.ToString().TrimEnd());
+    }
+
+    // ── Helpers ────────────────────────────────────────────────
+
+    private bool RequireDatabase(out CommandResult error)
+    {
+        if (_session.IsOpen)
+        {
+            error = default;
+            return true;
+        }
+
+        error = CommandResult.Error("Error: No database is open. Use 'open <path>' first.");
+        return false;
+    }
+
+    private List<(string Name, ComponentTable Table)> GetComponentTables()
+    {
+        var result = new List<(string, ComponentTable)>();
+        foreach (var kvp in _session.ComponentTypes)
+        {
+            var table = _session.Engine.GetComponentTable(kvp.Value);
+            if (table != null)
+            {
+                result.Add((kvp.Key, table));
+            }
+        }
+
+        return result;
+    }
+
+    private ChunkBasedSegment ResolveSegment(string name)
+    {
+        // Format: ComponentName.SegmentSuffix (e.g., CompA.Data, CompA.RevTable, CompA.PK_Index)
+        var dotPos = name.IndexOf('.');
+        if (dotPos < 0)
+        {
+            return null;
+        }
+
+        var componentName = name[..dotPos];
+        var suffix = name[(dotPos + 1)..];
+
+        if (!_session.ComponentTypes.TryGetValue(componentName, out var componentType))
+        {
+            return null;
+        }
+
+        var table = _session.Engine.GetComponentTable(componentType);
+        if (table == null)
+        {
+            return null;
+        }
+
+        return suffix.ToLowerInvariant() switch
+        {
+            "data"        => table.ComponentSegment,
+            "revtable"    => table.CompRevTableSegment,
+            "pk_index"    => table.DefaultIndexSegment,
+            "str64_index" => table.String64IndexSegment,
+            _             => null
+        };
+    }
+
+    private (IBTree Tree, string Error) ResolveIndex(string name)
+    {
+        // Format: ComponentName.FieldName (e.g., CompA.PK or CompA.PlayerId)
+        var dotPos = name.IndexOf('.');
+        if (dotPos < 0)
+        {
+            return (null, $"Error: Index name must be Component.Field (e.g., CompA.PK). Got '{name}'.");
+        }
+
+        var componentName = name[..dotPos];
+        var fieldName = name[(dotPos + 1)..];
+
+        if (!_session.ComponentTypes.TryGetValue(componentName, out var componentType))
+        {
+            return (null, $"Error: Component '{componentName}' not found.");
+        }
+
+        var table = _session.Engine.GetComponentTable(componentType);
+        if (table == null)
+        {
+            return (null, $"Error: No component table for '{componentName}'.");
+        }
+
+        // PK is the primary key index
+        if (fieldName.Equals("PK", StringComparison.OrdinalIgnoreCase))
+        {
+            return (table.PrimaryKeyIndex, null);
+        }
+
+        // Look through indexed fields via the definition's field map
+        if (table.IndexedFieldInfos != null && table.Definition.FieldsByName != null)
+        {
+            // Match by field name → find the corresponding IndexedFieldInfo
+            if (table.Definition.FieldsByName.TryGetValue(fieldName, out var field))
+            {
+                foreach (var info in table.IndexedFieldInfos)
+                {
+                    if (info.OffsetToField == field.OffsetInComponentStorage)
+                    {
+                        return (info.Index, null);
+                    }
+                }
+            }
+        }
+
+        return (null, $"Error: Index '{fieldName}' not found on component '{componentName}'. Use 'describe {componentName}' to see indexed fields.");
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        return bytes switch
+        {
+            >= 1024 * 1024 * 1024 => $"{bytes / (1024.0 * 1024 * 1024):F1} GB",
+            >= 1024 * 1024        => $"{bytes / (1024.0 * 1024):F1} MB",
+            >= 1024               => $"{bytes / 1024.0:F1} KB",
+            _                     => $"{bytes} B"
+        };
+    }
+
+    private static string Pct(int part, int total) => total > 0 ? $"{(double)part / total:P1}" : "0.0%";
+}

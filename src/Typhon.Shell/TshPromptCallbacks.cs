@@ -18,20 +18,32 @@ internal sealed class TshPromptCallbacks : PromptCallbacks
 {
     private readonly ShellSession _session;
 
-    // All Phase 1 command names
+    // All command names (Phase 1 + Phase 2)
     private static readonly string[] Commands =
     [
         "open", "close", "info",
         "load-schema", "reload-schema", "schema", "describe",
         "begin", "commit", "rollback",
         "create", "read", "update", "delete",
-        "set", "help", "history", "exit", "quit"
+        "set", "help", "history", "exit", "quit",
+        // Phase 2: Diagnostics
+        "cache-stats", "cache-pages", "page-dump",
+        "segments", "segment-detail",
+        "btree", "btree-dump", "btree-validate",
+        "revisions", "mvcc-stats",
+        "transactions", "memory", "resources"
     ];
 
     // Commands that take a component name as next argument
     private static readonly HashSet<string> ComponentCommands = new(StringComparer.OrdinalIgnoreCase)
     {
-        "create", "read", "update", "delete", "describe"
+        "create", "read", "update", "delete", "describe", "mvcc-stats"
+    };
+
+    // Commands that take a component name as second arg (after entity ID)
+    private static readonly HashSet<string> ComponentAfterIdCommands = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "revisions"
     };
 
     // Setting keys
@@ -55,7 +67,11 @@ internal sealed class TshPromptCallbacks : PromptCallbacks
     {
         "open", "close", "info", "load-schema", "reload-schema", "schema", "describe",
         "begin", "commit", "rollback", "create", "read", "update", "delete",
-        "set", "help", "history", "exit", "quit", "true", "false"
+        "set", "help", "history", "exit", "quit", "true", "false",
+        // Phase 2
+        "cache-stats", "cache-pages", "page-dump", "segments", "segment-detail",
+        "btree", "btree-dump", "btree-validate", "revisions", "mvcc-stats",
+        "transactions", "memory", "resources", "where"
     };
 
     public TshPromptCallbacks(ShellSession session)
@@ -90,10 +106,25 @@ internal sealed class TshPromptCallbacks : PromptCallbacks
             if (ComponentCommands.Contains(command))
             {
                 // After read/update/delete: second arg is entity ID, third is component name
-                // After create/describe: next arg is component name
+                // After create/describe/mvcc-stats: next arg is component name
                 var componentArgPos = command is "read" or "update" or "delete" ? 2 : 1;
 
                 if (words.Length == componentArgPos + 1)
+                {
+                    var prefix = words[^1];
+                    foreach (var name in _session.ComponentSchemas.Keys)
+                    {
+                        if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                        {
+                            items.Add(new CompletionItem(replacementText: name));
+                        }
+                    }
+                }
+            }
+            else if (ComponentAfterIdCommands.Contains(command))
+            {
+                // revisions: <id> <component> — component at position 2
+                if (words.Length == 3)
                 {
                     var prefix = words[^1];
                     foreach (var name in _session.ComponentSchemas.Keys)
@@ -274,6 +305,20 @@ internal sealed class TshPromptCallbacks : PromptCallbacks
             "history"       => "Show command history",
             "exit"          => "Exit the shell",
             "quit"          => "Exit the shell",
+            // Phase 2: Diagnostics
+            "cache-stats"    => "Page cache hit rate & state breakdown",
+            "cache-pages"    => "Memory page state summary",
+            "page-dump"      => "Inspect page header + hex data",
+            "segments"       => "List all segments with occupancy",
+            "segment-detail" => "Detailed segment info",
+            "btree"          => "B+Tree index statistics",
+            "btree-dump"     => "Dump B+Tree nodes",
+            "btree-validate" => "Validate B+Tree consistency",
+            "revisions"      => "Show entity revision chain",
+            "mvcc-stats"     => "MVCC revision statistics",
+            "transactions"   => "Active transaction list",
+            "memory"         => "Memory usage by subsystem",
+            "resources"      => "Resource graph explorer",
             _               => ""
         };
 }

@@ -1,7 +1,7 @@
 # Phase 1 — Core REPL, Schema & Data Operations
 
 **Date:** February 2026
-**Status:** Draft
+**Status:** Implemented
 **Parent:** [Typhon.Shell Design](./README.md)
 
 ---

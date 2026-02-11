@@ -148,7 +148,7 @@ public enum ComponentTableFlags
 /// </para>
 /// </remarks>
 [PublicAPI]
-public unsafe class ComponentTable : IResource, IMetricSource, IContentionTarget, IDebugPropertiesProvider
+public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTarget, IDebugPropertiesProvider
 {
     private const int ComponentSegmentStartingSize = 4;
     private const int MainIndexSegmentStartingSize = 4;
@@ -189,35 +189,7 @@ public unsafe class ComponentTable : IResource, IMetricSource, IContentionTarget
     private long _contentionWaitCount;
     private long _contentionTotalWaitUs;
     private long _contentionMaxWaitUs;
-
-    #region IResource Implementation
-
-    /// <inheritdoc />
-    public string Id { get; private set; }
-
-    /// <inheritdoc />
-    public ResourceType Type => ResourceType.Node;
-
-    /// <inheritdoc />
-    public IResource Parent { get; private set; }
-
-    /// <inheritdoc />
-    public IEnumerable<IResource> Children => [];  // Segments are aggregated, not children
-
-    /// <inheritdoc />
-    public DateTime CreatedAt { get; private set; }
-
-    /// <inheritdoc />
-    public IResourceRegistry Owner { get; private set; }
-
-    /// <inheritdoc />
-    public bool RegisterChild(IResource child) => false;  // No children allowed
-
-    /// <inheritdoc />
-    public bool RemoveChild(IResource resource) => false;  // No children allowed
-
-    #endregion
-
+    
     #region IContentionTarget Implementation
 
     /// <inheritdoc />
@@ -274,10 +246,7 @@ public unsafe class ComponentTable : IResource, IMetricSource, IContentionTarget
     }
 
     /// <inheritdoc />
-    public void ResetPeaks()
-    {
-        _contentionMaxWaitUs = 0;
-    }
+    public void ResetPeaks() => _contentionMaxWaitUs = 0;
 
     #endregion
 
@@ -319,17 +288,11 @@ public unsafe class ComponentTable : IResource, IMetricSource, IContentionTarget
 
     #endregion
     
-    public void Create(DatabaseEngine dbe, DBComponentDefinition definition)
+    public ComponentTable(DatabaseEngine dbe, DBComponentDefinition definition, IResource parent, ExhaustionPolicy exhaustionPolicy = ExhaustionPolicy.None) : 
+        base($"ComponentTable_{definition.Name}", ResourceType.ComponentTable, parent, exhaustionPolicy)
     {
         DBE = dbe;
         Definition = definition;
-
-        // IResource initialization - register as child of DatabaseEngine
-        Id = $"ComponentTable_{definition.Name}";
-        Parent = dbe;
-        Owner = dbe.Owner;
-        CreatedAt = DateTime.UtcNow;
-        Parent.RegisterChild(this);
 
         var mmf = DBE.MMF;
         ComponentSegment    = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, ComponentTotalSize);
@@ -417,28 +380,32 @@ public unsafe class ComponentTable : IResource, IMetricSource, IContentionTarget
         return index;
     }
 
-    public void Dispose()
+    protected override void Dispose(bool disposing)
     {
-        if (ComponentSegment == null) return;
-
-        // Unregister from parent (DatabaseEngine)
-        Parent?.RemoveChild(this);
-
-        // Dispose ComponentCollectionInfo accessors to release page references
-        if (ComponentCollectionVSBSByOffset != null)
+        if (ComponentSegment == null)
         {
-            foreach (var info in ComponentCollectionVSBSByOffset.Values)
-            {
-                info.Accessor.Dispose();
-            }
-            ComponentCollectionVSBSByOffset.Clear();
+            return;
         }
 
-        String64IndexSegment?.Dispose();
-        DefaultIndexSegment.Dispose();
-        CompRevTableSegment.Dispose();
-        ComponentSegment.Dispose();
+        if (disposing)
+        {
+            // Dispose ComponentCollectionInfo accessors to release page references
+            if (ComponentCollectionVSBSByOffset != null)
+            {
+                foreach (var info in ComponentCollectionVSBSByOffset.Values)
+                {
+                    info.Accessor.Dispose();
+                }
+                ComponentCollectionVSBSByOffset.Clear();
+            }
 
-        ComponentSegment = null;
+            String64IndexSegment?.Dispose();
+            DefaultIndexSegment.Dispose();
+            CompRevTableSegment.Dispose();
+            ComponentSegment.Dispose();
+
+            ComponentSegment = null;
+        }
+        base.Dispose(disposing);
     }
 }
