@@ -1,7 +1,7 @@
 # ADR-032: Resource System Architecture (Pull-Based Metrics, Owner Aggregates, Snapshot API)
 
 **Status**: Accepted
-**Date**: 2026-01-31
+**Date**: 2026-01-31 (amended 2026-02-11)
 **Deciders**: Developer + Claude Code
 
 ## Context
@@ -158,6 +158,95 @@ NodeSnapshot: "Storage/PageCache"
 - Path transforms: `/` → `.`, PascalCase → snake_case
 - Single source of truth (graph) feeds all external systems
 - Consumers can subscribe to subtrees
+
+### 7. ResourceNode Self-Registration and Root Lockdown (Amendment, 2026-02-11)
+
+**ResourceNode's public constructor self-registers with its parent. Root creation is locked down to a factory method.**
+
+```csharp
+// Public constructor — the ONLY way to create a non-root node
+public ResourceNode(string id, ResourceType type, IResource parent, ...)
+{
+    Parent = parent;
+    Owner = parent.Owner;
+    Parent.RegisterChild(this);  // self-registers
+}
+
+// Root creation — private constructor, factory access only
+internal static ResourceNode CreateRoot(ResourceRegistry registry) => new(registry);
+```
+
+**Rationale**:
+- Eliminates "forgot to call RegisterChild" bugs — the old `internal` constructor allowed parentless nodes that had to manually register, leading to split-brain (node's `Parent` was null despite being in the tree)
+- Makes illegal states unrepresentable: every non-root node always has a parent and is always registered
+- DatabaseEngine and MemoryAllocator now pass the correct subsystem node (`resourceRegistry.DataEngine`, `resourceRegistry.Allocation`) as parent instead of the registry itself
+
+### 8. Dispose(bool) Chain Contract for ResourceNode Subclasses (Amendment, 2026-02-11)
+
+**All ResourceNode subclasses must follow a strict Dispose pattern:**
+
+```csharp
+protected override void Dispose(bool disposing)
+{
+    if (IsDisposed) return;           // 1. Guard against double-dispose
+    if (disposing)
+    {
+        // 2. Managed cleanup here only
+    }
+    base.Dispose(disposing);          // 3. ALWAYS outside if(disposing)
+    IsDisposed = true;                // 4. Flag after base call
+}
+```
+
+**Rules**:
+- `base.Dispose(disposing)` must ALWAYS be called, and ALWAYS outside the `if (disposing)` block
+- Pass `disposing` to base (never hardcode `true`)
+- Managed cleanup (collections, child resources) goes inside `if (disposing)`
+- Don't manually dispose children that are registered in the ResourceNode tree — `base.Dispose` handles cascade
+- `IsDisposed` guard prevents re-entry from both explicit Dispose and finalizer paths
+
+**Rationale**:
+- Discovered bugs: ComponentTable was hiding Dispose (CS0108), DatabaseEngine never called base, PagedMMF hardcoded `base.Dispose(true)`, TransactionChain ran managed ops on finalizer path
+- The chain pattern ensures ResourceNode's child cascade always executes
+- Explicit `if (disposing)` guard prevents managed-object access during finalization
+
+### 9. IMemoryResource — Subtree Memory Aggregation (Amendment, 2026-02-11)
+
+**`IMemoryResource.EstimatedMemorySize` reports only the node's own memory, not children.**
+
+```csharp
+public interface IMemoryResource : IResource
+{
+    /// <remarks>
+    /// Children resources must NOT be considered for the computation.
+    /// </remarks>
+    int EstimatedMemorySize { get; }
+}
+```
+
+**Implementors**: PinnedMemoryBlock (native allocation size), MemoryBlockArray (array length), BlockAllocatorBase (managed overhead ~100B), PagedMMF (PageInfo array).
+
+**Aggregation**: The shell's `SumMemory` walks the tree recursively, summing `EstimatedMemorySize` at each `IMemoryResource` node. No double-counting because each node reports only its own contribution.
+
+**Rationale**:
+- MemoryAllocator should NOT implement IMemoryResource — it's a cross-cutting tracker/factory, not a memory owner. The blocks it creates are parented to their actual owners
+- BlockAllocatorBase SHOULD — it extends ResourceNode and its pages are children, making it a natural subtree root for memory queries
+- Separating `EstimatedMemorySize` (for tree aggregation) from `MemoryBlockSize` (for allocator tracking) avoids semantic confusion
+
+### 10. Owner Aggregates Refinement — Exclusions (Amendment, 2026-02-11)
+
+**Refined which types should NOT implement IResource:**
+
+| Type | Reason for Exclusion |
+|------|---------------------|
+| Transaction | Pooled, microsecond lifetime, hot-path overhead not justified |
+| ChangeSet | Short-lived commit artifact, same reasoning as Transaction |
+| DatabaseDefinitions | Static metadata, no lifecycle — exposed via DatabaseEngine.GetDebugProperties() |
+| DBComponentDefinition | Static metadata within DatabaseDefinitions |
+
+**Rationale**:
+- Transaction objects are pooled (16 pre-allocated) and recycled every microsecond — IResource registration/deregistration per transaction would add measurable overhead
+- Static metadata types have no lifecycle to track — their data is better exposed as debug properties on their owning node
 
 ## Alternatives Considered
 
