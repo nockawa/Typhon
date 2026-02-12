@@ -63,7 +63,7 @@ public partial class ChunkBasedSegment : LogicalSegment
         _divMagic = (0x1_0000_0000UL + (uint)_otherChunkCount - 1) / (uint)_otherChunkCount;
     }
 
-    internal unsafe override bool Create(PageBlockType type, Span<int> filePageIndices, bool clear, ChangeSet changeSet = null)
+    internal override bool Create(PageBlockType type, Span<int> filePageIndices, bool clear, ChangeSet changeSet = null)
     {
         if (!base.Create(type, filePageIndices, clear, changeSet))
         {
@@ -75,9 +75,9 @@ public partial class ChunkBasedSegment : LogicalSegment
         var length = filePageIndices.Length;
         for (int i = 0; i < length; i++)
         {
-            var addr = GetPageAddressExclusive(i, epoch, out var memPageIdx);
+            var page = GetPageExclusive(i, epoch, out var memPageIdx);
             int longSize = (i == 0 ? (ChunkCountRootPage + 63) : (ChunkCountPerPage + 63)) >> 6;
-            new Span<long>(addr + PagedMMF.PageBaseHeaderSize, longSize).Clear();
+            page.Metadata<long>(0, longSize).Clear();
             Manager.UnlatchPageExclusive(memPageIdx);
         }
 
@@ -133,14 +133,13 @@ public partial class ChunkBasedSegment : LogicalSegment
             // Clear the page metadata (bitmap) for newly allocated pages
             // This is critical! The base.Grow only clears raw data, not metadata.
             // Without this, InitFromLoad reads garbage and causes crashes.
-            unsafe
             {
                 var epoch = Manager.EpochManager.GlobalEpoch;
                 for (int i = currentLength; i < newLength; i++)
                 {
-                    var addr = GetPageAddressExclusive(i, epoch, out var memPageIdx);
+                    var page = GetPageExclusive(i, epoch, out var memPageIdx);
                     int longSize = (ChunkCountPerPage + 63) >> 6;
-                    new Span<long>(addr + PagedMMF.PageBaseHeaderSize, longSize).Clear();
+                    page.Metadata<long>(0, longSize).Clear();
                     changeSet?.AddByMemPageIndex(memPageIdx);
                     Manager.UnlatchPageExclusive(memPageIdx);
                 }

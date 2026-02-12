@@ -1,5 +1,4 @@
 using JetBrains.Annotations;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32.SafeHandles;
 using System;
@@ -898,6 +897,13 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     }
 
     internal unsafe byte* GetMemPageAddress(int memPageIndex) => &_memPagesAddr[memPageIndex * (long)PageSize];
+
+    /// <summary>
+    /// Get a typed <see cref="PageAccessor"/> for a memory page.
+    /// Provides type-safe access to page header, metadata, and raw data regions.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal unsafe PageAccessor GetPage(int memPageIndex) => new(GetMemPageAddress(memPageIndex));
 
     /// <summary>
     /// Get the raw data address for a memory page (skips header).

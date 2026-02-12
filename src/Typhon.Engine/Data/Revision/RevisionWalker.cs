@@ -29,7 +29,7 @@ internal ref struct RevisionWalker
         _elements = chunkSpan.Slice(sizeof(CompRevStorageHeader)).Cast<byte, CompRevStorageElement>();
     }
 
-    public unsafe bool Step(int stepCount, bool loop, out bool hasLopped)
+    public bool Step(int stepCount, bool loop, out bool hasLopped)
     {
         hasLopped = false;
         for (int i = 0; i < stepCount; i++)

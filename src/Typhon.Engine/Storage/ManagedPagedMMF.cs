@@ -190,12 +190,12 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
 
         RequestPageEpoch(0, epoch, out var memPageIdx);
         TryLatchPageExclusive(memPageIdx);
-        var addr = GetMemPageAddress(memPageIdx);
+        var page = GetPage(memPageIdx);
 
         // Set header information
         var cs = CreateChangeSet();
         cs.AddByMemPageIndex(memPageIdx);
-        ref var rootFileHeader = ref System.Runtime.CompilerServices.Unsafe.AsRef<RootFileHeader>(addr);
+        ref var rootFileHeader = ref page.As<RootFileHeader>();
         fixed (byte* headerSignature = rootFileHeader.HeaderSignature)
         {
             StringExtensions.StoreString(HeaderSignature, headerSignature, 32);
@@ -231,7 +231,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         cs.SaveChanges();
     }
 
-    unsafe protected override void OnFileLoading()
+    protected override void OnFileLoading()
     {
         base.OnFileLoading();
 
@@ -239,8 +239,8 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         var epoch = EpochManager.GlobalEpoch;
 
         RequestPageEpoch(0, epoch, out var memPageIdx);
-        var addr = GetMemPageAddress(memPageIdx);
-        ref var h = ref System.Runtime.CompilerServices.Unsafe.AsRef<RootFileHeader>(addr);
+        var page = GetPage(memPageIdx);
+        ref var h = ref page.As<RootFileHeader>();
 
         if (h.HeaderSignatureString != HeaderSignature)
         {

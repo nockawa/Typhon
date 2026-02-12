@@ -93,11 +93,11 @@ public partial class ChunkBasedSegment
             // No need to scan new pages - they're guaranteed empty!
         }
 
-        private unsafe void InitFromLoad()
+        private void InitFromLoad()
         {
             var epoch = _segment.Manager.EpochManager.GlobalEpoch;
             var curSegPageIndex = -1;
-            byte* metadataAddr = null;
+            ReadOnlySpan<long> metadataSpan = default;
             var allocated = 0;
             var segmentLength = _segment.Length;
 
@@ -119,8 +119,8 @@ public partial class ChunkBasedSegment
 
                 if (curSegPageIndex != prevIndex)
                 {
-                    var addr = _segment.GetPageAddress(curSegPageIndex, epoch, out _);
-                    metadataAddr = addr + PagedMMF.PageBaseHeaderSize;
+                    var page = _segment.GetPage(curSegPageIndex, epoch, out _);
+                    metadataSpan = page.MetadataReadOnly<long>();
                 }
 
                 // Bounds check: ensure pageOffset is within PageMetadata (16 longs max)
@@ -131,8 +131,7 @@ public partial class ChunkBasedSegment
                         $"pageIndex={curSegPageIndex}, i={i}, l0Offset={l0Offset}");
                 }
 
-                var data = new Span<long>(metadataAddr, PagedMMF.PageMetadataSize / sizeof(long));
-                var mask = data[pageOffset];
+                var mask = metadataSpan[pageOffset];
                 allocated += BitOperations.PopCount((ulong)mask);
 
                 if (mask == -1)
@@ -193,15 +192,15 @@ public partial class ChunkBasedSegment
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public unsafe bool SetL0(int bitIndex)
+        public bool SetL0(int bitIndex)
         {
             var l0Offset = bitIndex >> 6;
             var l0Mask = 1L << (bitIndex & 0x3F);
 
             var (pageIndex, pageOffset) = GetBitmapMaskLocation(l0Offset);
             var epoch = _segment.Manager.EpochManager.GlobalEpoch;
-            var addr = _segment.GetPageAddress(pageIndex, epoch, out _);
-            var data = new Span<long>(addr + PagedMMF.PageBaseHeaderSize, PagedMMF.PageMetadataSize / sizeof(long));
+            var page = _segment.GetPage(pageIndex, epoch, out _);
+            var data = page.Metadata<long>();
             {
                 var prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
                 if ((prevL0 & l0Mask) != 0)
@@ -239,15 +238,15 @@ public partial class ChunkBasedSegment
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        private unsafe bool SetL1(int index)
+        private bool SetL1(int index)
         {
             var l0Offset = index;
             var l0Mask = -1L;
 
             var (pageIndex, pageOffset) = GetBitmapMaskLocation(l0Offset);
             var epoch = _segment.Manager.EpochManager.GlobalEpoch;
-            var addr = _segment.GetPageAddress(pageIndex, epoch, out _);
-            var data = new Span<long>(addr + PagedMMF.PageBaseHeaderSize, PagedMMF.PageMetadataSize / sizeof(long));
+            var page = _segment.GetPage(pageIndex, epoch, out _);
+            var data = page.Metadata<long>();
             {
                 var prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
                 if (prevL0 != 0)
@@ -285,7 +284,7 @@ public partial class ChunkBasedSegment
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public unsafe void ClearL0(int index)
+        public void ClearL0(int index)
         {
             var l0Offset = index >> 6;
             var bitMask = 1L << (index & 0x3F);
@@ -293,8 +292,8 @@ public partial class ChunkBasedSegment
 
             var (pageIndex, pageOffset) = GetBitmapMaskLocation(l0Offset);
             var epoch = _segment.Manager.EpochManager.GlobalEpoch;
-            var addr = _segment.GetPageAddress(pageIndex, epoch, out _);
-            var data = new Span<long>(addr + PagedMMF.PageBaseHeaderSize, PagedMMF.PageMetadataSize / sizeof(long));
+            var page = _segment.GetPage(pageIndex, epoch, out _);
+            var data = page.Metadata<long>();
             {
                 var prevL0 = Interlocked.And(ref data[pageOffset], l0Mask);
 
@@ -335,20 +334,20 @@ public partial class ChunkBasedSegment
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public unsafe bool IsSet(int index)
+        public bool IsSet(int index)
         {
             var offset = index >> 6;
             var mask = 1L << (index & 0x3F);
 
             var (pageIndex, pageOffset) = GetBitmapMaskLocation(offset);
             var epoch = _segment.Manager.EpochManager.GlobalEpoch;
-            var addr = _segment.GetPageAddress(pageIndex, epoch, out _);
-            var data = new ReadOnlySpan<long>(addr + PagedMMF.PageBaseHeaderSize, PagedMMF.PageMetadataSize / sizeof(long));
+            var page = _segment.GetPage(pageIndex, epoch, out _);
+            var data = page.MetadataReadOnly<long>();
             return (data[pageOffset] & mask) != 0L;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        private unsafe bool FindNextUnsetL0(ref int index, ref long mask)
+        private bool FindNextUnsetL0(ref int index, ref long mask)
         {
             var capacity = Capacity;
 
@@ -361,7 +360,7 @@ public partial class ChunkBasedSegment
 
             var epoch = _segment.Manager.EpochManager.GlobalEpoch;
             var curPageId = -1;
-            byte* metadataAddr = null;
+            Span<long> metadataSpan = default;
 
             while (c0 < capacity)
             {
@@ -375,11 +374,11 @@ public partial class ChunkBasedSegment
                         var (pageId, offset) = GetBitmapMaskLocation(i0);
                         if (pageId != curPageId)
                         {
-                            var addr = _segment.GetPageAddress(pageId, epoch, out _);
-                            metadataAddr = addr + PagedMMF.PageBaseHeaderSize;
+                            var page = _segment.GetPage(pageId, epoch, out _);
+                            metadataSpan = page.Metadata<long>();
                             curPageId = pageId;
                         }
-                        var data = new Span<long>(metadataAddr, PagedMMF.PageMetadataSize / sizeof(long));
+                        var data = metadataSpan;
                         long t0 = 1L << (c0 & 0x3F);
                         v0 = data[offset] | (t0 - 1);
 

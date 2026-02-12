@@ -221,7 +221,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     internal long GetNewPrimaryKey() => Interlocked.Increment(ref _curPrimaryKey);
 
     // Create the first revision of the system schema
-    private unsafe void CreateSystemSchemaR1()
+    private void CreateSystemSchemaR1()
     {
         // Register the system components
         RegisterComponentFromAccessor<FieldR1>();
@@ -236,12 +236,12 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
         MMF.RequestPageEpoch(0, epoch, out var memPageIdx);
         MMF.TryLatchPageExclusive(memPageIdx);
-        var addr = MMF.GetMemPageAddress(memPageIdx);
+        var page = MMF.GetPage(memPageIdx);
 
         // Save the entry points in the file header
         var cs = MMF.CreateChangeSet();
         cs.AddByMemPageIndex(memPageIdx);
-        ref var rootFileHeader = ref Unsafe.AsRef<RootFileHeader>(addr);
+        ref var rootFileHeader = ref page.As<RootFileHeader>();
 
         rootFileHeader.SystemSchemaRevision = 1;
         rootFileHeader.FieldTableSPI = _fieldsTable.ComponentSegment.RootPageIndex;
