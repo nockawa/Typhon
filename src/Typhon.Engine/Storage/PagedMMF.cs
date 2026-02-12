@@ -998,10 +998,62 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         }
     }
 
+    /// <summary>
+    /// Acquire exclusive latch on an epoch-protected page (Idle → Exclusive).
+    /// Unlike TryPromoteToExclusive, this doesn't check LockedByThreadId ownership
+    /// because epoch pages are in Idle state with no thread owner.
+    /// </summary>
+    internal bool TryLatchPageExclusive(int memPageIndex)
+    {
+        var pi = _memPagesInfo[memPageIndex];
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
+        if (!pi.StateSyncRoot.EnterExclusiveAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("PageCache/LatchPageExclusive", TimeoutOptions.Current.PageCacheLockTimeout);
+        }
+
+        try
+        {
+            // Only latch Idle pages (epoch-protected)
+            if (pi.PageState != PageState.Idle)
+            {
+                return false;
+            }
+
+            pi.PageState = PageState.Exclusive;
+            pi.LockedByThreadId = Environment.CurrentManagedThreadId;
+            pi.ConcurrentSharedCounter = 1;
+            return true;
+        }
+        finally
+        {
+            pi.StateSyncRoot.ExitExclusiveAccess();
+        }
+    }
+
+    /// <summary>
+    /// Release exclusive latch on an epoch-protected page (Exclusive → Idle).
+    /// </summary>
+    internal void UnlatchPageExclusive(int memPageIndex)
+    {
+        var pi = _memPagesInfo[memPageIndex];
+        pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
+        try
+        {
+            pi.ConcurrentSharedCounter = 0;
+            pi.LockedByThreadId = 0;
+            pi.PageState = PageState.Idle;
+        }
+        finally
+        {
+            pi.StateSyncRoot.ExitExclusiveAccess();
+        }
+    }
+
     internal void IncrementDirty(int memPageIndex)
     {
         var pi = _memPagesInfo[memPageIndex];
-        Debug.Assert(pi.PageState is PageState.Shared or PageState.Exclusive, "We can't increment the dirty counter for a page that is not Shared or Exclusive.");
+        Debug.Assert(pi.PageState is PageState.Shared or PageState.Exclusive or PageState.Idle, "We can't increment the dirty counter for a page that is not Shared, Exclusive, or Idle (epoch-protected).");
 
         var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
         if (!pi.StateSyncRoot.EnterExclusiveAccess(ref wc))
@@ -1285,6 +1337,10 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         }
         return true;
     }
+
+    /// <summary>Get the PageInfo for a memory page by its memory index.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal PageInfo GetPageInfoByMemIndex(int memPageIndex) => _memPagesInfo[memPageIndex];
 
     /// <summary>Get the AccessEpoch for a memory page (test infrastructure).</summary>
     internal long GetPageAccessEpoch(int memPageIndex) => _memPagesInfo[memPageIndex].AccessEpoch;
