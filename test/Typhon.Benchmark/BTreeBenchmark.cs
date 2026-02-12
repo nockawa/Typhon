@@ -9,7 +9,7 @@ using Typhon.Engine.BPTree;
 
 namespace Typhon.Benchmark;
 
-[SimpleJob(warmupCount: 1, iterationCount: 1)]
+[SimpleJob(warmupCount: 3, iterationCount: 15)]
 [JsonExporterAttribute.Full]
 [BenchmarkCategory("BTree")]
 public class BTreeBenchmark
@@ -23,11 +23,10 @@ public class BTreeBenchmark
     [GlobalSetup]
     public void GlobalSetup()
     {
-        var dcs = 200*1024;
+        var dcs = 200 * 1024;
         dcs *= PagedMMF.PageSize;
 
-        var serviceCollection = new ServiceCollection();
-        _serviceCollection = serviceCollection;
+        _serviceCollection = new ServiceCollection();
         _serviceCollection
             .AddLogging(builder =>
             {
@@ -35,6 +34,7 @@ public class BTreeBenchmark
                 builder.SetMinimumLevel(LogLevel.Critical);
             })
             .AddResourceRegistry()
+            .AddMemoryAllocator()
             .AddEpochManager()
             .AddScopedManagedPagedMemoryMappedFile(options =>
             {
@@ -42,11 +42,26 @@ public class BTreeBenchmark
                 options.DatabaseCacheSize = (ulong)dcs;
                 options.PagesDebugPattern = false;
             });
+    }
 
+    [IterationSetup]
+    public void IterationSetup()
+    {
         _serviceProvider = _serviceCollection.BuildServiceProvider();
         _serviceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
         _pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         _epochManager = _serviceProvider.GetRequiredService<EpochManager>();
+    }
+
+    [IterationCleanup]
+    public void IterationCleanup()
+    {
+        _epochManager?.Dispose();
+        _epochManager = null;
+        _pmmf?.Dispose();
+        _pmmf = null;
+        _serviceProvider?.Dispose();
+        _serviceProvider = null;
     }
 
     public void Run()
@@ -57,10 +72,7 @@ public class BTreeBenchmark
     [GlobalCleanup]
     public void GlobalCleanup()
     {
-        _epochManager?.Dispose();
-        _epochManager = null;
-        _pmmf?.Dispose();
-        _pmmf = null;
+        // Per-iteration cleanup handles _epochManager, _pmmf, _serviceProvider
     }
 
     [Benchmark]
