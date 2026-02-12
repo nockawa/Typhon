@@ -1,10 +1,11 @@
 ﻿using JetBrains.Annotations;
 using Microsoft.Extensions.Logging;
-using System.Runtime.CompilerServices;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 using Typhon.Schema.Definition;
@@ -235,7 +236,8 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         var epoch = EpochManager.GlobalEpoch;
 
         MMF.RequestPageEpoch(0, epoch, out var memPageIdx);
-        MMF.TryLatchPageExclusive(memPageIdx);
+        var latched = MMF.TryLatchPageExclusive(memPageIdx);
+        Debug.Assert(latched, "TryLatchPageExclusive failed on root page during schema save");
         var page = MMF.GetPage(memPageIdx);
 
         // Save the entry points in the file header

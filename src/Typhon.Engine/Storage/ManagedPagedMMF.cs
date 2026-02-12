@@ -189,7 +189,8 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         var epoch = EpochManager.GlobalEpoch;
 
         RequestPageEpoch(0, epoch, out var memPageIdx);
-        TryLatchPageExclusive(memPageIdx);
+        var latched = TryLatchPageExclusive(memPageIdx);
+        Debug.Assert(latched, "TryLatchPageExclusive failed on root page during file creation");
         var page = GetPage(memPageIdx);
 
         // Set header information
@@ -221,10 +222,11 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         _occupancyMap.SetL0(0);
         _occupancyMap.SetL0(1);
 
-        // Reserve a pages to use when the occupancy map needs to grow, we need to reserve because we can't allocate them by the time the map is full
+        // Reserve pages to use when the occupancy map needs to grow, we need to reserve because we can't allocate them by the time the map is full
         _occupancyNextReservedPageIndex = 2;
         _occupancyNextReservedMapPageIndex = 3;
         _occupancyMap.SetL0(_occupancyNextReservedPageIndex);
+        _occupancyMap.SetL0(_occupancyNextReservedMapPageIndex);
         // ReSharper restore InconsistentlySynchronizedField
 
         UnlatchPageExclusive(memPageIdx);
@@ -331,9 +333,9 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         AllocatePages(ref pages, 0, changeSet);
 
         var segment = new LogicalSegment(this);
-        if (dic.TryAdd(pages[0], segment) == false)
+        if (!dic.TryAdd(pages[0], segment))
         {
-            Debug.Assert(true);
+            Debug.Fail("Segment root page already registered in dictionary — duplicate allocation");
         }
 
         if (segment.Create(type, pages, false, changeSet) == false)
@@ -380,7 +382,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         var segment = new ChunkBasedSegment(EpochManager, this, stride);
         if (!dic.TryAdd(pages[0], segment))
         {
-            Debug.Assert(true);
+            Debug.Fail("Segment root page already registered in dictionary — duplicate allocation");
         }
 
         if (!segment.Create(type, pages, false, changeSet))
@@ -403,7 +405,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         var segment = new ChunkBasedSegment(EpochManager, this, stride);
         if (dic.TryAdd(filePageIndex, segment) == false)
         {
-            Debug.Assert(true);
+            Debug.Fail("Segment root page already registered in dictionary — duplicate allocation");
         }
 
         if (segment.Load(filePageIndex) == false)

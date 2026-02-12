@@ -563,7 +563,7 @@ CachePagesCmd   <- 'cache-pages' (WS 'where' WS CacheFilter
 CacheFilter     <- CacheStateFilter / CacheSegmentFilter
 CacheStateFilter   <- 'state' WS? '=' WS? PageState
 CacheSegmentFilter <- 'segment' WS? '=' WS? SegmentName
-PageState       <- 'free' / 'idle' / 'shared' / 'exclusive' / 'dirty'
+PageState       <- 'free' / 'allocating' / 'idle' / 'exclusive'
 
 PageDumpCmd     <- 'page-dump' WS UnsignedInt (WS '--raw')?
 

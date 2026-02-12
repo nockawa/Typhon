@@ -181,13 +181,13 @@ public partial class ManagedPagedMMF
                     var l1Mask = 1L << (l0Offset & 0x3F);
 
                     var prevL1 = _l1All.Span[l1Offset];
-                    _l1All.Span[l1Offset] &= l1Mask;
+                    _l1All.Span[l1Offset] &= ~l1Mask;
 
                     if (prevL1 == -1)
                     {
                         var l2Offset = l1Offset >> 6;
                         var l2Mask = 1L << (l1Offset & 0x3F);
-                        _l2All.Span[l2Offset] &= l2Mask;
+                        _l2All.Span[l2Offset] &= ~l2Mask;
                     }
                 }
 
@@ -196,7 +196,7 @@ public partial class ManagedPagedMMF
                     var l1Offset = l0Offset >> 6;
                     var l1Mask = 1L << (l0Offset & 0x3F);
 
-                    _l1Any.Span[l1Offset] &= l1Mask;
+                    _l1Any.Span[l1Offset] &= ~l1Mask;
                 }
             }
             _segment.Manager.UnlatchPageExclusive(memPageIdx);

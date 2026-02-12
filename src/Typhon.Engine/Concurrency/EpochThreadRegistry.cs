@@ -260,8 +260,13 @@ internal sealed class EpochThreadRegistry : IDisposable
         _pinnedEpochs[index] = 0;
         _depths[index] = 0;
         _ownerThreads[index] = null;
-        _slotStates[index] = SlotFree;
-        Interlocked.Decrement(ref _activeSlotCount);
+
+        // CAS to make FreeSlot idempotent: ComputeMinActiveEpoch and EpochSlotHandle finalizer
+        // can both call FreeSlot for the same dead-thread slot concurrently.
+        if (Interlocked.CompareExchange(ref _slotStates[index], SlotFree, SlotActive) == SlotActive)
+        {
+            Interlocked.Decrement(ref _activeSlotCount);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════

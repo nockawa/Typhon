@@ -134,7 +134,7 @@ Failing to dispose IDisposable resources causes resource leaks. In Typhon, this 
 
 | Type | Consequence if not disposed |
 |------|----------------------------|
-| `ChunkAccessor` | **Page cache deadlock** - pages remain in Shared state indefinitely |
+| `ChunkAccessor` | **Page cache exhaustion** — epoch-pinned pages prevent eviction indefinitely |
 | `Transaction` | **Data corruption** - uncommitted changes leak, resource exhaustion |
 
 This analyzer addresses limitations in CA2000 which lacks inter-procedural analysis, misses tuple returns, and ignores exception flow paths.

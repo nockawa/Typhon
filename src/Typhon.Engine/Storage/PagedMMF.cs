@@ -833,6 +833,19 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             curPageInfo = nextPageInfo;
         }
 
+        // Increment ChangeRevision for the last page (the loop above only processes pages before the last one)
+        if (curPageInfo.FilePageIndex > 0)
+        {
+            var ioTask = curPageInfo.IOReadTask;
+            if (ioTask != null && !ioTask.IsCompletedSuccessfully)
+            {
+                ioTask.GetAwaiter().GetResult();
+            }
+
+            var headerAddr = (PageBaseHeader*)(memPageBaseAddr + (curPageInfo.MemPageIndex * PageSize));
+            ++headerAddr->ChangeRevision;
+        }
+
         // Don't forget to add the last operation
         operations.Add(curOperation);
 
@@ -871,7 +884,17 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         var lengthToWrite = PageSize * length;
         var pageData = MemPages.DataAsMemory.Slice(firstMemPageIndex * PageSize, lengthToWrite);
 
-        _fileSize = Math.Max(_fileSize, pageOffset + lengthToWrite);
+        // Atomic max: concurrent SavePageInternal calls may race on _fileSize
+        var newSize = pageOffset + lengthToWrite;
+        long oldSize;
+        do
+        {
+            oldSize = _fileSize;
+            if (newSize <= oldSize)
+            {
+                break;
+            }
+        } while (Interlocked.CompareExchange(ref _fileSize, newSize, oldSize) != oldSize);
 
         _metrics.PageWrittenToDiskCount += length;
         _metrics.WrittenOperationCount++;

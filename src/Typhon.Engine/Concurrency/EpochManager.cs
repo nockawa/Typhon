@@ -15,10 +15,9 @@ public sealed class EpochManager : ResourceNode, IMetricSource
     private long _globalEpoch;
     private readonly EpochThreadRegistry _registry;
 
-    // === Metrics ===
+    // === Metrics (non-atomic ++ is intentional: accuracy traded for hot-path performance) ===
     private long _epochAdvances;
     private long _scopeEnters;
-    private long _registryExhaustionCount;
 
     public EpochManager(string id, IResource parent) : base(id, ResourceType.Synchronization, parent)
     {
@@ -106,16 +105,12 @@ public sealed class EpochManager : ResourceNode, IMetricSource
         writer.WriteThroughput("EpochAdvances", _epochAdvances);
         writer.WriteThroughput("ScopeEnters", _scopeEnters);
         writer.WriteCapacity(_registry.ActiveSlotCount, EpochThreadRegistry.MaxSlots);
-        writer.WriteThroughput("RegistryExhaustions", _registryExhaustionCount);
     }
 
     public void ResetPeaks()
     {
         // No high-water marks currently tracked
     }
-
-    /// <summary>Increment exhaustion counter. Called by <see cref="EpochThreadRegistry"/> on slot exhaustion.</summary>
-    internal void RecordRegistryExhaustion() => _registryExhaustionCount++;
 
     protected override void Dispose(bool disposing)
     {

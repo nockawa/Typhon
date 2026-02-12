@@ -24,7 +24,7 @@ The Storage Engine is the foundation for all persistent data in Typhon. It provi
 | **3.2** | [ManagedPagedMMF](#32-managedpagedmmf) | Page allocation and occupancy tracking | ✅ Solid |
 | **3.3** | [LogicalSegment](#33-logicalsegment) | Multi-page directory abstraction | ✅ Solid |
 | **3.4** | [ChunkBasedSegment](#34-chunkbasedsegment) | Fixed-size chunk allocation | ✅ Solid |
-| **3.5** | [ChunkAccessor](#35-epochchunkaccessor) | Epoch-protected SIMD-optimized chunk cache | ✅ Solid |
+| **3.5** | [ChunkAccessor](#35-chunkaccessor) | Epoch-protected SIMD-optimized chunk cache | ✅ Solid |
 | **3.7** | [VariableSizedBufferSegment](#37-variablebuffersegment) | Variable-size buffer storage | ✅ Solid |
 | **3.8** | [StringTableSegment](#38-stringtablesegment) | UTF-8 string storage | ✅ Solid |
 | **3.9** | [Error Handling](#39-error-handling) | I/O error behavior and recovery | ⚠️ Basic |

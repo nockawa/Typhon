@@ -3,6 +3,7 @@
 using JetBrains.Annotations;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -93,7 +94,8 @@ public class LogicalSegment : IDisposable
     public PageAccessor GetPageExclusive(int segmentPageIndex, long epoch, out int memPageIndex)
     {
         Manager.RequestPageEpoch(Pages[segmentPageIndex], epoch, out memPageIndex);
-        Manager.TryLatchPageExclusive(memPageIndex);
+        var latched = Manager.TryLatchPageExclusive(memPageIndex);
+        Debug.Assert(latched, "TryLatchPageExclusive failed after RequestPageEpoch — page should be Idle");
         return Manager.GetPage(memPageIndex);
     }
 
@@ -116,7 +118,8 @@ public class LogicalSegment : IDisposable
     public unsafe byte* GetPageAddressExclusive(int segmentPageIndex, long epoch, out int memPageIndex)
     {
         Manager.RequestPageEpoch(Pages[segmentPageIndex], epoch, out memPageIndex);
-        Manager.TryLatchPageExclusive(memPageIndex);
+        var latched = Manager.TryLatchPageExclusive(memPageIndex);
+        Debug.Assert(latched, "TryLatchPageExclusive failed after RequestPageEpoch — page should be Idle");
         return Manager.GetMemPageAddress(memPageIndex);
     }
 
@@ -332,7 +335,8 @@ public class LogicalSegment : IDisposable
                 if (isNewPage)
                 {
                     Manager.RequestPageEpoch(curMapPageIndex, epoch, out memPageIdx);
-                    Manager.TryLatchPageExclusive(memPageIdx);
+                    var latched = Manager.TryLatchPageExclusive(memPageIdx);
+                    Debug.Assert(latched, "TryLatchPageExclusive failed after RequestPageEpoch");
                     page = Manager.GetPage(memPageIdx);
                     hasPage = true;
 
@@ -348,7 +352,8 @@ public class LogicalSegment : IDisposable
                     if (hasPage == false)
                     {
                         Manager.RequestPageEpoch(curMapPageIndex, epoch, out memPageIdx);
-                        Manager.TryLatchPageExclusive(memPageIdx);
+                        var latched = Manager.TryLatchPageExclusive(memPageIdx);
+                        Debug.Assert(latched, "TryLatchPageExclusive failed after RequestPageEpoch");
                         page = Manager.GetPage(memPageIdx);
                         hasPage = true;
                     }
@@ -363,7 +368,8 @@ public class LogicalSegment : IDisposable
                     if (hasPage == false)
                     {
                         Manager.RequestPageEpoch(curMapPageIndex, epoch, out memPageIdx);
-                        Manager.TryLatchPageExclusive(memPageIdx);
+                        var latched = Manager.TryLatchPageExclusive(memPageIdx);
+                        Debug.Assert(latched, "TryLatchPageExclusive failed after RequestPageEpoch");
                         page = Manager.GetPage(memPageIdx);
                         hasPage = true;
                     }
@@ -387,7 +393,8 @@ public class LogicalSegment : IDisposable
                         else
                         {
                             Manager.RequestPageEpoch(mapIndices[curIndexMapIndex + 1], epoch, out var endMemIdx);
-                            Manager.TryLatchPageExclusive(endMemIdx);
+                            var endLatched = Manager.TryLatchPageExclusive(endMemIdx);
+                            Debug.Assert(endLatched, "TryLatchPageExclusive failed after RequestPageEpoch");
                             var endPage = Manager.GetPage(endMemIdx);
                             InitHeader(endPage.Address, PageClearMode.Header, PageBlockFlags.IsLogicalSegment, type, 1);
                             changeSet?.AddByMemPageIndex(endMemIdx);
@@ -432,7 +439,8 @@ public class LogicalSegment : IDisposable
         {
             var pageIndex = filePageIndices[i];
             Manager.RequestPageEpoch(pageIndex, epoch, out var memPageIdx);
-            Manager.TryLatchPageExclusive(memPageIdx);
+            var latched = Manager.TryLatchPageExclusive(memPageIdx);
+            Debug.Assert(latched, "TryLatchPageExclusive failed after RequestPageEpoch");
             var page = Manager.GetPage(memPageIdx);
 
             changeSet?.AddByMemPageIndex(memPageIdx);

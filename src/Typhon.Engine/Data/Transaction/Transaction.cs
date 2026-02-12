@@ -156,7 +156,7 @@ public unsafe class Transaction : IDisposable
     {
         _dbe = dbe;
         _epochManager = _dbe.EpochManager;
-        _epochManager.EnterScope();
+        _ = _epochManager.EnterScope(); // Depth unused: Transaction uses ExitScopeUnordered (not LIFO)
         _isDisposed = false;
 #if DEBUG
         _debugOwningThreadId = Environment.CurrentManagedThreadId;
