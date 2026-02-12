@@ -26,6 +26,18 @@ public class ChangeSet
         }
     }
 
+    /// <summary>
+    /// Mark a page as dirty by its memory page index directly.
+    /// Used by epoch-mode ChunkAccessor which doesn't hold PageAccessor instances.
+    /// </summary>
+    public void AddByMemPageIndex(int memPageIndex)
+    {
+        if (_changedMemoryPageIndices.Add(memPageIndex))
+        {
+            _owner.IncrementDirty(memPageIndex);
+        }
+    }
+
     public void SaveChanges() => SaveChangesAsync().ConfigureAwait(false).GetAwaiter().GetResult();
 
     public Task SaveChangesAsync()

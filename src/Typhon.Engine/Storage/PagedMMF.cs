@@ -143,6 +143,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     private long _fileSize;
 
     private readonly ConcurrentDictionary<int, int> _memPageIndexByFilePageIndex;
+    private EpochManager _epochManager;   // null until Phase 3 wires it in
 
     unsafe public PagedMMF(IServiceProvider serviceProvider, PagedMMFOptions options, IResource parent, string resourceName, ILogger<PagedMMF> logger) :
         base(resourceName, ResourceType.File, parent)
@@ -250,6 +251,13 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     
     public bool IsDatabaseFileCreating { get; }
 
+    /// <summary>
+    /// Set the epoch manager for epoch-based page protection.
+    /// Called by DatabaseEngine during initialization.
+    /// When null (default), epoch checks are skipped in TryAcquire.
+    /// </summary>
+    internal void SetEpochManager(EpochManager epochManager) => _epochManager = epochManager;
+
     public bool IsDisposed { get; private set; }
 
     protected unsafe override void Dispose(bool disposing)
@@ -342,6 +350,60 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         finally
         {
             requestPageActivity?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Request epoch-tagged shared access to a page. The page is protected from eviction
+    /// by its AccessEpoch tag rather than by ref-counting. Caller must be inside an
+    /// <see cref="EpochGuard"/> scope.
+    /// </summary>
+    internal bool RequestPageEpoch(int filePageIndex, long currentEpoch, out int memPageIndex)
+    {
+        while (true)
+        {
+            if (!FetchPageToMemory(filePageIndex, out memPageIndex))
+            {
+                return false;
+            }
+
+            var pi = _memPagesInfo[memPageIndex];
+
+            // Tag the page with the current epoch (atomic max — never go backward)
+            long existing;
+            do
+            {
+                existing = pi.AccessEpoch;
+                if (currentEpoch <= existing)
+                {
+                    break;
+                }
+            } while (Interlocked.CompareExchange(ref pi.AccessEpoch, currentEpoch, existing) != existing);
+
+            // Handle Allocating state from cache miss — transition to Idle
+            // (must come AFTER epoch tag so the page is protected before becoming evictable)
+            if (pi.PageState == PageState.Allocating)
+            {
+                pi.PageState = PageState.Idle;
+                Interlocked.Increment(ref _metrics.FreeMemPageCount);
+            }
+
+            // Race detection: page may have been evicted between FetchPageToMemory and epoch tag
+            if (pi.FilePageIndex != filePageIndex)
+            {
+                continue;  // Retry
+            }
+
+            // Ensure data is ready (wait for pending I/O)
+            var ioTask = pi.IOReadTask;
+            if (ioTask != null && !ioTask.IsCompletedSuccessfully)
+            {
+                ioTask.GetAwaiter().GetResult();
+                pi.ResetIOCompletionTask();
+            }
+
+            pi.IncrementClockSweepCounter();
+            return true;
         }
     }
 
@@ -488,6 +550,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
     private bool AllocateMemoryPageCore(int filePageIndex, out int memPageIndex, long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
     {
+        var minActiveEpoch = _epochManager?.MinActiveEpoch ?? long.MaxValue;
         var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
         AdaptiveWaiter waiter = null;
 
@@ -513,7 +576,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                 memPageIndex = prevMemPageIndex + 1;
                 pi = _memPagesInfo[memPageIndex];
                 evictedFilePageIndex = pi.FilePageIndex;
-                if (TryAcquire(pi))
+                if (TryAcquire(pi, minActiveEpoch))
                 {
                     LogAllocatePageSequential();
                     found = true;
@@ -538,7 +601,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                     if (pi.ClockSweepCounter == 0)
                     {
                         evictedFilePageIndex = pi.FilePageIndex;
-                        if (TryAcquire(pi))
+                        if (TryAcquire(pi, minActiveEpoch))
                         {
                             found = true;
                             break;
@@ -564,7 +627,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
                         // If the counter is 0, the page is candidate for eviction, try to acquire it
                         evictedFilePageIndex = pi.FilePageIndex;
-                        if (TryAcquire(pi))
+                        if (TryAcquire(pi, minActiveEpoch))
                         {
                             found = true;
                             break;
@@ -644,11 +707,17 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         }
     }
 
-    private bool TryAcquire(PageInfo info)
+    private bool TryAcquire(PageInfo info, long minActiveEpoch)
     {
         // First pass, check without locking (we won't bother to acquire the lock if the page is not in Free or Idle state)
         var state = info.PageState;
         if (state != PageState.Free && state != PageState.Idle)
+        {
+            return false;
+        }
+
+        // Epoch check: if the page was accessed within an active epoch, skip it
+        if (state == PageState.Idle && info.AccessEpoch >= minActiveEpoch)
         {
             return false;
         }
@@ -672,6 +741,12 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             // We need to check the state again, because another thread might have changed between the first and second pass
             if (info.PageState is PageState.Free or PageState.Idle)
             {
+                // Re-check epoch under lock (may have changed since first pass)
+                if (info.PageState == PageState.Idle && info.AccessEpoch >= minActiveEpoch)
+                {
+                    return false;
+                }
+
                 // Idle page is still referenced in the cache directory, so we remove it
                 if (info.PageState == PageState.Idle)
                 {
@@ -679,6 +754,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                 }
                 info.ResetClockSweepCounter();
                 info.FilePageIndex = -1;
+                info.AccessEpoch = 0;  // Clear epoch tag on reallocation
                 info.PageState = PageState.Allocating;
                 Interlocked.Decrement(ref _metrics.FreeMemPageCount);
                 Debug.Assert(info.ConcurrentSharedCounter == 0);
@@ -1104,7 +1180,15 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     }
 
     internal unsafe byte* GetMemPageAddress(int memPageIndex) => &_memPagesAddr[memPageIndex * (long)PageSize];
-    
+
+    /// <summary>
+    /// Get the raw data address for a memory page (skips header).
+    /// Used by epoch-mode ChunkAccessor which computes chunk addresses directly.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal unsafe byte* GetMemPageRawDataAddress(int memPageIndex)
+        => GetMemPageAddress(memPageIndex) + PageHeaderSize;
+
     #region Logging helpers
 
     [Conditional("TELEMETRY")]
@@ -1201,6 +1285,12 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         }
         return true;
     }
+
+    /// <summary>Get the AccessEpoch for a memory page (test infrastructure).</summary>
+    internal long GetPageAccessEpoch(int memPageIndex) => _memPagesInfo[memPageIndex].AccessEpoch;
+
+    /// <summary>Get the PageState for a memory page (test infrastructure).</summary>
+    internal PageState GetPageState(int memPageIndex) => _memPagesInfo[memPageIndex].PageState;
 
     public int EstimatedMemorySize
     {
