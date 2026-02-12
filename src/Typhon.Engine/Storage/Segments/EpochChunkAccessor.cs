@@ -25,7 +25,7 @@ namespace Typhon.Engine;
 /// <see cref="ChangeSet.AddByMemPageIndex"/>.</para>
 /// </remarks>
 [StructLayout(LayoutKind.Sequential)]
-internal unsafe struct EpochChunkAccessor : IDisposable
+public unsafe struct EpochChunkAccessor : IDisposable
 {
     // === SOA layout for SIMD search (1 cache line) ===
     private fixed int _pageIndices[16];        // 64 bytes — segment page indices, SIMD searchable
@@ -64,6 +64,7 @@ internal unsafe struct EpochChunkAccessor : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal EpochChunkAccessor(ChunkBasedSegment segment, PagedMMF pagedMMF, EpochManager epochManager, ChangeSet changeSet = null)
     {
+        Debug.Assert(epochManager.IsCurrentThreadInScope, "EpochChunkAccessor must be created inside an epoch scope");
         _segment = segment;
         _pagedMMF = pagedMMF;
         _epochManager = epochManager;

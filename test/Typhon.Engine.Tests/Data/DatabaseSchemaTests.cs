@@ -34,6 +34,7 @@ public class DatabaseSchemaTests
             })
             .AddResourceRegistry()
             .AddMemoryAllocator()
+            .AddEpochManager()
             .AddScopedManagedPagedMemoryMappedFile(options =>
             {
                 options.DatabaseName = CurrentDatabaseName;

@@ -64,6 +64,11 @@ internal sealed class EpochThreadRegistry : IDisposable
     /// <summary>Number of slots currently owned by active threads.</summary>
     public int ActiveSlotCount => _activeSlotCount;
 
+    /// <summary>
+    /// Returns true if the current thread is inside an epoch scope (depth &gt; 0).
+    /// </summary>
+    public bool IsCurrentThreadInScope => _threadRegistry == this && _depths[_threadSlotIndex] > 0;
+
     // ═══════════════════════════════════════════════════════════════════════
     // Slot Management
     // ═══════════════════════════════════════════════════════════════════════
@@ -117,6 +122,35 @@ internal sealed class EpochThreadRegistry : IDisposable
         if (expectedDepth == 0)
         {
             // Outermost scope: unpin
+            _pinnedEpochs[slot] = 0;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Unpin the current thread without enforcing LIFO ordering. Decrements the nesting depth
+    /// and unpins when it reaches zero. Used by <see cref="Transaction"/> which can be disposed
+    /// in any order (not just LIFO).
+    /// </summary>
+    /// <returns>True if this was the outermost scope exit (thread is now unpinned).</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool UnpinCurrentThreadUnordered()
+    {
+        var slot = _threadSlotIndex;
+        var currentDepth = _depths[slot];
+
+        if (currentDepth <= 0)
+        {
+            ThrowHelper.ThrowInvalidOp("Epoch scope underflow: attempted to exit scope when not in any scope.");
+        }
+
+        _depths[slot] = currentDepth - 1;
+
+        if (currentDepth == 1)
+        {
+            // Was the outermost scope: unpin
             _pinnedEpochs[slot] = 0;
             return true;
         }

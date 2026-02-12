@@ -7,9 +7,9 @@ using Microsoft.CodeAnalysis.Diagnostics;
 namespace Typhon.Analyzers;
 
 /// <summary>
-/// Analyzer that enforces ChunkAccessor parameters must always be passed by ref.
-/// ChunkAccessor is a large ~1KB struct designed for zero-allocation, and passing
-/// by value causes expensive stack copies that defeat its performance design.
+/// Analyzer that enforces ChunkAccessor and EpochChunkAccessor parameters must always be passed by ref.
+/// These are large structs designed for zero-allocation, and passing by value causes expensive
+/// stack copies that defeat their performance design.
 /// </summary>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public class ChunkAccessorRefAnalyzer : DiagnosticAnalyzer
@@ -18,14 +18,14 @@ public class ChunkAccessorRefAnalyzer : DiagnosticAnalyzer
     private const string Category = "Performance";
 
     private static readonly LocalizableString Title =
-        "ChunkAccessor must be passed by ref";
+        "ChunkAccessor/EpochChunkAccessor must be passed by ref";
 
     private static readonly LocalizableString MessageFormat =
-        "Parameter '{0}' of type 'ChunkAccessor' must be passed by ref (not 'in' or by value)";
+        "Parameter '{0}' of type '{1}' must be passed by ref (not 'in' or by value)";
 
     private static readonly LocalizableString Description =
-        "ChunkAccessor is a large struct (~1KB) with mutating methods. " +
-        "It must be passed by 'ref' only. The 'in' modifier causes defensive copies when calling " +
+        "ChunkAccessor and EpochChunkAccessor are large structs with mutating methods. " +
+        "They must be passed by 'ref' only. The 'in' modifier causes defensive copies when calling " +
         "non-readonly methods, defeating the performance design. Passing by value creates expensive stack copies.";
 
     private static readonly DiagnosticDescriptor Rule = new DiagnosticDescriptor(
@@ -75,7 +75,7 @@ public class ChunkAccessorRefAnalyzer : DiagnosticAnalyzer
             if (typeSymbol == null)
                 continue;
 
-            // Check if the type is ChunkAccessor (match by name and namespace)
+            // Check if the type is ChunkAccessor or EpochChunkAccessor (match by name and namespace)
             if (IsChunkAccessorType(typeSymbol))
             {
                 // Check if the parameter has 'ref' modifier (ONLY ref is acceptable)
@@ -96,7 +96,8 @@ public class ChunkAccessorRefAnalyzer : DiagnosticAnalyzer
                     var diagnostic = Diagnostic.Create(
                         Rule,
                         parameter.GetLocation(),
-                        parameter.Identifier.Text);
+                        parameter.Identifier.Text,
+                        typeSymbol.Name);
 
                     context.ReportDiagnostic(diagnostic);
                 }
@@ -107,7 +108,7 @@ public class ChunkAccessorRefAnalyzer : DiagnosticAnalyzer
     private static bool IsChunkAccessorType(ITypeSymbol typeSymbol)
     {
         // Match by name and ensure it's in the Typhon.Engine namespace
-        if (typeSymbol.Name != "ChunkAccessor")
+        if (typeSymbol.Name != "ChunkAccessor" && typeSymbol.Name != "EpochChunkAccessor")
             return false;
 
         // Check namespace - handle both with and without global prefix

@@ -58,14 +58,12 @@ public unsafe class Transaction : IDisposable
         public ChunkBasedSegment CompContentSegment;
         public ChunkBasedSegment CompRevTableSegment;
         public BTree<long> PrimaryKeyIndex;
-        public ChunkAccessor CompContentAccessor;
-        public ChunkAccessor CompRevTableAccessor;
+        public EpochChunkAccessor CompContentAccessor;
+        public EpochChunkAccessor CompRevTableAccessor;
         public abstract void AddNew(long pk, CompRevInfo entry);
-        
+
         /// <summary>
-        /// Disposes the ChunkAccessor fields by reference to avoid struct copying.
-        /// ChunkAccessor is a ~1KB struct - accessing it through a class field creates a copy.
-        /// This method ensures the actual fields are disposed, not copies.
+        /// Disposes the EpochChunkAccessor fields to flush dirty pages.
         /// </summary>
         public void DisposeAccessors()
         {
@@ -115,6 +113,11 @@ public unsafe class Transaction : IDisposable
     public TransactionState State { get; private set; }
     private bool _isDisposed;
     private DatabaseEngine _dbe;
+    private EpochManager _epochManager;
+
+#if DEBUG
+    private int _debugOwningThreadId;
+#endif
 
     private Dictionary<Type, ComponentInfoBase> _componentInfos;
 
@@ -152,7 +155,12 @@ public unsafe class Transaction : IDisposable
     public void Init(DatabaseEngine dbe, long tsn)
     {
         _dbe = dbe;
+        _epochManager = _dbe.EpochManager;
+        _epochManager.EnterScope();
         _isDisposed = false;
+#if DEBUG
+        _debugOwningThreadId = Environment.CurrentManagedThreadId;
+#endif
         _committedOperationCount = null;
         _deletedComponentCount = 0;
         _changeSet = _dbe.MMF.CreateChangeSet();
@@ -165,6 +173,10 @@ public unsafe class Transaction : IDisposable
     internal void Reset()
     {
         _dbe = null;
+        _epochManager = null;
+#if DEBUG
+        _debugOwningThreadId = 0;
+#endif
         if (_componentInfos.Capacity <= ComponentInfosMaxCapacity)
         {
             _componentInfos.Clear();
@@ -181,6 +193,17 @@ public unsafe class Transaction : IDisposable
         _changeSet = null;
     }
 
+    [Conditional("DEBUG")]
+    private void AssertThreadAffinity()
+    {
+#if DEBUG
+        Debug.Assert(
+            _debugOwningThreadId == Environment.CurrentManagedThreadId,
+            "Transaction thread affinity violation: current thread differs from the creating thread. " +
+            "Transactions are single-thread-affine — all operations must run on the creating thread.");
+#endif
+    }
+
     public void Dispose()
     {
         if (_isDisposed)
@@ -188,23 +211,25 @@ public unsafe class Transaction : IDisposable
             return;
         }
 
+        AssertThreadAffinity();
+
         if (State != TransactionState.Committed)
         {
             Rollback();
         }
 
-        // Dispose all ChunkAccessors to release pages back to the page cache.
-        // This is critical! Without this, pages remain in Shared state and cannot
-        // be evicted by the clock-sweep algorithm, leading to page cache exhaustion
-        // and deadlock when segments need to grow.
-        // NOTE: We call DisposeAccessors() instead of accessing the fields directly
-        // because ChunkAccessor is a struct - accessing it through a class field
-        // would create a copy, disposing the copy but leaving the original untouched.
+        // Dispose all EpochChunkAccessors to flush dirty pages.
         foreach (var info in _componentInfos.Values)
         {
             info.DisposeAccessors();
         }
-        
+
+        // Exit epoch scope after accessors are disposed but before removing from the chain.
+        // This allows pages to be evicted once no transaction references them.
+        // Use unordered exit because transactions on the same thread can be disposed in any order
+        // (not necessarily LIFO), unlike EpochGuard which is stack-bound.
+        _epochManager.ExitScopeUnordered();
+
         _dbe.TransactionChain.Remove(this);
         _isDisposed = true;
     }
@@ -413,6 +438,7 @@ public unsafe class Transaction : IDisposable
     
     public int GetComponentRevision<T>(long pk) where T : unmanaged
     {
+        AssertThreadAffinity();
         var info = GetComponentInfo(typeof(T));
         if (info.IsMultiple)
         {
@@ -430,8 +456,7 @@ public unsafe class Transaction : IDisposable
                 return -1;
             }
             
-            using var ch = info.CompRevTableAccessor.GetChunkHandle(compRevInfo.CompRevTableFirstChunkId, false);
-            ref var header = ref ch.AsRef<CompRevStorageHeader>();
+            ref var header = ref info.CompRevTableAccessor.GetChunk<CompRevStorageHeader>(compRevInfo.CompRevTableFirstChunkId);
             return header.FirstItemRevision + (compRevInfo.CurRevisionIndex - header.FirstItemIndex);
         }
         else
@@ -447,21 +472,27 @@ public unsafe class Transaction : IDisposable
             {
                 return -1;
             }
-            
-            using var ch = info.CompRevTableAccessor.GetChunkHandle(compRevInfo.CompRevTableFirstChunkId, false);
-            ref var header = ref ch.AsRef<CompRevStorageHeader>();
+
+            ref var header = ref info.CompRevTableAccessor.GetChunk<CompRevStorageHeader>(compRevInfo.CompRevTableFirstChunkId);
             return header.FirstItemRevision + (compRevInfo.CurRevisionIndex - header.FirstItemIndex);
         }
     }
 
-    public ComponentCollectionAccessor<T> CreateComponentCollectionAccessor<T>(ref ComponentCollection<T> field) where T : unmanaged 
-        => new(_changeSet, _dbe.GetComponentCollectionVSBS<T>(), ref field);
+    public ComponentCollectionAccessor<T> CreateComponentCollectionAccessor<T>(ref ComponentCollection<T> field) where T : unmanaged
+    {
+        AssertThreadAffinity();
+        return new ComponentCollectionAccessor<T>(_changeSet, _dbe.GetComponentCollectionVSBS<T>(), ref field);
+    }
 
-    public ReadOnlyCollectionEnumerator<T> GetReadOnlyCollectionEnumerator<T>(ref ComponentCollection<T> field) where T : unmanaged =>
-        new(_dbe.GetComponentCollectionVSBS<T>(), field._bufferId);
+    public ReadOnlyCollectionEnumerator<T> GetReadOnlyCollectionEnumerator<T>(ref ComponentCollection<T> field) where T : unmanaged
+    {
+        AssertThreadAffinity();
+        return new ReadOnlyCollectionEnumerator<T>(_dbe.GetComponentCollectionVSBS<T>(), field._bufferId);
+    }
 
     public int GetComponentCollectionRefCounter<T>(ref ComponentCollection<T> field) where T : unmanaged
     {
+        AssertThreadAffinity();
         var vsbs = _dbe.GetComponentCollectionVSBS<T>();
         using var a = new VariableSizedBufferAccessor<T>(vsbs, field._bufferId);
 
@@ -490,27 +521,27 @@ public unsafe class Transaction : IDisposable
         public void Dispose() => _enumerator.Dispose();
     }
 
-    internal ChunkHandle GetCompRevStorageHeader<T>(long entity)
+    internal ref CompRevStorageHeader GetCompRevStorageHeader<T>(long entity)
     {
         var ci = GetComponentInfoSingle(typeof(T));
         var result = GetCompRevTableFirstChunkId(entity, ci);
         if (result.IsFailure)
         {
-            return default;
+            return ref Unsafe.NullRef<CompRevStorageHeader>();
         }
 
-        return ci.CompRevTableAccessor.GetChunkHandle(result.Value, false);
+        return ref ci.CompRevTableAccessor.GetChunk<CompRevStorageHeader>(result.Value);
     }
 
     internal int GetRevisionCount<T>(long entity)
     {
-        using var ch = GetCompRevStorageHeader<T>(entity);
-        if (ch.IsDefault)
+        ref var header = ref GetCompRevStorageHeader<T>(entity);
+        if (Unsafe.IsNullRef(ref header))
         {
             return -1;
         }
 
-        return ch.AsRef<CompRevStorageHeader>().ItemCount;
+        return header.ItemCount;
     }
 
     private ComponentInfoBase GetComponentInfo(Type componentType)
@@ -534,8 +565,8 @@ public unsafe class Transaction : IDisposable
                 CompContentSegment      = ct.ComponentSegment,
                 CompRevTableSegment     = ct.CompRevTableSegment,
                 PrimaryKeyIndex         = ct.PrimaryKeyIndex,
-                CompContentAccessor     = ct.ComponentSegment.CreateChunkAccessor(_changeSet),
-                CompRevTableAccessor    = ct.CompRevTableSegment.CreateChunkAccessor(_changeSet),
+                CompContentAccessor     = ct.ComponentSegment.CreateEpochChunkAccessor(_changeSet),
+                CompRevTableAccessor    = ct.CompRevTableSegment.CreateEpochChunkAccessor(_changeSet),
                 CompRevInfoCache        = new Dictionary<long, ComponentInfoBase.CompRevInfo>()
             };
         }
@@ -547,8 +578,8 @@ public unsafe class Transaction : IDisposable
                 CompContentSegment      = ct.ComponentSegment,
                 CompRevTableSegment     = ct.CompRevTableSegment,
                 PrimaryKeyIndex         = ct.PrimaryKeyIndex,
-                CompContentAccessor     = ct.ComponentSegment.CreateChunkAccessor(_changeSet),
-                CompRevTableAccessor    = ct.CompRevTableSegment.CreateChunkAccessor(_changeSet),
+                CompContentAccessor     = ct.ComponentSegment.CreateEpochChunkAccessor(_changeSet),
+                CompRevTableAccessor    = ct.CompRevTableSegment.CreateEpochChunkAccessor(_changeSet),
                 CompRevInfoCache        = new Dictionary<long, List<ComponentInfoBase.CompRevInfo>>()
             };
         }
@@ -577,8 +608,8 @@ public unsafe class Transaction : IDisposable
             CompContentSegment      = ct.ComponentSegment,
             CompRevTableSegment     = ct.CompRevTableSegment,
             PrimaryKeyIndex         = ct.PrimaryKeyIndex,
-            CompContentAccessor     = ct.ComponentSegment.CreateChunkAccessor(_changeSet),
-            CompRevTableAccessor    = ct.CompRevTableSegment.CreateChunkAccessor(_changeSet),
+            CompContentAccessor     = ct.ComponentSegment.CreateEpochChunkAccessor(_changeSet),
+            CompRevTableAccessor    = ct.CompRevTableSegment.CreateEpochChunkAccessor(_changeSet),
             CompRevInfoCache        = new Dictionary<long, ComponentInfoBase.CompRevInfo>()
         };
 
@@ -606,8 +637,8 @@ public unsafe class Transaction : IDisposable
             CompContentSegment      = ct.ComponentSegment,
             CompRevTableSegment     = ct.CompRevTableSegment,
             PrimaryKeyIndex         = ct.PrimaryKeyIndex,
-            CompContentAccessor     = ct.ComponentSegment.CreateChunkAccessor(_changeSet),
-            CompRevTableAccessor    = ct.CompRevTableSegment.CreateChunkAccessor(_changeSet),
+            CompContentAccessor     = ct.ComponentSegment.CreateEpochChunkAccessor(_changeSet),
+            CompRevTableAccessor    = ct.CompRevTableSegment.CreateEpochChunkAccessor(_changeSet),
             CompRevInfoCache        = new Dictionary<long, List<ComponentInfoBase.CompRevInfo>>()
         };
 
@@ -618,6 +649,7 @@ public unsafe class Transaction : IDisposable
 
     private void CreateComponent<T>(long pk, ref T comp) where T : unmanaged
     {
+        AssertThreadAffinity();
         var componentType = typeof(T);
         
         // Fetch the cached info or create it if it's the first time we've operated on this Component type
@@ -642,13 +674,14 @@ public unsafe class Transaction : IDisposable
         info.AddNew(pk, entry);
 
         // Copy the component data
-        using var ch = info.CompContentAccessor.GetChunkHandle(componentChunkId, true);
         int compSize = info.ComponentTable.ComponentStorageSize;
-        new Span<byte>(Unsafe.AsPointer(ref comp), compSize).CopyTo(ch.AsSpan().Slice(info.ComponentTable.ComponentOverhead));
+        var dst = info.CompContentAccessor.GetChunkAsSpan(componentChunkId, true);
+        new Span<byte>(Unsafe.AsPointer(ref comp), compSize).CopyTo(dst.Slice(info.ComponentTable.ComponentOverhead));
     }
-    
+
     private void CreateComponents<T>(long pk, ReadOnlySpan<T> compList) where T : unmanaged
     {
+        AssertThreadAffinity();
         var componentType = typeof(T);
         
         // Fetch the cached info or create it if it's the first time we've operated on this Component type
@@ -675,13 +708,14 @@ public unsafe class Transaction : IDisposable
             info.AddNew(pk, entry);
 
             // Copy the component data
-            using var ch = info.CompContentAccessor.GetChunkHandle(componentChunkId, true);
-            compList.Slice(i, 1).Cast<T, byte>().CopyTo(ch.AsSpan().Slice(info.ComponentTable.ComponentOverhead));
+            var dst = info.CompContentAccessor.GetChunkAsSpan(componentChunkId, true);
+            compList.Slice(i, 1).Cast<T, byte>().CopyTo(dst.Slice(info.ComponentTable.ComponentOverhead));
         }
     }
     
     private bool ReadComponent<T>(long pk, out T t) where T : unmanaged
     {
+        AssertThreadAffinity();
         var componentType = typeof(T);
         var info = GetComponentInfoSingle(componentType);
 
@@ -711,14 +745,15 @@ public unsafe class Transaction : IDisposable
         // If there is a valid component, copy its content to the destination
         t = default;
         int size = info.ComponentTable.ComponentStorageSize;
-        using var handle = info.CompContentAccessor.GetChunkHandle(compRevInfo.CurCompContentChunkId, false);
-        handle.AsSpan().Slice(info.ComponentTable.ComponentOverhead).CopyTo(new Span<byte>(Unsafe.AsPointer(ref t), size));
+        var src = info.CompContentAccessor.GetChunkAsReadOnlySpan(compRevInfo.CurCompContentChunkId);
+        src.Slice(info.ComponentTable.ComponentOverhead).CopyTo(new Span<byte>(Unsafe.AsPointer(ref t), size));
 
         return true;
     }
-    
+
     private bool ReadComponents<T>(long pk, out T[] t) where T : unmanaged
     {
+        AssertThreadAffinity();
         var componentType = typeof(T);
         var info = GetComponentInfoMultiple(componentType);
 
@@ -755,8 +790,8 @@ public unsafe class Transaction : IDisposable
             }
 
             // If there is a valid component, copy its content to the destination
-            using var handle = info.CompContentAccessor.GetChunkHandle(compRevInfo.CurCompContentChunkId, false);
-            handle.AsSpan().Slice(info.ComponentTable.ComponentOverhead).Cast<byte, T>().CopyTo(destSpan.Slice(destIndex++));
+            var chunkSpan = info.CompContentAccessor.GetChunkAsReadOnlySpan(compRevInfo.CurCompContentChunkId);
+            chunkSpan.Slice(info.ComponentTable.ComponentOverhead).Cast<byte, T>().CopyTo(destSpan.Slice(destIndex++));
         }
 
         // Deleted items were skipped, we need to trim the list...
@@ -776,6 +811,7 @@ public unsafe class Transaction : IDisposable
     
     private bool UpdateComponent<T>(long pk, ref T comp) where T : unmanaged
     {
+        AssertThreadAffinity();
         var componentType = typeof(T);
         var isDelete = Unsafe.IsNullRef(ref comp);
         
@@ -828,10 +864,9 @@ public unsafe class Transaction : IDisposable
         if (!isDelete)
         {
             // Copy the component data
-            using var handle = info.CompContentAccessor.GetChunkHandle(compRevInfo.CurCompContentChunkId, true);
             int componentSize = info.ComponentTable.ComponentStorageSize;
             var src = new Span<byte>(Unsafe.AsPointer(ref comp), componentSize);
-            var dst = handle.AsSpan().Slice(info.ComponentTable.ComponentOverhead);
+            var dst = info.CompContentAccessor.GetChunkAsSpan(compRevInfo.CurCompContentChunkId, true).Slice(info.ComponentTable.ComponentOverhead);
             src.CopyTo(dst);
 
             // If the component has collections, update the RefCounter of unchanged ones
@@ -845,7 +880,9 @@ public unsafe class Transaction : IDisposable
                     var dstBufferId = dst.Slice(offsetToCollectionField).Cast<byte, int>()[0];
                     if (srcBufferId == dstBufferId)
                     {
-                        kvp.Value.VSBS.BufferAddRef(srcBufferId, ref kvp.Value.Accessor);
+                        var accessor = kvp.Value.Segment.CreateEpochChunkAccessor(_changeSet);
+                        kvp.Value.BufferAddRef(srcBufferId, ref accessor);
+                        accessor.Dispose();
                     }
                 }
             }
@@ -857,6 +894,7 @@ public unsafe class Transaction : IDisposable
 
     private bool UpdateComponents<T>(long pk, ReadOnlySpan<T> compList) where T : unmanaged
     {
+        AssertThreadAffinity();
         var componentType = typeof(T);
         var isDelete = compList.Length == 0;
 
@@ -920,8 +958,7 @@ public unsafe class Transaction : IDisposable
             if (!isDelete)
             {
                 // Copy the component data
-                using var handle = info.CompContentAccessor.GetChunkHandle(compRevInfo.CurCompContentChunkId, true);
-                var dst = handle.AsSpan().Slice(info.ComponentTable.ComponentOverhead);
+                var dst = info.CompContentAccessor.GetChunkAsSpan(compRevInfo.CurCompContentChunkId, true).Slice(info.ComponentTable.ComponentOverhead);
                 var src = compList.Slice(i, 1).Cast<T, byte>();
                 src.CopyTo(dst);
             
@@ -936,7 +973,9 @@ public unsafe class Transaction : IDisposable
                         var dstBufferId = dst.Slice(offsetToCollectionField).Cast<byte, int>()[0];
                         if (srcBufferId == dstBufferId)
                         {
-                            kvp.Value.VSBS.BufferAddRef(srcBufferId, ref kvp.Value.Accessor);
+                            var accessor = kvp.Value.Segment.CreateEpochChunkAccessor(_changeSet);
+                            kvp.Value.BufferAddRef(srcBufferId, ref accessor);
+                            accessor.Dispose();
                         }
                     }
                 }
@@ -965,7 +1004,7 @@ public unsafe class Transaction : IDisposable
 
     private Result<int, BTreeLookupStatus> GetCompRevTableFirstChunkId(long pk, ComponentInfoSingle info)
     {
-        var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
+        var accessor = info.PrimaryKeyIndex.Segment.CreateEpochChunkAccessor(_changeSet);
         var result = info.PrimaryKeyIndex.TryGet(pk, ref accessor);
         accessor.Dispose();
         return result;
@@ -978,7 +1017,7 @@ public unsafe class Transaction : IDisposable
 
         int compRevFirstChunkId;
         {
-            var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
+            var accessor = info.PrimaryKeyIndex.Segment.CreateEpochChunkAccessor(_changeSet);
             var lookupResult = info.PrimaryKeyIndex.TryGet(pk, ref accessor);
             accessor.Dispose();
             if (lookupResult.IsFailure)
@@ -1047,7 +1086,7 @@ public unsafe class Transaction : IDisposable
     {
         ref var compRevTableAccessor = ref info.CompRevTableAccessor;
 
-        var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
+        var accessor = info.PrimaryKeyIndex.Segment.CreateEpochChunkAccessor(_changeSet);
         using var vsba = info.PrimaryKeyIndex.TryGetMultiple(pk, ref accessor);
         if (!vsba.IsValid)
         {
@@ -1138,7 +1177,7 @@ public unsafe class Transaction : IDisposable
         var dirtyFirstChunk = false;
 
         // Get the chunk storing the revision we want to commit as well as the index of the element
-        using var compRev = new ComponentRevision(info, ref compRevInfo, firstChunkId, ref compRevTableAccessor);
+        var compRev = new ComponentRevision(info, ref compRevInfo, firstChunkId, ref compRevTableAccessor);
         var lastCommitRevisionIndex = compRev.LastCommitRevisionIndex;
         var elementHandle = compRev.GetRevisionElement(compRevInfo.CurRevisionIndex);
 
@@ -1191,14 +1230,13 @@ public unsafe class Transaction : IDisposable
                 new Span<byte>(srcChunk, sizeToCopy).CopyTo(new Span<byte>(dstChunk, sizeToCopy));
 
                 // Update the indexInChunk and curElements to point to the new revision
-                elementHandle.Dispose();
                 elementHandle = compRev.GetRevisionElement(compRevInfo.CurRevisionIndex);
             }
             
             // Do we have a conflict to record?
             if (hasConflict && conflictSolver != null)
             {
-                using var lastCommitHandle = compRev.GetRevisionElement(lastCommitRevisionIndex);
+                var lastCommitHandle = compRev.GetRevisionElement(lastCommitRevisionIndex);
 
                 var overhead = info.ComponentTable.ComponentOverhead;
                 var readChunk = info.CompContentAccessor.GetChunkAddress(readCompChunkId) + overhead;
@@ -1227,8 +1265,6 @@ public unsafe class Transaction : IDisposable
                 compRev.SetLastCommitRevisionIndex(Math.Max(lastCommitRevisionIndex, compRevInfo.CurRevisionIndex));
             }
         }
-
-        elementHandle.Dispose();
 
         // If this transaction is the oldest (the tail), we can remove the previous revision (if any), it is also the right place and time to clean up void
         //  revisions (the entry of a rolled back commit)
@@ -1259,7 +1295,7 @@ public unsafe class Transaction : IDisposable
                 else
                 {
                     // Remove the index for single components
-                    var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
+                    var accessor = info.PrimaryKeyIndex.Segment.CreateEpochChunkAccessor(_changeSet);
                     info.PrimaryKeyIndex.Remove(pk, out _, ref accessor);
                     accessor.Dispose();
 
@@ -1287,10 +1323,8 @@ public unsafe class Transaction : IDisposable
         var startChunkId = compRevInfo.CompRevTableFirstChunkId;
         if (prevCompChunkId != 0)
         {
-            using var prevHandle = info.CompContentAccessor.GetChunkHandle(prevCompChunkId);
-            using var curHandle = info.CompContentAccessor.GetChunkHandle(compRevInfo.CurCompContentChunkId);
-            var prev = prevHandle.Address;
-            var cur = curHandle.Address;
+            var prev = info.CompContentAccessor.GetChunkAddress(prevCompChunkId);
+            var cur = info.CompContentAccessor.GetChunkAddress(compRevInfo.CurCompContentChunkId);
             var prevSpan = new Span<byte>(prev, info.ComponentTable.ComponentTotalSize);
             var curSpan = new Span<byte>(cur, info.ComponentTable.ComponentTotalSize);
 
@@ -1302,7 +1336,7 @@ public unsafe class Transaction : IDisposable
                 // The update changed the field?
                 if (prevSpan.Slice(ifi.OffsetToField, ifi.Size).SequenceEqual(curSpan.Slice(ifi.OffsetToField, ifi.Size)) == false)
                 {
-                    var accessor = ifi.Index.Segment.CreateChunkAccessor(_changeSet);
+                    var accessor = ifi.Index.Segment.CreateEpochChunkAccessor(_changeSet);
                     if (ifi.Index.AllowMultiple)
                     {
                         ifi.Index.RemoveValue(&prev[ifi.OffsetToField], *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref accessor);
@@ -1326,7 +1360,7 @@ public unsafe class Transaction : IDisposable
 
             // Update the index with this new entry
             {
-                var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
+                var accessor = info.PrimaryKeyIndex.Segment.CreateEpochChunkAccessor(_changeSet);
                 info.PrimaryKeyIndex.Add(pk, startChunkId, ref accessor);
                 accessor.Dispose();
             }
@@ -1336,7 +1370,7 @@ public unsafe class Transaction : IDisposable
             {
                 ref var ifi = ref indexedFieldInfos[i];
 
-                var accessor = ifi.Index.Segment.CreateChunkAccessor(_changeSet);
+                var accessor = ifi.Index.Segment.CreateEpochChunkAccessor(_changeSet);
                 if (ifi.Index.AllowMultiple)
                 {
                     *(int*)&cur[ifi.OffsetToIndexElementId] = ifi.Index.Add(&cur[ifi.OffsetToField], startChunkId, ref accessor);
@@ -1352,6 +1386,8 @@ public unsafe class Transaction : IDisposable
 
     public bool Rollback()
     {
+        AssertThreadAffinity();
+
         // Nothing to do if the transaction is empty
         if (State is TransactionState.Created)
         {
@@ -1539,6 +1575,8 @@ public unsafe class Transaction : IDisposable
     
     public bool Commit(ConcurrencyConflictHandler handler = null)
     {
+        AssertThreadAffinity();
+
         // Nothing to do if the transaction is empty
         if (State is TransactionState.Created)
         {

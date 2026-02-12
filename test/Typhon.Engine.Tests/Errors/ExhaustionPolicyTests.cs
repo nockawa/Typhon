@@ -210,6 +210,7 @@ class ExhaustionPolicyTests : TestBase<ExhaustionPolicyTests>
             })
             .AddResourceRegistry()
             .AddMemoryAllocator()
+            .AddEpochManager()
             .AddScopedManagedPagedMemoryMappedFile(options =>
             {
                 options.DatabaseName = CurrentDatabaseName;

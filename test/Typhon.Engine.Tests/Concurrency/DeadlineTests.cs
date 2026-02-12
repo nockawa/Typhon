@@ -287,13 +287,15 @@ public class DeadlineTests
     [CancelAfter(3000)]
     public void ToCancellationToken_Normal_CancelsAfterDeadline()
     {
-        var deadline = Deadline.FromTimeout(TimeSpan.FromMilliseconds(50));
+        var deadline = Deadline.FromTimeout(TimeSpan.FromMilliseconds(200));
         var token = deadline.ToCancellationToken();
 
         Assert.That(token.CanBeCanceled, Is.True);
         Assert.That(token.IsCancellationRequested, Is.False, "Should not be cancelled yet");
 
-        Thread.Sleep(100);
+        // Wait on the token itself rather than sleeping a fixed duration —
+        // this is deterministic regardless of thread scheduling jitter.
+        token.WaitHandle.WaitOne(2000);
 
         Assert.That(token.IsCancellationRequested, Is.True, "Should be cancelled after deadline");
     }

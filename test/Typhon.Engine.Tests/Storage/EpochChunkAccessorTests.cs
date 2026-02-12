@@ -89,6 +89,7 @@ class EpochChunkAccessorTests
             })
             .AddResourceRegistry()
             .AddMemoryAllocator()
+            .AddEpochManager()
             .AddScopedManagedPagedMemoryMappedFile(options =>
             {
                 options.DatabaseName = CurrentDatabaseName;
@@ -129,14 +130,14 @@ class EpochChunkAccessorTests
     public unsafe void GetChunk_BasicReadWrite()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
         var guard = EpochGuard.Enter(epochManager);
 
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor(pmmf, epochManager);
+        var accessor = segment.CreateEpochChunkAccessor();
 
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
         chunk.A = 42;
@@ -162,14 +163,14 @@ class EpochChunkAccessorTests
     public unsafe void GetChunkReadOnly_ReturnsCorrectData()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
         var guard = EpochGuard.Enter(epochManager);
 
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor(pmmf, epochManager);
+        var accessor = segment.CreateEpochChunkAccessor();
 
         // Write with mutable reference
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
@@ -188,14 +189,14 @@ class EpochChunkAccessorTests
     public unsafe void GetChunkAsSpan_ReturnsCorrectSize()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
         var guard = EpochGuard.Enter(epochManager);
 
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor(pmmf, epochManager);
+        var accessor = segment.CreateEpochChunkAccessor();
 
         var span = accessor.GetChunkAsSpan(chunkId);
         Assert.That(span.Length, Is.EqualTo(sizeof(TestChunk32)));
@@ -212,14 +213,14 @@ class EpochChunkAccessorTests
     public unsafe void ClearChunk_ZerosContent()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
         var guard = EpochGuard.Enter(epochManager);
 
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor(pmmf, epochManager);
+        var accessor = segment.CreateEpochChunkAccessor();
 
         // Write data
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
@@ -251,7 +252,7 @@ class EpochChunkAccessorTests
     public unsafe void DirtyChunk_SetsDirtyFlag()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
         var guard = EpochGuard.Enter(epochManager);
 
@@ -259,7 +260,7 @@ class EpochChunkAccessorTests
         var changeSet = pmmf.CreateChangeSet();
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor(pmmf, epochManager, changeSet);
+        var accessor = segment.CreateEpochChunkAccessor(changeSet);
 
         // Load chunk (not dirty)
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
@@ -282,7 +283,7 @@ class EpochChunkAccessorTests
     public unsafe void CommitChanges_FlushesToChangeSet()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
         var guard = EpochGuard.Enter(epochManager);
 
@@ -290,7 +291,7 @@ class EpochChunkAccessorTests
         var changeSet = pmmf.CreateChangeSet();
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor(pmmf, epochManager, changeSet);
+        var accessor = segment.CreateEpochChunkAccessor(changeSet);
 
         // Write with dirty flag
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId, dirty: true);
@@ -312,7 +313,7 @@ class EpochChunkAccessorTests
     public unsafe void CommitChanges_ClearsDirtyFlags()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
         var guard = EpochGuard.Enter(epochManager);
 
@@ -320,7 +321,7 @@ class EpochChunkAccessorTests
         var changeSet = pmmf.CreateChangeSet();
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor(pmmf, epochManager, changeSet);
+        var accessor = segment.CreateEpochChunkAccessor(changeSet);
 
         // Write with dirty flag
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId, dirty: true);
@@ -346,7 +347,7 @@ class EpochChunkAccessorTests
     public unsafe void Dispose_FlushesDirtyPages()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
         var guard = EpochGuard.Enter(epochManager);
 
@@ -354,7 +355,7 @@ class EpochChunkAccessorTests
         var changeSet = pmmf.CreateChangeSet();
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor(pmmf, epochManager, changeSet);
+        var accessor = segment.CreateEpochChunkAccessor(changeSet);
 
         // Write with dirty flag
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId, dirty: true);
@@ -375,12 +376,12 @@ class EpochChunkAccessorTests
     public unsafe void Dispose_Idempotent()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
         var guard = EpochGuard.Enter(epochManager);
 
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
-        var accessor = segment.CreateEpochChunkAccessor(pmmf, epochManager);
+        var accessor = segment.CreateEpochChunkAccessor();
 
         // Dispose twice — should not crash
         accessor.Dispose();
@@ -399,14 +400,14 @@ class EpochChunkAccessorTests
     public unsafe void MRU_HitOptimization()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
         var guard = EpochGuard.Enter(epochManager);
 
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor(pmmf, epochManager);
+        var accessor = segment.CreateEpochChunkAccessor();
 
         // First access loads page
         ref var chunk1 = ref accessor.GetChunk<TestChunk32>(chunkId);
@@ -434,7 +435,7 @@ class EpochChunkAccessorTests
     public unsafe void SIMD_Search_FindsCachedPage()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
         var guard = EpochGuard.Enter(epochManager);
 
@@ -448,7 +449,7 @@ class EpochChunkAccessorTests
             segment.AllocateChunk(false);
         }
 
-        var accessor = segment.CreateEpochChunkAccessor(pmmf, epochManager);
+        var accessor = segment.CreateEpochChunkAccessor();
 
         // Access chunks on page 0 and page 1
         var chunk0 = FirstChunkOnPage(0);
@@ -485,7 +486,7 @@ class EpochChunkAccessorTests
     public unsafe void ClockHand_Eviction_WorksCorrectly()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
         var guard = EpochGuard.Enter(epochManager);
 
@@ -499,7 +500,7 @@ class EpochChunkAccessorTests
             segment.AllocateChunk(false);
         }
 
-        var accessor = segment.CreateEpochChunkAccessor(pmmf, epochManager);
+        var accessor = segment.CreateEpochChunkAccessor();
 
         // Fill all 16 slots with pages 0-15
         for (int p = 0; p < 16; p++)
@@ -524,7 +525,7 @@ class EpochChunkAccessorTests
     public unsafe void ClockHand_NeverFails()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
         var guard = EpochGuard.Enter(epochManager);
 
@@ -538,7 +539,7 @@ class EpochChunkAccessorTests
             segment.AllocateChunk(false);
         }
 
-        var accessor = segment.CreateEpochChunkAccessor(pmmf, epochManager);
+        var accessor = segment.CreateEpochChunkAccessor();
 
         // Access 32 different pages — much more than the 16-slot cache
         // Clock-hand eviction should always succeed (no "all slots pinned" crash)
@@ -565,7 +566,7 @@ class EpochChunkAccessorTests
     public unsafe void MultiplePages_DifferentSegmentIndices()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
         var guard = EpochGuard.Enter(epochManager);
 
@@ -578,7 +579,7 @@ class EpochChunkAccessorTests
             segment.AllocateChunk(false);
         }
 
-        var accessor = segment.CreateEpochChunkAccessor(pmmf, epochManager);
+        var accessor = segment.CreateEpochChunkAccessor();
 
         // Write unique values on each page
         for (int p = 0; p < 3; p++)
@@ -609,14 +610,14 @@ class EpochChunkAccessorTests
     public unsafe void TryLatchExclusive_AcquiresLock()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
         var guard = EpochGuard.Enter(epochManager);
 
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor(pmmf, epochManager);
+        var accessor = segment.CreateEpochChunkAccessor();
 
         // Load the chunk first (populates slot with memPageIndex)
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
@@ -647,14 +648,14 @@ class EpochChunkAccessorTests
     public unsafe void UnlatchExclusive_ReleasesLock()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
         var guard = EpochGuard.Enter(epochManager);
 
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor(pmmf, epochManager);
+        var accessor = segment.CreateEpochChunkAccessor();
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
 
         // Latch
@@ -676,7 +677,7 @@ class EpochChunkAccessorTests
     public unsafe void TryLatchExclusive_FailsOnNonIdlePage()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
         var guard = EpochGuard.Enter(epochManager);
 
@@ -690,7 +691,7 @@ class EpochChunkAccessorTests
 
         // Now create epoch accessor and load the same chunk
         // The page is in Shared state from legacy accessor
-        var accessor = segment.CreateEpochChunkAccessor(pmmf, epochManager);
+        var accessor = segment.CreateEpochChunkAccessor();
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
 
         // TryLatchExclusive should fail because page is Shared (not Idle)
@@ -713,7 +714,7 @@ class EpochChunkAccessorTests
     public unsafe void EpochProtection_PreventsEviction()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
         var guard = EpochGuard.Enter(epochManager);
 
@@ -726,7 +727,7 @@ class EpochChunkAccessorTests
             segment.AllocateChunk(false);
         }
 
-        var accessor = segment.CreateEpochChunkAccessor(pmmf, epochManager);
+        var accessor = segment.CreateEpochChunkAccessor();
 
         // Load pages 0-3 via epoch accessor
         for (int p = 0; p < 4; p++)
@@ -778,13 +779,13 @@ class EpochChunkAccessorTests
     public unsafe void GetChunkBasedSegmentHeader_ReturnsValidRef()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
         var guard = EpochGuard.Enter(epochManager);
 
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
-        var accessor = segment.CreateEpochChunkAccessor(pmmf, epochManager);
+        var accessor = segment.CreateEpochChunkAccessor();
 
         // Access the segment header — should not crash
         ref var header = ref accessor.GetChunkBasedSegmentHeader<ChunkBasedSegmentHeader>(

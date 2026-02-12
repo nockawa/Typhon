@@ -116,6 +116,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
     public DatabaseDefinitions DBD { get; }
     public ManagedPagedMMF MMF { get; }
+    public EpochManager EpochManager { get; private set; }
 
     internal TransactionChain TransactionChain { get; }
 
@@ -135,11 +136,13 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         return TransactionChain.CreateTransaction(this);
     }
 
-    public DatabaseEngine(DatabaseEngineOptions options, ManagedPagedMMF mmf, ILogger<DatabaseEngine> log, IResourceRegistry resourceRegistry, 
-        string name = null) : base(name ?? $"DatabaseEngine_{Guid.NewGuid():N}", ResourceType.Engine, resourceRegistry.DataEngine)
+    public DatabaseEngine(IResourceRegistry resourceRegistry, EpochManager epochManager, ManagedPagedMMF mmf, DatabaseEngineOptions options, 
+        ILogger<DatabaseEngine> log, string name = null) : 
+        base(name ?? $"DatabaseEngine_{Guid.NewGuid():N}", ResourceType.Engine, resourceRegistry.DataEngine)
     {
         // Engine initialization
         MMF = mmf;
+        EpochManager = epochManager;
         _log = log;
         _options = options;
         TimeoutOptions.Current = _options.Timeouts;

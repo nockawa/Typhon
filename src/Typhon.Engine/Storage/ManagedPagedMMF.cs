@@ -94,10 +94,13 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
     // Throughput counters (supplement inherited _metrics)
     private long _evictionCount;
 
-    public ManagedPagedMMF(IServiceProvider serviceProvider, PagedMMFOptions options, IResource parent, string resourceName, ILogger<PagedMMF> logger, 
-        IResourceRegistry resourceRegistry) : 
-        base(serviceProvider, options, parent, $"ManagedPagedMMF_{options?.DatabaseName ?? Guid.NewGuid().ToString("N")}", logger)
+    public EpochManager EpochManager { get; private set; }
+
+    public ManagedPagedMMF(IResourceRegistry resourceRegistry, EpochManager epochManager, IMemoryAllocator memoryAllocator, PagedMMFOptions options, 
+        IResource parent, string resourceName, ILogger<PagedMMF> logger) :
+        base(memoryAllocator, options, parent, $"ManagedPagedMMF_{options?.DatabaseName ?? Guid.NewGuid().ToString("N")}", logger)
     {
+        EpochManager = epochManager;
     }
 
     public int AllocatePage(ChangeSet changeSet = null)
@@ -371,7 +374,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         Span<int> pages = stackalloc int[length];
         AllocatePages(ref pages, 0, changeSet);
 
-        var segment = new ChunkBasedSegment(this, stride);
+        var segment = new ChunkBasedSegment(EpochManager, this, stride);
         if (dic.TryAdd(pages[0], segment) == false)
         {
             Debug.Assert(true);
@@ -394,7 +397,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
             return null;
         }
 
-        var segment = new ChunkBasedSegment(this, stride);
+        var segment = new ChunkBasedSegment(EpochManager, this, stride);
         if (dic.TryAdd(filePageIndex, segment) == false)
         {
             Debug.Assert(true);

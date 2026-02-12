@@ -92,12 +92,12 @@ public interface IBTree
     ChunkBasedSegment Segment { get; }
     bool AllowMultiple { get; }
     // int Count { get; }
-    unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor);
-    unsafe bool Remove(void* keyAddr, out int value, ref ChunkAccessor accessor);
-    unsafe Result<int, BTreeLookupStatus> TryGet(void* keyAddr, ref ChunkAccessor accessor);
-    unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref ChunkAccessor accessor);
-    unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ref ChunkAccessor accessor);
-    void CheckConsistency(ref ChunkAccessor accessor);
+    unsafe int Add(void* keyAddr, int value, ref EpochChunkAccessor accessor);
+    unsafe bool Remove(void* keyAddr, out int value, ref EpochChunkAccessor accessor);
+    unsafe Result<int, BTreeLookupStatus> TryGet(void* keyAddr, ref EpochChunkAccessor accessor);
+    unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref EpochChunkAccessor accessor);
+    unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ref EpochChunkAccessor accessor);
+    void CheckConsistency(ref EpochChunkAccessor accessor);
 }
 
 public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged 
@@ -131,7 +131,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public ref struct InsertArguments
     {
-        public InsertArguments(TKey key, int value, IComparer<TKey> comparer, ref ChunkAccessor accessor)
+        public InsertArguments(TKey key, int value, IComparer<TKey> comparer, ref EpochChunkAccessor accessor)
         {
             _value = value;
             _keyComparer = comparer ?? Comparer<TKey>.Default;
@@ -145,7 +145,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
         public int ElementId;
 
-        public ref ChunkAccessor Accessor;
+        public ref EpochChunkAccessor Accessor;
 
         private readonly int _value;
         private readonly IComparer<TKey> _keyComparer;
@@ -165,7 +165,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     {
         public readonly TKey Key;
         public readonly IComparer<TKey> Comparer;
-        public ref ChunkAccessor Accessor;
+        public ref EpochChunkAccessor Accessor;
 
         /// <summary>
         /// result is set once when the value is found at leaf node.
@@ -177,7 +177,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         /// </summary>
         public bool Removed { get; private set; }
 
-        public RemoveArguments(in TKey key, in IComparer<TKey> comparer, ref ChunkAccessor accessor)
+        public RemoveArguments(in TKey key, in IComparer<TKey> comparer, ref EpochChunkAccessor accessor)
         {
             Key = key;
             Comparer = comparer;
@@ -270,8 +270,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         /// <summary>
         /// creates new relatives for child node.
         /// </summary>
-        public static void Create(NodeWrapper child, int index, NodeWrapper parent, ref NodeRelatives parentRelatives, out NodeRelatives res,
-            ref ChunkAccessor accessor)
+        public static void Create(NodeWrapper child, int index, NodeWrapper parent, ref NodeRelatives parentRelatives, out NodeRelatives res, ref EpochChunkAccessor accessor)
         {
             Debug.Assert(index >= -1 && index < parent.GetLength(ref accessor));
 
@@ -333,34 +332,34 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     private readonly ChunkBasedSegment _segment;
     private readonly BaseNodeStorage _storage;
 
-    public bool IsEmpty(ref ChunkAccessor accessor)
+    public bool IsEmpty(ref EpochChunkAccessor accessor)
     {
         ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false);
         var res = header.Count == 0;
         return res;
     }
 
-    public int IncCount(ref ChunkAccessor accessor)
+    public int IncCount(ref EpochChunkAccessor accessor)
     {
         ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false);
         var res = ++header.Count;
         return res;
     }
 
-    public int DecCount(ref ChunkAccessor accessor)
+    public int DecCount(ref EpochChunkAccessor accessor)
     {
         ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false);
         var res = --header.Count;
         return res;
     }
 
-    public void SetRootChunkId(ref ChunkAccessor accessor, int rootChunkId)
+    public void SetRootChunkId(ref EpochChunkAccessor accessor, int rootChunkId)
     {
         ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false);
         header.RootChunkId = rootChunkId;
     }
 
-    public int GetRootChunkId(ref ChunkAccessor accessor)
+    public int GetRootChunkId(ref EpochChunkAccessor accessor)
     {
         ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false);
         var res = header.RootChunkId;
@@ -372,8 +371,8 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     private NodeWrapper ReverseLinkList;
     public int Height;
 
-    protected KeyValueItem GetFirst(ref ChunkAccessor accessor) => LinkList.GetFirst(ref accessor);
-    protected KeyValueItem GetLast(ref ChunkAccessor accessor) => ReverseLinkList.GetLast(ref accessor);
+    protected KeyValueItem GetFirst(ref EpochChunkAccessor accessor) => LinkList.GetFirst(ref accessor);
+    protected KeyValueItem GetLast(ref EpochChunkAccessor accessor) => ReverseLinkList.GetLast(ref accessor);
 
     #endregion
 
@@ -397,21 +396,21 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
         else
         {
-            var ca = segment.CreateChunkAccessor();
+            var ca = segment.CreateEpochChunkAccessor();
             Root = _storage.LoadNode(GetRootChunkId(ref ca));
             ca.Dispose();
         }
     }
 
-    public unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor) => Add(Unsafe.AsRef<TKey>(keyAddr), value, ref accessor);
-    public unsafe bool Remove(void* keyAddr, out int value, ref ChunkAccessor accessor) => Remove(Unsafe.AsRef<TKey>(keyAddr), out value, ref accessor);
-    public unsafe Result<int, BTreeLookupStatus> TryGet(void* keyAddr, ref ChunkAccessor accessor) => TryGet(Unsafe.AsRef<TKey>(keyAddr), ref accessor);
-    public unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref ChunkAccessor accessor) 
+    public unsafe int Add(void* keyAddr, int value, ref EpochChunkAccessor accessor) => Add(Unsafe.AsRef<TKey>(keyAddr), value, ref accessor);
+    public unsafe bool Remove(void* keyAddr, out int value, ref EpochChunkAccessor accessor) => Remove(Unsafe.AsRef<TKey>(keyAddr), out value, ref accessor);
+    public unsafe Result<int, BTreeLookupStatus> TryGet(void* keyAddr, ref EpochChunkAccessor accessor) => TryGet(Unsafe.AsRef<TKey>(keyAddr), ref accessor);
+    public unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref EpochChunkAccessor accessor) 
         => RemoveValue(Unsafe.AsRef<TKey>(keyAddr), elementId, value, ref accessor);
-    public unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ref ChunkAccessor accessor)
+    public unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ref EpochChunkAccessor accessor)
         => TryGetMultiple(Unsafe.AsRef<TKey>(keyAddr), ref accessor);
 
-    public int Add(TKey key, int value, ref ChunkAccessor accessor)
+    public int Add(TKey key, int value, ref EpochChunkAccessor accessor)
     {
         Activity activity = null;
         if (TelemetryConfig.BTreeActive)
@@ -439,7 +438,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
     }
 
-    public bool Remove(TKey key, out int value, ref ChunkAccessor accessor)
+    public bool Remove(TKey key, out int value, ref EpochChunkAccessor accessor)
     {
         Activity activity = null;
         if (TelemetryConfig.BTreeActive)
@@ -468,7 +467,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
     }
 
-    public void CheckConsistency(ref ChunkAccessor accessor)
+    public void CheckConsistency(ref EpochChunkAccessor accessor)
     {
         // Recursive check from Root to leaf
         if (IsEmpty(ref accessor))
@@ -540,7 +539,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         get
         {
             // TODO use a thread-local ChunkRandomAccessor to avoid creating a new one every time.
-            var ca = this._segment.CreateChunkAccessor();
+            var ca = this._segment.CreateEpochChunkAccessor();
             try
             {
                 var result = TryGet(key, ref ca);
@@ -558,7 +557,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
     }
 
-    public Result<int, BTreeLookupStatus> TryGet(TKey key, ref ChunkAccessor accessor)
+    public Result<int, BTreeLookupStatus> TryGet(TKey key, ref EpochChunkAccessor accessor)
     {
         var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
         if (!_access.EnterSharedAccess(ref wc))
@@ -581,7 +580,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
     }
 
-    public bool RemoveValue(TKey key, int elementId, int value, ref ChunkAccessor accessor)
+    public bool RemoveValue(TKey key, int elementId, int value, ref EpochChunkAccessor accessor)
     {
         var result = TryGet(key, ref accessor);
         if (result.IsFailure)
@@ -632,7 +631,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         return true;
     }
 
-    public VariableSizedBufferAccessor<int> TryGetMultiple(TKey key, ref ChunkAccessor accessor)
+    public VariableSizedBufferAccessor<int> TryGetMultiple(TKey key, ref EpochChunkAccessor accessor)
     {
         var result = TryGet(key, ref accessor);
         if (result.IsFailure)
@@ -646,7 +645,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     #region Private API
 
-    protected internal NodeWrapper AllocNode(NodeStates states, ref ChunkAccessor accessor)
+    protected internal NodeWrapper AllocNode(NodeStates states, ref EpochChunkAccessor accessor)
     {
         var node = new NodeWrapper(_storage, _segment.AllocateChunk(true));
         _storage.InitializeNode(node, states, ref accessor);
@@ -820,7 +819,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
     }
 
-    private NodeWrapper FindLeaf(TKey key, out int index, ref ChunkAccessor accessor)
+    private NodeWrapper FindLeaf(TKey key, out int index, ref EpochChunkAccessor accessor)
     {
         index = -1;
         if (IsEmpty(ref accessor))

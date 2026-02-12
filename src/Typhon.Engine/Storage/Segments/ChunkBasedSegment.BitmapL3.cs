@@ -578,7 +578,7 @@ public partial class ChunkBasedSegment
 
             var span = result.Span;
 
-            using ChunkAccessor chunkAccessor = clearContent ? _segment.CreateChunkAccessor() : default;
+            using EpochChunkAccessor epochAccessor = clearContent ? _segment.CreateEpochChunkAccessor() : default;
 
             // Allocate per bulk of 64 pages as long as we can
             while (hasL1 && (length >= 64))
@@ -594,7 +594,7 @@ public partial class ChunkBasedSegment
                             var chunkIndex = (i << 6) + j;
                             if (clearContent)
                             {
-                                chunkAccessor.ClearChunk(chunkIndex);
+                                epochAccessor.ClearChunk(chunkIndex);
                             }
                             span[destI++] = chunkIndex;
                         }
@@ -615,7 +615,7 @@ public partial class ChunkBasedSegment
                     {
                         if (clearContent)
                         {
-                            chunkAccessor.ClearChunk(i);
+                            epochAccessor.ClearChunk(i);
                         }
                         span[destI++] = i;
                         --length;

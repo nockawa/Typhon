@@ -22,10 +22,11 @@ public class ResourceRegistryOptions
 /// Tree structure:
 /// <code>
 /// Root
-/// ├── Storage/      (PageCache, ManagedPagedMMF)
-/// ├── DataEngine/   (DatabaseEngine, ComponentTables)
-/// ├── Durability/   (WAL, Checkpoint)
-/// └── Allocation/   (MemoryAllocator, Bitmaps)
+/// ├── Storage/          (PageCache, ManagedPagedMMF)
+/// ├── DataEngine/       (DatabaseEngine, ComponentTables)
+/// ├── Durability/       (WAL, Checkpoint)
+/// ├── Allocation/       (MemoryAllocator, Bitmaps)
+/// └── Synchronization/  (EpochManager, latch pools)
 /// </code>
 /// </remarks>
 [PublicAPI]
@@ -49,6 +50,9 @@ public class ResourceRegistry : IResourceRegistry
     /// <inheritdoc />
     public IResource Allocation { get; }
 
+    /// <inheritdoc />
+    public IResource Synchronization { get; }
+
     /// <summary>
     /// Creates a new resource registry with the standard subsystem tree.
     /// </summary>
@@ -64,6 +68,7 @@ public class ResourceRegistry : IResourceRegistry
         DataEngine = new ResourceNode("DataEngine", ResourceType.Node, Root);
         Durability = new ResourceNode("Durability", ResourceType.Node, Root);
         Allocation = new ResourceNode("Allocation", ResourceType.Node, Root);
+        Synchronization = new ResourceNode("Synchronization", ResourceType.Node, Root);
     }
 
     /// <inheritdoc />
@@ -73,6 +78,7 @@ public class ResourceRegistry : IResourceRegistry
         ResourceSubsystem.DataEngine => DataEngine,
         ResourceSubsystem.Durability => Durability,
         ResourceSubsystem.Allocation => Allocation,
+        ResourceSubsystem.Synchronization => Synchronization,
         _ => throw new ArgumentOutOfRangeException(nameof(subsystem), subsystem, "Unknown subsystem")
     };
 

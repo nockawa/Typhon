@@ -9,6 +9,21 @@ namespace Typhon.Engine.Tests;
 [TestFixture]
 public class EpochManagerTests
 {
+    private ResourceRegistry _registry;
+
+    [SetUp]
+    public void Setup()
+    {
+        _registry = new ResourceRegistry(new ResourceRegistryOptions { Name = "test" });
+    }
+
+    [TearDown]
+    public void TearDown()
+    {
+        _registry?.Dispose();
+        _registry = null;
+    }
+
     // ========================================
     // Basic Lifecycle (single-threaded)
     // ========================================
@@ -17,7 +32,7 @@ public class EpochManagerTests
     [CancelAfter(1000)]
     public void EnterExit_SingleThread_EpochAdvances()
     {
-        using var manager = new EpochManager("test-epoch", null);
+        using var manager = new EpochManager("test-epoch", _registry.Synchronization);
         var initialEpoch = manager.GlobalEpoch;
 
         using (var guard = EpochGuard.Enter(manager))
@@ -34,7 +49,7 @@ public class EpochManagerTests
     [CancelAfter(1000)]
     public void NestedScopes_InnerExitDoesNotAdvance()
     {
-        using var manager = new EpochManager("test-epoch", null);
+        using var manager = new EpochManager("test-epoch", _registry.Synchronization);
         var initialEpoch = manager.GlobalEpoch;
 
         using (var outer = EpochGuard.Enter(manager))
@@ -57,7 +72,7 @@ public class EpochManagerTests
     [CancelAfter(1000)]
     public void MultipleOutermostScopes_AdvancesMultipleTimes()
     {
-        using var manager = new EpochManager("test-epoch", null);
+        using var manager = new EpochManager("test-epoch", _registry.Synchronization);
         var initialEpoch = manager.GlobalEpoch;
 
         for (int i = 0; i < 10; i++)
@@ -76,7 +91,7 @@ public class EpochManagerTests
     [CancelAfter(1000)]
     public void MinActiveEpoch_NoPinned_ReturnsGlobal()
     {
-        using var manager = new EpochManager("test-epoch", null);
+        using var manager = new EpochManager("test-epoch", _registry.Synchronization);
 
         // No active scopes — MinActiveEpoch should equal GlobalEpoch
         Assert.That(manager.MinActiveEpoch, Is.EqualTo(manager.GlobalEpoch));
@@ -86,7 +101,7 @@ public class EpochManagerTests
     [CancelAfter(1000)]
     public void MinActiveEpoch_SinglePinned_ReturnsPinnedValue()
     {
-        using var manager = new EpochManager("test-epoch", null);
+        using var manager = new EpochManager("test-epoch", _registry.Synchronization);
         var epochAtEntry = manager.GlobalEpoch;
 
         using (var guard = EpochGuard.Enter(manager))
@@ -103,7 +118,7 @@ public class EpochManagerTests
     [CancelAfter(5000)]
     public void MultiThread_MinActiveEpoch_ReturnsOldest()
     {
-        using var manager = new EpochManager("test-epoch", null);
+        using var manager = new EpochManager("test-epoch", _registry.Synchronization);
         var thread1Ready = new ManualResetEventSlim(false);
         var thread2Ready = new ManualResetEventSlim(false);
         var canExit = new ManualResetEventSlim(false);
@@ -152,7 +167,7 @@ public class EpochManagerTests
     [CancelAfter(1000)]
     public void CopySafety_DoubleDispose_NoOp()
     {
-        using var manager = new EpochManager("test-epoch", null);
+        using var manager = new EpochManager("test-epoch", _registry.Synchronization);
         var initialEpoch = manager.GlobalEpoch;
 
         var guard = EpochGuard.Enter(manager);
@@ -168,7 +183,7 @@ public class EpochManagerTests
     [CancelAfter(1000)]
     public void DepthMismatch_ThrowsInvalidOp()
     {
-        using var manager = new EpochManager("test-epoch", null);
+        using var manager = new EpochManager("test-epoch", _registry.Synchronization);
 
         var outer = EpochGuard.Enter(manager);
         var inner = EpochGuard.Enter(manager);
@@ -200,7 +215,7 @@ public class EpochManagerTests
     [CancelAfter(10000)]
     public void ThreadDeath_SlotReclaimed()
     {
-        using var manager = new EpochManager("test-epoch", null);
+        using var manager = new EpochManager("test-epoch", _registry.Synchronization);
 
         // Launch a thread that enters an epoch scope, then let it die
         var threadDone = new ManualResetEventSlim(false);
@@ -239,7 +254,7 @@ public class EpochManagerTests
     [CancelAfter(30000)]
     public void RegistryExhaustion_ThrowsResourceExhausted()
     {
-        using var manager = new EpochManager("test-epoch", null);
+        using var manager = new EpochManager("test-epoch", _registry.Synchronization);
         var barriers = new Barrier(EpochThreadRegistry.MaxSlots + 1);
         var canExit = new ManualResetEventSlim(false);
         var threads = new List<Thread>();
@@ -301,7 +316,7 @@ public class EpochManagerTests
     [CancelAfter(1000)]
     public void ScopeMetrics_Reported()
     {
-        using var manager = new EpochManager("test-epoch", null);
+        using var manager = new EpochManager("test-epoch", _registry.Synchronization);
 
         // Do some scope work
         using (var g1 = EpochGuard.Enter(manager))
@@ -329,11 +344,12 @@ public class EpochManagerTests
     [CancelAfter(1000)]
     public void Resource_PropertiesCorrect()
     {
-        using var manager = new EpochManager("epoch-mgr-1", null);
+        using var manager = new EpochManager("epoch-mgr-1", _registry.Synchronization);
 
         Assert.That(manager.Id, Is.EqualTo("epoch-mgr-1"));
         Assert.That(manager.Type, Is.EqualTo(ResourceType.Synchronization));
-        Assert.That(manager.Parent, Is.Null);
+        Assert.That(manager.Parent, Is.SameAs(_registry.Synchronization));
+        Assert.That(manager.Owner, Is.SameAs(_registry));
         Assert.That(manager.CreatedAt, Is.LessThanOrEqualTo(DateTime.UtcNow));
         Assert.That(manager.Children, Is.Empty);
     }
@@ -346,7 +362,7 @@ public class EpochManagerTests
     [CancelAfter(10000)]
     public void StressTest_ConcurrentEnterExit_NoCorruption()
     {
-        using var manager = new EpochManager("stress-test", null);
+        using var manager = new EpochManager("stress-test", _registry.Synchronization);
         var errorCount = 0;
         var barrier = new Barrier(20);
 

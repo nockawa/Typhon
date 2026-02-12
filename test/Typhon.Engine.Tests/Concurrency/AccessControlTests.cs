@@ -509,7 +509,6 @@ public class AccessControlTests
         var control = new AccessControl();
         var barrier = new Barrier(2);
         var canRelease = new ManualResetEventSlim(false);
-        var aboutToEnter = new ManualResetEventSlim(false);
 
         // Thread 1 holds exclusive
         var t1 = Task.Run(() =>
@@ -525,12 +524,12 @@ public class AccessControlTests
         // Thread 2 tries to acquire - will contend
         var t2 = Task.Run(() =>
         {
-            aboutToEnter.Set();
             control.EnterExclusiveAccess(ref TestWaitContext.Default);
             control.ExitExclusiveAccess();
         });
 
-        aboutToEnter.Wait();
+        // Wait until contention is actually observed before releasing
+        SpinWait.SpinUntil(() => control.WasContended, 2000);
         canRelease.Set();
 
         Task.WaitAll(t1, t2);
@@ -545,7 +544,6 @@ public class AccessControlTests
         var control = new AccessControl();
         var barrier = new Barrier(2);
         var canRelease = new ManualResetEventSlim(false);
-        var aboutToEnter = new ManualResetEventSlim(false);
 
         // Thread 1 holds exclusive
         var t1 = Task.Run(() =>
@@ -561,12 +559,12 @@ public class AccessControlTests
         // Thread 2 tries shared access - will be blocked by exclusive
         var t2 = Task.Run(() =>
         {
-            aboutToEnter.Set();
             control.EnterSharedAccess(ref TestWaitContext.Default);
             control.ExitSharedAccess();
         });
 
-        aboutToEnter.Wait();
+        // Wait until contention is actually observed before releasing
+        SpinWait.SpinUntil(() => control.WasContended, 2000);
         canRelease.Set();
 
         Task.WaitAll(t1, t2);
@@ -581,7 +579,6 @@ public class AccessControlTests
         var control = new AccessControl();
         var barrier = new Barrier(2);
         var canRelease = new ManualResetEventSlim(false);
-        var aboutToEnter = new ManualResetEventSlim(false);
 
         // Create contention
         var t1 = Task.Run(() =>
@@ -596,12 +593,12 @@ public class AccessControlTests
 
         var t2 = Task.Run(() =>
         {
-            aboutToEnter.Set();
             control.EnterExclusiveAccess(ref TestWaitContext.Default);
             control.ExitExclusiveAccess();
         });
 
-        aboutToEnter.Wait();
+        // Wait until contention is actually observed before releasing
+        SpinWait.SpinUntil(() => control.WasContended, 2000);
         canRelease.Set();
 
         Task.WaitAll(t1, t2);
@@ -622,7 +619,6 @@ public class AccessControlTests
         var control = new AccessControl();
         var barrier = new Barrier(2);
         var canRelease = new ManualResetEventSlim(false);
-        var aboutToEnter = new ManualResetEventSlim(false);
 
         // Create contention
         var t1 = Task.Run(() =>
@@ -637,12 +633,12 @@ public class AccessControlTests
 
         var t2 = Task.Run(() =>
         {
-            aboutToEnter.Set();
             control.EnterExclusiveAccess(ref TestWaitContext.Default);
             control.ExitExclusiveAccess();
         });
 
-        aboutToEnter.Wait();
+        // Wait until contention is actually observed before releasing
+        SpinWait.SpinUntil(() => control.WasContended, 2000);
         canRelease.Set();
 
         Task.WaitAll(t1, t2);

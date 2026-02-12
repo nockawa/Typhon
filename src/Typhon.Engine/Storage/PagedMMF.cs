@@ -129,7 +129,6 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     }
 
     protected readonly PagedMMFOptions Options;
-    protected readonly IServiceProvider ServiceProvider;
     protected readonly ILogger<PagedMMF> Logger;
     
     protected readonly PinnedMemoryBlock MemPages;
@@ -145,7 +144,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     private readonly ConcurrentDictionary<int, int> _memPageIndexByFilePageIndex;
     private EpochManager _epochManager;   // null until Phase 3 wires it in
 
-    unsafe public PagedMMF(IServiceProvider serviceProvider, PagedMMFOptions options, IResource parent, string resourceName, ILogger<PagedMMF> logger) :
+    unsafe public PagedMMF(IMemoryAllocator memoryAllocator, PagedMMFOptions options, IResource parent, string resourceName, ILogger<PagedMMF> logger) :
         base(resourceName, ResourceType.File, parent)
     {
         if (!options.Validate(true, out var errors))
@@ -153,14 +152,12 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             throw new ArgumentException("Invalid PagedMMF options", nameof(options), new AggregateException(errors));
         }
         
-        ServiceProvider = serviceProvider;
         Options = options;
         Logger = logger;
 
         // Create the cache of the page, pin it and keeps its address
         var cacheSize = Options.DatabaseCacheSize;
-        var ma = ServiceProvider.GetRequiredService<IMemoryAllocator>();
-        MemPages = ma.AllocatePinned("PageCache", this, (int)cacheSize, true, 64);
+        MemPages = memoryAllocator.AllocatePinned("PageCache", this, (int)cacheSize, true, 64);
         _memPagesAddr = MemPages.DataAsPointer;
 
         // Create the Memory Page info table
@@ -1000,8 +997,9 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
     /// <summary>
     /// Acquire exclusive latch on an epoch-protected page (Idle → Exclusive).
-    /// Unlike TryPromoteToExclusive, this doesn't check LockedByThreadId ownership
-    /// because epoch pages are in Idle state with no thread owner.
+    /// Re-entrant: if already exclusively held by the current thread, increments
+    /// a counter and returns true. This is needed because multiple chunks on the
+    /// same page may be latched independently (e.g., in VariableSizedBufferAccessor.NextChunk).
     /// </summary>
     internal bool TryLatchPageExclusive(int memPageIndex)
     {
@@ -1014,6 +1012,13 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
         try
         {
+            // Re-entrant: if already exclusively held by this thread, just bump counter
+            if (pi.PageState == PageState.Exclusive && pi.LockedByThreadId == Environment.CurrentManagedThreadId)
+            {
+                pi.ConcurrentSharedCounter++;
+                return true;
+            }
+
             // Only latch Idle pages (epoch-protected)
             if (pi.PageState != PageState.Idle)
             {
@@ -1033,6 +1038,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
     /// <summary>
     /// Release exclusive latch on an epoch-protected page (Exclusive → Idle).
+    /// Decrements the re-entrance counter; only transitions to Idle when it reaches zero.
     /// </summary>
     internal void UnlatchPageExclusive(int memPageIndex)
     {
@@ -1040,9 +1046,11 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
         try
         {
-            pi.ConcurrentSharedCounter = 0;
-            pi.LockedByThreadId = 0;
-            pi.PageState = PageState.Idle;
+            if (--pi.ConcurrentSharedCounter == 0)
+            {
+                pi.LockedByThreadId = 0;
+                pi.PageState = PageState.Idle;
+            }
         }
         finally
         {
@@ -1053,7 +1061,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     internal void IncrementDirty(int memPageIndex)
     {
         var pi = _memPagesInfo[memPageIndex];
-        Debug.Assert(pi.PageState is PageState.Shared or PageState.Exclusive or PageState.Idle, "We can't increment the dirty counter for a page that is not Shared, Exclusive, or Idle (epoch-protected).");
+        Debug.Assert(pi.PageState is PageState.Shared or PageState.Exclusive or PageState.Idle or PageState.IdleAndDirty, "We can't increment the dirty counter for a page that is not Shared, Exclusive, Idle, or IdleAndDirty.");
 
         var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
         if (!pi.StateSyncRoot.EnterExclusiveAccess(ref wc))

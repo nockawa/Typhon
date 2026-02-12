@@ -37,6 +37,7 @@ class EpochPageCacheTests
             })
             .AddResourceRegistry()
             .AddMemoryAllocator()
+            .AddEpochManager()
             .AddScopedPagedMemoryMappedFile(options =>
             {
                 options.DatabaseName = CurrentDatabaseName;
@@ -63,7 +64,7 @@ class EpochPageCacheTests
     {
         using var scope = _serviceProvider.CreateScope();
         var pmmf = scope.ServiceProvider.GetService<PagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
 
         // Step 1: Load pages 0-3 via legacy RequestPage, then dispose (→ Idle, no epoch tag)
@@ -113,7 +114,7 @@ class EpochPageCacheTests
     {
         using var scope = _serviceProvider.CreateScope();
         var pmmf = scope.ServiceProvider.GetService<PagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
 
         // Step 1: Enter epoch scope and fill all 8 cache slots via RequestPageEpoch
@@ -158,7 +159,7 @@ class EpochPageCacheTests
     {
         using var scope = _serviceProvider.CreateScope();
         var pmmf = scope.ServiceProvider.GetService<PagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
 
         // Legacy RequestPage should work normally even with epoch manager wired in
@@ -183,7 +184,7 @@ class EpochPageCacheTests
     {
         using var scope = _serviceProvider.CreateScope();
         var pmmf = scope.ServiceProvider.GetService<PagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
 
         // Load page 0 via legacy RequestPage (Shared) — hold the accessor
@@ -234,7 +235,7 @@ class EpochPageCacheTests
     {
         using var scope = _serviceProvider.CreateScope();
         var pmmf = scope.ServiceProvider.GetService<PagedMMF>();
-        using var epochManager = new EpochManager("test-epoch", null);
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         pmmf.SetEpochManager(epochManager);
 
         var guard = EpochGuard.Enter(epochManager);

@@ -482,7 +482,7 @@ internal sealed class DiagnosticCommandExecutor
                 var accessor = seg.CreateChunkAccessor();
                 unsafe
                 {
-                    var ptr = (byte*)accessor.GetChunkAddress(chunk.Value);
+                    var ptr = accessor.GetChunkAddress(chunk.Value);
                     sb.AppendLine();
                     sb.AppendLine("  [white]Raw chunk data:[/]");
                     var chunkSize = Math.Min(seg.Stride, 128);
@@ -526,15 +526,21 @@ internal sealed class DiagnosticCommandExecutor
         var sb = new StringBuilder();
         sb.AppendLine($"  Validating B+Tree [white]{Markup.Escape(indexName)}[/]...");
 
+        var checkEpochManager = _session.Engine.EpochManager;
+        var checkDepth = checkEpochManager.EnterScope();
         try
         {
-            var accessor = btree.Segment.CreateChunkAccessor();
+            var accessor = btree.Segment.CreateEpochChunkAccessor();
             btree.CheckConsistency(ref accessor);
             sb.AppendLine("  [green]Validation passed[/]");
         }
         catch (Exception ex)
         {
             sb.AppendLine($"  [red]Validation FAILED: {Markup.Escape(ex.Message)}[/]");
+        }
+        finally
+        {
+            checkEpochManager.ExitScope(checkDepth);
         }
 
         return CommandResult.Markup(sb.ToString().TrimEnd());
@@ -577,27 +583,36 @@ internal sealed class DiagnosticCommandExecutor
 
         // Look up the entity in the primary key index
         var pkIndex = table.PrimaryKeyIndex;
-        var accessor = pkIndex.Segment.CreateChunkAccessor();
-        unsafe
+        var epochManager = _session.Engine.EpochManager;
+        var epochDepth = epochManager.EnterScope();
+        try
         {
-            var lookupResult = pkIndex.TryGet(&entityId, ref accessor);
-            if (!lookupResult.IsSuccess)
+            var accessor = pkIndex.Segment.CreateEpochChunkAccessor();
+            unsafe
             {
-                return CommandResult.Error($"Error: Entity {entityId} not found in {componentName}.");
+                var lookupResult = pkIndex.TryGet(&entityId, ref accessor);
+                if (!lookupResult.IsSuccess)
+                {
+                    return CommandResult.Error($"Error: Entity {entityId} not found in {componentName}.");
+                }
+
+                var revChunkId = lookupResult.Value;
+                var revAccessor = table.CompRevTableSegment.CreateEpochChunkAccessor();
+                var revPtr = (CompRevStorageHeader*)revAccessor.GetChunkAddress(revChunkId);
+
+                var sb = new StringBuilder();
+                sb.AppendLine($"  [white]Entity {entityId} — {Markup.Escape(componentName)} revision chain[/]");
+                sb.AppendLine("  [grey]──────────────────────────────────────[/]");
+                sb.AppendLine($"  [grey]Chain:[/]           [white]{revPtr->ChainLength} chunk(s), {revPtr->ItemCount} items[/]");
+                sb.AppendLine($"  [grey]First revision:[/]  [white]{revPtr->FirstItemRevision}[/] [grey](index {revPtr->FirstItemIndex})[/]");
+                sb.AppendLine($"  [grey]Next chunk:[/]      [white]{(revPtr->NextChunkId >= 0 ? revPtr->NextChunkId.ToString() : "(none)")}[/]");
+
+                return CommandResult.Markup(sb.ToString().TrimEnd());
             }
-
-            var revChunkId = lookupResult.Value;
-            var revAccessor = table.CompRevTableSegment.CreateChunkAccessor();
-            var revPtr = (CompRevStorageHeader*)revAccessor.GetChunkAddress(revChunkId);
-
-            var sb = new StringBuilder();
-            sb.AppendLine($"  [white]Entity {entityId} — {Markup.Escape(componentName)} revision chain[/]");
-            sb.AppendLine("  [grey]──────────────────────────────────────[/]");
-            sb.AppendLine($"  [grey]Chain:[/]           [white]{revPtr->ChainLength} chunk(s), {revPtr->ItemCount} items[/]");
-            sb.AppendLine($"  [grey]First revision:[/]  [white]{revPtr->FirstItemRevision}[/] [grey](index {revPtr->FirstItemIndex})[/]");
-            sb.AppendLine($"  [grey]Next chunk:[/]      [white]{(revPtr->NextChunkId >= 0 ? revPtr->NextChunkId.ToString() : "(none)")}[/]");
-
-            return CommandResult.Markup(sb.ToString().TrimEnd());
+        }
+        finally
+        {
+            epochManager.ExitScope(epochDepth);
         }
     }
 

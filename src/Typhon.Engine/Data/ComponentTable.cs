@@ -169,19 +169,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     internal int ComponentTotalSize => Definition.ComponentStorageTotalSize;
     internal IndexedFieldInfo[] IndexedFieldInfos { get; private set; }
 
-    internal class ComponentCollectionInfo
-    {
-        public VariableSizedBufferSegmentBase VSBS;
-        public ChunkAccessor Accessor;
-
-        public ComponentCollectionInfo(VariableSizedBufferSegmentBase vsbs)
-        {
-            VSBS = vsbs;
-            Accessor = VSBS.Segment.CreateChunkAccessor();
-        }
-    }
-
-    internal Dictionary<int, ComponentCollectionInfo> ComponentCollectionVSBSByOffset { get; private set; }
+    internal Dictionary<int, VariableSizedBufferSegmentBase> ComponentCollectionVSBSByOffset { get; private set; }
 
     private ComponentTableFlags _flags;
 
@@ -293,7 +281,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     {
         DBE = dbe;
         Definition = definition;
-
+        
         var mmf = DBE.MMF;
         ComponentSegment    = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, ComponentTotalSize);
         CompRevTableSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, ComponentRevisionManager.CompRevChunkSize);
@@ -344,7 +332,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
 
     private void BuildComponentCollectionInfo()
     {
-        ComponentCollectionVSBSByOffset = new Dictionary<int, ComponentCollectionInfo>();
+        ComponentCollectionVSBSByOffset = new Dictionary<int, VariableSizedBufferSegmentBase>();
         foreach (var field in Definition.FieldsByName.Values)
         {
             if (field.Type != FieldType.Collection)
@@ -353,7 +341,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
             }
 
             var vsbs = DBE.GetComponentCollectionVSBS(field.DotNetUnderlyingType);
-            ComponentCollectionVSBSByOffset.Add(field.OffsetInComponentStorage, new ComponentCollectionInfo(vsbs));
+            ComponentCollectionVSBSByOffset.Add(field.OffsetInComponentStorage, vsbs);
             _flags |= ComponentTableFlags.HasCollections;
         }
     }
@@ -389,16 +377,6 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
 
         if (disposing)
         {
-            // Dispose ComponentCollectionInfo accessors to release page references
-            if (ComponentCollectionVSBSByOffset != null)
-            {
-                foreach (var info in ComponentCollectionVSBSByOffset.Values)
-                {
-                    info.Accessor.Dispose();
-                }
-                ComponentCollectionVSBSByOffset.Clear();
-            }
-
             String64IndexSegment?.Dispose();
             DefaultIndexSegment.Dispose();
             CompRevTableSegment.Dispose();

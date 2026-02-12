@@ -19,7 +19,10 @@ public enum ResourceSubsystem
     Durability,
 
     /// <summary>Memory allocation: MemoryAllocator, Bitmaps</summary>
-    Allocation
+    Allocation,
+
+    /// <summary>Synchronization primitives: EpochManager, latch pools</summary>
+    Synchronization
 }
 
 /// <summary>
@@ -53,6 +56,9 @@ public interface IResourceRegistry : IDisposable
 
     /// <summary>Allocation subsystem node (MemoryAllocator, Bitmaps).</summary>
     IResource Allocation { get; }
+
+    /// <summary>Synchronization subsystem node (EpochManager, latch pools).</summary>
+    IResource Synchronization { get; }
 
     /// <summary>
     /// Gets the subsystem node for the specified category.

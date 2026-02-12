@@ -1,6 +1,4 @@
 using JetBrains.Annotations;
-using System;
-using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
@@ -12,30 +10,18 @@ namespace Typhon.Engine;
 /// cannot be evicted until all scopes referencing that epoch have exited.
 /// </summary>
 [PublicAPI]
-public sealed class EpochManager : IResource, IMetricSource
+public sealed class EpochManager : ResourceNode, IMetricSource
 {
     private long _globalEpoch;
     private readonly EpochThreadRegistry _registry;
-
-    // === IResource implementation ===
-    private readonly string _id;
-    private readonly IResource _parent;
-    private readonly List<IResource> _children = [];
-    private readonly DateTime _createdAt = DateTime.UtcNow;
-    // Will be set in Phase 3 when DatabaseEngine integrates EpochManager
-#pragma warning disable CS0649
-    private IResourceRegistry _owner;
-#pragma warning restore CS0649
 
     // === Metrics ===
     private long _epochAdvances;
     private long _scopeEnters;
     private long _registryExhaustionCount;
 
-    public EpochManager(string id, IResource parent)
+    public EpochManager(string id, IResource parent) : base(id, ResourceType.Synchronization, parent)
     {
-        _id = id;
-        _parent = parent;
         _globalEpoch = 1; // Start at 1 so 0 means "no epoch" / "not pinned"
         _registry = new EpochThreadRegistry();
     }
@@ -58,6 +44,11 @@ public sealed class EpochManager : IResource, IMetricSource
     /// <summary>Number of active (pinned) slots in the thread registry.</summary>
     public int ActiveSlotCount => _registry.ActiveSlotCount;
 
+    /// <summary>
+    /// Returns true if the current thread is inside an epoch scope (depth &gt; 0).
+    /// </summary>
+    public bool IsCurrentThreadInScope => _registry.IsCurrentThreadInScope;
+
     // ═══════════════════════════════════════════════════════════════════════
     // Scope Management
     // ═══════════════════════════════════════════════════════════════════════
@@ -76,7 +67,7 @@ public sealed class EpochManager : IResource, IMetricSource
 
     /// <summary>
     /// Exit an epoch scope on the current thread. If this is the outermost scope,
-    /// unpins the thread and advances the global epoch.
+    /// unpins the thread and advances the global epoch. Enforces LIFO ordering.
     /// </summary>
     /// <param name="expectedDepth">The depth returned by the matching <see cref="EnterScope"/> call.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -90,24 +81,21 @@ public sealed class EpochManager : IResource, IMetricSource
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // IResource
-    // ═══════════════════════════════════════════════════════════════════════
-
-    public string Id => _id;
-    public ResourceType Type => ResourceType.Synchronization;
-    public IResource Parent => _parent;
-    public IEnumerable<IResource> Children => _children;
-    public DateTime CreatedAt => _createdAt;
-    public IResourceRegistry Owner => _owner;
-
-    public bool RegisterChild(IResource child)
+    /// <summary>
+    /// Exit an epoch scope without enforcing LIFO ordering. Used by <see cref="Transaction"/>
+    /// which can be disposed in any order. If this is the outermost scope, unpins the thread
+    /// and advances the global epoch.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void ExitScopeUnordered()
     {
-        _children.Add(child);
-        return true;
+        if (_registry.UnpinCurrentThreadUnordered())
+        {
+            // Outermost scope exited — advance the global epoch
+            Interlocked.Increment(ref _globalEpoch);
+            _epochAdvances++;
+        }
     }
-
-    public bool RemoveChild(IResource resource) => _children.Remove(resource);
 
     // ═══════════════════════════════════════════════════════════════════════
     // IMetricSource
@@ -129,8 +117,12 @@ public sealed class EpochManager : IResource, IMetricSource
     /// <summary>Increment exhaustion counter. Called by <see cref="EpochThreadRegistry"/> on slot exhaustion.</summary>
     internal void RecordRegistryExhaustion() => _registryExhaustionCount++;
 
-    public void Dispose()
+    protected override void Dispose(bool disposing)
     {
-        _registry.Dispose();
+        if (disposing)
+        {
+            _registry.Dispose();
+        }
+        base.Dispose(disposing);
     }
 }

@@ -55,7 +55,8 @@ public class LogicalSegment : IDisposable
     internal const int RootHeaderIndexSectionLength = RootHeaderIndexSectionCount * sizeof(int);
     internal const int NextHeadersIndexSectionCount = PagedMMF.PageRawDataSize / sizeof(int);
 
-    private readonly ManagedPagedMMF _manager;
+    internal ManagedPagedMMF Manager { get; }
+
     private readonly Lock _growLock = new();
     private volatile int[] _pages;
 
@@ -76,11 +77,11 @@ public class LogicalSegment : IDisposable
     public ReadOnlySpan<int> Pages => _pages;
     public bool GetPageExclusiveAccessor(int segmentFilePageIndex, [TransfersOwnership] out PageAccessor result,
         long timeout = Timeout.Infinite, CancellationToken cancellationToken = default) 
-        => _manager.RequestPage(Pages[segmentFilePageIndex], true, out result, timeout, cancellationToken);
+        => Manager.RequestPage(Pages[segmentFilePageIndex], true, out result, timeout, cancellationToken);
     
     public bool GetPageSharedAccessor(int segmentFilePageIndex, [TransfersOwnership] out PageAccessor result,
         long timeout = Timeout.Infinite, CancellationToken cancellationToken = default) 
-        => _manager.RequestPage(Pages[segmentFilePageIndex], false, out result, timeout, cancellationToken);
+        => Manager.RequestPage(Pages[segmentFilePageIndex], false, out result, timeout, cancellationToken);
 
     public delegate bool PageWalkPredicate(int indexInSegment, ref PageAccessor accessor);
     public delegate bool PageMapWalkPredicate(int pageMapIndex, ref PageAccessor accessor);
@@ -94,7 +95,7 @@ public class LogicalSegment : IDisposable
         var pageMapIndex = 0;
         while (true)
         {
-            _manager.RequestPage(curPageIndex, exclusiveAccess, out var pa);
+            Manager.RequestPage(curPageIndex, exclusiveAccess, out var pa);
             using (pa)
             {
                 if (predicate(pageMapIndex++, ref pa) == false)
@@ -119,7 +120,7 @@ public class LogicalSegment : IDisposable
         var pageMapIndex = 0;
         while (true)
         {
-            _manager.RequestPage(curPageIndex, exclusiveAccess, out var pa);
+            Manager.RequestPage(curPageIndex, exclusiveAccess, out var pa);
             using (pa)
             {
                 if (predicate(pageMapIndex++, ref pa, extra) == false)
@@ -165,7 +166,7 @@ public class LogicalSegment : IDisposable
             var newPages = new int[newLength];
             var newPagesAsSpan = newPages.AsSpan();
             curPages.CopyTo(newPagesAsSpan);
-            _manager.AllocatePages(ref newPagesAsSpan, curPages.Length, changeSet);
+            Manager.AllocatePages(ref newPagesAsSpan, curPages.Length, changeSet);
 
             CreateOrGrow(PageBlockType.None, newPages, curPages.Length, ref NoNextMap, clearNewPages, changeSet);
         }
@@ -173,7 +174,7 @@ public class LogicalSegment : IDisposable
     
     internal LogicalSegment(ManagedPagedMMF manager)
     {
-        _manager = manager;
+        Manager = manager;
     }
 
     public void Dispose() => _pages = null;
@@ -265,7 +266,7 @@ public class LogicalSegment : IDisposable
                 if (allocStartFrom < mapIndices.Length)
                 {
                     var pagesToAllocate = mapIndices[1..];
-                    _manager.AllocatePages(ref pagesToAllocate, allocStartFrom - 1, changeSet);
+                    Manager.AllocatePages(ref pagesToAllocate, allocStartFrom - 1, changeSet);
                 }
             }
             
@@ -290,7 +291,7 @@ public class LogicalSegment : IDisposable
                 // If it's a new page, initialize it
                 if (isNewPage)
                 {
-                    _manager.RequestPage(curMapPageIndex, true, out pa);
+                    Manager.RequestPage(curMapPageIndex, true, out pa);
                     hasAccessor = true;
                     
                     pa.InitHeader(
@@ -305,7 +306,7 @@ public class LogicalSegment : IDisposable
                 {
                     if (hasAccessor == false)
                     {
-                        _manager.RequestPage(curMapPageIndex, true, out pa);
+                        Manager.RequestPage(curMapPageIndex, true, out pa);
                         hasAccessor = true;
                     }
                     ref var lsh = ref pa.GetHeader<LogicalSegmentHeader>(LogicalSegmentHeader.Offset);
@@ -318,7 +319,7 @@ public class LogicalSegment : IDisposable
                 {
                     if (hasAccessor == false)
                     {
-                        _manager.RequestPage(curMapPageIndex, true, out pa);
+                        Manager.RequestPage(curMapPageIndex, true, out pa);
                         hasAccessor = true;
                     }
                     
@@ -340,7 +341,7 @@ public class LogicalSegment : IDisposable
                         // The current page is full, we need on fetch one more... just to store the termination 0 value
                         else
                         {
-                            _manager.RequestPage(mapIndices[curIndexMapIndex + 1], true, out var paEnd);
+                            Manager.RequestPage(mapIndices[curIndexMapIndex + 1], true, out var paEnd);
                             using (paEnd)
                             {
                                 paEnd.InitHeader(PageClearMode.Header, PageBlockFlags.IsLogicalSegment, type, 1);
@@ -385,7 +386,7 @@ public class LogicalSegment : IDisposable
         for (var i = growFrom; i < filePageIndices.Length; i++)
         {
             var pageIndex = filePageIndices[i];
-            _manager.RequestPage(pageIndex, true, out var pa);
+            Manager.RequestPage(pageIndex, true, out var pa);
             using (pa)
             {
                 changeSet?.Add(pa);
@@ -410,7 +411,7 @@ public class LogicalSegment : IDisposable
     
     internal virtual bool Load(int filePageIndex)
     {
-        _manager.RequestPage(filePageIndex, true, out var pa);
+        Manager.RequestPage(filePageIndex, true, out var pa);
         var pages = new List<int>();
         var rd = pa.PageRawData.Cast<byte, int>()[..RootHeaderIndexSectionCount];
         var maxIndicesForPage = RootHeaderIndexSectionCount;
@@ -432,7 +433,7 @@ public class LogicalSegment : IDisposable
             }
             
             pa.Dispose();
-            _manager.RequestPage(lsh.LogicalSegmentNextMapPBID, true, out pa);
+            Manager.RequestPage(lsh.LogicalSegmentNextMapPBID, true, out pa);
             rd = pa.PageRawData.Cast<byte, int>();
             i = 0; // Reset index for the new page
             
@@ -447,7 +448,7 @@ public class LogicalSegment : IDisposable
 
     public void Clear()
     {
-        var cs = _manager.CreateChangeSet();
+        var cs = Manager.CreateChangeSet();
         for (int i = 0; i < Length; i++)
         {
             GetPageExclusiveAccessor(i, out PageAccessor pa);
@@ -462,7 +463,7 @@ public class LogicalSegment : IDisposable
 
     public void Fill(byte value)
     {
-        var cs = _manager.CreateChangeSet();
+        var cs = Manager.CreateChangeSet();
         for (int i = 0; i < Length; i++)
         {
             GetPageExclusiveAccessor(i, out var pa);

@@ -30,6 +30,7 @@ public partial class ChunkBasedSegment : LogicalSegment
 {
     private readonly Lock _growLock = new();
     private volatile BitmapL3 _map;
+    private readonly EpochManager _epochManager;
 
     // Cached values for fast GetChunkLocation (avoids _map indirection)
     private readonly int _rootChunkCount;
@@ -39,13 +40,15 @@ public partial class ChunkBasedSegment : LogicalSegment
     // This replaces expensive division (~20-80 cycles) with multiply+shift (~3-4 cycles)
     private readonly ulong _divMagic;
     
-    internal ChunkBasedSegment(ManagedPagedMMF manager, int stride) : base(manager)
+    internal ChunkBasedSegment(EpochManager epochManager, ManagedPagedMMF manager, int stride) : base(manager)
     {
         if (stride < sizeof(long))
         {
             throw new Exception($"Invalid stride size, given {stride}, but must be at least 8 bytes");
         }
 
+        _epochManager = epochManager;
+        
         Stride = stride;
         ChunkCountRootPage = (PagedMMF.PageRawDataSize - RootHeaderIndexSectionLength) / stride;
         ChunkCountPerPage = PagedMMF.PageRawDataSize / stride;
@@ -260,9 +263,11 @@ public partial class ChunkBasedSegment : LogicalSegment
     [return: TransfersOwnership]
     public ChunkAccessor CreateChunkAccessor(ChangeSet changeSet=null) => new(this, changeSet);
 
+    /// <summary>
+    /// Create an EpochChunkAccessor using the stored PagedMMF and EpochManager references.
+    /// </summary>
     [return: TransfersOwnership]
-    internal EpochChunkAccessor CreateEpochChunkAccessor(PagedMMF pagedMMF, EpochManager epochManager, ChangeSet changeSet = null)
-        => new(this, pagedMMF, epochManager, changeSet);
+    internal EpochChunkAccessor CreateEpochChunkAccessor(ChangeSet changeSet = null) => new(this, Manager, _epochManager, changeSet);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public (int segmentIndex, int offset) GetChunkLocation(int index)

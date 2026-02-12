@@ -14,7 +14,9 @@ public class ChunkAccessorTests
 {
     private IServiceProvider _serviceProvider;
     private ServiceCollection _serviceCollection;
-    private ILogger<ChunkAccessorTests> _logger;
+    private ManagedPagedMMF _pmmf;
+    private EpochManager _epochManager;
+    private int _epochDepth;
 
     // Test data structures
     [StructLayout(LayoutKind.Sequential)]
@@ -85,6 +87,7 @@ public class ChunkAccessorTests
             })
             .AddResourceRegistry()
             .AddMemoryAllocator()
+            .AddEpochManager()
             .AddScopedManagedPagedMemoryMappedFile(options =>
             {
                 options.DatabaseName = CurrentDatabaseName;
@@ -94,12 +97,22 @@ public class ChunkAccessorTests
 
         _serviceProvider = _serviceCollection.BuildServiceProvider();
         _serviceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
-        _logger = _serviceCollection.BuildServiceProvider().GetRequiredService<ILogger<ChunkAccessorTests>>();
+        _serviceCollection.BuildServiceProvider().GetRequiredService<ILogger<ChunkAccessorTests>>();
+
+        _pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        _epochManager = _serviceProvider.GetRequiredService<EpochManager>();
+        _epochDepth = _epochManager.EnterScope();
     }
 
     [TearDown]
     public void TearDown()
     {
+        if (_epochManager != null)
+        {
+            _epochManager.ExitScope(_epochDepth);
+        }
+
+        _pmmf?.Dispose();
     }
 
     #region Creation and Initialization Tests
@@ -107,8 +120,8 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void Create_ValidSegment_InitializesCorrectly()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var accessor = segment.CreateChunkAccessor();
 
@@ -120,9 +133,8 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void Create_WithChangeSet_InitializesCorrectly()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
-        var changeSet = pmmf.CreateChangeSet();
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        var changeSet = _pmmf.CreateChangeSet();
 
         var accessor = segment.CreateChunkAccessor(changeSet);
 
@@ -137,8 +149,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void Get_SingleChunk_ReturnsValidReference()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
         var accessor = segment.CreateChunkAccessor();
@@ -160,8 +171,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void GetReadOnly_SingleChunk_ReturnsValidReference()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
         var accessor = segment.CreateChunkAccessor();
@@ -180,9 +190,8 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void Get_WithDirtyFlag_MarksPageDirty()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
-        var changeSet = pmmf.CreateChangeSet();
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        var changeSet = _pmmf.CreateChangeSet();
 
         var chunkId = segment.AllocateChunk(true);
         var accessor = segment.CreateChunkAccessor(changeSet);
@@ -200,8 +209,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void Get_MultipleChunksOnSamePage_ReturnsCorrectData()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk8));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk8));
 
         // Allocate multiple chunks that should be on the same page
         var chunk1 = segment.AllocateChunk(true);
@@ -234,8 +242,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void GetScoped_SingleChunk_PinsAndUnpins()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
         var accessor = segment.CreateChunkAccessor();
@@ -258,8 +265,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void GetScoped_MultipleScopes_PreventsEviction()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 50, sizeof(TestChunk32));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 50, sizeof(TestChunk32));
 
         // Allocate chunks on different pages
         var chunks = new int[20];
@@ -291,8 +297,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void ChunkScope_AsSpan_ReturnsValidSpan()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
         var accessor = segment.CreateChunkAccessor();
@@ -309,8 +314,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void ChunkScope_AsReadOnlySpan_ReturnsValidSpan()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
         var accessor = segment.CreateChunkAccessor();
@@ -334,8 +338,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void Get_RepeatedAccess_UsesMRUCache()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
         var accessor = segment.CreateChunkAccessor();
@@ -357,8 +360,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void Get_AlternatingChunks_UpdatesMRU()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunk1 = segment.AllocateChunk(true);
         var chunk2 = segment.AllocateChunk(true);
@@ -387,8 +389,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void Get_Fill16Slots_AllAccessible()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 100, sizeof(TestChunk8));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 100, sizeof(TestChunk8));
 
         // Allocate chunks spread across different pages (capacity = 16 slots)
         var chunks = new int[16];
@@ -428,8 +429,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void Get_MoreThan16Pages_EvictsLRU()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 100, sizeof(TestChunk8));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 100, sizeof(TestChunk8));
 
         // Allocate 20 chunks on different pages
         var chunks = new int[20];
@@ -476,9 +476,8 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void Eviction_SelectsLRUSlot_NotMRU()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 100, sizeof(TestChunk32));
-        var changeSet = pmmf.CreateChangeSet();
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 100, sizeof(TestChunk32));
+        var changeSet = _pmmf.CreateChangeSet();
 
         // Allocate many chunks on different pages
         var chunks = new int[20];
@@ -524,9 +523,8 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void Eviction_DirtySlot_AddsToChangeSet()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 100, sizeof(TestChunk32));
-        var changeSet = pmmf.CreateChangeSet();
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 100, sizeof(TestChunk32));
+        var changeSet = _pmmf.CreateChangeSet();
 
         var chunks = new int[20];
         for (int i = 0; i < 20; i++)
@@ -568,8 +566,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void TryPromoteChunk_CachedPage_Succeeds()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
         var accessor = segment.CreateChunkAccessor();
@@ -591,14 +588,13 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void TryPromoteChunk_NotCached_ReturnsFalse()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
         var accessor = segment.CreateChunkAccessor();
 
         // Try to promote without accessing first
-        bool promoted = accessor.TryPromoteChunk(chunkId);
+        accessor.TryPromoteChunk(chunkId);
 
         // May return false if page is not cached
         // This is expected behavior
@@ -609,8 +605,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void PromoteAndDemote_Multiple_MaintainsRefCount()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
         var accessor = segment.CreateChunkAccessor();
@@ -643,9 +638,8 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void DirtyTracking_OnlyDirtyPagesAddedToChangeSet()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
-        var changeSet = pmmf.CreateChangeSet();
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        var changeSet = _pmmf.CreateChangeSet();
 
         var chunk1 = segment.AllocateChunk(true);
         var chunk2 = segment.AllocateChunk(true);
@@ -656,7 +650,7 @@ public class ChunkAccessorTests
         c1.A = 100;
 
         // Access another as readonly
-        ref readonly var c2 = ref accessor.GetChunkReadOnly<TestChunk32>(chunk2);
+        accessor.GetChunkReadOnly<TestChunk32>(chunk2);
 
         accessor.Dispose();
 
@@ -668,9 +662,8 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void Dispose_WithDirtyPages_FlushesToChangeSet()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
-        var changeSet = pmmf.CreateChangeSet();
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        var changeSet = _pmmf.CreateChangeSet();
 
         var chunkId = segment.AllocateChunk(true);
         var accessor = segment.CreateChunkAccessor(changeSet);
@@ -689,8 +682,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void Dispose_WithoutChangeSet_DoesNotThrow()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
         var accessor = segment.CreateChunkAccessor(); // No changeset
@@ -709,9 +701,8 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void AllSlotsPinned_ThrowsException()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         // Use small chunk size to fit many per page
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 30, sizeof(TestChunk8));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 30, sizeof(TestChunk8));
 
         // Calculate chunks per page to ensure we span multiple pages
         var chunksPerPage = segment.ChunkCountPerPage;
@@ -746,7 +737,7 @@ public class ChunkAccessorTests
             // Try to access 17th chunk on a different page - should throw
             try
             {
-                ref var chunk = ref accessor.GetChunk<TestChunk8>(chunks[16]);
+                accessor.GetChunk<TestChunk8>(chunks[16]);
                 Assert.Fail("Expected InvalidOperationException - all slots should be pinned");
             }
             catch (InvalidOperationException)
@@ -768,8 +759,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void RootPage_HasCorrectHeaderOffset()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         // Chunk 0 is reserved, so allocate starting from 1
         var chunkId = segment.AllocateChunk(true);
@@ -790,8 +780,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void AccessDifferentChunkTypes_WorksCorrectly()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
         var accessor = segment.CreateChunkAccessor();
@@ -811,8 +800,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void SequentialAccess_ManyChunks_Succeeds()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 50, sizeof(TestChunk8));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 50, sizeof(TestChunk8));
 
         var chunkCount = 1000;
         var chunks = new int[chunkCount];
@@ -844,8 +832,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void RandomAccess_ManyChunks_Succeeds()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 50, sizeof(TestChunk16));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 50, sizeof(TestChunk16));
 
         var chunkCount = 500;
         var chunks = new int[chunkCount];
@@ -899,8 +886,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void Dispose_ReleasesAllResources()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
         var accessor = segment.CreateChunkAccessor();
@@ -915,8 +901,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void Dispose_WithPromotedPages_Demotes()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
         var accessor = segment.CreateChunkAccessor();
@@ -934,8 +919,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void Dispose_WithPinnedPages_Unpins()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var chunkId = segment.AllocateChunk(true);
         var accessor = segment.CreateChunkAccessor();
@@ -955,8 +939,7 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void MultipleDispose_DoesNotThrow()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
         var accessor = segment.CreateChunkAccessor();
 
@@ -974,9 +957,8 @@ public class ChunkAccessorTests
     [Test]
     public unsafe void StressTest_MixedOperations_Succeeds()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 100, sizeof(TestChunk32));
-        var changeSet = pmmf.CreateChangeSet();
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 100, sizeof(TestChunk32));
+        var changeSet = _pmmf.CreateChangeSet();
 
         var chunkCount = 200;
         var chunks = new int[chunkCount];

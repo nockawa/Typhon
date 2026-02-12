@@ -1,19 +1,16 @@
 using System.Collections.Immutable;
-using System.Linq;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.Operations;
 
 namespace Typhon.Analyzers;
 
 /// <summary>
-/// Analyzer that detects copying of ChunkAccessor instances.
-/// ChunkAccessor is a large ~1KB struct designed for zero-allocation. Copying it defeats
-/// its performance design and can create unexpected behavior since it maintains internal state.
-/// The only valid creation is via ChunkBasedSegment.CreateChunkAccessor().
-/// 
+/// Analyzer that detects copying of ChunkAccessor and EpochChunkAccessor instances.
+/// These are large structs designed for zero-allocation. Copying them defeats
+/// their performance design and can create unexpected behavior since they maintain internal state.
+/// The only valid creation is via ChunkBasedSegment.CreateChunkAccessor() / CreateEpochChunkAccessor().
+///
 /// This analyzer detects:
 /// 1. Direct assignment copies: var x = existingAccessor;
 /// 2. Ref field dereference copies: var x = refStruct.RefField; (where RefField is 'ref ChunkAccessor')
@@ -26,16 +23,16 @@ public class ChunkAccessorCopyAnalyzer : DiagnosticAnalyzer
     private const string Category = "Performance";
 
     private static readonly LocalizableString Title =
-        "ChunkAccessor must not be copied";
+        "ChunkAccessor/EpochChunkAccessor must not be copied";
 
     private static readonly LocalizableString MessageFormat =
-        "Copying ChunkAccessor '{0}' creates an expensive ~1KB stack copy. Use 'ref' to pass references instead.";
+        "Copying '{0}' creates an expensive stack copy. Use 'ref' to pass references instead.";
 
     private static readonly LocalizableString Description =
-        "ChunkAccessor is a large struct (~1KB) designed for zero-allocation performance. " +
-        "Copying it creates expensive stack copies and duplicates internal state (cache, pins, etc.). " +
-        "The only valid creation is via ChunkBasedSegment.CreateChunkAccessor(). " +
-        "All other usage should pass ChunkAccessor by 'ref' to avoid copies.";
+        "ChunkAccessor and EpochChunkAccessor are large structs designed for zero-allocation performance. " +
+        "Copying them creates expensive stack copies and duplicates internal state (cache, etc.). " +
+        "The only valid creation is via ChunkBasedSegment.CreateChunkAccessor() / CreateEpochChunkAccessor(). " +
+        "All other usage should pass by 'ref' to avoid copies.";
 
     private static readonly DiagnosticDescriptor Rule = new DiagnosticDescriptor(
         DiagnosticId,
@@ -171,9 +168,9 @@ public class ChunkAccessorCopyAnalyzer : DiagnosticAnalyzer
         if (returnOp.ReturnedValue == null || !IsChunkAccessorType(returnOp.ReturnedValue.Type))
             return;
 
-        // Allow returning from CreateChunkAccessor method
+        // Allow returning from CreateChunkAccessor / CreateEpochChunkAccessor methods
         var containingMethod = context.ContainingSymbol as IMethodSymbol;
-        if (containingMethod != null && containingMethod.Name == "CreateChunkAccessor")
+        if (containingMethod != null && (containingMethod.Name == "CreateChunkAccessor" || containingMethod.Name == "CreateEpochChunkAccessor"))
             return;
 
         // Allow returning from constructors (e.g., new ChunkAccessor(...))
@@ -198,10 +195,11 @@ public class ChunkAccessorCopyAnalyzer : DiagnosticAnalyzer
             unwrapped = conversion.Operand;
         }
 
-        // Check if it's an invocation of CreateChunkAccessor
+        // Check if it's an invocation of CreateChunkAccessor or CreateEpochChunkAccessor
         if (unwrapped is IInvocationOperation invocation)
         {
-            return invocation.TargetMethod.Name == "CreateChunkAccessor" &&
+            var methodName = invocation.TargetMethod.Name;
+            return (methodName == "CreateChunkAccessor" || methodName == "CreateEpochChunkAccessor") &&
                    invocation.TargetMethod.ContainingType?.Name == "ChunkBasedSegment";
         }
 
@@ -247,7 +245,7 @@ public class ChunkAccessorCopyAnalyzer : DiagnosticAnalyzer
             return false;
 
         // Match by name and ensure it's in the Typhon.Engine namespace
-        if (typeSymbol.Name != "ChunkAccessor")
+        if (typeSymbol.Name != "ChunkAccessor" && typeSymbol.Name != "EpochChunkAccessor")
             return false;
 
         // Check namespace - handle both with and without global prefix

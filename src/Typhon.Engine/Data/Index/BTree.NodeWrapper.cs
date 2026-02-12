@@ -25,53 +25,53 @@ public abstract partial class BTree<TKey>
         #region Node Properties
 
         public bool IsValid => _storage != null && ChunkId != 0;
-        public bool GetIsLeaf(ref ChunkAccessor accessor) => (_storage.GetNodeStates(this, ref accessor) & NodeStates.IsLeaf) != 0;
+        public bool GetIsLeaf(ref EpochChunkAccessor accessor) => (_storage.GetNodeStates(this, ref accessor) & NodeStates.IsLeaf) != 0;
         public int GetCapacity() => _storage.GetNodeCapacity();
-        public bool GetIsFull(ref ChunkAccessor accessor) => GetCount(ref accessor) == GetCapacity();
-        public bool GetIsHalfFull(ref ChunkAccessor accessor) => GetCount(ref accessor) >= (GetCapacity() / 2);
-        public int GetLength(ref ChunkAccessor accessor) => GetCount(ref accessor);
+        public bool GetIsFull(ref EpochChunkAccessor accessor) => GetCount(ref accessor) == GetCapacity();
+        public bool GetIsHalfFull(ref EpochChunkAccessor accessor) => GetCount(ref accessor) >= (GetCapacity() / 2);
+        public int GetLength(ref EpochChunkAccessor accessor) => GetCount(ref accessor);
 
-        public int GetCount(ref ChunkAccessor accessor) => _storage.GetCount(this, ref accessor);
+        public int GetCount(ref EpochChunkAccessor accessor) => _storage.GetCount(this, ref accessor);
 
-        internal void SetCount(int value, ref ChunkAccessor accessor) => _storage.SetCount(this, value, ref accessor);
+        internal void SetCount(int value, ref EpochChunkAccessor accessor) => _storage.SetCount(this, value, ref accessor);
 
-        public int GetStart(ref ChunkAccessor accessor) => _storage.GetStart(this, ref accessor);
+        public int GetStart(ref EpochChunkAccessor accessor) => _storage.GetStart(this, ref accessor);
 
-        private void SetStart(int value, ref ChunkAccessor accessor) => _storage.SetStart(this, value, ref accessor);
+        private void SetStart(int value, ref EpochChunkAccessor accessor) => _storage.SetStart(this, value, ref accessor);
 
-        public int GetEnd(ref ChunkAccessor accessor) => _storage.GetEnd(this, ref accessor);
+        public int GetEnd(ref EpochChunkAccessor accessor) => _storage.GetEnd(this, ref accessor);
 
-        public KeyValueItem GetFirst(ref ChunkAccessor accessor) => _storage.GetItem(this, 0, true, ref accessor);
+        public KeyValueItem GetFirst(ref EpochChunkAccessor accessor) => _storage.GetItem(this, 0, true, ref accessor);
 
-        public void SetFirst(KeyValueItem value, ref ChunkAccessor accessor) => _storage.SetItem(this, 0, value, true, ref accessor);
+        public void SetFirst(KeyValueItem value, ref EpochChunkAccessor accessor) => _storage.SetItem(this, 0, value, true, ref accessor);
 
-        public KeyValueItem GetLast(ref ChunkAccessor accessor) => _storage.GetItem(this, _storage.GetCount(this, ref accessor) - 1, true, ref accessor);
+        public KeyValueItem GetLast(ref EpochChunkAccessor accessor) => _storage.GetItem(this, _storage.GetCount(this, ref accessor) - 1, true, ref accessor);
 
-        public void SetLast(KeyValueItem value, ref ChunkAccessor accessor) 
+        public void SetLast(KeyValueItem value, ref EpochChunkAccessor accessor) 
             => _storage.SetItem(this, _storage.GetCount(this, ref accessor) - 1, value, true, ref accessor);
 
-        public NodeWrapper GetPrevious(ref ChunkAccessor accessor) => _storage.GetPreviousNode(this, ref accessor);
+        public NodeWrapper GetPrevious(ref EpochChunkAccessor accessor) => _storage.GetPreviousNode(this, ref accessor);
 
-        public void SetPrevious(NodeWrapper value, ref ChunkAccessor accessor) => _storage.SetPreviousNode(this, value.ChunkId, ref accessor);
+        public void SetPrevious(NodeWrapper value, ref EpochChunkAccessor accessor) => _storage.SetPreviousNode(this, value.ChunkId, ref accessor);
 
-        public NodeWrapper GetNext(ref ChunkAccessor accessor) => _storage.GetNextNode(this, ref accessor);
+        public NodeWrapper GetNext(ref EpochChunkAccessor accessor) => _storage.GetNextNode(this, ref accessor);
 
-        public void SetNext(NodeWrapper value, ref ChunkAccessor accessor) => _storage.SetNextNode(this, value.ChunkId, ref accessor);
+        public void SetNext(NodeWrapper value, ref EpochChunkAccessor accessor) => _storage.SetNextNode(this, value.ChunkId, ref accessor);
 
-        public NodeWrapper GetLeft(ref ChunkAccessor accessor) => _storage.GetLeftNode(this, ref accessor);
+        public NodeWrapper GetLeft(ref EpochChunkAccessor accessor) => _storage.GetLeftNode(this, ref accessor);
 
-        public void SetLeft(NodeWrapper value, ref ChunkAccessor accessor) => _storage.SetLeftNode(this, value.ChunkId, ref accessor);
+        public void SetLeft(NodeWrapper value, ref EpochChunkAccessor accessor) => _storage.SetLeftNode(this, value.ChunkId, ref accessor);
 
-        public KeyValueItem GetItem(int index, ref ChunkAccessor accessor) => _storage.GetItem(this, index, true, ref accessor);
-        public void SetItem(int index, KeyValueItem value, ref ChunkAccessor accessor) => _storage.SetItem(this, index, value, true, ref accessor);
+        public KeyValueItem GetItem(int index, ref EpochChunkAccessor accessor) => _storage.GetItem(this, index, true, ref accessor);
+        public void SetItem(int index, KeyValueItem value, ref EpochChunkAccessor accessor) => _storage.SetItem(this, index, value, true, ref accessor);
 
         #endregion
 
         #region Node Operations
 
-        public void PushFirst(KeyValueItem item, ref ChunkAccessor accessor) => _storage.PushFirst(this, item, ref accessor);
-        public void PushLast(KeyValueItem item, ref ChunkAccessor accessor) => _storage.PushLast(this, item, ref accessor);
-        public void MergeLeft(NodeWrapper right, ref ChunkAccessor accessor)
+        public void PushFirst(KeyValueItem item, ref EpochChunkAccessor accessor) => _storage.PushFirst(this, item, ref accessor);
+        public void PushLast(KeyValueItem item, ref EpochChunkAccessor accessor) => _storage.PushLast(this, item, ref accessor);
+        public void MergeLeft(NodeWrapper right, ref EpochChunkAccessor accessor)
         {
             Activity activity = null;
             if (TelemetryConfig.BTreeActive)
@@ -90,13 +90,13 @@ public abstract partial class BTree<TKey>
             }
         }
 
-        public NodeWrapper GetChild(int index, ref ChunkAccessor accessor) => _storage.GetChild(this, index, ref accessor);
+        public NodeWrapper GetChild(int index, ref EpochChunkAccessor accessor) => _storage.GetChild(this, index, ref accessor);
 
-        public NodeWrapper GetLastChild(ref ChunkAccessor accessor) => _storage.GetLastChild(this, ref accessor);
+        public NodeWrapper GetLastChild(ref EpochChunkAccessor accessor) => _storage.GetLastChild(this, ref accessor);
 
-        public NodeWrapper GetFirstChild(ref ChunkAccessor accessor) => _storage.GetFirstChild(this, ref accessor);
+        public NodeWrapper GetFirstChild(ref EpochChunkAccessor accessor) => _storage.GetFirstChild(this, ref accessor);
 
-        public KeyValueItem? Insert(ref InsertArguments args, ref NodeRelatives relatives, NodeWrapper parent, ref ChunkAccessor accessor)
+        public KeyValueItem? Insert(ref InsertArguments args, ref NodeRelatives relatives, NodeWrapper parent, ref EpochChunkAccessor accessor)
         {
             if (GetIsLeaf(ref accessor))
             {
@@ -108,7 +108,7 @@ public abstract partial class BTree<TKey>
             }
         }
 
-        public bool Remove(ref RemoveArguments args, ref NodeRelatives relatives, ref ChunkAccessor accessor)
+        public bool Remove(ref RemoveArguments args, ref NodeRelatives relatives, ref EpochChunkAccessor accessor)
         {
             if (GetIsLeaf(ref accessor))
             {
@@ -120,7 +120,7 @@ public abstract partial class BTree<TKey>
             }
         }
 
-        private KeyValueItem? InsertLeaf(ref InsertArguments args, ref NodeRelatives relatives, ref ChunkAccessor accessor)
+        private KeyValueItem? InsertLeaf(ref InsertArguments args, ref NodeRelatives relatives, ref EpochChunkAccessor accessor)
         {
             KeyValueItem? rightLeaf = null;
 
@@ -197,7 +197,7 @@ public abstract partial class BTree<TKey>
                 }
 
                 // splits right side to new node and keeps left side for current node.
-                NodeWrapper SplitNodeRight(NodeWrapper left, ref ChunkAccessor ca)
+                NodeWrapper SplitNodeRight(NodeWrapper left, ref EpochChunkAccessor ca)
                 {
                     var right = left.SplitRight(NodeStates.IsLeaf, ref ca);
                     var next = left.GetNext(ref ca);
@@ -211,7 +211,7 @@ public abstract partial class BTree<TKey>
                     return right;
                 }
 
-                bool CanSpillTo(NodeWrapper leaf, ref ChunkAccessor ca)
+                bool CanSpillTo(NodeWrapper leaf, ref EpochChunkAccessor ca)
                 {
                     return leaf.IsValid && !leaf.GetIsFull(ref ca);
                 }
@@ -227,7 +227,7 @@ public abstract partial class BTree<TKey>
             return rightLeaf;
         }
 
-        private KeyValueItem? InsertInternal(ref InsertArguments args, ref NodeRelatives relatives, ref ChunkAccessor accessor)
+        private KeyValueItem? InsertInternal(ref InsertArguments args, ref NodeRelatives relatives, ref EpochChunkAccessor accessor)
         {
             var index = Find(args.Key, args.KeyComparer, ref accessor);
 
@@ -374,7 +374,7 @@ public abstract partial class BTree<TKey>
                     }
                 }
 
-                bool CanSpillTo(NodeWrapper node, ref ChunkAccessor ca, out NodeWrapper iNode)
+                bool CanSpillTo(NodeWrapper node, ref EpochChunkAccessor ca, out NodeWrapper iNode)
                 {
                     if (node.IsValid && !node.GetIsLeaf(ref ca))
                     {
@@ -390,7 +390,7 @@ public abstract partial class BTree<TKey>
             return rightChild;
         }
 
-        public bool RemoveLeaf(ref RemoveArguments args, ref NodeRelatives relatives, ref ChunkAccessor accessor)
+        public bool RemoveLeaf(ref RemoveArguments args, ref NodeRelatives relatives, ref EpochChunkAccessor accessor)
         {
             var merge = false;
             var index = Find(args.Key, args.Comparer, ref accessor);
@@ -464,7 +464,7 @@ public abstract partial class BTree<TKey>
                     }
                 }
 
-                bool CanBorrowFrom(NodeWrapper leaf, ref ChunkAccessor ca)
+                bool CanBorrowFrom(NodeWrapper leaf, ref EpochChunkAccessor ca)
                 {
                     if (!leaf.IsValid)
                     {
@@ -478,7 +478,7 @@ public abstract partial class BTree<TKey>
             return merge; // true if merge happened.
         }
         
-        public bool RemoveInternal(ref RemoveArguments args, ref NodeRelatives relatives, ref ChunkAccessor accessor)
+        public bool RemoveInternal(ref RemoveArguments args, ref NodeRelatives relatives, ref EpochChunkAccessor accessor)
         {
             var merge = false;
             var index = Find(args.Key, args.Comparer, ref accessor);
@@ -559,7 +559,7 @@ public abstract partial class BTree<TKey>
                     }
                 }
 
-                bool CanBorrowFrom(NodeWrapper node, ref ChunkAccessor ca, out NodeWrapper iNode)
+                bool CanBorrowFrom(NodeWrapper node, ref EpochChunkAccessor ca, out NodeWrapper iNode)
                 {
                     if (!node.IsValid || node.GetIsLeaf(ref ca))
                     {
@@ -575,9 +575,9 @@ public abstract partial class BTree<TKey>
             return merge; // true if merge happened.
         }
 
-        private KeyValueItem RemoveAtInternal(int index, ref ChunkAccessor accessor) => _storage.RemoveAt(this, index, ref accessor);
+        private KeyValueItem RemoveAtInternal(int index, ref EpochChunkAccessor accessor) => _storage.RemoveAt(this, index, ref accessor);
 
-        private NodeWrapper SplitRight(NodeStates states, ref ChunkAccessor accessor)
+        private NodeWrapper SplitRight(NodeStates states, ref EpochChunkAccessor accessor)
         {
             Activity activity = null;
             if (TelemetryConfig.BTreeActive)
@@ -597,7 +597,7 @@ public abstract partial class BTree<TKey>
         }
 
         [Conditional("DEBUG")]
-        private static void Validate(NodeWrapper node, ref ChunkAccessor accessor)
+        private static void Validate(NodeWrapper node, ref EpochChunkAccessor accessor)
         {
             if (!node.IsValid)
             {
@@ -609,11 +609,11 @@ public abstract partial class BTree<TKey>
             Debug.Assert(!node.GetNext(ref accessor).IsValid || node.GetNext(ref accessor).GetPrevious(ref accessor) == node);
         }
 
-        public int Find(TKey key, IComparer<TKey> comparer, ref ChunkAccessor accessor) => BinarySearch(key, comparer, ref accessor);
+        public int Find(TKey key, IComparer<TKey> comparer, ref EpochChunkAccessor accessor) => BinarySearch(key, comparer, ref accessor);
 
-        private int BinarySearch(TKey key, IComparer<TKey> comparer, ref ChunkAccessor accessor) => _storage.BinarySearch(this, key, comparer, ref accessor);
+        private int BinarySearch(TKey key, IComparer<TKey> comparer, ref EpochChunkAccessor accessor) => _storage.BinarySearch(this, key, comparer, ref accessor);
 
-        private KeyValueItem InsertPopFirst(int index, KeyValueItem item, ref ChunkAccessor accessor)
+        private KeyValueItem InsertPopFirst(int index, KeyValueItem item, ref EpochChunkAccessor accessor)
         {
             if (index == 0)
             {
@@ -626,7 +626,7 @@ public abstract partial class BTree<TKey>
             return value;
         }
 
-        public KeyValueItem InsertPopLast(int index, KeyValueItem item, ref ChunkAccessor accessor)
+        public KeyValueItem InsertPopLast(int index, KeyValueItem item, ref EpochChunkAccessor accessor)
         {
             if (index == GetCount(ref accessor))
             {
@@ -639,7 +639,7 @@ public abstract partial class BTree<TKey>
             return value;
         }
 
-        public KeyValueItem PopFirstInternal(ref ChunkAccessor accessor)
+        public KeyValueItem PopFirstInternal(ref EpochChunkAccessor accessor)
         {
             if (GetCount(ref accessor) <= 0)
             {
@@ -653,7 +653,7 @@ public abstract partial class BTree<TKey>
             return temp;
         }
 
-        public KeyValueItem PopLastInternal(ref ChunkAccessor accessor)
+        public KeyValueItem PopLastInternal(ref EpochChunkAccessor accessor)
         {
             if (GetCount(ref accessor) <= 0)
             {
@@ -667,7 +667,7 @@ public abstract partial class BTree<TKey>
             return temp;
         }
 
-        public void Insert(int index, KeyValueItem item, ref ChunkAccessor accessor) => _storage.Insert(this, index, item, ref accessor);
+        public void Insert(int index, KeyValueItem item, ref EpochChunkAccessor accessor) => _storage.Insert(this, index, item, ref accessor);
 
         public int Adjust(int index) => (index < 0 || index >= GetCapacity()) ? (index + GetCapacity() * (-index).Sign()) : index;
 
@@ -685,7 +685,7 @@ public abstract partial class BTree<TKey>
 
         public static bool operator !=(NodeWrapper left, NodeWrapper right) => !left.Equals(right);
 
-        public NodeWrapper GetNearestChild(TKey key, IComparer<TKey> comparer, ref ChunkAccessor accessor)
+        public NodeWrapper GetNearestChild(TKey key, IComparer<TKey> comparer, ref EpochChunkAccessor accessor)
         {
             if (GetIsLeaf(ref accessor))
             {
@@ -719,7 +719,7 @@ public abstract partial class BTree<TKey>
             {
                 get
                 {
-                    var accessor = _node._storage.Segment.CreateChunkAccessor();
+                    var accessor = _node._storage.Segment.CreateEpochChunkAccessor();
                     try
                     {
                         return _node.GetPrevious(ref accessor);
@@ -735,7 +735,7 @@ public abstract partial class BTree<TKey>
             {
                 get
                 {
-                    var accessor = _node._storage.Segment.CreateChunkAccessor();
+                    var accessor = _node._storage.Segment.CreateEpochChunkAccessor();
                     try
                     {
                         return _node.GetNext(ref accessor);
@@ -751,7 +751,7 @@ public abstract partial class BTree<TKey>
             {
                 get
                 {
-                    var accessor = _node._storage.Segment.CreateChunkAccessor();
+                    var accessor = _node._storage.Segment.CreateEpochChunkAccessor();
                     try
                     {
                         return _node.GetLeft(ref accessor);
@@ -767,7 +767,7 @@ public abstract partial class BTree<TKey>
             {
                 get
                 {
-                    var accessor = _node._storage.Segment.CreateChunkAccessor();
+                    var accessor = _node._storage.Segment.CreateEpochChunkAccessor();
                     try
                     {
                         var count = _node.GetCount(ref accessor);
@@ -796,7 +796,7 @@ public abstract partial class BTree<TKey>
         }
 
         [ExcludeFromCodeCoverage]
-        internal void CheckConsistency(TKey key, CheckConsistencyParent parent, IComparer<TKey> comparer, int height, ref ChunkAccessor accessor)
+        internal void CheckConsistency(TKey key, CheckConsistencyParent parent, IComparer<TKey> comparer, int height, ref EpochChunkAccessor accessor)
         {
             Trace.Assert(IsValid, "Root node should always be valid");
 
