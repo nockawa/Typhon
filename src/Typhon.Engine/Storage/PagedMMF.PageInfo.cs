@@ -16,9 +16,9 @@ public partial class PagedMMF
         public int DirtyCounter;
 
         public AccessControlSmall StateSyncRoot;
-        public PageState PageState;                 // Must always be changed under StateSyncRoot lock
-        public int LockedByThreadId;                // Same
-        public int ConcurrentSharedCounter;         // Same
+        public PageState PageState;                     // Must always be changed under StateSyncRoot lock
+        public short ExclusiveLatchDepth;               // Re-entrance depth (multiple chunks on same page)
+        public AccessControlSmall PageExclusiveLatch;   // Thread ownership for exclusive latch
 
         /// <summary>
         /// The epoch at which this page was last accessed via epoch-based protection.
@@ -41,8 +41,8 @@ public partial class PagedMMF
             MemPageIndex = memPageIndex;
             FilePageIndex = -1;
             _clockSweepCounter = 0;
-            ConcurrentSharedCounter = 0;
             StateSyncRoot = new AccessControlSmall();
+            PageExclusiveLatch = new AccessControlSmall();
         }
 
         public void IncrementClockSweepCounter()

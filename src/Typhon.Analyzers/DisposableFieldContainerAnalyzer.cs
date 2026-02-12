@@ -9,12 +9,12 @@ namespace Typhon.Analyzers;
 
 /// <summary>
 /// Analyzer that detects classes and structs containing fields of critical IDisposable types
-/// (ChunkAccessor, Transaction, PageAccessor) that don't implement IDisposable themselves.
-/// 
-/// This catches bugs like StringTableSegment holding a ChunkAccessor field but not being
+/// (EpochChunkAccessor, Transaction) that don't implement IDisposable themselves.
+///
+/// This catches bugs like types holding an EpochChunkAccessor field but not being
 /// IDisposable, which causes page cache deadlocks when the container goes out of scope
 /// without disposing its owned resources.
-/// 
+///
 /// The analyzer is smart enough to skip false positives:
 /// - Types nested inside an IDisposable container (disposal managed by parent)
 /// - Inline arrays (compiler-generated, disposal managed by containing struct)
@@ -33,7 +33,7 @@ public class DisposableFieldContainerAnalyzer : DiagnosticAnalyzer
         "Type '{0}' contains field '{1}' of disposable type '{2}' but does not implement IDisposable{3}";
 
     private static readonly LocalizableString Description =
-        "Types that contain fields of critical IDisposable types (ChunkAccessor, Transaction, PageAccessor) " +
+        "Types that contain fields of critical IDisposable types (EpochChunkAccessor, Transaction) " +
         "must implement IDisposable to ensure proper cleanup. Failing to do so causes resource leaks " +
         "such as page cache deadlocks or uncommitted transaction data.";
 
@@ -53,9 +53,8 @@ public class DisposableFieldContainerAnalyzer : DiagnosticAnalyzer
     private static readonly ImmutableDictionary<string, string> CriticalTypes =
         ImmutableDictionary.CreateRange(new[]
         {
-            new KeyValuePair<string, string>("Typhon.Engine.ChunkAccessor", " - causes page cache deadlock"),
+            new KeyValuePair<string, string>("Typhon.Engine.EpochChunkAccessor", " - causes page cache deadlock"),
             new KeyValuePair<string, string>("Typhon.Engine.Transaction", " - causes uncommitted changes and resource leak"),
-            new KeyValuePair<string, string>("Typhon.Engine.PageAccessor", " - causes page lock leak"),
         });
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
@@ -88,7 +87,7 @@ public class DisposableFieldContainerAnalyzer : DiagnosticAnalyzer
             return;
 
         // Skip inline arrays - they are compiler-generated storage and their
-        // disposal is managed by the containing struct (e.g., ChunkAccessor)
+        // disposal is managed by the containing struct (e.g., EpochChunkAccessor)
         if (IsInlineArray(namedType))
             return;
 

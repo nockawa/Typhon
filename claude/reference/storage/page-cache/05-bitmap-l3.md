@@ -8,7 +8,7 @@ The hierarchical bitmap achieves near-O(1) allocation by using summary levels th
 
 ```
 Level 2 (L2All):  1 bit per 4096 items   ─┐
-                                           │ Summary levels
+                                          │ Summary levels
 Level 1 (L1All):  1 bit per 64 items     ─┤ (in memory)
 Level 1 (L1Any):  1 bit per 64 items     ─┘
                                            
@@ -92,10 +92,9 @@ public bool SetL0(int bitIndex)
     
     // 2. Get page containing this L0 word
     var (pageIndex, pageOffset) = GetBitmapMaskLocation(l0Offset);
-    _segment.GetPageSharedAccessor(pageIndex, out var page);
-    using (page)
+    byte* addr = _segment.GetPageAddress(pageIndex, epoch, out var memIdx);
     {
-        var data = page.PageMetadata.Cast<byte, long>();
+        var data = new Span<long>(addr + PagedMMF.PageMetadataOffset, metadataLongCount);
         
         // 3. Atomically set the bit
         long prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
@@ -104,7 +103,7 @@ public bool SetL0(int bitIndex)
         if ((prevL0 & l0Mask) != 0)
             return false;
         
-        page.SetPageDirty();
+        // Page dirtied via ChangeSet.AddByMemPageIndex(memIdx) by caller
         
         // 5. Update L1All if L0 word became fully set
         if (prevL0 != -1 && (prevL0 | l0Mask) == -1)
@@ -144,10 +143,9 @@ public bool SetL0(int bitIndex)
 public bool SetL1(int l0WordIndex)
 {
     var (pageIndex, pageOffset) = GetBitmapMaskLocation(l0WordIndex);
-    _segment.GetPageSharedAccessor(pageIndex, out var page);
-    using (page)
+    byte* addr = _segment.GetPageAddress(pageIndex, epoch, out var memIdx);
     {
-        var data = page.PageMetadata.Cast<byte, long>();
+        var data = new Span<long>(addr + PagedMMF.PageMetadataOffset, metadataLongCount);
         
         // Only succeed if entire word is empty (CompareExchange)
         long prevL0 = Interlocked.CompareExchange(ref data[pageOffset], -1L, 0L);
@@ -155,7 +153,7 @@ public bool SetL1(int l0WordIndex)
         if (prevL0 != 0)
             return false;  // Word wasn't empty
         
-        page.SetPageDirty();
+        // Page dirtied via ChangeSet.AddByMemPageIndex(memIdx) by caller
         
         // Update L1All (word is now fully set)
         int l1Offset = l0WordIndex >> 6;
@@ -191,10 +189,9 @@ public void ClearL0(int bitIndex)
     long clearMask = ~bitMask;
     
     var (pageIndex, pageOffset) = GetBitmapMaskLocation(l0Offset);
-    _segment.GetPageSharedAccessor(pageIndex, out var page);
-    using (page)
+    byte* addr = _segment.GetPageAddress(pageIndex, epoch, out var memIdx);
     {
-        var data = page.PageMetadata.Cast<byte, long>();
+        var data = new Span<long>(addr + PagedMMF.PageMetadataOffset, metadataLongCount);
         
         // Atomically clear the bit
         long prevL0 = Interlocked.And(ref data[pageOffset], clearMask);
@@ -203,7 +200,7 @@ public void ClearL0(int bitIndex)
         if ((prevL0 & bitMask) == 0)
             return;  // Already free (idempotent)
         
-        page.SetPageDirty();
+        // Page dirtied via ChangeSet.AddByMemPageIndex(memIdx) by caller
         
         // Update L1All if L0 word was fully set (now isn't)
         if (prevL0 == -1)

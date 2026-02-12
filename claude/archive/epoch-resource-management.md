@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | In Progress |
+| **Status** | Implemented (archived) |
 | **GitHub Issue** | #69 |
 | **Branch** | `feature/69-epoch-resource-management` |
 | **Target** | Phase 0-4, incremental delivery |

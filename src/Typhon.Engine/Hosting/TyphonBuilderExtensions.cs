@@ -232,14 +232,15 @@ public static class ServiceCollectionExtensions
             {
                 var resourceRegistry = serviceProvider.GetRequiredService<IResourceRegistry>();
                 var epochManager = serviceProvider.GetRequiredService<EpochManager>();
-                return (TS)(object)new ManagedPagedMMF(resourceRegistry, epochManager, memoryAllocator, options.Value, resourceRegistry.Storage, null, logger);
+                return (TS)(object)new ManagedPagedMMF(resourceRegistry, epochManager, memoryAllocator, options.Value, resourceRegistry.Storage, options.Value.DatabaseName, logger);
             }
 
             // For base PagedMMF - doesn't require IResourceRegistry
             if (typeof(TS) == typeof(PagedMMF))
             {
                 var resourceRegistry = serviceProvider.GetRequiredService<IResourceRegistry>();
-                return (TS)new PagedMMF(memoryAllocator, options.Value, resourceRegistry.Storage, null, logger);
+                var epochManager = serviceProvider.GetRequiredService<EpochManager>();
+                return (TS)new PagedMMF(memoryAllocator, epochManager, options.Value, resourceRegistry.Storage, options.Value.DatabaseName, logger);
             }
 
             // Fallback to Activator for other derived types (if any)

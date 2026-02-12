@@ -951,7 +951,7 @@ ExecutionSystem.UnitOfWork
 | Storage Feature | Durability Usage |
 |----------------|-----------------|
 | ChangeSet tracking | Identifies dirty pages for checkpoint |
-| Page cache (IdleAndDirty) | Pages awaiting checkpoint |
+| Page cache (Idle + DirtyCounter > 0) | Pages awaiting checkpoint |
 | Contiguous write batching | Efficient checkpoint fsync |
 | ManagedPagedMMF allocation | Registry segment, WAL segment pages |
 | PageBaseHeader reserved bytes | Page checksum storage |

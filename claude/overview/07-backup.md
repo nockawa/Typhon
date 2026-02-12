@@ -50,10 +50,10 @@ Intercept page mutations during an active backup to preserve the consistent snap
 
 ### Interception Point
 
-All write paths converge at `TransitionPageToAccess` in `PagedMMF.cs` before a page transitions to `PageState.Exclusive`. This is the single CoW hook:
+All write paths converge at `TryLatchPageExclusive` in `PagedMMF.cs` before a page transitions to `PageState.Exclusive`. This is the single CoW hook:
 
 ```csharp
-// Inside TransitionPageToAccess, just before: pi.PageState = PageState.Exclusive
+// Inside TryLatchPageExclusive, just before: pi.PageState = PageState.Exclusive
 if (_backupActive != 0)        // 1 volatile read — near-zero cost when inactive
 {
     TryCoWForBackup(pi);
@@ -630,7 +630,7 @@ For XOR-based reverse deltas, compression is particularly effective: unchanged b
 |----------|----------|-----------|
 | **WAL dependency** | None | Backups are self-contained page snapshots; checkpoint forced before backup |
 | **Delta direction** | Reverse (latest=full) | Optimizes restore-latest (common case); deletion is free |
-| **CoW trigger** | TransitionPageToAccess | Single convergence point for all write paths |
+| **CoW trigger** | TryLatchPageExclusive | Single convergence point for all write paths |
 | **Shadow pool** | Pre-allocated pinned ring buffer | Lock-free allocation, no GC pressure |
 | **Change tracking** | ChangeRevision (4B) + BackupEpoch (2B) | Per-page, lightweight, no wraparound concern |
 | **Backup unit** | Page (8KB) | Matches storage model, no semantic knowledge needed |

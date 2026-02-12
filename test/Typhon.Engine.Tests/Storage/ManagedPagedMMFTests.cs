@@ -75,33 +75,34 @@ public class ManagedPagedMMFTests
     }
 
     [Test]
-    public void InitializationTest()
+    public unsafe void InitializationTest()
     {
         {
             using var scope = _serviceProvider.CreateScope();
             var pmmf = scope.ServiceProvider.GetService<ManagedPagedMMF>();
-            
+            var epochManager = pmmf.EpochManager;
+
             var metrics = pmmf.GetMetrics();
             var cacheHit = metrics.MemPageCacheHit;
 
-            pmmf.RequestPage(0, false, out var pa);
-            using (pa)
-            {
-                metrics = pmmf.GetMetrics();
-                Assert.That(metrics.MemPageCacheHit, Is.GreaterThan(cacheHit));
-            }
+            var guard = EpochGuard.Enter(epochManager);
+            pmmf.RequestPageEpoch(0, epochManager.GlobalEpoch, out var memPageIndex);
+            metrics = pmmf.GetMetrics();
+            Assert.That(metrics.MemPageCacheHit, Is.GreaterThan(cacheHit));
+            guard.Dispose();
         }
 
         {
             using var scope = _serviceProvider.CreateScope();
             var pmmf = scope.ServiceProvider.GetService<ManagedPagedMMF>();
-            pmmf.RequestPage(0, false, out var pa);
-            using (pa)
-            {
-                ref var h = ref pa.WholePage.Cast<byte, RootFileHeader>()[0];
-                Assert.That(h.HeaderSignatureString, Is.EqualTo(ManagedPagedMMF.HeaderSignature));
-                Assert.That(h.DatabaseNameString, Is.EqualTo(CurrentDatabaseName));
-            }
+            var epochManager = pmmf.EpochManager;
+
+            var guard = EpochGuard.Enter(epochManager);
+            pmmf.RequestPageEpoch(0, epochManager.GlobalEpoch, out var memPageIndex);
+            ref var h = ref *(RootFileHeader*)pmmf.GetMemPageAddress(memPageIndex);
+            Assert.That(h.HeaderSignatureString, Is.EqualTo(ManagedPagedMMF.HeaderSignature));
+            Assert.That(h.DatabaseNameString, Is.EqualTo(CurrentDatabaseName));
+            guard.Dispose();
         }
     }
     
@@ -240,47 +241,50 @@ public class ManagedPagedMMFTests
 
     [Test]
     [TestCaseSource(nameof(Cases))]
-    public void CreateAndLoadBigSegment(int segmentLength)
+    public unsafe void CreateAndLoadBigSegment(int segmentLength)
     {
         int rootSegmentIndex;
         {
             using var scope = _serviceProvider.CreateScope();
             var pmmf = scope.ServiceProvider.GetRequiredService<ManagedPagedMMF>();
-            
+            using var guard = EpochGuard.Enter(pmmf.EpochManager);
+            var epoch = pmmf.EpochManager.GlobalEpoch;
+
             var cs = pmmf.CreateChangeSet();
 
             var s0 = pmmf.AllocateSegment(PageBlockType.None, segmentLength, cs);
-            
+
             for (int i = 0; i < segmentLength; i++)
             {
-                s0.GetPageExclusiveAccessor(i, out var pa);
-                cs.Add(pa);
-                using (pa)
-                {
-                    var rd = pa.LogicalSegmentData.Cast<byte, int>();
-                    rd[0] = i;
-                    rd[^1] = i + 1000;
-                }
+                var addr = s0.GetPageAddressExclusive(i, epoch, out var memPageIdx);
+                cs.AddByMemPageIndex(memPageIdx);
+                var root = (addr[0] & (byte)PageBlockFlags.IsLogicalSegmentRoot) != 0;
+                var offset = root ? LogicalSegment.RootHeaderIndexSectionLength : 0;
+                var rd = new Span<int>(addr + PagedMMF.PageHeaderSize + offset, (PagedMMF.PageRawDataSize - offset) / sizeof(int));
+                rd[0] = i;
+                rd[^1] = i + 1000;
+                pmmf.UnlatchPageExclusive(memPageIdx);
             }
             cs.SaveChanges();
             rootSegmentIndex = s0.RootPageIndex;
         }
-        
+
         {
             using var scope = _serviceProvider.CreateScope();
             var mpmmf = scope.ServiceProvider.GetRequiredService<ManagedPagedMMF>();
+            using var guard = EpochGuard.Enter(mpmmf.EpochManager);
+            var epoch = mpmmf.EpochManager.GlobalEpoch;
 
             var s0 = mpmmf.GetSegment(rootSegmentIndex);
 
             for (int i = 0; i < segmentLength; i++)
             {
-                s0.GetPageExclusiveAccessor(i, out var pa);
-                using (pa)
-                {
-                    var rd = pa.LogicalSegmentData.Cast<byte, int>();
-                    Assert.That(rd[0], Is.EqualTo(i));
-                    Assert.That(rd[^1], Is.EqualTo(i + 1000));
-                }
+                var addr = s0.GetPageAddress(i, epoch, out _);
+                var root = (addr[0] & (byte)PageBlockFlags.IsLogicalSegmentRoot) != 0;
+                var offset = root ? LogicalSegment.RootHeaderIndexSectionLength : 0;
+                var rd = new Span<int>(addr + PagedMMF.PageHeaderSize + offset, (PagedMMF.PageRawDataSize - offset) / sizeof(int));
+                Assert.That(rd[0], Is.EqualTo(i));
+                Assert.That(rd[^1], Is.EqualTo(i + 1000));
             }
         }
     }
@@ -699,7 +703,7 @@ Here come the drones!";
     }
 
     [Test]
-    [Property("MemPageCount", 2005)]        // 2000 for the amount of page in an index map (500 for the first, 2000 for the others), 5 for extra system pages
+    [Property("MemPageCount", 2600)]        // 2510 data pages + map/bitmap overhead; dirty pages are non-evictable until SaveChanges()
     public void LogicalSegmentGrowTest()
     {
         const int initialSize = 10;         // Header = 10

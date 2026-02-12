@@ -7,8 +7,6 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 
-#pragma warning disable CS0728 // Possibly incorrect assignment to local which is the argument to a using or lock statement
-
 namespace Typhon.Engine;
 
 public enum PageClearMode
@@ -75,19 +73,34 @@ public class LogicalSegment : IDisposable
 
     public int Length => _pages.Length;
     public ReadOnlySpan<int> Pages => _pages;
-    public bool GetPageExclusiveAccessor(int segmentFilePageIndex, [TransfersOwnership] out PageAccessor result,
-        long timeout = Timeout.Infinite, CancellationToken cancellationToken = default) 
-        => Manager.RequestPage(Pages[segmentFilePageIndex], true, out result, timeout, cancellationToken);
-    
-    public bool GetPageSharedAccessor(int segmentFilePageIndex, [TransfersOwnership] out PageAccessor result,
-        long timeout = Timeout.Infinite, CancellationToken cancellationToken = default) 
-        => Manager.RequestPage(Pages[segmentFilePageIndex], false, out result, timeout, cancellationToken);
 
-    public delegate bool PageWalkPredicate(int indexInSegment, ref PageAccessor accessor);
-    public delegate bool PageMapWalkPredicate(int pageMapIndex, ref PageAccessor accessor);
-    public delegate bool PageMapWalkPredicate<in T>(int pageMapIndex, ref PageAccessor accessor, T extra) where T : allows ref struct;
+    /// <summary>
+    /// Get the raw memory address for a segment page via epoch-based protection.
+    /// Caller must be inside an <see cref="EpochGuard"/> scope.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public unsafe byte* GetPageAddress(int segmentPageIndex, long epoch, out int memPageIndex)
+    {
+        Manager.RequestPageEpoch(Pages[segmentPageIndex], epoch, out memPageIndex);
+        return Manager.GetMemPageAddress(memPageIndex);
+    }
 
-    public void WalkIndicesMap(PageMapWalkPredicate predicate, bool exclusiveAccess)
+    /// <summary>
+    /// Get the raw memory address for a segment page with exclusive latch.
+    /// Caller must be inside an <see cref="EpochGuard"/> scope.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public unsafe byte* GetPageAddressExclusive(int segmentPageIndex, long epoch, out int memPageIndex)
+    {
+        Manager.RequestPageEpoch(Pages[segmentPageIndex], epoch, out memPageIndex);
+        Manager.TryLatchPageExclusive(memPageIndex);
+        return Manager.GetMemPageAddress(memPageIndex);
+    }
+
+    public unsafe delegate bool PageMapWalkPredicate(int pageMapIndex, byte* pageAddr, int memPageIndex);
+    public unsafe delegate bool PageMapWalkPredicate<in T>(int pageMapIndex, byte* pageAddr, int memPageIndex, T extra) where T : allows ref struct;
+
+    public unsafe void WalkIndicesMap(PageMapWalkPredicate predicate, long epoch)
     {
         var pages = _pages;
 
@@ -95,24 +108,23 @@ public class LogicalSegment : IDisposable
         var pageMapIndex = 0;
         while (true)
         {
-            Manager.RequestPage(curPageIndex, exclusiveAccess, out var pa);
-            using (pa)
-            {
-                if (predicate(pageMapIndex++, ref pa) == false)
-                {
-                    break;
-                }
+            Manager.RequestPageEpoch(curPageIndex, epoch, out var memPageIndex);
+            var addr = Manager.GetMemPageAddress(memPageIndex);
 
-                ref var lsh = ref pa.GetHeader<LogicalSegmentHeader>(LogicalSegmentHeader.Offset);
-                curPageIndex = lsh.LogicalSegmentNextMapPBID;
-                if (curPageIndex == 0)
-                {
-                    break;
-                }
+            if (predicate(pageMapIndex++, addr, memPageIndex) == false)
+            {
+                break;
+            }
+
+            ref var lsh = ref Unsafe.AsRef<LogicalSegmentHeader>(addr + LogicalSegmentHeader.Offset);
+            curPageIndex = lsh.LogicalSegmentNextMapPBID;
+            if (curPageIndex == 0)
+            {
+                break;
             }
         }
     }
-    public void WalkIndicesMap<T>(PageMapWalkPredicate<T> predicate, bool exclusiveAccess, T extra) where T : allows ref struct
+    public unsafe void WalkIndicesMap<T>(PageMapWalkPredicate<T> predicate, long epoch, T extra) where T : allows ref struct
     {
         var pages = _pages;
 
@@ -120,20 +132,19 @@ public class LogicalSegment : IDisposable
         var pageMapIndex = 0;
         while (true)
         {
-            Manager.RequestPage(curPageIndex, exclusiveAccess, out var pa);
-            using (pa)
-            {
-                if (predicate(pageMapIndex++, ref pa, extra) == false)
-                {
-                    break;
-                }
+            Manager.RequestPageEpoch(curPageIndex, epoch, out var memPageIndex);
+            var addr = Manager.GetMemPageAddress(memPageIndex);
 
-                ref var lsh = ref pa.GetHeader<LogicalSegmentHeader>(LogicalSegmentHeader.Offset);
-                curPageIndex = lsh.LogicalSegmentNextMapPBID;
-                if (curPageIndex == 0)
-                {
-                    break;
-                }
+            if (predicate(pageMapIndex++, addr, memPageIndex, extra) == false)
+            {
+                break;
+            }
+
+            ref var lsh = ref Unsafe.AsRef<LogicalSegmentHeader>(addr + LogicalSegmentHeader.Offset);
+            curPageIndex = lsh.LogicalSegmentNextMapPBID;
+            if (curPageIndex == 0)
+            {
+                break;
             }
         }
     }
@@ -218,12 +229,14 @@ public class LogicalSegment : IDisposable
     internal virtual bool Create(PageBlockType type, Span<int> filePageIndices, bool clear, ChangeSet changeSet = null) 
         => CreateOrGrow(type, filePageIndices, 0, ref NoNextMap, clear, changeSet);
 
-    internal bool CreateOrGrow(PageBlockType type, Span<int> filePageIndices, int growFrom, ref int nextMap, bool clear, ChangeSet changeSet)
+    internal unsafe bool CreateOrGrow(PageBlockType type, Span<int> filePageIndices, int growFrom, ref int nextMap, bool clear, ChangeSet changeSet)
     {
+        var epoch = Manager.EpochManager.GlobalEpoch;
+
         // Compute the number of indices map pages needed to store the indices (root + subsequent).
         // The end of the indices list is marked by a 0 value, we need to save space for this entry too, so the next line is accurate, if you wonder.
         var mapPageCount = 1 + ((filePageIndices.Length - RootHeaderIndexSectionCount + NextHeadersIndexSectionCount) / NextHeadersIndexSectionCount);
-        
+
         // Store the indices, code is complex because we may need multiple pages to store them all.
         // Reminder of how data is structured:
         // - Each page is 8192 bytes, with 192 bytes of header, and 8000 bytes of raw data.
@@ -239,20 +252,23 @@ public class LogicalSegment : IDisposable
             Span<int> mapIndices = stackalloc int[mapPageCount];
             mapIndices[0] = filePageIndices[0];                         // The first page is always the root page, so we set it here.;
             var mapIndexAllocStartFrom = 0;
-            
+
             if (mapPageCount > 1)
             {
                 // Need to rebuild the indices pages
                 if (growFrom > 0)
                 {
-                    WalkIndicesMap((i, ref accessor, span) =>
+                    WalkIndicesMap((i, pageAddr, memIdx, span) =>
                     {
-                        span[i] = accessor.FilePageIndex;
+                        // The FilePageIndex was stored in the page mapping; reconstruct from the map walk
+                        // Actually we need to retrieve the file page index from the manager's mapping
+                        var pi = Manager.GetPageInfoByMemIndex(memIdx);
+                        span[i] = pi.FilePageIndex;
                         mapIndexAllocStartFrom = i + 1;                 // Update the start index for the first page to allocate
                         return true;
-                    }, false, mapIndices);
+                    }, epoch, mapIndices);
                 }
-                
+
                 // If a nextMap is provided, we need to use it as the first new map page
                 var allocStartFrom = mapIndexAllocStartFrom;
                 if ((nextMap != 0) && (allocStartFrom < mapIndices.Length))
@@ -269,14 +285,14 @@ public class LogicalSegment : IDisposable
                     Manager.AllocatePages(ref pagesToAllocate, allocStartFrom - 1, changeSet);
                 }
             }
-            
+
             bool isFirstPage = true;
             var remainingIndices = filePageIndices.Length;
             var mapIndexBaseOffset = 0;
             var curIndexMapIndex = 0;
             var curFilePageIndex = 0;
             var curStartPageIndex = growFrom;
-            
+
             while (remainingIndices > 0)
             {
                 var curIndicesCount = Math.Min(remainingIndices, isFirstPage ? RootHeaderIndexSectionCount : NextHeadersIndexSectionCount);
@@ -284,19 +300,21 @@ public class LogicalSegment : IDisposable
                 var isNewPage = (curIndexMapIndex >= mapIndexAllocStartFrom) && ((curIndexMapIndex > 0) || (growFrom == 0));
                 var isLastAllocated = curIndexMapIndex == (mapIndexAllocStartFrom - 1);
                 var curMapPageIndex = mapIndices[curIndexMapIndex];
-                var hasAccessor = false;
-                PageAccessor pa = default;
+                var hasPage = false;
+                byte* addr = null;
+                int memPageIdx = -1;
                 var isPageDirty = false;
 
                 // If it's a new page, initialize it
                 if (isNewPage)
                 {
-                    Manager.RequestPage(curMapPageIndex, true, out pa);
-                    hasAccessor = true;
-                    
-                    pa.InitHeader(
-                        PageClearMode.Header, 
-                        PageBlockFlags.IsLogicalSegment | (isFirstPage ? PageBlockFlags.IsLogicalSegmentRoot : PageBlockFlags.None), 
+                    Manager.RequestPageEpoch(curMapPageIndex, epoch, out memPageIdx);
+                    Manager.TryLatchPageExclusive(memPageIdx);
+                    addr = Manager.GetMemPageAddress(memPageIdx);
+                    hasPage = true;
+
+                    InitHeader(addr, PageClearMode.Header,
+                        PageBlockFlags.IsLogicalSegment | (isFirstPage ? PageBlockFlags.IsLogicalSegmentRoot : PageBlockFlags.None),
                         type, 1);
                     isPageDirty = true;
                 }
@@ -304,12 +322,14 @@ public class LogicalSegment : IDisposable
                 // Update the indices map linked list, starting the index map before the first to allocate
                 if (isNewPage || isLastAllocated)
                 {
-                    if (hasAccessor == false)
+                    if (hasPage == false)
                     {
-                        Manager.RequestPage(curMapPageIndex, true, out pa);
-                        hasAccessor = true;
+                        Manager.RequestPageEpoch(curMapPageIndex, epoch, out memPageIdx);
+                        Manager.TryLatchPageExclusive(memPageIdx);
+                        addr = Manager.GetMemPageAddress(memPageIdx);
+                        hasPage = true;
                     }
-                    ref var lsh = ref pa.GetHeader<LogicalSegmentHeader>(LogicalSegmentHeader.Offset);
+                    ref var lsh = ref Unsafe.AsRef<LogicalSegmentHeader>(addr + LogicalSegmentHeader.Offset);
                     lsh.LogicalSegmentNextMapPBID = ((curIndexMapIndex + 1) < mapIndices.Length) ? mapIndices[curIndexMapIndex + 1] : 0;
                     isPageDirty = true;
                 }
@@ -317,37 +337,39 @@ public class LogicalSegment : IDisposable
                 // In the current map, set the page indices it contains
                 if ((curStartPageIndex >= mapIndexBaseOffset) && (curStartPageIndex < (mapIndexBaseOffset + curIndicesCount)))
                 {
-                    if (hasAccessor == false)
+                    if (hasPage == false)
                     {
-                        Manager.RequestPage(curMapPageIndex, true, out pa);
-                        hasAccessor = true;
+                        Manager.RequestPageEpoch(curMapPageIndex, epoch, out memPageIdx);
+                        Manager.TryLatchPageExclusive(memPageIdx);
+                        addr = Manager.GetMemPageAddress(memPageIdx);
+                        hasPage = true;
                     }
-                    
-                    var rd = pa.PageRawData.Cast<byte, int>();
+
+                    var rd = new Span<int>(addr + PagedMMF.PageHeaderSize, PagedMMF.PageRawDataSize / sizeof(int));
                     int j = curStartPageIndex - mapIndexBaseOffset;
                     curFilePageIndex += j;
                     for (; j < curIndicesCount; j++)
                     {
                         rd[j] = filePageIndices[curFilePageIndex++];
                     }
-                    
+
                     if ((remainingIndices - curIndicesCount) == 0)
                     {
                         if (j < rd.Length)
                         {
                             rd[j] = 0;
                         }
-                    
+
                         // The current page is full, we need on fetch one more... just to store the termination 0 value
                         else
                         {
-                            Manager.RequestPage(mapIndices[curIndexMapIndex + 1], true, out var paEnd);
-                            using (paEnd)
-                            {
-                                paEnd.InitHeader(PageClearMode.Header, PageBlockFlags.IsLogicalSegment, type, 1);
-                                changeSet?.Add(paEnd);
-                                paEnd.PageRawData.Cast<byte, int>()[0] = 0;
-                            }
+                            Manager.RequestPageEpoch(mapIndices[curIndexMapIndex + 1], epoch, out var endMemIdx);
+                            Manager.TryLatchPageExclusive(endMemIdx);
+                            var endAddr = Manager.GetMemPageAddress(endMemIdx);
+                            InitHeader(endAddr, PageClearMode.Header, PageBlockFlags.IsLogicalSegment, type, 1);
+                            changeSet?.AddByMemPageIndex(endMemIdx);
+                            new Span<int>(endAddr + PagedMMF.PageHeaderSize, 1)[0] = 0;
+                            Manager.UnlatchPageExclusive(endMemIdx);
                         }
                     }
                     isPageDirty = true;
@@ -366,54 +388,80 @@ public class LogicalSegment : IDisposable
                 {
                     curStartPageIndex = mapIndexBaseOffset;
                 }
-                
+
                 if (isPageDirty)
                 {
-                    changeSet?.Add(pa);
+                    changeSet?.AddByMemPageIndex(memPageIdx);
                 }
 
-                if (hasAccessor)
+                if (hasPage)
                 {
-                    pa.Dispose();
+                    Manager.UnlatchPageExclusive(memPageIdx);
                 }
-                    
+
                 isFirstPage = false;
                 curIndexMapIndex++;
             }
         }
-        
+
         // Initialize the subsequent pages on disk
         for (var i = growFrom; i < filePageIndices.Length; i++)
         {
             var pageIndex = filePageIndices[i];
-            Manager.RequestPage(pageIndex, true, out var pa);
-            using (pa)
+            Manager.RequestPageEpoch(pageIndex, epoch, out var memPageIdx);
+            Manager.TryLatchPageExclusive(memPageIdx);
+            var addr = Manager.GetMemPageAddress(memPageIdx);
+
+            changeSet?.AddByMemPageIndex(memPageIdx);
+
+            if (clear)
             {
-                changeSet?.Add(pa);
-
-                if (clear)
-                {
-                    pa.LogicalSegmentData.Clear();
-                }
-
-                pa.InitHeader(PageClearMode.None, PageBlockFlags.IsLogicalSegment|(i==0 ? PageBlockFlags.IsLogicalSegmentRoot : PageBlockFlags.None), type, 1);
-
-                // Update link list of the pages that make the segment
-                ref var lsh = ref pa.GetHeader<LogicalSegmentHeader>(LogicalSegmentHeader.Offset);
-                lsh.LogicalSegmentNextRawDataPBID = ((i + 1) < filePageIndices.Length) ? filePageIndices[i + 1] : 0;
+                var root = (addr[0] & (byte)PageBlockFlags.IsLogicalSegmentRoot) != 0;
+                var offset = root ? RootHeaderIndexSectionLength : 0;
+                new Span<byte>(addr + PagedMMF.PageHeaderSize + offset, PagedMMF.PageRawDataSize - offset).Clear();
             }
+
+            InitHeader(addr, PageClearMode.None, PageBlockFlags.IsLogicalSegment | (i == 0 ? PageBlockFlags.IsLogicalSegmentRoot : PageBlockFlags.None), type, 1);
+
+            // Update link list of the pages that make the segment
+            ref var lsh = ref Unsafe.AsRef<LogicalSegmentHeader>(addr + LogicalSegmentHeader.Offset);
+            lsh.LogicalSegmentNextRawDataPBID = ((i + 1) < filePageIndices.Length) ? filePageIndices[i + 1] : 0;
+
+            Manager.UnlatchPageExclusive(memPageIdx);
         }
-        
+
         _pages = filePageIndices.ToArray();
 
         return true;
     }
-    
-    internal virtual bool Load(int filePageIndex)
+
+    /// <summary>
+    /// Initialize page header directly from a raw pointer (epoch-based path).
+    /// </summary>
+    internal static unsafe void InitHeader(byte* pageAddr, PageClearMode clearMode, PageBlockFlags flags, PageBlockType type, short formatRevision)
     {
-        Manager.RequestPage(filePageIndex, true, out var pa);
+        if (clearMode == PageClearMode.Header)
+        {
+            new Span<byte>(pageAddr, PagedMMF.PageHeaderSize).Clear();
+        }
+        else if (clearMode == PageClearMode.WholePage)
+        {
+            new Span<byte>(pageAddr, PagedMMF.PageSize).Clear();
+        }
+        ref var header = ref Unsafe.AsRef<PageBaseHeader>(pageAddr + PageBaseHeader.Offset);
+        header.Flags = flags;
+        header.Type = type;
+        header.FormatRevision = formatRevision;
+    }
+    
+    internal unsafe virtual bool Load(int filePageIndex)
+    {
+        var epoch = Manager.EpochManager.GlobalEpoch;
+        Manager.RequestPageEpoch(filePageIndex, epoch, out var memPageIndex);
+        var addr = Manager.GetMemPageAddress(memPageIndex);
+
         var pages = new List<int>();
-        var rd = pa.PageRawData.Cast<byte, int>()[..RootHeaderIndexSectionCount];
+        var rd = new ReadOnlySpan<int>(addr + PagedMMF.PageHeaderSize, RootHeaderIndexSectionCount);
         var maxIndicesForPage = RootHeaderIndexSectionCount;
         var i = 0;
         while (rd[i] != 0)
@@ -426,52 +474,51 @@ public class LogicalSegment : IDisposable
             }
 
             // We reached the end of the root page, we need to load more pages
-            ref var lsh = ref pa.GetHeader<LogicalSegmentHeader>(LogicalSegmentHeader.Offset);
+            ref var lsh = ref Unsafe.AsRef<LogicalSegmentHeader>(addr + LogicalSegmentHeader.Offset);
             if (lsh.LogicalSegmentNextMapPBID == 0)
             {
                 break; // No more pages
             }
-            
-            pa.Dispose();
-            Manager.RequestPage(lsh.LogicalSegmentNextMapPBID, true, out pa);
-            rd = pa.PageRawData.Cast<byte, int>();
+
+            Manager.RequestPageEpoch(lsh.LogicalSegmentNextMapPBID, epoch, out memPageIndex);
+            addr = Manager.GetMemPageAddress(memPageIndex);
+            rd = new ReadOnlySpan<int>(addr + PagedMMF.PageHeaderSize, NextHeadersIndexSectionCount);
             i = 0; // Reset index for the new page
-            
+
             maxIndicesForPage = NextHeadersIndexSectionCount;
         }
-        pa.Dispose();
-        
+
         _pages = pages.ToArray();
 
         return true;
     }
 
-    public void Clear()
+    public unsafe void Clear()
     {
+        var epoch = Manager.EpochManager.GlobalEpoch;
         var cs = Manager.CreateChangeSet();
         for (int i = 0; i < Length; i++)
         {
-            GetPageExclusiveAccessor(i, out PageAccessor pa);
-            using (pa)
-            {
-                cs.Add(pa);
-                pa.PageRawData.Clear();
-            }
+            var addr = GetPageAddressExclusive(i, epoch, out var memPageIdx);
+            cs.AddByMemPageIndex(memPageIdx);
+            new Span<byte>(addr + PagedMMF.PageHeaderSize, PagedMMF.PageRawDataSize).Clear();
+            Manager.UnlatchPageExclusive(memPageIdx);
         }
         cs.SaveChanges();
     }
 
-    public void Fill(byte value)
+    public unsafe void Fill(byte value)
     {
+        var epoch = Manager.EpochManager.GlobalEpoch;
         var cs = Manager.CreateChangeSet();
         for (int i = 0; i < Length; i++)
         {
-            GetPageExclusiveAccessor(i, out var pa);
-            using (pa)
-            {
-                cs.Add(pa);
-                pa.LogicalSegmentData.Fill(value);
-            }
+            var addr = GetPageAddressExclusive(i, epoch, out var memPageIdx);
+            cs.AddByMemPageIndex(memPageIdx);
+            var root = (addr[0] & (byte)PageBlockFlags.IsLogicalSegmentRoot) != 0;
+            var offset = root ? RootHeaderIndexSectionLength : 0;
+            new Span<byte>(addr + PagedMMF.PageHeaderSize + offset, PagedMMF.PageRawDataSize - offset).Fill(value);
+            Manager.UnlatchPageExclusive(memPageIdx);
         }
         cs.SaveChanges();
     }

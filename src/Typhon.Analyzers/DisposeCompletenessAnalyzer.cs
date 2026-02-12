@@ -9,16 +9,16 @@ namespace Typhon.Analyzers;
 
 /// <summary>
 /// Analyzer that verifies Dispose() methods properly dispose ALL fields of critical types.
-/// 
-/// This catches bugs like ComponentTable.Dispose() forgetting to dispose ChunkAccessor fields
+///
+/// This catches bugs like ComponentTable.Dispose() forgetting to dispose EpochChunkAccessor fields
 /// stored in nested objects (e.g., ComponentCollectionInfo.Accessor).
-/// 
+///
 /// The analyzer checks:
-/// 1. Direct fields of critical types (ChunkAccessor, Transaction, PageAccessor)
+/// 1. Direct fields of critical types (EpochChunkAccessor, Transaction)
 /// 2. Fields that are collections/dictionaries containing objects with critical fields
-/// 
+///
 /// The analyzer skips:
-/// - ref fields (borrowed references, not owned - e.g., "ref ChunkAccessor _accessor")
+/// - ref fields (borrowed references, not owned - e.g., "ref EpochChunkAccessor _accessor")
 /// - These represent references to resources owned by the caller, not this type
 /// </summary>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
@@ -34,7 +34,7 @@ public class DisposeCompletenessAnalyzer : DiagnosticAnalyzer
         "Dispose() method in '{0}' does not dispose field '{1}' of type '{2}'{3}";
 
     private static readonly LocalizableString Description =
-        "Dispose() methods must dispose ALL fields of critical IDisposable types (ChunkAccessor, Transaction, PageAccessor). " +
+        "Dispose() methods must dispose ALL fields of critical IDisposable types (EpochChunkAccessor, Transaction). " +
         "Failing to dispose these fields causes resource leaks such as page cache deadlocks.";
 
     private static readonly DiagnosticDescriptor Rule = new DiagnosticDescriptor(
@@ -52,9 +52,8 @@ public class DisposeCompletenessAnalyzer : DiagnosticAnalyzer
     private static readonly ImmutableDictionary<string, string> CriticalTypes =
         ImmutableDictionary.CreateRange(new[]
         {
-            new KeyValuePair<string, string>("Typhon.Engine.ChunkAccessor", " - causes page cache deadlock"),
+            new KeyValuePair<string, string>("Typhon.Engine.EpochChunkAccessor", " - causes page cache deadlock"),
             new KeyValuePair<string, string>("Typhon.Engine.Transaction", " - causes uncommitted changes and resource leak"),
-            new KeyValuePair<string, string>("Typhon.Engine.PageAccessor", " - causes page lock leak"),
         });
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
@@ -172,7 +171,7 @@ public class DisposeCompletenessAnalyzer : DiagnosticAnalyzer
                 continue;
 
             // Skip ref fields - these are borrowed references, not owned resources
-            // e.g., "ref ChunkAccessor _accessor" in ref structs like RevisionEnumerator
+            // e.g., "ref EpochChunkAccessor _accessor" in ref structs like RevisionEnumerator
             // The owner of the referenced resource is responsible for disposal
             if (field.RefKind != RefKind.None)
                 continue;

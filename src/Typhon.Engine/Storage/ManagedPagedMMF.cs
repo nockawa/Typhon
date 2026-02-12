@@ -94,13 +94,10 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
     // Throughput counters (supplement inherited _metrics)
     private long _evictionCount;
 
-    public EpochManager EpochManager { get; private set; }
-
-    public ManagedPagedMMF(IResourceRegistry resourceRegistry, EpochManager epochManager, IMemoryAllocator memoryAllocator, PagedMMFOptions options, 
+    public ManagedPagedMMF(IResourceRegistry resourceRegistry, EpochManager epochManager, IMemoryAllocator memoryAllocator, PagedMMFOptions options,
         IResource parent, string resourceName, ILogger<PagedMMF> logger) :
-        base(memoryAllocator, options, parent, $"ManagedPagedMMF_{options?.DatabaseName ?? Guid.NewGuid().ToString("N")}", logger)
+        base(memoryAllocator, epochManager, options, parent, $"ManagedPagedMMF_{options?.DatabaseName ?? Guid.NewGuid().ToString("N")}", logger)
     {
-        EpochManager = epochManager;
     }
 
     public int AllocatePage(ChangeSet changeSet = null)
@@ -188,76 +185,82 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
     {
         base.OnFileCreating();
 
-        RequestPage(0, true, out var pa);
-        using (pa)
+        using var guard = EpochGuard.Enter(EpochManager);
+        var epoch = EpochManager.GlobalEpoch;
+
+        RequestPageEpoch(0, epoch, out var memPageIdx);
+        TryLatchPageExclusive(memPageIdx);
+        var addr = GetMemPageAddress(memPageIdx);
+
+        // Set header information
+        var cs = CreateChangeSet();
+        cs.AddByMemPageIndex(memPageIdx);
+        ref var rootFileHeader = ref System.Runtime.CompilerServices.Unsafe.AsRef<RootFileHeader>(addr);
+        fixed (byte* headerSignature = rootFileHeader.HeaderSignature)
         {
-            // Set header information
-            var cs = CreateChangeSet();
-            cs.Add(pa);
-            ref var rootFileHeader = ref pa.PageHeader.Cast<byte, RootFileHeader>()[0];
-            fixed (byte* headerSignature = rootFileHeader.HeaderSignature)
-            {
-                StringExtensions.StoreString(HeaderSignature, headerSignature, 32);
-            }
-            rootFileHeader.DatabaseFormatRevision = DatabaseFormatRevision;
-            fixed (byte* databaseName = rootFileHeader.DatabaseName)
-            {
-                StringExtensions.StoreString(Options.DatabaseName, databaseName, 64);
-            }
-
-            rootFileHeader.OccupancyMapSPI = OccupancySegmentRootPageIndex;
-            Logger.LogInformation("Initialize DiskPageAllocator service with root at page {PageId}", OccupancySegmentRootPageIndex);
-            
-            // Initialize the occupancy segment and map
-            _segments = new ConcurrentDictionary<int, LogicalSegment>();
-
-            _occupancySegment = CreateOccupancySegment(OccupancySegmentRootPageIndex, PageBlockType.OccupancyMap, 1, cs);
-
-            // ReSharper disable InconsistentlySynchronizedField
-            _occupancyMap = new BitmapL3(_occupancySegment);
-
-            // The first two pages are already manually allocated (file header and occupancy segment root page)
-            _occupancyMap.SetL0(0);
-            _occupancyMap.SetL0(1);
-            
-            // Reserve a pages to use when the occupancy map needs to grow, we need to reserve because we can't allocate them by the time the map is full
-            _occupancyNextReservedPageIndex = 2;
-            _occupancyNextReservedMapPageIndex = 3;
-            _occupancyMap.SetL0(_occupancyNextReservedPageIndex);
-            // ReSharper restore InconsistentlySynchronizedField
-            
-            cs.SaveChanges();
+            StringExtensions.StoreString(HeaderSignature, headerSignature, 32);
         }
+        rootFileHeader.DatabaseFormatRevision = DatabaseFormatRevision;
+        fixed (byte* databaseName = rootFileHeader.DatabaseName)
+        {
+            StringExtensions.StoreString(Options.DatabaseName, databaseName, 64);
+        }
+
+        rootFileHeader.OccupancyMapSPI = OccupancySegmentRootPageIndex;
+        Logger.LogInformation("Initialize DiskPageAllocator service with root at page {PageId}", OccupancySegmentRootPageIndex);
+
+        // Initialize the occupancy segment and map
+        _segments = new ConcurrentDictionary<int, LogicalSegment>();
+
+        _occupancySegment = CreateOccupancySegment(OccupancySegmentRootPageIndex, PageBlockType.OccupancyMap, 1, cs);
+
+        // ReSharper disable InconsistentlySynchronizedField
+        _occupancyMap = new BitmapL3(_occupancySegment);
+
+        // The first two pages are already manually allocated (file header and occupancy segment root page)
+        _occupancyMap.SetL0(0);
+        _occupancyMap.SetL0(1);
+
+        // Reserve a pages to use when the occupancy map needs to grow, we need to reserve because we can't allocate them by the time the map is full
+        _occupancyNextReservedPageIndex = 2;
+        _occupancyNextReservedMapPageIndex = 3;
+        _occupancyMap.SetL0(_occupancyNextReservedPageIndex);
+        // ReSharper restore InconsistentlySynchronizedField
+
+        UnlatchPageExclusive(memPageIdx);
+        cs.SaveChanges();
     }
 
-    protected override void OnFileLoading()
+    unsafe protected override void OnFileLoading()
     {
         base.OnFileLoading();
-        RequestPage(0, false, out var pa);
-        using (pa)
+
+        using var guard = EpochGuard.Enter(EpochManager);
+        var epoch = EpochManager.GlobalEpoch;
+
+        RequestPageEpoch(0, epoch, out var memPageIdx);
+        var addr = GetMemPageAddress(memPageIdx);
+        ref var h = ref System.Runtime.CompilerServices.Unsafe.AsRef<RootFileHeader>(addr);
+
+        if (h.HeaderSignatureString != HeaderSignature)
         {
-            ref var h = ref pa.PageHeader.Cast<byte, RootFileHeader>()[0];
-
-            if (h.HeaderSignatureString != HeaderSignature)
-            {
-                throw new NotImplementedException();
-            }
-
-            if (h.DatabaseNameString != Options.DatabaseName)
-            {
-                throw new NotImplementedException();
-            }
-            
-            Logger.LogInformation("Load Database '{DatabaseName}' from file '{FilePathName}'", h.DatabaseNameString, Options.BuildDatabasePathFileName());
-
-            // Initialize the occupancy segment and map
-            _segments = new ConcurrentDictionary<int, LogicalSegment>();
-
-            _occupancySegment = LoadOccupancySegment(h.OccupancyMapSPI, PageBlockType.OccupancyMap);
-
-            // ReSharper disable once InconsistentlySynchronizedField
-            _occupancyMap = new BitmapL3(_occupancySegment);
+            throw new NotImplementedException();
         }
+
+        if (h.DatabaseNameString != Options.DatabaseName)
+        {
+            throw new NotImplementedException();
+        }
+
+        Logger.LogInformation("Load Database '{DatabaseName}' from file '{FilePathName}'", h.DatabaseNameString, Options.BuildDatabasePathFileName());
+
+        // Initialize the occupancy segment and map
+        _segments = new ConcurrentDictionary<int, LogicalSegment>();
+
+        _occupancySegment = LoadOccupancySegment(h.OccupancyMapSPI, PageBlockType.OccupancyMap);
+
+        // ReSharper disable once InconsistentlySynchronizedField
+        _occupancyMap = new BitmapL3(_occupancySegment);
     }
     public LogicalSegment GetSegment(int filePageIndex)
     {
@@ -375,12 +378,12 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         AllocatePages(ref pages, 0, changeSet);
 
         var segment = new ChunkBasedSegment(EpochManager, this, stride);
-        if (dic.TryAdd(pages[0], segment) == false)
+        if (!dic.TryAdd(pages[0], segment))
         {
             Debug.Assert(true);
         }
 
-        if (segment.Create(type, pages, false, changeSet) == false)
+        if (!segment.Create(type, pages, false, changeSet))
         {
             return null;
         }
@@ -506,20 +509,19 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
 
         return new Dictionary<string, object>
         {
-            ["PageCache.FreeCount"] = extraInfo.FreeMemPageCount,
-            ["PageCache.AllocatingCount"] = extraInfo.AllocatingMemPageCount,
-            ["PageCache.IdleCount"] = extraInfo.IdleMemPageCount,
-            ["PageCache.SharedCount"] = extraInfo.SharedMemPageCount,
-            ["PageCache.ExclusiveCount"] = extraInfo.ExclusiveMemPageCount,
-            ["PageCache.IdleAndDirtyCount"] = extraInfo.IdleAndDirtyMemPageCount,
-            ["PageCache.PendingIOReadCount"] = extraInfo.PendingIOReadCount,
-            ["ClockSweep.MinCounter"] = extraInfo.MinClockSweepCounter,
-            ["ClockSweep.MaxCounter"] = extraInfo.MaxClockSweepCounter,
-            ["Segments.Count"] = _segments?.Count ?? 0,
-            ["OccupancyMap.Capacity"] = _occupancyMap?.Capacity ?? 0,
-            ["Contention.WaitCount"] = _contentionWaitCount,
-            ["Contention.TotalWaitUs"] = _contentionTotalWaitUs,
-            ["Contention.MaxWaitUs"] = _contentionMaxWaitUs,
+            ["PageCache.FreeCount"]             = extraInfo.FreeMemPageCount,
+            ["PageCache.AllocatingCount"]       = extraInfo.AllocatingMemPageCount,
+            ["PageCache.IdleCount"]             = extraInfo.IdleMemPageCount,
+            ["PageCache.ExclusiveCount"]        = extraInfo.ExclusiveMemPageCount,
+            ["PageCache.DirtyCount"]            = extraInfo.DirtyPageCount,
+            ["PageCache.PendingIOReadCount"]    = extraInfo.PendingIOReadCount,
+            ["ClockSweep.MinCounter"]           = extraInfo.MinClockSweepCounter,
+            ["ClockSweep.MaxCounter"]           = extraInfo.MaxClockSweepCounter,
+            ["Segments.Count"]                  = _segments?.Count ?? 0,
+            ["OccupancyMap.Capacity"]           = _occupancyMap?.Capacity ?? 0,
+            ["Contention.WaitCount"]            = _contentionWaitCount,
+            ["Contention.TotalWaitUs"]          = _contentionTotalWaitUs,
+            ["Contention.MaxWaitUs"]            = _contentionMaxWaitUs,
         };
     }
 

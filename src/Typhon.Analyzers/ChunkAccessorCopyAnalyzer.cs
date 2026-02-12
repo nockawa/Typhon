@@ -6,14 +6,14 @@ using Microsoft.CodeAnalysis.Operations;
 namespace Typhon.Analyzers;
 
 /// <summary>
-/// Analyzer that detects copying of ChunkAccessor and EpochChunkAccessor instances.
-/// These are large structs designed for zero-allocation. Copying them defeats
-/// their performance design and can create unexpected behavior since they maintain internal state.
-/// The only valid creation is via ChunkBasedSegment.CreateChunkAccessor() / CreateEpochChunkAccessor().
+/// Analyzer that detects copying of EpochChunkAccessor instances.
+/// This is a large struct designed for zero-allocation. Copying it defeats
+/// its performance design and can create unexpected behavior since it maintains internal state.
+/// The only valid creation is via ChunkBasedSegment.CreateEpochChunkAccessor().
 ///
 /// This analyzer detects:
 /// 1. Direct assignment copies: var x = existingAccessor;
-/// 2. Ref field dereference copies: var x = refStruct.RefField; (where RefField is 'ref ChunkAccessor')
+/// 2. Ref field dereference copies: var x = refStruct.RefField; (where RefField is 'ref EpochChunkAccessor')
 /// 3. Return statement copies
 /// </summary>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
@@ -23,15 +23,15 @@ public class ChunkAccessorCopyAnalyzer : DiagnosticAnalyzer
     private const string Category = "Performance";
 
     private static readonly LocalizableString Title =
-        "ChunkAccessor/EpochChunkAccessor must not be copied";
+        "EpochChunkAccessor must not be copied";
 
     private static readonly LocalizableString MessageFormat =
         "Copying '{0}' creates an expensive stack copy. Use 'ref' to pass references instead.";
 
     private static readonly LocalizableString Description =
-        "ChunkAccessor and EpochChunkAccessor are large structs designed for zero-allocation performance. " +
-        "Copying them creates expensive stack copies and duplicates internal state (cache, etc.). " +
-        "The only valid creation is via ChunkBasedSegment.CreateChunkAccessor() / CreateEpochChunkAccessor(). " +
+        "EpochChunkAccessor is a large struct designed for zero-allocation performance. " +
+        "Copying it creates expensive stack copies and duplicates internal state (cache, etc.). " +
+        "The only valid creation is via ChunkBasedSegment.CreateEpochChunkAccessor(). " +
         "All other usage should pass by 'ref' to avoid copies.";
 
     private static readonly DiagnosticDescriptor Rule = new DiagnosticDescriptor(
@@ -63,7 +63,7 @@ public class ChunkAccessorCopyAnalyzer : DiagnosticAnalyzer
     {
         var assignment = (ISimpleAssignmentOperation)context.Operation;
 
-        // Check if we're assigning a ChunkAccessor
+        // Check if we're assigning an EpochChunkAccessor
         if (!IsChunkAccessorType(assignment.Target.Type))
             return;
 
@@ -76,7 +76,7 @@ public class ChunkAccessorCopyAnalyzer : DiagnosticAnalyzer
         if (IsCreateChunkAccessorCall(assignment.Value))
             return;
 
-        // Allow assignment from default(ChunkAccessor) or new ChunkAccessor()
+        // Allow assignment from default(EpochChunkAccessor) or new EpochChunkAccessor()
         if (IsDefaultOrNewExpression(assignment.Value))
             return;
 
@@ -98,7 +98,7 @@ public class ChunkAccessorCopyAnalyzer : DiagnosticAnalyzer
         if (localSymbol == null)
             return;
 
-        // Check if it's a ChunkAccessor type
+        // Check if it's an EpochChunkAccessor type
         if (!IsChunkAccessorType(localSymbol.Type))
             return;
 
@@ -119,7 +119,7 @@ public class ChunkAccessorCopyAnalyzer : DiagnosticAnalyzer
         if (IsCreateChunkAccessorCall(initValue))
             return;
 
-        // Allow initialization from default(ChunkAccessor) or new ChunkAccessor()
+        // Allow initialization from default(EpochChunkAccessor) or new EpochChunkAccessor()
         if (IsDefaultOrNewExpression(initValue))
             return;
 
@@ -164,16 +164,16 @@ public class ChunkAccessorCopyAnalyzer : DiagnosticAnalyzer
     {
         var returnOp = (IReturnOperation)context.Operation;
 
-        // Check if we're returning a ChunkAccessor
+        // Check if we're returning an EpochChunkAccessor
         if (returnOp.ReturnedValue == null || !IsChunkAccessorType(returnOp.ReturnedValue.Type))
             return;
 
-        // Allow returning from CreateChunkAccessor / CreateEpochChunkAccessor methods
+        // Allow returning from CreateEpochChunkAccessor methods
         var containingMethod = context.ContainingSymbol as IMethodSymbol;
-        if (containingMethod != null && (containingMethod.Name == "CreateChunkAccessor" || containingMethod.Name == "CreateEpochChunkAccessor"))
+        if (containingMethod != null && containingMethod.Name == "CreateEpochChunkAccessor")
             return;
 
-        // Allow returning from constructors (e.g., new ChunkAccessor(...))
+        // Allow returning from constructors (e.g., new EpochChunkAccessor(...))
         if (IsDefaultOrNewExpression(returnOp.ReturnedValue))
             return;
 
@@ -195,11 +195,11 @@ public class ChunkAccessorCopyAnalyzer : DiagnosticAnalyzer
             unwrapped = conversion.Operand;
         }
 
-        // Check if it's an invocation of CreateChunkAccessor or CreateEpochChunkAccessor
+        // Check if it's an invocation of CreateEpochChunkAccessor
         if (unwrapped is IInvocationOperation invocation)
         {
             var methodName = invocation.TargetMethod.Name;
-            return (methodName == "CreateChunkAccessor" || methodName == "CreateEpochChunkAccessor") &&
+            return methodName == "CreateEpochChunkAccessor" &&
                    invocation.TargetMethod.ContainingType?.Name == "ChunkBasedSegment";
         }
 
@@ -215,7 +215,7 @@ public class ChunkAccessorCopyAnalyzer : DiagnosticAnalyzer
             unwrapped = conversion.Operand;
         }
 
-        // Check for default(ChunkAccessor), default, new ChunkAccessor()
+        // Check for default(EpochChunkAccessor), default, new EpochChunkAccessor()
         if (unwrapped is IDefaultValueOperation || unwrapped is IObjectCreationOperation)
             return true;
 
@@ -231,8 +231,8 @@ public class ChunkAccessorCopyAnalyzer : DiagnosticAnalyzer
     }
 
     /// <summary>
-    /// Checks if an operation is an allowed initializer for ChunkAccessor
-    /// (CreateChunkAccessor call, default, or new expression).
+    /// Checks if an operation is an allowed initializer for EpochChunkAccessor
+    /// (CreateEpochChunkAccessor call, default, or new expression).
     /// </summary>
     private static bool IsAllowedInitializer(IOperation operation)
     {
@@ -245,7 +245,7 @@ public class ChunkAccessorCopyAnalyzer : DiagnosticAnalyzer
             return false;
 
         // Match by name and ensure it's in the Typhon.Engine namespace
-        if (typeSymbol.Name != "ChunkAccessor" && typeSymbol.Name != "EpochChunkAccessor")
+        if (typeSymbol.Name != "EpochChunkAccessor")
             return false;
 
         // Check namespace - handle both with and without global prefix

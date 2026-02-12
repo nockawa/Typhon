@@ -63,7 +63,7 @@ public partial class ChunkBasedSegment : LogicalSegment
         _divMagic = (0x1_0000_0000UL + (uint)_otherChunkCount - 1) / (uint)_otherChunkCount;
     }
 
-    internal override bool Create(PageBlockType type, Span<int> filePageIndices, bool clear, ChangeSet changeSet = null)
+    internal unsafe override bool Create(PageBlockType type, Span<int> filePageIndices, bool clear, ChangeSet changeSet = null)
     {
         if (!base.Create(type, filePageIndices, clear, changeSet))
         {
@@ -71,16 +71,14 @@ public partial class ChunkBasedSegment : LogicalSegment
         }
 
         // Clear the metadata sections that store the chunk's occupancy bitmap
+        var epoch = Manager.EpochManager.GlobalEpoch;
         var length = filePageIndices.Length;
         for (int i = 0; i < length; i++)
         {
-            GetPageExclusiveAccessor(i, out var page);
-            using (page)
-            {
-                page.SetPageDirty();
-                int longSize = (i==0 ? (ChunkCountRootPage+63) : (ChunkCountPerPage+63)) >> 6;
-                page.PageMetadata.Cast<byte, long>().Slice(0, longSize).Clear();
-            }
+            var addr = GetPageAddressExclusive(i, epoch, out var memPageIdx);
+            int longSize = (i == 0 ? (ChunkCountRootPage + 63) : (ChunkCountPerPage + 63)) >> 6;
+            new Span<long>(addr + PagedMMF.PageBaseHeaderSize, longSize).Clear();
+            Manager.UnlatchPageExclusive(memPageIdx);
         }
 
         _map = new BitmapL3(this, false);
@@ -135,15 +133,16 @@ public partial class ChunkBasedSegment : LogicalSegment
             // Clear the page metadata (bitmap) for newly allocated pages
             // This is critical! The base.Grow only clears raw data, not metadata.
             // Without this, InitFromLoad reads garbage and causes crashes.
-            for (int i = currentLength; i < newLength; i++)
+            unsafe
             {
-                GetPageExclusiveAccessor(i, out var page);
-                using (page)
+                var epoch = Manager.EpochManager.GlobalEpoch;
+                for (int i = currentLength; i < newLength; i++)
                 {
-                    page.SetPageDirty();
+                    var addr = GetPageAddressExclusive(i, epoch, out var memPageIdx);
                     int longSize = (ChunkCountPerPage + 63) >> 6;
-                    page.PageMetadata.Cast<byte, long>().Slice(0, longSize).Clear();
-                    changeSet?.Add(page);
+                    new Span<long>(addr + PagedMMF.PageBaseHeaderSize, longSize).Clear();
+                    changeSet?.AddByMemPageIndex(memPageIdx);
+                    Manager.UnlatchPageExclusive(memPageIdx);
                 }
             }
             
@@ -259,9 +258,6 @@ public partial class ChunkBasedSegment : LogicalSegment
     }
 
     public void FreeChunk(int chunkId) => _map.ClearL0(chunkId);
-
-    [return: TransfersOwnership]
-    public ChunkAccessor CreateChunkAccessor(ChangeSet changeSet=null) => new(this, changeSet);
 
     /// <summary>
     /// Create an EpochChunkAccessor using the stored PagedMMF and EpochManager references.

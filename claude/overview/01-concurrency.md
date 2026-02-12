@@ -26,6 +26,7 @@ Every database operation that touches shared data needs synchronization. This co
 | **1.4** | [AccessControlSmall](#14-accesscontrolsmall) | 32-bit | Compact RW lock | ✅ Complete |
 | **1.5** | [ResourceAccessControl](#15-resourceaccesscontrol) | 32-bit | 3-mode lifecycle lock | ✅ Implemented |
 | **1.6** | [Cancellation Helpers](#16-cancellation-helpers) | N/A | Yield points, holdoff regions | 🔮 Future |
+| **1.7** | [Epoch-Based Resource Protection](#17-epoch-based-resource-protection) | N/A | Page lifetime via epoch scopes | ✅ Complete |
 
 ---
 
@@ -493,6 +494,92 @@ using (var holdoff = CancellationHoldoff.Begin())
 }
 // Cancellation checked here, thrown if pending
 ```
+
+---
+
+## 1.7 Epoch-Based Resource Protection
+
+### Purpose
+
+Replace per-page reference counting with epoch-scoped page protection. Instead of incrementing/decrementing a counter on every page access (2N obligations for N page accesses), a single `EpochGuard` scope per transaction protects all pages accessed within that scope (2 obligations total).
+
+### Core Types
+
+| Type | Kind | Purpose |
+|------|------|---------|
+| `EpochManager` | class (singleton per DatabaseEngine) | Owns global epoch counter, thread registry, metrics |
+| `EpochThreadRegistry` | class (internal) | Fixed 256-slot array of per-thread epoch pins (SOA layout) |
+| `EpochGuard` | ref struct | RAII scope guard — enter on construction, advance epoch on outermost exit |
+| `EpochSlotHandle` | CriticalFinalizerObject | Releases thread's slot on thread death via GC finalizer |
+
+### How It Works
+
+1. **Enter scope**: `EpochGuard.Enter(epochManager)` pins the current thread to the global epoch value
+2. **Access pages**: `RequestPageEpoch()` stamps each page with `AccessEpoch = max(existing, globalEpoch)`
+3. **Eviction check**: Clock-sweep skips pages where `AccessEpoch >= MinActiveEpoch` (any thread still in scope)
+4. **Exit scope**: `EpochGuard.Dispose()` unpins the thread; outermost exit advances the global epoch via `Interlocked.Increment`
+
+```csharp
+// Typical usage (managed by Transaction)
+using var guard = EpochGuard.Enter(epochManager);
+
+// All page accesses within this scope are epoch-protected
+pmmf.RequestPageEpoch(filePageIndex, epochManager.GlobalEpoch, out int memPageIndex);
+byte* addr = pmmf.GetMemPageAddress(memPageIndex);
+
+// Pages cannot be evicted while any EpochGuard referencing their epoch is active
+```
+
+### Nesting
+
+`EpochGuard` supports nesting via depth tracking. Only the outermost scope advances the global epoch:
+
+```
+Thread enters scope (depth 0 → 1): pin to global epoch
+  Thread enters nested scope (depth 1 → 2): no-op on pin
+  Thread exits nested scope (depth 2 → 1): no-op on unpin
+Thread exits outermost scope (depth 1 → 0): unpin, advance global epoch
+```
+
+Copy safety: depth validation in `UnpinCurrentThread` detects out-of-order disposal or accidental struct copies.
+
+### Thread Registry (SOA Layout)
+
+The `EpochThreadRegistry` uses Structure-of-Arrays for cache efficiency during `MinActiveEpoch` scans:
+
+- **Hot**: `_pinnedEpochs[256]` (2KB = 32 cache lines) — scanned on every eviction check
+- **Warm**: `_slotStates[256]`, `_depths[256]` — read/written on enter/exit
+- **Cold**: `_ownerThreads[256]` — registration and liveness checks only
+
+Slot allocation uses `[ThreadStatic]` for O(1) lookup after initial registration. Dead thread slots are reclaimed via `Thread.IsAlive` checks during `MinActiveEpoch` scans and `ClaimSlot` retries.
+
+### Relationship to Other Primitives
+
+| Primitive | Protects | Mechanism |
+|-----------|----------|-----------|
+| `EpochGuard` | **Page lifetime** — prevents eviction | Epoch tag on page vs MinActiveEpoch |
+| `AccessControlSmall` | **Page exclusivity** — mutual exclusion for writes | Exclusive latch (`TryLatchPageExclusive`) |
+| `AccessControl` | **B+Tree node concurrency** — reader-writer access | Shared/Exclusive latch per node |
+| MVCC timestamps | **Revision visibility** — snapshot isolation | Transaction tick vs revision timestamps |
+
+### Metrics
+
+`EpochManager` implements `IResource` and `IMetricSource`:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `EpochAdvances` | Counter | Total outermost scope exits |
+| `ScopeEnters` | Counter | Total scope entries (including nested) |
+| Slot utilization | Gauge | Active slots / 256 max |
+| `RegistryExhaustions` | Counter | ClaimSlot failures (should be 0) |
+
+### Code Locations
+
+- `src/Typhon.Engine/Concurrency/EpochManager.cs`
+- `src/Typhon.Engine/Concurrency/EpochThreadRegistry.cs`
+- `src/Typhon.Engine/Concurrency/EpochGuard.cs`
+
+> See also: [ADR-033: Epoch-Based Page Eviction](../adr/033-epoch-based-page-eviction.md), [Design: epoch-resource-management](../archive/epoch-resource-management.md)
 
 ---
 

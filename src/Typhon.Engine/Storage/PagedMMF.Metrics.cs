@@ -40,20 +40,19 @@ public partial class PagedMMF
         [PublicAPI]
         public struct MemPageExtraInfo
         {
-            public int FreeMemPageCount         { get; internal set; }
-            public int AllocatingMemPageCount   { get; internal set; }
-            public int IdleMemPageCount         { get; internal set; }
-            public int SharedMemPageCount       { get; internal set; }
-            public int ExclusiveMemPageCount    { get; internal set; }
-            public int IdleAndDirtyMemPageCount { get; internal set; }
-            public int LockedByThreadCount      { get; internal set; }
-            public int PendingIOReadCount       { get; internal set; }
-            public int MinClockSweepCounter     { get; internal set; }
-            public int MaxClockSweepCounter     { get; internal set; }
-            
+            public int FreeMemPageCount       { get; internal set; }
+            public int AllocatingMemPageCount { get; internal set; }
+            public int IdleMemPageCount       { get; internal set; }
+            public int ExclusiveMemPageCount  { get; internal set; }
+            public int DirtyPageCount         { get; internal set; }
+            public int LockedByThreadCount    { get; internal set; }
+            public int PendingIOReadCount     { get; internal set; }
+            public int MinClockSweepCounter   { get; internal set; }
+            public int MaxClockSweepCounter   { get; internal set; }
+
             public override string ToString() =>
                 $"Free: {FreeMemPageCount}, Allocating: {AllocatingMemPageCount}, Idle: {IdleMemPageCount}, " +
-                $"Shared: {SharedMemPageCount}, Exclusive: {ExclusiveMemPageCount}, IdleAndDirty: {IdleAndDirtyMemPageCount}, " +
+                $"Exclusive: {ExclusiveMemPageCount}, Dirty: {DirtyPageCount}, " +
                 $"LockedByThread: {LockedByThreadCount}, PendingIORead: {PendingIOReadCount}, " +
                 $"MinClockSweepCounter: {MinClockSweepCounter}, MaxClockSweepCounter: {MaxClockSweepCounter}";
         }

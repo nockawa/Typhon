@@ -8,7 +8,7 @@ The page cache uses a layered concurrency model:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│ Lock-Free Layer                                                  │
+│ Lock-Free Layer                                                 │
 │   - Cache directory (ConcurrentDictionary)                      │
 │   - Clock-sweep hand (Interlocked)                              │
 │   - Metrics counters (Interlocked)                              │
@@ -17,7 +17,7 @@ The page cache uses a layered concurrency model:
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ Fine-Grained Locking Layer                                       │
+│ Fine-Grained Locking Layer                                      │
 │   - Per-page state (AccessControlSmall - 4 bytes)               │
 │   - Segment growth (object lock)                                │
 │   - Occupancy map (AccessControl)                               │
@@ -25,10 +25,10 @@ The page cache uses a layered concurrency model:
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ Page Access Layer                                                │
-│   - Shared access (multiple readers)                            │
-│   - Exclusive access (single writer)                            │
-│   - Promotion/demotion                                          │
+│ Epoch Protection Layer                                          │
+│   - Epoch-scoped page access (replaces shared/exclusive model)  │
+│   - TryLatchPageExclusive / UnlatchPageExclusive for writes     │
+│   - AccessEpoch tags protect pages from eviction                │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -312,68 +312,64 @@ bool success = (prev == 0);
 
 ## Page State Transitions
 
-All state transitions are protected by `PageInfo.StateSyncRoot`:
+All state transitions are protected by `PageInfo.StateSyncRoot`. The epoch-based model has only two transitions:
+
+### Idle → Exclusive (TryLatchPageExclusive)
 
 ```csharp
-internal void TransitionPageToAccess(PageInfo pi, bool exclusive)
+internal bool TryLatchPageExclusive(int memPageIndex)
 {
-    pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
+    var pi = _memPagesInfo[memPageIndex];
+
+    // Re-entrant: already latched by this thread
+    if (pi.PageExclusiveLatch.IsLockedByCurrentThread)
+    {
+        pi.ExclusiveLatchDepth++;
+        return true;
+    }
+
+    // New acquisition: check state under StateSyncRoot
+    pi.StateSyncRoot.EnterExclusiveAccess(ref wc);
     try
     {
-        // Atomic state check and update
-        switch (pi.PageState)
-        {
-            case PageState.Allocating:
-            case PageState.Idle:
-            case PageState.IdleAndDirty:
-                pi.PageState = exclusive ? PageState.Exclusive : PageState.Shared;
-                pi.LockedByThreadId = Environment.CurrentManagedThreadId;
-                pi.ConcurrentSharedCounter = 1;
-                break;
-            
-            case PageState.Shared:
-                if (exclusive)
-                {
-                    // Promotion attempt
-                    if (pi.ConcurrentSharedCounter == 1 && 
-                        pi.LockedByThreadId == Environment.CurrentManagedThreadId)
-                    {
-                        pi.PageState = PageState.Exclusive;
-                    }
-                    else
-                    {
-                        // Must wait
-                        throw new InvalidOperationException("Cannot promote");
-                    }
-                }
-                else
-                {
-                    // Additional shared access
-                    pi.ConcurrentSharedCounter++;
-                    if (pi.LockedByThreadId != Environment.CurrentManagedThreadId)
-                        pi.LockedByThreadId = 0;  // Multiple threads
-                }
-                break;
-            
-            case PageState.Exclusive:
-                if (pi.LockedByThreadId == Environment.CurrentManagedThreadId)
-                {
-                    // Re-entrant
-                    pi.ConcurrentSharedCounter++;
-                }
-                else
-                {
-                    throw new InvalidOperationException("Page locked by another thread");
-                }
-                break;
-        }
+        if (pi.PageState != PageState.Idle)
+            return false;
+        pi.PageState = PageState.Exclusive;
     }
     finally
     {
         pi.StateSyncRoot.ExitExclusiveAccess();
     }
+
+    pi.PageExclusiveLatch.EnterExclusiveAccess(ref WaitContext.Null);
+    pi.ExclusiveLatchDepth = 0;
+    return true;
 }
 ```
+
+### Exclusive → Idle (UnlatchPageExclusive)
+
+```csharp
+internal void UnlatchPageExclusive(int memPageIndex)
+{
+    var pi = _memPagesInfo[memPageIndex];
+
+    if (pi.ExclusiveLatchDepth > 0)
+    {
+        pi.ExclusiveLatchDepth--;
+        return;
+    }
+
+    pi.PageExclusiveLatch.ExitExclusiveAccess();
+    pi.AccessEpoch = 0;
+
+    pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
+    pi.PageState = PageState.Idle;
+    pi.StateSyncRoot.ExitExclusiveAccess();
+}
+```
+
+> **Note**: The old `TransitionPageToAccess` and `TransitionPageFromAccessToIdle` methods were removed. There is no longer a `Shared` state — read access is protected by epoch tags without changing page state.
 
 ## Segment Growth Locking
 
@@ -406,29 +402,29 @@ public class LogicalSegment
 
 ## Race Condition Handling
 
-### Page Reallocation During Access
+### Page Reallocation During Epoch Access
 
 ```csharp
-public bool RequestPage(int filePageIndex, bool exclusive, out PageAccessor result)
+public bool RequestPageEpoch(int filePageIndex, long currentEpoch, out int memPageIndex)
 {
-    var waiter = new AdaptiveWaiter();
-    
     while (true)
     {
-        // Get memory page
-        FetchPageToMemory(filePageIndex, out int memPageIndex);
-        
+        // Get memory page (may allocate via clock-sweep)
+        FetchPageToMemory(filePageIndex, out memPageIndex);
+
         var pi = _memPagesInfo[memPageIndex];
-        
-        // Try to transition to access mode
-        if (TransitionPageToAccess(filePageIndex, pi, exclusive))
-        {
-            result = new PageAccessor(this, pi);
-            return true;
-        }
-        
-        // Page was reallocated by another thread - retry
-        waiter.Spin();
+
+        // Tag with epoch (atomic max — never goes backward)
+        AtomicMaxEpoch(ref pi.AccessEpoch, currentEpoch);
+
+        // Verify page wasn't evicted between fetch and epoch tag
+        if (pi.FilePageIndex != filePageIndex)
+            continue;  // Race: retry
+
+        // Wait for pending I/O if needed
+        WaitForIOComplete(pi);
+
+        return true;
     }
 }
 ```
@@ -473,18 +469,20 @@ private bool AllocateMemoryPage(int filePageIndex, out int memPageIndex)
 
 ```csharp
 // PageInfo fields that change together are grouped
-public class PageInfo
+internal class PageInfo
 {
     // Immutable - no sharing concern
     public readonly int MemPageIndex;
-    
-    // Changed together under lock
+
+    // Changed together under StateSyncRoot lock
     public PageState PageState;
-    public int LockedByThreadId;
-    public int ConcurrentSharedCounter;
-    
+    public AccessControlSmall PageExclusiveLatch;
+    public short ExclusiveLatchDepth;
+
+    // Epoch tag (lock-free atomic-max)
+    public long AccessEpoch;
+
     // Independently updated
-    [FieldOffset(??)]  // Consider cache line alignment
     private int _clockSweepCounter;
 }
 ```

@@ -10,8 +10,8 @@ namespace Typhon.Analyzers;
 /// <summary>
 /// Analyzer that detects IDisposable instances returned from method calls that are not properly disposed.
 /// This addresses limitations in CA2000 which lacks inter-procedural analysis and misses many patterns.
-/// 
-/// Critical Typhon types (ChunkAccessor, Transaction, PageAccessor) are reported as errors because
+///
+/// Critical Typhon types (EpochChunkAccessor, Transaction) are reported as errors because
 /// failing to dispose them causes system-level bugs like page cache deadlock or data corruption.
 /// </summary>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
@@ -87,9 +87,8 @@ public class DisposableNotDisposedAnalyzer : DiagnosticAnalyzer
     private static readonly ImmutableDictionary<string, string> CriticalTypes =
         ImmutableDictionary.CreateRange(new[]
         {
-            new KeyValuePair<string, string>("Typhon.Engine.ChunkAccessor", " - causes page cache deadlock"),
+            new KeyValuePair<string, string>("Typhon.Engine.EpochChunkAccessor", " - causes page cache deadlock"),
             new KeyValuePair<string, string>("Typhon.Engine.Transaction", " - causes uncommitted changes and resource leak"),
-            new KeyValuePair<string, string>("Typhon.Engine.PageAccessor", " - causes page lock leak"),
         });
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
@@ -506,7 +505,7 @@ public class DisposableNotDisposedAnalyzer : DiagnosticAnalyzer
             return true;
 
         // Unsafe.AsRef calls - these are reference casts, not new allocations
-        // e.g., ref var owner = ref Unsafe.AsRef<ChunkAccessor>(_ownerPtr);
+        // e.g., ref var owner = ref Unsafe.AsRef<EpochChunkAccessor>(_ownerPtr);
         if (unwrapped is IInvocationOperation invocation)
         {
             var methodName = invocation.TargetMethod.Name;

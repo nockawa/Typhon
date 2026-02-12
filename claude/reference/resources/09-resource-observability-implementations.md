@@ -254,13 +254,10 @@ public IReadOnlyDictionary<string, object> GetDebugProperties()
         ["PageCache.FreeCount"] = extraInfo.FreeMemPageCount,
         ["PageCache.AllocatingCount"] = extraInfo.AllocatingMemPageCount,
         ["PageCache.IdleCount"] = extraInfo.IdleMemPageCount,
-        ["PageCache.SharedCount"] = extraInfo.SharedMemPageCount,
         ["PageCache.ExclusiveCount"] = extraInfo.ExclusiveMemPageCount,
-        ["PageCache.IdleAndDirtyCount"] = extraInfo.IdleAndDirtyMemPageCount,
 
         // I/O state
         ["PageCache.PendingIOReadCount"] = extraInfo.PendingIOReadCount,
-        ["PageCache.LockedByThreadCount"] = extraInfo.LockedByThreadCount,
 
         // Clock-sweep state
         ["ClockSweep.MinCounter"] = extraInfo.MinClockSweepCounter,

@@ -639,6 +639,7 @@ class BtreeTests
     }
 
     [Test]
+    [Property("MemPageCount", 1024)]   // 300-page segment within epoch scope: all accessed pages are epoch-protected and non-evictable
     unsafe public void CheckSingleTreeBigAmount()
     {
         const int itemCount = 10000;

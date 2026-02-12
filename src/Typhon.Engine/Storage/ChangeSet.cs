@@ -18,17 +18,8 @@ public class ChangeSet
         _changedMemoryPageIndices = [];
     }
 
-    public void Add(PageAccessor accessor)
-    {
-        if (_changedMemoryPageIndices.Add(accessor.MemPageIndex))
-        {
-            _owner.IncrementDirty(accessor.MemPageIndex);
-        }
-    }
-
     /// <summary>
-    /// Mark a page as dirty by its memory page index directly.
-    /// Used by epoch-mode ChunkAccessor which doesn't hold PageAccessor instances.
+    /// Mark a page as dirty by its memory page index.
     /// </summary>
     public void AddByMemPageIndex(int memPageIndex)
     {

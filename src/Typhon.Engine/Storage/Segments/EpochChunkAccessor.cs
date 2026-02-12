@@ -19,8 +19,7 @@ namespace Typhon.Engine;
 ///   <item>SIMD Vector256 search — parallel scan of 16 cached page indices</item>
 ///   <item>Clock-hand eviction — O(1) amortized, cannot fail (no pinned slots)</item>
 /// </list>
-/// <para>Unlike <see cref="ChunkAccessor"/>, this type does not hold <see cref="PageAccessor"/>
-/// instances. Pages are protected from eviction by their epoch tag, not by ref-counting.
+/// <para>Pages are protected from eviction by their epoch tag, not by ref-counting.
 /// Dirty tracking uses a bitmask flushed to <see cref="ChangeSet"/> via
 /// <see cref="ChangeSet.AddByMemPageIndex"/>.</para>
 /// </remarks>

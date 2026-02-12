@@ -12,7 +12,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 namespace Typhon.Analyzers;
 
 /// <summary>
-/// Code fix provider that automatically adds 'ref' modifier to ChunkAccessor parameters.
+/// Code fix provider that automatically adds 'ref' modifier to EpochChunkAccessor parameters.
 /// </summary>
 [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(ChunkAccessorRefCodeFixProvider)), Shared]
 public class ChunkAccessorRefCodeFixProvider : CodeFixProvider

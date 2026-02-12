@@ -6,9 +6,8 @@ Custom Roslyn analyzers for the Typhon database engine project.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| TYPHON001 | Error | ChunkAccessor parameters must use `ref` modifier |
-| TYPHON002 | Error | ChunkAccessor field usage in unsafe methods |
-| TYPHON003 | Error | ChunkAccessor must not be copied |
+| TYPHON001 | Error | EpochChunkAccessor parameters must use `ref` modifier |
+| TYPHON003 | Error | EpochChunkAccessor must not be copied |
 | TYPHON004 | Error | IDisposable result must be disposed |
 
 ---
@@ -25,27 +24,26 @@ Failing to dispose IDisposable resources causes resource leaks. In Typhon, this 
 
 | Type | Consequence if not disposed |
 |------|----------------------------|
-| `ChunkAccessor` | **Page cache deadlock** - pages remain in Shared state indefinitely |
+| `EpochChunkAccessor` | **Page cache deadlock** - pages remain in Shared state indefinitely |
 | `Transaction` | **Data corruption** - uncommitted changes leak, resource exhaustion |
-| `PageAccessor` | **Page lock leak** - pages cannot be evicted |
 
 This analyzer addresses limitations in CA2000 which lacks inter-procedural analysis, misses tuple returns, and ignores exception flow paths.
 
 ### Detected Patterns
 
 ```csharp
-// ❌ ERROR TYPHON004 - Discarded result
+// ERROR TYPHON004 - Discarded result
 CreateTransaction();
 
-// ❌ ERROR TYPHON004 - Explicitly discarded
+// ERROR TYPHON004 - Explicitly discarded
 _ = CreateTransaction();
 
-// ❌ ERROR TYPHON004 - Variable never disposed
+// ERROR TYPHON004 - Variable never disposed
 var t = CreateTransaction();
 t.DoWork();
 // end of method without dispose
 
-// ❌ ERROR TYPHON004 - Reassignment without disposing first
+// ERROR TYPHON004 - Reassignment without disposing first
 var t = CreateTransaction();
 t = CreateTransaction();  // First value leaked!
 t.Dispose();
@@ -54,18 +52,18 @@ t.Dispose();
 ### Correct Usage
 
 ```csharp
-// ✅ CORRECT - Using declaration (preferred)
+// CORRECT - Using declaration (preferred)
 using var t = CreateTransaction();
 t.DoWork();
 // Automatically disposed at end of scope
 
-// ✅ CORRECT - Using statement
+// CORRECT - Using statement
 using (var t = CreateTransaction())
 {
     t.DoWork();
 }
 
-// ✅ CORRECT - Explicit Dispose() call
+// CORRECT - Explicit Dispose() call
 var t = CreateTransaction();
 try
 {
@@ -76,13 +74,13 @@ finally
     t.Dispose();
 }
 
-// ✅ CORRECT - Return transfers ownership to caller
+// CORRECT - Return transfers ownership to caller
 public Transaction CreateAndReturn()
 {
     return CreateTransaction();
 }
 
-// ✅ CORRECT - Field assignment transfers ownership
+// CORRECT - Field assignment transfers ownership
 private Transaction _transaction;
 public void Initialize()
 {
@@ -105,29 +103,29 @@ The analyzer includes automatic code fixes. In Visual Studio or Rider:
 
 **Severity:** Error
 
-**Description:** Enforces that `ChunkAccessor` parameters must always be passed by `ref` (not `in`, not by value).
+**Description:** Enforces that `EpochChunkAccessor` parameters must always be passed by `ref` (not `in`, not by value).
 
 ### Why This Rule Exists
 
-`ChunkAccessor` is a large struct (~1KB in size) with mutating methods, designed for zero-allocation, stack-based chunk access with SIMD-optimized operations. It must be passed by `ref` only:
+`EpochChunkAccessor` is a large struct (~1KB in size) with mutating methods, designed for zero-allocation, stack-based chunk access with SIMD-optimized operations. It must be passed by `ref` only:
 
 - **Performance Impact (by value):** Each by-value pass copies ~1KB of data onto the stack
 - **Performance Impact (in):** The `in` modifier causes **defensive copies** when calling non-readonly methods on the struct, completely defeating the performance design
-- **Design Violation:** ChunkAccessor has mutating methods like `GetChunk()` - using `in` triggers hidden copies on every call
+- **Design Violation:** EpochChunkAccessor has mutating methods like `GetChunk()` - using `in` triggers hidden copies on every call
 - **Cache Pollution:** Large stack copies can pollute CPU caches and degrade performance
 
 ### Correct Usage
 
 ```csharp
-// ✅ CORRECT - Pass by ref
-public void ProcessChunk(ref ChunkAccessor accessor)
+// CORRECT - Pass by ref
+public void ProcessChunk(ref EpochChunkAccessor accessor)
 {
     ref var chunk = ref accessor.GetChunk<MyData>(chunkId);
     // No defensive copies, direct access to the struct
 }
 
-// ✅ ALSO CORRECT - Even for readonly operations
-public bool ReadChunk(ref ChunkAccessor accessor, int chunkId)
+// ALSO CORRECT - Even for readonly operations
+public bool ReadChunk(ref EpochChunkAccessor accessor, int chunkId)
 {
     ref readonly var chunk = ref accessor.GetChunkReadOnly<MyData>(chunkId);
     return true;
@@ -137,14 +135,14 @@ public bool ReadChunk(ref ChunkAccessor accessor, int chunkId)
 ### Incorrect Usage
 
 ```csharp
-// ❌ ERROR TYPHON001 - Missing ref modifier
-public void ProcessChunk(ChunkAccessor accessor)
+// ERROR TYPHON001 - Missing ref modifier
+public void ProcessChunk(EpochChunkAccessor accessor)
 {
     // This creates a 1KB stack copy - expensive!
 }
 
-// ❌ ERROR TYPHON001 - Using 'in' causes defensive copies
-public void ProcessChunk(in ChunkAccessor accessor)
+// ERROR TYPHON001 - Using 'in' causes defensive copies
+public void ProcessChunk(in EpochChunkAccessor accessor)
 {
     // Every call to accessor.GetChunk() creates a defensive copy
     // because GetChunk() is not a readonly method!
@@ -161,46 +159,38 @@ The analyzer includes an automatic code fix that adds or replaces with the `ref`
 
 ---
 
-## ChunkAccessorFieldAnalyzer (TYPHON002)
-
-**Severity:** Error
-
-**Description:** Detects usage of ChunkAccessor fields within methods marked as unsafe.
-
----
-
 ## ChunkAccessorCopyAnalyzer (TYPHON003)
 
 **Severity:** Error
 
-**Description:** Detects copying of ChunkAccessor instances, which defeats its zero-allocation design and creates unexpected behavior due to duplicated internal state.
+**Description:** Detects copying of EpochChunkAccessor instances, which defeats its zero-allocation design and creates unexpected behavior due to duplicated internal state.
 
 ### Why This Rule Exists
 
-ChunkAccessor is a large ~1KB struct designed for zero-allocation. Copying it:
+EpochChunkAccessor is a large ~1KB struct designed for zero-allocation. Copying it:
 - Creates expensive ~1KB stack copies
 - Duplicates internal state (cache, pins, etc.)
 - Can lead to double-dispose or inconsistent state
 
-The only valid creation is via `ChunkBasedSegment.CreateChunkAccessor()`.
+The only valid creation is via `ChunkBasedSegment.CreateEpochChunkAccessor()`.
 
 ### Incorrect Usage
 
 ```csharp
-// ❌ ERROR TYPHON003 - Copying via assignment
+// ERROR TYPHON003 - Copying via assignment
 var copy = existingAccessor;
 
-// ❌ ERROR TYPHON003 - Copying via return
+// ERROR TYPHON003 - Copying via return
 return existingAccessor;
 ```
 
 ### Correct Usage
 
 ```csharp
-// ✅ CORRECT - Create new accessor
-using var accessor = segment.CreateChunkAccessor();
+// CORRECT - Create new accessor
+using var accessor = segment.CreateEpochChunkAccessor();
 
-// ✅ CORRECT - Pass by ref
+// CORRECT - Pass by ref
 ProcessData(ref accessor);
 ```
 

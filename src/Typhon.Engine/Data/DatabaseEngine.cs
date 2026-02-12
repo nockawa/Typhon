@@ -221,7 +221,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     internal long GetNewPrimaryKey() => Interlocked.Increment(ref _curPrimaryKey);
 
     // Create the first revision of the system schema
-    private void CreateSystemSchemaR1()
+    private unsafe void CreateSystemSchemaR1()
     {
         // Register the system components
         RegisterComponentFromAccessor<FieldR1>();
@@ -231,20 +231,24 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         _fieldsTable = GetComponentTable<FieldR1>();
         _componentsTable = GetComponentTable<ComponentR1>();
 
-        MMF.RequestPage(0, true, out var pa);
-        using (pa)
-        {
-            // Save the entry points in the file header
-            var cs = MMF.CreateChangeSet();
-            cs.Add(pa);
-            ref var rootFileHeader = ref pa.PageHeader.Cast<byte, RootFileHeader>()[0];
+        using var guard = EpochGuard.Enter(EpochManager);
+        var epoch = EpochManager.GlobalEpoch;
 
-            rootFileHeader.SystemSchemaRevision = 1;
-            rootFileHeader.FieldTableSPI = _fieldsTable.ComponentSegment.RootPageIndex;
-            rootFileHeader.ComponentTableSPI = _componentsTable.ComponentSegment.RootPageIndex;
-            
-            cs.SaveChanges();
-        }
+        MMF.RequestPageEpoch(0, epoch, out var memPageIdx);
+        MMF.TryLatchPageExclusive(memPageIdx);
+        var addr = MMF.GetMemPageAddress(memPageIdx);
+
+        // Save the entry points in the file header
+        var cs = MMF.CreateChangeSet();
+        cs.AddByMemPageIndex(memPageIdx);
+        ref var rootFileHeader = ref Unsafe.AsRef<RootFileHeader>(addr);
+
+        rootFileHeader.SystemSchemaRevision = 1;
+        rootFileHeader.FieldTableSPI = _fieldsTable.ComponentSegment.RootPageIndex;
+        rootFileHeader.ComponentTableSPI = _componentsTable.ComponentSegment.RootPageIndex;
+
+        MMF.UnlatchPageExclusive(memPageIdx);
+        cs.SaveChanges();
         
         // Now save the system components schema in the database (to load them next time we open the database)
         SaveInSystemSchema(_fieldsTable);

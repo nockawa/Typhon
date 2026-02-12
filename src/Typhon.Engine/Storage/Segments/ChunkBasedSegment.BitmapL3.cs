@@ -93,53 +93,48 @@ public partial class ChunkBasedSegment
             // No need to scan new pages - they're guaranteed empty!
         }
 
-        private void InitFromLoad()
+        private unsafe void InitFromLoad()
         {
-            var pageIndex = -1;
-            PageAccessor page = default;
-            Span<long> data = default;
+            var epoch = _segment.Manager.EpochManager.GlobalEpoch;
+            var curSegPageIndex = -1;
+            byte* metadataAddr = null;
             var allocated = 0;
             var segmentLength = _segment.Length;
-            
+
             for (int i = 0; i < Capacity; i += 64)
             {
                 var l0Offset = i >> 6;
-                var prevIndex = pageIndex;
+                var prevIndex = curSegPageIndex;
                 int pageOffset = 0;
-                
-                (pageIndex, pageOffset) = GetBitmapMaskLocation(i >> 6);
-                
+
+                (curSegPageIndex, pageOffset) = GetBitmapMaskLocation(i >> 6);
+
                 // Bounds check: ensure pageIndex is within segment
-                if (pageIndex >= segmentLength)
+                if (curSegPageIndex >= segmentLength)
                 {
-                    if (page.IsValid) page.Dispose();
                     throw new InvalidOperationException(
-                        $"BitmapL3.InitFromLoad: pageIndex {pageIndex} >= segmentLength {segmentLength}. " +
+                        $"BitmapL3.InitFromLoad: pageIndex {curSegPageIndex} >= segmentLength {segmentLength}. " +
                         $"Capacity={Capacity}, i={i}, l0Offset={l0Offset}");
                 }
-                
-                if (pageIndex != prevIndex)
+
+                if (curSegPageIndex != prevIndex)
                 {
-                    if (page.IsValid)
-                    {
-                        page.Dispose();
-                    }
-                    _segment.GetPageSharedAccessor(pageIndex, out page);
-                    data = page.PageMetadata.Cast<byte, long>();
+                    var addr = _segment.GetPageAddress(curSegPageIndex, epoch, out _);
+                    metadataAddr = addr + PagedMMF.PageBaseHeaderSize;
                 }
 
                 // Bounds check: ensure pageOffset is within PageMetadata (16 longs max)
                 if (pageOffset >= 16)
                 {
-                    if (page.IsValid) page.Dispose();
                     throw new InvalidOperationException(
                         $"BitmapL3.InitFromLoad: pageOffset {pageOffset} >= 16. " +
-                        $"pageIndex={pageIndex}, i={i}, l0Offset={l0Offset}");
+                        $"pageIndex={curSegPageIndex}, i={i}, l0Offset={l0Offset}");
                 }
 
+                var data = new Span<long>(metadataAddr, PagedMMF.PageMetadataSize / sizeof(long));
                 var mask = data[pageOffset];
                 allocated += BitOperations.PopCount((ulong)mask);
-                
+
                 if (mask == -1)
                 {
                     var l1Offset = l0Offset >> 6;
@@ -163,11 +158,6 @@ public partial class ChunkBasedSegment
 
                     _l1Any[l1Offset] |= l1Mask;
                 }
-                
-            }
-            if (page.IsValid)
-            {
-                page.Dispose();
             }
             _allocated = allocated;
         }
@@ -203,18 +193,17 @@ public partial class ChunkBasedSegment
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public bool SetL0(int bitIndex)
+        public unsafe bool SetL0(int bitIndex)
         {
             var l0Offset = bitIndex >> 6;
             var l0Mask = 1L << (bitIndex & 0x3F);
 
             var (pageIndex, pageOffset) = GetBitmapMaskLocation(l0Offset);
-            _segment.GetPageSharedAccessor(pageIndex, out var page);
-            using (page)
+            var epoch = _segment.Manager.EpochManager.GlobalEpoch;
+            var addr = _segment.GetPageAddress(pageIndex, epoch, out _);
+            var data = new Span<long>(addr + PagedMMF.PageBaseHeaderSize, PagedMMF.PageMetadataSize / sizeof(long));
             {
-                var data = page.PageMetadata.Cast<byte, long>();
                 var prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
-                page.SetPageDirty();                                                            // TODO only if changed
                 if ((prevL0 & l0Mask) != 0)
                 {
                     // The bit was concurrently set by someone else
@@ -250,18 +239,17 @@ public partial class ChunkBasedSegment
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        private bool SetL1(int index)
+        private unsafe bool SetL1(int index)
         {
             var l0Offset = index;
             var l0Mask = -1L;
 
             var (pageIndex, pageOffset) = GetBitmapMaskLocation(l0Offset);
-            _segment.GetPageSharedAccessor(pageIndex, out var page);
-            using (page)
+            var epoch = _segment.Manager.EpochManager.GlobalEpoch;
+            var addr = _segment.GetPageAddress(pageIndex, epoch, out _);
+            var data = new Span<long>(addr + PagedMMF.PageBaseHeaderSize, PagedMMF.PageMetadataSize / sizeof(long));
             {
-                var data = page.PageMetadata.Cast<byte, long>();
                 var prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
-                page.SetPageDirty();                                                            // TODO Only if changed
                 if (prevL0 != 0)
                 {
                     // Can't allocate the whole L1, some bits are set at L0
@@ -297,17 +285,17 @@ public partial class ChunkBasedSegment
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public void ClearL0(int index)
+        public unsafe void ClearL0(int index)
         {
             var l0Offset = index >> 6;
             var bitMask = 1L << (index & 0x3F);
             var l0Mask = ~bitMask;
 
             var (pageIndex, pageOffset) = GetBitmapMaskLocation(l0Offset);
-            _segment.GetPageSharedAccessor(pageIndex, out var page);
-            using (page)
+            var epoch = _segment.Manager.EpochManager.GlobalEpoch;
+            var addr = _segment.GetPageAddress(pageIndex, epoch, out _);
+            var data = new Span<long>(addr + PagedMMF.PageBaseHeaderSize, PagedMMF.PageMetadataSize / sizeof(long));
             {
-                var data = page.PageMetadata.Cast<byte, long>();
                 var prevL0 = Interlocked.And(ref data[pageOffset], l0Mask);
 
                 // Guard against double-free - only proceed if the bit was actually set
@@ -316,8 +304,6 @@ public partial class ChunkBasedSegment
                     // Bit wasn't set - this is a double-free or invalid free, ignore
                     return;
                 }
-
-                page.SetPageDirty();
 
                 // Update L1All: clear bit when L0 group transitions from full to not-full
                 if (prevL0 == -1)
@@ -349,22 +335,20 @@ public partial class ChunkBasedSegment
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public bool IsSet(int index)
+        public unsafe bool IsSet(int index)
         {
             var offset = index >> 6;
             var mask = 1L << (index & 0x3F);
 
             var (pageIndex, pageOffset) = GetBitmapMaskLocation(offset);
-            _segment.GetPageSharedAccessor(pageIndex, out var page);
-            using (page)
-            {
-                var data = page.PageMetadata.Cast<byte, long>();
-                return (data[pageOffset] & mask) != 0L;
-            }
+            var epoch = _segment.Manager.EpochManager.GlobalEpoch;
+            var addr = _segment.GetPageAddress(pageIndex, epoch, out _);
+            var data = new ReadOnlySpan<long>(addr + PagedMMF.PageBaseHeaderSize, PagedMMF.PageMetadataSize / sizeof(long));
+            return (data[pageOffset] & mask) != 0L;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        private bool FindNextUnsetL0(ref int index, ref long mask)
+        private unsafe bool FindNextUnsetL0(ref int index, ref long mask)
         {
             var capacity = Capacity;
 
@@ -375,8 +359,9 @@ public partial class ChunkBasedSegment
             var ll1 = _l1All.Length;
             var ll2 = _l2All.Length;
 
+            var epoch = _segment.Manager.EpochManager.GlobalEpoch;
             var curPageId = -1;
-            PageAccessor curPage = default;
+            byte* metadataAddr = null;
 
             while (c0 < capacity)
             {
@@ -390,11 +375,11 @@ public partial class ChunkBasedSegment
                         var (pageId, offset) = GetBitmapMaskLocation(i0);
                         if (pageId != curPageId)
                         {
-                            curPage.Dispose();
-                            _segment.GetPageSharedAccessor(pageId, out curPage);
+                            var addr = _segment.GetPageAddress(pageId, epoch, out _);
+                            metadataAddr = addr + PagedMMF.PageBaseHeaderSize;
                             curPageId = pageId;
                         }
-                        var data = curPage.PageMetadata.Cast<byte, long>();
+                        var data = new Span<long>(metadataAddr, PagedMMF.PageMetadataSize / sizeof(long));
                         long t0 = 1L << (c0 & 0x3F);
                         v0 = data[offset] | (t0 - 1);
 
@@ -403,11 +388,10 @@ public partial class ChunkBasedSegment
                             break;
                         }
                         c0 = ++i0 << 6;
-                        
+
                         // Bounds check after skip
                         if (c0 >= capacity)
                         {
-                            curPage.Dispose();
                             return false;
                         }
 
@@ -422,11 +406,10 @@ public partial class ChunkBasedSegment
 
                             i0 = 0;
                             c0 = ++i1 << 12;
-                            
+
                             // Bounds check after skip
                             if (c0 >= capacity)
                             {
-                                curPage.Dispose();
                                 return false;
                             }
 
@@ -440,44 +423,39 @@ public partial class ChunkBasedSegment
                                 }
                                 i1 = 0;
                                 c0 = ++i2 << 18;
-                                
+
                                 // Bounds check after skip
                                 if (c0 >= capacity)
                                 {
-                                    curPage.Dispose();
                                     return false;
                                 }
                             }
                         }
                     }
                 }
-                
+
                 // Recheck bounds after potential skip operations before computing candidate
                 if (c0 >= capacity)
                 {
-                    curPage.Dispose();
                     return false;
                 }
 
                 var bitPos = BitOperations.TrailingZeroCount(~v0);
                 var candidateIndex = (c0 & ~0x3F) + bitPos;
-                
+
                 // Critical: verify the candidate index is within capacity bounds
                 // The last L0 group may have bits beyond capacity that appear "free"
                 if (candidateIndex >= capacity)
                 {
-                    curPage.Dispose();
                     return false;
                 }
-                
+
                 v0 |= (1L << bitPos);
                 index = candidateIndex;
                 mask = v0;
-                curPage.Dispose();
                 return true;
             }
 
-            curPage.Dispose();
             return false;
         }
 

@@ -52,7 +52,7 @@ public class DisposeEarlyReturnAnalyzer : DiagnosticAnalyzer
 
     private static readonly LocalizableString Description =
         "Early return statements in Dispose() methods must not skip disposal of critical fields " +
-        "(ChunkAccessor, Transaction, PageAccessor). Either dispose the field before returning, " +
+        "(EpochChunkAccessor, Transaction). Either dispose the field before returning, " +
         "or restructure the code to ensure all paths dispose all critical fields.";
 
     private static readonly DiagnosticDescriptor Rule = new DiagnosticDescriptor(
@@ -70,9 +70,8 @@ public class DisposeEarlyReturnAnalyzer : DiagnosticAnalyzer
     private static readonly ImmutableDictionary<string, string> CriticalTypes =
         ImmutableDictionary.CreateRange(new[]
         {
-            new KeyValuePair<string, string>("Typhon.Engine.ChunkAccessor", " - causes page cache deadlock"),
+            new KeyValuePair<string, string>("Typhon.Engine.EpochChunkAccessor", " - causes page cache deadlock"),
             new KeyValuePair<string, string>("Typhon.Engine.Transaction", " - causes uncommitted changes and resource leak"),
-            new KeyValuePair<string, string>("Typhon.Engine.PageAccessor", " - causes page lock leak"),
         });
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
@@ -162,7 +161,7 @@ public class DisposeEarlyReturnAnalyzer : DiagnosticAnalyzer
                 continue;
 
             // Skip ref fields - these are borrowed references, not owned resources
-            // e.g., "ref ChunkAccessor _accessor" in ref structs
+            // e.g., "ref EpochChunkAccessor _accessor" in ref structs
             // The owner of the referenced resource is responsible for disposal
             if (field.RefKind != RefKind.None)
                 continue;

@@ -50,28 +50,31 @@ public partial class ManagedPagedMMF
         
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public bool SetL0(int bitIndex, ChangeSet changeSet = null)
+        public unsafe bool SetL0(int bitIndex, ChangeSet changeSet = null)
         {
             var l0Offset = bitIndex >> 6;
             var l0Mask = 1L << (bitIndex & 0x3F);
 
             var (pageIndex, pageOffset) = LogicalSegment.GetItemLocation<long>(l0Offset);
-            _segment.GetPageExclusiveAccessor(pageIndex, out var page);
-            using (page)
+            var epoch = _segment.Manager.EpochManager.GlobalEpoch;
+            var addr = _segment.GetPageAddressExclusive(pageIndex, epoch, out var memPageIdx);
+            var root = (addr[0] & (byte)PageBlockFlags.IsLogicalSegmentRoot) != 0;
+            var dataOffset = root ? LogicalSegment.RootHeaderIndexSectionLength : 0;
+            var data = new Span<long>(addr + PagedMMF.PageHeaderSize + dataOffset, (PagedMMF.PageRawDataSize - dataOffset) / sizeof(long));
             {
-                var data = page.LogicalSegmentData.Cast<byte, long>();
                 var prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
                 if ((prevL0 & l0Mask) != 0)
                 {
+                    _segment.Manager.UnlatchPageExclusive(memPageIdx);
                     // The bit was concurrently set by someone else
                     return false;
                 }
 
                 if (data[pageOffset] != prevL0)
                 {
-                    changeSet?.Add(page);
+                    changeSet?.AddByMemPageIndex(memPageIdx);
                 }
-                
+
                 if (prevL0 != -1 && (prevL0 | l0Mask) == -1)
                 {
                     var l1Offset = l0Offset >> 6;
@@ -96,31 +99,35 @@ public partial class ManagedPagedMMF
                     _l1Any.Span[l1Offset] |= l1Mask;
                 }
             }
+            _segment.Manager.UnlatchPageExclusive(memPageIdx);
             return true;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public bool SetL1(int index, ChangeSet changeSet = null)
+        public unsafe bool SetL1(int index, ChangeSet changeSet = null)
         {
             var l0Offset = index;
             var l0Mask = -1L;
 
             var (pageIndex, pageOffset) = LogicalSegment.GetItemLocation<long>(l0Offset);
-            _segment.GetPageExclusiveAccessor(pageIndex, out var page);
-            using (page)
+            var epoch = _segment.Manager.EpochManager.GlobalEpoch;
+            var addr = _segment.GetPageAddressExclusive(pageIndex, epoch, out var memPageIdx);
+            var root = (addr[0] & (byte)PageBlockFlags.IsLogicalSegmentRoot) != 0;
+            var dataOffset = root ? LogicalSegment.RootHeaderIndexSectionLength : 0;
+            var data = new Span<long>(addr + PagedMMF.PageHeaderSize + dataOffset, (PagedMMF.PageRawDataSize - dataOffset) / sizeof(long));
             {
-                var data = page.LogicalSegmentData.Cast<byte, long>();
                 var prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
 
                 if (prevL0 != 0)
                 {
+                    _segment.Manager.UnlatchPageExclusive(memPageIdx);
                     // Can't allocate the whole L1, some bits are set at L0
                     return false;
                 }
-                
+
                 if (data[pageOffset] != prevL0)
                 {
-                    changeSet?.Add(page);
+                    changeSet?.AddByMemPageIndex(memPageIdx);
                 }
 
                 if (prevL0 != -1 && (prevL0 | l0Mask) == -1)
@@ -147,27 +154,30 @@ public partial class ManagedPagedMMF
                     _l1Any.Span[l1Offset] |= l1Mask;
                 }
             }
+            _segment.Manager.UnlatchPageExclusive(memPageIdx);
             return true;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public void ClearL0(int index, ChangeSet changeSet = null)
+        public unsafe void ClearL0(int index, ChangeSet changeSet = null)
         {
             var l0Offset = index >> 6;
             var l0SetMask = 1L << (index & 0x3F);
             var l0ClearMask = ~l0SetMask;
 
             var (pageIndex, pageOffset) = LogicalSegment.GetItemLocation<long>(l0Offset);
-            _segment.GetPageExclusiveAccessor(pageIndex, out var page);
-            using (page)
+            var epoch = _segment.Manager.EpochManager.GlobalEpoch;
+            var addr = _segment.GetPageAddressExclusive(pageIndex, epoch, out var memPageIdx);
+            var root = (addr[0] & (byte)PageBlockFlags.IsLogicalSegmentRoot) != 0;
+            var dataOff = root ? LogicalSegment.RootHeaderIndexSectionLength : 0;
+            var data = new Span<long>(addr + PagedMMF.PageHeaderSize + dataOff, (PagedMMF.PageRawDataSize - dataOff) / sizeof(long));
             {
-                var data = page.LogicalSegmentData.Cast<byte, long>();
                 var prevL0 = Interlocked.And(ref data[pageOffset], l0ClearMask);
                 if ((prevL0 & l0SetMask) != 0)
                 {
-                    changeSet?.Add(page);
+                    changeSet?.AddByMemPageIndex(memPageIdx);
                 }
-                
+
                 if ((prevL0 == -1) && ((prevL0 & l0ClearMask) != -1))
                 {
                     var l1Offset = l0Offset >> 6;
@@ -192,25 +202,26 @@ public partial class ManagedPagedMMF
                     _l1Any.Span[l1Offset] &= l1Mask;
                 }
             }
+            _segment.Manager.UnlatchPageExclusive(memPageIdx);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public bool IsSet(int index)
+        public unsafe bool IsSet(int index)
         {
             var offset = index >> 6;
             var mask = 1L << (index & 0x3F);
 
             var (pageIndex, pageOffset) = LogicalSegment.GetItemLocation<long>(offset);
-            _segment.GetPageSharedAccessor(pageIndex, out var page);
-            using (page)
-            {
-                var data = page.LogicalSegmentDataReadOnly.Cast<byte, long>();
-                return (data[pageOffset] & mask) != 0L;
-            }
+            var epoch = _segment.Manager.EpochManager.GlobalEpoch;
+            var addr = _segment.GetPageAddress(pageIndex, epoch, out _);
+            var root = (addr[0] & (byte)PageBlockFlags.IsLogicalSegmentRoot) != 0;
+            var dataOff = root ? LogicalSegment.RootHeaderIndexSectionLength : 0;
+            var data = new ReadOnlySpan<long>(addr + PagedMMF.PageHeaderSize + dataOff, (PagedMMF.PageRawDataSize - dataOff) / sizeof(long));
+            return (data[pageOffset] & mask) != 0L;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-        public bool FindNextUnsetL0(ref int index, ref long mask)
+        public unsafe bool FindNextUnsetL0(ref int index, ref long mask)
         {
             var capacity = Capacity;
 
@@ -222,9 +233,11 @@ public partial class ManagedPagedMMF
             var ll1 = _l1All.Length;
             var ll2 = _l2All.Length;
 
+            var epoch = _segment.Manager.EpochManager.GlobalEpoch;
             var curPageId = -1;
             var i0 = 0;
-            PageAccessor curPage = default;
+            byte* curDataAddr = null;
+            int curDataLen = 0;
 
             while (c0 < capacity)
             {
@@ -237,11 +250,14 @@ public partial class ManagedPagedMMF
                         var (pageId, offset) = LogicalSegment.GetItemLocation<long>(i0);
                         if (pageId != curPageId)
                         {
-                            curPage.Dispose();
-                            _segment.GetPageSharedAccessor(pageId, out curPage);
+                            var addr = _segment.GetPageAddress(pageId, epoch, out _);
+                            var root = (addr[0] & (byte)PageBlockFlags.IsLogicalSegmentRoot) != 0;
+                            var dataOff = root ? LogicalSegment.RootHeaderIndexSectionLength : 0;
+                            curDataAddr = addr + PagedMMF.PageHeaderSize + dataOff;
+                            curDataLen = (PagedMMF.PageRawDataSize - dataOff) / sizeof(long);
                             curPageId = pageId;
                         }
-                        var data = curPage.LogicalSegmentDataReadOnly.Cast<byte, long>();
+                        var data = new ReadOnlySpan<long>(curDataAddr, curDataLen);
                         t0 = 1L << (c0 & 0x3F);
                         v0 = data[offset] | (t0 - 1);
 
@@ -286,11 +302,9 @@ public partial class ManagedPagedMMF
                 v0 |= (1L << bitPos);
                 index = (c0 & ~0x3F) + bitPos;
                 mask = v0;
-                curPage.Dispose();
                 return true;
             }
 
-            curPage.Dispose();
             return false;
         }
 
