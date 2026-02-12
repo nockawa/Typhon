@@ -481,7 +481,7 @@ internal sealed class DiagnosticCommandExecutor
             // Dump raw chunk data
             if (chunk.Value >= 0 && chunk.Value < seg.AllocatedChunkCount)
             {
-                using var accessor = seg.CreateEpochChunkAccessor();
+                using var accessor = seg.CreateChunkAccessor();
                 unsafe
                 {
                     var ptr = accessor.GetChunkAddress(chunk.Value);
@@ -532,7 +532,7 @@ internal sealed class DiagnosticCommandExecutor
         var checkDepth = checkEpochManager.EnterScope();
         try
         {
-            var accessor = btree.Segment.CreateEpochChunkAccessor();
+            var accessor = btree.Segment.CreateChunkAccessor();
             btree.CheckConsistency(ref accessor);
             sb.AppendLine("  [green]Validation passed[/]");
         }
@@ -589,7 +589,7 @@ internal sealed class DiagnosticCommandExecutor
         var epochDepth = epochManager.EnterScope();
         try
         {
-            var accessor = pkIndex.Segment.CreateEpochChunkAccessor();
+            var accessor = pkIndex.Segment.CreateChunkAccessor();
             unsafe
             {
                 var lookupResult = pkIndex.TryGet(&entityId, ref accessor);
@@ -599,7 +599,7 @@ internal sealed class DiagnosticCommandExecutor
                 }
 
                 var revChunkId = lookupResult.Value;
-                var revAccessor = table.CompRevTableSegment.CreateEpochChunkAccessor();
+                var revAccessor = table.CompRevTableSegment.CreateChunkAccessor();
                 var revPtr = (CompRevStorageHeader*)revAccessor.GetChunkAddress(revChunkId);
 
                 var sb = new StringBuilder();
@@ -693,7 +693,7 @@ internal sealed class DiagnosticCommandExecutor
         // Walk revision headers to compute statistics
         if (allocated > 0)
         {
-            using var accessor = revSeg.CreateEpochChunkAccessor();
+            using var accessor = revSeg.CreateChunkAccessor();
             var totalItems = 0L;
             var maxChain = 0;
             var singleRevCount = 0;

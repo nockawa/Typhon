@@ -13,12 +13,12 @@ internal ref struct ComponentRevisionManager
 
     internal ref struct ElementRevisionHandle
     {
-        private ref EpochChunkAccessor _accessor;
+        private ref ChunkAccessor _accessor;
         private readonly int _chunkId;
         private readonly bool _isFirst;
         private readonly short _elementIndex;
 
-        public ElementRevisionHandle(ref EpochChunkAccessor accessor, int chunkId, bool isFirst, short elementIndex)
+        public ElementRevisionHandle(ref ChunkAccessor accessor, int chunkId, bool isFirst, short elementIndex)
         {
             _accessor = ref accessor;
             _chunkId = chunkId;
@@ -44,7 +44,7 @@ internal ref struct ComponentRevisionManager
 
     }
 
-    internal static ElementRevisionHandle GetRevisionElement(ref EpochChunkAccessor accessor, int firstChunkId, short revisionIndex)
+    internal static ElementRevisionHandle GetRevisionElement(ref ChunkAccessor accessor, int firstChunkId, short revisionIndex)
     {
         ref var firstHeader = ref accessor.GetChunk<CompRevStorageHeader>(firstChunkId);
         if (revisionIndex < CompRevCountInRoot)
@@ -178,7 +178,7 @@ internal ref struct ComponentRevisionManager
     /// This method walks through the chain of revision chunks and builds a new one, only the first chunk is kept.
     /// </remarks>
     internal static unsafe bool CleanUpUnusedEntries(Transaction.ComponentInfoBase info, ref Transaction.ComponentInfoBase.CompRevInfo compRevInfo,
-        ref EpochChunkAccessor compRevTableAccessor, long nextMinTSN)
+        ref ChunkAccessor compRevTableAccessor, long nextMinTSN)
     {
         var firstChunkId = compRevInfo.CompRevTableFirstChunkId;
         ref var firstChunkHeader = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(firstChunkId);
@@ -238,7 +238,7 @@ internal ref struct ComponentRevisionManager
                                 foreach (var kvp in ct.ComponentCollectionVSBSByOffset)
                                 {
                                     var bufferId = info.CompContentAccessor.GetChunkAsReadOnlySpan(revChunkId).Slice(kvp.Key).Cast<byte, int>()[0];
-                                    var collAccessor = kvp.Value.Segment.CreateEpochChunkAccessor();
+                                    var collAccessor = kvp.Value.Segment.CreateChunkAccessor();
                                     kvp.Value.BufferRelease(bufferId, ref collAccessor);
                                     collAccessor.Dispose();
                                 }
@@ -290,7 +290,7 @@ internal ref struct ComponentRevisionManager
                 foreach (var kvp in ct.ComponentCollectionVSBSByOffset)
                 {
                     var bufferId = info.CompContentAccessor.GetChunkAsReadOnlySpan(chunkId).Slice(kvp.Key).Cast<byte, int>()[0];
-                    var collAccessor = kvp.Value.Segment.CreateEpochChunkAccessor();
+                    var collAccessor = kvp.Value.Segment.CreateChunkAccessor();
                     kvp.Value.BufferRelease(bufferId, ref collAccessor);
                     collAccessor.Dispose();
                 }
@@ -353,7 +353,7 @@ internal ref struct ComponentRevisionManager
     private static int ComputeRevElementCount(int chainLength) => CompRevCountInRoot + ((chainLength - 1) * CompRevCountInNext);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    private static unsafe short GetRevisionLocation(ref EpochChunkAccessor accessor, int firstChunkId, short revisionIndex, out int resChunkId)
+    private static unsafe short GetRevisionLocation(ref ChunkAccessor accessor, int firstChunkId, short revisionIndex, out int resChunkId)
     {
         if (revisionIndex < CompRevCountInRoot)
         {

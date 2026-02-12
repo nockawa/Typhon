@@ -24,7 +24,7 @@ The Storage Engine is the foundation for all persistent data in Typhon. It provi
 | **3.2** | [ManagedPagedMMF](#32-managedpagedmmf) | Page allocation and occupancy tracking | ✅ Solid |
 | **3.3** | [LogicalSegment](#33-logicalsegment) | Multi-page directory abstraction | ✅ Solid |
 | **3.4** | [ChunkBasedSegment](#34-chunkbasedsegment) | Fixed-size chunk allocation | ✅ Solid |
-| **3.5** | [EpochChunkAccessor](#35-epochchunkaccessor) | Epoch-protected SIMD-optimized chunk cache | ✅ Solid |
+| **3.5** | [ChunkAccessor](#35-epochchunkaccessor) | Epoch-protected SIMD-optimized chunk cache | ✅ Solid |
 | **3.7** | [VariableSizedBufferSegment](#37-variablebuffersegment) | Variable-size buffer storage | ✅ Solid |
 | **3.8** | [StringTableSegment](#38-stringtablesegment) | UTF-8 string storage | ✅ Solid |
 | **3.9** | [Error Handling](#39-error-handling) | I/O error behavior and recovery | ⚠️ Basic |
@@ -328,7 +328,7 @@ When `AllocateChunk()` or `AllocateChunks()` cannot satisfy a request (bitmap fu
 
 ---
 
-## 3.5 EpochChunkAccessor
+## 3.5 ChunkAccessor
 
 ### Purpose
 
@@ -389,7 +389,7 @@ fixed (int* indices = _pageIndices)
 var guard = EpochGuard.Enter(epochManager);
 
 // Create accessor
-var accessor = segment.CreateEpochChunkAccessor(changeSet);
+var accessor = segment.CreateChunkAccessor(changeSet);
 
 // Read chunk (direct reference — no handle/pin needed)
 ref var node = ref accessor.GetChunk<BTreeNode>(chunkId);
@@ -420,7 +420,7 @@ guard.Dispose();  // Exit epoch scope, advance global epoch
 
 ### Code Location
 
-`src/Typhon.Engine/Storage/Segments/EpochChunkAccessor.cs` (~350 lines)
+`src/Typhon.Engine/Storage/Segments/ChunkAccessor.cs` (~350 lines)
 
 ---
 
@@ -635,7 +635,7 @@ Tests located in `test/Typhon.Engine.Tests/`:
 | `ManagedPagedMMFTests` | Page allocation, occupancy tracking |
 | `LogicalSegmentTests` | Directory structure, overflow handling |
 | `ChunkBasedSegmentTests` | Chunk allocation, bitmap operations |
-| `EpochChunkAccessorTests` | SIMD lookup, dirty tracking, epoch protection |
+| `ChunkAccessorTests` | SIMD lookup, dirty tracking, epoch protection |
 | `EpochPageCacheTests` | Epoch-based eviction, dirty page handling |
 | `EpochManagerTests` | Scope management, thread registry, MinActiveEpoch |
 
@@ -673,6 +673,6 @@ The Storage Engine is **mature and well-optimized**. Key areas:
 | **Cache algorithm** | Clock-sweep | Simple, effective, low overhead; adapts to access patterns |
 | **Counter cap** | 5 | Prevents single hot page from dominating cache |
 | **Epoch-based protection** | Yes | Replaces per-page ref-counting; 2 obligations per tx vs 2N. See [ADR-033](../adr/033-epoch-based-page-eviction.md) |
-| **SIMD in hot path** | Yes | EpochChunkAccessor is called millions of times; worth the complexity |
+| **SIMD in hot path** | Yes | ChunkAccessor is called millions of times; worth the complexity |
 | **Async I/O** | Yes | Non-blocking reads improve throughput under load |
 | **Pinned memory** | Yes | Required for safe pointer arithmetic in unsafe code |

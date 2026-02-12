@@ -573,7 +573,7 @@ classDiagram
 | `VariableSizedBufferSegmentBase` | Owner Aggregates — drill-down via `IDebugPropertiesProvider` |
 | `StringTableSegment` | Owner Aggregates |
 | **Stack-allocated / ref structs** | |
-| `EpochChunkAccessor` | Stack-allocated ~303B ref struct with SOA layout and SIMD search |
+| `ChunkAccessor` | Stack-allocated ~303B ref struct with SOA layout and SIMD search |
 | `ComponentRevisionManager` | `ref struct`, transaction-scoped |
 | `ComponentRevision` | `ref struct`, ephemeral |
 | `RevisionEnumerator` | Scoped iteration utility |

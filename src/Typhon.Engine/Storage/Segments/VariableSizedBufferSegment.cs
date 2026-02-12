@@ -51,7 +51,7 @@ public unsafe class VariableSizedBufferSegmentBase
         Segment = segment;
     }
 
-    public int AllocateBuffer(ref EpochChunkAccessor accessor)
+    public int AllocateBuffer(ref ChunkAccessor accessor)
     {
         // Allocate and initialize the first chunk of the Buffer
         var segment = accessor.Segment;
@@ -68,7 +68,7 @@ public unsafe class VariableSizedBufferSegmentBase
         return chunkId;
     }
 
-    public int BufferAddRef(int bufferId, ref EpochChunkAccessor accessor)
+    public int BufferAddRef(int bufferId, ref ChunkAccessor accessor)
     {
         ref var rh = ref accessor.GetChunk<VariableSizedBufferRootHeader>(bufferId, true);
         try
@@ -84,7 +84,7 @@ public unsafe class VariableSizedBufferSegmentBase
         }
     }
 
-    public int BufferRelease(int bufferId, ref EpochChunkAccessor accessor)
+    public int BufferRelease(int bufferId, ref ChunkAccessor accessor)
     {
         ref var rh = ref accessor.GetChunk<VariableSizedBufferRootHeader>(bufferId, true);
         try
@@ -105,7 +105,7 @@ public unsafe class VariableSizedBufferSegmentBase
         }
     }
 
-    public void DeleteBuffer(int bufferId, ref EpochChunkAccessor accessor)
+    public void DeleteBuffer(int bufferId, ref ChunkAccessor accessor)
     {
         // Fetch the root chunk — epoch protects page lifetime
         var unlock = false;
@@ -181,13 +181,13 @@ public unsafe class VariableSizedBufferSegmentBase
 [PublicAPI]
 public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase where T : unmanaged
 {
-    // protected ChunkRandomAccessor EpochChunkAccessor;
+    // protected ChunkRandomAccessor ChunkAccessor;
 
     unsafe public VariableSizedBufferSegment(ChunkBasedSegment segment) : base(segment, sizeof(T))
     {
     }
 
-    unsafe public int AddElement(int bufferId, T value, ref EpochChunkAccessor accessor)
+    unsafe public int AddElement(int bufferId, T value, ref ChunkAccessor accessor)
     {
         // Fetch the root chunk — epoch protects page lifetime
         ref var rh = ref accessor.GetChunk<VariableSizedBufferRootHeader>(bufferId, true);
@@ -252,7 +252,7 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
         }
     }
 
-    unsafe public void AddElements(int bufferId, ReadOnlySpan<T> items, ref EpochChunkAccessor accessor)
+    unsafe public void AddElements(int bufferId, ReadOnlySpan<T> items, ref ChunkAccessor accessor)
     {
         // Fetch the root chunk — epoch protects page lifetime
         ref var rh = ref accessor.GetChunk<VariableSizedBufferRootHeader>(bufferId, true);
@@ -324,7 +324,7 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
         }
     }
 
-    unsafe public int DeleteElement(int bufferId, int elementId, T element, ref EpochChunkAccessor accessor)
+    unsafe public int DeleteElement(int bufferId, int elementId, T element, ref ChunkAccessor accessor)
     {
         // Fetch the root chunk — epoch protects page lifetime
         ref var rh = ref accessor.GetChunk<VariableSizedBufferRootHeader>(bufferId, true);
@@ -378,7 +378,7 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
     /// <returns>A ref struct enumerator that can be used in foreach loops</returns>
     public BufferEnumerator<T> EnumerateBuffer(int bufferId) => new(this, bufferId);
 
-    public int CloneBuffer(int sourceBufferId, ref EpochChunkAccessor accessor)
+    public int CloneBuffer(int sourceBufferId, ref ChunkAccessor accessor)
     {
         var destBufferId = AllocateBuffer(ref accessor);
         using var source = GetReadOnlyAccessor(sourceBufferId);
@@ -469,7 +469,7 @@ public ref struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanag
 
     private int _rootChunkId;
     private unsafe byte* _rootChunkAddr;
-    private EpochChunkAccessor _accessor;
+    private ChunkAccessor _accessor;
 
     private int _curChunkId;
     private unsafe byte* _curChunkAddr;
@@ -506,7 +506,7 @@ public ref struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanag
         _segment = owner.Segment;
         _rootChunkId = rootChunkId;
 
-        _accessor = _segment.CreateEpochChunkAccessor(changeSet);
+        _accessor = _segment.CreateChunkAccessor(changeSet);
 
         _rootChunkAddr = _accessor.GetChunkAddress(rootChunkId);
         ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(_rootChunkAddr);

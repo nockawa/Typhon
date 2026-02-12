@@ -74,7 +74,7 @@ class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
             var depth = _dbe.EpochManager.EnterScope();
             try
             {
-                var holderAccessor = segment.CreateEpochChunkAccessor();
+                var holderAccessor = segment.CreateChunkAccessor();
                 ref var header = ref holderAccessor.GetChunk<CompRevStorageHeader>(firstChunkId, false);
                 header.EnterControlLockForTest();
                 acquired.Set();
@@ -95,7 +95,7 @@ class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
             var depth = _dbe.EpochManager.EnterScope();
             try
             {
-                var accessor = segment.CreateEpochChunkAccessor();
+                var accessor = segment.CreateChunkAccessor();
                 try
                 {
                     var enumerator = new RevisionEnumerator(ref accessor, firstChunkId, true, true);
@@ -142,7 +142,7 @@ class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
             var depth = _dbe.EpochManager.EnterScope();
             try
             {
-                var holderAccessor = segment.CreateEpochChunkAccessor();
+                var holderAccessor = segment.CreateChunkAccessor();
                 ref var header = ref holderAccessor.GetChunk<CompRevStorageHeader>(firstChunkId, false);
                 header.EnterControlLockForTest();
                 acquired.Set();
@@ -168,7 +168,7 @@ class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
             var depth = _dbe.EpochManager.EnterScope();
             try
             {
-                var accessor = segment.CreateEpochChunkAccessor();
+                var accessor = segment.CreateChunkAccessor();
                 try
                 {
                     ComponentRevisionManager.GetRevisionElement(ref accessor, firstChunkId, revisionIndex);
@@ -211,7 +211,7 @@ class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
             var depth = _dbe.EpochManager.EnterScope();
             try
             {
-                var setupAccessor = segment.CreateEpochChunkAccessor();
+                var setupAccessor = segment.CreateChunkAccessor();
                 rootChunkId = vsbs.AllocateBuffer(ref setupAccessor);
                 setupAccessor.Dispose();
             }
@@ -228,7 +228,7 @@ class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
             var depth = _dbe.EpochManager.EnterScope();
             try
             {
-                var warmupAccessor = segment.CreateEpochChunkAccessor();
+                var warmupAccessor = segment.CreateChunkAccessor();
                 _ = warmupAccessor.GetChunk<byte>(rootChunkId, false);
                 warmupAccessor.Dispose();
             }
@@ -247,7 +247,7 @@ class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
             var depth = _dbe.EpochManager.EnterScope();
             try
             {
-                var holderAccessor = segment.CreateEpochChunkAccessor();
+                var holderAccessor = segment.CreateChunkAccessor();
                 ref var header = ref holderAccessor.GetChunk<VariableSizedBufferRootHeader>(rootChunkId, false);
                 header.EnterBufferLockForTest();
                 acquired.Set();
@@ -268,7 +268,7 @@ class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
         var mmfSnapshot = _dbe.MMF.SnapshotInternalState();
 
         // Attempt to create a read-only accessor — should throw due to lock contention.
-        // Must be inside an epoch scope because GetReadOnlyAccessor creates an EpochChunkAccessor internally.
+        // Must be inside an epoch scope because GetReadOnlyAccessor creates an ChunkAccessor internally.
         var mainDepth = _dbe.EpochManager.EnterScope();
         try
         {
@@ -304,7 +304,7 @@ class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
         var depth = _dbe.EpochManager.EnterScope();
         try
         {
-            var indexAccessor = ct.DefaultIndexSegment.CreateEpochChunkAccessor();
+            var indexAccessor = ct.DefaultIndexSegment.CreateChunkAccessor();
             var result = ct.PrimaryKeyIndex.TryGet(entityId, ref indexAccessor);
             indexAccessor.Dispose();
             Assert.That(result.IsSuccess, Is.True, "Entity should exist in PrimaryKeyIndex");

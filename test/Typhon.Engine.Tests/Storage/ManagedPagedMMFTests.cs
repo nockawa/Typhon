@@ -336,7 +336,7 @@ public class ManagedPagedMMFTests
         var depth = epochManager.EnterScope();
         try
         {
-            var ca = s0.CreateEpochChunkAccessor();
+            var ca = s0.CreateChunkAccessor();
 
             ref var obj = ref ca.GetChunk<ChunkA>(0);
             obj.A = -1;
@@ -369,7 +369,7 @@ public class ManagedPagedMMFTests
         var depth = epochManager.EnterScope();
         try
         {
-            var accessor = s.CreateEpochChunkAccessor();
+            var accessor = s.CreateChunkAccessor();
 
             var vsb = new VariableSizedBufferSegment<long>(s);
 
@@ -415,7 +415,7 @@ public class ManagedPagedMMFTests
         var depth = epochManager.EnterScope();
         try
         {
-            var accessor = s.CreateEpochChunkAccessor();
+            var accessor = s.CreateChunkAccessor();
 
             // VSBS
             var vsb = new VariableSizedBufferSegment<int>(s);
@@ -481,7 +481,7 @@ public class ManagedPagedMMFTests
         var depth = epochManager.EnterScope();
         try
         {
-            var accessor = s.CreateEpochChunkAccessor();
+            var accessor = s.CreateChunkAccessor();
 
             var vsb = new VariableSizedBufferSegment<long>(s);
 

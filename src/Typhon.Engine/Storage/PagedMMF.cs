@@ -913,6 +913,12 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     internal unsafe byte* GetMemPageRawDataAddress(int memPageIndex)
         => GetMemPageAddress(memPageIndex) + PageHeaderSize;
 
+    /// <summary>
+    /// Get the base address of the memory page cache.
+    /// Used by ChunkAccessor to compute memPageIndex from raw data addresses.
+    /// </summary>
+    internal unsafe byte* MemPagesBaseAddress => _memPagesAddr;
+
     #region Logging helpers
 
     [Conditional("TELEMETRY")]

@@ -43,7 +43,7 @@ public class StringTableSegment
         var depth = _epochManager.EnterScope();
         try
         {
-            var accessor = _segment.CreateEpochChunkAccessor();
+            var accessor = _segment.CreateChunkAccessor();
 
             var sizeLeft = byteCount;
             var curOffset = 0;
@@ -79,7 +79,7 @@ public class StringTableSegment
         var depth = _epochManager.EnterScope();
         try
         {
-            var accessor = _segment.CreateEpochChunkAccessor();
+            var accessor = _segment.CreateChunkAccessor();
 
             var curChunkAddr = accessor.GetChunkAddress(stringId);
             ref var curChunk = ref Unsafe.AsRef<ChunkHeader>(curChunkAddr);
@@ -120,7 +120,7 @@ public class StringTableSegment
         var depth = _epochManager.EnterScope();
         try
         {
-            var accessor = _segment.CreateEpochChunkAccessor();
+            var accessor = _segment.CreateChunkAccessor();
 
             var curChunkId = stringId;
             var curChunkAddr = accessor.GetChunkAddress(stringId, true);

@@ -58,12 +58,12 @@ public unsafe class Transaction : IDisposable
         public ChunkBasedSegment CompContentSegment;
         public ChunkBasedSegment CompRevTableSegment;
         public BTree<long> PrimaryKeyIndex;
-        public EpochChunkAccessor CompContentAccessor;
-        public EpochChunkAccessor CompRevTableAccessor;
+        public ChunkAccessor CompContentAccessor;
+        public ChunkAccessor CompRevTableAccessor;
         public abstract void AddNew(long pk, CompRevInfo entry);
 
         /// <summary>
-        /// Disposes the EpochChunkAccessor fields to flush dirty pages.
+        /// Disposes the ChunkAccessor fields to flush dirty pages.
         /// </summary>
         public void DisposeAccessors()
         {
@@ -218,7 +218,7 @@ public unsafe class Transaction : IDisposable
             Rollback();
         }
 
-        // Dispose all EpochChunkAccessors to flush dirty pages.
+        // Dispose all ChunkAccessors to flush dirty pages.
         foreach (var info in _componentInfos.Values)
         {
             info.DisposeAccessors();
@@ -565,8 +565,8 @@ public unsafe class Transaction : IDisposable
                 CompContentSegment      = ct.ComponentSegment,
                 CompRevTableSegment     = ct.CompRevTableSegment,
                 PrimaryKeyIndex         = ct.PrimaryKeyIndex,
-                CompContentAccessor     = ct.ComponentSegment.CreateEpochChunkAccessor(_changeSet),
-                CompRevTableAccessor    = ct.CompRevTableSegment.CreateEpochChunkAccessor(_changeSet),
+                CompContentAccessor     = ct.ComponentSegment.CreateChunkAccessor(_changeSet),
+                CompRevTableAccessor    = ct.CompRevTableSegment.CreateChunkAccessor(_changeSet),
                 CompRevInfoCache        = new Dictionary<long, ComponentInfoBase.CompRevInfo>()
             };
         }
@@ -578,8 +578,8 @@ public unsafe class Transaction : IDisposable
                 CompContentSegment      = ct.ComponentSegment,
                 CompRevTableSegment     = ct.CompRevTableSegment,
                 PrimaryKeyIndex         = ct.PrimaryKeyIndex,
-                CompContentAccessor     = ct.ComponentSegment.CreateEpochChunkAccessor(_changeSet),
-                CompRevTableAccessor    = ct.CompRevTableSegment.CreateEpochChunkAccessor(_changeSet),
+                CompContentAccessor     = ct.ComponentSegment.CreateChunkAccessor(_changeSet),
+                CompRevTableAccessor    = ct.CompRevTableSegment.CreateChunkAccessor(_changeSet),
                 CompRevInfoCache        = new Dictionary<long, List<ComponentInfoBase.CompRevInfo>>()
             };
         }
@@ -608,8 +608,8 @@ public unsafe class Transaction : IDisposable
             CompContentSegment      = ct.ComponentSegment,
             CompRevTableSegment     = ct.CompRevTableSegment,
             PrimaryKeyIndex         = ct.PrimaryKeyIndex,
-            CompContentAccessor     = ct.ComponentSegment.CreateEpochChunkAccessor(_changeSet),
-            CompRevTableAccessor    = ct.CompRevTableSegment.CreateEpochChunkAccessor(_changeSet),
+            CompContentAccessor     = ct.ComponentSegment.CreateChunkAccessor(_changeSet),
+            CompRevTableAccessor    = ct.CompRevTableSegment.CreateChunkAccessor(_changeSet),
             CompRevInfoCache        = new Dictionary<long, ComponentInfoBase.CompRevInfo>()
         };
 
@@ -637,8 +637,8 @@ public unsafe class Transaction : IDisposable
             CompContentSegment      = ct.ComponentSegment,
             CompRevTableSegment     = ct.CompRevTableSegment,
             PrimaryKeyIndex         = ct.PrimaryKeyIndex,
-            CompContentAccessor     = ct.ComponentSegment.CreateEpochChunkAccessor(_changeSet),
-            CompRevTableAccessor    = ct.CompRevTableSegment.CreateEpochChunkAccessor(_changeSet),
+            CompContentAccessor     = ct.ComponentSegment.CreateChunkAccessor(_changeSet),
+            CompRevTableAccessor    = ct.CompRevTableSegment.CreateChunkAccessor(_changeSet),
             CompRevInfoCache        = new Dictionary<long, List<ComponentInfoBase.CompRevInfo>>()
         };
 
@@ -880,7 +880,7 @@ public unsafe class Transaction : IDisposable
                     var dstBufferId = dst.Slice(offsetToCollectionField).Cast<byte, int>()[0];
                     if (srcBufferId == dstBufferId)
                     {
-                        var accessor = kvp.Value.Segment.CreateEpochChunkAccessor(_changeSet);
+                        var accessor = kvp.Value.Segment.CreateChunkAccessor(_changeSet);
                         kvp.Value.BufferAddRef(srcBufferId, ref accessor);
                         accessor.Dispose();
                     }
@@ -973,7 +973,7 @@ public unsafe class Transaction : IDisposable
                         var dstBufferId = dst.Slice(offsetToCollectionField).Cast<byte, int>()[0];
                         if (srcBufferId == dstBufferId)
                         {
-                            var accessor = kvp.Value.Segment.CreateEpochChunkAccessor(_changeSet);
+                            var accessor = kvp.Value.Segment.CreateChunkAccessor(_changeSet);
                             kvp.Value.BufferAddRef(srcBufferId, ref accessor);
                             accessor.Dispose();
                         }
@@ -1004,7 +1004,7 @@ public unsafe class Transaction : IDisposable
 
     private Result<int, BTreeLookupStatus> GetCompRevTableFirstChunkId(long pk, ComponentInfoSingle info)
     {
-        var accessor = info.PrimaryKeyIndex.Segment.CreateEpochChunkAccessor(_changeSet);
+        var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
         var result = info.PrimaryKeyIndex.TryGet(pk, ref accessor);
         accessor.Dispose();
         return result;
@@ -1017,7 +1017,7 @@ public unsafe class Transaction : IDisposable
 
         int compRevFirstChunkId;
         {
-            var accessor = info.PrimaryKeyIndex.Segment.CreateEpochChunkAccessor(_changeSet);
+            var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
             var lookupResult = info.PrimaryKeyIndex.TryGet(pk, ref accessor);
             accessor.Dispose();
             if (lookupResult.IsFailure)
@@ -1086,7 +1086,7 @@ public unsafe class Transaction : IDisposable
     {
         ref var compRevTableAccessor = ref info.CompRevTableAccessor;
 
-        var accessor = info.PrimaryKeyIndex.Segment.CreateEpochChunkAccessor(_changeSet);
+        var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
         using var vsba = info.PrimaryKeyIndex.TryGetMultiple(pk, ref accessor);
         if (!vsba.IsValid)
         {
@@ -1295,7 +1295,7 @@ public unsafe class Transaction : IDisposable
                 else
                 {
                     // Remove the index for single components
-                    var accessor = info.PrimaryKeyIndex.Segment.CreateEpochChunkAccessor(_changeSet);
+                    var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
                     info.PrimaryKeyIndex.Remove(pk, out _, ref accessor);
                     accessor.Dispose();
 
@@ -1336,7 +1336,7 @@ public unsafe class Transaction : IDisposable
                 // The update changed the field?
                 if (prevSpan.Slice(ifi.OffsetToField, ifi.Size).SequenceEqual(curSpan.Slice(ifi.OffsetToField, ifi.Size)) == false)
                 {
-                    var accessor = ifi.Index.Segment.CreateEpochChunkAccessor(_changeSet);
+                    var accessor = ifi.Index.Segment.CreateChunkAccessor(_changeSet);
                     if (ifi.Index.AllowMultiple)
                     {
                         ifi.Index.RemoveValue(&prev[ifi.OffsetToField], *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref accessor);
@@ -1360,7 +1360,7 @@ public unsafe class Transaction : IDisposable
 
             // Update the index with this new entry
             {
-                var accessor = info.PrimaryKeyIndex.Segment.CreateEpochChunkAccessor(_changeSet);
+                var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
                 info.PrimaryKeyIndex.Add(pk, startChunkId, ref accessor);
                 accessor.Dispose();
             }
@@ -1370,7 +1370,7 @@ public unsafe class Transaction : IDisposable
             {
                 ref var ifi = ref indexedFieldInfos[i];
 
-                var accessor = ifi.Index.Segment.CreateEpochChunkAccessor(_changeSet);
+                var accessor = ifi.Index.Segment.CreateChunkAccessor(_changeSet);
                 if (ifi.Index.AllowMultiple)
                 {
                     *(int*)&cur[ifi.OffsetToIndexElementId] = ifi.Index.Add(&cur[ifi.OffsetToField], startChunkId, ref accessor);

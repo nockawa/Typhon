@@ -400,11 +400,11 @@ Each bit = 1 chunk slot
 1 = allocated, 0 = free
 ```
 
-### EpochChunkAccessor Integration
+### ChunkAccessor Integration
 
 ```csharp
 // Create epoch-based accessor for chunk operations (caller must be inside an EpochGuard scope)
-using var accessor = segment.CreateEpochChunkAccessor(epoch, changeSet);
+using var accessor = segment.CreateChunkAccessor(epoch, changeSet);
 
 // Get chunk address
 byte* ptr = accessor.GetChunkAddress(chunkId, dirty: true);
@@ -444,4 +444,4 @@ comp.Value = 42;
   - Magic multiplier for fast chunk location
   - 3-level bitmap for O(1) allocation
   - Automatic growth with bitmap extension
-  - Integrates with EpochChunkAccessor for cached access
+  - Integrates with ChunkAccessor for cached access

@@ -88,12 +88,12 @@ public class EpochGuardBenchmarks
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Phase 2: EpochChunkAccessor Microbenchmarks
+// Phase 2: ChunkAccessor Microbenchmarks
 // ═══════════════════════════════════════════════════════════════════════
 
 [SimpleJob(warmupCount: 3, iterationCount: 5)]
-[BenchmarkCategory("EpochChunkAccessor")]
-public class EpochChunkAccessorBenchmarks
+[BenchmarkCategory("ChunkAccessor")]
+public class ChunkAccessorBenchmarks
 {
     private ServiceProvider _serviceProvider;
     private ManagedPagedMMF _pmmf;
@@ -111,7 +111,7 @@ public class EpochChunkAccessorBenchmarks
     public unsafe void GlobalSetup()
     {
         // Each BDN process needs a unique database file to avoid file locking conflicts
-        _databaseName = $"EpochChunkAccessorBench_{Environment.ProcessId}";
+        _databaseName = $"ChunkAccessorBench_{Environment.ProcessId}";
 
         var dcs = 200 * 1024;
         dcs *= PagedMMF.PageSize;
@@ -173,7 +173,7 @@ public class EpochChunkAccessorBenchmarks
     [Benchmark]
     public unsafe void MRU_Hit()
     {
-        var accessor = _segment.CreateEpochChunkAccessor();
+        var accessor = _segment.CreateChunkAccessor();
         for (int i = 0; i < 1000; i++)
         {
             accessor.GetChunkAddress(_singleChunkId);
@@ -187,7 +187,7 @@ public class EpochChunkAccessorBenchmarks
     [Benchmark]
     public unsafe void SIMD_Hit_4Chunks()
     {
-        var accessor = _segment.CreateEpochChunkAccessor();
+        var accessor = _segment.CreateChunkAccessor();
         var chunks = _chunks4;
         for (int i = 0; i < 1000; i++)
         {
@@ -202,7 +202,7 @@ public class EpochChunkAccessorBenchmarks
     [Benchmark]
     public unsafe void Eviction_17Chunks()
     {
-        var accessor = _segment.CreateEpochChunkAccessor();
+        var accessor = _segment.CreateChunkAccessor();
         var chunks = _chunks17;
         for (int i = 0; i < 17; i++)
         {
@@ -218,7 +218,7 @@ public class EpochChunkAccessorBenchmarks
     public unsafe void CommitChanges_AllDirty()
     {
         var changeSet = _pmmf.CreateChangeSet();
-        var accessor = _segment.CreateEpochChunkAccessor(changeSet);
+        var accessor = _segment.CreateChunkAccessor(changeSet);
 
         // Load and dirty 16 distinct chunks
         for (int i = 0; i < 16; i++)
@@ -237,7 +237,7 @@ public class EpochChunkAccessorBenchmarks
     public unsafe void Dispose_16Slots()
     {
         var changeSet = _pmmf.CreateChangeSet();
-        var accessor = _segment.CreateEpochChunkAccessor(changeSet);
+        var accessor = _segment.CreateChunkAccessor(changeSet);
 
         // Fill all 16 slots, some dirty
         for (int i = 0; i < 16; i++)

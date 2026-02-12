@@ -84,7 +84,7 @@ public class BTreeBenchmark
         var depth = _epochManager.EnterScope();
         try
         {
-            var accessor = segment.CreateEpochChunkAccessor();
+            var accessor = segment.CreateChunkAccessor();
             var tree = new IntMultipleBTree(segment);
 
             var chunkCapacity = segment.ChunkCapacity;

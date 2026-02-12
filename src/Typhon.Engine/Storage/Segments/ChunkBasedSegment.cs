@@ -259,10 +259,10 @@ public partial class ChunkBasedSegment : LogicalSegment
     public void FreeChunk(int chunkId) => _map.ClearL0(chunkId);
 
     /// <summary>
-    /// Create an EpochChunkAccessor using the stored PagedMMF and EpochManager references.
+    /// Create an ChunkAccessor using the stored PagedMMF and EpochManager references.
     /// </summary>
     [return: TransfersOwnership]
-    internal EpochChunkAccessor CreateEpochChunkAccessor(ChangeSet changeSet = null) => new(this, Manager, _epochManager, changeSet);
+    internal ChunkAccessor CreateChunkAccessor(ChangeSet changeSet = null) => new(this, Manager, _epochManager, changeSet);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public (int segmentIndex, int offset) GetChunkLocation(int index)

@@ -62,7 +62,7 @@ guard.Dispose();
 int chunkId = segment.AllocateChunk(clearContent: true);
 
 // Get chunk data via epoch-based accessor
-using var accessor = segment.CreateEpochChunkAccessor(epoch, changeSet);
+using var accessor = segment.CreateChunkAccessor(epoch, changeSet);
 byte* ptr = accessor.GetChunkAddress(chunkId, dirty: true);
 ref MyStruct data = ref Unsafe.AsRef<MyStruct>(ptr);
 ```
@@ -111,7 +111,7 @@ ref MyStruct data = ref Unsafe.AsRef<MyStruct>(ptr);
 | **Segments** | `LogicalSegment` | Multi-page abstraction with linked pages |
 | **Chunks** | `ChunkBasedSegment` | Fixed-size allocation with 3-level bitmap |
 | **Protection** | `EpochManager` | Epoch-scoped page eviction protection |
-| **Access** | `EpochChunkAccessor` | 16-slot SOA cache for chunk access |
+| **Access** | `ChunkAccessor` | 16-slot SOA cache for chunk access |
 
 ## Key Constants
 

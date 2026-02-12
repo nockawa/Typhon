@@ -10,7 +10,7 @@ namespace Typhon.Engine;
 /// <summary>
 /// Epoch-protected chunk accessor with pure SOA layout and SIMD-optimized search.
 /// Replaces ref-counted page access with epoch-based protection for page lifetime.
-/// ~303 bytes. Always pass by ref to avoid copies.
+/// ~248 bytes (4 cache lines). Always pass by ref to avoid copies.
 /// </summary>
 /// <remarks>
 /// <para><b>Three-tier hot path:</b></para>
@@ -23,17 +23,15 @@ namespace Typhon.Engine;
 /// Dirty tracking uses a bitmask flushed to <see cref="ChangeSet"/> via
 /// <see cref="ChangeSet.AddByMemPageIndex"/>.</para>
 /// </remarks>
+[NoCopy(Reason = "~248 byte struct with mutable SIMD cache and epoch-pinned pages")]
 [StructLayout(LayoutKind.Sequential)]
-public unsafe struct EpochChunkAccessor : IDisposable
+public unsafe struct ChunkAccessor : IDisposable
 {
     // === SOA layout for SIMD search (1 cache line) ===
     private fixed int _pageIndices[16];        // 64 bytes — segment page indices, SIMD searchable
 
     // === Base addresses for direct pointer arithmetic (2 cache lines) ===
     private fixed long _baseAddresses[16];     // 128 bytes — raw data address per slot
-
-    // === Memory page indices for dirty tracking (1 cache line) ===
-    private fixed int _memPageIndices[16];     // 64 bytes — for ChangeSet.AddByMemPageIndex
 
     // === Compact state ===
     private ushort _dirtyFlags;                // 2 bytes — bitmask of dirty slots
@@ -51,6 +49,9 @@ public unsafe struct EpochChunkAccessor : IDisposable
     private PagedMMF _pagedMMF;
     private EpochManager _epochManager;
 
+    // === Base address for computing memPageIndex on-demand (saves 64 bytes vs storing _memPageIndices[16]) ===
+    private byte* _memPagesBaseAddr;           // 8 bytes
+
     // === Constants ===
     private const int Capacity = 16;
     private const int InvalidPageIndex = -1;
@@ -58,12 +59,23 @@ public unsafe struct EpochChunkAccessor : IDisposable
     public ChunkBasedSegment Segment => _segment;
 
     /// <summary>
-    /// Create a new EpochChunkAccessor. All storage is stack-allocated — zero heap allocations.
+    /// Compute memPageIndex from a slot's base address.
+    /// This saves 64 bytes by not storing _memPageIndices[16].
+    /// Cost: one subtraction + one shift (2-3 cycles) — only used in slow paths.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal EpochChunkAccessor(ChunkBasedSegment segment, PagedMMF pagedMMF, EpochManager epochManager, ChangeSet changeSet = null)
+    private int GetMemPageIndexFromSlot(int slot) =>
+        // _baseAddresses[slot] points to raw data (after PageHeaderSize)
+        // memPageIndex = (rawDataAddr - PageHeaderSize - _memPagesBaseAddr) / PageSize
+        (int)(((byte*)_baseAddresses[slot] - PagedMMF.PageHeaderSize - _memPagesBaseAddr) >> PagedMMF.PageSizePow2);
+
+    /// <summary>
+    /// Create a new ChunkAccessor. All storage is stack-allocated — zero heap allocations.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal ChunkAccessor(ChunkBasedSegment segment, PagedMMF pagedMMF, EpochManager epochManager, ChangeSet changeSet = null)
     {
-        Debug.Assert(epochManager.IsCurrentThreadInScope, "EpochChunkAccessor must be created inside an epoch scope");
+        Debug.Assert(epochManager.IsCurrentThreadInScope, "ChunkAccessor must be created inside an epoch scope");
         _segment = segment;
         _pagedMMF = pagedMMF;
         _epochManager = epochManager;
@@ -74,6 +86,7 @@ public unsafe struct EpochChunkAccessor : IDisposable
         _dirtyFlags = 0;
         _stride = segment.Stride;
         _rootHeaderOffset = LogicalSegment.RootHeaderIndexSectionLength;
+        _memPagesBaseAddr = pagedMMF.MemPagesBaseAddress;
 
         // Initialize page indices to invalid (-1). Other arrays are zero-initialized by struct init.
         fixed (int* pageIndices = _pageIndices)
@@ -160,7 +173,7 @@ public unsafe struct EpochChunkAccessor : IDisposable
         while (flags != 0)
         {
             var bit = BitOperations.TrailingZeroCount(flags);
-            _changeSet.AddByMemPageIndex(_memPageIndices[bit]);
+            _changeSet.AddByMemPageIndex(GetMemPageIndexFromSlot(bit));
             flags &= ~(1 << bit);
         }
         _dirtyFlags = 0;
@@ -186,14 +199,14 @@ public unsafe struct EpochChunkAccessor : IDisposable
             var mask0 = Vector256.Equals(v0, target).ExtractMostSignificantBits();
             if (mask0 != 0)
             {
-                return _pagedMMF.TryLatchPageExclusive(_memPageIndices[BitOperations.TrailingZeroCount(mask0)]);
+                return _pagedMMF.TryLatchPageExclusive(GetMemPageIndexFromSlot(BitOperations.TrailingZeroCount(mask0)));
             }
 
             var v1 = Vector256.Load(indices + 8);
             var mask1 = Vector256.Equals(v1, target).ExtractMostSignificantBits();
             if (mask1 != 0)
             {
-                return _pagedMMF.TryLatchPageExclusive(_memPageIndices[8 + BitOperations.TrailingZeroCount(mask1)]);
+                return _pagedMMF.TryLatchPageExclusive(GetMemPageIndexFromSlot(8 + BitOperations.TrailingZeroCount(mask1)));
             }
         }
 
@@ -215,7 +228,7 @@ public unsafe struct EpochChunkAccessor : IDisposable
             var mask0 = Vector256.Equals(v0, target).ExtractMostSignificantBits();
             if (mask0 != 0)
             {
-                _pagedMMF.UnlatchPageExclusive(_memPageIndices[BitOperations.TrailingZeroCount(mask0)]);
+                _pagedMMF.UnlatchPageExclusive(GetMemPageIndexFromSlot(BitOperations.TrailingZeroCount(mask0)));
                 return;
             }
 
@@ -223,7 +236,7 @@ public unsafe struct EpochChunkAccessor : IDisposable
             var mask1 = Vector256.Equals(v1, target).ExtractMostSignificantBits();
             if (mask1 != 0)
             {
-                _pagedMMF.UnlatchPageExclusive(_memPageIndices[8 + BitOperations.TrailingZeroCount(mask1)]);
+                _pagedMMF.UnlatchPageExclusive(GetMemPageIndexFromSlot(8 + BitOperations.TrailingZeroCount(mask1)));
             }
         }
     }
@@ -373,7 +386,7 @@ public unsafe struct EpochChunkAccessor : IDisposable
         var mask = 1 << slot;
         if ((_dirtyFlags & mask) != 0 && _changeSet != null)
         {
-            _changeSet.AddByMemPageIndex(_memPageIndices[slot]);
+            _changeSet.AddByMemPageIndex(GetMemPageIndexFromSlot(slot));
             _dirtyFlags = (ushort)(_dirtyFlags & ~mask);
         }
 
@@ -390,7 +403,6 @@ public unsafe struct EpochChunkAccessor : IDisposable
         Debug.Assert(result, $"RequestPageEpoch failed for file page {filePageIndex}");
 
         _pageIndices[slot] = pageIndex;
-        _memPageIndices[slot] = memPageIndex;
         _baseAddresses[slot] = (long)_pagedMMF.GetMemPageRawDataAddress(memPageIndex);
     }
 

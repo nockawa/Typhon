@@ -33,7 +33,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Reference the Roslyn analyzer for EpochChunkAccessor enforcement -->
+    <!-- Reference the Roslyn analyzer for ChunkAccessor enforcement -->
     <ProjectReference Include="..\..\src\Typhon.Analyzers\Typhon.Analyzers.csproj"
                       ReferenceOutputAssembly="false"
                       OutputItemType="Analyzer" />

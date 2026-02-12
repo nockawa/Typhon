@@ -37,9 +37,9 @@ Replace per-page reference counting with **epoch-based protection**:
 ### Positive
 
 - **2 obligations per transaction** instead of 2N — one `EpochGuard.Enter()`, one `Dispose()`
-- **No "all slots pinned" failure**: `EpochChunkAccessor` eviction always succeeds (no pinned slots to skip)
+- **No "all slots pinned" failure**: `ChunkAccessor` eviction always succeeds (no pinned slots to skip)
 - **Simpler state machine**: 4 states vs 6, fewer transition paths to reason about
-- **Smaller accessor**: `EpochChunkAccessor` (~280 bytes SOA) vs old `ChunkAccessor` (~1KB AOS)
+- **Smaller accessor**: `ChunkAccessor` (~280 bytes SOA) vs old `ChunkAccessor` (~1KB AOS)
 - **Copy safety**: `EpochGuard` depth validation detects misuse; ref struct prevents heap capture
 
 ### Negative
@@ -57,6 +57,6 @@ Replace per-page reference counting with **epoch-based protection**:
 Delivered in Issue #69 across 4 phases:
 - **Phase 0**: `EpochManager`, `EpochThreadRegistry`, `EpochGuard` foundation
 - **Phase 1**: `RequestPageEpoch`, dual-mode eviction predicate, `ChangeSet.AddByMemPageIndex`
-- **Phase 2**: `EpochChunkAccessor` rewrite (SOA layout, clock-hand eviction, SIMD search)
+- **Phase 2**: `ChunkAccessor` rewrite (SOA layout, clock-hand eviction, SIMD search)
 - **Phase 3**: Migrate all callers (Transaction, B+Tree, CRUD, StringTable, segments)
 - **Phase 4**: Delete legacy code (`PageAccessor`, `ChunkAccessor`, `PageState.Shared/IdleAndDirty`, `ConcurrentSharedCounter`), simplify `PageState`, update documentation

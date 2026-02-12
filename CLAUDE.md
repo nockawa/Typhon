@@ -148,7 +148,7 @@ dotnet run -c Release --filter '*PagedMemoryFile*'
 
 - **ChunkBasedSegment**: Fixed-size chunk allocation within pages
   - Occupancy tracking via 3-level bitmaps for efficient allocation
-  - EpochChunkAccessor provides SIMD-optimized cached access with epoch-based page protection
+  - ChunkAccessor provides SIMD-optimized cached access with epoch-based page protection
   - Located in: `src/Typhon.Engine/Persistence Layer/ChunkBasedSegment.cs`
 
 > See also: [ADR-006: 8KB Page Size](claude/adr/006-8kb-page-size.md), [ADR-007: Clock-Sweep Eviction](claude/adr/007-clock-sweep-eviction.md)
@@ -365,7 +365,7 @@ var committed = t.Commit(); // or t.Rollback()
 1. **Page Caching**: Clock-sweep algorithm minimizes disk I/O
 2. **Sequential Allocation**: Allocates adjacent pages for contiguous writes
 3. **Transaction Pooling**: Reuses transaction objects
-4. **EpochChunkAccessor**: SIMD-optimized 16-slot chunk cache with epoch-based page protection
+4. **ChunkAccessor**: SIMD-optimized 16-slot chunk cache with epoch-based page protection
 5. **Batch I/O**: Groups contiguous page writes
 6. **Epoch-Protected Reads**: Epoch-scoped page access doesn't block readers
 7. **Adaptive Waiting**: Spin-wait then yield for contention

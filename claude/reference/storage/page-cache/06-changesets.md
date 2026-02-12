@@ -312,20 +312,20 @@ catch
 }
 ```
 
-### Pattern 3: With EpochChunkAccessor
+### Pattern 3: With ChunkAccessor
 
 ```csharp
 var changeSet = pagedMMF.CreateChangeSet();
 
 // Inside an EpochGuard scope:
-using var accessor = segment.CreateEpochChunkAccessor(currentEpoch, changeSet);
+using var accessor = segment.CreateChunkAccessor(currentEpoch, changeSet);
 
 // Modifications automatically tracked via dirty flag
 byte* ptr = accessor.GetChunkAddress(chunkId, dirty: true);
 ref MyStruct data = ref Unsafe.AsRef<MyStruct>(ptr);
 data.Value = 42;
 
-// EpochChunkAccessor.Dispose() flushes dirty pages to ChangeSet
+// ChunkAccessor.Dispose() flushes dirty pages to ChangeSet
 changeSet.SaveChanges();
 ```
 

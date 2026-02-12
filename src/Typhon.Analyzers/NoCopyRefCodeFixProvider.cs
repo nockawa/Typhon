@@ -12,13 +12,13 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 namespace Typhon.Analyzers;
 
 /// <summary>
-/// Code fix provider that automatically adds 'ref' modifier to EpochChunkAccessor parameters.
+/// Code fix provider that automatically adds the <c>ref</c> modifier to [NoCopy] type parameters.
 /// </summary>
-[ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(ChunkAccessorRefCodeFixProvider)), Shared]
-public class ChunkAccessorRefCodeFixProvider : CodeFixProvider
+[ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(NoCopyRefCodeFixProvider)), Shared]
+public class NoCopyRefCodeFixProvider : CodeFixProvider
 {
     public sealed override ImmutableArray<string> FixableDiagnosticIds =>
-        ImmutableArray.Create(ChunkAccessorRefAnalyzer.DiagnosticId);
+        ImmutableArray.Create(NoCopyAnalyzer.RefDiagnosticId);
 
     public sealed override FixAllProvider GetFixAllProvider() =>
         WellKnownFixAllProviders.BatchFixer;
@@ -29,7 +29,9 @@ public class ChunkAccessorRefCodeFixProvider : CodeFixProvider
             .ConfigureAwait(false);
 
         if (root == null)
+        {
             return;
+        }
 
         var diagnostic = context.Diagnostics.First();
         var diagnosticSpan = diagnostic.Location.SourceSpan;
@@ -42,7 +44,9 @@ public class ChunkAccessorRefCodeFixProvider : CodeFixProvider
             .First();
 
         if (parameter == null)
+        {
             return;
+        }
 
         // Register a code action that will change to 'ref' modifier
         var title = HasInModifier(parameter) ? "Replace 'in' with 'ref'" : "Add 'ref' modifier";
@@ -51,7 +55,7 @@ public class ChunkAccessorRefCodeFixProvider : CodeFixProvider
             CodeAction.Create(
                 title: title,
                 createChangedDocument: c => ChangeToRefModifierAsync(context.Document, parameter, c),
-                equivalenceKey: nameof(ChunkAccessorRefCodeFixProvider)),
+                equivalenceKey: nameof(NoCopyRefCodeFixProvider)),
             diagnostic);
     }
 
@@ -60,8 +64,11 @@ public class ChunkAccessorRefCodeFixProvider : CodeFixProvider
         foreach (var modifier in parameter.Modifiers)
         {
             if (modifier.IsKind(SyntaxKind.InKeyword))
+            {
                 return true;
+            }
         }
+
         return false;
     }
 
@@ -72,7 +79,9 @@ public class ChunkAccessorRefCodeFixProvider : CodeFixProvider
     {
         var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
         if (root == null)
+        {
             return document;
+        }
 
         ParameterSyntax newParameter;
 
@@ -107,6 +116,7 @@ public class ChunkAccessorRefCodeFixProvider : CodeFixProvider
                     newModifiers = newModifiers.Add(modifier);
                 }
             }
+
             newParameter = parameter.WithModifiers(newModifiers);
         }
         else

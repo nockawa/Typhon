@@ -7,11 +7,11 @@ using System.Runtime.InteropServices;
 namespace Typhon.Engine.Tests;
 
 /// <summary>
-/// Comprehensive unit tests for EpochChunkAccessor covering SOA layout, SIMD search,
+/// Comprehensive unit tests for ChunkAccessor covering SOA layout, SIMD search,
 /// clock-hand eviction, dirty tracking, latching, and epoch protection.
 /// </summary>
 [TestFixture]
-class EpochChunkAccessorTests
+class ChunkAccessorTests
 {
     private IServiceProvider _serviceProvider;
     private ServiceCollection _serviceCollection;
@@ -136,7 +136,7 @@ class EpochChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor();
+        var accessor = segment.CreateChunkAccessor();
 
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
         chunk.A = 42;
@@ -168,7 +168,7 @@ class EpochChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor();
+        var accessor = segment.CreateChunkAccessor();
 
         // Write with mutable reference
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
@@ -193,7 +193,7 @@ class EpochChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor();
+        var accessor = segment.CreateChunkAccessor();
 
         var span = accessor.GetChunkAsSpan(chunkId);
         Assert.That(span.Length, Is.EqualTo(sizeof(TestChunk32)));
@@ -216,7 +216,7 @@ class EpochChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor();
+        var accessor = segment.CreateChunkAccessor();
 
         // Write data
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
@@ -255,7 +255,7 @@ class EpochChunkAccessorTests
         var changeSet = pmmf.CreateChangeSet();
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor(changeSet);
+        var accessor = segment.CreateChunkAccessor(changeSet);
 
         // Load chunk (not dirty)
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
@@ -285,7 +285,7 @@ class EpochChunkAccessorTests
         var changeSet = pmmf.CreateChangeSet();
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor(changeSet);
+        var accessor = segment.CreateChunkAccessor(changeSet);
 
         // Write with dirty flag
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId, dirty: true);
@@ -314,7 +314,7 @@ class EpochChunkAccessorTests
         var changeSet = pmmf.CreateChangeSet();
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor(changeSet);
+        var accessor = segment.CreateChunkAccessor(changeSet);
 
         // Write with dirty flag
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId, dirty: true);
@@ -347,7 +347,7 @@ class EpochChunkAccessorTests
         var changeSet = pmmf.CreateChangeSet();
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor(changeSet);
+        var accessor = segment.CreateChunkAccessor(changeSet);
 
         // Write with dirty flag
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId, dirty: true);
@@ -372,7 +372,7 @@ class EpochChunkAccessorTests
         var guard = EpochGuard.Enter(epochManager);
 
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
-        var accessor = segment.CreateEpochChunkAccessor();
+        var accessor = segment.CreateChunkAccessor();
 
         // Dispose twice — should not crash
         accessor.Dispose();
@@ -397,7 +397,7 @@ class EpochChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor();
+        var accessor = segment.CreateChunkAccessor();
 
         // First access loads page
         ref var chunk1 = ref accessor.GetChunk<TestChunk32>(chunkId);
@@ -438,7 +438,7 @@ class EpochChunkAccessorTests
             segment.AllocateChunk(false);
         }
 
-        var accessor = segment.CreateEpochChunkAccessor();
+        var accessor = segment.CreateChunkAccessor();
 
         // Access chunks on page 0 and page 1
         var chunk0 = FirstChunkOnPage(0);
@@ -488,7 +488,7 @@ class EpochChunkAccessorTests
             segment.AllocateChunk(false);
         }
 
-        var accessor = segment.CreateEpochChunkAccessor();
+        var accessor = segment.CreateChunkAccessor();
 
         // Fill all 16 slots with pages 0-15
         for (int p = 0; p < 16; p++)
@@ -526,7 +526,7 @@ class EpochChunkAccessorTests
             segment.AllocateChunk(false);
         }
 
-        var accessor = segment.CreateEpochChunkAccessor();
+        var accessor = segment.CreateChunkAccessor();
 
         // Access 32 different pages — much more than the 16-slot cache
         // Clock-hand eviction should always succeed (no "all slots pinned" crash)
@@ -565,7 +565,7 @@ class EpochChunkAccessorTests
             segment.AllocateChunk(false);
         }
 
-        var accessor = segment.CreateEpochChunkAccessor();
+        var accessor = segment.CreateChunkAccessor();
 
         // Write unique values on each page
         for (int p = 0; p < 3; p++)
@@ -602,7 +602,7 @@ class EpochChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor();
+        var accessor = segment.CreateChunkAccessor();
 
         // Load the chunk first (populates slot with memPageIndex)
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
@@ -639,7 +639,7 @@ class EpochChunkAccessorTests
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
         var chunkId = segment.AllocateChunk(true);
 
-        var accessor = segment.CreateEpochChunkAccessor();
+        var accessor = segment.CreateChunkAccessor();
         ref var chunk = ref accessor.GetChunk<TestChunk32>(chunkId);
 
         // Latch
@@ -697,7 +697,7 @@ class EpochChunkAccessorTests
         // and are protected from eviction while this guard is active.
         var guard = EpochGuard.Enter(epochManager);
 
-        var accessor = segment.CreateEpochChunkAccessor();
+        var accessor = segment.CreateChunkAccessor();
 
         // Load pages 0-3 via epoch accessor — these get the current (higher) epoch
         for (int p = 0; p < 4; p++)
@@ -748,7 +748,7 @@ class EpochChunkAccessorTests
 
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(TestChunk32));
 
-        var accessor = segment.CreateEpochChunkAccessor();
+        var accessor = segment.CreateChunkAccessor();
 
         // Access the segment header — should not crash
         ref var header = ref accessor.GetChunkBasedSegmentHeader<ChunkBasedSegmentHeader>(

@@ -213,8 +213,8 @@ internal class ComponentInfo
     public ChunkBasedSegment CompContentSegment;        // Component data
     public ChunkBasedSegment CompRevTableSegment;       // Revision metadata
     public LongSingleBTree PrimaryKeyIndex;             // Entity ID → Revision chain
-    public EpochChunkAccessor CompContentAccessor;      // Epoch-based cached chunk access
-    public EpochChunkAccessor CompRevTableAccessor;     // Epoch-based cached revision access
+    public ChunkAccessor CompContentAccessor;      // Epoch-based cached chunk access
+    public ChunkAccessor CompRevTableAccessor;     // Epoch-based cached revision access
     public Dictionary<long, CompRevInfo> CompRevInfoCache;  // Transaction's view
 }
 ```
@@ -2358,16 +2358,16 @@ var revisionSegment = mmf.AllocateChunkBasedSegment(
 
 ---
 
-### EpochChunkAccessor
+### ChunkAccessor
 
-**File:** `src/Typhon.Engine/Storage/Segments/EpochChunkAccessor.cs`
+**File:** `src/Typhon.Engine/Storage/Segments/ChunkAccessor.cs`
 
 **Purpose:** Epoch-protected cached chunk access with SOA layout and clock-hand eviction.
 
 **Cache Strategy:**
 
 ```csharp
-public ref struct EpochChunkAccessor
+public ref struct ChunkAccessor
 {
     private const int DefaultCapacity = 16;  // 16-slot cache
 
@@ -2486,11 +2486,11 @@ No promotion/demotion needed — the epoch model has only two transitions: `Idle
 
 **Lifecycle (ref struct, No Pooling):**
 
-`EpochChunkAccessor` is a `ref struct` (~303 bytes) allocated entirely on the stack. No heap allocation, no object pooling needed. All 16 cache slots use fixed-size arrays embedded directly in the struct. Disposal flushes dirty pages to the `ChangeSet` but does not release page references — epoch handles that.
+`ChunkAccessor` is a `ref struct` (~303 bytes) allocated entirely on the stack. No heap allocation, no object pooling needed. All 16 cache slots use fixed-size arrays embedded directly in the struct. Disposal flushes dirty pages to the `ChangeSet` but does not release page references — epoch handles that.
 
 ```csharp
 // Created inside an epoch scope, used on the stack
-using var accessor = segment.CreateEpochChunkAccessor(epoch, changeSet);
+using var accessor = segment.CreateChunkAccessor(epoch, changeSet);
 ref MyStruct data = ref accessor.GetChunk<MyStruct>(chunkId, dirty: true);
 data.Value = 42;
 // accessor.Dispose() → CommitChanges() flushes dirty to ChangeSet
@@ -3376,7 +3376,7 @@ src/Typhon.Engine/
 │   ├── ManagedPagedMMF.cs                # Segment management
 │   ├── LogicalSegment.cs                 # Multi-page abstraction
 │   ├── ChunkBasedSegment.cs              # Fixed-size chunk allocation
-│   ├── EpochChunkAccessor.cs             # Epoch-based chunk-level caching
+│   ├── ChunkAccessor.cs             # Epoch-based chunk-level caching
 │   ├── PageBaseHeader.cs                 # Page structure definitions
 │   ├── VariableSizedBufferSegment.cs     # Variable-size elements
 │   └── StringTableSegment.cs             # String storage

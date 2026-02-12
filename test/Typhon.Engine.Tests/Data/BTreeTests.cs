@@ -76,7 +76,7 @@ class BtreeTests
         var depth = epochManager.EnterScope();
         try
         {
-            var accessor = segment.CreateEpochChunkAccessor();
+            var accessor = segment.CreateChunkAccessor();
             var tree = new IntSingleBTree(segment);
 
             tree.Add(10, 10, ref accessor);
@@ -114,7 +114,7 @@ class BtreeTests
         var depth = epochManager.EnterScope();
         try
         {
-            var accessor = segment.CreateEpochChunkAccessor();
+            var accessor = segment.CreateChunkAccessor();
             var tree = new FloatSingleBTree(segment);
 
             tree.Add(-0.10f, 10, ref accessor);
@@ -152,7 +152,7 @@ class BtreeTests
         var depth = epochManager.EnterScope();
         try
         {
-            var accessor = segment.CreateEpochChunkAccessor();
+            var accessor = segment.CreateChunkAccessor();
             var tree = new IntSingleBTree(segment);
 
             tree.Add(140, 140, ref accessor);
@@ -193,7 +193,7 @@ class BtreeTests
         var depth = epochManager.EnterScope();
         try
         {
-            var accessor = segment.CreateEpochChunkAccessor();
+            var accessor = segment.CreateChunkAccessor();
             var tree = new String64SingleBTree(segment);
 
             tree.Add("140", 140, ref accessor);
@@ -242,7 +242,7 @@ class BtreeTests
         var depth = epochManager.EnterScope();
         try
         {
-            var accessor = segment.CreateEpochChunkAccessor();
+            var accessor = segment.CreateChunkAccessor();
             var tree = new IntSingleBTree(segment);
 
             foreach (var v in values)
@@ -287,7 +287,7 @@ class BtreeTests
         var depth = epochManager.EnterScope();
         try
         {
-            var accessor = segment.CreateEpochChunkAccessor();
+            var accessor = segment.CreateChunkAccessor();
             var tree = new IntSingleBTree(segment);
 
             for (int loopC = 0; loopC < 2; loopC++)
@@ -346,7 +346,7 @@ class BtreeTests
         var depth = epochManager.EnterScope();
         try
         {
-            var accessor = segment.CreateEpochChunkAccessor();
+            var accessor = segment.CreateChunkAccessor();
             var tree = new IntSingleBTree(segment);
 
             var array = samples.ToArray();
@@ -384,7 +384,7 @@ class BtreeTests
         var depth = epochManager.EnterScope();
         try
         {
-            var accessor = segment.CreateEpochChunkAccessor();
+            var accessor = segment.CreateChunkAccessor();
             var tree = new IntMultipleBTree(segment);
 
             var eid0 = tree.Add(1, 10, ref accessor);
@@ -443,7 +443,7 @@ class BtreeTests
         var depth = epochManager.EnterScope();
         try
         {
-            var accessor = segment.CreateEpochChunkAccessor();
+            var accessor = segment.CreateChunkAccessor();
             var tree = new ByteMultipleBTree(segment);
 
             var eid0 = tree.Add(1, 10, ref accessor);
@@ -502,7 +502,7 @@ class BtreeTests
         var depth = epochManager.EnterScope();
         try
         {
-            var accessor = segment.CreateEpochChunkAccessor();
+            var accessor = segment.CreateChunkAccessor();
             var tree = new FloatMultipleBTree(segment);
 
             var eid0 = tree.Add(1.1f, 10, ref accessor);
@@ -571,7 +571,7 @@ class BtreeTests
             var depth = epochManager.EnterScope();
             try
             {
-                var accessor = segment.CreateEpochChunkAccessor(changeSet);
+                var accessor = segment.CreateChunkAccessor(changeSet);
                 var tree = new FloatSingleBTree(segment);
 
                 var rand = new Random(1234);
@@ -612,7 +612,7 @@ class BtreeTests
             var depth = epochManager.EnterScope();
             try
             {
-                var accessor = segment.CreateEpochChunkAccessor();
+                var accessor = segment.CreateChunkAccessor();
                 var tree = new FloatSingleBTree(segment, true);
 
                 foreach (var kvp in items)
@@ -650,7 +650,7 @@ class BtreeTests
         var depth = epochManager.EnterScope();
         try
         {
-            var accessor = segment.CreateEpochChunkAccessor();
+            var accessor = segment.CreateChunkAccessor();
             var tree = new FloatSingleBTree(segment);
 
             var rand = new Random(1234);
@@ -699,7 +699,7 @@ class BtreeTests
         var depth = epochManager.EnterScope();
         try
         {
-            var accessor = segment.CreateEpochChunkAccessor();
+            var accessor = segment.CreateChunkAccessor();
             var tree = new IntMultipleBTree(segment);
 
             var chunkCapacity = segment.ChunkCapacity;

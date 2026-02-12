@@ -728,7 +728,7 @@ public class ChunkBasedSegmentBitmapL3Tests
         Assert.That(chunkId, Is.GreaterThan(0));
 
         // Verify the chunk data is cleared
-        using var accessor = segment.CreateEpochChunkAccessor();
+        using var accessor = segment.CreateChunkAccessor();
         var chunkData = accessor.GetChunkAsReadOnlySpan(chunkId);
         
         foreach (var b in chunkData)

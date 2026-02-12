@@ -9,7 +9,7 @@ public ref struct ComponentCollectionAccessor<T> : IDisposable where T : unmanag
 {
     private VariableSizedBufferSegment<T> _vsbs;
     private ref ComponentCollection<T> _field;
-    private EpochChunkAccessor _ca;
+    private ChunkAccessor _ca;
     private readonly int _initialBufferId;
     private readonly ChangeSet _changeSet;
 
@@ -18,7 +18,7 @@ public ref struct ComponentCollectionAccessor<T> : IDisposable where T : unmanag
         _vsbs = vsbs;
         _changeSet = changeSet;
         _field = ref field;
-        _ca = _vsbs.Segment.CreateEpochChunkAccessor(changeSet);
+        _ca = _vsbs.Segment.CreateChunkAccessor(changeSet);
         _initialBufferId = field._bufferId;
     }
 
