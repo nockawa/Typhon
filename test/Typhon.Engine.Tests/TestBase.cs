@@ -297,6 +297,8 @@ abstract class TestBase<T> : TestBase
             .AddResourceRegistry()
             .AddMemoryAllocator()
             .AddEpochManager()
+            .AddHighResolutionSharedTimer()
+            .AddDeadlineWatchdog()
             .AddScopedManagedPagedMemoryMappedFile(options =>
             {
                 options.DatabaseName = CurrentDatabaseName;

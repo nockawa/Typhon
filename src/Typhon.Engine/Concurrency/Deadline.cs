@@ -60,6 +60,13 @@ public readonly struct Deadline : IEquatable<Deadline>
 
     private Deadline(long ticks) => _ticks = ticks;
 
+    /// <summary>Raw monotonic ticks for internal use (priority queue ordering, diagnostics).</summary>
+    internal long Ticks
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _ticks;
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     // Sentinel Values
     // ═══════════════════════════════════════════════════════════════════════
@@ -68,7 +75,7 @@ public readonly struct Deadline : IEquatable<Deadline>
     public static readonly Deadline Infinite = new(long.MaxValue);
 
     /// <summary>Already expired — immediate failure. Equivalent to <c>default(Deadline)</c>.</summary>
-    public static readonly Deadline Zero = default;
+    public static readonly Deadline Zero;
 
     // ═══════════════════════════════════════════════════════════════════════
     // Factory Methods

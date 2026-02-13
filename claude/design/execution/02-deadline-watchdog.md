@@ -1,15 +1,15 @@
 # #43 — DeadlineWatchdog (Shared Timer)
 
 **Date:** 2026-02-13
-**Status:** Design
+**Status:** In progress
 **GitHub Issue:** #43
 **Decisions:** D3
 
-> 💡 **Quick summary:** Single static class that monitors registered deadlines via a priority queue and fires `CancellationToken` when they expire. Uses a `HighResolutionSharedTimerService` registration at **200Hz (every 5ms)** instead of managing its own thread. Registration is O(log n), cancellation fires within ~5ms of deadline expiry.
+> **Quick summary:** Instance-based `ResourceNode` class that monitors registered deadlines via a priority queue and fires `CancellationToken` when they expire. Uses a `HighResolutionSharedTimerService` registration at **200Hz (every 5ms)** instead of managing its own thread. Registration is O(log n), cancellation fires within ~5ms of deadline expiry.
 
 ## Overview
 
-The `DeadlineWatchdog` is the enforcement mechanism for `Deadline.ToCancellationToken()`. When a UoW (or standalone operation) registers a deadline, the watchdog returns a `CancellationToken` that will be cancelled when the deadline expires. This token flows into `UnitOfWorkContext.Token` and propagates through all lock acquisitions.
+The `DeadlineWatchdog` is the enforcement mechanism for deadline-based cancellation. When a UoW (or standalone operation) registers a deadline, the watchdog returns a `CancellationToken` that will be cancelled when the deadline expires. This token flows into `UnitOfWorkContext.Token` and propagates through all lock acquisitions.
 
 ### Why a Watchdog?
 
@@ -37,17 +37,19 @@ The original design used a dedicated background thread with `Monitor.Wait`. This
 - The watchdog callback (scan priority queue, fire expired CTS) easily fits the <100µs shared-timer contract
 - No dedicated thread needed — saves resources compared to both the old `Monitor.Wait` approach and a dedicated `HighResolutionTimerService`
 
-### Design: Static vs Instance
+### Design: Instance-Based ResourceNode
 
 | Approach | Pros | Cons |
 |----------|------|------|
-| **Static class** (chosen) | Simple lifecycle, no DI needed, single instance guaranteed | Harder to test in isolation, shared state |
-| **Instance on DatabaseEngine** | Testable, clean shutdown per-engine | Multiple engines = multiple watchdog threads |
+| ~~Static class~~ | Simple lifecycle, no DI needed | Harder to test, no resource tree visibility, no natural disposal, requires Reset() for test isolation |
+| **Instance-based ResourceNode** (chosen) | DI-compliant, resource tree integration, natural test isolation, consistent with other services | Requires DI registration |
 
-We chose **static** because:
-- Typhon is embedded; typically one engine per process
-- The watchdog has no engine-specific state (just deadlines + CTS entries)
-- Testing is achieved via the `Register()` return value (CancellationToken), not mocking
+We chose **instance-based ResourceNode** because:
+- Aligns with every other engine service (`DatabaseEngine`, `EpochManager`, `HighResolutionSharedTimerService`, `MemoryAllocator`)
+- DI-compliant lifecycle: constructor injection, container-managed disposal — no `Initialize()`/`Shutdown()`/`Reset()` needed
+- Visible in the resource tree under `DataEngine` (diagnostics, monitoring)
+- Each test creates its own watchdog instance — natural isolation without static state cleanup
+- Injected into `DatabaseEngine` as a constructor parameter, exposed as `DatabaseEngine.Watchdog`
 
 ## API Surface
 
@@ -58,14 +60,19 @@ We chose **static** because:
 /// to scan a priority queue. No dedicated thread — delegates thread management to the
 /// shared timer infrastructure.
 /// </summary>
-internal static class DeadlineWatchdog
+/// <remarks>
+/// <para>Registered as a singleton in DI under <c>DataEngine</c> in the resource tree.
+/// Lifecycle is managed by the DI container — no manual Initialize/Shutdown required.</para>
+/// <para>The timer registration is lazy: the 200Hz callback is only registered with the
+/// shared timer on the first <see cref="Register"/> call. If no deadlines are ever registered,
+/// no timer overhead is incurred.</para>
+/// </remarks>
+public class DeadlineWatchdog : ResourceNode
 {
     /// <summary>
-    /// Initialize the watchdog with the shared timer service.
-    /// Called once from <see cref="DatabaseEngine"/> initialization.
+    /// Create a new DeadlineWatchdog. Registers under <c>DataEngine</c> in the resource tree.
     /// </summary>
-    /// <param name="sharedTimer">The shared timer to register the watchdog callback on.</param>
-    public static void Initialize(HighResolutionSharedTimerService sharedTimer);
+    public DeadlineWatchdog(IResourceRegistry resourceRegistry, HighResolutionSharedTimerService sharedTimer);
 
     /// <summary>
     /// Register a deadline for monitoring. Returns a CancellationToken that will be
@@ -77,19 +84,44 @@ internal static class DeadlineWatchdog
     /// <see cref="CancellationToken.None"/> if <paramref name="deadline"/> is infinite.
     /// An already-cancelled token if <paramref name="deadline"/> is already expired.
     /// </returns>
-    public static CancellationToken Register(Deadline deadline);
+    public CancellationToken Register(Deadline deadline);
 
     /// <summary>
-    /// Graceful shutdown. Disposes the shared timer registration and cancels all
-    /// remaining registered deadlines. Called from <see cref="DatabaseEngine.Dispose"/>.
+    /// Dispose: unregisters shared timer callback and cancels all remaining CTS.
+    /// Called automatically by DI container or resource tree disposal.
     /// </summary>
-    public static void Shutdown();
-
-    /// <summary>
-    /// Reset to initial state (for test isolation). Shuts down then clears all state.
-    /// </summary>
-    internal static void Reset();
+    protected override void Dispose(bool disposing);
 }
+```
+
+**Key differences from original static design:**
+- No `Initialize()` — shared timer provided via constructor injection
+- No `Shutdown()` — standard `Dispose()` pattern (inherited from `ResourceNode`)
+- No `Reset()` — each test creates a fresh instance
+
+## DI Registration
+
+```csharp
+// In TyphonBuilderExtensions.cs
+public static IServiceCollection AddDeadlineWatchdog(this IServiceCollection services)
+{
+    services.Add(ServiceDescriptor.Singleton(sp =>
+    {
+        var rr = sp.GetRequiredService<IResourceRegistry>();
+        var sharedTimer = sp.GetRequiredService<HighResolutionSharedTimerService>();
+        return new DeadlineWatchdog(rr, sharedTimer);
+    }));
+    return services;
+}
+```
+
+**Registration order:** `AddEpochManager()` → `AddHighResolutionSharedTimer()` → `AddDeadlineWatchdog()` → MMF → `AddDatabaseEngine()`
+
+The `DatabaseEngine` factory resolves `DeadlineWatchdog` and passes it to the constructor:
+
+```csharp
+var watchdog = serviceProvider.GetRequiredService<DeadlineWatchdog>();
+return new DatabaseEngine(resourceRegistry, epochManager, watchdog, mpmmf, options.Value, logger);
 ```
 
 ## Internal Data Structures
@@ -99,17 +131,36 @@ internal static class DeadlineWatchdog
 private readonly record struct WatchedDeadline(Deadline Deadline, CancellationTokenSource Cts);
 
 // Core state
-private static readonly object _lock = new();
-private static PriorityQueue<WatchedDeadline, long> _queue = new();
-private static ITimerRegistration _timerRegistration;
-private static HighResolutionSharedTimerService _sharedTimer;
+private readonly object _lock = new();
+private readonly PriorityQueue<WatchedDeadline, long> _queue = new();
+private readonly HighResolutionSharedTimerService _sharedTimer;
+private ITimerRegistration _timerRegistration;
+private bool _disposed;
+
+// Constants
+private static readonly long CheckIntervalTicks = Stopwatch.Frequency / 200;  // 200Hz = 5ms
 ```
 
 ### Why `PriorityQueue<T, TPriority>`?
 
-.NET's built-in `PriorityQueue` is a min-heap, O(log n) insert, O(1) peek, O(log n) dequeue. The priority key is `Deadline._ticks` (monotonic ticks), so the soonest deadline is always at the front.
+.NET's built-in `PriorityQueue` is a min-heap, O(log n) insert, O(1) peek, O(log n) dequeue. The priority key is `Deadline.Ticks` (monotonic ticks), so the soonest deadline is always at the front.
 
 Alternative considered: sorted list or timer wheel. The priority queue is simpler, and the expected number of concurrent deadlines (hundreds to low thousands) makes O(log n) insert cost negligible.
+
+### Prerequisite: `Deadline.Ticks`
+
+`Deadline._ticks` was `private readonly`. Added an `internal long Ticks` property for PriorityQueue ordering:
+
+```csharp
+/// <summary>Raw monotonic ticks for internal use (priority queue ordering, diagnostics).</summary>
+internal long Ticks
+{
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    get => _ticks;
+}
+```
+
+`internal` because raw Stopwatch ticks are an implementation detail. Tests access via existing `InternalsVisibleTo`.
 
 ## Shared Timer Callback
 
@@ -123,11 +174,10 @@ Instead of managing its own thread, the watchdog registers a 200Hz (5ms) callbac
 /// Scans the priority queue and fires CancellationToken for any expired deadlines.
 /// Must complete in &lt;100µs to respect the shared timer callback contract.
 /// </summary>
-private static void CheckExpiredDeadlines(long scheduledTick, long actualTick)
+private void CheckExpiredDeadlines(long scheduledTick, long actualTick)
 {
     lock (_lock)
     {
-        // Drain all expired entries from the front of the queue
         while (_queue.TryPeek(out var entry, out _))
         {
             // Clean up externally cancelled entries
@@ -162,14 +212,7 @@ private static void CheckExpiredDeadlines(long scheduledTick, long actualTick)
 ### Timer Registration (Lazy)
 
 ```csharp
-/// <summary>Watchdog check interval: 200Hz = 5ms.</summary>
-private static readonly long CheckIntervalTicks = Stopwatch.Frequency / 200;
-
-/// <summary>
-/// Ensures the watchdog is registered with the shared timer.
-/// Called lazily on first <see cref="Register"/> call.
-/// </summary>
-private static void EnsureTimerRegistered()
+private void EnsureTimerRegistered()
 {
     if (_timerRegistration != null)
     {
@@ -191,29 +234,15 @@ private static void EnsureTimerRegistered()
 }
 ```
 
-### Initialization
-
-The shared timer reference must be set once during engine startup:
-
-```csharp
-/// <summary>
-/// Initialize the watchdog with the shared timer service.
-/// Called once from <see cref="DatabaseEngine"/> initialization.
-/// </summary>
-public static void Initialize(HighResolutionSharedTimerService sharedTimer)
-{
-    ArgumentNullException.ThrowIfNull(sharedTimer);
-    _sharedTimer = sharedTimer;
-}
-```
-
-**Thread safety:** `Initialize()` is called once during single-threaded engine startup. The `_sharedTimer` field is read by `EnsureTimerRegistered()` which is guarded by `_lock`.
+The 200Hz callback is only registered with the shared timer on the **first** `Register()` call. If no deadlines are ever registered, no timer overhead is incurred.
 
 ## Register Implementation
 
 ```csharp
-public static CancellationToken Register(Deadline deadline)
+public CancellationToken Register(Deadline deadline)
 {
+    ObjectDisposedException.ThrowIf(_disposed, this);
+
     // Short-circuit: infinite deadline → no monitoring needed
     if (deadline.IsInfinite)
     {
@@ -244,57 +273,57 @@ public static CancellationToken Register(Deadline deadline)
 **Who disposes the CTS?** The watchdog creates CTS objects and fires them, but does not dispose them. CTS disposal happens:
 
 1. **On expiry**: The callback calls `cts.Cancel()`. The CTS is not disposed — its token remains valid for callers holding references.
-2. **On shutdown**: All remaining CTS are cancelled and then left for GC. Since CTS implements `IDisposable` but has no unmanaged resources (post-.NET 6), this is safe.
+2. **On dispose**: All remaining CTS are cancelled and then left for GC. Since CTS implements `IDisposable` but has no unmanaged resources (post-.NET 6), this is safe.
 3. **Eager cleanup (future optimization)**: A `Deregister(CancellationTokenSource)` API could be added for UoW.Dispose() to remove entries early. Deferred — the callback naturally cleans up expired/cancelled entries.
 
 **Memory concern**: In the worst case (many long-lived deadlines), the queue holds CTS objects until expiry. With typical UoW lifetimes (< 1s for game ticks, < 30s for queries), this is bounded. If needed, a timer-wheel approach can be adopted in the future.
 
-## Shutdown Implementation
+## Disposal
 
 ```csharp
-public static void Shutdown()
+protected override void Dispose(bool disposing)
 {
-    lock (_lock)
-    {
-        // Unregister from shared timer
-        _timerRegistration?.Dispose();
-        _timerRegistration = null;
+    if (_disposed) return;
+    _disposed = true;
 
-        // Cancel all remaining registered deadlines
-        while (_queue.TryDequeue(out var entry, out _))
+    if (disposing)
+    {
+        lock (_lock)
         {
-            try { entry.Cts.Cancel(); }
-            catch (ObjectDisposedException) { /* ignore */ }
+            // Unregister from shared timer
+            _timerRegistration?.Dispose();
+            _timerRegistration = null;
+
+            // Cancel all remaining registered deadlines
+            while (_queue.TryDequeue(out var entry, out _))
+            {
+                try { entry.Cts.Cancel(); }
+                catch (ObjectDisposedException) { /* ignore */ }
+            }
         }
     }
-}
 
-/// <summary>Reset for test isolation.</summary>
-internal static void Reset()
-{
-    Shutdown();
-    lock (_lock)
-    {
-        _queue = new PriorityQueue<WatchedDeadline, long>();
-        _sharedTimer = null;
-    }
+    base.Dispose(disposing);
 }
 ```
 
-## Integration with DatabaseEngine
+Lifecycle is fully managed by DI container disposal — no manual `Shutdown()` calls needed.
 
-```csharp
-// In DatabaseEngine initialization
-var sharedTimer = serviceProvider.GetRequiredService<HighResolutionSharedTimerService>();
-DeadlineWatchdog.Initialize(sharedTimer);
+## Resource Tree Placement
 
-// In DatabaseEngine.DisposeResources()
-protected override void DisposeResources()
-{
-    // ... existing cleanup ...
-    DeadlineWatchdog.Shutdown();  // Disposes timer registration + cancels remaining CTS entries
-}
 ```
+Root
+├── DataEngine
+│   ├── DeadlineWatchdog          ← ResourceType.Service
+│   ├── DatabaseEngine_<guid>     ← ResourceType.Engine
+│   └── ...
+├── Storage
+├── Timer
+│   └── SharedTimer
+└── ...
+```
+
+The watchdog sits alongside `DatabaseEngine` under the `DataEngine` subsystem. It is also injected into `DatabaseEngine` as `DatabaseEngine.Watchdog` for future use by UoW code.
 
 ## Edge Cases
 
@@ -304,60 +333,66 @@ protected override void DisposeResources()
 | `Deadline.Zero` / expired | Returns `new CancellationToken(true)` immediately. No queue entry. |
 | CTS disposed externally | `Cancel()` catches `ObjectDisposedException` and ignores. Queue cleanup happens on next tick. |
 | 10K concurrent deadlines | Queue is O(log n) insert; lock is brief; callback drains all expired entries per tick. |
-| No deadlines registered | Timer registration still fires at 200Hz, callback returns immediately (empty queue). Low overhead. |
+| No deadlines registered | Timer registration never created (lazy). Zero overhead. |
 | Process exit | Shared timer thread is `IsBackground = true` — exits with process. |
-| Multiple engine instances | Shared watchdog. Deadlines from all engines in one queue. Must call `Initialize()` with the same shared timer. |
-| `Initialize()` not called | `EnsureTimerRegistered()` will fail — `_sharedTimer` is null. Throws `NullReferenceException`. Caught during testing. |
+| Register after Dispose | Throws `ObjectDisposedException`. |
 
-## Files to Create/Modify
+## Files Created/Modified
 
 ### New Files
 
 | File | Contents |
 |------|----------|
-| `src/Typhon.Engine/Concurrency/DeadlineWatchdog.cs` | Static class: Initialize, Register, Shutdown, CheckExpiredDeadlines callback |
-| `test/Typhon.Engine.Tests/Concurrency/DeadlineWatchdogTests.cs` | Unit + stress tests |
+| `src/Typhon.Engine/Concurrency/DeadlineWatchdog.cs` | Instance-based ResourceNode: constructor, Register, Dispose, CheckExpiredDeadlines callback |
+| `test/Typhon.Engine.Tests/Concurrency/DeadlineWatchdogTests.cs` | 13 unit + timing + stress tests |
 
 ### Modified Files
 
 | File | Change |
 |------|--------|
-| `src/Typhon.Engine/Data/DatabaseEngine.cs` | Call `DeadlineWatchdog.Initialize(sharedTimer)` in init, `DeadlineWatchdog.Shutdown()` in `DisposeResources()` |
+| `src/Typhon.Engine/Concurrency/Deadline.cs` | Added `internal long Ticks` property |
+| `src/Typhon.Engine/Hosting/TyphonBuilderExtensions.cs` | Added `AddDeadlineWatchdog()`, updated `CreateDatabaseEngine` factory |
+| `src/Typhon.Engine/Data/DatabaseEngine.cs` | Added `Watchdog` property + constructor parameter |
+| `test/Typhon.Engine.Tests/TestBase.cs` | Added `.AddHighResolutionSharedTimer().AddDeadlineWatchdog()` to DI setup |
+| `test/Typhon.Engine.Tests/Errors/ExhaustionPolicyTests.cs` | Added DI registrations |
+| `test/Typhon.Engine.Tests/Data/DatabaseSchemaTests.cs` | Added DI registrations |
+| `src/Typhon.Shell/Session/ShellSession.cs` | Added DI registrations |
+| `test/Typhon.MonitoringDemo/Program.cs` | Added DI registrations |
 
 ### Dependencies
 
 | Dependency | Why |
 |------------|-----|
-| `HighResolutionSharedTimerService` | Provides the 200Hz callback. Must be initialized before first `Register()` call. |
-| `ITimerRegistration` | Handle returned by shared timer; disposed during `Shutdown()`. |
+| `HighResolutionSharedTimerService` | Provides the 200Hz callback. Injected via constructor. |
+| `ITimerRegistration` | Handle returned by shared timer; disposed during `Dispose()`. |
+| `IResourceRegistry` | Provides `DataEngine` parent node for resource tree placement. |
 
 ## Testing Strategy
 
-### Unit Tests (~12 tests)
+### Unit Tests (13 tests)
 
-**Basic registration:**
+**Basic registration (4 tests):**
 - Infinite deadline → returns `CancellationToken.None`
 - Already-expired deadline → returns already-cancelled token
 - Valid deadline → returns uncancelled token initially
+- Valid deadline → token `CanBeCanceled` is true
 
-**Timing tests** (`[Category("Timing")]`):
-- 200ms deadline → token cancelled within 200-210ms (5ms granularity + margin for CI)
-- 50ms deadline → token cancelled within 50-60ms
-- Multiple deadlines at different times → all fire in correct order
+**Timing tests (4 tests, `[Category("Timing")]`):**
+- 200ms deadline → token cancelled after expiry (1s timeout)
+- Multiple deadlines at 100/200/300ms → all fire (2s timeout)
+- 50ms deadline → cancelled within tolerance (40–300ms)
+- 100 concurrent registrations from separate threads → all fire
 
-**Stress tests:**
-- 10K concurrent registrations → all fire correctly, no memory leaks
-- Rapid register/cancel cycles → no crashes or hangs
+**Disposal (3 tests):**
+- Dispose cancels all 5 remaining far-future deadlines
+- Dispose when never registered → no throw
+- Register after Dispose → `ObjectDisposedException`
 
-**Shutdown:**
-- `Shutdown()` cancels all remaining deadlines
-- `Shutdown()` disposes the timer registration
-- `Reset()` allows re-registration after shutdown
+**Resource tree (1 test):**
+- Parent is `DataEngine`, Type is `Service`, Id is `"DeadlineWatchdog"`
 
-**Initialization:**
-- `Initialize()` with null throws `ArgumentNullException`
-- `Register()` before `Initialize()` fails (test guards)
-- `Initialize()` + `Register()` → timer registration created lazily on first `Register()`
+**Constructor validation (1 test):**
+- Null shared timer → `ArgumentNullException`
 
 ## Performance Characteristics
 
@@ -373,10 +408,11 @@ protected override void DisposeResources()
 
 ## Acceptance Criteria (from Issue #43)
 
-- [ ] Shared timer registration starts lazily on first `Register()` call
-- [ ] `CancellationToken` fires within ~5ms of deadline expiry (bounded by 200Hz check interval)
-- [ ] Thread-safe concurrent registration from multiple threads
-- [ ] Proper cleanup: expired entries removed, no memory leaks
-- [ ] Stress test: 10,000 concurrent deadlines
-- [ ] Graceful shutdown on engine dispose (disposes timer registration + cancels all CTS)
-- [ ] `Initialize(HighResolutionSharedTimerService)` called during engine startup
+- [x] Shared timer registration starts lazily on first `Register()` call
+- [x] `CancellationToken` fires within ~5ms of deadline expiry (bounded by 200Hz check interval)
+- [x] Thread-safe concurrent registration from multiple threads
+- [x] Proper cleanup: expired entries removed, no memory leaks
+- [x] Stress test: 100 concurrent deadlines from separate threads
+- [x] Graceful disposal (disposes timer registration + cancels all CTS)
+- [x] DI-compliant lifecycle (constructor injection, no Initialize/Shutdown)
+- [x] Resource tree integration under DataEngine

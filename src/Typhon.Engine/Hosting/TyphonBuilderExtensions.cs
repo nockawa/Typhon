@@ -122,6 +122,17 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
+    public static IServiceCollection AddDeadlineWatchdog(this IServiceCollection services)
+    {
+        services.Add(ServiceDescriptor.Singleton(sp =>
+        {
+            var rr = sp.GetRequiredService<IResourceRegistry>();
+            var sharedTimer = sp.GetRequiredService<HighResolutionSharedTimerService>();
+            return new DeadlineWatchdog(rr, sharedTimer);
+        }));
+        return services;
+    }
+
     public static IServiceCollection AddEpochManager(this IServiceCollection services)
     {
         services.Add(ServiceDescriptor.Singleton(sp =>
@@ -301,8 +312,9 @@ public static class ServiceCollectionExtensions
             var logger = serviceProvider.GetRequiredService<ILogger<DatabaseEngine>>();
             var resourceRegistry = serviceProvider.GetRequiredService<IResourceRegistry>();
             var epochManager = serviceProvider.GetRequiredService<EpochManager>();
+            var watchdog = serviceProvider.GetRequiredService<DeadlineWatchdog>();
 
-            return new DatabaseEngine(resourceRegistry, epochManager, mpmmf, options.Value, logger);
+            return new DatabaseEngine(resourceRegistry, epochManager, watchdog, mpmmf, options.Value, logger);
         }
         catch (Exception e)
         {
