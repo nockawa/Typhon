@@ -261,6 +261,7 @@ public partial class ChunkBasedSegment : LogicalSegment
     /// <summary>
     /// Create an ChunkAccessor using the stored PagedMMF and EpochManager references.
     /// </summary>
+    [AllowCopy]
     [return: TransfersOwnership]
     internal ChunkAccessor CreateChunkAccessor(ChangeSet changeSet = null) => new(this, Manager, _epochManager, changeSet);
 

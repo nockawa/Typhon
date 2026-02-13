@@ -1146,6 +1146,14 @@ public unsafe class Transaction : IDisposable
     }
 
     /// <summary>
+    /// Create a WaitContext that respects both the UoW deadline and a subsystem-specific timeout.
+    /// The tighter deadline wins.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static WaitContext ComposeWaitContext(ref UnitOfWorkContext ctx, TimeSpan subsystemTimeout)
+        => WaitContext.FromDeadline(Deadline.Min(ctx.WaitContext.Deadline, Deadline.FromTimeout(subsystemTimeout)));
+
+    /// <summary>
     /// <b>THE COMPONENT COMMIT METHOD (a big one, bold upper case were mandatory!)</b>
     /// </summary>
     /// <param name="pk">The primary key of the entity the component belong to</param>
@@ -1268,7 +1276,7 @@ public unsafe class Transaction : IDisposable
 
         // If this transaction is the oldest (the tail), we can remove the previous revision (if any), it is also the right place and time to clean up void
         //  revisions (the entry of a rolled back commit)
-        var wcTail = WaitContext.FromTimeout(TimeoutOptions.Current.TransactionChainLockTimeout);
+        var wcTail = ComposeWaitContext(ref context.Ctx, TimeoutOptions.Current.TransactionChainLockTimeout);
         if (!_dbe.TransactionChain.Control.EnterSharedAccess(ref wcTail))
         {
             ThrowHelper.ThrowLockTimeout("TransactionChain/CommitTailCheck", TimeoutOptions.Current.TransactionChainLockTimeout);
@@ -1384,7 +1392,7 @@ public unsafe class Transaction : IDisposable
         }
     }
 
-    public bool Rollback()
+    public bool Rollback(ref UnitOfWorkContext ctx)
     {
         AssertThreadAffinity();
 
@@ -1400,12 +1408,17 @@ public unsafe class Transaction : IDisposable
             return false;
         }
 
+        // No yield point — rollback/cleanup must always complete
+        using var holdoff = ctx.EnterHoldoff();
+
         using var activity = TyphonActivitySource.StartActivity("Transaction.Rollback");
         activity?.SetTag(TyphonSpanAttributes.TransactionTsn, TSN);
         activity?.SetTag(TyphonSpanAttributes.TransactionComponentCount, _componentInfos.Count);
 
-        // Get the minimum tick of all transactions because we'll remove component versions that are older
         var context = new CommitContext { IsRollback = true };
+#pragma warning disable CS9093 // ref-assign is safe: CommitContext is a ref struct that never escapes this method
+        context.Ctx = ref ctx;
+#pragma warning restore CS9093
 
         var deletedComponentSingles = new List<long>();
         // Process every Component Type and their components
@@ -1440,7 +1453,7 @@ public unsafe class Transaction : IDisposable
                         _deletedComponentCount++;
                     }
                     break;
-                
+
                 case ComponentInfoMultiple multiple:
                     foreach (var key in multiple.CompRevInfoCache.Keys)
                     {
@@ -1473,6 +1486,12 @@ public unsafe class Transaction : IDisposable
         activity?.SetTag(TyphonSpanAttributes.TransactionStatus, "rolledback");
         _dbe?.RecordRollback();
         return true;
+    }
+
+    public bool Rollback()
+    {
+        var ctx = UnitOfWorkContext.None;
+        return Rollback(ref ctx);
     }
 
     [PublicAPI]
@@ -1571,9 +1590,10 @@ public unsafe class Transaction : IDisposable
         public ref ComponentInfoBase.CompRevInfo CompRevInfo;
         public ConcurrencyConflictSolver Solver;
         public bool IsRollback;
+        public ref UnitOfWorkContext Ctx;
     }
     
-    public bool Commit(ConcurrencyConflictHandler handler = null)
+    public bool Commit(ref UnitOfWorkContext ctx, ConcurrencyConflictHandler handler = null)
     {
         AssertThreadAffinity();
 
@@ -1589,14 +1609,23 @@ public unsafe class Transaction : IDisposable
             return false;
         }
 
+        // ── Yield point: safe to cancel before any modifications ──
+        ctx.ThrowIfCancelled();
+
         using var activity = TyphonActivitySource.StartActivity("Transaction.Commit");
         activity?.SetTag(TyphonSpanAttributes.TransactionTsn, TSN);
         activity?.SetTag(TyphonSpanAttributes.TransactionComponentCount, _componentInfos.Count);
 
         var startTicks = Stopwatch.GetTimestamp();
 
+        // ── Holdoff: entire commit loop runs to completion ──
+        using var holdoff = ctx.EnterHoldoff();
+
         var conflictSolver = handler != null ? GetConflictSolver() : null;
         var context = new CommitContext { IsRollback = false, Solver = conflictSolver };
+#pragma warning disable CS9093 // ref-assign is safe: CommitContext is a ref struct that never escapes this method
+        context.Ctx = ref ctx;
+#pragma warning restore CS9093
         var hasConflict = false;
 
         // Process every Component Type and their components
@@ -1669,5 +1698,11 @@ public unsafe class Transaction : IDisposable
         _dbe?.RecordCommitDuration(elapsedUs);
 
         return true;
+    }
+
+    public bool Commit(ConcurrencyConflictHandler handler = null)
+    {
+        var ctx = UnitOfWorkContext.FromTimeout(TimeoutOptions.Current.DefaultCommitTimeout);
+        return Commit(ref ctx, handler);
     }
 }

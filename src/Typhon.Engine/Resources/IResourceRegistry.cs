@@ -22,7 +22,10 @@ public enum ResourceSubsystem
     Allocation,
 
     /// <summary>Synchronization primitives: EpochManager, latch pools</summary>
-    Synchronization
+    Synchronization,
+
+    /// <summary>Timer services: high-resolution shared and dedicated timers</summary>
+    Timer
 }
 
 /// <summary>
@@ -59,6 +62,12 @@ public interface IResourceRegistry : IDisposable
 
     /// <summary>Synchronization subsystem node (EpochManager, latch pools).</summary>
     IResource Synchronization { get; }
+
+    /// <summary>Timer subsystem node (high-resolution shared and dedicated timers).</summary>
+    IResource Timer { get; }
+
+    /// <summary>Timer/Dedicated sub-node for isolated single-handler timers.</summary>
+    IResource TimerDedicated { get; }
 
     /// <summary>
     /// Gets the subsystem node for the specified category.

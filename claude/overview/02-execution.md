@@ -16,9 +16,9 @@ The Execution System manages the lifecycle of user operations through the **Unit
 
 ---
 
-## Status: 🆕 New
+## Status: 🚧 Partially Implemented
 
-This component does not yet exist in the codebase. This document captures the design requirements based on architecture analysis and game server usage patterns.
+The timeout/cancellation foundation (§2.4–§2.6) is implemented. The Unit of Work class (§2.1), durability modes (§2.3), WAL infrastructure (§2.7), and async integration (§2.8) remain to be built.
 
 ---
 
@@ -29,10 +29,10 @@ This component does not yet exist in the codebase. This document captures the de
 | **2.1** | [Unit of Work](#21-unit-of-work) | Durability boundary, owns UnitOfWorkContext | 🆕 New |
 | **2.2** | [Transaction Commit Path](#22-transaction-commit-path) | Epoch stamp, WAL serialization, durability decision | 🆕 New |
 | **2.3** | [Durability Modes](#23-durability-modes) | Deferred / GroupCommit / Immediate + per-tx override | 🆕 New |
-| **2.4** | [UnitOfWorkContext](#24-executioncontext) | Deadline, cancellation, holdoff state | 🆕 New |
-| **2.5** | [Deadline Management](#25-deadline-management) | Monotonic time, timeout conversion | 🆕 New |
-| **2.6** | [Cancellation & Holdoff](#26-cancellation--holdoff) | Cooperative cancellation, critical sections | 🆕 New |
-| **2.7** | [Background Workers](#27-background-workers) | WAL Writer, Checkpoint Manager, Watchdog, GC | 🆕 New |
+| **2.4** | [UnitOfWorkContext](#24-executioncontext) | Deadline, cancellation, holdoff state | ✅ Implemented |
+| **2.5** | [Deadline Management](#25-deadline-management) | Monotonic time, timeout conversion | ✅ Implemented |
+| **2.6** | [Cancellation & Holdoff](#26-cancellation--holdoff) | Cooperative cancellation, critical sections | ✅ Implemented |
+| **2.7** | [Background Workers](#27-background-workers) | WAL Writer, Checkpoint Manager, Watchdog, GC | 🚧 Partial (Watchdog only) |
 | **2.8** | [Async Integration](#28-async-integration-optional) | Optional async/await support via AsyncLocal | 🆕 New |
 | **2.9** | [Work Scheduler](#29-work-scheduler-future) | Task queuing (deferred to post-1.0) | 🔮 Future |
 | **3** | [Motivating Example](#3-motivating-example-player-commands) | Player Commands pattern - the WHY | 📖 Context |
@@ -328,8 +328,16 @@ This section describes the hot path executed inside `tx.Commit()` — the sequen
 
 ```csharp
 // High-level: what tx.Commit() does
+// NOTE: The actual signature now supports deadline/cancellation propagation:
+//   public bool Commit(ref UnitOfWorkContext ctx, ConcurrencyConflictHandler handler = null)
+//   public bool Commit(ConcurrencyConflictHandler handler = null)  // backward-compatible wrapper
+// The UnitOfWorkContext overload propagates deadlines to all internal lock acquisitions.
+// The parameterless overload uses UnitOfWorkContext.FromTimeout(TimeoutOptions.Current.DefaultCommitTimeout).
 public bool Commit(DurabilityOverride durability = DurabilityOverride.Default)
 {
+    // 0. Yield point: safe to cancel before any modifications (via UnitOfWorkContext)
+    // ctx.ThrowIfCancelled();
+
     // 1. MVCC conflict detection (existing)
     if (!ResolveConflicts()) return false;
 
@@ -594,17 +602,20 @@ The context flows through the entire call stack, ensuring:
 
 ### Lifetime & Allocation
 
-**Design Decision**: UnitOfWorkContext is a **pooled class**, bound to Unit of Work lifetime.
+> **⚠️ Implementation Note (2026-02):** The actual implementation (see [GitHub #42](https://github.com/nockawa/Typhon/issues/42)) chose a **24-byte struct** passed by `ref`, not a pooled class. This was a deliberate design revision — the struct avoids heap allocation entirely and enables zero-copy propagation through the call stack. The `CancellationToken` is stored by value (it's already a struct wrapping a reference). See `src/Typhon.Engine/Concurrency/UnitOfWorkContext.cs` for the implementation and [ADR-034](../adr/034-unitofworkcontext-struct-design.md) for the rationale.
+
+**Original design decision** (pre-implementation):
 
 | Factor | Decision | Rationale |
 |--------|----------|-----------|
-| **Struct vs Class** | Class | Contains managed references (CancellationTokenSource) |
-| **Pooled?** | Yes | Medium lifetime (UoW), reusable, avoids GC pressure |
-| **Lifetime** | Same as UoW | Created when UoW created, returned to pool on UoW dispose |
+| **Struct vs Class** | ~~Class~~ → **Struct (24 bytes)** | CancellationToken is a value type; struct avoids GC entirely |
+| **Pooled?** | ~~Yes~~ → **No (stack-allocated)** | Passed by ref, no heap allocation |
+| **Lifetime** | Same as UoW (or standalone for backward-compatible Commit) | Created at operation start, flows through call stack by ref |
 
-### Design Sketch
+### Design Sketch (Original — see implementation note above)
 
 ```csharp
+// ORIGINAL SKETCH (kept for architectural context):
 public sealed class UnitOfWorkContext : IDisposable
 {
     // Identity (for diagnostics)
@@ -634,7 +645,7 @@ public sealed class UnitOfWorkContext : IDisposable
         if (HoldoffCount > 0) return;  // Skip check in critical section
 
         if (Deadline.IsExpired)
-            throw new TimeoutException("Operation deadline expired");
+            throw new TyphonTimeoutException(...);
 
         CancellationToken.ThrowIfCancellationRequested();
     }
@@ -957,16 +968,18 @@ void InnerOperation(UnitOfWorkContext ctx)
 | **Timeout** | Deadline exceeded | Log as warning, may retry |
 | **Cancellation** | User requested (`CancellationToken.Cancel()`) | Clean abort, no retry |
 
-Both throw `OperationCanceledException`, but can be distinguished:
+They throw distinct exception types and can be caught separately:
 
 ```csharp
 try
 {
     ctx.ThrowIfCancelled();
 }
-catch (TimeoutException)
+catch (TyphonTimeoutException)
 {
     // Deadline exceeded - log and potentially retry
+    // TyphonTimeoutException is the base; LockTimeoutException and
+    // TransactionTimeoutException are subclasses with richer context
     _logger.LogWarning("Operation timed out");
 }
 catch (OperationCanceledException)
@@ -1642,43 +1655,43 @@ The UoW timeout flows through to all database operations (UnitOfWorkContext), en
 
 | Component | Status | Location | Notes |
 |-----------|--------|----------|-------|
-| **Unit of Work** | ❌ Missing | - | To be implemented |
-| **UnitOfWorkContext** | ❌ Missing | - | To be implemented |
-| **Deadline** | ❌ Missing | - | To be implemented |
+| **Unit of Work** | ❌ Missing | - | To be implemented (Tier 4) |
+| **UnitOfWorkContext** | ✅ Implemented | `Concurrency/UnitOfWorkContext.cs` | 24-byte struct: Deadline + CancellationToken + EpochId + holdoff |
+| **WaitContext** | ✅ Implemented | `Concurrency/WaitContext.cs` | 16-byte struct: Deadline + CancellationToken, used by all lock primitives |
+| **Deadline** | ✅ Implemented | `Concurrency/Deadline.cs` | Monotonic time via `Stopwatch.GetTimestamp()` |
+| **DeadlineWatchdog** | ✅ Implemented | `Concurrency/DeadlineWatchdog.cs` | 200Hz via shared timer, fires CancellationTokens |
+| **High-Res Timer** | ✅ Implemented | `Concurrency/Timer/` | Base + dedicated + shared timer services |
+| **Yield Points** | ✅ Implemented | `Transaction.cs`, `BTree.cs`, `RevisionWalker.cs` | `ThrowIfCancelled()` at safe locations |
+| **Holdoff Regions** | ✅ Implemented | `Transaction.cs`, `BTree.NodeWrapper.cs` | Counter-based nesting, RAII via `EnterHoldoff()` |
+| **Transaction API** | ✅ Implemented | `Transaction.cs` | `Commit(ref UnitOfWorkContext)` + backward-compatible wrapper |
 | **WAL Writer** | ❌ Missing | - | To be implemented (see [06-durability.md](06-durability.md)) |
 | **Checkpoint Manager** | ❌ Missing | - | To be implemented (see [06-durability.md](06-durability.md)) |
-| **Timeout in locks** | ⚠️ Partial | `AccessControl.LockData.cs` | Uses `DateTime.UtcNow` (wall-clock) |
-| **AdaptiveWaiter** | ✅ Exists | `Misc/AdaptiveWaiter.cs` | Spin-then-yield, needs deadline integration |
+| **Timeout in locks** | ✅ Complete | `AccessControl.LockData.cs` | Migrated to monotonic `Deadline` (was `DateTime.UtcNow`) |
+| **AdaptiveWaiter** | ✅ Complete | `Misc/AdaptiveWaiter.cs` | Integrated with WaitContext/Deadline |
 | **TimeManager** | ⚠️ Minimal | `TimeManager.cs` | Just frame counter, not real time management |
 | **Async I/O hooks** | ⚠️ Prepared | `PagedMMF.cs` | File opened async, completion handling incomplete |
 
 ### Migration Path
 
-**Step 1**: Implement `Deadline` struct with monotonic time
+**Step 1**: ✅ Implement `Deadline` struct with monotonic time — [#36](https://github.com/nockawa/Typhon/issues/36)
 
-**Step 2**: Update `AccessControl.LockData` to use `Deadline` instead of `DateTime.UtcNow`:
+**Step 2**: ✅ Update `AccessControl.LockData` to use `Deadline` + `WaitContext` — [#36](https://github.com/nockawa/Typhon/issues/36)
 
-```csharp
-// Current (problematic):
-private readonly DateTime _timeOutAt;
-public bool IsTimedOutOrCanceled => DateTime.UtcNow > _timeOutAt;
+**Step 3**: ✅ Implement high-resolution timer infrastructure — [#76](https://github.com/nockawa/Typhon/issues/76)
 
-// Target:
-private readonly Deadline _deadline;
-public bool IsTimedOutOrCanceled => _deadline.IsExpired || _token.IsCancellationRequested;
-```
+**Step 4**: ✅ Implement `UnitOfWorkContext` as 24-byte struct (not pooled class) — [#42](https://github.com/nockawa/Typhon/issues/42)
 
-**Step 3**: Implement `UnitOfWorkContext` with pooling
+**Step 5**: ✅ Implement `DeadlineWatchdog` with 200Hz shared timer — [#43](https://github.com/nockawa/Typhon/issues/43)
 
-**Step 4**: Implement `UnitOfWork` wrapping Transaction creation
+**Step 6**: ✅ Implement yield points and holdoff regions — [#44](https://github.com/nockawa/Typhon/issues/44)
 
-**Step 5**: Implement WAL Writer + ring buffer (see [06-durability.md §6.1](06-durability.md#61-write-ahead-log-wal))
+**Step 7**: ✅ Wire `UnitOfWorkContext` into Transaction API — [#45](https://github.com/nockawa/Typhon/issues/45)
 
-**Step 6**: Implement Checkpoint Manager (see [06-durability.md §6.6](06-durability.md#66-checkpoint-pipeline))
+**Step 8**: ❌ Implement `UnitOfWork` wrapping Transaction creation — Tier 4
 
-**Step 7**: Wire context into existing Transaction (epoch stamping, WAL serialization)
+**Step 9**: ❌ Implement WAL Writer + ring buffer (see [06-durability.md §6.1](06-durability.md#61-write-ahead-log-wal))
 
-**Step 8**: Implement `DeadlineWatchdog` for background monitoring
+**Step 10**: ❌ Implement Checkpoint Manager (see [06-durability.md §6.6](06-durability.md#66-checkpoint-pipeline))
 
 ---
 
@@ -1749,18 +1762,22 @@ gantt
 
 ---
 
-## Code Locations (Planned)
+## Code Locations
 
-| Component | Planned Location |
-|-----------|------------------|
-| Deadline | `src/Typhon.Engine/Misc/Deadline.cs` |
-| UnitOfWorkContext | `src/Typhon.Engine/Execution/UnitOfWorkContext.cs` |
-| UnitOfWork | `src/Typhon.Engine/Execution/UnitOfWork.cs` |
-| DeadlineWatchdog | `src/Typhon.Engine/Execution/DeadlineWatchdog.cs` |
-| WAL Writer | `src/Typhon.Engine/Durability/WalWriter.cs` |
-| Checkpoint Manager | `src/Typhon.Engine/Durability/CheckpointManager.cs` |
-| UoW Registry | `src/Typhon.Engine/Durability/UowRegistry.cs` |
-| Work Scheduler | `src/Typhon.Engine/Execution/WorkScheduler.cs` (future) |
+| Component | Location | Status |
+|-----------|----------|--------|
+| Deadline | `src/Typhon.Engine/Concurrency/Deadline.cs` | ✅ |
+| WaitContext | `src/Typhon.Engine/Concurrency/WaitContext.cs` | ✅ |
+| UnitOfWorkContext | `src/Typhon.Engine/Concurrency/UnitOfWorkContext.cs` | ✅ |
+| DeadlineWatchdog | `src/Typhon.Engine/Concurrency/DeadlineWatchdog.cs` | ✅ |
+| HighResolutionTimerServiceBase | `src/Typhon.Engine/Concurrency/Timer/HighResolutionTimerServiceBase.cs` | ✅ |
+| HighResolutionTimerService | `src/Typhon.Engine/Concurrency/Timer/HighResolutionTimerService.cs` | ✅ |
+| HighResolutionSharedTimerService | `src/Typhon.Engine/Concurrency/Timer/HighResolutionSharedTimerService.cs` | ✅ |
+| UnitOfWork | `src/Typhon.Engine/Execution/UnitOfWork.cs` | ❌ Planned |
+| WAL Writer | `src/Typhon.Engine/Durability/WalWriter.cs` | ❌ Planned |
+| Checkpoint Manager | `src/Typhon.Engine/Durability/CheckpointManager.cs` | ❌ Planned |
+| UoW Registry | `src/Typhon.Engine/Durability/UowRegistry.cs` | ❌ Planned |
+| Work Scheduler | `src/Typhon.Engine/Execution/WorkScheduler.cs` | 🔮 Future |
 
 ---
 
@@ -1773,8 +1790,9 @@ gantt
 | **UoW nesting** | Not supported (flat only) | Simplicity, avoid complexity |
 | **UoW concurrency** | Multiple concurrent UoWs allowed | Multi-threaded game servers |
 | **Crash recovery** | Epoch voiding via registry + WAL replay | Instant init + data repair |
-| **UnitOfWorkContext allocation** | Pooled class | Contains managed refs, medium lifetime |
+| **UnitOfWorkContext allocation** | ~~Pooled class~~ → 24-byte struct passed by ref | CancellationToken is a value type; struct avoids GC entirely, zero-copy via ref ([ADR-034](../adr/034-unitofworkcontext-struct-design.md)) |
 | **UnitOfWorkContext epoch** | Carried in context | Avoids indirection on commit hot path |
+| **Transaction API** | `Commit(ref UnitOfWorkContext)` + backward-compatible wrapper | Deadline propagates to all lock acquisitions; existing code unchanged |
 | **Deadline time source** | Monotonic (`Stopwatch`) | Immune to clock adjustments |
 | **Cancellation model** | Cooperative with holdoff | Safe abort at yield points |
 | **Holdoff implementation** | Counter-based + scoped | Allows nesting, RAII cleanup |

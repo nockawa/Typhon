@@ -35,6 +35,8 @@ public class DatabaseSchemaTests
             .AddResourceRegistry()
             .AddMemoryAllocator()
             .AddEpochManager()
+            .AddHighResolutionSharedTimer()
+            .AddDeadlineWatchdog()
             .AddScopedManagedPagedMemoryMappedFile(options =>
             {
                 options.DatabaseName = CurrentDatabaseName;

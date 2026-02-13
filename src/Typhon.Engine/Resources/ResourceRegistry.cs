@@ -26,7 +26,9 @@ public class ResourceRegistryOptions
 /// ├── DataEngine/       (DatabaseEngine, ComponentTables)
 /// ├── Durability/       (WAL, Checkpoint)
 /// ├── Allocation/       (MemoryAllocator, Bitmaps)
-/// └── Synchronization/  (EpochManager, latch pools)
+/// ├── Synchronization/  (EpochManager, latch pools)
+/// └── Timer/            (HighResolutionSharedTimerService)
+///     └── Dedicated/    (HighResolutionTimerService instances)
 /// </code>
 /// </remarks>
 [PublicAPI]
@@ -53,6 +55,12 @@ public class ResourceRegistry : IResourceRegistry
     /// <inheritdoc />
     public IResource Synchronization { get; }
 
+    /// <inheritdoc />
+    public IResource Timer { get; }
+
+    /// <inheritdoc />
+    public IResource TimerDedicated { get; }
+
     /// <summary>
     /// Creates a new resource registry with the standard subsystem tree.
     /// </summary>
@@ -69,6 +77,10 @@ public class ResourceRegistry : IResourceRegistry
         Durability = new ResourceNode("Durability", ResourceType.Node, Root);
         Allocation = new ResourceNode("Allocation", ResourceType.Node, Root);
         Synchronization = new ResourceNode("Synchronization", ResourceType.Node, Root);
+
+        // Timer subsystem
+        Timer = new ResourceNode("Timer", ResourceType.Node, Root);
+        TimerDedicated = new ResourceNode("Dedicated", ResourceType.Node, Timer);
     }
 
     /// <inheritdoc />
@@ -79,6 +91,7 @@ public class ResourceRegistry : IResourceRegistry
         ResourceSubsystem.Durability => Durability,
         ResourceSubsystem.Allocation => Allocation,
         ResourceSubsystem.Synchronization => Synchronization,
+        ResourceSubsystem.Timer => Timer,
         _ => throw new ArgumentOutOfRangeException(nameof(subsystem), subsystem, "Unknown subsystem")
     };
 

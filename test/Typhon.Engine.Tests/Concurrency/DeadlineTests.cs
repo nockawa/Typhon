@@ -1,6 +1,4 @@
-﻿#nullable enable
-
-using NUnit.Framework;
+﻿using NUnit.Framework;
 using System;
 using System.Diagnostics;
 using System.Threading;
@@ -287,7 +285,7 @@ public class DeadlineTests
     [CancelAfter(3000)]
     public void ToCancellationToken_Normal_CancelsAfterDeadline()
     {
-        var deadline = Deadline.FromTimeout(TimeSpan.FromMilliseconds(200));
+        var deadline = Deadline.FromTimeout(TimeSpan.FromMilliseconds(50));
         var token = deadline.ToCancellationToken();
 
         Assert.That(token.CanBeCanceled, Is.True);

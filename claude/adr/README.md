@@ -117,6 +117,13 @@ What becomes easier or more difficult because of this decision?
 |---|-------|--------|------|
 | [032](032-resource-system-architecture.md) | Resource System Architecture (Pull-Based Metrics, Owner Aggregates, Snapshot API) | Accepted | 2026-01 |
 
+### Epoch & Execution (033–034)
+
+| # | Title | Status | Date |
+|---|-------|--------|------|
+| [033](033-epoch-based-page-eviction.md) | Epoch-Based Page Eviction (Replace Per-Page Ref Counting) | Accepted | 2026-02 |
+| [034](034-unitofworkcontext-struct-design.md) | UnitOfWorkContext as 24-Byte Struct with Ref Passing | Accepted | 2026-02 |
+
 ---
 
 ## Relationship to Other Documentation
