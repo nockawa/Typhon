@@ -267,7 +267,7 @@ Either is better than the current hybrid.
 | Process crash during commit | Partial commit: some component tables updated, others not. No recovery. |
 | Power loss after `Commit()` returns | All unflushed dirty pages lost. No WAL to replay. |
 | Long-running transaction + high write rate | Unbounded revision chain growth, read latency degrades for all transactions |
-| All page cache pages pinned | `TransitionPageToAccess` spins forever (Release) or throws after 1s (Debug) |
+| All page cache pages epoch-protected | Clock-sweep eviction skips all pages (no evictable candidates), `RequestPageEpoch` retries until an epoch scope exits |
 | Two processes open same file | Silent corruption — no file lock prevents it |
 
 ---

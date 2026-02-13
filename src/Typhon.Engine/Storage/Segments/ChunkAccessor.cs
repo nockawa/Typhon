@@ -1,5 +1,5 @@
-using JetBrains.Annotations;
 using System;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -8,207 +8,268 @@ using System.Runtime.Intrinsics;
 namespace Typhon.Engine;
 
 /// <summary>
-/// Per-slot metadata stored in AoS layout for cache locality.
-/// 16 bytes per slot = 4 slots per 64-byte cache line.
+/// Epoch-protected chunk accessor with pure SOA layout and SIMD-optimized search.
+/// Replaces ref-counted page access with epoch-based protection for page lifetime.
+/// ~248 bytes (4 cache lines). Always pass by ref to avoid copies.
 /// </summary>
-[StructLayout(LayoutKind.Sequential, Pack = 1)]
-internal struct SlotData
-{
-    public long BaseAddress;      // 8 bytes - cached page raw data address
-    public int HitCount;          // 4 bytes - LRU tracking
-    public short PinCounter;      // 2 bytes - scope protection
-    public byte DirtyFlag;        // 1 byte - lazy dirty tracking
-    public byte PromoteCounter;   // 1 byte - exclusive page promotion
-}
-
-/// <summary>
-/// Inline array for SlotData storage (C# 12+).
-/// </summary>
-[InlineArray(16)]
-internal struct SlotDataBuffer
-{
-    private SlotData _element;
-}
-
-/// <summary>
-/// Inline array for PageAccessor storage (C# 12+).
-/// </summary>
-[InlineArray(16)]
-internal struct PageAccessorBuffer
-{
-    private PageAccessor _element;
-}
-
-/// <summary>
-/// Stack-allocated chunk accessor combining best of ChunkRandomAccessor and StackChunkAccessor.
-/// - Zero heap allocation (struct, always pass by ref)
-/// - SIMD-optimized hot paths
-/// - MRU cache for repeated access
-/// - Scoped safety for multi-chunk operations
-/// - Fixed 16-slot capacity for optimal performance
-/// WARNING: This struct is ~1KB in size. Always pass by ref to avoid expensive copies.
-/// </summary>
-[PublicAPI]
+/// <remarks>
+/// <para><b>Three-tier hot path:</b></para>
+/// <list type="number">
+///   <item>MRU check — branch-prediction-friendly for repeated access to same page</item>
+///   <item>SIMD Vector256 search — parallel scan of 16 cached page indices</item>
+///   <item>Clock-hand eviction — O(1) amortized, cannot fail (no pinned slots)</item>
+/// </list>
+/// <para>Pages are protected from eviction by their epoch tag, not by ref-counting.
+/// Dirty tracking uses a bitmask flushed to <see cref="ChangeSet"/> via
+/// <see cref="ChangeSet.AddByMemPageIndex"/>.</para>
+/// </remarks>
+[NoCopy(Reason = "~248 byte struct with mutable SIMD cache and epoch-pinned pages")]
 [StructLayout(LayoutKind.Sequential)]
 public unsafe struct ChunkAccessor : IDisposable
 {
-    // === Hybrid SOA+AoS layout for optimal performance ===
-    // SOA: page indices for SIMD search
-    private fixed int _pageIndices[16];       // 64 bytes - SIMD searchable via Vector256
+    // === SOA layout for SIMD search (1 cache line) ===
+    private fixed int _pageIndices[16];        // 64 bytes — segment page indices, SIMD searchable
 
-    // AoS: per-slot metadata for cache locality after SIMD finds the slot
-    private SlotDataBuffer _slots;            // 256 bytes - all metadata in one cache line per slot access
+    // === Base addresses for direct pointer arithmetic (2 cache lines) ===
+    private fixed long _baseAddresses[16];     // 128 bytes — raw data address per slot
 
-    // === Page accessors (inline array, no heap allocation) ===
-    private PageAccessorBuffer _pageAccessors; // 16 PageAccessor structs
-
-    // === Segment state ===
-    private ChunkBasedSegment _segment;
-    private ChangeSet _changeSet;
+    // === Compact state ===
+    private ushort _dirtyFlags;                // 2 bytes — bitmask of dirty slots
+    private byte _clockHand;                   // 1 byte — eviction cursor
+    private byte _mruSlot;                     // 1 byte — most recently used slot
+    private byte _usedSlots;                   // 1 byte — high water mark (0-16)
 
     // === Cached hot-path values ===
-    private byte _mruSlot;                     // Most Recently Used slot for ultra-fast repeat access
-    private byte _usedSlots;                   // High water mark (0-16)
-    private int _stride;                       // Cached chunk size
-    private int _rootHeaderOffset;             // Cached LogicalSegment.RootHeaderIndexSectionLength
+    private int _stride;                       // 4 bytes — chunk size in bytes
+    private int _rootHeaderOffset;             // 4 bytes — LogicalSegment.RootHeaderIndexSectionLength
+
+    // === References ===
+    private ChunkBasedSegment _segment;
+    private ChangeSet _changeSet;
+    private PagedMMF _pagedMMF;
+    private EpochManager _epochManager;
+
+    // === Base address for computing memPageIndex on-demand (saves 64 bytes vs storing _memPageIndices[16]) ===
+    private byte* _memPagesBaseAddr;           // 8 bytes
 
     // === Constants ===
     private const int Capacity = 16;
     private const int InvalidPageIndex = -1;
-    
+
     public ChunkBasedSegment Segment => _segment;
 
     /// <summary>
-    /// Create a new ChunkAccessor. All storage is stack-allocated - zero heap allocations.
+    /// Compute memPageIndex from a slot's base address.
+    /// This saves 64 bytes by not storing _memPageIndices[16].
+    /// Cost: one subtraction + one shift (2-3 cycles) — only used in slow paths.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ChunkAccessor(ChunkBasedSegment segment, ChangeSet changeSet = null)
+    private int GetMemPageIndexFromSlot(int slot) =>
+        // _baseAddresses[slot] points to raw data (after PageHeaderSize)
+        // memPageIndex = (rawDataAddr - PageHeaderSize - _memPagesBaseAddr) / PageSize
+        (int)(((byte*)_baseAddresses[slot] - PagedMMF.PageHeaderSize - _memPagesBaseAddr) >> PagedMMF.PageSizePow2);
+
+    /// <summary>
+    /// Create a new ChunkAccessor. All storage is stack-allocated — zero heap allocations.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal ChunkAccessor(ChunkBasedSegment segment, PagedMMF pagedMMF, EpochManager epochManager, ChangeSet changeSet = null)
     {
+        Debug.Assert(epochManager.IsCurrentThreadInScope, "ChunkAccessor must be created inside an epoch scope");
         _segment = segment;
+        _pagedMMF = pagedMMF;
+        _epochManager = epochManager;
         _changeSet = changeSet;
         _mruSlot = 0;
         _usedSlots = 0;
+        _clockHand = 0;
+        _dirtyFlags = 0;
         _stride = segment.Stride;
         _rootHeaderOffset = LogicalSegment.RootHeaderIndexSectionLength;
+        _memPagesBaseAddr = pagedMMF.MemPagesBaseAddress;
 
-        // Initialize page indices to invalid (-1). Other arrays are already zero-initialized by 'new'.
+        // Initialize page indices to invalid (-1). Other arrays are zero-initialized by struct init.
         fixed (int* pageIndices = _pageIndices)
         {
             Unsafe.InitBlockUnaligned(pageIndices, 0xFF, 64);
         }
     }
 
-    /// <summary>
-    /// Get mutable reference to chunk. UNSAFE: ref valid until a different page is accessed.
-    /// ULTRA-FAST PATH for hot loops (B+Tree operations, etc.)
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    public ref T GetChunk<T>(int chunkId, bool dirty = false) where T : unmanaged => ref Unsafe.AsRef<T>(GetChunkAddress(chunkId, dirty));
+    // ═══════════════════════════════════════════════════════════════════════
+    // Public API — chunk access
+    // ═══════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Get read-only reference to chunk. Same performance as Get, safer semantics.
+    /// Get mutable reference to chunk. The returned ref is valid for the lifetime of the
+    /// enclosing <see cref="EpochGuard"/> — epoch protection prevents page eviction regardless
+    /// of slot eviction within this accessor.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    public ref readonly T GetChunkReadOnly<T>(int chunkId) where T : unmanaged => ref GetChunk<T>(chunkId, dirty: false);
+    public ref T GetChunk<T>(int chunkId, bool dirty = false) where T : unmanaged
+        => ref Unsafe.AsRef<T>(GetChunkAddress(chunkId, dirty));
+
+    /// <summary>
+    /// Get read-only reference to chunk. Safe for the lifetime of the enclosing <see cref="EpochGuard"/>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+    public ref readonly T GetChunkReadOnly<T>(int chunkId) where T : unmanaged
+        => ref GetChunk<T>(chunkId, dirty: false);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public Span<byte> GetChunkAsSpan(int index, bool dirtyPage = false) => new(GetChunkAddress(index, dirtyPage), _stride);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    public ReadOnlySpan<byte> GetChunkAsReadOnlySpan(int index, bool dirtyPage = false) => new(GetChunkAddress(index, dirtyPage), _stride);
-    
-    /// <summary>
-    /// Get scoped access to chunk with automatic pinning. SAFE for multi-chunk operations.
-    /// Pin prevents eviction until scope is disposed.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ChunkHandle GetChunkHandle(int chunkId, bool dirty = false)
-    {
-        var addr = GetChunkAddressAndPin(chunkId, dirty, out var slotIndex);
-#pragma warning disable CS9084 // Struct member returns 'this' or other instance members by reference
-        return new ChunkHandle(ref this, slotIndex, addr, _stride);
-#pragma warning restore CS9084 // Struct member returns 'this' or other instance members by reference
-    }
-    
-    /// <summary>
-    /// Get scoped access to chunk with automatic pinning. SAFE for multi-chunk operations.
-    /// Pin prevents eviction until scope is disposed.
-    /// Unsafe version, see remarks
-    /// </summary>
-    /// <remarks>
-    /// This version return a <see cref="ChunkHandleUnsafe"/> which can be allocated on the stack but which is UNSAFE to be used with
-    /// a <see cref="ChunkAccessor"/> being declared as a field of a ref type (a type which instances can be moved by the GC).
-    /// </remarks>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ChunkHandleUnsafe GetChunkHandleUnsafe(int chunkId, bool dirty = false)
-    {
-        var addr = GetChunkAddressAndPin(chunkId, dirty, out var slotIndex);
-        void* selfPtr = Unsafe.AsPointer(ref this);
-        return new ChunkHandleUnsafe(selfPtr, slotIndex, addr, _stride);
-    }
-    
+    public ReadOnlySpan<byte> GetChunkAsReadOnlySpan(int index) => new(GetChunkAddress(index, false), _stride);
+
     internal void ClearChunk(int index)
     {
         var addr = GetChunkAddress(index);
         new Span<long>(addr, _stride / 8).Clear();
     }
 
+    /// <summary>
+    /// Mark a loaded chunk's slot as dirty without accessing the chunk data.
+    /// </summary>
     internal void DirtyChunk(int index)
     {
         (int si, _) = _segment.GetChunkLocation(index);
-        for (int i = 0, used = 0; used < _usedSlots; i++)
+
+        fixed (int* indices = _pageIndices)
         {
-            if (_pageIndices[i] == InvalidPageIndex)
+            var target = Vector256.Create(si);
+
+            var v0 = Vector256.Load(indices);
+            var mask0 = Vector256.Equals(v0, target).ExtractMostSignificantBits();
+            if (mask0 != 0)
             {
-                continue;
+                _dirtyFlags |= (ushort)(1 << BitOperations.TrailingZeroCount(mask0));
+                return;
             }
 
-            ++used;
-            ref var slotData = ref _slots[i];
-
-            if (_pageIndices[i] == si)
+            var v1 = Vector256.Load(indices + 8);
+            var mask1 = Vector256.Equals(v1, target).ExtractMostSignificantBits();
+            if (mask1 != 0)
             {
-                slotData.DirtyFlag = 1;
-                return;
+                _dirtyFlags |= (ushort)(1 << (8 + BitOperations.TrailingZeroCount(mask1)));
             }
         }
     }
-    
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Dirty flush
+    // ═══════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Commit the dirty state of each page and release the shared access.
+    /// Flush dirty bitmask to ChangeSet.
     /// </summary>
-    /// <remarks>
-    /// Typically call this method at the end of an atomic operation to update the <see cref="PagedMMF"/> accordingly.
-    /// If the page was promoted in exclusive mode, it won't be release, just simply ignored.
-    /// </remarks>
     public void CommitChanges()
     {
-        for (int i = 0, used = 0; used < _usedSlots; i++)
+        if (_changeSet == null || _dirtyFlags == 0)
         {
-            if (_pageIndices[i] == InvalidPageIndex)
-            {
-                continue;
-            }
+            return;
+        }
 
-            ++used;
-            ref var slotData = ref _slots[i];
-
-            // Lazy dirty tracking: flush on dispose
-            if (slotData.DirtyFlag != 0 && _changeSet != null)
-            {
-                _changeSet.Add(_pageAccessors[i]);
-                slotData.DirtyFlag = 0;
-            }
-        }        
+        var flags = (int)_dirtyFlags;
+        while (flags != 0)
+        {
+            var bit = BitOperations.TrailingZeroCount(flags);
+            _changeSet.AddByMemPageIndex(GetMemPageIndexFromSlot(bit));
+            flags &= ~(1 << bit);
+        }
+        _dirtyFlags = 0;
     }
-    
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Exclusive latch (for B+Tree node splits, etc.)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Acquire exclusive latch on an epoch-protected page (Idle → Exclusive).
+    /// The chunk must already be loaded into a slot.
+    /// </summary>
+    public bool TryLatchExclusive(int chunkId)
+    {
+        (int pageIndex, _) = _segment.GetChunkLocation(chunkId);
+
+        fixed (int* indices = _pageIndices)
+        {
+            var target = Vector256.Create(pageIndex);
+
+            var v0 = Vector256.Load(indices);
+            var mask0 = Vector256.Equals(v0, target).ExtractMostSignificantBits();
+            if (mask0 != 0)
+            {
+                return _pagedMMF.TryLatchPageExclusive(GetMemPageIndexFromSlot(BitOperations.TrailingZeroCount(mask0)));
+            }
+
+            var v1 = Vector256.Load(indices + 8);
+            var mask1 = Vector256.Equals(v1, target).ExtractMostSignificantBits();
+            if (mask1 != 0)
+            {
+                return _pagedMMF.TryLatchPageExclusive(GetMemPageIndexFromSlot(8 + BitOperations.TrailingZeroCount(mask1)));
+            }
+        }
+
+        return false; // Page not cached
+    }
+
+    /// <summary>
+    /// Release exclusive latch on an epoch-protected page (Exclusive → Idle).
+    /// </summary>
+    public void UnlatchExclusive(int chunkId)
+    {
+        (int pageIndex, _) = _segment.GetChunkLocation(chunkId);
+
+        fixed (int* indices = _pageIndices)
+        {
+            var target = Vector256.Create(pageIndex);
+
+            var v0 = Vector256.Load(indices);
+            var mask0 = Vector256.Equals(v0, target).ExtractMostSignificantBits();
+            if (mask0 != 0)
+            {
+                _pagedMMF.UnlatchPageExclusive(GetMemPageIndexFromSlot(BitOperations.TrailingZeroCount(mask0)));
+                return;
+            }
+
+            var v1 = Vector256.Load(indices + 8);
+            var mask1 = Vector256.Equals(v1, target).ExtractMostSignificantBits();
+            if (mask1 != 0)
+            {
+                _pagedMMF.UnlatchPageExclusive(GetMemPageIndexFromSlot(8 + BitOperations.TrailingZeroCount(mask1)));
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Segment header access
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Access segment header (for internal ChunkBasedSegment operations).
+    /// </summary>
+    internal ref T GetChunkBasedSegmentHeader<T>(int offset, bool dirty) where T : unmanaged
+    {
+        // Page 0 is always the root page containing the header — ensure it's loaded
+        GetChunkAddress(0, dirty);
+
+        // _baseAddresses[_mruSlot] points to raw data area (after PageHeaderSize).
+        // Walk back to page start to apply absolute offset.
+        var rawDataAddr = (byte*)_baseAddresses[_mruSlot];
+        var pageStart = rawDataAddr - PagedMMF.PageHeaderSize;
+        return ref Unsafe.AsRef<T>(pageStart + offset);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // HOT PATH: chunk address resolution
+    // ═══════════════════════════════════════════════════════════════════════
+
     /// <summary>
     /// CRITICAL HOT PATH: Get chunk address with maximum performance.
     /// Three-tier optimization:
     /// 1. MRU check (branch prediction friendly for repeated access)
     /// 2. SIMD search (parallel scan of 16 slots)
-    /// 3. LRU eviction (cache miss, load new page)
+    /// 3. Clock-hand eviction (O(1) amortized, cannot fail)
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     internal byte* GetChunkAddress(int chunkId, bool dirty = false)
@@ -216,21 +277,16 @@ public unsafe struct ChunkAccessor : IDisposable
         (int pageIndex, int offset) = _segment.GetChunkLocation(chunkId);
 
         // === ULTRA FAST PATH: MRU check ===
-        // Huge win for B+Tree operations that access same node repeatedly
         var mru = _mruSlot;
         if (_pageIndices[mru] == pageIndex)
         {
-            ref var slot = ref _slots[mru];
             if (dirty)
             {
-                slot.DirtyFlag = 1;
+                _dirtyFlags |= (ushort)(1 << mru);
             }
 
-            slot.HitCount++;
-
-            // Compute address with cached header offset (no function call)
             var headerOffset = pageIndex == 0 ? _rootHeaderOffset : 0;
-            return (byte*)slot.BaseAddress + headerOffset + offset * _stride;
+            return (byte*)_baseAddresses[mru] + headerOffset + offset * _stride;
         }
 
         // === FAST PATH: SIMD search through cache ===
@@ -257,147 +313,48 @@ public unsafe struct ChunkAccessor : IDisposable
             }
         }
 
-        // === SLOW PATH: Cache miss - evict LRU and load new page ===
+        // === SLOW PATH: Cache miss — clock-hand eviction ===
         return LoadAndGet(pageIndex, offset, dirty);
     }
 
     /// <summary>
-    /// Get chunk address and pin the slot (for scoped access).
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private byte* GetChunkAddressAndPin(int chunkId, bool dirty, out int slotIndex)
-    {
-        (int pageIndex, int offset) = _segment.GetChunkLocation(chunkId);
-
-        // Check MRU first
-        var mru = _mruSlot;
-        if (_pageIndices[mru] == pageIndex)
-        {
-            slotIndex = mru;
-            ref var slot = ref _slots[mru];
-
-            if (dirty)
-            {
-                slot.DirtyFlag = 1;
-            }
-
-            slot.HitCount++;
-            slot.PinCounter++;
-
-            var headerOffset = pageIndex == 0 ? _rootHeaderOffset : 0;
-            return (byte*)slot.BaseAddress + headerOffset + offset * _stride;
-        }
-
-        // SIMD search
-        fixed (int* indices = _pageIndices)
-        {
-            var target = Vector256.Create(pageIndex);
-
-            var v0 = Vector256.Load(indices);
-            var mask0 = Vector256.Equals(v0, target).ExtractMostSignificantBits();
-            if (mask0 != 0)
-            {
-                slotIndex = BitOperations.TrailingZeroCount(mask0);
-                return GetFromSlotAndPin(slotIndex, pageIndex, offset, dirty);
-            }
-
-            var v1 = Vector256.Load(indices + 8);
-            var mask1 = Vector256.Equals(v1, target).ExtractMostSignificantBits();
-            if (mask1 != 0)
-            {
-                slotIndex = 8 + BitOperations.TrailingZeroCount(mask1);
-                return GetFromSlotAndPin(slotIndex, pageIndex, offset, dirty);
-            }
-        }
-
-        // Cache miss
-        return LoadAndGetWithPin(pageIndex, offset, dirty, out slotIndex);
-    }
-
-    /// <summary>
-    /// Helper for SIMD search hit: update MRU, hit count, dirty flag, compute address.
+    /// Helper for SIMD search hit: update MRU, dirty flag, compute address.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private byte* GetFromSlot(int slotIndex, int pageIndex, int offset, bool dirty)
     {
         _mruSlot = (byte)slotIndex;
-        ref var slot = ref _slots[slotIndex];
 
         if (dirty)
         {
-            slot.DirtyFlag = 1;
+            _dirtyFlags |= (ushort)(1 << slotIndex);
         }
 
-        slot.HitCount++;
-
         var headerOffset = pageIndex == 0 ? _rootHeaderOffset : 0;
-        return (byte*)slot.BaseAddress + headerOffset + offset * _stride;
+        return (byte*)_baseAddresses[slotIndex] + headerOffset + offset * _stride;
     }
 
-    /// <summary>
-    /// Helper for SIMD search hit with pinning.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private byte* GetFromSlotAndPin(int slotIndex, int pageIndex, int offset, bool dirty)
-    {
-        _mruSlot = (byte)slotIndex;
-        ref var slot = ref _slots[slotIndex];
-
-        if (dirty)
-        {
-            slot.DirtyFlag = 1;
-        }
-
-        slot.HitCount++;
-        slot.PinCounter++;
-
-        var headerOffset = pageIndex == 0 ? _rootHeaderOffset : 0;
-        return (byte*)slot.BaseAddress + headerOffset + offset * _stride;
-    }
+    // ═══════════════════════════════════════════════════════════════════════
+    // SLOW PATH: eviction and page loading
+    // ═══════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Cache miss slow path: find LRU slot, evict, load new page.
+    /// Cache miss slow path: clock-hand eviction, load new page.
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)] // Keep hot paths small
     private byte* LoadAndGet(int pageIndex, int offset, bool dirty)
     {
-        var slot = FindLRUSlot();
-        if (slot == -1)
-        {
-            ThrowHelper.ThrowInvalidOp("All 16 cache slots are pinned or promoted. Cannot evict.");
-        }
-
+        var slot = FindEvictionSlot();
         EvictSlot(slot);
         LoadIntoSlot(slot, pageIndex);
-
         return GetFromSlot(slot, pageIndex, offset, dirty);
     }
 
     /// <summary>
-    /// Cache miss slow path with pinning.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private byte* LoadAndGetWithPin(int pageIndex, int offset, bool dirty, out int slotIndex)
-    {
-        var slot = FindLRUSlot();
-        if (slot == -1)
-        {
-            ThrowHelper.ThrowInvalidOp("All 16 cache slots are pinned or promoted. Cannot evict.");
-        }
-
-        EvictSlot(slot);
-        LoadIntoSlot(slot, pageIndex);
-
-        slotIndex = slot;
-        return GetFromSlotAndPin(slot, pageIndex, offset, dirty);
-    }
-
-    /// <summary>
-    /// Find the LRU (Least Recently Used) slot for eviction.
-    /// Scans for slot with minimum hit count that isn't pinned or promoted.
+    /// Clock-hand eviction: O(1) amortized, always succeeds (no pinning mechanism).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int FindLRUSlot()
+    private int FindEvictionSlot()
     {
         // Fast path: use unused slots first
         if (_usedSlots < Capacity)
@@ -405,371 +362,66 @@ public unsafe struct ChunkAccessor : IDisposable
             return _usedSlots++;
         }
 
-        // Scan for minimum hit count among evictable slots
-        var minHit = int.MaxValue;
-        var minSlot = -1;
-
-        for (int i = 0; i < Capacity; i++)
+        // Clock-hand: advance, skip MRU
+        var hand = (byte)((_clockHand + 1) & 0xF);
+        if (hand == _mruSlot)
         {
-            ref var slot = ref _slots[i];
-            if (slot.PinCounter == 0 && slot.PromoteCounter == 0 && slot.HitCount < minHit)
-            {
-                minHit = slot.HitCount;
-                minSlot = i;
-            }
+            hand = (byte)((hand + 1) & 0xF);
         }
-
-        return minSlot;
+        _clockHand = hand;
+        return hand;
     }
 
     /// <summary>
-    /// Evict a slot: flush dirty page, release page accessor.
+    /// Evict a slot: flush dirty state. No page release — epoch protects lifetime.
     /// </summary>
     private void EvictSlot(int slot)
     {
         if (_pageIndices[slot] == InvalidPageIndex)
         {
-            return; // Slot never used
+            return;
         }
 
-        ref var slotData = ref _slots[slot];
-
-        // Lazy dirty tracking: add to ChangeSet on eviction
-        if (slotData.DirtyFlag != 0 && _changeSet != null)
+        // Flush dirty to ChangeSet before evicting
+        var mask = 1 << slot;
+        if ((_dirtyFlags & mask) != 0 && _changeSet != null)
         {
-            _changeSet.Add(_pageAccessors[slot]);
+            _changeSet.AddByMemPageIndex(GetMemPageIndexFromSlot(slot));
+            _dirtyFlags = (ushort)(_dirtyFlags & ~mask);
         }
 
-        _pageAccessors[slot].Dispose();
         _pageIndices[slot] = InvalidPageIndex;
-        slotData.DirtyFlag = 0;
-        slotData.HitCount = 0;
     }
 
     /// <summary>
-    /// Load a new page into a slot.
+    /// Load a page into a slot via epoch-protected access.
     /// </summary>
     private void LoadIntoSlot(int slot, int pageIndex)
     {
-        _segment.GetPageSharedAccessor(pageIndex, out _pageAccessors[slot]);
+        var filePageIndex = _segment.Pages[pageIndex];
+        var result = _pagedMMF.RequestPageEpoch(filePageIndex, _epochManager.GlobalEpoch, out var memPageIndex);
+        Debug.Assert(result, $"RequestPageEpoch failed for file page {filePageIndex}");
+
         _pageIndices[slot] = pageIndex;
-
-        ref var slotData = ref _slots[slot];
-        slotData.BaseAddress = (long)_pageAccessors[slot].GetRawDataAddr();
-        slotData.HitCount = 1; // Initial hit
-        slotData.PinCounter = 0;
-        slotData.PromoteCounter = 0;
-    }
-
-    /// <summary>
-    /// Try to promote a chunk's page from Shared to Exclusive access.
-    /// Required for certain B+Tree operations. Must call DemoteChunk when done.
-    /// </summary>
-    public bool TryPromoteChunk(int chunkId)
-    {
-        (int pageIndex, _) = _segment.GetChunkLocation(chunkId);
-
-        // SIMD search for the page
-        fixed (int* indices = _pageIndices)
-        {
-            var target = Vector256.Create(pageIndex);
-
-            var v0 = Vector256.Load(indices);
-            var mask0 = Vector256.Equals(v0, target).ExtractMostSignificantBits();
-            if (mask0 != 0)
-            {
-                return TryPromoteSlot(BitOperations.TrailingZeroCount(mask0));
-            }
-
-            var v1 = Vector256.Load(indices + 8);
-            var mask1 = Vector256.Equals(v1, target).ExtractMostSignificantBits();
-            if (mask1 != 0)
-            {
-                return TryPromoteSlot(8 + BitOperations.TrailingZeroCount(mask1));
-            }
-        }
-
-        return false; // Page not cached
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool TryPromoteSlot(int slot)
-    {
-        ref var slotData = ref _slots[slot];
-
-        // Already promoted - increment ref count
-        if (slotData.PromoteCounter > 0)
-        {
-            slotData.PromoteCounter++;
-            return true;
-        }
-
-        // Try to promote to exclusive
-        if (_pageAccessors[slot].TryPromoteToExclusive())
-        {
-            slotData.PromoteCounter = 1;
-            return true;
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Demote a chunk's page from Exclusive back to Shared access.
-    /// </summary>
-    public void DemoteChunk(int chunkId)
-    {
-        (int pageIndex, _) = _segment.GetChunkLocation(chunkId);
-
-        fixed (int* indices = _pageIndices)
-        {
-            var target = Vector256.Create(pageIndex);
-
-            var v0 = Vector256.Load(indices);
-            var mask0 = Vector256.Equals(v0, target).ExtractMostSignificantBits();
-            if (mask0 != 0)
-            {
-                DemoteSlot(BitOperations.TrailingZeroCount(mask0));
-                return;
-            }
-
-            var v1 = Vector256.Load(indices + 8);
-            var mask1 = Vector256.Equals(v1, target).ExtractMostSignificantBits();
-            if (mask1 != 0)
-            {
-                DemoteSlot(8 + BitOperations.TrailingZeroCount(mask1));
-            }
-        }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void DemoteSlot(int slot)
-    {
-        ref var slotData = ref _slots[slot];
-        if (slotData.PromoteCounter > 0 && --slotData.PromoteCounter == 0)
-        {
-            _pageAccessors[slot].DemoteExclusive();
-        }
-    }
-
-    /// <summary>
-    /// Internal: Unpin a slot (called by ChunkScope disposal).
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void UnpinSlot(int slot) => _slots[slot].PinCounter--;
-
-    /// <summary>
-    /// Access segment header (for internal ChunkBasedSegment operations).
-    /// </summary>
-    internal ref T GetChunkBasedSegmentHeader<T>(int offset, bool dirty) where T : unmanaged
-    {
-        // Page 0 is always the root page containing the header
-        var addr = GetChunkAddress(0, dirty);
-
-        // Walk back from chunk data to page header
-        var pageHeaderAddr = addr - _rootHeaderOffset - PagedMMF.PageHeaderSize;
-        return ref Unsafe.AsRef<T>(pageHeaderAddr + offset);
+        _baseAddresses[slot] = (long)_pagedMMF.GetMemPageRawDataAddress(memPageIndex);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // State Snapshot (test infrastructure)
+    // Disposal
     // ═══════════════════════════════════════════════════════════════════════
 
-    internal struct StateSnapshot
-    {
-        internal byte UsedSlots;
-        internal fixed short PinCounters[16];
-        internal fixed byte PromoteCounters[16];
-    }
-
-    internal StateSnapshot SnapshotInternalState()
-    {
-        var snapshot = new StateSnapshot { UsedSlots = _usedSlots };
-        for (int i = 0; i < Capacity; i++)
-        {
-            ref var slot = ref _slots[i];
-            snapshot.PinCounters[i] = slot.PinCounter;
-            snapshot.PromoteCounters[i] = slot.PromoteCounter;
-        }
-        return snapshot;
-    }
-
-    internal bool CheckInternalState(in StateSnapshot snapshot)
-    {
-        var maxSlots = Math.Max(snapshot.UsedSlots, _usedSlots);
-        for (int i = 0; i < maxSlots; i++)
-        {
-            ref var slot = ref _slots[i];
-            if (slot.PinCounter != snapshot.PinCounters[i] || slot.PromoteCounter != snapshot.PromoteCounters[i])
-            {
-                return false;
-            }
-        }
-        return true;
-    }
-
     /// <summary>
-    /// Dispose accessor: flush all dirty pages, release all page locks.
+    /// Dispose accessor: flush dirty pages. No page release — epoch handles lifetime.
     /// </summary>
     public void Dispose()
     {
-        // Guard against disposing a default-constructed or already-disposed accessor
-        // A properly constructed accessor always has _segment set
         if (_segment == null)
         {
             return;
         }
-        
-        for (int i = 0, used = 0; used < _usedSlots; i++)
-        {
-            if (_pageIndices[i] == InvalidPageIndex)
-            {
-                continue;
-            }
 
-            ++used;
-            ref var slotData = ref _slots[i];
-
-            // Demote any promoted pages
-            if (slotData.PromoteCounter > 0)
-            {
-                _pageAccessors[i].DemoteExclusive();
-            }
-
-            // Lazy dirty tracking: flush on dispose
-            if (slotData.DirtyFlag != 0 && _changeSet != null)
-            {
-                _changeSet.Add(_pageAccessors[i]);
-            }
-
-            _pageAccessors[i].Dispose();
-        }
-
+        CommitChanges();
         _usedSlots = 0;
         _segment = null!;
-    }
-}
-
-/// <summary>
-/// Scoped chunk access with automatic pinning.
-/// Prevents eviction until disposed - safe for multi-chunk operations.
-/// </summary>
-[PublicAPI]
-public unsafe ref struct ChunkHandle : IDisposable
-{
-    private ref ChunkAccessor _owner; 
-    private byte* _chunkAddress;
-    private int _chunkLength;
-    private int _slotIndex;
-
-    internal ChunkHandle(ref ChunkAccessor owner, int slotIndex, byte* chunkAddress, int chunkLength)
-    {
-        _owner = ref owner;
-        _slotIndex = slotIndex;
-        _chunkAddress = chunkAddress;
-        _chunkLength = chunkLength;
-    }
-
-    public byte* Address => _chunkAddress;
-    
-    /// <summary>
-    /// Get mutable reference to chunk data.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T AsRef<T>() => ref Unsafe.AsRef<T>(_chunkAddress);
-
-    /// <summary>
-    /// Get chunk data as mutable span.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Span<byte> AsSpan() => new(_chunkAddress, _chunkLength);
-
-    /// <summary>
-    /// Get chunk data as read-only span.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ReadOnlySpan<byte> AsReadOnlySpan() => new(_chunkAddress, _chunkLength);
-
-    /// <summary>
-    /// Get chunk data as SpanStream for sequential parsing (revision enumeration).
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public SpanStream AsStream() => new(new Span<byte>(_chunkAddress, _chunkLength));
-
-    public bool IsDefault => Unsafe.IsNullRef(ref _owner);
-    
-    /// <summary>
-    /// Dispose scope: unpin the slot, making it evictable again.
-    /// </summary>
-    public void Dispose()
-    {
-        if (!Unsafe.IsNullRef(ref _owner))
-        {
-            _owner.UnpinSlot(_slotIndex);
-            _owner = ref Unsafe.NullRef<ChunkAccessor>();
-        }
-    }
-}
-
-
-/// <summary>
-/// Scoped chunk access with automatic pinning.
-/// Prevents eviction until disposed - safe for multi-chunk operations.
-/// </summary>
-[PublicAPI]
-public unsafe ref struct ChunkHandleUnsafe : IDisposable
-{
-    private void* _ownerPtr; 
-    private byte* _chunkAddress;
-    private int _chunkLength;
-    private int _slotIndex;
-
-    internal ChunkHandleUnsafe(void* ownerPtr, int slotIndex, byte* chunkAddress, int chunkLength)
-    {
-        _ownerPtr = ownerPtr;
-        _slotIndex = slotIndex;
-        _chunkAddress = chunkAddress;
-        _chunkLength = chunkLength;
-    }
-
-    public byte* Address => _chunkAddress;
-    
-    /// <summary>
-    /// Get mutable reference to chunk data.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T AsRef<T>() => ref Unsafe.AsRef<T>(_chunkAddress);
-
-    /// <summary>
-    /// Get chunk data as mutable span.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Span<byte> AsSpan() => new(_chunkAddress, _chunkLength);
-
-    /// <summary>
-    /// Get chunk data as read-only span.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ReadOnlySpan<byte> AsReadOnlySpan() => new(_chunkAddress, _chunkLength);
-
-    /// <summary>
-    /// Get chunk data as SpanStream for sequential parsing (revision enumeration).
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public SpanStream AsStream() => new(new Span<byte>(_chunkAddress, _chunkLength));
-
-    public bool IsDefault => _ownerPtr == null;
-    
-    /// <summary>
-    /// Dispose scope: unpin the slot, making it evictable again.
-    /// </summary>
-    public void Dispose()
-    {
-        if (_ownerPtr != null)
-        {
-            ref var owner = ref Unsafe.AsRef<ChunkAccessor>(_ownerPtr);
-            owner.UnpinSlot(_slotIndex);
-            _ownerPtr = null;
-        }
     }
 }

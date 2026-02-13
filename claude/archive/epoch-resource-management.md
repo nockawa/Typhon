@@ -2,7 +2,9 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | Draft |
+| **Status** | Implemented (archived) |
+| **GitHub Issue** | #69 |
+| **Branch** | `feature/69-epoch-resource-management` |
 | **Target** | Phase 0-4, incremental delivery |
 | **Prerequisites** | Error Foundation (#36), existing concurrency primitives |
 | **Related** | [Research](../research/epoch-resource-management/README.md), [ADR-007](../adr/007-clock-sweep-eviction.md), [CompRevDeferredCleanup](CompRevDeferredCleanup.md) |

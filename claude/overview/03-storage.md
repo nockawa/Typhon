@@ -24,8 +24,7 @@ The Storage Engine is the foundation for all persistent data in Typhon. It provi
 | **3.2** | [ManagedPagedMMF](#32-managedpagedmmf) | Page allocation and occupancy tracking | ✅ Solid |
 | **3.3** | [LogicalSegment](#33-logicalsegment) | Multi-page directory abstraction | ✅ Solid |
 | **3.4** | [ChunkBasedSegment](#34-chunkbasedsegment) | Fixed-size chunk allocation | ✅ Solid |
-| **3.5** | [PageAccessor](#35-pageaccessor) | Safe page access wrapper | ✅ Solid |
-| **3.6** | [ChunkAccessor](#36-chunkaccessor) | SIMD-optimized chunk cache | ✅ Solid |
+| **3.5** | [ChunkAccessor](#35-chunkaccessor) | Epoch-protected SIMD-optimized chunk cache | ✅ Solid |
 | **3.7** | [VariableSizedBufferSegment](#37-variablebuffersegment) | Variable-size buffer storage | ✅ Solid |
 | **3.8** | [StringTableSegment](#38-stringtablesegment) | UTF-8 string storage | ✅ Solid |
 | **3.9** | [Error Handling](#39-error-handling) | I/O error behavior and recovery | ⚠️ Basic |
@@ -40,23 +39,25 @@ The Storage Engine is the foundation for all persistent data in Typhon. It provi
 Core memory-mapped file manager handling:
 - Page cache with clock-sweep eviction
 - Async read/write I/O operations
-- Page state machine (Free → Allocating → Shared/Exclusive → Idle)
+- Page state machine (Free → Allocating → Idle ↔ Exclusive)
+- Epoch-based page eviction protection
 - Database file lifecycle (create, open, close)
 
 ### Page Cache Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         Page Cache (Default: 2MB)                        │
+│                         Page Cache (Default: 2MB)                       │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  GCHandle-pinned byte array (prevents GC moves)                         │
 │  256 pages × 8192 bytes = 2,097,152 bytes                               │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  PageInfo[256] - metadata for each cached page:                         │
-│    - State (Free/Allocating/Shared/Exclusive/Idle/IdleAndDirty)         │
+│    - State (Free/Allocating/Idle/Exclusive)                             │
 │    - FilePageIndex (which file page is cached here)                     │
 │    - ClockSweepCounter (0-5, for eviction)                              │
 │    - DirtyCounter (pending writes)                                      │
+│    - AccessEpoch (epoch tag for eviction protection)                    │
 │    - IOReadTask (async load operation)                                  │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -129,16 +130,29 @@ If the first pass finds no evictable pages (all counters > 0), a second pass ign
 stateDiagram-v2
     [*] --> Free
     Free --> Allocating: Request page
-    Allocating --> Shared: Load complete (read)
-    Allocating --> Exclusive: Load complete (write)
-    Shared --> Idle: All readers exit
-    Exclusive --> Idle: Writer exits
-    Exclusive --> IdleAndDirty: Writer exits (modified)
-    Idle --> Shared: New reader
-    Idle --> Exclusive: New writer
-    IdleAndDirty --> Idle: Write flushed
-    Idle --> Free: Evicted
+    Allocating --> Idle: Load complete
+    Idle --> Exclusive: TryLatchPageExclusive
+    Exclusive --> Idle: UnlatchPageExclusive
+    Idle --> Free: Evicted (epoch-safe + not dirty)
 ```
+
+**4 states** (simplified from the original 6 by removing `Shared` and `IdleAndDirty`):
+
+| State | Meaning |
+|-------|---------|
+| `Free` | Page slot not allocated in cache |
+| `Allocating` | Being loaded from disk |
+| `Idle` | Loaded in cache, protected from eviction by epoch tag and/or `DirtyCounter > 0` |
+| `Exclusive` | Exclusively latched for writes |
+
+**Eviction predicate:** A page in `Idle` state can be evicted only when:
+```
+(DirtyCounter == 0) AND (AccessEpoch < MinActiveEpoch)
+```
+
+The `AccessEpoch` is stamped when a page is accessed via `RequestPageEpoch()`. Pages accessed within an active `EpochGuard` scope cannot be evicted — their epoch tag is >= the minimum active epoch across all threads. This replaces the old per-page reference counting (`ConcurrentSharedCounter`).
+
+Dirty pages (those with `DirtyCounter > 0`) stay in `Idle` state and are tracked by the dirty counter rather than a separate `IdleAndDirty` state. They cannot be evicted until flushed to disk.
 
 ### Async I/O
 
@@ -147,10 +161,12 @@ stateDiagram-v2
 var task = RandomAccess.ReadAsync(_fileHandle, buffer, pageOffset);
 pageInfo.IOReadTask = task;
 
-// PageAccessor.EnsureDataReady() blocks until complete
-public void EnsureDataReady()
+// RequestPageEpoch waits for I/O completion inline
+var ioTask = pi.IOReadTask;
+if (ioTask != null && !ioTask.IsCompletedSuccessfully)
 {
-    _pageInfo.IOReadTask?.GetAwaiter().GetResult();
+    ioTask.GetAwaiter().GetResult();
+    pi.ResetIOCompletionTask();
 }
 
 // Writes batch contiguous pages
@@ -179,17 +195,17 @@ Extends PagedMMF with page allocation management:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ Page 0: Root File Header                                                 │
+│ Page 0: Root File Header                                                │
 ├─────────────────────────────────────────────────────────────────────────┤
 │   Offset 0:    RootFileHeader (192 bytes)                               │
 │   Offset 192:  Reserved (8000 bytes)                                    │
 ├─────────────────────────────────────────────────────────────────────────┤
-│ Pages 1-3: Occupancy Bitmap Segment                                      │
+│ Pages 1-3: Occupancy Bitmap Segment                                     │
 ├─────────────────────────────────────────────────────────────────────────┤
 │   Tracks which pages are allocated/free                                 │
 │   3-level hierarchy for fast allocation                                 │
 ├─────────────────────────────────────────────────────────────────────────┤
-│ Pages 4+: User Data Pages                                                │
+│ Pages 4+: User Data Pages                                               │
 ├─────────────────────────────────────────────────────────────────────────┤
 │   Segments, chunks, indexes, components...                              │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -312,102 +328,85 @@ When `AllocateChunk()` or `AllocateChunks()` cannot satisfy a request (bitmap fu
 
 ---
 
-## 3.5 PageAccessor
+## 3.5 ChunkAccessor
 
 ### Purpose
 
-Safe wrapper for page access that manages state transitions and provides typed access to page sections.
+Epoch-protected, SIMD-optimized chunk accessor with 16-slot cache. This is a **critical hot path** component that replaced the legacy `PageAccessor` and `ChunkAccessor` types. It uses epoch-based page protection instead of per-page reference counting.
 
-### Page Sections
+**Key design changes from the legacy types:**
+- No `PageAccessor` intermediary — raw pointer arithmetic via `GetMemPageAddress()`
+- No per-slot pinning/unpinning — epoch scope protects all accessed pages
+- No "all slots pinned" failure mode — clock-hand eviction always succeeds
+- SOA layout (~280 bytes) instead of interleaved AOS layout (~1KB)
+- Must always be passed by **ref** (enforced by Roslyn analyzer TYPHON001)
+
+### Three-Tier Lookup
+
+1. **MRU Check** — Most recently used slot (single comparison, ~3-4 cycles)
+2. **SIMD Search** — Vector256 parallel search of all 16 slots (~10-15 cycles)
+3. **Clock-Hand Eviction** — Replace next non-MRU slot on miss (no pinning to skip)
+
+### SOA Cache Structure
 
 ```csharp
-public ref struct PageAccessor
+// Hot: SIMD searchable page indices (1 cache line)
+private fixed int _pageIndices[16];           // 64 bytes
+
+// Hot: raw data addresses for direct pointer arithmetic (2 cache lines)
+private fixed long _baseAddresses[16];        // 128 bytes
+
+// Warm: memory page indices for ChangeSet dirty tracking (1 cache line)
+private fixed int _memPageIndices[16];        // 64 bytes
+
+// Control: dirty bitmask, clock hand, MRU slot, used count
+private ushort _dirtyFlags;                   // 2 bytes (1 bit per slot)
+```
+
+### SIMD Search Implementation
+
+```csharp
+fixed (int* indices = _pageIndices)
 {
-    // Header section (64 bytes)
-    public ref PageBaseHeader Header { get; }
+    var target = Vector256.Create(pageIndex);
 
-    // Metadata section (128 bytes)
-    public Span<byte> Metadata { get; }
+    // Search first 8 slots
+    var v0 = Vector256.Load(indices);
+    var mask0 = Vector256.Equals(v0, target).ExtractMostSignificantBits();
+    if (mask0 != 0) return BitOperations.TrailingZeroCount(mask0);
 
-    // Raw data section (8000 bytes)
-    public Span<byte> RawData { get; }
-
-    // Ensure async load is complete
-    public void EnsureDataReady();
+    // Search second 8 slots
+    var v1 = Vector256.Load(indices + 8);
+    var mask1 = Vector256.Equals(v1, target).ExtractMostSignificantBits();
+    if (mask1 != 0) return 8 + BitOperations.TrailingZeroCount(mask1);
 }
 ```
 
 ### Usage
 
 ```csharp
-// Read access
-using (var accessor = mmf.GetPageShared(pageIndex))
-{
-    accessor.EnsureDataReady();
-    var data = accessor.RawData;
-    // Read data...
-}
+// Always within an EpochGuard scope (managed by Transaction)
+var guard = EpochGuard.Enter(epochManager);
 
-// Write access
-using (var accessor = mmf.GetPageExclusive(pageIndex))
-{
-    accessor.EnsureDataReady();
-    var data = accessor.RawData;
-    // Modify data...
-}
-```
+// Create accessor
+var accessor = segment.CreateChunkAccessor(changeSet);
 
-### Code Location
+// Read chunk (direct reference — no handle/pin needed)
+ref var node = ref accessor.GetChunk<BTreeNode>(chunkId);
 
-`src/Typhon.Engine/Persistence Layer/PageAccessor.cs` (~282 lines)
+// Write chunk (marks page dirty)
+ref var data = ref accessor.GetChunk<MyComponent>(chunkId, dirty: true);
 
----
+// Exclusive latch for writes (decoupled from lifetime)
+pagedMMF.TryLatchPageExclusive(memPageIndex);
+// ... write ...
+pagedMMF.UnlatchPageExclusive(memPageIndex);
 
-## 3.6 ChunkAccessor
+// Flush dirty pages to ChangeSet
+accessor.CommitChanges();
+accessor.Dispose();  // Final dirty flush, no page release needed
 
-### Purpose
-
-SIMD-optimized chunk access with 16-slot cache. This is a **critical hot path** component with three-tier optimization:
-
-1. **MRU Check** - Most recently used slot (single comparison)
-2. **SIMD Search** - Vector256 parallel search of all 16 slots
-3. **LRU Eviction** - Replace least recently used on miss
-
-### Cache Structure
-
-```csharp
-[InlineArray(16)]
-public struct SlotArray
-{
-    private SlotData _element0;  // 16 bytes per slot
-}
-
-public struct SlotData
-{
-    public int ChunkIndex;      // Which chunk is cached
-    public int Offset;          // Offset within page
-    public int PageCacheIndex;  // Which cache page
-    public int LastAccess;      // MRU counter
-}
-```
-
-### SIMD Search Implementation
-
-```csharp
-// Two parallel searches (8 slots each)
-var searchVec = Vector256.Create(chunkIndex);
-
-var slots0 = Vector256.LoadUnsafe(ref chunkIndices[0]);
-var slots1 = Vector256.LoadUnsafe(ref chunkIndices[8]);
-
-var match0 = Vector256.Equals(slots0, searchVec);
-var match1 = Vector256.Equals(slots1, searchVec);
-
-var mask0 = match0.ExtractMostSignificantBits();
-var mask1 = match1.ExtractMostSignificantBits();
-
-if (mask0 != 0) return BitOperations.TrailingZeroCount(mask0);
-if (mask1 != 0) return BitOperations.TrailingZeroCount(mask1) + 8;
+guard.Dispose();  // Exit epoch scope, advance global epoch
 ```
 
 ### Performance
@@ -416,11 +415,12 @@ if (mask1 != 0) return BitOperations.TrailingZeroCount(mask1) + 8;
 |-----------|-----------------|
 | MRU hit | 3-4 |
 | SIMD hit | 10-15 |
-| Cache miss + load | 100+ (depends on page state) |
+| Cache miss + load | ~25 (excl. I/O) |
+| Epoch enter/exit | ~5ns |
 
 ### Code Location
 
-`src/Typhon.Engine/Persistence Layer/ChunkAccessor.cs` (~743 lines)
+`src/Typhon.Engine/Storage/Segments/ChunkAccessor.cs` (~350 lines)
 
 ---
 
@@ -614,13 +614,14 @@ public class PagedMMFOptions
 | Optimization | Description | Impact |
 |--------------|-------------|--------|
 | **GCHandle Pinning** | Page cache never moves in memory | Enables safe pointer arithmetic |
+| **Epoch Protection** | 2 obligations per transaction instead of 2N | Eliminates per-page ref-count overhead |
 | **Clock-Sweep** | Adaptive cache eviction | Prevents thrashing, respects access patterns |
 | **Magic Multiplier** | Replace division with multiply+shift | 3-4 cycles vs 20-80 cycles |
 | **SIMD Search** | Vector256 parallel slot comparison | 16 comparisons in ~2 instructions |
+| **SOA Layout** | Cache-line-aligned accessor fields | 3 cache lines vs 5+ for hot path |
 | **Contiguous Writes** | Batch adjacent dirty pages | Reduces I/O operations |
 | **Lazy Dirty Tracking** | Defer writes until eviction | Reduces unnecessary I/O |
 | **Sequential Allocation** | Prefer adjacent memory pages | Better cache locality |
-| **Inline Arrays** | Zero-allocation cache slots | No heap pressure in hot path |
 
 ---
 
@@ -630,10 +631,13 @@ Tests located in `test/Typhon.Engine.Tests/`:
 
 | Test Class | Focus |
 |------------|-------|
-| `PagedMMFTests` | Cache eviction, I/O operations, state transitions |
+| `PagedMMFTests` | Cache eviction, I/O operations, epoch-based state transitions |
 | `ManagedPagedMMFTests` | Page allocation, occupancy tracking |
 | `LogicalSegmentTests` | Directory structure, overflow handling |
 | `ChunkBasedSegmentTests` | Chunk allocation, bitmap operations |
+| `ChunkAccessorTests` | SIMD lookup, dirty tracking, epoch protection |
+| `EpochPageCacheTests` | Epoch-based eviction, dirty page handling |
+| `EpochManagerTests` | Scope management, thread registry, MinActiveEpoch |
 
 ---
 
@@ -646,7 +650,7 @@ The Storage Engine is **mature and well-optimized**. Key areas:
 | Core I/O | ✅ Solid | Memory-mapped files, async read/write |
 | Page Cache | ✅ Solid | Clock-sweep, configurable size |
 | Segments | ✅ Solid | Logical, chunk-based, variable, string |
-| Concurrency | ✅ Solid | Reader-writer locks per page |
+| Concurrency | ✅ Solid | Epoch-based protection, exclusive page latching |
 | Performance | ✅ Solid | SIMD, magic multiplier, lazy dirty |
 | Error Handling | ⚠️ Minimal | Basic corruption detection only |
 | Page Checksums | 📐 Designed | CRC32C in PageBaseHeader, verified on read. See [06-durability.md §6.6](06-durability.md#66-checkpoint-manager) |
@@ -668,6 +672,7 @@ The Storage Engine is **mature and well-optimized**. Key areas:
 | **Page size** | 8192 bytes | Balance between overhead and granularity; matches common OS page sizes |
 | **Cache algorithm** | Clock-sweep | Simple, effective, low overhead; adapts to access patterns |
 | **Counter cap** | 5 | Prevents single hot page from dominating cache |
+| **Epoch-based protection** | Yes | Replaces per-page ref-counting; 2 obligations per tx vs 2N. See [ADR-033](../adr/033-epoch-based-page-eviction.md) |
 | **SIMD in hot path** | Yes | ChunkAccessor is called millions of times; worth the complexity |
 | **Async I/O** | Yes | Non-blocking reads improve throughput under load |
 | **Pinned memory** | Yes | Required for safe pointer arithmetic in unsafe code |

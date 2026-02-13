@@ -12,49 +12,47 @@ This reference documents Typhon's page caching system—a sophisticated multi-la
 | [01-page-layout.md](01-page-layout.md) | Page structure, headers, and memory layout |
 | [02-page-states.md](02-page-states.md) | Page state machine and lifecycle |
 | [03-clock-sweep.md](03-clock-sweep.md) | Clock-sweep eviction algorithm |
-| [04-accessors.md](04-accessors.md) | PageAccessor and ChunkAccessor |
-| [05-segments.md](05-segments.md) | LogicalSegment and ChunkBasedSegment |
-| [06-bitmap-l3.md](06-bitmap-l3.md) | Hierarchical bitmap allocation |
-| [07-changesets.md](07-changesets.md) | Dirty page tracking and I/O batching |
-| [08-concurrency.md](08-concurrency.md) | Thread safety and synchronization |
+| [04-segments.md](04-segments.md) | LogicalSegment and ChunkBasedSegment |
+| [05-bitmap-l3.md](05-bitmap-l3.md) | Hierarchical bitmap allocation |
+| [06-changesets.md](06-changesets.md) | Dirty page tracking and I/O batching |
+| [07-concurrency.md](07-concurrency.md) | Thread safety and synchronization |
 
 ## Quick Start
 
-### Requesting a Page for Reading
+### Requesting a Page for Reading (Epoch-Protected)
 
 ```csharp
-// Get shared (read) access to a page
-if (pagedMMF.RequestPage(filePageIndex, exclusive: false, out var accessor))
-{
-    using (accessor)
-    {
-        // Access page data (8000 bytes usable)
-        ReadOnlySpan<byte> data = accessor.PageRawData;
-        
-        // Or cast to your data type
-        var items = data.Cast<byte, MyStruct>();
-    }
-}
+// Enter epoch scope and access page via raw pointer
+var guard = EpochGuard.Enter(epochManager);
+var epoch = epochManager.GlobalEpoch;
+
+pagedMMF.RequestPageEpoch(filePageIndex, epoch, out int memPageIndex);
+byte* addr = pagedMMF.GetMemPageAddress(memPageIndex);
+
+// Access page data (8000 bytes usable, starting after header)
+var data = new ReadOnlySpan<byte>(addr + PagedMMF.PageHeaderSize, PagedMMF.PageRawDataSize);
+
+guard.Dispose();
 ```
 
 ### Requesting a Page for Writing
 
 ```csharp
-// Get exclusive (write) access
-if (pagedMMF.RequestPage(filePageIndex, exclusive: true, out var accessor))
-{
-    using (accessor)
-    {
-        Span<byte> data = accessor.PageRawData;
-        // Modify data...
-        
-        // Mark as dirty for persistence
-        changeSet.Add(accessor);
-    }
-}
+// Enter epoch scope, get page, latch for exclusive write
+var guard = EpochGuard.Enter(epochManager);
+var epoch = epochManager.GlobalEpoch;
 
-// Flush changes to disk
-await changeSet.SaveChangesAsync();
+pagedMMF.RequestPageEpoch(filePageIndex, epoch, out int memPageIndex);
+pagedMMF.TryLatchPageExclusive(memPageIndex);
+
+byte* addr = pagedMMF.GetMemPageAddress(memPageIndex);
+// Modify data via pointer...
+
+changeSet.AddByMemPageIndex(memPageIndex);
+pagedMMF.UnlatchPageExclusive(memPageIndex);
+changeSet.SaveChanges();
+
+guard.Dispose();
 ```
 
 ### Allocating Chunks in a Segment
@@ -63,8 +61,8 @@ await changeSet.SaveChangesAsync();
 // Allocate a single chunk
 int chunkId = segment.AllocateChunk(clearContent: true);
 
-// Get chunk data via accessor
-using var accessor = new ChunkAccessor(segment, changeSet);
+// Get chunk data via epoch-based accessor
+using var accessor = segment.CreateChunkAccessor(epoch, changeSet);
 byte* ptr = accessor.GetChunkAddress(chunkId, dirty: true);
 ref MyStruct data = ref Unsafe.AsRef<MyStruct>(ptr);
 ```
@@ -92,8 +90,8 @@ ref MyStruct data = ref Unsafe.AsRef<MyStruct>(ptr);
 │                        PagedMMF                                 │
 │         (Page cache, Clock-sweep, Async I/O)                    │
 │  ┌──────────────┐  ┌───────────────┐  ┌──────────────────┐      │
-│  │ PageCache    │  │ PageInfo[]    │  │ PageAccessor     │      │
-│  │ (pinned mem) │  │ (state/meta)  │  │ (RAII handle)    │      │
+│  │ PageCache    │  │ PageInfo[]    │  │ EpochManager     │      │
+│  │ (pinned mem) │  │ (state/meta)  │  │ (eviction prot.) │      │
 │  └──────────────┘  └───────────────┘  └──────────────────┘      │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -112,8 +110,8 @@ ref MyStruct data = ref Unsafe.AsRef<MyStruct>(ptr);
 | **Management** | `ManagedPagedMMF` | Page allocation, segments, occupancy bitmaps |
 | **Segments** | `LogicalSegment` | Multi-page abstraction with linked pages |
 | **Chunks** | `ChunkBasedSegment` | Fixed-size allocation with 3-level bitmap |
-| **Access** | `PageAccessor` | RAII handle for page data |
-| **Access** | `ChunkAccessor` | 16-slot SIMD cache for chunk access |
+| **Protection** | `EpochManager` | Epoch-scoped page eviction protection |
+| **Access** | `ChunkAccessor` | 16-slot SOA cache for chunk access |
 
 ## Key Constants
 
@@ -130,8 +128,8 @@ ref MyStruct data = ref Unsafe.AsRef<MyStruct>(ptr);
 
 | Operation | Typical Latency | Notes |
 |-----------|-----------------|-------|
-| Cache hit (shared) | < 1 μs | Lock-free read path |
-| Cache hit (exclusive) | 1-5 μs | State transition |
+| Cache hit (epoch read) | < 1 μs | Epoch-protected raw pointer access |
+| Cache hit (exclusive latch) | 1-5 μs | State transition Idle → Exclusive |
 | Cache miss | 10-100 μs | Disk I/O required |
 | Chunk allocation | < 1 μs | Hierarchical bitmap skip |
 | Batch write (contiguous) | 50-500 μs | Grouped I/O |

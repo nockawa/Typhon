@@ -213,8 +213,8 @@ internal class ComponentInfo
     public ChunkBasedSegment CompContentSegment;        // Component data
     public ChunkBasedSegment CompRevTableSegment;       // Revision metadata
     public LongSingleBTree PrimaryKeyIndex;             // Entity ID → Revision chain
-    public ChunkRandomAccessor CompContentAccessor;     // Cached chunk access
-    public ChunkRandomAccessor CompRevTableAccessor;    // Cached revision access
+    public ChunkAccessor CompContentAccessor;      // Epoch-based cached chunk access
+    public ChunkAccessor CompRevTableAccessor;     // Epoch-based cached revision access
     public Dictionary<long, CompRevInfo> CompRevInfoCache;  // Transaction's view
 }
 ```
@@ -482,23 +482,17 @@ public enum PageState : ushort
 {
     Free         = 0,  // Not allocated, available for reuse
     Allocating   = 1,  // Currently being acquired
-    Idle         = 2,  // Allocated but not accessed
-    Shared       = 3,  // Multiple readers accessing
-    Exclusive    = 4,  // Single exclusive writer
-    IdleAndDirty = 5   // Needs disk write
+    Idle         = 2,  // Allocated; protected from eviction by epoch tag (AccessEpoch) and/or DirtyCounter > 0
+    Exclusive    = 4,  // Single exclusive writer via PageExclusiveLatch
 }
 ```
 
 **State Transitions:**
 ```
-Free → Allocating → Idle
-Idle → Shared (multiple readers)
-Idle → Exclusive (single writer)
-Shared → Idle (all readers exit)
-Exclusive → IdleAndDirty (dirty write)
-Exclusive → Idle (clean write)
-IdleAndDirty → Idle (after flush)
-Idle → Free (eviction)
+Free → Allocating → Idle (via RequestPageEpoch, sets AccessEpoch)
+Idle → Exclusive (via TryLatchPageExclusive)
+Exclusive → Idle (via UnlatchPageExclusive, resets AccessEpoch=0)
+Idle → Free (eviction, only when AccessEpoch < MinActiveEpoch AND DirtyCounter == 0)
 ```
 
 **Page Cache:**
@@ -521,12 +515,14 @@ public class PagedMMF
 ```csharp
 internal class PageInfo
 {
-    public int FilePageIndex;               // -1 if free
+    public int FilePageIndex;                       // -1 if free
     public PageState PageState;
-    public int ClockSweepCounter;           // 0-5, for LRU approximation
-    public int LockedByThreadId;            // Exclusive lock holder
-    public Task IOReadTask;                 // Async read operation
-    public object StateSyncRoot;            // Lock for state transitions
+    public int ClockSweepCounter;                   // 0-5, for LRU approximation
+    public AccessControlSmall PageExclusiveLatch;   // Thread ownership for exclusive latch
+    public short ExclusiveLatchDepth;               // Re-entrance depth
+    public long AccessEpoch;                        // Epoch tag; >= MinActiveEpoch prevents eviction
+    public int DirtyCounter;                        // Pending write-backs; > 0 prevents eviction
+    public AccessControlSmall StateSyncRoot;        // Lock for state transitions
 }
 ```
 
@@ -576,7 +572,7 @@ private int AllocateMemoryPage(int filePageIndex, bool exclusive)
 
 **ClockSweepCounter Management:**
 - **Max value:** 5 (capped by `IncrementClockSweepCounter`)
-- **Incremented:** On page access (via `TransitionPageToAccess`)
+- **Incremented:** On page access (via `RequestPageEpoch`)
 - **Decremented:** During clock-sweep eviction pass
 - **Reset:** On page allocation
 
@@ -1514,11 +1510,10 @@ public bool ReadEntity<T>(long primaryKey, out T component) where T : unmanaged
         return false;
     }
 
-    // Zero-copy: get pointer to chunk, cast to T*
-    using var handle = ci.CompContentAccessor.GetChunkHandle(
+    // Zero-copy: get pointer to chunk via epoch-protected accessor, cast to T*
+    var componentPtr = (T*)ci.CompContentAccessor.GetChunkAddress(
         compRevInfo.CurCompContentChunkId, dirty: false);
 
-    var componentPtr = (T*)handle.Address;  // Direct pointer access
     component = *componentPtr;  // Single memcpy
 
     return true;
@@ -2106,8 +2101,7 @@ public void Add(long key, int value)
     var leafId = FindLeaf(key, path);
 
     // Insert into leaf
-    using var handle = _nodeSegment.GetChunkHandle(leafId, dirty: true);
-    ref var leaf = ref *(LeafNode*)handle.Address;
+    ref var leaf = ref _nodeAccessor.GetChunk<LeafNode>(leafId, dirty: true);
 
     if (leaf.Count < MaxLeafEntries)
     {
@@ -2139,8 +2133,7 @@ public bool TryGet(long key, out int value)
     // Navigate to leaf
     var leafId = FindLeaf(key, path: null);
 
-    using var handle = _nodeSegment.GetChunkHandle(leafId, dirty: false);
-    ref var leaf = ref *(LeafNode*)handle.Address;
+    ref var leaf = ref _nodeAccessor.GetChunkReadOnly<LeafNode>(leafId);
 
     // Binary search in leaf
     var index = BinarySearch(leaf.Keys, leaf.Count, key);
@@ -2365,171 +2358,142 @@ var revisionSegment = mmf.AllocateChunkBasedSegment(
 
 ---
 
-### ChunkRandomAccessor
+### ChunkAccessor
 
-**File:** `src/Typhon.Engine/Persistence Layer/ChunkRandomAccessor.cs`
+**File:** `src/Typhon.Engine/Storage/Segments/ChunkAccessor.cs`
 
-**Purpose:** Cache recently accessed pages for efficient chunk access.
+**Purpose:** Epoch-protected cached chunk access with SOA layout and clock-hand eviction.
 
 **Cache Strategy:**
 
 ```csharp
-public class ChunkRandomAccessor
+public ref struct ChunkAccessor
 {
-    private const int MaxCachedPages = 8;  // Default cache size
+    private const int DefaultCapacity = 16;  // 16-slot cache
 
-    private struct CachedEntry
-    {
-        public int HitCount;                 // Access frequency (LRU)
-        public short PinCounter;             // Prevents eviction
-        public PagedMMF.PageState CurrentPageState;
-        public short IsDirty;                // Needs flush
-        public short PromoteCounter;         // Exclusive lock depth
-        public byte* BaseAddress;            // Cached page pointer
-    }
+    // SOA layout for cache-friendly SIMD scanning
+    private Span<int> _segmentPageIndices;   // Segment page index per slot
+    private Span<int> _memPageIndices;       // Memory page index per slot
+    private Span<byte> _dirtyFlags;          // Dirty flag per slot
+    private Span<nint> _addresses;           // Raw page address per slot
 
-    private CachedEntry[] _cachedEntries;
-    private int[] _cachedPageIndices;  // File page index per cache slot
+    private int _clockHand;                  // Clock-hand eviction pointer
+    private readonly long _epoch;            // Epoch tag for page access
+    private readonly ChangeSet _changeSet;   // Dirty tracking
 }
 ```
 
-**Access Pattern:**
+**Access Pattern (Three-Tier Hot Path):**
 
 ```csharp
-public ChunkHandle GetChunkHandle(int chunkId, bool dirty)
+internal byte* GetChunkAddress(int chunkId, bool dirty = false)
 {
-    var (pageIndex, offset) = GetChunkLocation(chunkId);
-    var cacheIndex = FindOrLoadPage(pageIndex);
+    (int pageIndex, int offset) = _segment.GetChunkLocation(chunkId);
 
-    ref var entry = ref _cachedEntries[cacheIndex];
-    entry.HitCount++;  // Update LRU
-    entry.PinCounter++;  // Prevent eviction
-
-    if (dirty)
-        entry.IsDirty = 1;
-
-    return new ChunkHandle
+    // === ULTRA FAST PATH: MRU check (branch-prediction friendly) ===
+    var mru = _mruSlot;
+    if (_pageIndices[mru] == pageIndex)
     {
-        Address = entry.BaseAddress + offset,
-        CacheIndex = cacheIndex,
-        Accessor = this
-    };
+        if (dirty) _dirtyFlags |= (ushort)(1 << mru);
+        return (byte*)_baseAddresses[mru] + offset * _stride;
+    }
+
+    // === FAST PATH: SIMD Vector256 parallel scan of 16 slots ===
+    fixed (int* indices = _pageIndices)
+    {
+        var target = Vector256.Create(pageIndex);
+        var v0 = Vector256.Load(indices);
+        var mask0 = Vector256.Equals(v0, target).ExtractMostSignificantBits();
+        if (mask0 != 0) return GetFromSlot(BitOperations.TrailingZeroCount(mask0), ...);
+
+        var v1 = Vector256.Load(indices + 8);
+        var mask1 = Vector256.Equals(v1, target).ExtractMostSignificantBits();
+        if (mask1 != 0) return GetFromSlot(8 + BitOperations.TrailingZeroCount(mask1), ...);
+    }
+
+    // === SLOW PATH: Cache miss — clock-hand eviction ===
+    return LoadAndGet(pageIndex, offset, dirty);
 }
 ```
 
-**Eviction (LRU):**
+**Eviction (Clock-Hand):**
 
 ```csharp
-private int FindOrLoadPage(int pageIndex)
+private int FindEvictionSlot()
 {
-    // Check if already cached
-    for (int i = 0; i < MaxCachedPages; i++)
+    // Use unused slots first
+    if (_usedSlots < Capacity) return _usedSlots++;
+
+    // Clock-hand: advance, skip MRU
+    var hand = (byte)((_clockHand + 1) & 0xF);
+    if (hand == _mruSlot) hand = (byte)((hand + 1) & 0xF);
+    _clockHand = hand;
+    return hand;
+}
+
+private void EvictSlot(int slot)
+{
+    // Flush dirty to ChangeSet before evicting
+    var mask = 1 << slot;
+    if ((_dirtyFlags & mask) != 0 && _changeSet != null)
     {
-        if (_cachedPageIndices[i] == pageIndex)
-            return i;  // Cache hit
+        _changeSet.AddByMemPageIndex(_memPageIndices[slot]);
+        _dirtyFlags = (ushort)(_dirtyFlags & ~mask);
     }
-
-    // Cache miss: find victim (lowest HitCount)
-    int victimIndex = -1;
-    int lowestHitCount = int.MaxValue;
-
-    for (int i = 0; i < MaxCachedPages; i++)
-    {
-        if (_cachedEntries[i].PinCounter > 0)
-            continue;  // Skip pinned entries
-
-        if (_cachedEntries[i].HitCount < lowestHitCount)
-        {
-            lowestHitCount = _cachedEntries[i].HitCount;
-            victimIndex = i;
-        }
-    }
-
-    if (victimIndex < 0)
-        throw new InvalidOperationException("All pages pinned");
-
-    // Evict victim and load new page
-    EvictPage(victimIndex);
-    LoadPage(victimIndex, pageIndex);
-
-    return victimIndex;
+    _pageIndices[slot] = InvalidPageIndex;
 }
 ```
 
-**Pin/Unpin:**
+Key differences from the old LRU approach: no pinning mechanism (epoch protects pages from eviction at the `PagedMMF` level), O(1) amortized clock-hand (no scanning for minimum hit count), and eviction always succeeds.
+
+**Epoch Protection (No Pin/Unpin):**
+
+The old `ChunkHandle` with `Pin/Unpin` semantics is gone. Pages are protected from eviction by their epoch tag (`AccessEpoch >= MinActiveEpoch`), set atomically during `RequestPageEpoch`. No reference counting or explicit pinning is needed — the `EpochGuard` scope determines lifetime.
 
 ```csharp
-public struct ChunkHandle : IDisposable
-{
-    public byte* Address;
-    private int CacheIndex;
-    private ChunkRandomAccessor Accessor;
+// Old pattern (deleted):
+//   var handle = accessor.GetChunkHandle(chunkId, dirty: true);
+//   handle.Address[0] = 42;
+//   handle.Dispose();  // Unpin
 
-    public void Dispose()
-    {
-        ref var entry = ref Accessor._cachedEntries[CacheIndex];
-        entry.PinCounter--;  // Unpin
-    }
+// New pattern:
+byte* addr = accessor.GetChunkAddress(chunkId, dirty: true);
+addr[0] = 42;
+// No dispose needed per chunk — epoch protects the page
+```
+
+**Exclusive Latching (Replaces Promote/Demote):**
+
+```csharp
+// Acquire exclusive latch (Idle → Exclusive) via SIMD lookup
+public bool TryLatchExclusive(int chunkId)
+{
+    (int pageIndex, _) = _segment.GetChunkLocation(chunkId);
+    // SIMD search for cached page slot...
+    return _pagedMMF.TryLatchPageExclusive(_memPageIndices[slot]);
+}
+
+// Release exclusive latch (Exclusive → Idle)
+public void UnlatchExclusive(int chunkId)
+{
+    (int pageIndex, _) = _segment.GetChunkLocation(chunkId);
+    // SIMD search for cached page slot...
+    _pagedMMF.UnlatchPageExclusive(_memPageIndices[slot]);
 }
 ```
 
-**Promotion (Shared → Exclusive):**
+No promotion/demotion needed — the epoch model has only two transitions: `Idle → Exclusive` (latch) and `Exclusive → Idle` (unlatch). Read access is epoch-protected without changing page state.
+
+**Lifecycle (ref struct, No Pooling):**
+
+`ChunkAccessor` is a `ref struct` (~303 bytes) allocated entirely on the stack. No heap allocation, no object pooling needed. All 16 cache slots use fixed-size arrays embedded directly in the struct. Disposal flushes dirty pages to the `ChangeSet` but does not release page references — epoch handles that.
 
 ```csharp
-public void PromoteChunk(int chunkId)
-{
-    var (pageIndex, _) = GetChunkLocation(chunkId);
-    var cacheIndex = FindCachedPage(pageIndex);
-
-    ref var entry = ref _cachedEntries[cacheIndex];
-
-    if (entry.PromoteCounter == 0)
-    {
-        // Request exclusive access from PagedMMF
-        _pagedMMF.PromotePageToExclusive(pageIndex);
-        entry.CurrentPageState = PageState.Exclusive;
-    }
-
-    entry.PromoteCounter++;
-}
-
-public void DemoteChunk(int chunkId)
-{
-    var (pageIndex, _) = GetChunkLocation(chunkId);
-    var cacheIndex = FindCachedPage(pageIndex);
-
-    ref var entry = ref _cachedEntries[cacheIndex];
-    entry.PromoteCounter--;
-
-    if (entry.PromoteCounter == 0)
-    {
-        // Release exclusive access
-        _pagedMMF.DemotePageToShared(pageIndex);
-        entry.CurrentPageState = PageState.Shared;
-    }
-}
-```
-
-**Object Pooling:**
-
-```csharp
-private static ConcurrentBag<ChunkRandomAccessor> _pool = new();
-
-public static ChunkRandomAccessor Get(ChunkBasedSegment segment)
-{
-    if (_pool.TryTake(out var accessor))
-    {
-        accessor.Initialize(segment);
-        return accessor;
-    }
-    return new ChunkRandomAccessor(segment);
-}
-
-public void ReturnToPool()
-{
-    Reset();
-    _pool.Add(this);
-}
+// Created inside an epoch scope, used on the stack
+using var accessor = segment.CreateChunkAccessor(epoch, changeSet);
+ref MyStruct data = ref accessor.GetChunk<MyStruct>(chunkId, dirty: true);
+data.Value = 42;
+// accessor.Dispose() → CommitChanges() flushes dirty to ChangeSet
 ```
 
 ---
@@ -3412,8 +3376,7 @@ src/Typhon.Engine/
 │   ├── ManagedPagedMMF.cs                # Segment management
 │   ├── LogicalSegment.cs                 # Multi-page abstraction
 │   ├── ChunkBasedSegment.cs              # Fixed-size chunk allocation
-│   ├── ChunkRandomAccessor.cs            # Chunk-level caching
-│   ├── PageAccessor.cs                   # Page access interface
+│   ├── ChunkAccessor.cs             # Epoch-based chunk-level caching
 │   ├── PageBaseHeader.cs                 # Page structure definitions
 │   ├── VariableSizedBufferSegment.cs     # Variable-size elements
 │   └── StringTableSegment.cs             # String storage

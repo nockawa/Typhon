@@ -67,17 +67,15 @@ internal sealed class DiagnosticCommandExecutor
         metrics.GetMemPageExtraInfo(out var extra);
 
         var totalPages = extra.FreeMemPageCount + extra.AllocatingMemPageCount +
-                         extra.IdleMemPageCount + extra.SharedMemPageCount +
-                         extra.ExclusiveMemPageCount + extra.IdleAndDirtyMemPageCount;
+                         extra.IdleMemPageCount + extra.ExclusiveMemPageCount;
         var totalBytes = (long)totalPages * PagedMMF.PageSize;
         sb.AppendLine($"  [grey]Total pages:[/]     [white]{totalPages}[/] [grey]({FormatBytes(totalBytes)})[/]");
 
         sb.AppendLine("  [grey]State breakdown:[/]");
         sb.AppendLine($"    [grey]Free:[/]          [white]{extra.FreeMemPageCount}[/]  [grey]({Pct(extra.FreeMemPageCount, totalPages)})[/]");
         sb.AppendLine($"    [grey]Idle:[/]          [white]{extra.IdleMemPageCount}[/]  [grey]({Pct(extra.IdleMemPageCount, totalPages)})[/]");
-        sb.AppendLine($"    [grey]Shared:[/]        [white]{extra.SharedMemPageCount}[/]  [grey]({Pct(extra.SharedMemPageCount, totalPages)})[/]");
         sb.AppendLine($"    [grey]Exclusive:[/]     [white]{extra.ExclusiveMemPageCount}[/]  [grey]({Pct(extra.ExclusiveMemPageCount, totalPages)})[/]");
-        sb.AppendLine($"    [grey]Dirty:[/]         [white]{extra.IdleAndDirtyMemPageCount}[/]  [grey]({Pct(extra.IdleAndDirtyMemPageCount, totalPages)})[/]");
+        sb.AppendLine($"    [grey]Dirty:[/]         [white]{extra.DirtyPageCount}[/]  [grey]({Pct(extra.DirtyPageCount, totalPages)})[/]");
         sb.AppendLine($"    [grey]Allocating:[/]    [white]{extra.AllocatingMemPageCount}[/]");
         sb.AppendLine("  [grey]──────────────────────────────────────[/]");
 
@@ -150,9 +148,8 @@ internal sealed class DiagnosticCommandExecutor
             ("Free", extra.FreeMemPageCount),
             ("Allocating", extra.AllocatingMemPageCount),
             ("Idle", extra.IdleMemPageCount),
-            ("Shared", extra.SharedMemPageCount),
             ("Exclusive", extra.ExclusiveMemPageCount),
-            ("IdleAndDirty", extra.IdleAndDirtyMemPageCount),
+            ("Dirty", extra.DirtyPageCount),
         };
 
         sb.AppendLine("  [grey]State          Count[/]");
@@ -160,8 +157,7 @@ internal sealed class DiagnosticCommandExecutor
 
         foreach (var (name, count) in states)
         {
-            if (filterState != null && !name.Equals(filterState, StringComparison.OrdinalIgnoreCase) &&
-                !name.Replace("And", "").Equals(filterState, StringComparison.OrdinalIgnoreCase))
+            if (filterState != null && !name.Equals(filterState, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -202,19 +198,24 @@ internal sealed class DiagnosticCommandExecutor
         }
 
         var mmf = _session.Engine.MMF;
-        if (!mmf.RequestPage(pageIndex, false, out var pa))
+        var epochManager = _session.Engine.EpochManager;
+        using var guard = EpochGuard.Enter(epochManager);
+        var epoch = epochManager.GlobalEpoch;
+
+        if (!mmf.RequestPageEpoch(pageIndex, epoch, out var memPageIdx))
         {
             return CommandResult.Error($"Error: Could not access page {pageIndex}.");
         }
 
-        using (pa)
+        unsafe
         {
+            var pageAddr = mmf.GetMemPageAddress(memPageIdx);
             var sb = new StringBuilder();
 
             if (raw)
             {
-                // Raw hex dump of the entire page via WholePageReadOnly span
-                var wholePage = pa.WholePageReadOnly;
+                // Raw hex dump of the entire page via direct pointer
+                var wholePage = new ReadOnlySpan<byte>(pageAddr, PagedMMF.PageSize);
                 for (var offset = 0; offset < wholePage.Length; offset += 16)
                 {
                     sb.Append($"  {offset:X4}: ");
@@ -241,7 +242,7 @@ internal sealed class DiagnosticCommandExecutor
             else
             {
                 // Structured view: parse the PageBaseHeader from the header span
-                var headerSpan = pa.PageHeaderReadOnly;
+                var headerSpan = new ReadOnlySpan<byte>(pageAddr, PagedMMF.PageHeaderSize);
                 var baseHeader = MemoryMarshal.Read<PageBaseHeader>(headerSpan);
 
                 sb.AppendLine($"  [white]Page {pageIndex} — Structured View[/]");
@@ -258,7 +259,7 @@ internal sealed class DiagnosticCommandExecutor
                 // Hex dump of first 128 bytes of raw data area
                 sb.AppendLine("  [white]Data Preview (first 128 bytes)[/]");
                 sb.AppendLine("  [grey]──────────────────────────────────────[/]");
-                var rawData = pa.PageRawDataReadOnly;
+                var rawData = new ReadOnlySpan<byte>(pageAddr + PagedMMF.PageHeaderSize, PagedMMF.PageRawDataSize);
                 var previewLen = Math.Min(128, rawData.Length);
                 for (var offset = 0; offset < previewLen; offset += 16)
                 {
@@ -461,6 +462,7 @@ internal sealed class DiagnosticCommandExecutor
             }
         }
 
+        using var btreeGuard = EpochGuard.Enter(_session.Engine.EpochManager);
         var seg = btree.Segment;
         var sb = new StringBuilder();
         sb.AppendLine($"  [white]B+Tree dump: {Markup.Escape(indexName)}[/]");
@@ -479,10 +481,10 @@ internal sealed class DiagnosticCommandExecutor
             // Dump raw chunk data
             if (chunk.Value >= 0 && chunk.Value < seg.AllocatedChunkCount)
             {
-                var accessor = seg.CreateChunkAccessor();
+                using var accessor = seg.CreateChunkAccessor();
                 unsafe
                 {
-                    var ptr = (byte*)accessor.GetChunkAddress(chunk.Value);
+                    var ptr = accessor.GetChunkAddress(chunk.Value);
                     sb.AppendLine();
                     sb.AppendLine("  [white]Raw chunk data:[/]");
                     var chunkSize = Math.Min(seg.Stride, 128);
@@ -526,6 +528,8 @@ internal sealed class DiagnosticCommandExecutor
         var sb = new StringBuilder();
         sb.AppendLine($"  Validating B+Tree [white]{Markup.Escape(indexName)}[/]...");
 
+        var checkEpochManager = _session.Engine.EpochManager;
+        var checkDepth = checkEpochManager.EnterScope();
         try
         {
             var accessor = btree.Segment.CreateChunkAccessor();
@@ -535,6 +539,10 @@ internal sealed class DiagnosticCommandExecutor
         catch (Exception ex)
         {
             sb.AppendLine($"  [red]Validation FAILED: {Markup.Escape(ex.Message)}[/]");
+        }
+        finally
+        {
+            checkEpochManager.ExitScope(checkDepth);
         }
 
         return CommandResult.Markup(sb.ToString().TrimEnd());
@@ -577,27 +585,36 @@ internal sealed class DiagnosticCommandExecutor
 
         // Look up the entity in the primary key index
         var pkIndex = table.PrimaryKeyIndex;
-        var accessor = pkIndex.Segment.CreateChunkAccessor();
-        unsafe
+        var epochManager = _session.Engine.EpochManager;
+        var epochDepth = epochManager.EnterScope();
+        try
         {
-            var lookupResult = pkIndex.TryGet(&entityId, ref accessor);
-            if (!lookupResult.IsSuccess)
+            var accessor = pkIndex.Segment.CreateChunkAccessor();
+            unsafe
             {
-                return CommandResult.Error($"Error: Entity {entityId} not found in {componentName}.");
+                var lookupResult = pkIndex.TryGet(&entityId, ref accessor);
+                if (!lookupResult.IsSuccess)
+                {
+                    return CommandResult.Error($"Error: Entity {entityId} not found in {componentName}.");
+                }
+
+                var revChunkId = lookupResult.Value;
+                var revAccessor = table.CompRevTableSegment.CreateChunkAccessor();
+                var revPtr = (CompRevStorageHeader*)revAccessor.GetChunkAddress(revChunkId);
+
+                var sb = new StringBuilder();
+                sb.AppendLine($"  [white]Entity {entityId} — {Markup.Escape(componentName)} revision chain[/]");
+                sb.AppendLine("  [grey]──────────────────────────────────────[/]");
+                sb.AppendLine($"  [grey]Chain:[/]           [white]{revPtr->ChainLength} chunk(s), {revPtr->ItemCount} items[/]");
+                sb.AppendLine($"  [grey]First revision:[/]  [white]{revPtr->FirstItemRevision}[/] [grey](index {revPtr->FirstItemIndex})[/]");
+                sb.AppendLine($"  [grey]Next chunk:[/]      [white]{(revPtr->NextChunkId >= 0 ? revPtr->NextChunkId.ToString() : "(none)")}[/]");
+
+                return CommandResult.Markup(sb.ToString().TrimEnd());
             }
-
-            var revChunkId = lookupResult.Value;
-            var revAccessor = table.CompRevTableSegment.CreateChunkAccessor();
-            var revPtr = (CompRevStorageHeader*)revAccessor.GetChunkAddress(revChunkId);
-
-            var sb = new StringBuilder();
-            sb.AppendLine($"  [white]Entity {entityId} — {Markup.Escape(componentName)} revision chain[/]");
-            sb.AppendLine("  [grey]──────────────────────────────────────[/]");
-            sb.AppendLine($"  [grey]Chain:[/]           [white]{revPtr->ChainLength} chunk(s), {revPtr->ItemCount} items[/]");
-            sb.AppendLine($"  [grey]First revision:[/]  [white]{revPtr->FirstItemRevision}[/] [grey](index {revPtr->FirstItemIndex})[/]");
-            sb.AppendLine($"  [grey]Next chunk:[/]      [white]{(revPtr->NextChunkId >= 0 ? revPtr->NextChunkId.ToString() : "(none)")}[/]");
-
-            return CommandResult.Markup(sb.ToString().TrimEnd());
+        }
+        finally
+        {
+            epochManager.ExitScope(epochDepth);
         }
     }
 
@@ -661,6 +678,7 @@ internal sealed class DiagnosticCommandExecutor
             return CommandResult.Error($"Error: No component table for '{componentName}'.");
         }
 
+        using var mvccGuard = EpochGuard.Enter(_session.Engine.EpochManager);
         var revSeg = table.CompRevTableSegment;
         var allocated = revSeg.AllocatedChunkCount;
 
@@ -675,7 +693,7 @@ internal sealed class DiagnosticCommandExecutor
         // Walk revision headers to compute statistics
         if (allocated > 0)
         {
-            var accessor = revSeg.CreateChunkAccessor();
+            using var accessor = revSeg.CreateChunkAccessor();
             var totalItems = 0L;
             var maxChain = 0;
             var singleRevCount = 0;

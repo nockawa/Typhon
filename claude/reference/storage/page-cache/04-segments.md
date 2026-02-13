@@ -8,13 +8,13 @@ Segments abstract over multiple physical pages to provide a contiguous logical a
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        LogicalSegment                            │
+│                        LogicalSegment                           │
 │   Provides: Multi-page abstraction, linked page directory       │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                      ChunkBasedSegment                           │
+│                      ChunkBasedSegment                          │
 │   Adds: Fixed-size chunk allocation, 3-level occupancy bitmap   │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -57,21 +57,21 @@ The first page (root) has a special structure:
 ```
 Root Page (8192 bytes):
 ┌─────────────────────────────────────────────────────────────────┐
-│ PageBaseHeader (64 bytes)                                        │
+│ PageBaseHeader (64 bytes)                                       │
 │   Flags = IsLogicalSegment | IsLogicalSegmentRoot               │
 ├─────────────────────────────────────────────────────────────────┤
 │ LogicalSegmentHeader (8 bytes, at offset 64)                    │
 │   LogicalSegmentNextMapPBID    (int) → next index page          │
 │   LogicalSegmentNextRawDataPBID (int) → next data page          │
 ├─────────────────────────────────────────────────────────────────┤
-│ PageMetadata (128 bytes)                                         │
+│ PageMetadata (128 bytes)                                        │
 │   Used by ChunkBasedSegment for occupancy bitmap                │
 ├─────────────────────────────────────────────────────────────────┤
-│ Index Section (2000 bytes)                                       │
+│ Index Section (2000 bytes)                                      │
 │   int[500] page indices (0 = end marker)                        │
 ├─────────────────────────────────────────────────────────────────┤
-│ Data Section (6000 bytes)                                        │
-│   Available for actual data                                      │
+│ Data Section (6000 bytes)                                       │
+│   Available for actual data                                     │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -82,15 +82,15 @@ When a segment exceeds 500 pages, overflow pages store additional indices:
 ```
 Overflow Page (8192 bytes):
 ┌─────────────────────────────────────────────────────────────────┐
-│ PageBaseHeader (64 bytes)                                        │
+│ PageBaseHeader (64 bytes)                                       │
 │   Flags = IsLogicalSegment (NOT root)                           │
 ├─────────────────────────────────────────────────────────────────┤
 │ LogicalSegmentHeader (8 bytes)                                  │
 │   LogicalSegmentNextMapPBID → next overflow (or 0)              │
 ├─────────────────────────────────────────────────────────────────┤
-│ PageMetadata (128 bytes)                                         │
+│ PageMetadata (128 bytes)                                        │
 ├─────────────────────────────────────────────────────────────────┤
-│ Index Section (8000 bytes)                                       │
+│ Index Section (8000 bytes)                                      │
 │   int[2000] page indices (0 = end marker)                       │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -175,18 +175,20 @@ public static (int pageIndex, int offset) GetItemLocation(int itemIndex, int ite
 ### Page Access
 
 ```csharp
-// Get shared (read) access to a segment page
-public void GetPageSharedAccessor(int segmentPageIndex, out PageAccessor accessor)
+// Get raw pointer to a segment page (caller must be inside an EpochGuard scope)
+public unsafe byte* GetPageAddress(int segmentPageIndex, long epoch, out int memPageIndex)
 {
     int filePageIndex = _pages[segmentPageIndex];
-    _manager.RequestPage(filePageIndex, exclusive: false, out accessor);
+    Manager.RequestPageEpoch(filePageIndex, epoch, out memPageIndex);
+    return Manager.GetMemPageAddress(memPageIndex);
 }
 
-// Get exclusive (write) access
-public void GetPageExclusiveAccessor(int segmentPageIndex, out PageAccessor accessor)
+// Get exclusive (write) access to a segment page (caller must be inside an EpochGuard scope)
+public unsafe byte* GetPageAddressExclusive(int segmentPageIndex, long epoch, out int memPageIndex)
 {
-    int filePageIndex = _pages[segmentPageIndex];
-    _manager.RequestPage(filePageIndex, exclusive: true, out accessor);
+    byte* addr = GetPageAddress(segmentPageIndex, epoch, out memPageIndex);
+    Manager.TryLatchPageExclusive(memPageIndex);
+    return addr;
 }
 ```
 
@@ -346,16 +348,15 @@ public bool Grow(int minNewPageCount = 0, ChangeSet changeSet = null)
         base.Grow(newLength, clearNewPages: true, changeSet);
         
         // 2. Clear metadata (bitmap) for new pages
+        var epoch = _manager.EpochManager.GlobalEpoch;
         for (int i = currentLength; i < newLength; i++)
         {
-            GetPageExclusiveAccessor(i, out var page);
-            using (page)
-            {
-                // Clear occupancy bitmap in metadata
-                int longCount = (ChunkCountPerPage + 63) >> 6;
-                page.PageMetadata.Cast<byte, long>().Slice(0, longCount).Clear();
-                changeSet?.Add(page);
-            }
+            byte* addr = GetPageAddressExclusive(i, epoch, out var memIdx);
+            // Clear occupancy bitmap in page metadata area
+            int longCount = (ChunkCountPerPage + 63) >> 6;
+            new Span<long>(addr + PagedMMF.PageMetadataOffset, longCount).Clear();
+            changeSet?.AddByMemPageIndex(memIdx);
+            _manager.UnlatchPageExclusive(memIdx);
         }
         
         // 3. Extend bitmap (copies L1/L2 from old, new pages are zeroed)
@@ -391,8 +392,8 @@ Each page's metadata (128 bytes) stores the L0 level of the occupancy bitmap:
 PageMetadata (128 bytes = 1024 bits):
 
 ┌──────────────────────────────────────────────────────────────────┐
-│ long[0]  │ long[1]  │ long[2]  │ ... │ long[15]                 │
-│ bits 0-63│bits 64-127│bits 128-191│   │ bits 960-1023           │
+│ long[0]  │ long[1]  │ long[2]  │ ... │ long[15]                  │
+│ bits 0-63│bits 64-127│bits 128-191│   │ bits 960-1023            │
 └──────────────────────────────────────────────────────────────────┘
 
 Each bit = 1 chunk slot
@@ -402,8 +403,8 @@ Each bit = 1 chunk slot
 ### ChunkAccessor Integration
 
 ```csharp
-// Create accessor for chunk operations
-using var accessor = new ChunkAccessor(segment, changeSet);
+// Create epoch-based accessor for chunk operations (caller must be inside an EpochGuard scope)
+using var accessor = segment.CreateChunkAccessor(epoch, changeSet);
 
 // Get chunk address
 byte* ptr = accessor.GetChunkAddress(chunkId, dirty: true);
@@ -413,8 +414,9 @@ ref MyComponent comp = ref Unsafe.AsRef<MyComponent>(ptr);
 comp.Value = 42;
 
 // Accessor handles:
-// - Page caching (16-slot SIMD cache)
-// - Dirty tracking
+// - Page caching (16-slot SOA cache with clock-hand eviction)
+// - Epoch-based page protection
+// - Dirty tracking via ChangeSet
 // - Automatic flush on dispose
 ```
 

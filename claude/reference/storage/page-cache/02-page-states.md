@@ -9,12 +9,12 @@ internal enum PageState : ushort
 {
     Free         = 0,   // Page not yet allocated to any file page
     Allocating   = 1,   // Being assigned by AllocateMemoryPage
-    Idle         = 2,   // Allocated but not in use, can be evicted
-    Shared       = 3,   // Read access (one or more concurrent threads)
-    Exclusive    = 4,   // Write access (single thread only)
-    IdleAndDirty = 5,   // Released but needs disk flush
+    Idle         = 2,   // Allocated but not in active exclusive use; protected from eviction by epoch tag and/or DirtyCounter > 0
+    Exclusive    = 4,   // Write access — single thread holds PageExclusiveLatch
 }
 ```
+
+> **Note**: The `Shared` and `IdleAndDirty` states were removed in the epoch-based resource management migration (#69). Read-access protection is now handled by epoch tags (`AccessEpoch`), and dirty tracking is orthogonal to page state via `DirtyCounter`.
 
 ## Key PageInfo Properties
 
@@ -25,44 +25,40 @@ Each memory page slot is tracked by a `PageInfo` instance with these state-relat
 | `MemPageIndex` | `int` | Immutable index into the memory cache array (0 to N-1) |
 | `FilePageIndex` | `int` | Which file page is cached here (-1 if unmapped) |
 | `PageState` | `PageState` | Current state in the lifecycle (see enum above) |
-| `LockedByThreadId` | `int` | Thread ID holding access (0 if none or multiple readers) |
-| `ConcurrentSharedCounter` | `int` | Number of active accessors (shared or re-entrant exclusive) |
+| `PageExclusiveLatch` | `AccessControlSmall` | Thread ownership for exclusive latch (replaces old `LockedByThreadId`) |
+| `ExclusiveLatchDepth` | `short` | Re-entrance depth for exclusive latching (multiple chunks on same page) |
+| `AccessEpoch` | `long` | Epoch tag when page was last accessed; pages with `AccessEpoch >= MinActiveEpoch` cannot be evicted |
 | `DirtyCounter` | `int` | Pending write-backs; >0 prevents eviction |
 | `ClockSweepCounter` | `int` | Eviction priority (0-5); higher = more recently used |
-| `StateSyncRoot` | `AccessControlSmall` | 4-byte reader-writer lock protecting state transitions |
+| `StateSyncRoot` | `AccessControlSmall` | 4-byte lock protecting state transitions |
 
 ## State Machine Diagram
 
 ```
-                         ┌────────────────────────────────────────────┐
-                         │                                            │
-                         ▼                                            │
-    ┌────────┐    TryAcquire()    ┌────────────┐                      │
-    │  Free  │───────────────────►│ Allocating │                      │
-    └────────┘                    └─────┬──────┘                      │
-         ▲                              │                             │
-         │                    TransitionPageToAccess()                │
-         │                              │                             │
-         │              ┌───────────────┴───────────────┐             │
-         │              ▼                               ▼             │
-         │        ┌──────────┐                  ┌───────────┐         │
-         │        │  Shared  │◄────────────────►│ Exclusive │         │
-         │        └────┬─────┘    promote/      └─────┬─────┘         │
-         │             │          demote              │               │
-         │             │                              │               │
-         │             └──────────┬───────────────────┘               │
-         │                        │                                   │
-         │          TransitionPageFromAccessToIdle()                  │
-         │                        │                                   │
-         │              ┌─────────┴─────────┐                         │
-         │              ▼                   ▼                         │
-         │        ┌──────────┐       ┌──────────────┐                 │
-         │        │   Idle   │       │ IdleAndDirty │                 │
-         │        └────┬─────┘       └──────┬───────┘                 │
-         │             │                    │                         │
-         │   (eviction)│     DecrementDirty()                         │
-         │             │     (DirtyCounter=0)                         │
-         └─────────────┴────────────────────┴─────────────────────────┘
+                    TryAcquire()         AllocateMemoryPageCore()
+    ┌────────┐  ─────────────────►┌────────────┐
+    │  Free  │                    │ Allocating │
+    └────────┘                    └─────┬──────┘
+         ▲                              │
+         │                     RequestPageEpoch()
+         │                     (sets AccessEpoch)
+         │                              │
+         │                              ▼
+         │                        ┌───────────┐
+         │                        │    Idle   │◄──── UnlatchPageExclusive()
+         │                        └─────┬─────┘      (resets AccessEpoch=0)
+         │                              │
+         │              TryLatchPageExclusive()
+         │                              │
+         │                              ▼
+         │                        ┌────────────┐
+         │                        │  Exclusive │
+         │                        └─────┬──────┘
+         │                              │
+         │       (eviction, when Idle   │
+         │        + AccessEpoch < Min   │
+         │        + DirtyCounter == 0)  │
+         └──────────────────────────────┘
 ```
 
 ## State Descriptions
@@ -73,8 +69,6 @@ Each memory page slot is tracked by a `PageInfo` instance with these state-relat
 
 **Properties**:
 - `FilePageIndex = -1`
-- `ConcurrentSharedCounter = 0`
-- `LockedByThreadId = 0`
 - `ClockSweepCounter = 0`
 
 **Transitions**:
@@ -89,162 +83,119 @@ Each memory page slot is tracked by a `PageInfo` instance with these state-relat
 - May have pending I/O read task
 
 **Transitions**:
-- → `Shared`: When `TransitionPageToAccess(exclusive: false)` succeeds
-- → `Exclusive`: When `TransitionPageToAccess(exclusive: true)` succeeds
+- → `Idle`: When `RequestPageEpoch()` completes (I/O finished, epoch tag set)
 
 ### Idle (2)
 
-**Meaning**: Page is loaded in cache but not currently accessed. **Can be evicted**.
+**Meaning**: Page is loaded in cache but not currently under exclusive access. May or may not be evictable depending on epoch tag and dirty state.
+
+**Eviction eligibility**: `AccessEpoch < MinActiveEpoch AND DirtyCounter == 0`
 
 **Properties**:
 - `FilePageIndex` is valid (page is cached)
-- `ConcurrentSharedCounter = 0`
-- `DirtyCounter = 0` (no pending writes)
+- `AccessEpoch` may be set (epoch-protected) or 0 (unprotected)
+- `DirtyCounter` may be > 0 (dirty, not evictable)
 
 **Transitions**:
-- → `Shared`: When `TransitionPageToAccess(exclusive: false)` succeeds
-- → `Exclusive`: When `TransitionPageToAccess(exclusive: true)` succeeds
-- → `Allocating`: When evicted and reassigned to different file page
-
-### Shared (3)
-
-**Meaning**: Page has one or more concurrent readers.
-
-**Properties**:
-- `ConcurrentSharedCounter >= 1`
-- If counter = 1: `LockedByThreadId` = owner thread
-- If counter > 1: `LockedByThreadId = 0` (multiple threads)
-
-**Transitions**:
-- → `Shared` (stay): Additional shared access (counter++)
-- → `Exclusive`: Promotion when single reader on same thread
-- → `Idle` or `IdleAndDirty`: When last reader exits
+- → `Exclusive`: When `TryLatchPageExclusive()` succeeds
+- → `Allocating`: When evicted and reassigned to a different file page (only if evictable)
 
 ### Exclusive (4)
 
-**Meaning**: Page has exclusive (write) access by one thread.
+**Meaning**: Page has exclusive (write) access by one thread via `PageExclusiveLatch`.
 
 **Properties**:
-- `ConcurrentSharedCounter >= 1` (counts re-entrant access)
-- `LockedByThreadId` = owning thread
+- `PageExclusiveLatch.IsLockedByCurrentThread` is true for the owning thread
+- `ExclusiveLatchDepth >= 0` (tracks re-entrant access from same thread)
 
 **Transitions**:
-- → `Exclusive` (stay): Re-entrant access from same thread (counter++)
-- → `Shared`: Demotion (explicit or via accessor disposal)
-- → `Idle` or `IdleAndDirty`: When all access released
-
-### IdleAndDirty (5)
-
-**Meaning**: Page was modified but not yet flushed to disk. **Cannot be evicted** until written.
-
-**Properties**:
-- `DirtyCounter > 0`
-- `ConcurrentSharedCounter = 0`
-
-**Transitions**:
-- → `Shared`: When `TransitionPageToAccess(exclusive: false)` succeeds
-- → `Exclusive`: When `TransitionPageToAccess(exclusive: true)` succeeds
-- → `Idle`: When `DecrementDirty()` reduces `DirtyCounter` to 0
+- → `Exclusive` (stay): Re-entrant latch from same thread (`ExclusiveLatchDepth++`)
+- → `Idle`: When `UnlatchPageExclusive()` releases (depth reaches 0); `AccessEpoch` reset to 0
 
 ## Transition Rules
 
-### Entering Access Mode
+### Entering Exclusive Access
 
-`TransitionPageToAccess()` handles transitions into `Shared` or `Exclusive`:
-
-| From State | To Shared | To Exclusive |
-|------------|-----------|--------------|
-| Allocating | ✓ Set Shared, thread ID, counter=1 | ✓ Set Exclusive, thread ID, counter=1 |
-| Idle | ✓ Set Shared, thread ID, counter=1 | ✓ Set Exclusive, thread ID, counter=1 |
-| IdleAndDirty | ✓ Set Shared, thread ID, counter=1 | ✓ Set Exclusive, thread ID, counter=1 |
-| Shared (same thread) | ✓ Increment counter | ✓ Promote if counter=1 |
-| Shared (diff thread) | ✓ Increment counter, clear thread ID | ✗ Wait or fail |
-| Exclusive (same thread) | ✓ Re-entrant (counter++) | ✓ Re-entrant (counter++) |
-| Exclusive (diff thread) | ✗ Wait or fail | ✗ Wait or fail |
-
-### Exiting Access Mode
-
-`TransitionPageFromAccessToIdle()` handles release:
+`TryLatchPageExclusive()` acquires exclusive access:
 
 ```csharp
-internal void TransitionPageFromAccessToIdle(PageInfo pi)
+internal bool TryLatchPageExclusive(int memPageIndex)
 {
-    pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
+    var pi = _memPagesInfo[memPageIndex];
+
+    // Re-entrant: already latched by this thread
+    if (pi.PageExclusiveLatch.IsLockedByCurrentThread)
+    {
+        pi.ExclusiveLatchDepth++;
+        return true;
+    }
+
+    // New acquisition: check page state under StateSyncRoot
+    if (!pi.StateSyncRoot.EnterExclusiveAccess(ref wc))
+        ThrowHelper.ThrowLockTimeout(...);
+
     try
     {
-        // Decrement access counter
-        if (--pi.ConcurrentSharedCounter != 0)
-            return;  // Other accessors still active
-        
-        // Last accessor released
-        pi.LockedByThreadId = 0;
-        
-        if (pi.DirtyCounter > 0)
-        {
-            pi.PageState = PageState.IdleAndDirty;
-        }
-        else
-        {
-            pi.PageState = PageState.Idle;
-            Interlocked.Increment(ref _metrics.FreeMemPageCount);
-        }
+        if (pi.PageState != PageState.Idle)
+            return false;
+        pi.PageState = PageState.Exclusive;
     }
     finally
     {
         pi.StateSyncRoot.ExitExclusiveAccess();
     }
-}
-```
 
-## Promotion and Demotion
-
-### Shared → Exclusive (Promotion)
-
-Promotion is only allowed when:
-1. Current thread holds the **only** shared access (`ConcurrentSharedCounter == 1`)
-2. Current thread is the `LockedByThreadId`
-
-```csharp
-public bool TryPromoteToExclusive()
-{
-    // Must be sole reader
-    if (pi.ConcurrentSharedCounter != 1)
-        return false;
-    
-    // Must be same thread
-    if (pi.LockedByThreadId != Environment.CurrentManagedThreadId)
-        return false;
-    
-    pi.PageState = PageState.Exclusive;
-    _previousMode = PageState.Shared;  // Remember for demotion
+    // Acquire the latch (records thread ownership)
+    pi.PageExclusiveLatch.EnterExclusiveAccess(ref WaitContext.Null);
+    pi.ExclusiveLatchDepth = 0;
     return true;
 }
 ```
 
-### Exclusive → Shared (Demotion)
+### Exiting Exclusive Access
 
-Demotion reverts to the previous access mode:
+`UnlatchPageExclusive()` releases the latch:
 
 ```csharp
-internal void DemoteExclusive(PageInfo pi, PageState previousMode)
+internal void UnlatchPageExclusive(int memPageIndex)
 {
+    var pi = _memPagesInfo[memPageIndex];
+
+    // Re-entrant depth: just decrement
+    if (pi.ExclusiveLatchDepth > 0)
+    {
+        pi.ExclusiveLatchDepth--;
+        return;
+    }
+
+    // Release latch and transition back to Idle
+    pi.PageExclusiveLatch.ExitExclusiveAccess();
+    pi.AccessEpoch = 0;  // No longer epoch-protected after unlatch
+
     pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
-    try
-    {
-        pi.PageState = previousMode;  // Usually Shared
-    }
-    finally
-    {
-        pi.StateSyncRoot.ExitExclusiveAccess();
-    }
+    pi.PageState = PageState.Idle;
+    pi.StateSyncRoot.ExitExclusiveAccess();
 }
 ```
 
+## Epoch-Based Protection
+
+Instead of per-page reference counting (`ConcurrentSharedCounter`), pages are protected from eviction by epoch tags:
+
+1. **Enter scope**: `EpochGuard.Enter(epochManager)` pins the current thread at the global epoch
+2. **Access page**: `RequestPageEpoch(pageIndex, epoch, out memPageIndex)` tags the page with `AccessEpoch = epoch`
+3. **Exit scope**: `guard.Dispose()` unpins the thread; the global epoch may advance
+4. **Eviction check**: A page is only evictable when `AccessEpoch < MinActiveEpoch` (no active thread is in a scope that could reference it)
+
+This replaces the old `Shared` state — multiple readers simply access Idle pages through epoch-protected raw pointers without changing page state.
+
 ## Dirty Page Tracking
+
+Dirty tracking is **orthogonal** to page state. A page in `Idle` state can have `DirtyCounter > 0`:
 
 ### IncrementDirty
 
-Called when a page is marked for write-back:
+Called when a page is marked for write-back via `ChangeSet.AddByMemPageIndex()`:
 
 ```csharp
 internal void IncrementDirty(int memPageIndex)
@@ -258,23 +209,19 @@ internal void IncrementDirty(int memPageIndex)
 
 ### DecrementDirty
 
-Called after page is written to disk:
+Called after page is written to disk (in `SavePages` continuation):
 
 ```csharp
 internal void DecrementDirty(int memPageIndex)
 {
     var pi = _memPagesInfo[memPageIndex];
     pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
-    
-    if (--pi.DirtyCounter == 0 && pi.PageState == PageState.IdleAndDirty)
-    {
-        pi.PageState = PageState.Idle;
-        Interlocked.Increment(ref _metrics.FreeMemPageCount);
-    }
-    
+    --pi.DirtyCounter;
     pi.StateSyncRoot.ExitExclusiveAccess();
 }
 ```
+
+> **Note**: Unlike the old model, `DecrementDirty` no longer transitions state. Dirty pages stay `Idle` — they're simply non-evictable while `DirtyCounter > 0`.
 
 ## Eviction Eligibility
 
@@ -282,42 +229,19 @@ A page can only be evicted (via clock-sweep) if:
 
 | State | Evictable? | Reason |
 |-------|------------|--------|
-| Free | ✓ (trivially) | Already free |
-| Allocating | ✗ | In use |
-| Idle | ✓ | No active access, no pending writes |
-| Shared | ✗ | Active readers |
-| Exclusive | ✗ | Active writer |
-| IdleAndDirty | ✗ | Must flush to disk first |
+| Free | Yes (trivially) | Already free |
+| Allocating | No | In use |
+| Idle (epoch-protected) | No | `AccessEpoch >= MinActiveEpoch` |
+| Idle (dirty) | No | `DirtyCounter > 0` |
+| Idle (clean, stale epoch) | Yes | `AccessEpoch < MinActiveEpoch AND DirtyCounter == 0` |
+| Exclusive | No | Active writer |
 
 ```csharp
-private bool TryAcquire(PageInfo info)
-{
-    // Quick check without lock
-    if (info.PageState != PageState.Free && info.PageState != PageState.Idle)
-        return false;
-    
-    info.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
-    try
-    {
-        // Re-check under lock
-        if (info.PageState != PageState.Free && info.PageState != PageState.Idle)
-            return false;
-        
-        // Evict: remove from cache directory
-        if (info.PageState == PageState.Idle)
-        {
-            _memPageIndexByFilePageIndex.TryRemove(info.FilePageIndex, out _);
-        }
-        
-        info.PageState = PageState.Allocating;
-        info.FilePageIndex = -1;
-        return true;
-    }
-    finally
-    {
-        info.StateSyncRoot.ExitExclusiveAccess();
-    }
-}
+// Eviction predicate (simplified from TryAcquire)
+bool evictable = (info.PageState == PageState.Free) ||
+    (info.PageState == PageState.Idle &&
+     info.AccessEpoch < minActiveEpoch &&
+     info.DirtyCounter == 0);
 ```
 
 ## PageInfo Structure
@@ -329,24 +253,27 @@ internal class PageInfo
 {
     // Identity (immutable)
     public readonly int MemPageIndex;
-    
+
     // Current mapping
     public int FilePageIndex;           // -1 if not mapped
-    
+
     // State machine
     public PageState PageState;
-    public int LockedByThreadId;        // Thread holding lock (0 if none/multiple)
-    public int ConcurrentSharedCounter; // Number of active accesses
-    
+    public AccessControlSmall StateSyncRoot;  // 4-byte lock protecting state transitions
+
+    // Exclusive latching
+    public AccessControlSmall PageExclusiveLatch;  // Thread ownership via built-in LockedByThreadId
+    public short ExclusiveLatchDepth;              // Re-entrance depth
+
+    // Epoch protection
+    public long AccessEpoch;            // Epoch tag; >= MinActiveEpoch prevents eviction
+
     // Dirty tracking
-    public int DirtyCounter;            // Pending write-backs
-    
+    public int DirtyCounter;            // Pending write-backs; > 0 prevents eviction
+
     // Eviction priority
     private int _clockSweepCounter;     // 0-5, higher = more recently used
-    
-    // Synchronization
-    public AccessControlSmall StateSyncRoot;  // 4-byte reader-writer lock
-    
+
     // Async I/O
     private Lazy<Task<int>> _ioReadTask;
 }
@@ -363,7 +290,6 @@ try
 {
     // Modify state atomically
     pi.PageState = newState;
-    pi.ConcurrentSharedCounter = newCounter;
 }
 finally
 {
@@ -371,13 +297,13 @@ finally
 }
 ```
 
+Epoch tagging (`AccessEpoch`) uses lock-free atomic-max via `Interlocked.CompareExchange` — no lock needed since epoch values only increase.
+
 ## Summary
 
 | State | Active Access | Dirty | Evictable | Typical Duration |
 |-------|---------------|-------|-----------|------------------|
 | Free | No | No | Yes | Until first use |
 | Allocating | Transitioning | No | No | Microseconds |
-| Idle | No | No | Yes | Until next access or eviction |
-| Shared | Read(s) | Maybe | No | Duration of read operation |
-| Exclusive | Write | Maybe | No | Duration of write operation |
-| IdleAndDirty | No | Yes | No | Until flush completes |
+| Idle | Epoch-protected reads | Maybe | Only if epoch stale + clean | Variable |
+| Exclusive | Write (single thread) | Maybe | No | Duration of write operation |

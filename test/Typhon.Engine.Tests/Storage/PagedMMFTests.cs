@@ -3,13 +3,11 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NUnit.Framework;
 using Serilog;
-using Serilog.Events;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 
 namespace Typhon.Engine.Tests;
@@ -56,6 +54,7 @@ class PagedMMFTests
             })
             .AddResourceRegistry()
             .AddMemoryAllocator()
+            .AddEpochManager()
             .AddScopedPagedMemoryMappedFile(options =>
             {
                 options.DatabaseName = CurrentDatabaseName;
@@ -75,40 +74,43 @@ class PagedMMFTests
     private const int CreateFillPagesThenReadThemMemPageCount = 512;
     [Test]
     [Property("MemPageCount", CreateFillPagesThenReadThemMemPageCount)]
-    public void CreateFillPagesThenReadThem()
+    unsafe public void CreateFillPagesThenReadThem()
     {
         const int pageCount = 128;
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         {
             using var scope = _serviceProvider.CreateScope();
             var pmmf = scope.ServiceProvider.GetService<PagedMMF>();
 
             Assert.That(pmmf.GetMetrics().FreeMemPageCount, Is.EqualTo(CreateFillPagesThenReadThemMemPageCount));
-        
+
             // Fill pages with data
             {
                 var now = DateTime.UtcNow;
                 var cs = pmmf.CreateChangeSet();
+                var guard = EpochGuard.Enter(epochManager);
+                var currentEpoch = epochManager.GlobalEpoch;
                 for (int i = 0; i < pageCount; i++)
                 {
-                    pmmf.RequestPage(i, true, out var accessor);
-                    using (accessor)
-                    {
-                        var ispan = accessor.PageRawData.Cast<byte, int>();
-                        ispan[0] = i; // Set first element
-                        ispan[^1] = i; // Set last element
-                        cs.Add(accessor);
-                    }
+                    pmmf.RequestPageEpoch(i, currentEpoch, out int memPageIndex);
+                    pmmf.TryLatchPageExclusive(memPageIndex);
+                    var addr = pmmf.GetMemPageAddress(memPageIndex);
+                    var ispan = (int*)(addr + PagedMMF.PageHeaderSize);
+                    ispan[0] = i; // Set first element
+                    ispan[PagedMMF.PageRawDataSize / sizeof(int) - 1] = i; // Set last element
+                    cs.AddByMemPageIndex(memPageIndex);
+                    pmmf.UnlatchPageExclusive(memPageIndex);
                 }
+                guard.Dispose();
                 Console.WriteLine($"Average time to fill one page {((DateTime.UtcNow - now).TotalSeconds / pageCount).FriendlyTime()}");
 
-                Assert.That(pmmf.GetMetrics().FreeMemPageCount, Is.EqualTo(CreateFillPagesThenReadThemMemPageCount - pageCount));
                 now = DateTime.UtcNow;
                 cs.SaveChanges();
-            
+
                 Console.WriteLine($"Average time to save one page {((DateTime.UtcNow - now).TotalSeconds / pageCount).FriendlyTime()}");
             }
-        
+
             Assert.That(pmmf.GetMetrics().FreeMemPageCount, Is.EqualTo(CreateFillPagesThenReadThemMemPageCount));
         }
 
@@ -119,89 +121,34 @@ class PagedMMFTests
             Assert.That(pmmf.GetMetrics().FreeMemPageCount, Is.EqualTo(CreateFillPagesThenReadThemMemPageCount));
             long totalRequest = 0;
             long totalAccess = 0;
-        
+
             // The file exists and has content, load it
             {
+                var guard = EpochGuard.Enter(epochManager);
+                var currentEpoch = epochManager.GlobalEpoch;
                 for (int i = 0; i < pageCount; i++)
                 {
                     var now = DateTime.UtcNow;
-                
-                    pmmf.RequestPage(i, true, out var accessor);
-                    using (accessor)
-                    {
-                        totalRequest += (DateTime.UtcNow - now).Ticks;
-                
-                        now = DateTime.UtcNow;
-                        var content = accessor.PageRawData.Cast<byte, int>();
-                        totalAccess += (DateTime.UtcNow - now).Ticks;
-                
-                        Assert.That(content[0], Is.EqualTo(i), $"Page {i} content mismatch after reset.");
-                        Assert.That(content[^1], Is.EqualTo(i), $"Page {i} content mismatch after reset.");
-                    }
+
+                    pmmf.RequestPageEpoch(i, currentEpoch, out int memPageIndex);
+                    totalRequest += (DateTime.UtcNow - now).Ticks;
+
+                    now = DateTime.UtcNow;
+                    var addr = pmmf.GetMemPageAddress(memPageIndex);
+                    var content = (int*)(addr + PagedMMF.PageHeaderSize);
+                    totalAccess += (DateTime.UtcNow - now).Ticks;
+
+                    Assert.That(content[0], Is.EqualTo(i), $"Page {i} content mismatch after reset.");
+                    Assert.That(content[PagedMMF.PageRawDataSize / sizeof(int) - 1], Is.EqualTo(i), $"Page {i} content mismatch after reset.");
                 }
+                guard.Dispose();
             }
-        
+
             Assert.That(pmmf.GetMetrics().FreeMemPageCount, Is.EqualTo(CreateFillPagesThenReadThemMemPageCount));
             Console.WriteLine($"Average Request Time: {TimeSpan.FromTicks(totalRequest / pageCount).TotalSeconds.FriendlyTime()}, Average Access Time: {TimeSpan.FromTicks(totalAccess / pageCount).TotalSeconds.FriendlyTime()}");
         }
     }
 
-    [Test]
-    [Property("MemPageCount", 4)]
-    public void MemPageStarvation()
-    {
-        using var scope = _serviceProvider.CreateScope();
-        var pmmf = scope.ServiceProvider.GetService<PagedMMF>();
-        
-        var waitTask0PagesCreated = new ManualResetEventSlim();
-        
-        var tasks = new Task[2];
-        tasks[0] = Task.Run(() =>
-        {
-            var accessors = new PageAccessor[4];
-            for (int i = 0; i < 4; i++)
-            {
-                pmmf.RequestPage(i, false, out accessors[i]);
-            }
-            waitTask0PagesCreated.Set();
-            
-            for (int i = 0; i < 4; i++)
-            {
-                Thread.Sleep(500);
-                accessors[i].Dispose();
-            }
-
-            return Task.CompletedTask;
-        });
-
-        tasks[1] = Task.Run(() =>
-        {
-            waitTask0PagesCreated.Wait();
-
-            var accessors = new PageAccessor[4];
-            for (int i = 0; i < 4; i++)
-            {
-                var now = DateTime.UtcNow;
-                pmmf.RequestPage(i + 4, false, out var pa);
-                
-                var delay = (DateTime.UtcNow - now).TotalSeconds;
-                Assert.That(delay, Is.GreaterThanOrEqualTo(0.4), $"Page {i + 4} should take at least 0.4sec to access as it is the time for the first thread to release one.");
-                Console.WriteLine($"Page {i + 4} created in {delay.FriendlyTime()}");
-                
-                pa.PageRawData[0] = 123;
-                accessors[i] = pa;
-            }
-
-            foreach (PageAccessor pa in accessors)
-            {
-                pa.Dispose();
-            }
-
-        });
-        
-        Task.WaitAll(tasks);
-    }
-    
     private static List<int> GenerateRandomAccess(int min, int max, int count=0)
     {
         int inputCount = max - min + 1;
@@ -239,6 +186,8 @@ class PagedMMFTests
     [Test]
     unsafe public void SequentialWrites()
     {
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
+
         // Write
         {
             using var scope = _serviceProvider.CreateScope();
@@ -248,31 +197,41 @@ class PagedMMFTests
             var pageWrittenCount = metrics.PageWrittenToDiskCount;
             var writtenIOCount = metrics.WrittenOperationCount;
             var cs = pmmf.CreateChangeSet();
-            pmmf.RequestPage(10, true, out var p1);    // The page 10, 11 and 12 will also be consecutive in the memory cache, 
-            pmmf.RequestPage(11, true, out var p2);    //  allowing a single write
-            pmmf.RequestPage(12, true, out var p3);
-            pmmf.RequestPage(14, true, out var p4);
-            var a = p1.WholePage.Cast<byte, int>();
+
+            var guard = EpochGuard.Enter(epochManager);
+            var currentEpoch = epochManager.GlobalEpoch;
+
+            pmmf.RequestPageEpoch(10, currentEpoch, out int mp1);    // The page 10, 11 and 12 will also be consecutive in the memory cache,
+            pmmf.RequestPageEpoch(11, currentEpoch, out int mp2);    //  allowing a single write
+            pmmf.RequestPageEpoch(12, currentEpoch, out int mp3);
+            pmmf.RequestPageEpoch(14, currentEpoch, out int mp4);
+
+            pmmf.TryLatchPageExclusive(mp1);
+            var a = (int*)pmmf.GetMemPageAddress(mp1);
             a[0] = 10;
-            cs.Add(p1);
-                
-            a = p2.WholePage.Cast<byte, int>();
+            cs.AddByMemPageIndex(mp1);
+            pmmf.UnlatchPageExclusive(mp1);
+
+            pmmf.TryLatchPageExclusive(mp2);
+            a = (int*)pmmf.GetMemPageAddress(mp2);
             a[0] = 11;
-            cs.Add(p2);
-                
-            a = p3.WholePage.Cast<byte, int>();
+            cs.AddByMemPageIndex(mp2);
+            pmmf.UnlatchPageExclusive(mp2);
+
+            pmmf.TryLatchPageExclusive(mp3);
+            a = (int*)pmmf.GetMemPageAddress(mp3);
             a[0] = 12;
-            cs.Add(p3);
-            
-            a = p4.WholePage.Cast<byte, int>();
+            cs.AddByMemPageIndex(mp3);
+            pmmf.UnlatchPageExclusive(mp3);
+
+            pmmf.TryLatchPageExclusive(mp4);
+            a = (int*)pmmf.GetMemPageAddress(mp4);
             a[0] = 14;
-            cs.Add(p4);
-            
-            p1.Dispose();
-            p2.Dispose();
-            p3.Dispose();
-            p4.Dispose();
-            
+            cs.AddByMemPageIndex(mp4);
+            pmmf.UnlatchPageExclusive(mp4);
+
+            guard.Dispose();
+
             cs.SaveChanges();
             Assert.That(metrics.PageWrittenToDiskCount, Is.EqualTo(pageWrittenCount+4));
             Assert.That(metrics.WrittenOperationCount, Is.EqualTo(writtenIOCount+2));
@@ -283,27 +242,27 @@ class PagedMMFTests
             using var scope = _serviceProvider.CreateScope();
             var pmmf = scope.ServiceProvider.GetService<PagedMMF>();
 
-            pmmf.RequestPage(10, true, out var p1);
-            pmmf.RequestPage(11, true, out var p2);
-            pmmf.RequestPage(12, true, out var p3);
-            pmmf.RequestPage(14, true, out var p4);
+            var guard = EpochGuard.Enter(epochManager);
+            var currentEpoch = epochManager.GlobalEpoch;
 
-            var a = p1.WholePage.Cast<byte, int>();
+            pmmf.RequestPageEpoch(10, currentEpoch, out int mp1);
+            pmmf.RequestPageEpoch(11, currentEpoch, out int mp2);
+            pmmf.RequestPageEpoch(12, currentEpoch, out int mp3);
+            pmmf.RequestPageEpoch(14, currentEpoch, out int mp4);
+
+            var a = (int*)pmmf.GetMemPageAddress(mp1);
             Assert.That(a[0], Is.EqualTo(10), "Page 10 should be 10");
 
-            var b = p2.WholePage.Cast<byte, int>();
+            var b = (int*)pmmf.GetMemPageAddress(mp2);
             Assert.That(b[0], Is.EqualTo(11), "Page 11 should be 11");
-            
-            var c = p3.WholePage.Cast<byte, int>();
+
+            var c = (int*)pmmf.GetMemPageAddress(mp3);
             Assert.That(c[0], Is.EqualTo(12), "Page 12 should be 12");
-            
-            var d = p4.WholePage.Cast<byte, int>();
+
+            var d = (int*)pmmf.GetMemPageAddress(mp4);
             Assert.That(d[0], Is.EqualTo(14), "Page 14 should be 14");
-            
-            p1.Dispose();
-            p2.Dispose();
-            p3.Dispose();
-            p4.Dispose();
+
+            guard.Dispose();
         }
     }
 
@@ -322,6 +281,7 @@ class PagedMMFTests
         var frameCount = 50;
         var opsPerFrame = 1000;
         var readWriteRatio = 0.75f;
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         // Size configured in the Property attribute above, right now it's 8 pages cached, which is vicious because
         //  my actual computer has more thread, which means multiple thread compete for the same memory page.
@@ -373,7 +333,7 @@ class PagedMMFTests
                 remaining -= heapCount;
             }
         }
-        
+
         {
             using var scope = _serviceProvider.CreateScope();
             var pmmf = scope.ServiceProvider.GetService<PagedMMF>();
@@ -381,7 +341,7 @@ class PagedMMFTests
             // Setup initial value of each page
             var sw = new Stopwatch();
             sw.Start();
-        
+
             Parallel.ForEach(Enumerable.Range(0, coreCount), i =>
             {
                 if (ranges.TryTake(out var operation) == false)
@@ -392,20 +352,24 @@ class PagedMMFTests
                 var firstPageIndex = operation.Item1;
                 var heapCount = operation.Item2;
 
+                var guard = EpochGuard.Enter(epochManager);
+                var currentEpoch = epochManager.GlobalEpoch;
                 var cs = pmmf.CreateChangeSet();
                 for (int j = 0; j < heapCount; j++)
                 {
                     var pageIndex = firstPageIndex + j;
-                    pmmf.RequestPage(pageIndex, true, out var a);
-                    cs.Add(a);
+                    pmmf.RequestPageEpoch(pageIndex, currentEpoch, out int memPageIndex);
+                    pmmf.TryLatchPageExclusive(memPageIndex);
+                    cs.AddByMemPageIndex(memPageIndex);
 
-                    var dest = a.WholePage.Cast<byte, int>();
+                    var dest = (int*)pmmf.GetMemPageAddress(memPageIndex);
                     dest[0] = pageIndex;
-                    a.Dispose();
+                    pmmf.UnlatchPageExclusive(memPageIndex);
                 }
+                guard.Dispose();
                 cs.SaveChanges();
             });
-            
+
             var di = pmmf.GetMetrics();
             Console.WriteLine($"Generated file in {sw.ElapsedMilliseconds}ms, Write counts: {di.PageWrittenToDiskCount}, Generated a total of {frameCount*trueOpsCount} Pages operations");
         }
@@ -416,15 +380,18 @@ class PagedMMFTests
             var tm = scope.ServiceProvider.GetRequiredService<TimeManager>();
 
             // Check the initial page of each page
-            for (int i = 0; i < pagesCount; i++)
             {
-                pmmf.RequestPage(i, false, out var a);
+                var guard = EpochGuard.Enter(epochManager);
+                var currentEpoch = epochManager.GlobalEpoch;
+                for (int i = 0; i < pagesCount; i++)
+                {
+                    pmmf.RequestPageEpoch(i, currentEpoch, out int memPageIndex);
 
-                var dest = a.WholePage.Cast<byte, int>();
-                var localI = i;
-                Assert.That(dest[0], Is.EqualTo(i), () => $"Bad DiskPageId {localI}");
-            
-                a.Dispose();
+                    var dest = (int*)pmmf.GetMemPageAddress(memPageIndex);
+                    var localI = i;
+                    Assert.That(dest[0], Is.EqualTo(i), () => $"Bad DiskPageId {localI}");
+                }
+                guard.Dispose();
             }
 
             // Simulate accesses
@@ -441,29 +408,35 @@ class PagedMMFTests
                     {
                         // Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId}] Check Page {info.PageId} is {info.ExpectedValue}");
 
-                        pmmf.RequestPage(info.PageId, false, out var a);
-                        int actual = a.WholePage.Cast<byte, int>()[0];
+                        var guard = EpochGuard.Enter(epochManager);
+                        var currentEpoch = epochManager.GlobalEpoch;
+                        pmmf.RequestPageEpoch(info.PageId, currentEpoch, out int memPageIndex);
+                        int actual = ((int*)pmmf.GetMemPageAddress(memPageIndex))[0];
 
                         // _logger.LogCritical("Check Page {PageId} has Value {ExpectedValue} and has {value}", info.PageId, info.ExpectedValue, actual);
                         Assert.That(actual, Is.EqualTo(info.ExpectedValue), $"Frame {curFrame}, Page {info.PageId} should be {info.ExpectedValue} but is {actual}");
-                    
-                        a.Dispose();
+
+                        guard.Dispose();
                     }
                     else
                     {
+                        var guard = EpochGuard.Enter(epochManager);
+                        var currentEpoch = epochManager.GlobalEpoch;
                         var cs = pmmf.CreateChangeSet();
                         // Console.WriteLine($"[{Thread.CurrentThread.ManagedThreadId}] Page {info.PageId} bumped to {info.ExpectedValue}");
 
-                        pmmf.RequestPage(info.PageId, true, out var a);
-                        cs.Add(a);
-                        var pa = a.WholePage.Cast<byte, int>();
+                        pmmf.RequestPageEpoch(info.PageId, currentEpoch, out int memPageIndex);
+                        pmmf.TryLatchPageExclusive(memPageIndex);
+                        cs.AddByMemPageIndex(memPageIndex);
+                        var pa = (int*)pmmf.GetMemPageAddress(memPageIndex);
                         ++pa[0]; // Bump the value
                         var actual = pa[0];
-                    
+
                         // _logger.LogCritical("Bump Page {PageId} to {value}, expected {ExpectedValue}", info.PageId, *pa, info.ExpectedValue);
                         Assert.That(actual, Is.EqualTo(info.ExpectedValue), $"Frame {curFrame}, Page {info.PageId} should be {info.ExpectedValue} but is {actual}");
-                    
-                        a.Dispose();
+
+                        pmmf.UnlatchPageExclusive(memPageIndex);
+                        guard.Dispose();
                         cs.SaveChanges();
                     }
                 });

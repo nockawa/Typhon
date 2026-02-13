@@ -28,6 +28,9 @@ public class ChunkBasedSegmentBitmapL3Tests
 {
     private IServiceProvider _serviceProvider;
     private ILogger<ChunkBasedSegmentBitmapL3Tests> _logger;
+    private ManagedPagedMMF _pmmf;
+    private EpochManager _epochManager;
+    private int _epochDepth;
 
     private static string CurrentDatabaseName
     {
@@ -70,6 +73,7 @@ public class ChunkBasedSegmentBitmapL3Tests
             })
             .AddResourceRegistry()
             .AddMemoryAllocator()
+            .AddEpochManager()
             .AddScopedManagedPagedMemoryMappedFile(options =>
             {
                 options.DatabaseName = CurrentDatabaseName;
@@ -80,6 +84,21 @@ public class ChunkBasedSegmentBitmapL3Tests
         _serviceProvider = serviceCollection.BuildServiceProvider();
         _serviceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
         _logger = _serviceProvider.GetRequiredService<ILogger<ChunkBasedSegmentBitmapL3Tests>>();
+
+        _pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        _epochManager = _serviceProvider.GetRequiredService<EpochManager>();
+        _epochDepth = _epochManager.EnterScope();
+    }
+
+    [TearDown]
+    public void TearDown()
+    {
+        if (_epochManager != null)
+        {
+            _epochManager.ExitScope(_epochDepth);
+        }
+
+        _pmmf?.Dispose();
     }
 
     #region Basic Allocation Tests
@@ -87,8 +106,7 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void AllocateChunk_ReturnsSequentialIds()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
 
         var allocatedIds = new List<int>();
         var freeCount = segment.FreeChunkCount;
@@ -108,8 +126,7 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void AllocateChunk_NeverReturnsZero()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
 
         // Allocate all chunks and verify none is 0
         var freeCount = segment.FreeChunkCount;
@@ -124,8 +141,7 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void AllocatedCount_MatchesActualAllocations()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
 
         var initialAllocated = segment.AllocatedChunkCount;
         Assert.That(initialAllocated, Is.EqualTo(1), "Initially only chunk 0 should be reserved");
@@ -147,8 +163,7 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void FreeChunk_DecreasesAllocatedCount()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
 
         var chunkId = segment.AllocateChunk(false);
         var allocatedBefore = segment.AllocatedChunkCount;
@@ -162,8 +177,7 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void FreeChunk_AllowsReallocation()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 1, 1024);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 1, 1024);
 
         // Allocate all available chunks
         var allocatedIds = new List<int>();
@@ -190,8 +204,7 @@ public class ChunkBasedSegmentBitmapL3Tests
     public void FreeChunk_DoubleFree_CorruptsState()
     {
         // This test documents current (buggy?) behavior where double-free corrupts state
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
 
         var chunkId = segment.AllocateChunk(false);
         var allocatedBefore = segment.AllocatedChunkCount;
@@ -220,8 +233,7 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void AllocateChunks_AllocatesRequestedCount()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 5, 64);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 5, 64);
 
         const int requestCount = 100;
         using var result = segment.AllocateChunks(requestCount, false);
@@ -235,8 +247,7 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void AllocateChunks_GrowsWhenInsufficientCapacity()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 1, 1024);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 1, 1024);
 
         var initialCapacity = segment.ChunkCapacity;
         var freeCount = segment.FreeChunkCount;
@@ -257,8 +268,7 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void AllocateChunks_GrowsAndAllocatesAll()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 1, 1024);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 1, 1024);
 
         var allocatedBefore = segment.AllocatedChunkCount;
         var freeCount = segment.FreeChunkCount;
@@ -275,9 +285,9 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void AllocateChunks_BulkOf64_UsesL1Optimization()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+
         // Need enough capacity for bulk allocation (64+ chunks)
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 64);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 64);
 
         var allocatedBefore = segment.AllocatedChunkCount;
 
@@ -296,8 +306,7 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void Allocation_CrossesL0Boundary()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 5, 64);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 5, 64);
 
         // Allocate chunks that cross the 64-bit L0 boundary
         var allocatedIds = new List<int>();
@@ -316,9 +325,8 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void Allocation_CrossesL1Boundary()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         // L1 boundary is at 64*64 = 4096 chunks
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 100, 64);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 100, 64);
 
         // Skip to near the L1 boundary by allocating many chunks
         const int targetCount = 4100; // Cross the 4096 boundary
@@ -335,8 +343,7 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void FreeChunk_AtL0Boundary()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 5, 64);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 5, 64);
 
         // Allocate past the first L0 group
         var allocatedIds = new List<int>();
@@ -373,8 +380,7 @@ public class ChunkBasedSegmentBitmapL3Tests
     {
         // This test targets a potential bug in ClearL0 where _l1All and _l2All
         // are updated using &= l1Mask instead of &= ~l1Mask
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 5, 64);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 5, 64);
 
         // Allocate all 64 chunks in the first L0 group (should set L1All bit)
         var allocatedIds = new List<int>();
@@ -419,9 +425,8 @@ public class ChunkBasedSegmentBitmapL3Tests
         // To clear that bit, we need AND with the inverse (~l1Mask).
         // But the code ANDs with the mask itself, clearing ALL OTHER bits!
         
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         // Large enough segment to have multiple L0 groups
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 64);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 64);
 
         // Allocate chunks from TWO different L0 groups
         // Group 0: chunks 1-63 (0 is reserved)
@@ -463,8 +468,7 @@ public class ChunkBasedSegmentBitmapL3Tests
     public void ClearL0_MultipleGroups_BitmapConsistency()
     {
         // Test that freeing chunks in one L0 group doesn't corrupt other groups
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 20, 64);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 20, 64);
 
         // Allocate 200 chunks across multiple L0 groups
         var allChunks = new List<int>();
@@ -512,8 +516,7 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void ClearL0_FullL0GroupThenClear_StateConsistency()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 5, 64);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 5, 64);
 
         // Fill an entire L0 group (64 consecutive chunks)
         // Skip chunk 0 which is reserved
@@ -548,8 +551,7 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void ConcurrentAllocate_NoduplicateIds()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 20, 64);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 20, 64);
 
         var allIds = new System.Collections.Concurrent.ConcurrentBag<int>();
         var tasks = new List<Task>();
@@ -560,13 +562,21 @@ public class ChunkBasedSegmentBitmapL3Tests
         {
             tasks.Add(Task.Run(() =>
             {
-                for (int i = 0; i < allocsPerThread; i++)
+                var depth = _epochManager.EnterScope();
+                try
                 {
-                    var id = segment.AllocateChunk(false);
-                    if (id > 0)
+                    for (int i = 0; i < allocsPerThread; i++)
                     {
-                        allIds.Add(id);
+                        var id = segment.AllocateChunk(false);
+                        if (id > 0)
+                        {
+                            allIds.Add(id);
+                        }
                     }
+                }
+                finally
+                {
+                    _epochManager.ExitScope(depth);
                 }
             }));
         }
@@ -584,8 +594,7 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void ConcurrentAllocateAndFree_MaintainsConsistency()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 20, 64);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 20, 64);
 
         var allocatedIds = new System.Collections.Concurrent.ConcurrentQueue<int>();
         var errors = new System.Collections.Concurrent.ConcurrentBag<string>();
@@ -597,30 +606,38 @@ public class ChunkBasedSegmentBitmapL3Tests
         {
             tasks.Add(Task.Run(() =>
             {
-                while (!cts.Token.IsCancellationRequested)
+                var depth = _epochManager.EnterScope();
+                try
                 {
-                    // Check if there's likely room before allocating
-                    if (segment.FreeChunkCount <= 0)
+                    while (!cts.Token.IsCancellationRequested)
                     {
-                        Thread.SpinWait(100);
-                        continue;
-                    }
+                        // Check if there's likely room before allocating
+                        if (segment.FreeChunkCount <= 0)
+                        {
+                            Thread.SpinWait(100);
+                            continue;
+                        }
 
-                    var id = segment.AllocateChunk(false);
-                    
-                    // Validate the returned ID against CURRENT capacity (may have grown)
-                    var currentCapacity = segment.ChunkCapacity;
-                    if (id >= currentCapacity)
-                    {
-                        errors.Add($"BUG: AllocateChunk returned {id} >= capacity {currentCapacity}");
-                        break;
+                        var id = segment.AllocateChunk(false);
+
+                        // Validate the returned ID against CURRENT capacity (may have grown)
+                        var currentCapacity = segment.ChunkCapacity;
+                        if (id >= currentCapacity)
+                        {
+                            errors.Add($"BUG: AllocateChunk returned {id} >= capacity {currentCapacity}");
+                            break;
+                        }
+
+                        if (id > 0 && id < currentCapacity)
+                        {
+                            allocatedIds.Enqueue(id);
+                        }
+                        Thread.SpinWait(10);
                     }
-                    
-                    if (id > 0 && id < currentCapacity)
-                    {
-                        allocatedIds.Enqueue(id);
-                    }
-                    Thread.SpinWait(10);
+                }
+                finally
+                {
+                    _epochManager.ExitScope(depth);
                 }
             }));
         }
@@ -630,13 +647,21 @@ public class ChunkBasedSegmentBitmapL3Tests
         {
             tasks.Add(Task.Run(() =>
             {
-                while (!cts.Token.IsCancellationRequested)
+                var depth = _epochManager.EnterScope();
+                try
                 {
-                    if (allocatedIds.TryDequeue(out var id))
+                    while (!cts.Token.IsCancellationRequested)
                     {
-                        segment.FreeChunk(id);
+                        if (allocatedIds.TryDequeue(out var id))
+                        {
+                            segment.FreeChunk(id);
+                        }
+                        Thread.SpinWait(10);
                     }
-                    Thread.SpinWait(10);
+                }
+                finally
+                {
+                    _epochManager.ExitScope(depth);
                 }
             }));
         }
@@ -672,9 +697,8 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void SmallSegment_SinglePage_MinimalCapacity()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         // Large stride = fewer chunks per page
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 1, 2048);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 1, 2048);
 
         var capacity = segment.ChunkCapacity;
         var freeCount = segment.FreeChunkCount;
@@ -697,8 +721,7 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void AllocateWithClearContent_ClearsChunkData()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
 
         // Allocate with clearing
         var chunkId = segment.AllocateChunk(true);
@@ -717,8 +740,7 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void ReserveChunk_ManualReservation()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
 
         var allocatedBefore = segment.AllocatedChunkCount;
 
@@ -741,8 +763,7 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void ReserveChunk_DoubleReserve_ReturnsFalse()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
 
         // First allocation of chunk
         var id = segment.AllocateChunk(false);
@@ -762,12 +783,11 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void Capacity_MatchesExpectedFormula()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
 
         const int pageCount = 5;
         const int stride = 64;
 
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, pageCount, stride);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, pageCount, stride);
 
         // Expected: (pageCount-1) * ChunkCountPerPage + ChunkCountRootPage
         var expectedCapacity = (pageCount - 1) * segment.ChunkCountPerPage + segment.ChunkCountRootPage;
@@ -784,13 +804,12 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void AllocateChunk_ExceedsCapacity_AutoGrows()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         
         // Use a small segment (2 pages) with large chunks to minimize initial capacity
         const int pageCount = 2;
         const int stride = 512; // Large stride = fewer chunks per page
         
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, pageCount, stride);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, pageCount, stride);
         
         var initialCapacity = segment.ChunkCapacity;
         var initialFree = segment.FreeChunkCount;
@@ -855,7 +874,6 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void StressTest_RealisticComponentSize_AutoGrowsToAccommodate()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         
         // Simulate ComponentTable's default: 4 pages
         const int pageCount = 4;
@@ -864,7 +882,7 @@ public class ChunkBasedSegmentBitmapL3Tests
         // String64 (64) + 4 ints (16) + 2 longs (16) + 4 floats (16) + bool (1+padding)
         const int componentSize = 112;
         
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, pageCount, componentSize);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, pageCount, componentSize);
         
         var initialCapacity = segment.ChunkCapacity;
         var initialFree = segment.FreeChunkCount;
@@ -924,14 +942,13 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void AllocateChunk_CapacityExhausted_CausesDataCorruption()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         
         // Use 2 pages with a stride that leaves room for overflow within page bounds
         // This ensures we get invalid IDs rather than IndexOutOfRangeException
         const int pageCount = 2;
         const int stride = 512; // Moderate stride
         
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, pageCount, stride);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, pageCount, stride);
         
         var capacity = segment.ChunkCapacity;
         var freeCount = segment.FreeChunkCount;
@@ -1003,8 +1020,7 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void FreeChunkCount_NeverExceedsCapacity()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
 
         // Perform many allocate/free cycles
         for (int cycle = 0; cycle < 10; cycle++)
@@ -1035,8 +1051,7 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void IsSet_ReturnsCorrectState()
     {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
+        var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 2, 64);
 
         // Chunk 0 is reserved, should be set
         // Note: We can't directly call IsSet on ChunkBasedSegment, 
@@ -1060,6 +1075,10 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void LoadFromDisk_RestoresAllocatedState()
     {
+        // Release the shared _pmmf so scoped instances can access the file
+        _pmmf.Dispose();
+        _pmmf = null;
+
         int rootPageIndex;
         int allocatedCount;
         var allocatedIds = new List<int>();

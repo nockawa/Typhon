@@ -1,0 +1,123 @@
+using JetBrains.Annotations;
+using System.Runtime.CompilerServices;
+using System.Threading;
+
+namespace Typhon.Engine;
+
+/// <summary>
+/// Manages epoch-based resource protection. One instance per <see cref="DatabaseEngine"/>.
+/// Threads enter/exit epoch scopes via <see cref="EpochGuard"/>; pages tagged with an epoch
+/// cannot be evicted until all scopes referencing that epoch have exited.
+/// </summary>
+[PublicAPI]
+public sealed class EpochManager : ResourceNode, IMetricSource
+{
+    private long _globalEpoch;
+    private readonly EpochThreadRegistry _registry;
+
+    // === Metrics (non-atomic ++ is intentional: accuracy traded for hot-path performance) ===
+    private long _epochAdvances;
+    private long _scopeEnters;
+
+    public EpochManager(string id, IResource parent) : base(id, ResourceType.Synchronization, parent)
+    {
+        _globalEpoch = 1; // Start at 1 so 0 means "no epoch" / "not pinned"
+        _registry = new EpochThreadRegistry();
+    }
+
+    /// <summary>Current global epoch value. Monotonically increasing.</summary>
+    public long GlobalEpoch => _globalEpoch;
+
+    /// <summary>
+    /// The minimum epoch pinned by any active thread. Pages tagged with an epoch
+    /// &gt;= this value cannot be evicted. Returns <see cref="GlobalEpoch"/> if no threads are active.
+    /// </summary>
+    public long MinActiveEpoch => _registry.ComputeMinActiveEpoch(_globalEpoch);
+
+    /// <summary>Total number of epoch advances since creation.</summary>
+    public long EpochAdvances => _epochAdvances;
+
+    /// <summary>Total number of scope entries since creation.</summary>
+    public long ScopeEnters => _scopeEnters;
+
+    /// <summary>Number of active (pinned) slots in the thread registry.</summary>
+    public int ActiveSlotCount => _registry.ActiveSlotCount;
+
+    /// <summary>
+    /// Returns true if the current thread is inside an epoch scope (depth &gt; 0).
+    /// </summary>
+    public bool IsCurrentThreadInScope => _registry.IsCurrentThreadInScope;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Scope Management
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Enter an epoch scope on the current thread. Pins the current global epoch,
+    /// preventing eviction of pages tagged with this or later epochs.
+    /// </summary>
+    /// <returns>The depth before entering (0 for outermost scope).</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal int EnterScope()
+    {
+        _scopeEnters++;
+        return _registry.PinCurrentThread(_globalEpoch);
+    }
+
+    /// <summary>
+    /// Exit an epoch scope on the current thread. If this is the outermost scope,
+    /// unpins the thread and advances the global epoch. Enforces LIFO ordering.
+    /// </summary>
+    /// <param name="expectedDepth">The depth returned by the matching <see cref="EnterScope"/> call.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void ExitScope(int expectedDepth)
+    {
+        if (_registry.UnpinCurrentThread(expectedDepth))
+        {
+            // Outermost scope exited — advance the global epoch
+            Interlocked.Increment(ref _globalEpoch);
+            _epochAdvances++;
+        }
+    }
+
+    /// <summary>
+    /// Exit an epoch scope without enforcing LIFO ordering. Used by <see cref="Transaction"/>
+    /// which can be disposed in any order. If this is the outermost scope, unpins the thread
+    /// and advances the global epoch.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void ExitScopeUnordered()
+    {
+        if (_registry.UnpinCurrentThreadUnordered())
+        {
+            // Outermost scope exited — advance the global epoch
+            Interlocked.Increment(ref _globalEpoch);
+            _epochAdvances++;
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // IMetricSource
+    // ═══════════════════════════════════════════════════════════════════════
+
+    public void ReadMetrics(IMetricWriter writer)
+    {
+        writer.WriteThroughput("EpochAdvances", _epochAdvances);
+        writer.WriteThroughput("ScopeEnters", _scopeEnters);
+        writer.WriteCapacity(_registry.ActiveSlotCount, EpochThreadRegistry.MaxSlots);
+    }
+
+    public void ResetPeaks()
+    {
+        // No high-water marks currently tracked
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _registry.Dispose();
+        }
+        base.Dispose(disposing);
+    }
+}

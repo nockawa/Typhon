@@ -18,11 +18,14 @@ public class ChangeSet
         _changedMemoryPageIndices = [];
     }
 
-    public void Add(PageAccessor accessor)
+    /// <summary>
+    /// Mark a page as dirty by its memory page index.
+    /// </summary>
+    public void AddByMemPageIndex(int memPageIndex)
     {
-        if (_changedMemoryPageIndices.Add(accessor.MemPageIndex))
+        if (_changedMemoryPageIndices.Add(memPageIndex))
         {
-            _owner.IncrementDirty(accessor.MemPageIndex);
+            _owner.IncrementDirty(memPageIndex);
         }
     }
 

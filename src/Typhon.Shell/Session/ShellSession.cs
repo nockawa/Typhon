@@ -88,6 +88,7 @@ internal sealed class ShellSession : IDisposable
             })
             .AddResourceRegistry()
             .AddMemoryAllocator()
+            .AddEpochManager()
             .AddManagedPagedMMF(options =>
             {
                 options.DatabaseName = _databaseName;

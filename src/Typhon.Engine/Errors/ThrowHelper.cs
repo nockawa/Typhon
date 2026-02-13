@@ -28,4 +28,12 @@ internal static class ThrowHelper
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static void ThrowCorruption(string componentName, int pageIndex, string detail) => throw new CorruptionException(componentName, pageIndex, detail);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowEpochRegistryExhausted()
+        => throw new ResourceExhaustedException(
+            "Concurrency/EpochThreadRegistry",
+            ResourceType.Synchronization,
+            EpochThreadRegistry.MaxSlots,
+            EpochThreadRegistry.MaxSlots);
 }

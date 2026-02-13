@@ -12,14 +12,14 @@ A `ChangeSet` accumulates modified pages during a logical operation (e.g., a tra
 │  Modify Page B  │────►│  ChangeSet.Add  │────►│  Track Dirty    │
 │  Modify Page C  │────►│  ChangeSet.Add  │────►│  Track Dirty    │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
-                                                        │
-                                                        ▼
-                                               ┌─────────────────┐
-                                               │ SaveChangesAsync│
-                                               │  - Sort pages   │
-                                               │  - Group contig │
-                                               │  - Batch I/O    │
-                                               └─────────────────┘
+                                                         │
+                                                         ▼
+                                                ┌─────────────────┐
+                                                │ SaveChangesAsync│
+                                                │  - Sort pages   │
+                                                │  - Group contig │
+                                                │  - Batch I/O    │
+                                                └─────────────────┘
 ```
 
 ## ChangeSet Class
@@ -42,17 +42,17 @@ public class ChangeSet
 ### Adding Pages
 
 ```csharp
-public void Add(PageAccessor accessor)
+public void AddByMemPageIndex(int memPageIndex)
 {
     // Only increment dirty counter once per page per ChangeSet
-    if (_changedMemoryPageIndices.Add(accessor.MemPageIndex))
+    if (_changedMemoryPageIndices.Add(memPageIndex))
     {
-        _owner.IncrementDirty(accessor.MemPageIndex);
+        _owner.IncrementDirty(memPageIndex);
     }
 }
 ```
 
-**Key Point**: The `HashSet` ensures each page is tracked only once, even if modified multiple times during the operation.
+**Key Point**: The `HashSet` ensures each page is tracked only once, even if modified multiple times during the operation. The epoch-based API uses `AddByMemPageIndex` with the raw memory page index (obtained from `RequestPageEpoch`).
 
 ### Saving Changes
 
@@ -120,40 +120,31 @@ internal void IncrementDirty(int memPageIndex)
 internal void DecrementDirty(int memPageIndex)
 {
     var pi = _memPagesInfo[memPageIndex];
-    
+
     pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
-    try
-    {
-        if (--pi.DirtyCounter == 0 && pi.PageState == PageState.IdleAndDirty)
-        {
-            // No more pending writes, transition to Idle
-            pi.PageState = PageState.Idle;
-            Interlocked.Increment(ref _metrics.FreeMemPageCount);
-        }
-    }
-    finally
-    {
-        pi.StateSyncRoot.ExitExclusiveAccess();
-    }
+    --pi.DirtyCounter;
+    pi.StateSyncRoot.ExitExclusiveAccess();
 }
+```
+
+> **Note**: Dirty pages stay in `Idle` state — `DecrementDirty` no longer performs state transitions. Pages become evictable when both `DirtyCounter == 0` AND `AccessEpoch < MinActiveEpoch`.
+
+```csharp
 ```
 
 ### State Interaction
 
 ```
-Page modified → DirtyCounter++
+Page modified → DirtyCounter++ (page stays Idle)
                      │
                      ▼
-Access released → State = IdleAndDirty (if DirtyCounter > 0)
+Page written → DirtyCounter-- (page stays Idle)
                      │
                      ▼
-Page written → DirtyCounter--
-                     │
-                     ▼
-DirtyCounter = 0 → State = Idle (can be evicted)
+DirtyCounter = 0 + AccessEpoch < MinActiveEpoch → can be evicted
 ```
 
-**Important**: A page in `IdleAndDirty` state **cannot be evicted** until all dirty references are flushed.
+**Important**: Dirty tracking is orthogonal to page state. Pages with `DirtyCounter > 0` stay in `Idle` state but **cannot be evicted**. The old `IdleAndDirty` state was removed.
 
 ## Batch I/O Optimization
 
@@ -266,14 +257,14 @@ var cs1 = new ChangeSet(pagedMMF);
 var cs2 = new ChangeSet(pagedMMF);
 
 // Both modify page 5
-cs1.Add(page5Accessor);  // DirtyCounter = 1
-cs2.Add(page5Accessor);  // DirtyCounter = 2
+cs1.AddByMemPageIndex(page5MemIdx);  // DirtyCounter = 1
+cs2.AddByMemPageIndex(page5MemIdx);  // DirtyCounter = 2
 
 // Flush cs1
-await cs1.SaveChangesAsync();  // DirtyCounter = 1 (still dirty!)
+await cs1.SaveChangesAsync();  // DirtyCounter = 1 (still dirty, still Idle)
 
-// Page stays in IdleAndDirty until cs2 flushes
-await cs2.SaveChangesAsync();  // DirtyCounter = 0, State = Idle
+// Page stays non-evictable until cs2 flushes
+await cs2.SaveChangesAsync();  // DirtyCounter = 0, now evictable
 ```
 
 This ensures a page isn't evicted while any ChangeSet still references it.
@@ -283,17 +274,19 @@ This ensures a page isn't evicted while any ChangeSet still references it.
 ### Pattern 1: Simple Modification
 
 ```csharp
-var changeSet = new ChangeSet(pagedMMF);
+var changeSet = pagedMMF.CreateChangeSet();
 
-pagedMMF.RequestPage(pageIndex, exclusive: true, out var accessor);
-using (accessor)
-{
-    // Modify data
-    accessor.PageRawData[0] = 42;
-    changeSet.Add(accessor);
-}
+// Inside an EpochGuard scope:
+pagedMMF.RequestPageEpoch(pageIndex, currentEpoch, out int memPageIndex);
+pagedMMF.TryLatchPageExclusive(memPageIndex);
 
-await changeSet.SaveChangesAsync();
+// Modify data via raw pointer
+byte* addr = pagedMMF.GetMemPageAddress(memPageIndex);
+*(addr + PagedMMF.PageHeaderSize) = 42;
+changeSet.AddByMemPageIndex(memPageIndex);
+
+pagedMMF.UnlatchPageExclusive(memPageIndex);
+changeSet.SaveChanges();
 ```
 
 ### Pattern 2: Transaction-Style
@@ -322,19 +315,18 @@ catch
 ### Pattern 3: With ChunkAccessor
 
 ```csharp
-var changeSet = new ChangeSet(pagedMMF);
+var changeSet = pagedMMF.CreateChangeSet();
 
-using (var accessor = new ChunkAccessor(segment, changeSet))
-{
-    // Modifications automatically tracked via dirty flag
-    byte* ptr = accessor.GetChunkAddress(chunkId, dirty: true);
-    ref MyStruct data = ref Unsafe.AsRef<MyStruct>(ptr);
-    data.Value = 42;
-    
-    // ChunkAccessor.Dispose() flushes dirty pages to ChangeSet
-}
+// Inside an EpochGuard scope:
+using var accessor = segment.CreateChunkAccessor(currentEpoch, changeSet);
 
-await changeSet.SaveChangesAsync();
+// Modifications automatically tracked via dirty flag
+byte* ptr = accessor.GetChunkAddress(chunkId, dirty: true);
+ref MyStruct data = ref Unsafe.AsRef<MyStruct>(ptr);
+data.Value = 42;
+
+// ChunkAccessor.Dispose() flushes dirty pages to ChangeSet
+changeSet.SaveChanges();
 ```
 
 ### Pattern 4: Segment Operations
@@ -404,7 +396,7 @@ float pagesPerWrite = (float)PageWrittenToDiskCount / WrittenOperationCount;
 |--------|-------------|
 | **Tracking** | HashSet ensures each page tracked once |
 | **Dirty Counter** | Reference count for pending writes |
-| **State Protection** | IdleAndDirty prevents eviction |
+| **Eviction Protection** | DirtyCounter > 0 prevents eviction (pages stay Idle) |
 | **Batching** | Sort + group contiguous pages |
 | **I/O** | Async RandomAccess for positioned writes |
 | **Multiple ChangeSets** | Each increments/decrements independently |

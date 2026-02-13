@@ -111,6 +111,36 @@ public static class ServiceCollectionExtensions
         }
     }
 
+    public static IServiceCollection AddEpochManager(this IServiceCollection services)
+    {
+        services.Add(ServiceDescriptor.Singleton(sp =>
+        {
+            var rr = sp.GetRequiredService<IResourceRegistry>();
+            return new EpochManager("EpochManager", rr.Synchronization);
+        }));
+        return services;
+    }
+
+    public static IServiceCollection AddScopedEpochManager(this IServiceCollection services)
+    {
+        services.Add(ServiceDescriptor.Scoped(sp =>
+        {
+            var rr = sp.GetRequiredService<IResourceRegistry>();
+            return new EpochManager("EpochManager", rr.Synchronization);
+        }));
+        return services;
+    }
+
+    public static IServiceCollection AddTransientEpochManager(this IServiceCollection services)
+    {
+        services.Add(ServiceDescriptor.Transient(sp =>
+        {
+            var rr = sp.GetRequiredService<IResourceRegistry>();
+            return new EpochManager("EpochManager", rr.Synchronization);
+        }));
+        return services;
+    }
+
     public static IServiceCollection AddPagedMemoryMappedFiled(
         this IServiceCollection services,
         Action<PagedMMFOptions> configure = null) =>
@@ -195,19 +225,22 @@ public static class ServiceCollectionExtensions
         {
             var options = serviceProvider.GetRequiredService<IOptions<TO>>();
             var logger = serviceProvider.GetRequiredService<ILogger<PagedMMF>>();
+            var memoryAllocator = serviceProvider.GetRequiredService<IMemoryAllocator>();
 
             // Directly instantiate ManagedPagedMMF which requires IResourceRegistry
             if (typeof(TS) == typeof(ManagedPagedMMF))
             {
                 var resourceRegistry = serviceProvider.GetRequiredService<IResourceRegistry>();
-                return (TS)(object)new ManagedPagedMMF(serviceProvider, options.Value, resourceRegistry.Storage, null, logger, resourceRegistry);
+                var epochManager = serviceProvider.GetRequiredService<EpochManager>();
+                return (TS)(object)new ManagedPagedMMF(resourceRegistry, epochManager, memoryAllocator, options.Value, resourceRegistry.Storage, options.Value.DatabaseName, logger);
             }
 
             // For base PagedMMF - doesn't require IResourceRegistry
             if (typeof(TS) == typeof(PagedMMF))
             {
                 var resourceRegistry = serviceProvider.GetRequiredService<IResourceRegistry>();
-                return (TS)new PagedMMF(serviceProvider, options.Value, resourceRegistry.Storage, null, logger);
+                var epochManager = serviceProvider.GetRequiredService<EpochManager>();
+                return (TS)new PagedMMF(memoryAllocator, epochManager, options.Value, resourceRegistry.Storage, options.Value.DatabaseName, logger);
             }
 
             // Fallback to Activator for other derived types (if any)
@@ -256,8 +289,9 @@ public static class ServiceCollectionExtensions
             var mpmmf = serviceProvider.GetRequiredService<ManagedPagedMMF>();
             var logger = serviceProvider.GetRequiredService<ILogger<DatabaseEngine>>();
             var resourceRegistry = serviceProvider.GetRequiredService<IResourceRegistry>();
+            var epochManager = serviceProvider.GetRequiredService<EpochManager>();
 
-            return new DatabaseEngine(options.Value, mpmmf, logger, resourceRegistry);
+            return new DatabaseEngine(resourceRegistry, epochManager, mpmmf, options.Value, logger);
         }
         catch (Exception e)
         {
