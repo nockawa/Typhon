@@ -262,24 +262,6 @@ abstract class TestBase<T> : TestBase
         var o = TestContext.CurrentContext.Test.Properties.ContainsKey("CacheSize");
         var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("CacheSize")! : (int)PagedMMF.MinimumCacheSize;
 
-        var config = new LoggerConfiguration()
-            .MinimumLevel.Verbose()
-            /*
-            .MinimumLevel.Override(typeof(LogicalSegmentManager).FullName, LogEventLevel.Verbose)
-            */
-            .Enrich.FromLogContext()
-            .Enrich.WithThreadId()
-            .Enrich.WithCurrentFrame();
-        
-        ExtraLoggerConf?.Invoke(config);
-        
-        if (UseSeq)
-        {
-            config.WriteTo.Seq("http://localhost:5341");
-        }
-        
-        Log.Logger = config.CreateLogger();
-
         var serviceCollection = new ServiceCollection();
         ServiceCollection = serviceCollection;
         ServiceCollection

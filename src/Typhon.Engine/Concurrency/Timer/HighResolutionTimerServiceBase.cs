@@ -205,6 +205,9 @@ public abstract class HighResolutionTimerServiceBase : ResourceNode, IMetricSour
     // Calibration
     // ═══════════════════════════════════════════════════════════════
 
+    private static long? CalibrationSleepThreshold;
+    internal static void ResetCalibrationSleepThreshold() => CalibrationSleepThreshold = null;
+    
     /// <summary>
     /// Measures actual Thread.Sleep(1) duration to calibrate phase thresholds. Called once during construction. Returns 1.5x the worst-case observed duration.
     /// </summary>
@@ -212,6 +215,14 @@ public abstract class HighResolutionTimerServiceBase : ResourceNode, IMetricSour
     {
         const int warmupRounds = 3;
         const int measureRounds = 10;
+        
+        // Unit-test must not execute this method every time, the result is always the same, and we take a penalty of 20ms at least
+        // So we cache the value
+        if (CalibrationSleepThreshold.HasValue)
+        {
+            return CalibrationSleepThreshold.Value;
+        }
+        
         long worst = 0;
 
         // Warm up — let the OS scheduler settle
@@ -233,7 +244,8 @@ public abstract class HighResolutionTimerServiceBase : ResourceNode, IMetricSour
         }
 
         // 1.5x safety margin: ensures we never Sleep() when it would overshoot
-        return (long)(worst * 1.5);
+        CalibrationSleepThreshold = (long)(worst * 1.5);
+        return CalibrationSleepThreshold.Value;
     }
 
     // ═══════════════════════════════════════════════════════════════

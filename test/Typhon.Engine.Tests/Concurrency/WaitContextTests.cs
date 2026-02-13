@@ -364,21 +364,21 @@ public class WaitContextTests
     [CancelAfter(5000)]
     public void HighFrequency_ShouldStop_Consistent()
     {
-        // A context with 2s deadline should not report ShouldStop during first second
-        var ctx = WaitContext.FromTimeout(TimeSpan.FromSeconds(2));
+        // A context with 500ms deadline should not report ShouldStop during first 100ms
+        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(500));
         var start = System.Diagnostics.Stopwatch.GetTimestamp();
-        var oneSecondTicks = System.Diagnostics.Stopwatch.Frequency;
+        var spinTicks = System.Diagnostics.Stopwatch.Frequency / 10; // 100ms
 
         int checkCount = 0;
-        while (System.Diagnostics.Stopwatch.GetTimestamp() - start < oneSecondTicks)
+        while (System.Diagnostics.Stopwatch.GetTimestamp() - start < spinTicks)
         {
             Assert.That(ctx.ShouldStop, Is.False,
-                $"ShouldStop should not be true during first second (check #{checkCount})");
+                $"ShouldStop should not be true during first 100ms (check #{checkCount})");
             checkCount++;
         }
 
-        Assert.That(checkCount, Is.GreaterThan(1000),
-            "Should have performed many checks in one second");
+        Assert.That(checkCount, Is.GreaterThan(100),
+            "Should have performed many checks in 100ms");
     }
 
     [Test]

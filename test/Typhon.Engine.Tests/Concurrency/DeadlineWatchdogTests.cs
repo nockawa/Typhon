@@ -98,9 +98,9 @@ public class DeadlineWatchdogTests
     [Category("Timing")]
     public void Register_MultipleDeadlines_AllFire()
     {
-        var d1 = Deadline.FromTimeout(TimeSpan.FromMilliseconds(100));
-        var d2 = Deadline.FromTimeout(TimeSpan.FromMilliseconds(200));
-        var d3 = Deadline.FromTimeout(TimeSpan.FromMilliseconds(300));
+        var d1 = Deadline.FromTimeout(TimeSpan.FromMilliseconds(50));
+        var d2 = Deadline.FromTimeout(TimeSpan.FromMilliseconds(100));
+        var d3 = Deadline.FromTimeout(TimeSpan.FromMilliseconds(150));
 
         var t1 = _watchdog.Register(d1);
         var t2 = _watchdog.Register(d2);
@@ -109,7 +109,7 @@ public class DeadlineWatchdogTests
         // Wait for all to fire (generous timeout)
         var all = WaitHandle.WaitAll([t1.WaitHandle, t2.WaitHandle, t3.WaitHandle], 2000);
 
-        Assert.That(all, Is.True, "All three deadline tokens should have been cancelled");
+        Assert.That(all, Is.True, "All three deadline tokens should have been canceled");
         Assert.That(t1.IsCancellationRequested, Is.True);
         Assert.That(t2.IsCancellationRequested, Is.True);
         Assert.That(t3.IsCancellationRequested, Is.True);

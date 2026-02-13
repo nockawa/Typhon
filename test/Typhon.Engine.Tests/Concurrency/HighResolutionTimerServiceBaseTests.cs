@@ -121,6 +121,7 @@ public class HighResolutionTimerServiceBaseTests
     [Test]
     public void Calibration_Reasonable()
     {
+        HighResolutionTimerServiceBase.ResetCalibrationSleepThreshold();
         using var timer = new HighResolutionTimerService(
             "CalibrationTest",
             Stopwatch.Frequency / 100,
@@ -168,16 +169,18 @@ public class HighResolutionTimerServiceBaseTests
     [Category("Timing")]
     public void MeanTimingError_PopulatedAfterTicks()
     {
+        using var ready = new ManualResetEventSlim(false);
+
         using var timer = new HighResolutionTimerService(
             "ErrorTest",
             Stopwatch.Frequency / 100, // 10ms
-            (_, _) => { },
+            (_, _) => ready.Set(),
             _registry.TimerDedicated);
 
         timer.Start();
 
-        // Run for 200ms to accumulate ~20 ticks
-        Thread.Sleep(200);
+        // Wait for at least one tick to fire
+        Assert.That(ready.Wait(2000), Is.True, "Timer did not tick within 2s");
 
         Assert.That(timer.TickCount, Is.GreaterThan(0), "Should have ticked");
         // MeanTimingErrorUs should be populated (non-zero after first tick)

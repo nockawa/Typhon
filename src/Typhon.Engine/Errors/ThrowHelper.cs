@@ -36,4 +36,8 @@ internal static class ThrowHelper
             ResourceType.Synchronization,
             EpochThreadRegistry.MaxSlots,
             EpochThreadRegistry.MaxSlots);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowTransactionTimeout(long transactionId, TimeSpan waitDuration)
+        => throw new TransactionTimeoutException(transactionId, waitDuration);
 }

@@ -55,19 +55,21 @@ public class HighResolutionTimerServiceTests
     {
         long receivedScheduled = 0;
         long receivedActual = 0;
+        using var ready = new ManualResetEventSlim(false);
 
         using var timer = new HighResolutionTimerService(
             "TimestampTest",
-            Stopwatch.Frequency / 10, // 100ms
+            Stopwatch.Frequency / 100, // 10ms
             (scheduled, actual) =>
             {
                 Interlocked.Exchange(ref receivedScheduled, scheduled);
                 Interlocked.Exchange(ref receivedActual, actual);
+                ready.Set();
             },
             _registry.TimerDedicated);
 
         timer.Start();
-        Thread.Sleep(200); // Wait for at least one tick
+        Assert.That(ready.Wait(2000), Is.True, "Callback did not fire within 2s");
 
         Assert.That(Interlocked.Read(ref receivedScheduled), Is.GreaterThan(0), "Scheduled timestamp not received");
         Assert.That(Interlocked.Read(ref receivedActual), Is.GreaterThan(0), "Actual timestamp not received");

@@ -122,24 +122,39 @@ public class HighResolutionSharedTimerServiceTests
     {
         var fastCount = 0L;
         var slowCount = 0L;
+        using var ready = new ManualResetEventSlim(false);
 
         using var shared = new HighResolutionSharedTimerService(_registry.Timer);
 
         var fastReg = shared.Register("Fast", Stopwatch.Frequency / 100, // 10ms
-            (_, _) => Interlocked.Increment(ref fastCount));
+            (_, _) =>
+            {
+                Interlocked.Increment(ref fastCount);
+                if (Interlocked.Read(ref fastCount) >= 20 && Interlocked.Read(ref slowCount) >= 2)
+                {
+                    ready.Set();
+                }
+            });
         var slowReg = shared.Register("Slow", Stopwatch.Frequency / 10, // 100ms
-            (_, _) => Interlocked.Increment(ref slowCount));
+            (_, _) =>
+            {
+                Interlocked.Increment(ref slowCount);
+                if (Interlocked.Read(ref fastCount) >= 20 && Interlocked.Read(ref slowCount) >= 2)
+                {
+                    ready.Set();
+                }
+            });
 
-        // Run for 500ms
-        Thread.Sleep(500);
+        // Wait until both thresholds are met, with a safety timeout
+        Assert.That(ready.Wait(2000), Is.True, "Callbacks did not reach thresholds within 2s");
 
         var fast = Interlocked.Read(ref fastCount);
         var slow = Interlocked.Read(ref slowCount);
 
-        // Fast (10ms) should fire ~50 times, Slow (100ms) should fire ~5 times
+        // Fast (10ms) should fire more often than Slow (100ms)
         Assert.That(fast, Is.GreaterThan(slow), "Fast callback should fire more often than slow");
-        Assert.That(fast, Is.GreaterThanOrEqualTo(20), "Fast callback should fire at least 20 times in 500ms");
-        Assert.That(slow, Is.GreaterThanOrEqualTo(2), "Slow callback should fire at least twice in 500ms");
+        Assert.That(fast, Is.GreaterThanOrEqualTo(20), "Fast callback should fire at least 20 times");
+        Assert.That(slow, Is.GreaterThanOrEqualTo(2), "Slow callback should fire at least twice");
 
         fastReg.Dispose();
         slowReg.Dispose();
@@ -274,13 +289,21 @@ public class HighResolutionSharedTimerServiceTests
     public void SlowInvocationCount_Tracked()
     {
         using var shared = new HighResolutionSharedTimerService(_registry.Timer);
+        using var ready = new ManualResetEventSlim(false);
 
         // Register a callback that deliberately takes >100µs
-        var reg = shared.Register("SlowCallback", Stopwatch.Frequency / 100,
-            (_, _) => Thread.Sleep(1)); // 1ms > 100µs threshold
+        ITimerRegistration reg = null;
+        reg = shared.Register("SlowCallback", Stopwatch.Frequency / 100, // 10ms
+            (_, _) =>
+            {
+                Thread.Sleep(1); // 1ms > 100µs threshold
+                if (reg?.SlowInvocationCount > 0)
+                {
+                    ready.Set();
+                }
+            });
 
-        Thread.Sleep(200);
-
+        Assert.That(ready.Wait(2000), Is.True, "Slow invocations were not tracked within 2s");
         Assert.That(reg.SlowInvocationCount, Is.GreaterThan(0), "Slow invocations should be tracked");
 
         reg.Dispose();
