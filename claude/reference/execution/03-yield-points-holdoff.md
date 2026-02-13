@@ -1,7 +1,7 @@
 # #44 — Cancellation Yield Points & Holdoff Regions
 
 **Date:** 2026-02-13
-**Status:** In progress
+**Status:** Implemented
 **GitHub Issue:** #44
 **Decisions:** D4, D5
 

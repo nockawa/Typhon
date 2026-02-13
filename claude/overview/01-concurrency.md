@@ -21,11 +21,11 @@ Every database operation that touches shared data needs synchronization. This co
 | # | Name | Size | Purpose | Status |
 |---|------|------|---------|--------|
 | **1.1** | [Deadline](#11-deadline) | 8 bytes | Monotonic timeout tracking | ✅ Implemented |
-| **1.2** | [Watchdog Thread](#12-watchdog-thread) | N/A | Background expiry monitoring | 🆕 New |
+| **1.2** | [Deadline Watchdog](#12-deadline-watchdog) | N/A | Background expiry monitoring | ✅ Implemented |
 | **1.3** | [AccessControl](#13-accesscontrol) | 64-bit | Reader-writer lock with telemetry | ✅ Complete |
 | **1.4** | [AccessControlSmall](#14-accesscontrolsmall) | 32-bit | Compact RW lock | ✅ Complete |
 | **1.5** | [ResourceAccessControl](#15-resourceaccesscontrol) | 32-bit | 3-mode lifecycle lock | ✅ Implemented |
-| **1.6** | [Cancellation Helpers](#16-cancellation-helpers) | N/A | Yield points, holdoff regions | 🔮 Future |
+| **1.6** | [Cancellation Helpers](#16-cancellation-helpers) | N/A | Yield points, holdoff regions | ✅ Implemented |
 | **1.7** | [Epoch-Based Resource Protection](#17-epoch-based-resource-protection) | N/A | Page lifetime via epoch scopes | ✅ Complete |
 
 ---
@@ -97,44 +97,63 @@ public static Deadline FromTimeout(TimeSpan timeout)
 
 ---
 
-## 1.2 Watchdog Thread
+## 1.2 Deadline Watchdog
 
 ### Purpose
 
-A single background thread that:
-1. Monitors registered deadlines and triggers cancellation when they expire
-2. Can be extended for other periodic tasks (health checks, metrics collection, etc.)
+Monitors registered deadlines and fires `CancellationToken`s when they expire. Built on the shared high-resolution timer infrastructure rather than a dedicated thread.
 
-### Why Shared?
+### Why Shared Timer?
 
 Creating a `CancellationTokenSource.CancelAfter()` for every deadline creates a timer per deadline. A shared watchdog:
-- Reduces timer/thread overhead
-- Centralizes timeout monitoring
-- Provides a home for future background tasks
+- Reduces timer/thread overhead (one shared timer thread serves all subscribers)
+- Centralizes timeout monitoring at ~200Hz (5ms precision)
+- Lazy startup: the 200Hz callback is only registered on first `Register()` call
 
-### Design
+### High-Resolution Timer Infrastructure
+
+The watchdog is built on a two-tier timer system:
+
+| Type | Thread Model | Use Case |
+|------|-------------|----------|
+| `HighResolutionTimerService` | Dedicated thread per instance | Safety-critical handlers requiring isolation |
+| `HighResolutionSharedTimerService` | Single shared thread, multiplexed | Non-critical periodic tasks (watchdog, metrics, cleanup) |
+
+Both inherit from `HighResolutionTimerServiceBase`, which provides a **three-phase wait strategy** for precise scheduling:
+
+1. **Sleep phase** — `Thread.Sleep(1)` until within calibrated threshold (~15ms on Windows)
+2. **Yield phase** — `Thread.Yield()` until within 50µs of target
+3. **Spin phase** — `Thread.SpinWait(1)` for final alignment
+
+The base class calibrates `Thread.Sleep(1)` duration at startup (with 1.5x safety margin) and tracks timing metrics: mean/max error, missed ticks, invocation count.
+
+### API
 
 ```csharp
-internal static class DeadlineWatchdog
+public class DeadlineWatchdog : ResourceNode
 {
     // Register a deadline, get a CancellationToken that cancels when it expires
-    public static CancellationToken Register(Deadline deadline);
-
-    // For advanced use: callback instead of token
-    public static IDisposable Register(Deadline deadline, Action onExpired);
+    public CancellationToken Register(Deadline deadline);
 }
 ```
 
 ### Implementation Notes
 
-- Uses a priority queue sorted by expiration time
-- Wakes up only when the soonest deadline is near (not polling)
+- Extends `ResourceNode` (participates in resource tree lifecycle)
+- Uses a `PriorityQueue<WatchedDeadline, long>` sorted by expiration time
+- Registered as a 200Hz callback on `HighResolutionSharedTimerService`
+- ~5ms worst-case latency between deadline expiry and token cancellation
+- Lazy: shared timer callback only registered on first `Register()` call
 - Thread-safe registration from any thread
-- Lazy initialization (not started until first deadline registered)
 
-### Code Location
+### Code Locations
 
-`src/Typhon.Engine/Misc/DeadlineWatchdog.cs` *(to be created)*
+- `src/Typhon.Engine/Concurrency/DeadlineWatchdog.cs` ✅
+- `src/Typhon.Engine/Concurrency/Timer/HighResolutionTimerServiceBase.cs` ✅
+- `src/Typhon.Engine/Concurrency/Timer/HighResolutionTimerService.cs` ✅
+- `src/Typhon.Engine/Concurrency/Timer/HighResolutionSharedTimerService.cs` ✅
+
+> See also: [Design: High-Resolution Timer Infrastructure](../reference/execution/01-high-resolution-timer.md), [Design: Deadline Watchdog](../reference/execution/02-deadline-watchdog.md)
 
 ---
 
@@ -475,25 +494,90 @@ Higher-level cancellation patterns built on Deadline and CancellationToken:
 
 ### Current State
 
-**Future** - Not yet designed. Will be needed when implementing the Execution System.
+**Implemented** — Yield points and holdoff regions are implemented via `UnitOfWorkContext` (24-byte struct) and integrated into the Transaction commit path, B+Tree traversal, and revision chain walks.
 
-### Sketch
+### UnitOfWorkContext
+
+The cancellation infrastructure is embedded in `UnitOfWorkContext`, a 24-byte struct that flows through all operations:
 
 ```csharp
-// Yield point - check and throw if cancelled
-public static void CheckCancellation(CancellationToken token)
+[StructLayout(LayoutKind.Sequential)]
+public struct UnitOfWorkContext  // 24 bytes
 {
-    token.ThrowIfCancellationRequested();
-}
+    public WaitContext WaitContext;   // 16 bytes (Deadline + CancellationToken)
+    public ushort EpochId;           // 2 bytes
+    private ushort _padding;         // 2 bytes
+    private int _holdoffCount;       // 4 bytes
 
-// Holdoff region - defer cancellation
-using (var holdoff = CancellationHoldoff.Begin())
-{
-    // Critical section - cancellation is deferred
-    // (recorded but not acted upon until holdoff ends)
+    // Yield point: checks deadline + cancellation, respects holdoff
+    public void ThrowIfCancelled()
+    {
+        if (_holdoffCount > 0) return;  // Skip in critical section
+        if (WaitContext.Deadline.IsExpired)
+            throw new TyphonTimeoutException(...);
+        WaitContext.CancellationToken.ThrowIfCancellationRequested();
+    }
+
+    // Holdoff: RAII scope for critical sections
+    public HoldoffScope EnterHoldoff() => new HoldoffScope(ref this);
+
+    // Factories
+    public static UnitOfWorkContext FromTimeout(TimeSpan timeout);
+    public static UnitOfWorkContext None { get; }  // Infinite deadline, no cancellation
 }
-// Cancellation checked here, thrown if pending
 ```
+
+### Yield Point Catalog
+
+Yield points are locations where `ctx.ThrowIfCancelled()` is called — safe to abort with no data corruption:
+
+| Location | File | Why Safe |
+|----------|------|----------|
+| Start of `Commit()` | `Transaction.cs` | Nothing modified yet; transaction can be retried |
+| B+Tree `FindLeaf()` loop | `BTree.cs` | Read-only traversal between node boundaries |
+| Revision chain `Step()` | `RevisionWalker.cs` | Read-only traversal between chunk boundaries |
+
+**Note:** Yield points inside holdoff regions (e.g., B+Tree traversal during commit) are no-ops — the holdoff counter suppresses the check.
+
+### Holdoff Region Catalog
+
+Holdoff regions wrap critical sections via `using var holdoff = ctx.EnterHoldoff()`:
+
+| Region | File | Why Holdoff |
+|--------|------|-------------|
+| Entire commit loop | `Transaction.cs` | Prevents partial commit (atomicity) |
+| B+Tree node split | `BTree.NodeWrapper.cs` | Parent-child consistency during split |
+| Revision chain append | `ComponentRevisionManager.cs` | Chain must remain valid |
+| Entire rollback | `Transaction.cs` | Cleanup must always complete |
+
+**Nesting:** Holdoff is counter-based. If B+Tree insert runs inside `Commit()`, the commit holdoff (count=1) plus the split holdoff (count=2) nest correctly. Cancellation only fires when the outermost holdoff exits (count returns to 0).
+
+### Deadline Composition
+
+When operations need both a UoW deadline and a subsystem-specific timeout, `Deadline.Min()` ensures the tighter constraint wins:
+
+```csharp
+// UoW deadline (500ms) + subsystem timeout (5s) → effective deadline is 500ms
+var wc = WaitContext.FromDeadline(
+    Deadline.Min(ctx.WaitContext.Deadline, Deadline.FromTimeout(subsystemTimeout)));
+```
+
+This is used at lock acquisition sites within the commit path (TransactionChain, revision chain, B+Tree, segment allocation).
+
+### Error Propagation
+
+| Condition | Exception | Retryable? |
+|-----------|-----------|------------|
+| Deadline expired at yield point | `TyphonTimeoutException` | Yes (transaction unchanged) |
+| CancellationToken triggered | `OperationCanceledException` | Depends on caller |
+| Lock timeout (deadline or subsystem) | `LockTimeoutException` | Depends on commit state |
+
+### Code Locations
+
+- `src/Typhon.Engine/Concurrency/UnitOfWorkContext.cs` ✅
+- `src/Typhon.Engine/Concurrency/WaitContext.cs` ✅
+
+> See also: [Design: Yield Points & Holdoff](../reference/execution/03-yield-points-holdoff.md), [Design: Transaction API](../reference/execution/04-transaction-api.md)
 
 ---
 
@@ -593,22 +677,26 @@ gantt
 
     section Foundation
     Deadline struct           :done, d1, 0, 1
-    Watchdog thread          :d2, after d1, 1
+    High-res timer infra     :done, d2, after d1, 1
+    Deadline Watchdog         :done, d3, after d2, 1
 
     section Lock Primitives
-    AccessControl update  :d3, after d2, 2
-    AccessControlSmall update :d4, after d2, 1
-    ResourceAccessControl    :d5, after d2, 2
+    AccessControl update  :done, d4, after d3, 2
+    AccessControlSmall update :done, d5, after d3, 1
+    ResourceAccessControl    :done, d6, after d3, 2
 
-    section Future
-    Cancellation helpers     :d6, after d5, 1
+    section Cancellation
+    UnitOfWorkContext struct  :done, d7, after d6, 1
+    Yield points & holdoff   :done, d8, after d7, 1
 ```
 
-**Order:**
-1. **Deadline** - Everything else depends on it
-2. **Watchdog Thread** - Needed for `ToCancellationToken()`
-3. **AccessControl / AccessControlSmall / ResourceAccessControl** - Can be parallelized
-4. **Cancellation Helpers** - Defer until Execution System work begins
+**Order (all implemented):**
+1. **Deadline** — Foundation for all time-based operations
+2. **High-Resolution Timer Infrastructure** — `HighResolutionTimerServiceBase`, shared and dedicated timer services
+3. **Deadline Watchdog** — 200Hz monitoring via shared timer, fires CancellationTokens
+4. **AccessControl / AccessControlSmall / ResourceAccessControl** — WaitContext/Deadline integration
+5. **UnitOfWorkContext** — 24-byte struct carrying deadline + cancellation + holdoff state
+6. **Yield Points & Holdoff** — Cooperative cancellation at safe locations, critical section protection
 
 ---
 
@@ -617,7 +705,8 @@ gantt
 | Sub-Component | Test Focus |
 |---------------|------------|
 | Deadline | Overflow handling, `Remaining` accuracy, `ToCancellationToken` behavior |
-| Watchdog | Multiple deadlines, cancellation timing, cleanup on disposal |
+| Deadline Watchdog | Multiple deadlines, cancellation timing, cleanup on disposal, 200Hz precision |
+| High-Res Timer | Calibration, drift-free scheduling, shared timer multiplexing, timing metrics |
 | AccessControl | Fairness (waiters get served), timeout expiry, telemetry recording |
 | AccessControlSmall | Same as above, but stress high-density scenarios |
 | ResourceAccessControl | Mode compatibility matrix, Destroy terminal behavior, promotion |
@@ -634,8 +723,10 @@ Existing tests in `test/Typhon.Engine.Tests/Misc/AccessControlTests.cs` provide 
 | **Overflow handling** | Clamp to `long.MaxValue` | At 1 GHz, overflow at ~292 years; defensive clamping is cheap insurance |
 | **AccessControl migration** | Complete | Legacy `AccessControl` struct has been removed; current `AccessControl` is the 64-bit atomic version |
 | **ResourceAccessControl timing** | Implement alongside Deadline | Design is ready; build on proper foundation from start |
-| **ToCancellationToken** | Shared watchdog thread | Avoids timer-per-deadline overhead; watchdog will serve other future purposes |
-| **Watchdog precision** | Millisecond-level | Fine for lock timeouts; easy to adjust frequency if needed |
+| **ToCancellationToken** | Shared watchdog via `HighResolutionSharedTimerService` | Avoids timer-per-deadline overhead; shared timer multiplexes multiple subscribers |
+| **Watchdog precision** | ~5ms (200Hz shared timer) | Sufficient for lock/operation timeouts; sub-ms precision not needed for cancellation |
+| **Timer architecture** | Two-tier (dedicated + shared) | Dedicated for safety-critical; shared for watchdog/metrics/cleanup |
+| **Cancellation model** | Cooperative via `UnitOfWorkContext.ThrowIfCancelled()` | Safe abort at yield points; holdoff regions protect critical sections |
 | **Telemetry sink** | OpenTelemetry (Grafana LGTM for production) | Industry standard; see [Dashboard research](../research/Dashboard.md) |
 | **Lock hierarchy** | Not enforced now | MVCC avoids transaction-level deadlocks; revisit when Query parallelism is implemented |
 

@@ -1,7 +1,7 @@
 # #45 — Transaction API: Add UnitOfWorkContext Parameter
 
 **Date:** 2026-02-13
-**Status:** Design
+**Status:** Implemented
 **GitHub Issue:** #45
 **Decisions:** D4, D5, D6
 
