@@ -63,4 +63,10 @@ public class TimeoutOptions
     /// Defaults to 10 seconds because segment allocation may trigger page-level operations under the hood.
     /// </remarks>
     public TimeSpan SegmentAllocationLockTimeout { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Default timeout for <see cref="Transaction.Commit()"/> when called without an explicit
+    /// <see cref="UnitOfWorkContext"/>. Individual lock timeouts (5-10s) provide tighter bounds within this limit.
+    /// </summary>
+    public TimeSpan DefaultCommitTimeout { get; set; } = TimeSpan.FromSeconds(30);
 }

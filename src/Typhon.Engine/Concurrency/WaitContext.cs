@@ -43,7 +43,7 @@ public readonly struct WaitContext
     // Constructor (private — use factory methods)
     // ═══════════════════════════════════════════════════════════════════════
 
-    private WaitContext(Deadline deadline, CancellationToken token)
+    internal WaitContext(Deadline deadline, CancellationToken token)
     {
         Deadline = deadline;
         Token = token;
@@ -106,10 +106,11 @@ public readonly struct WaitContext
     public static WaitContext FromToken(CancellationToken token)
         => new(Deadline.Infinite, token);
 
-    // NOTE: FromUnitOfWorkContext is intentionally omitted until UnitOfWorkContext exists.
-    // When implemented, it will look like:
-    // public static WaitContext FromUnitOfWorkContext(UnitOfWorkContext ctx)
-    //     => new(ctx.Deadline, ctx.CancellationToken);
+    /// <summary>Create from an existing <see cref="UnitOfWorkContext"/> (reads embedded WaitContext).</summary>
+    /// <param name="ctx">The execution context containing the embedded WaitContext.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static WaitContext FromUnitOfWorkContext(ref UnitOfWorkContext ctx)
+        => ctx.WaitContext;
 
     // ═══════════════════════════════════════════════════════════════════════
     // Termination Check

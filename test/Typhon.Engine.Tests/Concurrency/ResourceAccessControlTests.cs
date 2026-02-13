@@ -1,5 +1,3 @@
-#nullable enable
-
 using NUnit.Framework;
 using System;
 using System.Collections.Concurrent;
@@ -168,7 +166,7 @@ public class ResourceAccessControlTests
     {
         var control = new ResourceAccessControl();
         control.EnterModify(ref TestWaitContext.Default);
-        Exception? caughtException = null;
+        Exception caughtException = null;
 
         var task = Task.Run(() =>
         {
@@ -510,7 +508,7 @@ public class ResourceAccessControlTests
     {
         var control = new ResourceAccessControl();
         control.EnterModify(ref TestWaitContext.Default);
-        Exception? caughtException = null;
+        Exception caughtException = null;
 
         var task = Task.Run(() =>
         {

@@ -150,6 +150,8 @@ internal static class Program
         builder.Services.AddResourceRegistry();
         builder.Services.AddMemoryAllocator();
         builder.Services.AddEpochManager();
+        builder.Services.AddHighResolutionSharedTimer();
+        builder.Services.AddDeadlineWatchdog();
         builder.Services.AddSingleton<IResourceGraph>(sp => new ResourceGraph(sp.GetRequiredService<IResourceRegistry>()));
 
         // Register Typhon services as SINGLETONS - we want the same engine for the entire app lifetime

@@ -148,13 +148,16 @@ internal sealed class ResourceExplorer
                 CanFocus = true,
                 Text = " Select a resource node to inspect.\n\n" +
                        " Use \u2191\u2193 to navigate, \u2192 to expand, \u2190 to collapse.\n" +
-                       " Press r to refresh, q or Esc to return to the shell."
+                       " Press r to refresh, a to toggle auto-refresh (5 Hz),\n" +
+                       " q or Esc to return to the shell."
             };
             detailView.SetScheme(darkScheme);
 
             rightPane.Add(detailView);
 
             // ── Status bar at bottom ─────────────────────────────
+
+            var autoRefreshShortcut = new Shortcut { Key = Key.A, Text = "Auto [OFF]" };
 
             var statusBar = new StatusBar(
             [
@@ -171,6 +174,7 @@ internal sealed class ResourceExplorer
                     Key = Key.Empty,
                 },
                 new Shortcut { Key = Key.R, Text = "Refresh" },
+                autoRefreshShortcut,
                 new Shortcut { Key = Key.Q, Text = "Quit" },
             ]);
             statusBar.SetScheme(statusScheme);
@@ -190,6 +194,41 @@ internal sealed class ResourceExplorer
             win.Add(rightPane);
             win.Add(statusBar);
 
+            // ── Auto-refresh state ──────────────────────────────
+            object autoRefreshToken = null;
+
+            void StartAutoRefresh()
+            {
+                if (autoRefreshToken != null)
+                {
+                    return;
+                }
+
+                autoRefreshToken = app.AddTimeout(TimeSpan.FromMilliseconds(200), () =>
+                {
+                    var selected = treeView.SelectedObject;
+                    if (selected is IMetricSource)
+                    {
+                        detailView.Text = BuildDetailText(selected);
+                    }
+
+                    return true; // keep repeating
+                });
+
+                autoRefreshShortcut.Text = "Auto [ON]";
+            }
+
+            void StopAutoRefresh()
+            {
+                if (autoRefreshToken != null)
+                {
+                    app.RemoveTimeout(autoRefreshToken);
+                    autoRefreshToken = null;
+                }
+
+                autoRefreshShortcut.Text = "Auto [OFF]";
+            }
+
             // ── Global key bindings (app.Keyboard.KeyDown fires before any view) ──
 
             app.Keyboard.KeyDown += (_, key) =>
@@ -201,6 +240,7 @@ internal sealed class ResourceExplorer
 
                 if (key == Key.Q || key == Key.Q.WithShift || key == Key.Esc)
                 {
+                    StopAutoRefresh();
                     app.RequestStop();
                     key.Handled = true;
                 }
@@ -210,6 +250,18 @@ internal sealed class ResourceExplorer
                     if (selected != null)
                     {
                         detailView.Text = BuildDetailText(selected);
+                    }
+                    key.Handled = true;
+                }
+                else if (key == Key.A || key == Key.A.WithShift)
+                {
+                    if (autoRefreshToken != null)
+                    {
+                        StopAutoRefresh();
+                    }
+                    else
+                    {
+                        StartAutoRefresh();
                     }
                     key.Handled = true;
                 }

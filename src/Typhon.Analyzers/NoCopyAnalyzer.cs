@@ -245,6 +245,23 @@ public class NoCopyAnalyzer : DiagnosticAnalyzer
     // ═══════════════════════════════════════════════════════════════════════
 
     /// <summary>
+    /// Checks whether the given member is marked with <c>[AllowCopy]</c>.
+    /// </summary>
+    private static bool HasAllowCopyAttribute(ISymbol symbol)
+    {
+        foreach (var attr in symbol.GetAttributes())
+        {
+            if (attr.AttributeClass?.Name is "AllowCopyAttribute" or "AllowCopy" &&
+                attr.AttributeClass.ContainingNamespace?.ToDisplayString() == "Typhon.Engine")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Checks whether the given type is marked with <c>[NoCopy]</c>.
     /// </summary>
     private static bool IsNoCopyType(ITypeSymbol typeSymbol)
@@ -297,13 +314,26 @@ public class NoCopyAnalyzer : DiagnosticAnalyzer
 
     /// <summary>
     /// Returns <c>true</c> if the operation is an allowed value for [NoCopy] types:
-    /// invocations (factory methods), <c>default</c>, or <c>new</c> expressions.
+    /// <c>default</c>, <c>new</c> expressions, or invocations/properties marked with <c>[AllowCopy]</c>.
     /// </summary>
     private static bool IsAllowedValue(IOperation operation)
     {
         var unwrapped = UnwrapConversions(operation);
 
-        if (unwrapped is IDefaultValueOperation or IObjectCreationOperation or IInvocationOperation)
+        if (unwrapped is IDefaultValueOperation or IObjectCreationOperation)
+        {
+            return true;
+        }
+
+        // Method calls returning [NoCopy] types require [AllowCopy] — the analyzer cannot
+        // distinguish factories (fresh value) from getters (copy of existing state).
+        if (unwrapped is IInvocationOperation invocation)
+        {
+            return HasAllowCopyAttribute(invocation.TargetMethod);
+        }
+
+        // Property reads marked [AllowCopy] — sentinel properties like None that inline to direct construction
+        if (unwrapped is IPropertyReferenceOperation propRef && HasAllowCopyAttribute(propRef.Property))
         {
             return true;
         }

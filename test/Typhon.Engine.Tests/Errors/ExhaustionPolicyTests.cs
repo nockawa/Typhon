@@ -210,6 +210,8 @@ class ExhaustionPolicyTests : TestBase<ExhaustionPolicyTests>
             .AddResourceRegistry()
             .AddMemoryAllocator()
             .AddEpochManager()
+            .AddHighResolutionSharedTimer()
+            .AddDeadlineWatchdog()
             .AddScopedManagedPagedMemoryMappedFile(options =>
             {
                 options.DatabaseName = CurrentDatabaseName;
