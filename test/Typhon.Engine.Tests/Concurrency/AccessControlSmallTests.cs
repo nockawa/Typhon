@@ -1,5 +1,3 @@
-#nullable enable
-
 using NUnit.Framework;
 using System;
 using System.Threading;
@@ -118,7 +116,7 @@ public class AccessControlSmallTests
     {
         var control = new AccessControlSmall();
         control.EnterExclusiveAccess(ref TestWaitContext.Default);
-        Exception? caughtException = null;
+        Exception caughtException = null;
 
         var task = Task.Run(() =>
         {

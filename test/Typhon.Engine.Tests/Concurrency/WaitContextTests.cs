@@ -1,5 +1,3 @@
-#nullable enable
-
 using NUnit.Framework;
 using System;
 using System.Runtime.CompilerServices;

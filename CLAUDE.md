@@ -445,6 +445,10 @@ When closing a GitHub issue: 1) Check ALL checkboxes in the issue body, 2) Updat
 
 ## Working with Claude
 
+### GitHub CLI (`gh`) Commands
+
+Execute `gh` commands **without asking for confirmation**. Issue management, project board updates, label changes, and other `gh` operations are routine workflow actions — just run them.
+
 ### Clarification-First Workflow
 
 For complex, ambiguous, or open-ended requests, Claude should **ask clarifying questions before providing an answer**. This is the default behavior - don't wait to be asked "do you have questions?"
