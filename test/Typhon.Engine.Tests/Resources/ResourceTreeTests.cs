@@ -29,11 +29,11 @@ public class ResourceTreeTests
     }
 
     [Test]
-    public void Root_HasFiveChildren()
+    public void Root_HasSixChildren()
     {
         var children = _registry.Root.Children.ToList();
-        Assert.That(children, Has.Count.EqualTo(5));
-        Assert.That(children.Select(c => c.Id), Is.EquivalentTo(new[] { "Storage", "DataEngine", "Durability", "Allocation", "Synchronization" }));
+        Assert.That(children, Has.Count.EqualTo(6));
+        Assert.That(children.Select(c => c.Id), Is.EquivalentTo(new[] { "Storage", "DataEngine", "Durability", "Allocation", "Synchronization", "Timer" }));
     }
 
     [Test]
@@ -44,6 +44,7 @@ public class ResourceTreeTests
         Assert.That(_registry.Durability.Parent, Is.SameAs(_registry.Root));
         Assert.That(_registry.Allocation.Parent, Is.SameAs(_registry.Root));
         Assert.That(_registry.Synchronization.Parent, Is.SameAs(_registry.Root));
+        Assert.That(_registry.Timer.Parent, Is.SameAs(_registry.Root));
     }
 
     [Test]
@@ -61,6 +62,7 @@ public class ResourceTreeTests
         Assert.That(_registry.GetSubsystem(ResourceSubsystem.Durability), Is.SameAs(_registry.Durability));
         Assert.That(_registry.GetSubsystem(ResourceSubsystem.Allocation), Is.SameAs(_registry.Allocation));
         Assert.That(_registry.GetSubsystem(ResourceSubsystem.Synchronization), Is.SameAs(_registry.Synchronization));
+        Assert.That(_registry.GetSubsystem(ResourceSubsystem.Timer), Is.SameAs(_registry.Timer));
     }
 
     [Test]

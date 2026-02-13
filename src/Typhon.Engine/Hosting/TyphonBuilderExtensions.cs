@@ -111,6 +111,17 @@ public static class ServiceCollectionExtensions
         }
     }
 
+    public static IServiceCollection AddHighResolutionSharedTimer(this IServiceCollection services)
+    {
+        services.Add(ServiceDescriptor.Singleton(sp =>
+        {
+            var rr = sp.GetRequiredService<IResourceRegistry>();
+            var logger = sp.GetService<ILogger<HighResolutionSharedTimerService>>();
+            return new HighResolutionSharedTimerService(rr.Timer, logger);
+        }));
+        return services;
+    }
+
     public static IServiceCollection AddEpochManager(this IServiceCollection services)
     {
         services.Add(ServiceDescriptor.Singleton(sp =>

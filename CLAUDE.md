@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Opinion vs Action
+
+When the user asks for your **opinion** on a design choice, code approach, or any topic — give your opinion only. Do NOT edit files, make changes, or act on anything. Just share your thoughts and wait for explicit instructions to proceed.
+
 ## Project Overview
 
 Typhon is a real-time, low-latency ACID database engine with microsecond-level performance targets. It uses an Entity-Component-System (ECS) architecture combined with traditional database features like transactions, MVCC (Multi-Version Concurrency Control), and persistent B+Tree indexes.
@@ -81,6 +85,8 @@ dotnet test test/Typhon.Engine.Tests/Typhon.Engine.Tests.csproj
 ```bash
 dotnet test --filter "FullyQualifiedName~TransactionTests.CreateComp_SingleTransaction_SuccessfulCommit"
 ```
+
+**IMPORTANT — Test timeout safety:** Typhon unit tests should complete in under 5 seconds. If tests run longer, it almost certainly means an infinite loop or deadlock. When running tests, ALWAYS use a 30-second timeout and kill the process if it hasn't completed. Use `timeout 30` (on Windows) or equivalent to enforce this.
 
 **Run benchmarks:**
 ```bash
