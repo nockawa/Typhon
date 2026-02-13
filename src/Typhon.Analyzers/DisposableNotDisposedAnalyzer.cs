@@ -1,8 +1,6 @@
 ﻿using System.Collections.Generic;
 using System.Collections.Immutable;
-using System.Linq;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.Operations;
@@ -12,8 +10,8 @@ namespace Typhon.Analyzers;
 /// <summary>
 /// Analyzer that detects IDisposable instances returned from method calls that are not properly disposed.
 /// This addresses limitations in CA2000 which lacks inter-procedural analysis and misses many patterns.
-/// 
-/// Critical Typhon types (ChunkAccessor, Transaction, PageAccessor) are reported as errors because
+///
+/// Critical Typhon types (ChunkAccessor, Transaction) are reported as errors because
 /// failing to dispose them causes system-level bugs like page cache deadlock or data corruption.
 /// </summary>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
@@ -82,17 +80,6 @@ public class DisposableNotDisposedAnalyzer : DiagnosticAnalyzer
         isEnabledByDefault: true,
         description: ReassignmentDescription);
 
-    /// <summary>
-    /// Critical Typhon types that MUST be disposed. Maps type name to consequence description.
-    /// Only these types are tracked - general IDisposable is not tracked to avoid false positives.
-    /// </summary>
-    private static readonly ImmutableDictionary<string, string> CriticalTypes =
-        ImmutableDictionary.CreateRange(new[]
-        {
-            new KeyValuePair<string, string>("Typhon.Engine.ChunkAccessor", " - causes page cache deadlock"),
-            new KeyValuePair<string, string>("Typhon.Engine.Transaction", " - causes uncommitted changes and resource leak"),
-            new KeyValuePair<string, string>("Typhon.Engine.PageAccessor", " - causes page lock leak"),
-        });
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
         ImmutableArray.Create(DiscardedRule, UndisposedRule, ReassignmentRule);
@@ -526,28 +513,14 @@ public class DisposableNotDisposedAnalyzer : DiagnosticAnalyzer
             return false;
 
         // ONLY track critical Typhon types to avoid false positives
-        // General IDisposable tracking causes too many false positives in complex codebases
-        var fullName = GetFullTypeName(type);
-        return CriticalTypes.ContainsKey(fullName);
-    }
-
-    private static string GetFullTypeName(ITypeSymbol type)
-    {
-        var ns = type.ContainingNamespace?.ToDisplayString();
-        if (string.IsNullOrEmpty(ns))
-            return type.Name;
-
-        // Handle global:: prefix
-        if (ns.StartsWith("global::"))
-            ns = ns.Substring(8);
-
-        return $"{ns}.{type.Name}";
+        var fullName = DisposableAnalyzerHelpers.GetFullTypeName(type);
+        return DisposableAnalyzerHelpers.CriticalTypes.ContainsKey(fullName);
     }
 
     private static string GetConsequenceMessage(ITypeSymbol type)
     {
-        var fullName = GetFullTypeName(type);
-        return CriticalTypes.TryGetValue(fullName, out var consequence) ? consequence : "";
+        var fullName = DisposableAnalyzerHelpers.GetFullTypeName(type);
+        return DisposableAnalyzerHelpers.CriticalTypes.TryGetValue(fullName, out var consequence) ? consequence : "";
     }
 
     /// <summary>

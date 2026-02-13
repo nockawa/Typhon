@@ -1,5 +1,4 @@
 using JetBrains.Annotations;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32.SafeHandles;
 using System;
@@ -47,14 +46,13 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         int free = 0;
         int allocating = 0;
         int idleCount = 0;
-        int sharedCount = 0;
         int exclusiveCount = 0;
-        int idleAndDirtyCount = 0;
+        int dirtyCount = 0;
         int lockedByThreadCount = 0;
         int pendingIOReadCount = 0;
         int minClockSweepCounter = int.MaxValue;
         int maxClockSweepCounter = int.MinValue;
-        
+
         foreach (var pi in _memPagesInfo)
         {
             switch (pi.PageState)
@@ -68,17 +66,15 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                 case PageState.Idle:
                     idleCount++;
                     break;
-                case PageState.Shared:
-                    sharedCount++;
-                    break;
                 case PageState.Exclusive:
                     exclusiveCount++;
                     break;
-                case PageState.IdleAndDirty:
-                    idleAndDirtyCount++;
-                    break;
             }
-            if (pi.LockedByThreadId != 0)
+            if (pi.DirtyCounter > 0)
+            {
+                dirtyCount++;
+            }
+            if (pi.PageExclusiveLatch.LockedByThreadId != 0)
             {
                 lockedByThreadCount++;
             }
@@ -95,15 +91,14 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                 maxClockSweepCounter = pi.ClockSweepCounter;
             }
         }
-        
+
         res = new Metrics.MemPageExtraInfo
         {
             FreeMemPageCount = free,
             AllocatingMemPageCount = allocating,
             IdleMemPageCount = idleCount,
-            SharedMemPageCount = sharedCount,
             ExclusiveMemPageCount = exclusiveCount,
-            IdleAndDirtyMemPageCount = idleAndDirtyCount,
+            DirtyPageCount = dirtyCount,
             LockedByThreadCount = lockedByThreadCount,
             PendingIOReadCount = pendingIOReadCount,
             MinClockSweepCounter = minClockSweepCounter,
@@ -121,15 +116,11 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     {
         Free         = 0,   // The page is free, yet to be allocated.
         Allocating   = 1,   // The page is being allocating by a call to AllocateMemoryPage.
-        Idle         = 2,   // The page is allocated but idle (nobody is accessing it). So it can be re-used or reallocated to another File Page.
-        Shared       = 3,   // The page is allocated and accessed by one/many concurrent threads,
-                            //  the ConcurrentSharedCounter will indicate how many concurrent access we have.
-        Exclusive    = 4,   // The page is allocated and accessed exclusively by a given thread indicated by LockedByThreadId.
-        IdleAndDirty = 5,   // The page access was released but its content yet need to be written to disk.
+        Idle         = 2,   // The page is allocated but idle. Protected from eviction by epoch tag and/or DirtyCounter > 0.
+        Exclusive    = 4,   // The page is allocated and accessed exclusively by a given thread via PageExclusiveLatch.
     }
 
     protected readonly PagedMMFOptions Options;
-    protected readonly IServiceProvider ServiceProvider;
     protected readonly ILogger<PagedMMF> Logger;
     
     protected readonly PinnedMemoryBlock MemPages;
@@ -143,23 +134,23 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     private long _fileSize;
 
     private readonly ConcurrentDictionary<int, int> _memPageIndexByFilePageIndex;
+    public EpochManager EpochManager { get; private set; }
 
-    unsafe public PagedMMF(IServiceProvider serviceProvider, PagedMMFOptions options, IResource parent, string resourceName, ILogger<PagedMMF> logger) :
-        base(resourceName, ResourceType.File, parent)
+    unsafe public PagedMMF(IMemoryAllocator memoryAllocator, EpochManager epochManager, PagedMMFOptions options, IResource parent, string resourceName,
+        ILogger<PagedMMF> logger) : base(resourceName, ResourceType.File, parent)
     {
         if (!options.Validate(true, out var errors))
         {
             throw new ArgumentException("Invalid PagedMMF options", nameof(options), new AggregateException(errors));
         }
         
-        ServiceProvider = serviceProvider;
+        EpochManager = epochManager;
         Options = options;
         Logger = logger;
 
         // Create the cache of the page, pin it and keeps its address
         var cacheSize = Options.DatabaseCacheSize;
-        var ma = ServiceProvider.GetRequiredService<IMemoryAllocator>();
-        MemPages = ma.AllocatePinned("PageCache", this, (int)cacheSize, true, 64);
+        MemPages = memoryAllocator.AllocatePinned("PageCache", this, (int)cacheSize, true, 64);
         _memPagesAddr = MemPages.DataAsPointer;
 
         // Create the Memory Page info table
@@ -278,70 +269,56 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     }
     
     /// <summary>
-    /// Request access to a File Page, either Shared or Exclusive.
+    /// Request epoch-tagged shared access to a page. The page is protected from eviction
+    /// by its AccessEpoch tag rather than by ref-counting. Caller must be inside an
+    /// <see cref="EpochGuard"/> scope.
     /// </summary>
-    /// <param name="filePageIndex">The index of the File Page to access.</param>
-    /// <param name="exclusive"><c>true</c> for Exclusive access, <c>false</c> for Shared.</param>
-    /// <param name="result">The <see cref="PageAccessor"/> allowing access to the page, valid only if the method returns <c>true</c>.</param>
-    /// <param name="timeout">The time (in tick) the method should wait to return successfully.</param>
-    /// <param name="cancellationToken">An optional cancellation token for the user to cancel the call.</param>
-    /// <returns><c>true</c> if the call succeeded, <paramref name="result"/> will be valid. <c>false</c> if the operation was cancelled or time out
-    /// <paramref name="result"/> won't be valid and be set to default.</returns>
-    /// <remarks>
-    /// This method will enter a wait cycle if:
-    /// <li> The Memory Page is not allocated and there are no free Memory Pages available </li>
-    /// <li> The requested access requires to wait for the transition to be made (one or many threads hold an access not compatible with the one we request).</li>
-    /// <br/>
-    /// If the File Page is being loading from disk to memory, the read is completely independent of this operation, the <see cref="PageAccessor"/> will
-    ///  wait for it upon its first content access.
-    /// </remarks>
-    public bool RequestPage(int filePageIndex, bool exclusive, [TransfersOwnership] out PageAccessor result,
-        long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
+    internal bool RequestPageEpoch(int filePageIndex, long currentEpoch, out int memPageIndex)
     {
-#if TELEMETRY
-        using var logId = LogContext.PushProperty("FilePageIndex", filePageIndex);
-        using var logRW = LogContext.PushProperty("IsExclusive", exclusive);
-        LogRequestPage(filePageIndex, exclusive);
-#endif
-
-        Activity requestPageActivity = null;
-        if (TelemetryConfig.PagedMMFSpanAll)
+        while (true)
         {
-            // RequestPage is a child of the current activity (Transaction operation)
-            // This gives full call hierarchy visibility at the cost of larger traces
-            requestPageActivity = TyphonActivitySource.StartActivity("PageCache.RequestPage");
-            requestPageActivity?.SetTag(TyphonSpanAttributes.PageId, filePageIndex);
-        }
-
-        try
-        {
-            // Race condition can occur during TransitionPageToAccessAsync (e.g. waiting for the lock while the memory page is being reallocated for another disk page)
-            // So we loop until we get the page in the right state
-            AdaptiveWaiter waiter = null;
-            while (true)
+            if (!FetchPageToMemory(filePageIndex, out memPageIndex))
             {
-                // If this returns false, it means we can't request a page right now: we return false
-                if (!FetchPageToMemory(filePageIndex, out var memPageIndex, timeout, cancellationToken))
-                {
-                    result = default;
-                    return false;
-                }
-                var pi = _memPagesInfo[memPageIndex];
-
-                // If this return false, it's most likely a race condition where the Memory Page was reallocated for another File Page
-                if (!TransitionPageToAccess(filePageIndex, pi, exclusive, timeout, cancellationToken))
-                {
-                    waiter ??= new AdaptiveWaiter();
-                    waiter.Spin();
-                    continue;
-                }
-                result = new PageAccessor(this, pi);
-                return true;
+                return false;
             }
-        }
-        finally
-        {
-            requestPageActivity?.Dispose();
+
+            var pi = _memPagesInfo[memPageIndex];
+
+            // Tag the page with the current epoch (atomic max — never go backward)
+            long existing;
+            do
+            {
+                existing = pi.AccessEpoch;
+                if (currentEpoch <= existing)
+                {
+                    break;
+                }
+            } while (Interlocked.CompareExchange(ref pi.AccessEpoch, currentEpoch, existing) != existing);
+
+            // Handle Allocating state from cache miss — transition to Idle
+            // (must come AFTER epoch tag so the page is protected before becoming evictable)
+            if (pi.PageState == PageState.Allocating)
+            {
+                pi.PageState = PageState.Idle;
+                Interlocked.Increment(ref _metrics.FreeMemPageCount);
+            }
+
+            // Race detection: page may have been evicted between FetchPageToMemory and epoch tag
+            if (pi.FilePageIndex != filePageIndex)
+            {
+                continue;  // Retry
+            }
+
+            // Ensure data is ready (wait for pending I/O)
+            var ioTask = pi.IOReadTask;
+            if (ioTask != null && !ioTask.IsCompletedSuccessfully)
+            {
+                ioTask.GetAwaiter().GetResult();
+                pi.ResetIOCompletionTask();
+            }
+
+            pi.IncrementClockSweepCounter();
+            return true;
         }
     }
 
@@ -488,6 +465,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
     private bool AllocateMemoryPageCore(int filePageIndex, out int memPageIndex, long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
     {
+        var minActiveEpoch = EpochManager?.MinActiveEpoch ?? long.MaxValue;
         var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
         AdaptiveWaiter waiter = null;
 
@@ -513,7 +491,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                 memPageIndex = prevMemPageIndex + 1;
                 pi = _memPagesInfo[memPageIndex];
                 evictedFilePageIndex = pi.FilePageIndex;
-                if (TryAcquire(pi))
+                if (TryAcquire(pi, minActiveEpoch))
                 {
                     LogAllocatePageSequential();
                     found = true;
@@ -538,7 +516,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                     if (pi.ClockSweepCounter == 0)
                     {
                         evictedFilePageIndex = pi.FilePageIndex;
-                        if (TryAcquire(pi))
+                        if (TryAcquire(pi, minActiveEpoch))
                         {
                             found = true;
                             break;
@@ -564,7 +542,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
                         // If the counter is 0, the page is candidate for eviction, try to acquire it
                         evictedFilePageIndex = pi.FilePageIndex;
-                        if (TryAcquire(pi))
+                        if (TryAcquire(pi, minActiveEpoch))
                         {
                             found = true;
                             break;
@@ -632,8 +610,6 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                 pi.PageState = PageState.Free;
                 pi.ResetIOCompletionTask();
                 pi.ResetClockSweepCounter();
-                pi.ConcurrentSharedCounter = 0;
-                pi.LockedByThreadId = 0;
                 pi.StateSyncRoot.ExitExclusiveAccess();
 
                 memPageIndex = newMemPageIndex;
@@ -644,13 +620,22 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         }
     }
 
-    private bool TryAcquire(PageInfo info)
+    private bool TryAcquire(PageInfo info, long minActiveEpoch)
     {
         // First pass, check without locking (we won't bother to acquire the lock if the page is not in Free or Idle state)
         var state = info.PageState;
         if (state != PageState.Free && state != PageState.Idle)
         {
             return false;
+        }
+
+        // Don't evict pages that are epoch-protected or still dirty
+        if (state == PageState.Idle)
+        {
+            if (info.AccessEpoch >= minActiveEpoch || info.DirtyCounter > 0)
+            {
+                return false;
+            }
         }
 
         // Second pass, under lock
@@ -662,8 +647,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                 ThrowHelper.ThrowLockTimeout("PageCache/TryAcquire", TimeoutOptions.Current.PageCacheLockTimeout);
             }
 
-            // PageAccessor is responsible to reset the IOMode from read to none for a loading page, but only if the user creates and uses one, (which is
-            //  most of the cases, but not all o them). So we take the opportunity to reset the IOMode here, if needed.
+            // Reset the IOMode from read to none for a loading page if the IO read task completed successfully.
             if (info.IOReadTask!=null && info.IOReadTask.IsCompletedSuccessfully)
             {
                 info.ResetIOCompletionTask();
@@ -672,6 +656,12 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             // We need to check the state again, because another thread might have changed between the first and second pass
             if (info.PageState is PageState.Free or PageState.Idle)
             {
+                // Re-check epoch + dirty under lock (may have changed since first pass)
+                if (info.PageState == PageState.Idle && (info.AccessEpoch >= minActiveEpoch || info.DirtyCounter > 0))
+                {
+                    return false;
+                }
+
                 // Idle page is still referenced in the cache directory, so we remove it
                 if (info.PageState == PageState.Idle)
                 {
@@ -679,10 +669,10 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                 }
                 info.ResetClockSweepCounter();
                 info.FilePageIndex = -1;
+                info.AccessEpoch = 0;  // Clear epoch tag on reallocation
                 info.PageState = PageState.Allocating;
                 Interlocked.Decrement(ref _metrics.FreeMemPageCount);
-                Debug.Assert(info.ConcurrentSharedCounter == 0);
-                Debug.Assert(info.LockedByThreadId == 0);
+                Debug.Assert(info.ExclusiveLatchDepth == 0);
                 return true;
             }
             else
@@ -696,236 +686,81 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         }
     }
     
-    /// <summary>
-    /// Transition the page from its current mode to Access (either shared or exclusive), blocking the call if needed.
-    /// </summary>
-    /// <param name="filePageIndex">Disk Page Id</param>
-    /// <param name="pi">The corresponding PageInfo</param>
-    /// <param name="exclusive"><c>true</c> if we are doing Exclusive access, otherwise it's Shared access</param>
-    /// <param name="timeout">The time (in tick) the method should wait to return successfully.</param>
-    /// <param name="cancellationToken">An optional cancellation token for the user to cancel the call.</param>
-    /// <returns><c>true</c> is we successfully transitioned to access, <c>false</c> if we failed because of a race condition</returns>
-    /// <remarks>
-    /// This is...not easy... because there are many cases to cover
-    /// Basically, the behavior we want is:
-    ///  - If the page is Allocating or Idle: we transition to access, with Shared (Single, we store the Thread ID) or Exclusive by the requested thread.
-    ///  - If the page is Shared:
-    ///    - If we are requesting Shared again from the same thread: it's a re-entrant request, we keep the Shared Single and allow re-entrance.
-    ///    - If we are requesting Shared again from another thread: we allow concurrent Shared but release the Single access from the Thread (no thread own the access anymore).
-    ///    - If we are requesting Exclusive from the same thread: we promote the access from Shared Single to Exclusive.
-    ///    - If we are requesting Exclusive from another thread: we wait for the Share request(s) to be over.
-    ///  - If the page is Exclusive:
-    ///    - If we request Shared or Exclusive from the same thread: we allow re-entrance.
-    ///    - If we request Shared or Exclusive from another thread, we wait the current access to be over.
-    /// All in all, it's common sense. We are being permissive by allowing re-entrant Shared from/to Exclusive when it's the same thread, we
-    ///  assume the user knows what (s)he is doing.
-    /// Promotion from Shared to Exclusive can only be made from Shared Single, it won't work in a two phases process where we would have
-    ///  at first multiple Shared accesses, then all access stop except a remaining one, we don't know which thread remains in Shared mode so
-    ///  we can't promote it to Exclusive if the situation would arise. If this is an issue we would have to store an array of threads
-    ///  instead of a single field.
-    /// </remarks>
-    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    private bool TransitionPageToAccess(int filePageIndex, PageInfo pi, bool exclusive, 
-        long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
-    {
-#if TELEMETRY
-        int loopCount = 0;
-        // ReSharper disable once TooWideLocalVariableScope
-        DateTime start = DateTime.UtcNow;
-#endif        
-        PageState prevState;
-        AdaptiveWaiter waiter = null;
-        while (true)
-        {
-            try
-            {
-                // We want to change the state, so we need to acquire the lock
-                var wcAccess = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
-                if (!pi.StateSyncRoot.EnterExclusiveAccess(ref wcAccess))
-                {
-                    ThrowHelper.ThrowLockTimeout("PageCache/TransitionToAccess", TimeoutOptions.Current.PageCacheLockTimeout);
-                }
-
-                Debug.Assert(pi.PageState != PageState.Free);
-                
-#if TELEMETRY
-                var memPageId = pi.MemPageIndex;
-                prevState = pi.PageState;
-                using var logId = LogContext.PushProperty("FilePageIndex", filePageIndex);
-                using var logMemPageId = LogContext.PushProperty("MemPageIndex", memPageId);
-#endif
-
-                // Safeguard, now we are under lock, check the MemPage is still targeting the PageId we want
-                if ((filePageIndex != pi.FilePageIndex))
-                {
-                    LogTransitionFailed(exclusive ? PageState.Exclusive : PageState.Shared);
-                    return false;
-                }
-
-                ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-                // Each section at this level of indentation is testing the current state of the page 
-                
-                ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-                // If the page is Allocating or Idle (and Dirty), we can transition to Shared or Exclusive very simply
-                if (pi.PageState is PageState.Allocating or PageState.Idle or PageState.IdleAndDirty)
-                {
-                    // Setting the page to Allocating already updated the FreeMemPageCount, but we need to update it for other states
-                    if (pi.PageState != PageState.Allocating)
-                    {
-                        Interlocked.Decrement(ref _metrics.FreeMemPageCount);
-                    }
-                    
-                    pi.PageState = exclusive ? PageState.Exclusive : PageState.Shared;
-                    pi.LockedByThreadId = Environment.CurrentManagedThreadId;
-                    pi.ConcurrentSharedCounter = 1;
-                    pi.IncrementClockSweepCounter();
-
-                    LogTransitionSuccessful(prevState, pi.PageState);
-                    return true;
-                }
-                
-                ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-                // If the page is in Shared state
-                else if (pi.PageState == PageState.Shared)
-                {
-                    // Single/multiple or Re-entrant Shared mode?
-                    if (!exclusive)
-                    {
-                        // Loose the single access if we now have multiple threads doing Shared access
-                        var ct = Environment.CurrentManagedThreadId;
-                        pi.LockedByThreadId = (pi.LockedByThreadId == ct) ? ct : 0;
-
-                        ++pi.ConcurrentSharedCounter;
-                        pi.IncrementClockSweepCounter();
-                        
-                        LogTransitionSuccessful(prevState, pi.PageState);
-                        return true;
-                    }
-
-                    // Promotion from Shared to Exclusive?
-                    
-                    // Only possible if we are in Shared Single mode with the same thread that requested the Exclusive access
-                    if (pi.ConcurrentSharedCounter == 1)
-                    {
-                        var ct = Environment.CurrentManagedThreadId;
-                        if (pi.LockedByThreadId == ct)
-                        {
-                            // We can promote
-                            ++pi.ConcurrentSharedCounter;
-                            pi.IncrementClockSweepCounter();
-                            pi.PageState = PageState.Exclusive;
-                            pi.IncrementClockSweepCounter();
-
-                            LogTransitionSuccessful(prevState, pi.PageState);
-                            return true;
-                        }
-                    }
-                    
-                    // We need to wait for any other cases, we jump right after the finally block
-                }
-                
-                ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-                // From here, the page is in Exclusive state
-                else
-                {
-                    // Check for re-entrant Access: we are in Exclusive access, we want exclusive access, and we are the thread that already owns the page.
-                    // In this case we can return immediately
-                    if (/*exclusive &&*/ Environment.CurrentManagedThreadId == pi.LockedByThreadId)
-                    {
-                        ++pi.ConcurrentSharedCounter;
-                        pi.IncrementClockSweepCounter();
-            
-                        LogTransitionSuccessful(prevState, pi.PageState);
-                        return true;
-                    }
-                }
-            }
-            finally
-            {
-                pi.StateSyncRoot.ExitExclusiveAccess();
-            }
-
-            // We arrive here because we couldn't make the requested transition, in a leap of faith, we wait...and retry.
-            // But we log it, because, ya know...
-#if TELEMETRY
-            if (loopCount.IsPowerOf2())
-            {
-                LogTransitionWaitAndLoop(prevState, exclusive ? PageState.Exclusive : PageState.Shared, loopCount, DateTime.UtcNow - start);
-            }
-            loopCount++;
-#endif
-            
-            waiter ??= new AdaptiveWaiter();
-            waiter.Spin();
-        }
-    }
-
     public ChangeSet CreateChangeSet() => new(this);
 
-    internal bool TryPromoteToExclusive(int filePageIndex, PageInfo pi, out PageState previousMode)
+    /// <summary>
+    /// Acquire exclusive latch on an epoch-protected page (Idle → Exclusive).
+    /// Re-entrant: if already exclusively held by the current thread, increments
+    /// a counter and returns true. This is needed because multiple chunks on the
+    /// same page may be latched independently (e.g., in VariableSizedBufferAccessor.NextChunk).
+    /// </summary>
+    internal bool TryLatchPageExclusive(int memPageIndex)
     {
-        try
+        var pi = _memPagesInfo[memPageIndex];
+
+        // Re-entrant fast path: already latched by this thread — skip StateSyncRoot entirely
+        if (pi.PageExclusiveLatch.IsLockedByCurrentThread)
         {
-            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
-            if (!pi.StateSyncRoot.EnterExclusiveAccess(ref wc))
-            {
-                ThrowHelper.ThrowLockTimeout("PageCache/PromoteToExclusive", TimeoutOptions.Current.PageCacheLockTimeout);
-            }
-
-            previousMode = pi.PageState;
-
-            // Check if the page was reallocated by the time we got the lock
-            if (filePageIndex != pi.FilePageIndex)
-            {
-                return false;
-            }
-
-            var ct = Environment.CurrentManagedThreadId;
-
-            // Check if the thread already own exclusive access
-            if (pi.LockedByThreadId != ct)
-            {
-                return false;
-            }
-
-            pi.IncrementClockSweepCounter();
-            ++pi.ConcurrentSharedCounter;
-
-            // If the thread is already in write mode, there's nothing to do, the call succeeds.
-            if (pi.PageState == PageState.Exclusive)
-            {
-                return true;
-            }
-
-            // Switch to write, set the page as dirty
-            pi.PageState = PageState.Exclusive;
-
+            pi.ExclusiveLatchDepth++;
             return true;
         }
-        finally
-        {
-            pi.StateSyncRoot.ExitExclusiveAccess();
-        }
-    }
 
-    internal void DemoteExclusive(PageInfo pi, PageState previousMode)
-    {
+        // New acquisition: check page state under StateSyncRoot
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
+        if (!pi.StateSyncRoot.EnterExclusiveAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("PageCache/LatchPageExclusive", TimeoutOptions.Current.PageCacheLockTimeout);
+        }
+
         try
         {
-            pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
-            --pi.ConcurrentSharedCounter;
-            pi.PageState = previousMode;
+            if (pi.PageState != PageState.Idle)
+            {
+                return false;
+            }
+
+            pi.PageState = PageState.Exclusive;
         }
         finally
         {
             pi.StateSyncRoot.ExitExclusiveAccess();
         }
+
+        // Acquire the latch (records thread ownership atomically)
+        pi.PageExclusiveLatch.EnterExclusiveAccess(ref WaitContext.Null);
+        pi.ExclusiveLatchDepth = 0;
+        return true;
+    }
+
+    /// <summary>
+    /// Release exclusive latch on an epoch-protected page (Exclusive → Idle).
+    /// Decrements the re-entrance counter; only transitions to Idle when it reaches zero.
+    /// </summary>
+    internal void UnlatchPageExclusive(int memPageIndex)
+    {
+        var pi = _memPagesInfo[memPageIndex];
+
+        if (pi.ExclusiveLatchDepth > 0)
+        {
+            pi.ExclusiveLatchDepth--;
+            return;
+        }
+
+        pi.PageExclusiveLatch.ExitExclusiveAccess();
+
+        pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
+        pi.PageState = PageState.Idle;
+        // Reset epoch tag so the page becomes evictable immediately.
+        // The exclusive latch already protected the page during writes;
+        // once unlatched, epoch protection is no longer needed.
+        pi.AccessEpoch = 0;
+        pi.StateSyncRoot.ExitExclusiveAccess();
     }
 
     internal void IncrementDirty(int memPageIndex)
     {
         var pi = _memPagesInfo[memPageIndex];
-        Debug.Assert(pi.PageState is PageState.Shared or PageState.Exclusive, "We can't increment the dirty counter for a page that is not Shared or Exclusive.");
+        Debug.Assert(pi.PageState is PageState.Exclusive or PageState.Idle, "We can't increment the dirty counter for a page that is not Exclusive or Idle.");
 
         var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
         if (!pi.StateSyncRoot.EnterExclusiveAccess(ref wc))
@@ -940,11 +775,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     {
         var pi = _memPagesInfo[memPageIndex];
         pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
-        if (--pi.DirtyCounter == 0 && pi.PageState == PageState.IdleAndDirty)
-        {
-            pi.PageState = PageState.Idle;
-            Interlocked.Increment(ref _metrics.FreeMemPageCount);
-        }
+        --pi.DirtyCounter;
         pi.StateSyncRoot.ExitExclusiveAccess();
     }
 
@@ -974,8 +805,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             if (curPageInfo.FilePageIndex > 0)
             {
                 // Make sure the page to save is properly loaded first (wait for any pending IO read to complete)
-                // NOTE: We don't use PageAccessor here because SavePages is called after accessors are disposed,
-                // so pages are in IdleAndDirty state, not Shared/Exclusive.
+                // Make sure the page to save is properly loaded first (wait for any pending IO read to complete).
                 var ioTask = curPageInfo.IOReadTask;
                 if (ioTask != null && !ioTask.IsCompletedSuccessfully)
                 {
@@ -1001,6 +831,19 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             }
 
             curPageInfo = nextPageInfo;
+        }
+
+        // Increment ChangeRevision for the last page (the loop above only processes pages before the last one)
+        if (curPageInfo.FilePageIndex > 0)
+        {
+            var ioTask = curPageInfo.IOReadTask;
+            if (ioTask != null && !ioTask.IsCompletedSuccessfully)
+            {
+                ioTask.GetAwaiter().GetResult();
+            }
+
+            var headerAddr = (PageBaseHeader*)(memPageBaseAddr + (curPageInfo.MemPageIndex * PageSize));
+            ++headerAddr->ChangeRevision;
         }
 
         // Don't forget to add the last operation
@@ -1041,7 +884,17 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         var lengthToWrite = PageSize * length;
         var pageData = MemPages.DataAsMemory.Slice(firstMemPageIndex * PageSize, lengthToWrite);
 
-        _fileSize = Math.Max(_fileSize, pageOffset + lengthToWrite);
+        // Atomic max: concurrent SavePageInternal calls may race on _fileSize
+        var newSize = pageOffset + lengthToWrite;
+        long oldSize;
+        do
+        {
+            oldSize = _fileSize;
+            if (newSize <= oldSize)
+            {
+                break;
+            }
+        } while (Interlocked.CompareExchange(ref _fileSize, newSize, oldSize) != oldSize);
 
         _metrics.PageWrittenToDiskCount += length;
         _metrics.WrittenOperationCount++;
@@ -1066,90 +919,57 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         return writeTask;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    internal void TransitionPageFromAccessToIdle(PageInfo pi)
-    {
-#if TELEMETRY
-        using var logId = LogContext.PushProperty("FilePageIndex", pi.FilePageIndex);
-        using var logMemPageId = LogContext.PushProperty("MemPageIndex", pi.MemPageIndex);
-#endif
-        try
-        {
-            pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
-            var pageState = pi.PageState;
-            Debug.Assert(pageState == PageState.Shared || pageState == PageState.Exclusive);
-
-            if (--pi.ConcurrentSharedCounter != 0)
-            {
-                return;
-            }
-
-            pi.LockedByThreadId = 0;
-            if (pi.DirtyCounter > 0)
-            {
-                pi.PageState = PageState.IdleAndDirty;
-            }
-            else
-            {
-                pi.PageState =  PageState.Idle;
-                Interlocked.Increment(ref _metrics.FreeMemPageCount);
-            }
-            
-            LogTransitionSuccessful(pageState, PageState.Idle);
-        }
-        finally
-        {
-            pi.StateSyncRoot.ExitExclusiveAccess();
-        }
-    }
-
     internal unsafe byte* GetMemPageAddress(int memPageIndex) => &_memPagesAddr[memPageIndex * (long)PageSize];
-    
+
+    /// <summary>
+    /// Get a typed <see cref="PageAccessor"/> for a memory page.
+    /// Provides type-safe access to page header, metadata, and raw data regions.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal unsafe PageAccessor GetPage(int memPageIndex) => new(GetMemPageAddress(memPageIndex));
+
+    /// <summary>
+    /// Get the raw data address for a memory page (skips header).
+    /// Used by epoch-mode ChunkAccessor which computes chunk addresses directly.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal unsafe byte* GetMemPageRawDataAddress(int memPageIndex)
+        => GetMemPageAddress(memPageIndex) + PageHeaderSize;
+
+    /// <summary>
+    /// Get the base address of the memory page cache.
+    /// Used by ChunkAccessor to compute memPageIndex from raw data addresses.
+    /// </summary>
+    internal unsafe byte* MemPagesBaseAddress => _memPagesAddr;
+
     #region Logging helpers
 
     [Conditional("TELEMETRY")]
-    private void LogRequestPage(int pageId, bool doesWrite) => Logger.LogDebug(10, "Request Disk Page: {PageId}, Write: {IsExclusive}", pageId, doesWrite);
-    
-    [Conditional("TELEMETRY")]
     private void LogMemPageCacheHit() => Logger.LogTrace(11, "MemPage Cache Hit");
-    
+
     [Conditional("TELEMETRY")]
     private void LogMemPageCacheMiss() => Logger.LogTrace(12, "MemPage Cache Miss");
-    
+
     [Conditional("TELEMETRY")]
     private void LogRequestPageFound() => Logger.LogTrace(13, "Request Page Found");
-    
+
     [Conditional("TELEMETRY")]
     private void LogRequestPageRace() => Logger.LogTrace(14, "Request Page Race Condition (reallocation)");
 
     [Conditional("TELEMETRY")]
     private void LogAllocatePageEnter() => Logger.LogTrace(20, "Allocate Page Enter");
-    
+
     [Conditional("TELEMETRY")]
     private void LogAllocatePageSequential() => Logger.LogTrace(22, "Allocate Page Sequential");
-    
+
     [Conditional("TELEMETRY")]
     private void LogAllocatePageFound(int memPageIndex) => Logger.LogTrace(24, "Allocate Page Found {MemPageId}", memPageIndex);
-    
+
     [Conditional("TELEMETRY")]
     private void LogAllocatePageLoad() => Logger.LogTrace(25, "Allocate Page Load From Disk");
 
     [Conditional("TELEMETRY")]
-    private void LogTransitionSuccessful(PageState prevMode, PageState newMode) => 
-        Logger.LogTrace(40, "Transition completed from {PrevMode} to {NewMode}", prevMode, newMode);
-
-    [Conditional("TELEMETRY")]
-    private void LogTransitionFailed(PageState newMode) => 
-        Logger.LogTrace(41, "Transition completed to {NewMode} failed due to reallocation", newMode);
-
-
-    [Conditional("TELEMETRY")]
-    private void LogTransitionWaitAndLoop(PageState prevMode, PageState newMode, int loopCount, TimeSpan duration) => 
-        Logger.LogTrace(42, "Transition waiting/reloop from {prevNode} to {NewMode} loop count: {loopCount}, duration: {duration}", prevMode, newMode, loopCount, duration);
-
- 
-    [Conditional("TELEMETRY")]
-    private void LogReset() => 
+    private void LogReset() =>
         Logger.LogTrace(44, "Resetting PagedFile instance !!!");
 
     #endregion
@@ -1158,10 +978,10 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     // State Snapshot (test infrastructure)
     // ═══════════════════════════════════════════════════════════════════════
 
-    internal readonly struct PageSnapshot(PageState state, int sharedCounter, int dirtyCounter)
+    internal readonly struct PageSnapshot(PageState state, short exclusiveLatchDepth, int dirtyCounter)
     {
         internal readonly PageState _state = state;
-        internal readonly int _concurrentSharedCounter = sharedCounter;
+        internal readonly short _exclusiveLatchDepth = exclusiveLatchDepth;
         internal readonly int _dirtyCounter = dirtyCounter;
     }
 
@@ -1176,7 +996,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         for (int i = 0; i < _memPagesInfo.Length; i++)
         {
             var pi = _memPagesInfo[i];
-            pages[i] = new PageSnapshot(pi.PageState, pi.ConcurrentSharedCounter, pi.DirtyCounter);
+            pages[i] = new PageSnapshot(pi.PageState, pi.ExclusiveLatchDepth, pi.DirtyCounter);
         }
         return new StateSnapshot(pages);
     }
@@ -1193,7 +1013,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             var pi = _memPagesInfo[i];
             ref readonly var snap = ref snapshot._pages[i];
             if (pi.PageState != snap._state ||
-                pi.ConcurrentSharedCounter != snap._concurrentSharedCounter ||
+                pi.ExclusiveLatchDepth != snap._exclusiveLatchDepth ||
                 pi.DirtyCounter != snap._dirtyCounter)
             {
                 return false;
@@ -1201,6 +1021,16 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         }
         return true;
     }
+
+    /// <summary>Get the PageInfo for a memory page by its memory index.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal PageInfo GetPageInfoByMemIndex(int memPageIndex) => _memPagesInfo[memPageIndex];
+
+    /// <summary>Get the AccessEpoch for a memory page (test infrastructure).</summary>
+    internal long GetPageAccessEpoch(int memPageIndex) => _memPagesInfo[memPageIndex].AccessEpoch;
+
+    /// <summary>Get the PageState for a memory page (test infrastructure).</summary>
+    internal PageState GetPageState(int memPageIndex) => _memPagesInfo[memPageIndex].PageState;
 
     public int EstimatedMemorySize
     {

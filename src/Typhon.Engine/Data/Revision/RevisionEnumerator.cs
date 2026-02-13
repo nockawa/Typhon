@@ -1,4 +1,4 @@
-﻿using JetBrains.Annotations;
+using JetBrains.Annotations;
 using System;
 using System.Runtime.CompilerServices;
 
@@ -8,8 +8,6 @@ namespace Typhon.Engine;
 internal ref struct RevisionEnumerator : IDisposable
 {
     private ref ChunkAccessor _compRevTableAccessor;
-    private ChunkHandle _firstChunkHandle;
-    private ChunkHandle _curChunkHandle;
     private ref CompRevStorageHeader _header;
     private Span<CompRevStorageElement> _elements;
     private readonly int _firstChunkId;
@@ -25,7 +23,7 @@ internal ref struct RevisionEnumerator : IDisposable
     public int RevisionIndex => _revisionIndex;
     public int IndexInChunk => _indexInChunk;
     public bool HasLopped => _hasLopped;
-        
+
     public ref CompRevStorageElement Current
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
@@ -35,10 +33,10 @@ internal ref struct RevisionEnumerator : IDisposable
             {
                 return ref _elements[_indexInChunk];
             }
-            return ref Unsafe.NullRef<CompRevStorageElement>();                
+            return ref Unsafe.NullRef<CompRevStorageElement>();
         }
     }
-        
+
     public ref int NextChunkId => ref _nextChunkId;
     public Span<CompRevStorageElement> Elements => _elements;
     public Span<CompRevStorageElement> CurrentAsSpan => _elements.Slice(_indexInChunk, 1);
@@ -52,7 +50,7 @@ internal ref struct RevisionEnumerator : IDisposable
         {
             return false;
         }
-            
+
         ++_revisionIndex;
         if (++_indexInChunk == _elements.Length)
         {
@@ -71,15 +69,13 @@ internal ref struct RevisionEnumerator : IDisposable
         _compRevTableAccessor = ref compRevTableAccessor;
         _exclusiveAccess = exclusiveAccess;
         _firstChunkId = compRevFirstChunkId;
-        _firstChunkHandle = compRevTableAccessor.GetChunkHandle(compRevFirstChunkId, false);
-        _header = ref _firstChunkHandle.AsRef<CompRevStorageHeader>();
+        _header = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(compRevFirstChunkId);
         _ownsLock = !_header.Control.IsLockedByCurrentThread;
         if (_ownsLock)
         {
             var wc = WaitContext.FromTimeout(TimeoutOptions.Current.RevisionChainLockTimeout);
             if (!_header.Control.Enter(_exclusiveAccess, ref wc))
             {
-                _firstChunkHandle.Dispose();
                 ThrowHelper.ThrowLockTimeout("RevisionChain/Enumerate", TimeoutOptions.Current.RevisionChainLockTimeout);
             }
         }
@@ -89,7 +85,7 @@ internal ref struct RevisionEnumerator : IDisposable
         _indexInChunk = goToFirstItem ? _header.FirstItemIndex : (short)0;
         if (_indexInChunk < ComponentRevisionManager.CompRevCountInRoot)
         {
-            var chunkContent = _firstChunkHandle.AsSpan();
+            var chunkContent = compRevTableAccessor.GetChunkAsSpan(compRevFirstChunkId, false);
             _nextChunkId = ref chunkContent.Cast<byte, int>()[0];
             _elements = chunkContent.Slice(sizeof(CompRevStorageHeader)).Cast<byte, CompRevStorageElement>();
             CurChunkId = compRevFirstChunkId;
@@ -104,21 +100,18 @@ internal ref struct RevisionEnumerator : IDisposable
         _revisionIndex = -1;
     }
 
-    public bool StepToChunk(int stepCount, bool loop)
+    public unsafe bool StepToChunk(int stepCount, bool loop)
     {
         for (int i = 0; i < stepCount; i++)
         {
-            _curChunkHandle.Dispose();
-            _curChunkHandle = default;
             if (_nextChunkId == 0)
             {
                 if (loop)
                 {
                     CurChunkId = _firstChunkId;
-                    _curChunkHandle = _compRevTableAccessor.GetChunkHandle(_firstChunkId, false);
-                    var stream = _curChunkHandle.AsStream();
-                    _nextChunkId = ref stream.PopRef<int>();
-                    _elements = stream.PopSpan<CompRevStorageElement>(ComponentRevisionManager.CompRevCountInRoot);
+                    var chunkSpan = _compRevTableAccessor.GetChunkAsSpan(_firstChunkId, false);
+                    _nextChunkId = ref chunkSpan.Cast<byte, int>()[0];
+                    _elements = chunkSpan.Slice(sizeof(CompRevStorageHeader)).Cast<byte, CompRevStorageElement>();
                     _hasLopped = true;
                     return true;
                 }
@@ -131,10 +124,9 @@ internal ref struct RevisionEnumerator : IDisposable
 
             {
                 CurChunkId = _nextChunkId;
-                _curChunkHandle = _compRevTableAccessor.GetChunkHandle(_nextChunkId, false);
-                var stream = _curChunkHandle.AsStream();
-                _nextChunkId = ref stream.PopRef<int>();
-                _elements = stream.PopSpan<CompRevStorageElement>(ComponentRevisionManager.CompRevCountInNext);
+                var chunkSpan = _compRevTableAccessor.GetChunkAsSpan(_nextChunkId, false);
+                _nextChunkId = ref chunkSpan.Cast<byte, int>()[0];
+                _elements = chunkSpan.Slice(sizeof(int)).Cast<byte, CompRevStorageElement>().Slice(0, ComponentRevisionManager.CompRevCountInNext);
             }
         }
         return true;
@@ -146,7 +138,5 @@ internal ref struct RevisionEnumerator : IDisposable
         {
             _header.Control.Exit(_exclusiveAccess);
         }
-        _firstChunkHandle.Dispose();
-        _curChunkHandle.Dispose();
     }
 }

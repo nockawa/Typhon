@@ -84,6 +84,13 @@ public enum ResourceType
     Allocator = 60,
 
     // ═══════════════════════════════════════════════════════════════
+    // SYNCHRONIZATION LAYER
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>Synchronization primitives (epoch manager, latch pools)</summary>
+    Synchronization = 65,
+
+    // ═══════════════════════════════════════════════════════════════
     // DURABILITY LAYER
     // ═══════════════════════════════════════════════════════════════
 

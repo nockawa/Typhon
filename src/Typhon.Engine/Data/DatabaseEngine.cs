@@ -1,10 +1,11 @@
 ﻿using JetBrains.Annotations;
 using Microsoft.Extensions.Logging;
-using System.Runtime.CompilerServices;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 using Typhon.Schema.Definition;
@@ -116,6 +117,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
     public DatabaseDefinitions DBD { get; }
     public ManagedPagedMMF MMF { get; }
+    public EpochManager EpochManager { get; private set; }
 
     internal TransactionChain TransactionChain { get; }
 
@@ -135,11 +137,13 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         return TransactionChain.CreateTransaction(this);
     }
 
-    public DatabaseEngine(DatabaseEngineOptions options, ManagedPagedMMF mmf, ILogger<DatabaseEngine> log, IResourceRegistry resourceRegistry, 
-        string name = null) : base(name ?? $"DatabaseEngine_{Guid.NewGuid():N}", ResourceType.Engine, resourceRegistry.DataEngine)
+    public DatabaseEngine(IResourceRegistry resourceRegistry, EpochManager epochManager, ManagedPagedMMF mmf, DatabaseEngineOptions options, 
+        ILogger<DatabaseEngine> log, string name = null) : 
+        base(name ?? $"DatabaseEngine_{Guid.NewGuid():N}", ResourceType.Engine, resourceRegistry.DataEngine)
     {
         // Engine initialization
         MMF = mmf;
+        EpochManager = epochManager;
         _log = log;
         _options = options;
         TimeoutOptions.Current = _options.Timeouts;
@@ -228,20 +232,25 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         _fieldsTable = GetComponentTable<FieldR1>();
         _componentsTable = GetComponentTable<ComponentR1>();
 
-        MMF.RequestPage(0, true, out var pa);
-        using (pa)
-        {
-            // Save the entry points in the file header
-            var cs = MMF.CreateChangeSet();
-            cs.Add(pa);
-            ref var rootFileHeader = ref pa.PageHeader.Cast<byte, RootFileHeader>()[0];
+        using var guard = EpochGuard.Enter(EpochManager);
+        var epoch = EpochManager.GlobalEpoch;
 
-            rootFileHeader.SystemSchemaRevision = 1;
-            rootFileHeader.FieldTableSPI = _fieldsTable.ComponentSegment.RootPageIndex;
-            rootFileHeader.ComponentTableSPI = _componentsTable.ComponentSegment.RootPageIndex;
-            
-            cs.SaveChanges();
-        }
+        MMF.RequestPageEpoch(0, epoch, out var memPageIdx);
+        var latched = MMF.TryLatchPageExclusive(memPageIdx);
+        Debug.Assert(latched, "TryLatchPageExclusive failed on root page during schema save");
+        var page = MMF.GetPage(memPageIdx);
+
+        // Save the entry points in the file header
+        var cs = MMF.CreateChangeSet();
+        cs.AddByMemPageIndex(memPageIdx);
+        ref var rootFileHeader = ref page.As<RootFileHeader>();
+
+        rootFileHeader.SystemSchemaRevision = 1;
+        rootFileHeader.FieldTableSPI = _fieldsTable.ComponentSegment.RootPageIndex;
+        rootFileHeader.ComponentTableSPI = _componentsTable.ComponentSegment.RootPageIndex;
+
+        MMF.UnlatchPageExclusive(memPageIdx);
+        cs.SaveChanges();
         
         // Now save the system components schema in the database (to load them next time we open the database)
         SaveInSystemSchema(_fieldsTable);

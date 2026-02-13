@@ -136,7 +136,7 @@ dotnet run -c Release --filter '*PagedMemoryFile*'
 - **PagedMMF**: Base class handling memory-mapped file I/O
   - 8KB pages with sophisticated caching (default: 256 pages = 2MB cache)
   - Clock-sweep eviction algorithm
-  - Page states: Free, Allocating, Idle, Shared, Exclusive, IdleAndDirty
+  - Page states: Free, Allocating, Idle, Exclusive (epoch-based eviction protection)
   - Async I/O operations
   - Located in: `src/Typhon.Engine/Persistence Layer/PagedMMF.cs`
 
@@ -148,7 +148,7 @@ dotnet run -c Release --filter '*PagedMemoryFile*'
 
 - **ChunkBasedSegment**: Fixed-size chunk allocation within pages
   - Occupancy tracking via 3-level bitmaps for efficient allocation
-  - ChunkRandomAccessor provides cached access
+  - ChunkAccessor provides SIMD-optimized cached access with epoch-based page protection
   - Located in: `src/Typhon.Engine/Persistence Layer/ChunkBasedSegment.cs`
 
 > See also: [ADR-006: 8KB Page Size](claude/adr/006-8kb-page-size.md), [ADR-007: Clock-Sweep Eviction](claude/adr/007-clock-sweep-eviction.md)
@@ -248,10 +248,11 @@ dotnet run -c Release --filter '*PagedMemoryFile*'
 
 ### Concurrency Primitives
 - **AccessControl**: Reader-writer lock for general concurrent access
-- **AccessControlSmall**: Compact version for space-constrained scenarios
+- **AccessControlSmall**: Compact version for space-constrained scenarios (also used for page exclusive latching)
+- **EpochManager / EpochGuard**: Epoch-based page protection replacing per-page ref-counting
 - **AdaptiveWaiter**: Spin-then-yield optimization for lock contention
-- Lock-free reads via shared page access
-- Located in: `src/Typhon.Engine/Misc/`
+- Lock-free reads via epoch-protected page access
+- Located in: `src/Typhon.Engine/Misc/` and `src/Typhon.Engine/Concurrency/`
 
 > See also: [ADR-016: Three-Mode ResourceAccessControl](claude/adr/016-three-mode-resource-access-control.md), [ADR-017: 64-Bit Atomic State](claude/adr/017-64bit-access-control-state.md), [ADR-018: Adaptive Spin-Wait](claude/adr/018-adaptive-spin-wait.md)
 
@@ -364,9 +365,9 @@ var committed = t.Commit(); // or t.Rollback()
 1. **Page Caching**: Clock-sweep algorithm minimizes disk I/O
 2. **Sequential Allocation**: Allocates adjacent pages for contiguous writes
 3. **Transaction Pooling**: Reuses transaction objects
-4. **ChunkRandomAccessor**: Caches recently accessed chunks
+4. **ChunkAccessor**: SIMD-optimized 16-slot chunk cache with epoch-based page protection
 5. **Batch I/O**: Groups contiguous page writes
-6. **Lock-Free Reads**: Shared page access doesn't block readers
+6. **Epoch-Protected Reads**: Epoch-scoped page access doesn't block readers
 7. **Adaptive Waiting**: Spin-wait then yield for contention
 8. **Pinned Memory**: GCHandle prevents GC moves on page cache
 

@@ -1,282 +1,110 @@
-﻿// unset
-
-using JetBrains.Annotations;
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using JetBrains.Annotations;
 
 namespace Typhon.Engine;
 
+/// <summary>
+/// Lightweight, zero-overhead typed accessor for an 8KB page in the memory-mapped cache.
+/// Provides type-safe access to the three page regions: Header (64B), Metadata (128B), RawData (8000B).
+/// </summary>
+/// <remarks>
+/// This is a ref struct wrapping a single <c>byte*</c>. The JIT elides the wrapper entirely when methods are inlined,
+/// producing identical machine code to hand-written pointer arithmetic.
+/// For heavy-duty internal use (e.g., <see cref="LogicalSegment.InitHeader"/>, <see cref="ChunkAccessor"/>),
+/// use <see cref="Address"/> to get the raw pointer.
+/// </remarks>
 [PublicAPI]
-unsafe public struct PageAccessor : IDisposable
+public unsafe ref struct PageAccessor
 {
-    #region Read-Only Access
+    private readonly byte* _addr;
 
-    internal ref T GetHeader<T>(int offset) where T : unmanaged
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal PageAccessor(byte* addr) => _addr = addr;
+
+    // ── Escape hatch ─────────────────────────────────────────────
+
+    /// <summary>Raw pointer to the page start. For InitHeader, ChunkAccessor, and similar internal use.</summary>
+    public byte* Address
     {
-        EnsureDataReady();
-        return ref PageHeader.Slice(offset).Cast<byte, T>()[0];
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _addr;
     }
 
-    /// <summary>
-    /// Span of the whole data of the page.
-    /// </summary>
-    public ReadOnlySpan<byte> WholePageReadOnly
+    // ── Header region (0..63) ────────────────────────────────────
+
+    /// <summary>Access the <see cref="PageBaseHeader"/> at offset 0.</summary>
+    public ref PageBaseHeader Header
     {
-        get
-        {
-            EnsureDataReady();
-            return new ReadOnlySpan<byte>(_pageAddress, PagedMMF.PageSize);
-        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => ref Unsafe.AsRef<PageBaseHeader>(_addr);
     }
 
-    /// <summary>
-    /// Span of the header of the page.
-    /// </summary>
-    public ReadOnlySpan<byte> PageHeaderReadOnly
+    /// <summary>Page block flags (first byte). No struct load — single byte read.</summary>
+    public PageBlockFlags Flags
     {
-        get
-        {
-            EnsureDataReady();
-            return new ReadOnlySpan<byte>(_pageAddress, PagedMMF.PageHeaderSize);
-        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => (PageBlockFlags)_addr[0];
     }
 
-    /// <summary>
-    /// Span of the page metadata, it's a 128 bytes zone inside the PageHeader, just right after the BaseHeader
-    /// </summary>
-    public ReadOnlySpan<byte> PageMetadataReadOnly
+    /// <summary>True if this page is the root page of its logical segment.</summary>
+    public bool IsRoot
     {
-        get
-        {
-            EnsureDataReady();
-            return new ReadOnlySpan<byte>(_pageAddress + PagedMMF.PageBaseHeaderSize, PagedMMF.PageMetadataSize);
-        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => (_addr[0] & (byte)PageBlockFlags.IsLogicalSegmentRoot) != 0;
     }
 
-    /// <summary>
-    /// Span of the page raw data, it's a 8000 bytes zone after the header.
-    /// </summary>
-    public ReadOnlySpan<byte> PageRawDataReadOnly
-    {
-        get
-        {
-            EnsureDataReady();
-            return new ReadOnlySpan<byte>(_pageAddress + PagedMMF.PageHeaderSize, PagedMMF.PageRawDataSize);
-        }
-    }
+    /// <summary>Access the full page start as an arbitrary unmanaged struct.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ref T As<T>() where T : unmanaged
+        => ref Unsafe.AsRef<T>(_addr);
 
-    /// <summary>
-    /// Span of the Logical Segment's raw data. See Remarks.
-    /// </summary>
-    /// <remarks>
-    /// If the page block is part of a Logical Segment, this will return the span covering its raw data section.
-    /// BEWARE: the root page of a Logical Segment is 6000 bytes wide, subsequent pages will be 8000 bytes.
-    /// Unpredictable result will occur if using this property on a non-Logical Segment Page Block.
-    /// </remarks>
-    public ReadOnlySpan<byte> LogicalSegmentDataReadOnly
-    {
-        get
-        {
-            EnsureDataReady();
-            var root = (_pageAddress[0] & (byte)PageBlockFlags.IsLogicalSegmentRoot) != 0;
-            var offset = root ? LogicalSegment.RootHeaderIndexSectionLength : 0;
-            return new ReadOnlySpan<byte>(_pageAddress + PagedMMF.PageHeaderSize + offset, PagedMMF.PageRawDataSize - offset);
-        }
-    }
-    internal ref readonly T GetElementReadOnly<T>(int index, bool isLogicalRoot) where T : unmanaged
-    {
-        EnsureDataReady();
-        return ref Unsafe.AsRef<T>(_pageAddress + PagedMMF.PageHeaderSize + (isLogicalRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) +
-                                   (index * sizeof(T)));
-    }
+    /// <summary>Access an unmanaged struct at a specific byte offset within the page.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ref T StructAt<T>(int byteOffset) where T : unmanaged
+        => ref Unsafe.AsRef<T>(_addr + byteOffset);
 
-    #endregion
+    // ── Metadata region (64..191) ────────────────────────────────
 
-    #region Read/Write Access
+    /// <summary>The 128-byte metadata region (chunk occupancy bitmaps) as <see cref="Span{T}"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public Span<T> Metadata<T>() where T : unmanaged
+        => new Span<T>(_addr + PagedMMF.PageBaseHeaderSize, PagedMMF.PageMetadataSize / Unsafe.SizeOf<T>());
 
-    /// Address of the page in memory. Data may not be ready yet, use <see cref="EnsureDataReady"/> to ensure the data is loaded.
-    private readonly byte* _pageAddress;
+    /// <summary>The 128-byte metadata region as <see cref="ReadOnlySpan{T}"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ReadOnlySpan<T> MetadataReadOnly<T>() where T : unmanaged
+        => new ReadOnlySpan<T>(_addr + PagedMMF.PageBaseHeaderSize, PagedMMF.PageMetadataSize / Unsafe.SizeOf<T>());
 
-    internal byte* GetElementAddr(int index, int stride, bool isLogicalRoot)
-    {
-        EnsureDataReady();
-        return _pageAddress + PagedMMF.PageHeaderSize + (isLogicalRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (index * stride);
-    }
+    /// <summary>A sub-region of metadata starting at <paramref name="byteOffset"/> for <paramref name="count"/> elements of <typeparamref name="T"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public Span<T> Metadata<T>(int byteOffset, int count) where T : unmanaged
+        => new Span<T>(_addr + PagedMMF.PageBaseHeaderSize + byteOffset, count);
 
-    internal byte* GetRawDataAddr()
-    {
-        EnsureDataReady();
-        return _pageAddress + PagedMMF.PageHeaderSize;
-    }
-    
-    /// <summary>
-    /// Span of the whole data of the page.
-    /// </summary>
-    public Span<byte> WholePage
-    {
-        get
-        {
-            EnsureDataReady();
-            return new Span<byte>(_pageAddress, PagedMMF.PageSize);
-        }
-    }
+    /// <summary>A sub-region of metadata as <see cref="ReadOnlySpan{T}"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ReadOnlySpan<T> MetadataReadOnly<T>(int byteOffset, int count) where T : unmanaged
+        => new ReadOnlySpan<T>(_addr + PagedMMF.PageBaseHeaderSize + byteOffset, count);
 
-    /// <summary>
-    /// Span of the header of the page.
-    /// </summary>
-    public Span<byte> PageHeader
-    {
-        get
-        {
-            EnsureDataReady();
-            return new Span<byte>(_pageAddress, PagedMMF.PageHeaderSize);
-        }
-    }
+    // ── Raw data region (192..8191) ──────────────────────────────
 
-    /// <summary>
-    /// Span of the page metadata, it's a 128 bytes zone inside the PageHeader, just right after the BaseHeader
-    /// </summary>
-    public Span<byte> PageMetadata
-    {
-        get
-        {
-            EnsureDataReady();
-            return new Span<byte>(_pageAddress + PagedMMF.PageBaseHeaderSize, PagedMMF.PageMetadataSize);
-        }
-    }
+    /// <summary>The full 8000-byte raw data region as <see cref="Span{T}"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public Span<T> RawData<T>() where T : unmanaged
+        => new Span<T>(_addr + PagedMMF.PageHeaderSize, PagedMMF.PageRawDataSize / Unsafe.SizeOf<T>());
 
-    /// <summary>
-    /// Span of the page raw data, it's a 8000 bytes zone after the header.
-    /// </summary>
-    public Span<byte> PageRawData
-    {
-        get
-        {
-            EnsureDataReady();
-            return new Span<byte>(_pageAddress + PagedMMF.PageHeaderSize, PagedMMF.PageRawDataSize);
-        }
-    }
+    /// <summary>The full 8000-byte raw data region as <see cref="ReadOnlySpan{T}"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ReadOnlySpan<T> RawDataReadOnly<T>() where T : unmanaged
+        => new ReadOnlySpan<T>(_addr + PagedMMF.PageHeaderSize, PagedMMF.PageRawDataSize / Unsafe.SizeOf<T>());
 
-    /// <summary>
-    /// Span of the Logical Segment's raw data. See Remarks.
-    /// </summary>
-    /// <remarks>
-    /// If the page block is part of a Logical Segment, this will return the span covering its raw data section.
-    /// BEWARE: the root page of a Logical Segment is 6000 bytes wide, subsequent pages will be 8000 bytes.
-    /// Unpredictable result will occur if using this property on a non-Logical Segment Page Block.
-    /// </remarks>
-    public Span<byte> LogicalSegmentData
-    {
-        get
-        {
-            EnsureDataReady();
-            var root = (_pageAddress[0] & (byte)PageBlockFlags.IsLogicalSegmentRoot) != 0;
-            var offset = root ? LogicalSegment.RootHeaderIndexSectionLength : 0;
-            return new Span<byte>(_pageAddress + PagedMMF.PageHeaderSize + offset, PagedMMF.PageRawDataSize - offset);
-        }
-    }
+    /// <summary>A sub-region of raw data starting at <paramref name="byteOffset"/> for <paramref name="count"/> elements of <typeparamref name="T"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public Span<T> RawData<T>(int byteOffset, int count) where T : unmanaged
+        => new Span<T>(_addr + PagedMMF.PageHeaderSize + byteOffset, count);
 
-    internal ref T GetElement<T>(int index, bool isLogicalRoot) where T : unmanaged
-    {
-        EnsureDataReady();
-        return ref Unsafe.AsRef<T>(_pageAddress + PagedMMF.PageHeaderSize + (isLogicalRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) +
-                                   (index * sizeof(T)));
-    }
-
-    #endregion
-
-    public readonly void SetPageDirty()
-    {
-    }
-
-    public bool TryPromoteToExclusive() => _owner.TryPromoteToExclusive(_filePageIndex, _pi, out _previousMode);
-
-    public void DemoteExclusive()
-    {
-        _owner.DemoteExclusive(_pi, _previousMode);
-        _previousMode = PagedMMF.PageState.Idle;
-    }
-
-    /// <summary>
-    /// The Disk Page ID the accessor is into
-    /// </summary>
-    public int FilePageIndex => _filePageIndex;
-    
-    public int MemPageIndex => _pi.MemPageIndex;
-        
-    private readonly PagedMMF _owner;
-    private readonly int _filePageIndex;
-    private PagedMMF.PageInfo _pi;
-    private PagedMMF.PageState _previousMode;
-    private bool _isReady;
-
-    internal PageAccessor(PagedMMF owner, PagedMMF.PageInfo pi)
-    {
-        _owner = owner;
-        _filePageIndex = pi.FilePageIndex;
-        _pi = pi;
-        _previousMode = PagedMMF.PageState.Idle;
-        _isReady = pi.IOReadTask==null || pi.IOReadTask.IsCompletedSuccessfully;
-        _pageAddress = owner.GetMemPageAddress(pi.MemPageIndex);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    internal void EnsureDataReady()
-    {
-        if (_isReady)
-        {
-            return;
-        }
-
-        Debug.Assert(_pi.IOReadTask!=null);
-        var ioTask = _pi.IOReadTask;
-        if (ioTask.IsCompletedSuccessfully)
-        {
-            _isReady = true;
-            _pi.ResetIOCompletionTask();
-            return;
-        }
-        
-        ioTask.GetAwaiter().GetResult();
-        _isReady = true;
-        _pi.ResetIOCompletionTask();
-    }
-    
-    public bool IsValid => _pi != null;
-
-    public void Dispose()
-    {
-        if (_pi == null)
-        {
-            return;
-        }
-
-        // If _previousMode is not Idle, it means a call to TryPromoteToExclusive() succeeded, so we need to demote back to Idle.
-        if (_previousMode != PagedMMF.PageState.Idle)
-        {
-            _owner.DemoteExclusive(_pi, _previousMode);
-        }
-        else if (_pi.PageState != PagedMMF.PageState.Idle)
-        {
-            _owner.TransitionPageFromAccessToIdle(_pi);
-        }
-
-        _pi = null;
-    }
-    public void InitHeader(PageClearMode clearMode, PageBlockFlags flags, PageBlockType type, short formatRevision)
-    {
-        if (clearMode == PageClearMode.Header)
-        {
-            PageHeader.Slice(0, PagedMMF.PageHeaderSize).Clear();
-        }
-        else if (clearMode == PageClearMode.WholePage)
-        {
-            PageHeader.Clear();
-        }
-        ref var header = ref GetHeader<PageBaseHeader>(PageBaseHeader.Offset);
-        header.Flags = flags;
-        header.Type = type;
-        header.FormatRevision = formatRevision;
-    }
+    /// <summary>A sub-region of raw data as <see cref="ReadOnlySpan{T}"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ReadOnlySpan<T> RawDataReadOnly<T>(int byteOffset, int count) where T : unmanaged
+        => new ReadOnlySpan<T>(_addr + PagedMMF.PageHeaderSize + byteOffset, count);
 }

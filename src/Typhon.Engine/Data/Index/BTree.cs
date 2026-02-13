@@ -270,8 +270,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         /// <summary>
         /// creates new relatives for child node.
         /// </summary>
-        public static void Create(NodeWrapper child, int index, NodeWrapper parent, ref NodeRelatives parentRelatives, out NodeRelatives res,
-            ref ChunkAccessor accessor)
+        public static void Create(NodeWrapper child, int index, NodeWrapper parent, ref NodeRelatives parentRelatives, out NodeRelatives res, ref ChunkAccessor accessor)
         {
             Debug.Assert(index >= -1 && index < parent.GetLength(ref accessor));
 

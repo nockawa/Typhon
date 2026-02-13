@@ -2,7 +2,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
 using Serilog;
-using System;
 using System.Collections.Generic;
 
 namespace Typhon.Engine.Tests;
@@ -210,6 +209,7 @@ class ExhaustionPolicyTests : TestBase<ExhaustionPolicyTests>
             })
             .AddResourceRegistry()
             .AddMemoryAllocator()
+            .AddEpochManager()
             .AddScopedManagedPagedMemoryMappedFile(options =>
             {
                 options.DatabaseName = CurrentDatabaseName;

@@ -11,14 +11,11 @@ public abstract partial class BTree<TKey>
         protected internal BTree<TKey> Owner;
 
         protected internal ChunkBasedSegment Segment;
-        // private ThreadLocal<ChunkRandomAccessor> _chunkAccessorThreadLocal;
-        // protected ChunkRandomAccessor ChunkAccessor => _chunkAccessorThreadLocal.Value;
 
         internal virtual void Initialize(BTree<TKey> owner, ChunkBasedSegment segment)
         {
             Owner = owner;
             Segment = segment;
-            // _chunkAccessorThreadLocal = new ThreadLocal<ChunkRandomAccessor>(() => segment.CreateChunkAccessor(ChunkRandomAccessorPagedCount));
         }
 
         public void CommitChanges(ref ChunkAccessor accessor) => accessor.CommitChanges();
