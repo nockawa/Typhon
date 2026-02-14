@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 
 namespace Typhon.Engine;
 
@@ -20,7 +21,7 @@ namespace Typhon.Engine;
 /// </remarks>
 internal class DeferredCleanupManager
 {
-    private struct CleanupEntry
+    internal struct CleanupEntry
     {
         public ComponentTable Table;
         public long PrimaryKey;
@@ -31,6 +32,11 @@ internal class DeferredCleanupManager
 
     // Reverse index: (table, pk) → blockingTSN for O(1) dedup
     private readonly Dictionary<(ComponentTable, long), long> _entityToBlockingTSN;
+
+    // Pool for reusing List<CleanupEntry> instances across TSN buckets — avoids GC alloc per bucket.
+    // All access is under _lock, so no additional synchronization needed.
+    private const int ListPoolMaxSize = 16;
+    private readonly Stack<List<CleanupEntry>> _listPool = new();
 
     // Thread safety
     private AccessControl _lock;
@@ -78,50 +84,59 @@ internal class DeferredCleanupManager
     internal void RecordLazyCleanupSkipped() => LazyCleanupSkipped++;
 
     /// <summary>
-    /// Enqueue an entity for deferred cleanup, to be processed when the blocking transaction completes.
+    /// Enqueue a batch of entities for deferred cleanup under a single lock acquisition.
+    /// All entries share the same <paramref name="blockingTSN"/> (the tail TSN at the time of commit).
     /// </summary>
     /// <param name="blockingTSN">The TSN of the oldest active transaction blocking cleanup</param>
-    /// <param name="table">The component table owning the entity</param>
-    /// <param name="pk">The primary key of the entity</param>
-    public void Enqueue(long blockingTSN, ComponentTable table, long pk)
+    /// <param name="entries">The batch of entities to enqueue. Must not be null or empty.</param>
+    public void EnqueueBatch(long blockingTSN, List<CleanupEntry> entries)
     {
+        if (entries.Count == 0)
+        {
+            return;
+        }
+
         var wc = WaitContext.FromTimeout(TimeoutOptions.Current.TransactionChainLockTimeout);
         if (!_lock.EnterExclusiveAccess(ref wc))
         {
-            ThrowHelper.ThrowLockTimeout("DeferredCleanup/Enqueue", TimeoutOptions.Current.TransactionChainLockTimeout);
+            ThrowHelper.ThrowLockTimeout("DeferredCleanup/EnqueueBatch", TimeoutOptions.Current.TransactionChainLockTimeout);
         }
 
-        var key = (table, pk);
-
-        // Check if already queued
-        if (_entityToBlockingTSN.TryGetValue(key, out var existingTSN))
-        {
-            // Keep the OLDEST blocking TSN — cleanup should happen when the oldest blocker completes
-            if (blockingTSN >= existingTSN)
-            {
-                _lock.ExitExclusiveAccess();
-                return;
-            }
-
-            // New blocking TSN is older — migrate to new bucket
-            RemoveFromList(existingTSN, table, pk);
-        }
-
-        // Add to appropriate TSN bucket
+        // Get-or-create the TSN bucket once for the whole batch
         if (!_pendingCleanups.TryGetValue(blockingTSN, out var list))
         {
-            list = new List<CleanupEntry>();
+            list = RentList();
             _pendingCleanups[blockingTSN] = list;
         }
 
-        list.Add(new CleanupEntry { Table = table, PrimaryKey = pk });
-        _entityToBlockingTSN[key] = blockingTSN;
+        var added = 0;
+        var span = CollectionsMarshal.AsSpan(entries);
+        for (int i = 0; i < span.Length; i++)
+        {
+            ref var entry = ref span[i];
+            var key = (entry.Table, entry.PrimaryKey);
+
+            if (_entityToBlockingTSN.TryGetValue(key, out var existingTSN))
+            {
+                if (blockingTSN >= existingTSN)
+                {
+                    continue; // Already queued under an older (or same) TSN
+                }
+
+                // New blocking TSN is older — migrate to new bucket
+                RemoveFromList(existingTSN, entry.Table, entry.PrimaryKey);
+            }
+
+            list.Add(entry);
+            _entityToBlockingTSN[key] = blockingTSN;
+            added++;
+        }
+
         var currentSize = _entityToBlockingTSN.Count;
         QueueSize = currentSize;
-
         _lock.ExitExclusiveAccess();
 
-        EnqueuedTotal++;
+        EnqueuedTotal += added;
 
         // High-water-mark logging — only at exact crossing points to avoid spam
         if (currentSize == _options.CriticalThreshold)
@@ -144,15 +159,32 @@ internal class DeferredCleanupManager
     /// <returns>The number of entities cleaned up</returns>
     public int ProcessDeferredCleanups(long completedTSN, long nextMinTSN, DatabaseEngine dbe, ChangeSet changeSet)
     {
-        // Collect entries under lock
-        var toCleanup = new List<CleanupEntry>();
-        var tsnsToRemove = new List<long>();
+        // Lockless early-exit: Count is a plain int field read (atomic on x64).
+        // Stale zero → skip (entries caught on next call). Stale non-zero → acquire lock, find nothing, exit.
+        if (_pendingCleanups.Count == 0)
+        {
+            return 0;
+        }
 
         var wc = WaitContext.FromTimeout(TimeoutOptions.Current.TransactionChainLockTimeout);
         if (!_lock.EnterExclusiveAccess(ref wc))
         {
             ThrowHelper.ThrowLockTimeout("DeferredCleanup/Process", TimeoutOptions.Current.TransactionChainLockTimeout);
         }
+
+        // Peek at the smallest key — if it's beyond completedTSN, nothing to collect
+        using (var peek = _pendingCleanups.GetEnumerator())
+        {
+            if (!peek.MoveNext() || peek.Current.Key > completedTSN)
+            {
+                _lock.ExitExclusiveAccess();
+                return 0;
+            }
+        }
+
+        // We have work to do — allocate collection lists
+        var toCleanup = new List<CleanupEntry>();
+        var tsnsToRemove = new List<long>();
 
         foreach (var kvp in _pendingCleanups)
         {
@@ -164,11 +196,12 @@ internal class DeferredCleanupManager
             toCleanup.AddRange(kvp.Value);
             tsnsToRemove.Add(kvp.Key);
 
-            // Remove from reverse lookup
+            // Remove from reverse lookup, then return the list to the pool
             foreach (var entry in kvp.Value)
             {
                 _entityToBlockingTSN.Remove((entry.Table, entry.PrimaryKey));
             }
+            ReturnList(kvp.Value);
         }
 
         // Remove processed TSN buckets
@@ -244,6 +277,26 @@ internal class DeferredCleanupManager
         return true;
     }
 
+    /// <summary>Rent a list from the pool or create a new one. Must be called under lock.</summary>
+    private List<CleanupEntry> RentList()
+    {
+        if (_listPool.TryPop(out var list))
+        {
+            return list;
+        }
+        return [];
+    }
+
+    /// <summary>Clear and return a list to the pool. Must be called under lock.</summary>
+    private void ReturnList(List<CleanupEntry> list)
+    {
+        list.Clear();
+        if (_listPool.Count < ListPoolMaxSize)
+        {
+            _listPool.Push(list);
+        }
+    }
+
     /// <summary>
     /// Remove a specific entity from a TSN bucket in the pending cleanups list.
     /// Must be called under lock.
@@ -266,6 +319,7 @@ internal class DeferredCleanupManager
 
         if (list.Count == 0)
         {
+            ReturnList(list);
             _pendingCleanups.Remove(tsn);
         }
     }
