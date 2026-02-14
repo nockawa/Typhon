@@ -1276,6 +1276,7 @@ public unsafe class Transaction : IDisposable
 
         // If this transaction is the oldest (the tail), we can remove the previous revision (if any), it is also the right place and time to clean up void
         //  revisions (the entry of a rolled back commit)
+        // If not the tail, enqueue for deferred cleanup so the entity is cleaned when the blocking tail completes.
         var wcTail = ComposeWaitContext(ref context.Ctx, TimeoutOptions.Current.TransactionChainLockTimeout);
         if (!_dbe.TransactionChain.Control.EnterSharedAccess(ref wcTail))
         {
@@ -1283,6 +1284,7 @@ public unsafe class Transaction : IDisposable
         }
         var isTail = _dbe.TransactionChain.Tail == this;
         long nextMinTSN = isTail ? _dbe.TransactionChain.Tail.Next?.TSN ?? _dbe.TransactionChain.NextFreeId : 0;
+        long tailTSN = isTail ? 0 : _dbe.TransactionChain.MinTSN;
         _dbe.TransactionChain.Control.ExitSharedAccess();
 
         if (isTail)
@@ -1311,6 +1313,11 @@ public unsafe class Transaction : IDisposable
                     return true;
                 }
             }
+        }
+        else if (tailTSN > 0)
+        {
+            // Not the tail — enqueue for deferred cleanup when the blocking tail completes
+            _dbe.DeferredCleanupManager.Enqueue(tailTSN, info.ComponentTable, pk);
         }
 
         // As we committed/rolled back the current revision, we don't need to keep track of the previous one anymore
@@ -1597,9 +1604,28 @@ public unsafe class Transaction : IDisposable
     {
         AssertThreadAffinity();
 
-        // Nothing to do if the transaction is empty
+        // Nothing to commit if the transaction is empty, but still process deferred cleanups
+        // in case this transaction (as the tail) is blocking cleanup of entities modified by others.
         if (State is TransactionState.Created)
         {
+            if (_dbe.DeferredCleanupManager.QueueSize > 0)
+            {
+                var wcDeferred = ComposeWaitContext(ref ctx, TimeoutOptions.Current.TransactionChainLockTimeout);
+                if (_dbe.TransactionChain.Control.EnterSharedAccess(ref wcDeferred))
+                {
+                    var isTailForDeferred = _dbe.TransactionChain.Tail == this;
+                    var nextMinTSNDeferred = isTailForDeferred
+                        ? _dbe.TransactionChain.Tail.Next?.TSN ?? _dbe.TransactionChain.NextFreeId
+                        : 0;
+                    _dbe.TransactionChain.Control.ExitSharedAccess();
+
+                    if (isTailForDeferred)
+                    {
+                        _dbe.DeferredCleanupManager.ProcessDeferredCleanups(TSN, nextMinTSNDeferred, _dbe, _changeSet);
+                    }
+                }
+            }
+
             return true;
         }
 
@@ -1677,6 +1703,25 @@ public unsafe class Transaction : IDisposable
                         }
                     }
                     break;
+            }
+        }
+
+        // Process deferred cleanups from other transactions that were blocked by this one
+        if (_dbe.DeferredCleanupManager.QueueSize > 0)
+        {
+            var wcDeferred = ComposeWaitContext(ref ctx, TimeoutOptions.Current.TransactionChainLockTimeout);
+            if (_dbe.TransactionChain.Control.EnterSharedAccess(ref wcDeferred))
+            {
+                var isTailForDeferred = _dbe.TransactionChain.Tail == this;
+                var nextMinTSNDeferred = isTailForDeferred
+                    ? _dbe.TransactionChain.Tail.Next?.TSN ?? _dbe.TransactionChain.NextFreeId
+                    : 0;
+                _dbe.TransactionChain.Control.ExitSharedAccess();
+
+                if (isTailForDeferred)
+                {
+                    _dbe.DeferredCleanupManager.ProcessDeferredCleanups(TSN, nextMinTSNDeferred, _dbe, _changeSet);
+                }
             }
         }
 

@@ -121,6 +121,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     public DeadlineWatchdog Watchdog { get; }
 
     internal TransactionChain TransactionChain { get; }
+    internal DeferredCleanupManager DeferredCleanupManager { get; }
 
     /// <summary>
     /// Create a transaction in order to make Queries and CRUD operation on the database
@@ -152,6 +153,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         _componentCollectionSegmentByStride = new ConcurrentDictionary<int, ChunkBasedSegment>();
         _componentCollectionVSBSByType = new ConcurrentDictionary<Type, VariableSizedBufferSegmentBase>();
         TransactionChain = new TransactionChain(_options.Resources.MaxActiveTransactions, this);
+        DeferredCleanupManager = new DeferredCleanupManager();
 
         DBD = new DatabaseDefinitions();
         ConstructComponentStore();

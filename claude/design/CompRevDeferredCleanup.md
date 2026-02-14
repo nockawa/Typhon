@@ -4,7 +4,9 @@
 
 This document describes a critical memory leak in the MVCC (Multi-Version Concurrency Control) implementation and proposes a hybrid solution combining deferred cleanup queues with lazy opportunistic cleanup.
 
-**Status**: Design Specification
+**GitHub Issue:** #46
+**Branch:** `fix/46-mvcc-revision-leak`
+**Status**: Partially implemented (#33 done, #16 remaining)
 **Target Implementation**: Typhon.Engine v1.x
 **Related Components**: Transaction, TransactionChain, ComponentTable, MVCC
 
