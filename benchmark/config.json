@@ -1,0 +1,58 @@
+{
+  "defaults": {
+    "regression_pct": 15.0,
+    "improvement_pct": 15.0,
+    "min_runs_for_trend": 3,
+    "baseline_window": 5
+  },
+  "type_categories": {
+    "EpochGuardBenchmarks": "Epoch",
+    "ChunkAccessorBenchmarks": "ChunkAccessor",
+    "TransactionBenchmarks": "EndToEnd",
+    "BTreeBenchmark": "BTree",
+    "BTreeMicroBenchmarks": "BTree",
+    "AccessControlBenchmarks": "Concurrency",
+    "AccessControlSmallBenchmarks": "Concurrency",
+    "PagedMMFBenchmarks": "Storage",
+    "ChangeSetBenchmarks": "Storage",
+    "ComponentTableBenchmarks": "Data",
+    "RevisionBenchmarks": "MVCC",
+    "String64Benchmarks": "Primitives",
+    "FindNextUnsetBenchmarks": "Collections",
+    "WorkloadBenchmarks": "Workload",
+    "IndexLookupBenchmarks": "Index"
+  },
+  "categories": {
+    "Epoch": { "regression_pct": 8.0 },
+    "ChunkAccessor": { "regression_pct": 8.0 },
+    "Concurrency": { "regression_pct": 10.0 },
+    "EndToEnd": { "regression_pct": 20.0 },
+    "MVCC": { "regression_pct": 10.0 },
+    "Primitives": { "regression_pct": 8.0 },
+    "Collections": { "regression_pct": 10.0 },
+    "Workload": { "regression_pct": 20.0 },
+    "Index": { "regression_pct": 20.0 }
+  },
+  "benchmarks": {
+    "EpochGuardBenchmarks.EnterExit": {
+      "regression_pct": 5.0,
+      "target_ns": 5.0
+    },
+    "ChunkAccessorBenchmarks.MRU_Hit": {
+      "regression_pct": 5.0,
+      "target_ns": 5.0
+    },
+    "ChunkAccessorBenchmarks.SIMD_Hit_4Chunks": {
+      "target_ns": 8.0
+    },
+    "ChunkAccessorBenchmarks.Eviction_17Chunks": {
+      "target_ns": 25.0
+    },
+    "ChunkAccessorBenchmarks.CommitChanges_AllDirty": {
+      "target_ns": 100.0
+    },
+    "ChunkAccessorBenchmarks.Dispose_16Slots": {
+      "target_ns": 150.0
+    }
+  }
+}
