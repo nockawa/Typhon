@@ -5,7 +5,7 @@
 **GitHub Issue:** #42
 **Decisions:** D1, D2, D7, D8
 
-> 💡 **Quick summary:** Create a 24-byte `UnitOfWorkContext` struct that embeds a `WaitContext` (deadline + cancellation) and adds epoch ID and holdoff counter. `HoldoffScope` ref struct provides RAII critical sections. Lock sites can use the embedded `WaitContext` directly — no construction needed.
+> 💡 **Quick summary:** Create a 24-byte `UnitOfWorkContext` struct that embeds a `WaitContext` (deadline + cancellation) and adds UoW ID and holdoff counter. `HoldoffScope` ref struct provides RAII critical sections. Lock sites can use the embedded `WaitContext` directly — no construction needed.
 
 ## Overview
 
@@ -49,8 +49,8 @@ public struct UnitOfWorkContext
     /// </summary>
     public WaitContext WaitContext;                       // 16 bytes (Deadline 8B + Token 8B)
 
-    /// <summary>UoW epoch for revision stamping (reserved for Tier 3).</summary>
-    public readonly ushort EpochId;                      // 2 bytes
+    /// <summary>UoW identifier for revision stamping and crash recovery.</summary>
+    public readonly ushort UowId;                        // 2 bytes
 
     private readonly ushort _padding;                    // 2 bytes (alignment)
 
@@ -94,7 +94,7 @@ Offset  Size  Field
   0      16   WaitContext
   0       8     ├─ Deadline (_ticks : long)
   8       8     └─ Token (CancellationToken struct)
- 16       2   EpochId
+ 16       2   UowId
  18       2   _padding
  20       4   _holdoffCount
 ────────────
@@ -118,24 +118,24 @@ public void UnitOfWorkContext_Size_Is24Bytes()
 // Construction
 // ═══════════════════════════════════════════════════════════════
 
-/// <summary>Primary constructor — WaitContext + epoch.</summary>
+/// <summary>Primary constructor — WaitContext + UoW ID.</summary>
 [MethodImpl(MethodImplOptions.AggressiveInlining)]
-public UnitOfWorkContext(WaitContext waitContext, ushort epochId = 0)
+public UnitOfWorkContext(WaitContext waitContext, ushort uowId = 0)
 {
     WaitContext = waitContext;
-    EpochId = epochId;
+    UowId = uowId;
     _padding = 0;
     _holdoffCount = 0;
 }
 
 /// <summary>Primary constructor — deadline + cancellation token.</summary>
 [MethodImpl(MethodImplOptions.AggressiveInlining)]
-public UnitOfWorkContext(Deadline deadline, CancellationToken token, ushort epochId = 0)
-    : this(new WaitContext(deadline, token), epochId)
+public UnitOfWorkContext(Deadline deadline, CancellationToken token, ushort uowId = 0)
+    : this(new WaitContext(deadline, token), uowId)
 {
 }
 
-/// <summary>Create from a relative timeout (no cancellation, no epoch).</summary>
+/// <summary>Create from a relative timeout (no cancellation, no UoW ID).</summary>
 [MethodImpl(MethodImplOptions.AggressiveInlining)]
 public static UnitOfWorkContext FromTimeout(TimeSpan timeout)
     => new(WaitContext.FromTimeout(timeout));

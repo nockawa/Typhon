@@ -505,7 +505,7 @@ The cancellation infrastructure is embedded in `UnitOfWorkContext`, a 24-byte st
 public struct UnitOfWorkContext  // 24 bytes
 {
     public WaitContext WaitContext;   // 16 bytes (Deadline + CancellationToken)
-    public ushort EpochId;           // 2 bytes
+    public ushort UowId;             // 2 bytes
     private ushort _padding;         // 2 bytes
     private int _holdoffCount;       // 4 bytes
 

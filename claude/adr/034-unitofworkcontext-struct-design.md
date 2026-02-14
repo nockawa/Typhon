@@ -7,7 +7,7 @@
 
 ## Context
 
-Typhon's execution model needs a context object that flows through all operations within a Unit of Work or transaction: deadline, cancellation token, UoW epoch, and holdoff state for critical section protection. Every major database engine has this pattern (SQL Server's `SOS_Task`, PostgreSQL's `PGPROC`, MySQL's `THD`).
+Typhon's execution model needs a context object that flows through all operations within a Unit of Work or transaction: deadline, cancellation token, UoW ID, and holdoff state for critical section protection. Every major database engine has this pattern (SQL Server's `SOS_Task`, PostgreSQL's `PGPROC`, MySQL's `THD`).
 
 The original design (documented in [02-execution.md §2.4](../overview/02-execution.md#24-executioncontext)) specified a **pooled class** — a heap-allocated object with `CancellationTokenSource`, rented from a `ConcurrentQueue` pool and returned on UoW dispose. This was motivated by the assumption that `CancellationTokenSource` required managed heap allocation.
 
@@ -28,7 +28,7 @@ Implement `UnitOfWorkContext` as a **24-byte struct** passed by `ref` (not a poo
 public struct UnitOfWorkContext  // 24 bytes, 3 × 8-byte qwords
 {
     public WaitContext WaitContext;   // 16 bytes (Deadline + CancellationToken)
-    public ushort EpochId;           // 2 bytes
+    public ushort UowId;             // 2 bytes
     private ushort _padding;         // 2 bytes (alignment)
     private int _holdoffCount;       // 4 bytes (nesting counter)
 }
@@ -107,7 +107,7 @@ Drop the holdoff counter and track holdoff state externally (e.g., thread-static
 
 ### Neutral
 
-- **24 bytes vs 16 bytes**: The holdoff counter adds 8 bytes (4 bytes + 2 padding + 2 epoch). On a hot path that already passes 16-byte WaitContext by ref, the marginal cost of 8 more bytes is negligible.
+- **24 bytes vs 16 bytes**: The holdoff counter adds 8 bytes (4 bytes + 2 padding + 2 UoW ID). On a hot path that already passes 16-byte WaitContext by ref, the marginal cost of 8 more bytes is negligible.
 - **Thread safety**: The struct is single-threaded by design (one UoW or transaction per thread). No synchronization needed on the holdoff counter.
 
 ## Implementation

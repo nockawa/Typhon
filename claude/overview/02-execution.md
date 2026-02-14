@@ -27,7 +27,7 @@ The timeout/cancellation foundation (§2.4–§2.6) is implemented. The Unit of 
 | # | Name | Purpose | Status |
 |---|------|---------|--------|
 | **2.1** | [Unit of Work](#21-unit-of-work) | Durability boundary, owns UnitOfWorkContext | 🆕 New |
-| **2.2** | [Transaction Commit Path](#22-transaction-commit-path) | Epoch stamp, WAL serialization, durability decision | 🆕 New |
+| **2.2** | [Transaction Commit Path](#22-transaction-commit-path) | UoW ID stamp, WAL serialization, durability decision | 🆕 New |
 | **2.3** | [Durability Modes](#23-durability-modes) | Deferred / GroupCommit / Immediate + per-tx override | 🆕 New |
 | **2.4** | [UnitOfWorkContext](#24-executioncontext) | Deadline, cancellation, holdoff state | ✅ Implemented |
 | **2.5** | [Deadline Management](#25-deadline-management) | Monotonic time, timeout conversion | ✅ Implemented |
@@ -43,7 +43,7 @@ The timeout/cancellation foundation (§2.4–§2.6) is implemented. The Unit of 
 
 ### Purpose
 
-The Unit of Work (UoW) is the **durability boundary** for user operations. It allows batching multiple transactions for efficient persistence while maintaining atomicity guarantees on crash recovery. Each UoW is assigned an **epoch** from the UoW Registry, which stamps all revisions created within its scope.
+The Unit of Work (UoW) is the **durability boundary** for user operations. It allows batching multiple transactions for efficient persistence while maintaining atomicity guarantees on crash recovery. Each UoW is assigned a **UoW ID** from the UoW Registry, which stamps all revisions created within its scope.
 
 ### Design Rationale
 
@@ -81,7 +81,7 @@ await uow.FlushAsync();  // Single FUA for all changes (~15-85µs)
 
 ### Crash Recovery Semantics
 
-**Design Decision**: On crash, uncommitted Units of Work are **rolled back entirely** via the epoch registry. Their epoch is marked `Void`, making all stamped revisions instantly invisible.
+**Design Decision**: On crash, uncommitted Units of Work are **rolled back entirely** via the UoW registry. Their UoW ID is marked `Void`, making all stamped revisions instantly invisible.
 
 ```csharp
 using var uow = db.CreateUnitOfWork(DurabilityMode.Deferred);
@@ -93,8 +93,8 @@ tx3.Commit();  // Never reached
 uow.Flush();   // Never reached
 
 // On recovery:
-//   Phase 1: Registry sees this epoch as Pending → marks Void
-//   Result: all revisions with this epoch are invisible
+//   Phase 1: Registry sees this UoW ID as Pending → marks Void
+//   Result: all revisions with this UoW ID are invisible
 //   Database state = before this UoW started
 ```
 
@@ -105,10 +105,10 @@ For the full recovery algorithm (registry scan + WAL replay + torn page repair),
 **Design Decision**: Multiple Units of Work can be active concurrently on different threads.
 
 ```
-Thread 1: UoW for zone A simulation    (epoch=42, Deferred)
-Thread 2: UoW for zone B simulation    (epoch=43, Deferred)
-Thread 3: UoW for player trades        (epoch=44, Immediate)
-Thread 4: UoW for general requests     (epoch=45, GroupCommit)
+Thread 1: UoW for zone A simulation    (uowId=42, Deferred)
+Thread 2: UoW for zone B simulation    (uowId=43, Deferred)
+Thread 3: UoW for player trades        (uowId=44, Immediate)
+Thread 4: UoW for general requests     (uowId=45, GroupCommit)
 ```
 
 Each UoW is isolated; they interact only through the underlying MVCC transaction isolation. However, they **share** several infrastructure resources (see below).
@@ -188,7 +188,7 @@ If nested scopes are needed, the user should structure their code with a single 
 public sealed class UnitOfWork : IDisposable, IAsyncDisposable
 {
     // Identity
-    public ushort Epoch { get; }              // Allocated from UoW Registry
+    public ushort UowId { get; }              // Allocated from UoW Registry
 
     // Owns the execution context
     public UnitOfWorkContext Context { get; }
@@ -225,14 +225,14 @@ public enum DurabilityMode
 
 ```
 CreateUnitOfWork(mode)
-  → Allocate epoch from UoW Registry (Pending)
+  → Allocate UoW ID from UoW Registry (Pending)
   → Rent UnitOfWorkContext from pool
   → Return UoW
 
 UoW in use:
   → CreateTransaction() → tx operations → tx.Commit()
   → Repeat for multiple transactions
-  → All revisions stamped with UoW's epoch
+  → All revisions stamped with UoW's ID
 
 Flush() / FlushAsync():
   → Signal WAL writer to flush all buffered records for this UoW
@@ -243,14 +243,14 @@ Dispose():
   → If flushed: normal cleanup
   → If NOT flushed: changes remain volatile (crash = rolled back)
   → Return UnitOfWorkContext to pool
-  → Epoch eventually recycled when no active tx references it
+  → UoW ID eventually recycled when no active tx references it
 ```
 
-### Epoch Recycling
+### UoW ID Recycling
 
-Each UoW is assigned an epoch from a **fixed-size registry array** (see [06-durability.md §6.4](06-durability.md#64-uow-registry)). Epochs are a scarce resource — the registry has a bounded number of slots — so timely recycling is critical for sustained throughput.
+Each UoW is assigned a UoW ID from a **fixed-size registry array** (see [06-durability.md §6.4](06-durability.md#64-uow-registry)). UoW IDs are a scarce resource — the registry has a bounded number of slots — so timely recycling is critical for sustained throughput.
 
-**Epoch state machine:**
+**UoW ID state machine:**
 
 ```
 Pending ──→ WalDurable ──→ Committed ──→ Recyclable
@@ -265,16 +265,16 @@ Pending ──→ WalDurable ──→ Committed ──→ Recyclable
 |-----------|---------|-----|
 | Pending → WalDurable | `uow.Flush()` or WAL writer completes FUA | WAL Writer thread |
 | WalDurable → Committed | Checkpoint Manager flushes dirty pages + fsyncs data file | Checkpoint Manager |
-| Committed → Recyclable | `TransactionChain.MinTSN` advances past all revisions stamped with this epoch | GC on transaction disposal |
-| Pending → Void | Crash recovery finds epoch still Pending | Recovery algorithm |
+| Committed → Recyclable | `TransactionChain.MinTSN` advances past all revisions stamped with this UoW ID | GC on transaction disposal |
+| Pending → Void | Crash recovery finds UoW ID still Pending | Recovery algorithm |
 | Void → Recyclable | Recovery completes | Recovery algorithm |
 
-**The MinTSN condition** is the most subtle transition: an epoch can only be recycled when *no active transaction* can still observe its revisions. Since transactions use snapshot isolation (they see revisions with TSN ≤ their own), the epoch is safe to recycle once `MinTSN` (the oldest active transaction's TSN) exceeds all TSNs stamped by that epoch's transactions. This is analogous to PostgreSQL's `xmin` horizon driving tuple vacuuming.
+**The MinTSN condition** is the most subtle transition: a UoW ID can only be recycled when *no active transaction* can still observe its revisions. Since transactions use snapshot isolation (they see revisions with TSN ≤ their own), the UoW ID is safe to recycle once `MinTSN` (the oldest active transaction's TSN) exceeds all TSNs stamped by that UoW's transactions. This is analogous to PostgreSQL's `xmin` horizon driving tuple vacuuming.
 
-**Consequences of stale epochs:**
-- A fixed-size registry means stale epochs **block new UoW creation** (no free slots available). This is the engine's natural back-pressure mechanism.
-- Stale epochs also increase crash recovery time: the registry scan must examine each slot, and pending/stale epochs require WAL segment retention.
-- Long-running read-only transactions are the primary cause of epoch stall (they hold `MinTSN` low, preventing Committed → Recyclable transitions). This mirrors the "long transaction" problem in PostgreSQL's MVCC vacuum.
+**Consequences of stale UoW IDs:**
+- A fixed-size registry means stale UoW IDs **block new UoW creation** (no free slots available). This is the engine's natural back-pressure mechanism.
+- Stale UoW IDs also increase crash recovery time: the registry scan must examine each slot, and pending/stale UoW IDs require WAL segment retention.
+- Long-running read-only transactions are the primary cause of UoW ID stall (they hold `MinTSN` low, preventing Committed → Recyclable transitions). This mirrors the "long transaction" problem in PostgreSQL's MVCC vacuum.
 
 **Design rationale for fixed-size registry:**
 - **Predictable memory**: Registry is a single cache-line-aligned array, no dynamic allocation
@@ -287,7 +287,7 @@ Pending ──→ WalDurable ──→ Committed ──→ Recyclable
 A Deferred UoW that commits many transactions without calling `Flush()` has specific resource and recovery implications:
 
 **Resource accumulation:**
-- WAL segments accumulate on disk — they can't be recycled until the epoch reaches `WalDurable` → `Committed`
+- WAL segments accumulate on disk — they can't be recycled until the UoW ID reaches `WalDurable` → `Committed`
 - The engine allocates new WAL segments dynamically and does **not** force-flush or abort the UoW
 - The user bears the disk cost of their durability choice
 
@@ -299,18 +299,18 @@ Extreme case: 1M transactions × 200 bytes = ~200 MB WAL retention
 
 No engine-imposed cap exists — the user controls when to flush. If disk space is a concern, the user should periodically call `FlushAsync()` within long batches or use GroupCommit mode instead.
 
-**On crash (epoch still Pending):**
-1. Recovery scans the registry, finds this epoch as `Pending`
-2. Epoch marked `Void` — all revisions stamped with it become instantly invisible
-3. WAL replay skips voided epoch records (they are still on disk but semantically dead)
-4. After recovery completes, WAL segments for voided epochs are recycled
+**On crash (UoW ID still Pending):**
+1. Recovery scans the registry, finds this UoW ID as `Pending`
+2. UoW ID marked `Void` — all revisions stamped with it become instantly invisible
+3. WAL replay skips voided UoW ID records (they are still on disk but semantically dead)
+4. After recovery completes, WAL segments for voided UoW IDs are recycled
 5. Database state = as if this UoW never existed
 
-**On crash (epoch WalDurable but not yet Committed):**
-1. Recovery finds epoch as `WalDurable` — WAL records are intact
-2. WAL replay re-applies all committed transactions from this epoch
+**On crash (UoW ID WalDurable but not yet Committed):**
+1. Recovery finds UoW ID as `WalDurable` — WAL records are intact
+2. WAL replay re-applies all committed transactions from this UoW
 3. Dirty pages are reconstructed from WAL records
-4. Epoch transitions to `Committed` after checkpoint
+4. UoW ID transitions to `Committed` after checkpoint
 
 This asymmetry — `Pending` means "discard everything" while `WalDurable` means "replay everything" — is what makes the Deferred/Immediate distinction a *durability* choice rather than a *consistency* choice. All modes provide the same ACID guarantees for committed, flushed transactions.
 
@@ -341,9 +341,9 @@ public bool Commit(DurabilityOverride durability = DurabilityOverride.Default)
     // 1. MVCC conflict detection (existing)
     if (!ResolveConflicts()) return false;
 
-    // 2. Stamp epoch on all revision elements
+    // 2. Stamp UoW ID on all revision elements
     foreach (ref var rev in _pendingRevisions)
-        rev.UowEpoch = _uow.Epoch;
+        rev.UowId = _uow.UowId;
 
     // 3. Serialize WAL record to ring buffer (~100-500ns)
     var lsn = _walWriter.SerializeToBuffer(BuildWalRecord());
@@ -379,7 +379,7 @@ The following diagram shows the complete data flow — from `CreateUnitOfWork()`
 | Step | Operation | Cost | Notes |
 |------|-----------|------|-------|
 | 1 | Conflict detection | Variable | Compare revision indices, resolve conflicts |
-| 2 | Epoch stamping | ~10-50ns | Set 2-byte epoch on each pending revision |
+| 2 | UoW ID stamping | ~10-50ns | Set 2-byte UoW ID on each pending revision |
 | 3 | WAL serialization | ~100-500ns | Write 32B header + payload to MPSC ring buffer |
 | 4a | Durability check | ~1-3ns | One compare + branch |
 | 4b | Signal + wait (Immediate only) | ~15-85µs | Wake WAL writer, block for FUA |
@@ -1656,7 +1656,7 @@ The UoW timeout flows through to all database operations (UnitOfWorkContext), en
 | Component | Status | Location | Notes |
 |-----------|--------|----------|-------|
 | **Unit of Work** | ❌ Missing | - | To be implemented (Tier 4) |
-| **UnitOfWorkContext** | ✅ Implemented | `Concurrency/UnitOfWorkContext.cs` | 24-byte struct: Deadline + CancellationToken + EpochId + holdoff |
+| **UnitOfWorkContext** | ✅ Implemented | `Concurrency/UnitOfWorkContext.cs` | 24-byte struct: Deadline + CancellationToken + UowId + holdoff |
 | **WaitContext** | ✅ Implemented | `Concurrency/WaitContext.cs` | 16-byte struct: Deadline + CancellationToken, used by all lock primitives |
 | **Deadline** | ✅ Implemented | `Concurrency/Deadline.cs` | Monotonic time via `Stopwatch.GetTimestamp()` |
 | **DeadlineWatchdog** | ✅ Implemented | `Concurrency/DeadlineWatchdog.cs` | 200Hz via shared timer, fires CancellationTokens |

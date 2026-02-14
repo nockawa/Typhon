@@ -43,7 +43,7 @@ The overview doc (§2.4) specifies `UnitOfWorkContext` as a **pooled class**. Af
 | CancellationTokenSource | Can be owned by class | Owned externally (by future UoW) |
 | Hot path cost | Pool rent/return (~20-50ns) | Zero |
 
-**Rationale:** CancellationToken is a struct (8B), so the context doesn't need managed references. The `EpochId` field is included but reserved for future UoW integration. The `_holdoffCount` is the only mutable state, requiring `ref` passing — acceptable for Typhon's synchronous commit path.
+**Rationale:** CancellationToken is a struct (8B), so the context doesn't need managed references. The `UowId` field is included but reserved for future UoW integration. The `_holdoffCount` is the only mutable state, requiring `ref` passing — acceptable for Typhon's synchronous commit path.
 
 ## Design Decisions
 
@@ -56,7 +56,7 @@ The overview doc (§2.4) specifies `UnitOfWorkContext` as a **pooled class**. Af
 | D5 | Entire commit loop in holdoff | Once commit starts modifying data, it runs to completion |
 | D6 | Backward-compatible `Commit()` overload | Existing callers unaffected; wrapper uses default timeout |
 | D7 | `HoldoffScope` as `ref struct` with `ref` field | C# 13 supports ref fields; follows `EpochGuard` pattern |
-| D8 | `EpochId` field included but reserved | Stabilizes struct layout for future UoW integration |
+| D8 | `UowId` field included but reserved | Stabilizes struct layout for future UoW integration |
 
 ## Implementation Order
 
