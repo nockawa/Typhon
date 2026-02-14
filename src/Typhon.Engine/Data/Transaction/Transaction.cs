@@ -218,6 +218,24 @@ public unsafe class Transaction : IDisposable
             Rollback();
         }
 
+        // Process deferred cleanups if this transaction was the tail blocking other entities.
+        // Must happen before Remove() so we can still detect ourselves as the tail.
+        if (_dbe.DeferredCleanupManager.QueueSize > 0)
+        {
+            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.TransactionChainLockTimeout);
+            if (_dbe.TransactionChain.Control.EnterSharedAccess(ref wc))
+            {
+                var isTail = _dbe.TransactionChain.Tail == this;
+                var nextMinTSN = isTail ? _dbe.TransactionChain.Tail.Next?.TSN ?? _dbe.TransactionChain.NextFreeId : 0;
+                _dbe.TransactionChain.Control.ExitSharedAccess();
+
+                if (isTail)
+                {
+                    _dbe.DeferredCleanupManager.ProcessDeferredCleanups(TSN, nextMinTSN, _dbe, _changeSet);
+                }
+            }
+        }
+
         // Dispose all ChunkAccessors to flush dirty pages.
         foreach (var info in _componentInfos.Values)
         {
@@ -1072,6 +1090,82 @@ public unsafe class Transaction : IDisposable
             PrevCompContentChunkId = prevCompChunkId,
             PrevRevisionIndex = prevCompRevisionIndex
         };
+
+        // Lazy opportunistic cleanup: if the revision chain has accumulated many entries,
+        // try to clean up old revisions opportunistically during this read.
+        var lazyThreshold = _dbe.DeferredCleanupManager.LazyCleanupThreshold;
+        if (lazyThreshold > 0)
+        {
+            ref var header = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(compRevFirstChunkId);
+            if (header.ItemCount >= lazyThreshold)
+            {
+                // Use (MinTSN & ~1L) to account for 1-bit precision loss in CompRevStorageElement.TSN:
+                // bit 0 of the lower 16 bits is shared with IsolationFlag, so odd TSN values are stored
+                // as their even predecessor. Rounding down prevents removing the tail's own entries.
+                var safeCutoff = _dbe.TransactionChain.MinTSN & ~1L;
+                if (safeCutoff > 0)
+                {
+                    try
+                    {
+                        if (header.Control.TryEnterExclusiveAccess())
+                        {
+                            var lazyRevAccessor = info.CompRevTableSegment.CreateChunkAccessor(_changeSet);
+                            var lazyContentAccessor = info.CompContentSegment.CreateChunkAccessor(_changeSet);
+
+                            ComponentRevisionManager.CleanUpUnusedEntriesCore(info.ComponentTable, compRevFirstChunkId, safeCutoff,
+                                ref lazyRevAccessor, ref lazyContentAccessor);
+
+                            lazyRevAccessor.Dispose();
+                            lazyContentAccessor.Dispose();
+                            header.Control.ExitExclusiveAccess();
+
+                            // After defrag, the chain is compacted. Re-walk to find the correct revision index for our
+                            //  TSN (void/isolated entries may shift positions).
+                            prevCompRevisionIndex = -1;
+                            curCompRevisionIndex = -1;
+                            prevCompChunkId = 0;
+                            curCompChunkId = 0;
+                            {
+                                using var reEnum = new RevisionEnumerator(ref compRevTableAccessor, compRevFirstChunkId, false, true);
+                                while (reEnum.MoveNext())
+                                {
+                                    ref var el = ref reEnum.Current;
+                                    if (el.IsVoid)
+                                    {
+                                        continue;
+                                    }
+                                    if (el.TSN > TSN)
+                                    {
+                                        break;
+                                    }
+                                    if ((el.TSN > 0) && !el.IsolationFlag)
+                                    {
+                                        prevCompRevisionIndex = curCompRevisionIndex;
+                                        prevCompChunkId = curCompChunkId;
+                                        curCompRevisionIndex = (short)(reEnum.Header.FirstItemIndex + reEnum.RevisionIndex);
+                                        curCompChunkId = el.ComponentChunkId;
+                                    }
+                                }
+                            }
+                            compRevInfo.CurRevisionIndex = curCompRevisionIndex;
+                            compRevInfo.PrevRevisionIndex = prevCompRevisionIndex;
+                            compRevInfo.CurCompContentChunkId = curCompChunkId;
+                            compRevInfo.PrevCompContentChunkId = prevCompChunkId;
+
+                            _dbe.DeferredCleanupManager.RecordLazyCleanup();
+                        }
+                        else
+                        {
+                            _dbe.DeferredCleanupManager.RecordLazyCleanupSkipped();
+                        }
+                    }
+                    catch
+                    {
+                        // Never fail a read due to lazy cleanup
+                    }
+                }
+            }
+        }
 
         // Tombstoned entity: carry the value (callers like UpdateComponent need revision metadata) but signal Deleted
         if (curCompChunkId == 0)

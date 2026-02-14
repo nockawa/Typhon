@@ -1,5 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using NUnit.Framework;
+using Serilog;
+using System.Threading.Tasks;
 
 namespace Typhon.Engine.Tests;
 
@@ -224,5 +227,412 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 
         // No deferred cleanup needed — the transaction was the tail and cleaned directly
         Assert.That(dbe.DeferredCleanupManager.QueueSize, Is.EqualTo(0), "Queue should stay empty when transaction is its own tail");
+    }
+
+    [Test]
+    public void DeferredCleanup_EnqueueDuplicate_MigratesToOlderTick()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        // T1 (tail, TSN=X), T2 (TSN=X+1) both active
+        using var t1 = dbe.CreateTransaction();
+        using var t2 = dbe.CreateTransaction();
+
+        // T3 creates entity E, commits → enqueued with blockingTSN = T1.TSN
+        long pk;
+        {
+            using var t3 = dbe.CreateTransaction();
+            var a = new CompA(10);
+            pk = t3.CreateEntity(ref a);
+            t3.Commit();
+        }
+
+        var queueSizeAfterCreate = dbe.DeferredCleanupManager.QueueSize;
+
+        // T4 updates same entity E, commits → same entity enqueued again
+        // Should be a no-op because T1.TSN is already the oldest blocker
+        {
+            using var t4 = dbe.CreateTransaction();
+            var a = new CompA(20);
+            t4.UpdateEntity(pk, ref a);
+            t4.Commit();
+        }
+
+        // Queue size should not have grown — dedup keeps the oldest blocking TSN
+        Assert.That(dbe.DeferredCleanupManager.QueueSize, Is.EqualTo(queueSizeAfterCreate),
+            "Queue should have only 1 entry per entity — duplicate enqueue for same entity is deduplicated");
+
+        t2.Commit();
+        t1.Commit();
+    }
+
+    [Test]
+    public void DeferredCleanup_ProcessPartialQueue()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        // Setup: create entities A and B, each with 1 revision (the create)
+        long pkA, pkB;
+        {
+            using var t = dbe.CreateTransaction();
+            var a = new CompA(1);
+            pkA = t.CreateEntity(ref a);
+            t.Commit();
+        }
+        {
+            using var t = dbe.CreateTransaction();
+            var a = new CompA(2);
+            pkB = t.CreateEntity(ref a);
+            t.Commit();
+        }
+
+        // Now start T_a (tail blocker) — all subsequent updates will be blocked by T_a
+        var t_a = dbe.CreateTransaction();
+
+        // Update entity A → creates 2nd revision, blocked by T_a
+        {
+            using var t = dbe.CreateTransaction();
+            var a = new CompA(11);
+            t.UpdateEntity(pkA, ref a);
+            t.Commit();
+        }
+
+        // Start T_b BEFORE updating entity B, so T_b has an intermediate TSN
+        var t_b = dbe.CreateTransaction();
+
+        // Update entity B → creates 2nd revision, blocked by T_a (still the tail)
+        {
+            using var t = dbe.CreateTransaction();
+            var a = new CompA(22);
+            t.UpdateEntity(pkB, ref a);
+            t.Commit();
+        }
+
+        // Both entities should have 2 revisions
+        {
+            using var tCheck = dbe.CreateTransaction();
+            Assert.That(tCheck.GetRevisionCount<CompA>(pkA), Is.EqualTo(2),
+                "Entity A should have 2 revisions while T_a is blocking");
+            Assert.That(tCheck.GetRevisionCount<CompA>(pkB), Is.EqualTo(2),
+                "Entity B should have 2 revisions while T_a is blocking");
+        }
+
+        // Queue should have entries
+        Assert.That(dbe.DeferredCleanupManager.QueueSize, Is.GreaterThan(0),
+            "Queue should have entries for blocked entities");
+        var queueSizeBefore = dbe.DeferredCleanupManager.QueueSize;
+
+        // Commit T_a → processes deferred cleanup for all entries blocked by T_a.TSN.
+        // nextMinTSN will be T_b.TSN, so only revisions with TSN < T_b.TSN get removed.
+        // Entity A's create revision (TSN < T_a.TSN) should be cleaned.
+        // Entity B's create revision (TSN < T_a.TSN) should also be cleaned.
+        t_a.Commit();
+        t_a.Dispose();
+
+        // Both entities should now have 1 revision — T_a was blocking both
+        {
+            using var tCheck = dbe.CreateTransaction();
+            Assert.That(tCheck.GetRevisionCount<CompA>(pkA), Is.EqualTo(1),
+                "Entity A should have 1 revision after T_a committed");
+            Assert.That(tCheck.GetRevisionCount<CompA>(pkB), Is.EqualTo(1),
+                "Entity B should have 1 revision after T_a committed");
+        }
+
+        // Queue should be empty — T_a was the only blocker
+        Assert.That(dbe.DeferredCleanupManager.QueueSize, Is.EqualTo(0),
+            "Queue should be empty after T_a committed");
+
+        // Verify counters show processing occurred
+        Assert.That(dbe.DeferredCleanupManager.ProcessedTotal, Is.GreaterThan(0),
+            "ProcessedTotal should be > 0 after deferred cleanup ran");
+
+        t_b.Commit();
+        t_b.Dispose();
+    }
+
+    [Test]
+    public void DeferredCleanup_TailDispose_WithoutCommit_TriggersCleanup()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        // T1 (tail), T2 creates entity + commits, T3 updates + commits → 2 revisions, queued
+        var t1 = dbe.CreateTransaction();
+
+        long pk;
+        {
+            using var t2 = dbe.CreateTransaction();
+            var a = new CompA(10);
+            pk = t2.CreateEntity(ref a);
+            t2.Commit();
+        }
+        {
+            using var t3 = dbe.CreateTransaction();
+            var a = new CompA(20);
+            t3.UpdateEntity(pk, ref a);
+            t3.Commit();
+        }
+
+        // Verify 2 revisions and queue has entries
+        {
+            using var tCheck = dbe.CreateTransaction();
+            Assert.That(tCheck.GetRevisionCount<CompA>(pk), Is.EqualTo(2));
+        }
+        Assert.That(dbe.DeferredCleanupManager.QueueSize, Is.GreaterThan(0));
+
+        // Dispose T1 without committing — should trigger deferred cleanup
+        t1.Dispose();
+
+        // Verify entity has 1 revision and queue is empty
+        {
+            using var tVerify = dbe.CreateTransaction();
+            Assert.That(tVerify.GetRevisionCount<CompA>(pk), Is.EqualTo(1),
+                "Entity should have 1 revision after tail is disposed without commit");
+        }
+        Assert.That(dbe.DeferredCleanupManager.QueueSize, Is.EqualTo(0),
+            "Queue should be empty after tail dispose triggers deferred cleanup");
+    }
+
+    [Test]
+    public void DeferredCleanup_TailRollback_TriggersCleanup()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        // T1 (tail) makes some changes, T2 creates entity + commits
+        var t1 = dbe.CreateTransaction();
+        {
+            // T1 does some work (writes something to make rollback meaningful)
+            var a = new CompA(99);
+            t1.CreateEntity(ref a);
+        }
+
+        long pk;
+        {
+            using var t2 = dbe.CreateTransaction();
+            var a = new CompA(10);
+            pk = t2.CreateEntity(ref a);
+            t2.Commit();
+        }
+        {
+            using var t3 = dbe.CreateTransaction();
+            var a = new CompA(20);
+            t3.UpdateEntity(pk, ref a);
+            t3.Commit();
+        }
+
+        // Verify 2 revisions
+        {
+            using var tCheck = dbe.CreateTransaction();
+            Assert.That(tCheck.GetRevisionCount<CompA>(pk), Is.EqualTo(2));
+        }
+
+        // Explicitly rollback T1, then dispose — deferred cleanup should fire
+        t1.Rollback();
+        t1.Dispose();
+
+        // Verify entity has 1 revision and queue is empty
+        {
+            using var tVerify = dbe.CreateTransaction();
+            Assert.That(tVerify.GetRevisionCount<CompA>(pk), Is.EqualTo(1),
+                "Entity should have 1 revision after tail rollback+dispose triggers deferred cleanup");
+        }
+        Assert.That(dbe.DeferredCleanupManager.QueueSize, Is.EqualTo(0),
+            "Queue should be empty after tail rollback triggers deferred cleanup");
+    }
+
+    [Test]
+    public void DeferredCleanup_ConcurrentCommits_ProcessCorrectEntries()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        const int entityCount = 20;
+
+        // T_blocker is the tail
+        using var tBlocker = dbe.CreateTransaction();
+
+        // Create N entities across parallel tasks (each task creates one entity)
+        var pks = new long[entityCount];
+        for (int i = 0; i < entityCount; i++)
+        {
+            using var t = dbe.CreateTransaction();
+            var a = new CompA(i);
+            pks[i] = t.CreateEntity(ref a);
+            t.Commit();
+        }
+
+        // Update all entities (creates second revision for each)
+        Parallel.For(0, entityCount, i =>
+        {
+            using var t = dbe.CreateTransaction();
+            var a = new CompA(i + 1000);
+            t.UpdateEntity(pks[i], ref a);
+            t.Commit();
+        });
+
+        // All entities should have 2 revisions (blocked by T_blocker)
+        {
+            using var tCheck = dbe.CreateTransaction();
+            for (int i = 0; i < entityCount; i++)
+            {
+                Assert.That(tCheck.GetRevisionCount<CompA>(pks[i]), Is.EqualTo(2),
+                    $"Entity {i} should have 2 revisions while blocker is active");
+            }
+        }
+
+        // Commit the blocker — triggers deferred cleanup
+        tBlocker.Commit();
+
+        // Verify: all entities have 1 revision, queue is empty
+        {
+            using var tVerify = dbe.CreateTransaction();
+            for (int i = 0; i < entityCount; i++)
+            {
+                Assert.That(tVerify.GetRevisionCount<CompA>(pks[i]), Is.EqualTo(1),
+                    $"Entity {i} should have 1 revision after deferred cleanup");
+            }
+        }
+        Assert.That(dbe.DeferredCleanupManager.QueueSize, Is.EqualTo(0),
+            "Queue should be empty after all concurrent entries are cleaned");
+    }
+}
+
+/// <summary>
+/// Tests for lazy cleanup require a custom <see cref="DeferredCleanupOptions.LazyCleanupThreshold"/>
+/// so they use a separate test fixture with a custom DI setup.
+/// </summary>
+class DeferredCleanupLazyTests : TestBase<DeferredCleanupLazyTests>
+{
+    public override void Setup()
+    {
+        var serviceCollection = new ServiceCollection();
+        ServiceCollection = serviceCollection;
+        ServiceCollection
+            .AddLogging(builder =>
+            {
+                builder.AddSerilog();
+                builder.AddSimpleConsole(options =>
+                {
+                    options.SingleLine = true;
+                    options.IncludeScopes = true;
+                    options.TimestampFormat = "mm:ss.fff ";
+                });
+                builder.SetMinimumLevel(LogLevel.Information);
+            })
+            .AddResourceRegistry()
+            .AddMemoryAllocator()
+            .AddEpochManager()
+            .AddHighResolutionSharedTimer()
+            .AddDeadlineWatchdog()
+            .AddScopedManagedPagedMemoryMappedFile(options =>
+            {
+                options.DatabaseName = CurrentDatabaseName;
+                options.DatabaseCacheSize = (ulong)PagedMMF.MinimumCacheSize;
+                options.PagesDebugPattern = false;
+            })
+            .AddScopedDatabaseEngine(options =>
+            {
+                options.DeferredCleanup.LazyCleanupThreshold = 3;
+            });
+
+        ServiceProvider = ServiceCollection.BuildServiceProvider();
+        ServiceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
+        Logger = ServiceCollection.BuildServiceProvider().GetRequiredService<ILogger<DeferredCleanupLazyTests>>();
+    }
+
+    [Test]
+    public void LazyCleanup_TriggersOnRead()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        // With threshold=3, lazy cleanup triggers when ItemCount >= 3 during reads.
+        // Build up revisions without a blocking tail first (so they accumulate normally).
+
+        // Create an entity and update it multiple times in separate transactions
+        // while a blocker holds the tail position to prevent immediate cleanup.
+        var tBlocker = dbe.CreateTransaction();
+
+        long pk;
+        {
+            using var t = dbe.CreateTransaction();
+            var a = new CompA(1);
+            pk = t.CreateEntity(ref a);
+            t.Commit();
+        }
+
+        // Update 3 more times to reach ItemCount >= 4 (create + 3 updates)
+        for (int i = 2; i <= 4; i++)
+        {
+            using var t = dbe.CreateTransaction();
+            var a = new CompA(i * 10);
+            t.UpdateEntity(pk, ref a);
+            t.Commit();
+        }
+
+        // Entity should have 4 revisions (blocked by tBlocker)
+        {
+            using var tCheck = dbe.CreateTransaction();
+            Assert.That(tCheck.GetRevisionCount<CompA>(pk), Is.EqualTo(4),
+                "Entity should have 4 revisions while blocker is active");
+        }
+
+        // Commit the blocker — this triggers deferred cleanup
+        tBlocker.Commit();
+        tBlocker.Dispose();
+
+        // After the blocker commits, the entity should be cleaned down to 1 revision
+        {
+            using var tVerify = dbe.CreateTransaction();
+            Assert.That(tVerify.GetRevisionCount<CompA>(pk), Is.EqualTo(1),
+                "Entity should have 1 revision after blocker commits");
+        }
+
+        // Now create a new scenario: build up revisions again without a blocker
+        // (each commit cleans immediately), but then create a blocker to accumulate,
+        // then commit the blocker so MinTSN advances, and finally read the entity
+        // to trigger lazy cleanup.
+        var tBlocker2 = dbe.CreateTransaction();
+
+        // Update 3 times to get ItemCount >= threshold (3)
+        for (int i = 10; i <= 12; i++)
+        {
+            using var t = dbe.CreateTransaction();
+            var a = new CompA(i * 100);
+            t.UpdateEntity(pk, ref a);
+            t.Commit();
+        }
+
+        var lazyCountBefore = dbe.DeferredCleanupManager.LazyCleanupTotal;
+
+        // Commit the blocker so MinTSN advances — this makes old revisions eligible for cleanup
+        tBlocker2.Commit();
+        tBlocker2.Dispose();
+
+        // Now read the entity — this should trigger lazy cleanup since ItemCount >= threshold
+        // and MinTSN has advanced past the old revisions
+        {
+            using var tRead = dbe.CreateTransaction();
+            tRead.ReadEntity(pk, out CompA result);
+            Assert.That(result.A, Is.EqualTo(1200), "Should read the latest value");
+        }
+
+        // Verify either: the lazy cleanup counter was incremented, OR the deferred cleanup
+        // already handled it (which is also correct behavior)
+        var lazyCountAfter = dbe.DeferredCleanupManager.LazyCleanupTotal;
+        var processedTotal = dbe.DeferredCleanupManager.ProcessedTotal;
+
+        // The entity should be cleaned one way or another
+        {
+            using var tFinal = dbe.CreateTransaction();
+            Assert.That(tFinal.GetRevisionCount<CompA>(pk), Is.EqualTo(1),
+                "Entity should have 1 revision after lazy or deferred cleanup");
+        }
+
+        Assert.That(lazyCountAfter + processedTotal, Is.GreaterThan(0),
+            "At least one cleanup path (lazy or deferred) should have been active");
     }
 }

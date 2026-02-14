@@ -79,6 +79,11 @@ public class DatabaseEngineOptions
     /// Lock acquisition timeout configuration for all engine subsystems.
     /// </summary>
     public TimeoutOptions Timeouts { get; set; } = new();
+
+    /// <summary>
+    /// Deferred cleanup subsystem configuration for MVCC revision management.
+    /// </summary>
+    public DeferredCleanupOptions DeferredCleanup { get; set; } = new();
 }
 
 /// <summary>
@@ -153,7 +158,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         _componentCollectionSegmentByStride = new ConcurrentDictionary<int, ChunkBasedSegment>();
         _componentCollectionVSBSByType = new ConcurrentDictionary<Type, VariableSizedBufferSegmentBase>();
         TransactionChain = new TransactionChain(_options.Resources.MaxActiveTransactions, this);
-        DeferredCleanupManager = new DeferredCleanupManager();
+        DeferredCleanupManager = new DeferredCleanupManager(_options.DeferredCleanup, _log);
 
         DBD = new DatabaseDefinitions();
         ConstructComponentStore();
@@ -358,6 +363,11 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         // Duration: commit timing
         var avgUs = _commitCount > 0 ? _commitSumUs / _commitCount : 0;
         writer.WriteDuration("Commit", _commitLastUs, avgUs, _commitMaxUs);
+
+        // Deferred cleanup throughput
+        writer.WriteThroughput("Cleanup.Enqueued", DeferredCleanupManager.EnqueuedTotal);
+        writer.WriteThroughput("Cleanup.Processed", DeferredCleanupManager.ProcessedTotal);
+        writer.WriteThroughput("Cleanup.LazyTriggered", DeferredCleanupManager.LazyCleanupTotal);
     }
 
     /// <inheritdoc />
@@ -390,6 +400,9 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             ["Commit.LastUs"] = _commitLastUs,
             ["Commit.MaxUs"] = _commitMaxUs,
             ["Commit.Count"] = _commitCount,
+            ["DeferredCleanup.QueueSize"] = DeferredCleanupManager.QueueSize,
+            ["DeferredCleanup.EnqueuedTotal"] = DeferredCleanupManager.EnqueuedTotal,
+            ["DeferredCleanup.ProcessedTotal"] = DeferredCleanupManager.ProcessedTotal,
         };
 
     #endregion

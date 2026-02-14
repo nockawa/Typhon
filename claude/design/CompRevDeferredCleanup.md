@@ -6,7 +6,7 @@ This document describes a critical memory leak in the MVCC (Multi-Version Concur
 
 **GitHub Issue:** #46
 **Branch:** `fix/46-mvcc-revision-leak`
-**Status**: Partially implemented (#33 done, #16 remaining)
+**Status**: Complete
 **Target Implementation**: Typhon.Engine v1.x
 **Related Components**: Transaction, TransactionChain, ComponentTable, MVCC
 
@@ -1124,4 +1124,12 @@ Long-running transactions cause indefinite accumulation of component revisions f
 
 ---
 
-**Next Steps**: Review this design, then proceed to implementation with comprehensive unit and integration tests.
+## Implementation Notes
+
+Deviations and clarifications from the original design:
+
+- **No per-entity timer for lazy cleanup rate limiting**: The design proposed `LazyCleanupMinAge` and `LazyCleanupInterval` timers. Implementation uses only the `ItemCount >= LazyCleanupThreshold` heuristic — timers add too much per-entity overhead for the benefit.
+- **Lazy cleanup only for single-component `GetCompRevInfoFromIndex`**: The `AllowMultiple` component overload is not instrumented for lazy cleanup, since multi-component entities have different revision chain semantics.
+- **Deferred cleanup on dispose handled in `Transaction.Dispose()`**: The design suggested handling tail change in `TransactionChain.Remove()`. Implementation processes deferred cleanups in `Dispose()` before `Remove()` is called, because `Remove()` lacks direct access to the `DatabaseEngine` and `ChangeSet` needed for cleanup.
+- **TSN bit-packing safety**: `CleanUpUnusedEntriesCore` cutoff uses `MinTSN & ~1L` to account for 1-bit precision loss in `CompRevStorageElement.TSN` (bit 0 of `_packedTickLow` is shared with `IsolationFlag`). This prevents incorrectly removing the tail's own entries when the TSN is odd.
+- **Logger shared from `DatabaseEngine`**: `DeferredCleanupManager` receives `ILogger<DatabaseEngine>` via constructor injection, sharing the engine's log category rather than creating a separate one.

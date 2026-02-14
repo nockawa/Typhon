@@ -1,5 +1,5 @@
+using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
-using System.Threading;
 
 namespace Typhon.Engine;
 
@@ -35,16 +35,47 @@ internal class DeferredCleanupManager
     // Thread safety
     private AccessControl _lock;
 
+    // Configuration
+    private readonly DeferredCleanupOptions _options;
+
+    // Logger (nullable — no nullable annotations per project conventions)
+    private readonly ILogger _log;
+
+    // Observability counters
+
     /// <summary>
     /// Current number of entities in the deferred cleanup queue. Updated atomically for observability.
     /// </summary>
     public int QueueSize;
 
-    public DeferredCleanupManager()
+    /// <summary>Total entities enqueued for deferred cleanup.</summary>
+    public long EnqueuedTotal { get; private set; }
+
+    /// <summary>Total entities cleaned via the deferred path.</summary>
+    public long ProcessedTotal { get; private set; }
+
+    /// <summary>Total lazy cleanups performed during entity reads.</summary>
+    public long LazyCleanupTotal { get; private set; }
+
+    /// <summary>Total lazy cleanups skipped because the revision chain lock was unavailable.</summary>
+    public long LazyCleanupSkipped { get; private set; }
+
+    /// <summary>Minimum ItemCount before lazy cleanup is attempted.</summary>
+    internal int LazyCleanupThreshold => _options.LazyCleanupThreshold;
+
+    public DeferredCleanupManager(DeferredCleanupOptions options, ILogger log = null)
     {
+        _options = options;
+        _log = log;
         _pendingCleanups = new SortedDictionary<long, List<CleanupEntry>>();
         _entityToBlockingTSN = new Dictionary<(ComponentTable, long), long>();
     }
+
+    /// <summary>Record a successful lazy cleanup operation.</summary>
+    internal void RecordLazyCleanup() => LazyCleanupTotal++;
+
+    /// <summary>Record a lazy cleanup that was skipped (lock unavailable).</summary>
+    internal void RecordLazyCleanupSkipped() => LazyCleanupSkipped++;
 
     /// <summary>
     /// Enqueue an entity for deferred cleanup, to be processed when the blocking transaction completes.
@@ -85,9 +116,22 @@ internal class DeferredCleanupManager
 
         list.Add(new CleanupEntry { Table = table, PrimaryKey = pk });
         _entityToBlockingTSN[key] = blockingTSN;
-        Interlocked.Exchange(ref QueueSize, _entityToBlockingTSN.Count);
+        var currentSize = _entityToBlockingTSN.Count;
+        QueueSize = currentSize;
 
         _lock.ExitExclusiveAccess();
+
+        EnqueuedTotal++;
+
+        // High-water-mark logging — only at exact crossing points to avoid spam
+        if (currentSize == _options.CriticalThreshold)
+        {
+            _log?.LogWarning("Deferred cleanup queue reached critical threshold ({Size} entities)", currentSize);
+        }
+        else if (currentSize == _options.HighWaterMark)
+        {
+            _log?.LogWarning("Deferred cleanup queue reached high water mark ({Size} entities)", currentSize);
+        }
     }
 
     /// <summary>
@@ -133,7 +177,7 @@ internal class DeferredCleanupManager
             _pendingCleanups.Remove(tsn);
         }
 
-        Interlocked.Exchange(ref QueueSize, _entityToBlockingTSN.Count);
+        QueueSize = _entityToBlockingTSN.Count;
         _lock.ExitExclusiveAccess();
 
         // Perform cleanup OUTSIDE the lock (I/O operations)
@@ -144,6 +188,11 @@ internal class DeferredCleanupManager
             {
                 cleanedCount++;
             }
+        }
+
+        if (cleanedCount > 0)
+        {
+            ProcessedTotal += cleanedCount;
         }
 
         return cleanedCount;
