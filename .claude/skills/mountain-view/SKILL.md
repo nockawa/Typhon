@@ -30,9 +30,20 @@ gh issue list --repo nockawa/Typhon --state open --json number,title,labels,crea
 # All closed issues (for velocity calculation)
 gh issue list --repo nockawa/Typhon --state closed --json number,title,labels,closedAt --limit 200
 
-# All project items with full field data
-# Never pipe gh project item-list directly — redirect to file first (see _helpers.md)
-gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
+# All project items with full field data — pipe directly to Python (see _helpers.md)
+gh project item-list 7 --owner nockawa --limit 200 --format json 2>&1 | python3 -c "
+import json, sys
+items = json.load(sys.stdin)['items']
+for item in items:
+    s = item.get('status', '?')
+    n = item.get('content', {}).get('number', '?')
+    t = item.get('title', 'untitled')
+    p = item.get('priority', '?')
+    a = item.get('area', '?')
+    e = item.get('estimate', '?')
+    ph = item.get('phase', '?')
+    print(f'#{n} | {s} | {p} | {a} | {e} | {ph} | {t}')
+"
 ```
 
 ### 2. Calculate Totals
