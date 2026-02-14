@@ -16,7 +16,7 @@ namespace Typhon.Benchmark;
 
 [SimpleJob(warmupCount: 3, iterationCount: 5)]
 [MemoryDiagnoser]
-[BenchmarkCategory("Epoch")]
+[BenchmarkCategory("Epoch", "Regression")]
 public class EpochGuardBenchmarks
 {
     private EpochManager _epochManager;
@@ -92,7 +92,7 @@ public class EpochGuardBenchmarks
 // ═══════════════════════════════════════════════════════════════════════
 
 [SimpleJob(warmupCount: 3, iterationCount: 5)]
-[BenchmarkCategory("ChunkAccessor")]
+[BenchmarkCategory("ChunkAccessor", "Regression")]
 public class ChunkAccessorBenchmarks
 {
     private ServiceProvider _serviceProvider;
@@ -170,7 +170,7 @@ public class ChunkAccessorBenchmarks
     /// <summary>
     /// Target: ≤ 5ns. Repeated access to same chunk (MRU hit every time).
     /// </summary>
-    [Benchmark]
+    [Benchmark(OperationsPerInvoke = 1000)]
     public unsafe void MRU_Hit()
     {
         var accessor = _segment.CreateChunkAccessor();
@@ -184,7 +184,7 @@ public class ChunkAccessorBenchmarks
     /// <summary>
     /// Target: ≤ 8ns. Rotate through 4 cached chunks (SIMD search path).
     /// </summary>
-    [Benchmark]
+    [Benchmark(OperationsPerInvoke = 1000)]
     public unsafe void SIMD_Hit_4Chunks()
     {
         var accessor = _segment.CreateChunkAccessor();
@@ -199,7 +199,7 @@ public class ChunkAccessorBenchmarks
     /// <summary>
     /// Target: ≤ 25ns (excl. I/O). 17 chunks forces eviction on every access after warmup.
     /// </summary>
-    [Benchmark]
+    [Benchmark(OperationsPerInvoke = 17)]
     public unsafe void Eviction_17Chunks()
     {
         var accessor = _segment.CreateChunkAccessor();
@@ -266,7 +266,7 @@ public struct BenchComp
 
 [SimpleJob(warmupCount: 2, iterationCount: 3)]
 [MemoryDiagnoser]
-[BenchmarkCategory("EndToEnd")]
+[BenchmarkCategory("EndToEnd", "Regression")]
 public class TransactionBenchmarks
 {
     private ServiceProvider _serviceProvider;
@@ -290,6 +290,8 @@ public class TransactionBenchmarks
           .AddResourceRegistry()
           .AddMemoryAllocator()
           .AddEpochManager()
+          .AddHighResolutionSharedTimer()
+          .AddDeadlineWatchdog()
           .AddScopedManagedPagedMemoryMappedFile(options =>
           {
               options.DatabaseName = _databaseName;
