@@ -176,11 +176,36 @@ internal ref struct ComponentRevisionManager
     /// <param name="nextMinTSN">The minimal TSN to keep revisions</param>
     /// <remarks>
     /// This method walks through the chain of revision chunks and builds a new one, only the first chunk is kept.
+    /// Thin wrapper around <see cref="CleanUpUnusedEntriesCore"/> that also updates the transaction-specific <paramref name="compRevInfo"/> cache.
     /// </remarks>
     internal static unsafe bool CleanUpUnusedEntries(Transaction.ComponentInfoBase info, ref Transaction.ComponentInfoBase.CompRevInfo compRevInfo,
         ref ChunkAccessor compRevTableAccessor, long nextMinTSN)
     {
         var firstChunkId = compRevInfo.CompRevTableFirstChunkId;
+        var result = CleanUpUnusedEntriesCore(info.ComponentTable, firstChunkId, nextMinTSN, ref compRevTableAccessor, ref info.CompContentAccessor);
+
+        // As we defrag and move everything to the beginning of the chunk, the first revision is always at 0
+        compRevInfo.CurRevisionIndex = 0;
+
+        return result;
+    }
+
+    /// <summary>
+    /// Core cleanup logic for a component's revision chain. Removes all entries older than <paramref name="nextMinTSN"/>,
+    /// releases unused component chunks, and defragments the remaining revisions.
+    /// </summary>
+    /// <param name="ct">The component table owning the entity</param>
+    /// <param name="firstChunkId">The first chunk ID of the revision chain</param>
+    /// <param name="nextMinTSN">The minimal TSN to keep revisions</param>
+    /// <param name="compRevTableAccessor">Accessor for the revision table segment</param>
+    /// <param name="compContentAccessor">Accessor for the component content segment</param>
+    /// <returns><c>true</c> if the component is fully deleted (single tombstone remaining), <c>false</c> otherwise</returns>
+    /// <remarks>
+    /// This method is transaction-agnostic and can be called from both the transaction commit path and the deferred cleanup path.
+    /// </remarks>
+    internal static unsafe bool CleanUpUnusedEntriesCore(ComponentTable ct, int firstChunkId, long nextMinTSN,
+        ref ChunkAccessor compRevTableAccessor, ref ChunkAccessor compContentAccessor)
+    {
         ref var firstChunkHeader = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(firstChunkId);
 
         // Create a temporary chunk to store the cleaned-up content of the first chunk (we can't overwrite the first chunk right away)
@@ -193,7 +218,6 @@ internal ref struct ComponentRevisionManager
         var curDestIndex = 0;
         var curDestIndexInChunk = 0;
         var skipCount = 0;
-        var ct = info.ComponentTable;
         var hasCollections = ct.HasCollections;
 
         int newChunkId = 0;
@@ -237,14 +261,14 @@ internal ref struct ComponentRevisionManager
                             {
                                 foreach (var kvp in ct.ComponentCollectionVSBSByOffset)
                                 {
-                                    var bufferId = info.CompContentAccessor.GetChunkAsReadOnlySpan(revChunkId).Slice(kvp.Key).Cast<byte, int>()[0];
+                                    var bufferId = compContentAccessor.GetChunkAsReadOnlySpan(revChunkId).Slice(kvp.Key).Cast<byte, int>()[0];
                                     var collAccessor = kvp.Value.Segment.CreateChunkAccessor();
                                     kvp.Value.BufferRelease(bufferId, ref collAccessor);
                                     collAccessor.Dispose();
                                 }
                             }
 
-                            info.CompContentSegment.FreeChunk(revChunkId);
+                            ct.ComponentSegment.FreeChunk(revChunkId);
                         }
 
                         // Clear the entry
@@ -272,7 +296,7 @@ internal ref struct ComponentRevisionManager
                     curDestIndexInChunk = 0;                                            // Reset the index in chunk
                     tempFirstHeader[0].ChainLength++;                                   // One more chunk in the chain
 
-                    newChunkId = info.CompRevTableSegment.AllocateChunk(false);          // Allocate a new chunk
+                    newChunkId = ct.CompRevTableSegment.AllocateChunk(false);            // Allocate a new chunk
                     curNextChunkId[0] = newChunkId;                                     // Set the next chunk ID of the current chunk
                     var newChunkSpan = compRevTableAccessor.GetChunkAsSpan(newChunkId, true);
                     newChunkSpan.Split(out curNextChunkId, out curDestElements);         // Update our "cur" variables
@@ -289,13 +313,13 @@ internal ref struct ComponentRevisionManager
             {
                 foreach (var kvp in ct.ComponentCollectionVSBSByOffset)
                 {
-                    var bufferId = info.CompContentAccessor.GetChunkAsReadOnlySpan(chunkId).Slice(kvp.Key).Cast<byte, int>()[0];
+                    var bufferId = compContentAccessor.GetChunkAsReadOnlySpan(chunkId).Slice(kvp.Key).Cast<byte, int>()[0];
                     var collAccessor = kvp.Value.Segment.CreateChunkAccessor();
                     kvp.Value.BufferRelease(bufferId, ref collAccessor);
                     collAccessor.Dispose();
                 }
             }
-            info.CompRevTableSegment.FreeChunk(chunkId);
+            ct.CompRevTableSegment.FreeChunk(chunkId);
         }
 
         tempFirstHeader[0].FirstItemRevision = firstChunkHeader.FirstItemRevision + skipCount;
@@ -303,8 +327,6 @@ internal ref struct ComponentRevisionManager
         tempChunk.CopyTo(compRevTableAccessor.GetChunkAsSpan(firstChunkId, true));
         firstChunkHeader = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(firstChunkId);
         firstChunkHeader.Control = tempControl;
-
-        compRevInfo.CurRevisionIndex = 0;   // As we defrag and move everything to the beginning of the chunk, the first revision is always at 0
 
         // Is the component totally deleted? Return true, otherwise false
         return (tempFirstHeader[0].ItemCount == 1 && tempElements[0].ComponentChunkId == 0);

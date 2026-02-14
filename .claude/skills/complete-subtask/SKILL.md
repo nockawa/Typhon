@@ -75,29 +75,25 @@ gh issue close <number>
 
 ### 4. Update Project Status to Done
 
-**Project item lookup:** Read `.claude/skills/_helpers.md` for the robust pattern. **Never pipe `gh project item-list` directly** — always redirect to a temp file first, then parse with Python.
+**Project item lookup:** Read `.claude/skills/_helpers.md` for the robust patterns.
 
 ```bash
-# Step 1: Save project data to temp file (avoids pipe buffer issues on Windows)
-gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
-
-# Step 2: Find the item ID for this sub-issue
-python -c "
+# Step 1: Find the item ID by piping directly to Python (no temp files)
+gh project item-list 7 --owner nockawa --limit 200 --format json 2>&1 | python3 -c "
 import json, sys
-with open(sys.argv[1]) as f:
-    items = json.load(f)['items']
+items = json.load(sys.stdin)['items']
 for item in items:
-    if item.get('content', {}).get('number') == int(sys.argv[2]):
+    if item.get('content', {}).get('number') == int(sys.argv[1]):
         print(item['id'])
         sys.exit(0)
 print('NOT_FOUND')
-" "$SCRATCHPAD/project-items.json" <sub_issue_number>
+" <sub_issue_number>
 
-# Step 2b: If NOT_FOUND, add the sub-issue to the project board first
+# Step 1b: If NOT_FOUND, add the sub-issue to the project board first
 # gh project item-add 7 --owner nockawa --url https://github.com/nockawa/Typhon/issues/<sub_issue_number>
-# Then re-fetch and find the new item ID (same as step 1+2)
+# Then re-run step 1
 
-# Step 3: Update status to Done (using the item ID from step 2 or 2b)
+# Step 2: Update status to Done (using the item ID from step 1)
 gh project item-edit --project-id PVT_kwHOAud1ac4BNdCj --id <item_id> \
   --field-id PVTSSF_lAHOAud1ac4BNdCjzg8cXYI \
   --single-select-option-id 12503e99  # "Done"
@@ -124,15 +120,20 @@ If the checkbox line also contains a description, preserve it. Only change `[ ]`
 
 **Update the parent issue body:**
 
-```bash
-gh issue edit <parent_number> --body "<updated_body>"
-```
-
-**Important:** Use a HEREDOC or temp file to pass the body to avoid shell escaping issues with markdown content:
+**Important:** Never reconstruct the body manually — Unicode characters will break on Windows. Always fetch, modify, and write back using the Pattern 5 from `_helpers.md`:
 
 ```bash
-# Write updated body to temp file, then:
-gh issue edit <parent_number> --body-file /tmp/parent_body.md
+# Fetch body, check the checkbox, write to temp file, update issue
+gh issue view <parent_number> --repo nockawa/Typhon --json body --jq ".body" 2>&1 | PYTHONUTF8=1 python3 -c "
+import sys, tempfile
+body = sys.stdin.read()
+body = body.replace('- [ ] #<sub_number> ', '- [x] #<sub_number> ')
+with tempfile.NamedTemporaryFile(mode='w', suffix='.md', encoding='utf-8', delete=False) as f:
+    f.write(body)
+    print(f.name)
+" | while read tmpfile; do
+  gh issue edit <parent_number> --repo nockawa/Typhon --body-file \"\$tmpfile\"
+done
 ```
 
 If no matching checkbox is found, report it but don't fail — the parent may use a different format.

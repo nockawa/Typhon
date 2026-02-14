@@ -22,13 +22,24 @@ Extract `--deep` from arguments first, then process the remainder as issue numbe
 
 ### Case 1: No arguments provided
 
-Fetch Research and Backlog items from the project. **Never pipe `gh project item-list` directly** — always redirect to a temp file first (see `.claude/skills/_helpers.md`):
+Fetch Research and Backlog items from the project. **Always pipe `gh project item-list` directly to Python** (see `.claude/skills/_helpers.md`):
 
 ```bash
-gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
+gh project item-list 7 --owner nockawa --limit 200 --format json 2>&1 | python3 -c "
+import json, sys
+items = json.load(sys.stdin)['items']
+for item in items:
+    s = item.get('status', '')
+    if s in ('Research', 'Backlog'):
+        n = item.get('content', {}).get('number', '?')
+        t = item.get('title', 'untitled')
+        p = item.get('priority', '?')
+        a = item.get('area', '?')
+        print(f'#{n} | {s} | {p} | {a} | {t}')
+"
 ```
 
-Parse the temp file with Python to filter for items with Status = "Research" (prioritize these — they're the ones most likely ready for design) then "Backlog". Use `AskUserQuestion` to present a choice:
+Use the output to filter for items with Status = "Research" (prioritize these — they're the ones most likely ready for design) then "Backlog". Use `AskUserQuestion` to present a choice:
 
 **Question:** "Which issue would you like to start designing?"
 **Header:** "Issue"
@@ -359,25 +370,21 @@ If one or more ideas documents were selected in step 3b, ask **for each one** (s
 
 Get the project item ID and update Status to "Ready".
 
-**Project item lookup:** Read `.claude/skills/_helpers.md` for the robust pattern. **Never pipe `gh project item-list` directly** — always redirect to a temp file first, then parse with Python.
+**Project item lookup:** Read `.claude/skills/_helpers.md` for the robust patterns.
 
 ```bash
-# Step 1: Save project data to temp file (avoids pipe buffer issues on Windows)
-gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
-
-# Step 2: Find the item ID for this issue
-python -c "
+# Step 1: Find the item ID by piping directly to Python (no temp files)
+gh project item-list 7 --owner nockawa --limit 200 --format json 2>&1 | python3 -c "
 import json, sys
-with open(sys.argv[1]) as f:
-    items = json.load(f)['items']
+items = json.load(sys.stdin)['items']
 for item in items:
-    if item.get('content', {}).get('number') == int(sys.argv[2]):
+    if item.get('content', {}).get('number') == int(sys.argv[1]):
         print(item['id'])
         sys.exit(0)
 print('NOT_FOUND')
-" "$SCRATCHPAD/project-items.json" <issue_number>
+" <issue_number>
 
-# Step 3: Update status field (using the item ID from step 2)
+# Step 2: Update status field (using the item ID from step 1)
 gh project item-edit --project-id PVT_kwHOAud1ac4BNdCj --id <item_id> \
   --field-id PVTSSF_lAHOAud1ac4BNdCjzg8cXYI \
   --single-select-option-id 303600de  # "Ready"

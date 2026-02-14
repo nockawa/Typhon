@@ -80,7 +80,7 @@ dotnet test test/Typhon.Engine.Tests/Typhon.Engine.Tests.csproj
 dotnet test --filter "FullyQualifiedName~TransactionTests.CreateComp_SingleTransaction_SuccessfulCommit"
 ```
 
-**IMPORTANT — Test timeout safety:** Typhon unit tests should complete in under 5 seconds. If tests run longer, it almost certainly means an infinite loop or deadlock. When running tests, ALWAYS use a 30-second timeout and kill the process if it hasn't completed. Use `timeout 30` (on Windows) or equivalent to enforce this.
+**IMPORTANT — Test timeout safety:** Typhon unit tests should complete in under 5 seconds. If tests run longer, it almost certainly means an infinite loop or deadlock. When running tests, ALWAYS use a 15-second timeout and kill the process if it hasn't completed. Use `timeout 15` (on Windows) or equivalent to enforce this.
 
 **Run benchmarks:**
 ```bash

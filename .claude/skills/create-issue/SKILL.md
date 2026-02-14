@@ -129,22 +129,19 @@ gh project item-add 7 --owner nockawa --url ISSUE_URL
 
 ### Step 4: Get the project item ID
 
-**Project item lookup:** Read `.claude/skills/_helpers.md` for the robust pattern. **Never pipe `gh project item-list` directly** — always redirect to a temp file first, then parse with Python.
+**Project item lookup:** Read `.claude/skills/_helpers.md` for the robust patterns.
 
 ```bash
-# Save to temp file, then find the item ID
-gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
-
-python -c "
+# Find the item ID by piping directly to Python (no temp files)
+gh project item-list 7 --owner nockawa --limit 200 --format json 2>&1 | python3 -c "
 import json, sys
-with open(sys.argv[1]) as f:
-    items = json.load(f)['items']
+items = json.load(sys.stdin)['items']
 for item in items:
-    if item.get('content', {}).get('number') == int(sys.argv[2]):
+    if item.get('content', {}).get('number') == int(sys.argv[1]):
         print(item['id'])
         sys.exit(0)
 print('NOT_FOUND')
-" "$SCRATCHPAD/project-items.json" <issue_number>
+" <issue_number>
 ```
 
 ### Step 5: Set project fields

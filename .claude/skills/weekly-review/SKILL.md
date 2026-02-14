@@ -33,14 +33,25 @@ gh api repos/nockawa/Typhon/commits --jq '.[0:20] | .[] | {sha: .sha[0:7], messa
 
 ### 2. Check Current Work Status
 
-**Never pipe `gh project item-list` directly** — always redirect to a temp file first (see `.claude/skills/_helpers.md`):
+**Always pipe `gh project item-list` directly to Python** (see `.claude/skills/_helpers.md`):
 
 ```bash
-# All project items with their status — redirect to file to avoid Windows pipe buffer issues
-gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
+# All project items with their status — pipe directly to Python
+gh project item-list 7 --owner nockawa --limit 200 --format json 2>&1 | python3 -c "
+import json, sys
+items = json.load(sys.stdin)['items']
+for item in items:
+    s = item.get('status', '?')
+    n = item.get('content', {}).get('number', '?')
+    t = item.get('title', 'untitled')
+    p = item.get('priority', '?')
+    a = item.get('area', '?')
+    e = item.get('estimate', '?')
+    print(f'#{n} | {s} | {p} | {a} | {e} | {t}')
+"
 ```
 
-Parse the temp file with Python to filter and categorize items.
+Parse the output to filter and categorize items.
 
 Categorize by status:
 - In Progress

@@ -17,6 +17,7 @@ public unsafe class Transaction : IDisposable
 {
     private const int RandomAccessCachedPagesCount = 8;
     private const int ComponentInfosMaxCapacity = 131;
+    private const int DeferredEnqueueBatchCapacity = 256;
 
     internal abstract class ComponentInfoBase
     {
@@ -125,6 +126,10 @@ public unsafe class Transaction : IDisposable
     private int _deletedComponentCount;
     private ChangeSet _changeSet;
 
+    // Reused across pooled Transaction lifetimes — collects deferred enqueue entries per commit/rollback
+    // to flush in a single batch (one lock acquire instead of N). Never re-allocated after warmup.
+    private List<DeferredCleanupManager.CleanupEntry> _deferredEnqueueBatch;
+
     public Transaction Previous { get; internal set; }
     public Transaction Next { get; internal set; }
 
@@ -191,6 +196,7 @@ public unsafe class Transaction : IDisposable
         _committedOperationCount = null;
         _deletedComponentCount = 0;
         _changeSet = null;
+        _deferredEnqueueBatch?.Clear();
     }
 
     [Conditional("DEBUG")]
@@ -216,6 +222,24 @@ public unsafe class Transaction : IDisposable
         if (State != TransactionState.Committed)
         {
             Rollback();
+        }
+
+        // Process deferred cleanups if this transaction was the tail blocking other entities.
+        // Must happen before Remove() so we can still detect ourselves as the tail.
+        if (_dbe.DeferredCleanupManager.QueueSize > 0)
+        {
+            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.TransactionChainLockTimeout);
+            if (_dbe.TransactionChain.Control.EnterSharedAccess(ref wc))
+            {
+                var isTail = _dbe.TransactionChain.Tail == this;
+                var nextMinTSN = isTail ? _dbe.TransactionChain.Tail.Next?.TSN ?? _dbe.TransactionChain.NextFreeId : 0;
+                _dbe.TransactionChain.Control.ExitSharedAccess();
+
+                if (isTail)
+                {
+                    _dbe.DeferredCleanupManager.ProcessDeferredCleanups(TSN, nextMinTSN, _dbe, _changeSet);
+                }
+            }
         }
 
         // Dispose all ChunkAccessors to flush dirty pages.
@@ -1073,6 +1097,82 @@ public unsafe class Transaction : IDisposable
             PrevRevisionIndex = prevCompRevisionIndex
         };
 
+        // Lazy opportunistic cleanup: if the revision chain has accumulated many entries,
+        // try to clean up old revisions opportunistically during this read.
+        var lazyThreshold = _dbe.DeferredCleanupManager.LazyCleanupThreshold;
+        if (lazyThreshold > 0)
+        {
+            ref var header = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(compRevFirstChunkId);
+            if (header.ItemCount >= lazyThreshold)
+            {
+                // Use (MinTSN & ~1L) to account for 1-bit precision loss in CompRevStorageElement.TSN:
+                // bit 0 of the lower 16 bits is shared with IsolationFlag, so odd TSN values are stored
+                // as their even predecessor. Rounding down prevents removing the tail's own entries.
+                var safeCutoff = _dbe.TransactionChain.MinTSN & ~1L;
+                if (safeCutoff > 0)
+                {
+                    try
+                    {
+                        if (header.Control.TryEnterExclusiveAccess())
+                        {
+                            var lazyRevAccessor = info.CompRevTableSegment.CreateChunkAccessor(_changeSet);
+                            var lazyContentAccessor = info.CompContentSegment.CreateChunkAccessor(_changeSet);
+
+                            ComponentRevisionManager.CleanUpUnusedEntriesCore(info.ComponentTable, compRevFirstChunkId, safeCutoff,
+                                ref lazyRevAccessor, ref lazyContentAccessor);
+
+                            lazyRevAccessor.Dispose();
+                            lazyContentAccessor.Dispose();
+                            header.Control.ExitExclusiveAccess();
+
+                            // After defrag, the chain is compacted. Re-walk to find the correct revision index for our
+                            //  TSN (void/isolated entries may shift positions).
+                            prevCompRevisionIndex = -1;
+                            curCompRevisionIndex = -1;
+                            prevCompChunkId = 0;
+                            curCompChunkId = 0;
+                            {
+                                using var reEnum = new RevisionEnumerator(ref compRevTableAccessor, compRevFirstChunkId, false, true);
+                                while (reEnum.MoveNext())
+                                {
+                                    ref var el = ref reEnum.Current;
+                                    if (el.IsVoid)
+                                    {
+                                        continue;
+                                    }
+                                    if (el.TSN > TSN)
+                                    {
+                                        break;
+                                    }
+                                    if ((el.TSN > 0) && !el.IsolationFlag)
+                                    {
+                                        prevCompRevisionIndex = curCompRevisionIndex;
+                                        prevCompChunkId = curCompChunkId;
+                                        curCompRevisionIndex = (short)(reEnum.Header.FirstItemIndex + reEnum.RevisionIndex);
+                                        curCompChunkId = el.ComponentChunkId;
+                                    }
+                                }
+                            }
+                            compRevInfo.CurRevisionIndex = curCompRevisionIndex;
+                            compRevInfo.PrevRevisionIndex = prevCompRevisionIndex;
+                            compRevInfo.CurCompContentChunkId = curCompChunkId;
+                            compRevInfo.PrevCompContentChunkId = prevCompChunkId;
+
+                            _dbe.DeferredCleanupManager.RecordLazyCleanup();
+                        }
+                        else
+                        {
+                            _dbe.DeferredCleanupManager.RecordLazyCleanupSkipped();
+                        }
+                    }
+                    catch
+                    {
+                        // Never fail a read due to lazy cleanup
+                    }
+                }
+            }
+        }
+
         // Tombstoned entity: carry the value (callers like UpdateComponent need revision metadata) but signal Deleted
         if (curCompChunkId == 0)
         {
@@ -1276,18 +1376,10 @@ public unsafe class Transaction : IDisposable
 
         // If this transaction is the oldest (the tail), we can remove the previous revision (if any), it is also the right place and time to clean up void
         //  revisions (the entry of a rolled back commit)
-        var wcTail = ComposeWaitContext(ref context.Ctx, TimeoutOptions.Current.TransactionChainLockTimeout);
-        if (!_dbe.TransactionChain.Control.EnterSharedAccess(ref wcTail))
+        // If not the tail, collect for batched deferred cleanup (flushed after the commit loop with a single lock acquire).
+        if (context.IsTail)
         {
-            ThrowHelper.ThrowLockTimeout("TransactionChain/CommitTailCheck", TimeoutOptions.Current.TransactionChainLockTimeout);
-        }
-        var isTail = _dbe.TransactionChain.Tail == this;
-        long nextMinTSN = isTail ? _dbe.TransactionChain.Tail.Next?.TSN ?? _dbe.TransactionChain.NextFreeId : 0;
-        _dbe.TransactionChain.Control.ExitSharedAccess();
-
-        if (isTail)
-        {
-            var isDeleted = ComponentRevisionManager.CleanUpUnusedEntries(info, ref compRevInfo, ref compRevTableAccessor, nextMinTSN);
+            var isDeleted = ComponentRevisionManager.CleanUpUnusedEntries(info, ref compRevInfo, ref compRevTableAccessor, context.NextMinTSN);
             dirtyFirstChunk = true;
 
             if (isDeleted)
@@ -1310,6 +1402,19 @@ public unsafe class Transaction : IDisposable
                     revTableSegment.FreeChunk(firstChunkId);
                     return true;
                 }
+            }
+        }
+        else if (context.TailTSN > 0)
+        {
+            // Not the tail — collect for batched enqueue (no lock here, flushed after the loop or at capacity)
+            _deferredEnqueueBatch ??= new List<DeferredCleanupManager.CleanupEntry>(16);
+            _deferredEnqueueBatch.Add(new DeferredCleanupManager.CleanupEntry { Table = info.ComponentTable, PrimaryKey = pk });
+
+            // Flush at capacity to bound memory — content is transient, safe to drain mid-loop
+            if (_deferredEnqueueBatch.Count >= DeferredEnqueueBatchCapacity)
+            {
+                _dbe.DeferredCleanupManager.EnqueueBatch(context.TailTSN, _deferredEnqueueBatch);
+                _deferredEnqueueBatch.Clear();
             }
         }
 
@@ -1420,6 +1525,17 @@ public unsafe class Transaction : IDisposable
         context.Ctx = ref ctx;
 #pragma warning restore CS9093
 
+        // Determine tail status once for the entire rollback — saves N-1 shared lock acquires on TransactionChain
+        var wcTail = ComposeWaitContext(ref ctx, TimeoutOptions.Current.TransactionChainLockTimeout);
+        if (!_dbe.TransactionChain.Control.EnterSharedAccess(ref wcTail))
+        {
+            ThrowHelper.ThrowLockTimeout("TransactionChain/RollbackTailCheck", TimeoutOptions.Current.TransactionChainLockTimeout);
+        }
+        context.IsTail = _dbe.TransactionChain.Tail == this;
+        context.NextMinTSN = context.IsTail ? _dbe.TransactionChain.Tail.Next?.TSN ?? _dbe.TransactionChain.NextFreeId : 0;
+        context.TailTSN = context.IsTail ? 0 : _dbe.TransactionChain.MinTSN;
+        _dbe.TransactionChain.Control.ExitSharedAccess();
+
         var deletedComponentSingles = new List<long>();
         // Process every Component Type and their components
         foreach (var componentInfo in _componentInfos.Values)
@@ -1479,6 +1595,13 @@ public unsafe class Transaction : IDisposable
                     }
                     break;
             }
+        }
+
+        // Flush batched deferred enqueue entries (non-tail path: single lock acquire for all entities)
+        if (_deferredEnqueueBatch is { Count: > 0 })
+        {
+            _dbe.DeferredCleanupManager.EnqueueBatch(context.TailTSN, _deferredEnqueueBatch);
+            _deferredEnqueueBatch.Clear();
         }
 
         // New state
@@ -1591,15 +1714,39 @@ public unsafe class Transaction : IDisposable
         public ConcurrencyConflictSolver Solver;
         public bool IsRollback;
         public ref UnitOfWorkContext Ctx;
+
+        // Hoisted from per-entity to per-commit: determined once before the entity loop
+        public bool IsTail;
+        public long NextMinTSN;  // Valid when IsTail == true: the TSN to keep revisions for
+        public long TailTSN;     // Valid when IsTail == false: the blocking tail's TSN
     }
     
     public bool Commit(ref UnitOfWorkContext ctx, ConcurrencyConflictHandler handler = null)
     {
         AssertThreadAffinity();
 
-        // Nothing to do if the transaction is empty
+        // Nothing to commit if the transaction is empty, but still process deferred cleanups
+        // in case this transaction (as the tail) is blocking cleanup of entities modified by others.
         if (State is TransactionState.Created)
         {
+            if (_dbe.DeferredCleanupManager.QueueSize > 0)
+            {
+                var wcDeferred = ComposeWaitContext(ref ctx, TimeoutOptions.Current.TransactionChainLockTimeout);
+                if (_dbe.TransactionChain.Control.EnterSharedAccess(ref wcDeferred))
+                {
+                    var isTailForDeferred = _dbe.TransactionChain.Tail == this;
+                    var nextMinTSNDeferred = isTailForDeferred
+                        ? _dbe.TransactionChain.Tail.Next?.TSN ?? _dbe.TransactionChain.NextFreeId
+                        : 0;
+                    _dbe.TransactionChain.Control.ExitSharedAccess();
+
+                    if (isTailForDeferred)
+                    {
+                        _dbe.DeferredCleanupManager.ProcessDeferredCleanups(TSN, nextMinTSNDeferred, _dbe, _changeSet);
+                    }
+                }
+            }
+
             return true;
         }
 
@@ -1627,6 +1774,17 @@ public unsafe class Transaction : IDisposable
         context.Ctx = ref ctx;
 #pragma warning restore CS9093
         var hasConflict = false;
+
+        // Determine tail status once for the entire commit — saves N-1 shared lock acquires on TransactionChain
+        var wcTail = ComposeWaitContext(ref ctx, TimeoutOptions.Current.TransactionChainLockTimeout);
+        if (!_dbe.TransactionChain.Control.EnterSharedAccess(ref wcTail))
+        {
+            ThrowHelper.ThrowLockTimeout("TransactionChain/CommitTailCheck", TimeoutOptions.Current.TransactionChainLockTimeout);
+        }
+        context.IsTail = _dbe.TransactionChain.Tail == this;
+        context.NextMinTSN = context.IsTail ? _dbe.TransactionChain.Tail.Next?.TSN ?? _dbe.TransactionChain.NextFreeId : 0;
+        context.TailTSN = context.IsTail ? 0 : _dbe.TransactionChain.MinTSN;
+        _dbe.TransactionChain.Control.ExitSharedAccess();
 
         // Process every Component Type and their components
         foreach (var kvp in _componentInfos)
@@ -1678,6 +1836,19 @@ public unsafe class Transaction : IDisposable
                     }
                     break;
             }
+        }
+
+        // Flush batched deferred enqueue entries (non-tail path: single lock acquire for all entities)
+        if (_deferredEnqueueBatch is { Count: > 0 })
+        {
+            _dbe.DeferredCleanupManager.EnqueueBatch(context.TailTSN, _deferredEnqueueBatch);
+            _deferredEnqueueBatch.Clear();
+        }
+
+        // Process deferred cleanups from other transactions that were blocked by this one (tail path)
+        if (context.IsTail && _dbe.DeferredCleanupManager.QueueSize > 0)
+        {
+            _dbe.DeferredCleanupManager.ProcessDeferredCleanups(TSN, context.NextMinTSN, _dbe, _changeSet);
         }
 
         // Check if any conflicts were detected (recorded via _dbe.RecordConflict() in CommitComponent)
