@@ -100,32 +100,25 @@ If all prior sub-issues are checked (or there are none before this one), skip si
 
 ### 5. Update Project Status to In Progress
 
-**Project item lookup:** Read `.claude/skills/_helpers.md` for the robust pattern. **Never pipe `gh project item-list` directly** — always redirect to a temp file first, then parse with Python.
+**Project item lookup:** Read `.claude/skills/_helpers.md` for the robust patterns.
 
 ```bash
-# Step 1: Save project data to temp file (avoids pipe buffer issues on Windows)
-gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
-
-# Step 2: Find the item ID for this sub-issue
-python -c "
+# Step 1: Find the item ID by piping directly to Python (no temp files)
+gh project item-list 7 --owner nockawa --limit 200 --format json 2>&1 | python3 -c "
 import json, sys
-with open(sys.argv[1]) as f:
-    items = json.load(f)['items']
+items = json.load(sys.stdin)['items']
 for item in items:
-    if item.get('content', {}).get('number') == int(sys.argv[2]):
+    if item.get('content', {}).get('number') == int(sys.argv[1]):
         print(item['id'])
         sys.exit(0)
 print('NOT_FOUND')
-" "$SCRATCHPAD/project-items.json" <sub_issue_number>
+" <sub_issue_number>
 
-# Step 2b: If NOT_FOUND, add the sub-issue to the project board first
-gh project item-add 7 --owner nockawa --url https://github.com/nockawa/Typhon/issues/<sub_issue_number>
+# Step 1b: If NOT_FOUND, add the sub-issue to the project board first
+# gh project item-add 7 --owner nockawa --url https://github.com/nockawa/Typhon/issues/<sub_issue_number>
+# Then re-run step 1
 
-# Then re-fetch and find the new item ID
-gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
-# Re-run the Python lookup from Step 2
-
-# Step 3: Update status to In Progress (using the item ID from step 2 or 2b)
+# Step 2: Update status to In Progress (using the item ID from step 1)
 gh project item-edit --project-id PVT_kwHOAud1ac4BNdCj --id <item_id> \
   --field-id PVTSSF_lAHOAud1ac4BNdCjzg8cXYI \
   --single-select-option-id a0a7aab6  # "In Progress"

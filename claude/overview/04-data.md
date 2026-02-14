@@ -30,6 +30,7 @@ The API follows a three-tier hierarchy: **DatabaseEngine** (setup/schema) → **
 | **4.6** | [Revision Chains](#46-revision-chains) | MVCC history management | ✅ Solid |
 | **4.7** | [B+Tree Indexes](#47-btree-indexes) | Fast key-value lookups | ✅ Solid |
 | **4.8** | [Schema System](#48-schema-system) | Component/field/index metadata | ✅ Solid |
+| **4.9** | [GC & Space Reclamation](#49-gc--space-reclamation) | Inline, deferred, and lazy revision cleanup | ✅ Solid |
 
 ---
 
@@ -832,6 +833,60 @@ Revisions can only be GC'd if their epoch has reached `Committed` state:
 
 This adds a second condition to GC eligibility: `TSN < MinTSN` AND `epoch == Committed`. In practice, epochs advance quickly (checkpoint every ~10s), so this rarely delays GC.
 
+### Deferred Cleanup (Long-Running Transactions)
+
+When a non-tail transaction commits, it cannot clean up old revisions inline because a longer-running transaction (the tail) still holds MinTSN low. Instead, entities that need cleanup are **deferred** to the `DeferredCleanupManager`:
+
+```
+Non-tail tx commits:
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │  Can't clean: Tail TSN=95 still active, MinTSN hasn't advanced     │
+  │  → Enqueue (table, pk) into DeferredCleanupManager                 │
+  │    keyed by blockingTSN=95                                          │
+  └─────────────────────────────────────────────────────────────────────┘
+
+Later, when Tail (TSN=95) completes:
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │  ProcessDeferredCleanups(completedTSN=95)                           │
+  │  → Collect all entries with blockingTSN ≤ 95                        │
+  │  → Clean up revision chains using new MinTSN                        │
+  └─────────────────────────────────────────────────────────────────────┘
+```
+
+**Key design choices:**
+
+| Aspect | Decision | Rationale |
+|--------|----------|-----------|
+| **Queue structure** | `SortedDictionary<blockingTSN, List<CleanupEntry>>` | Efficient range queries: collect all entries ≤ completedTSN |
+| **Dedup** | Reverse index `(table, pk) → blockingTSN` | Same entity queued once regardless of how many concurrent writes |
+| **Batch enqueue** | Transaction-local buffer, flushed in batches of 256 | Single lock per batch instead of per-entity; bounds memory |
+| **Lock scope** | One shared lock for tail check, one exclusive lock per batch flush | N→1 lock reduction vs per-entity approach |
+| **List pooling** | Stack-based pool (cap 16) for TSN bucket lists | Eliminates GC alloc for dictionary value lists |
+| **Early-exit** | Lockless `Count == 0` check before lock acquire | Avoids contention when queue is empty (common case) |
+
+### Lazy Cleanup (Opportunistic)
+
+In addition to the deferred path, revision chains can be cleaned **lazily** during entity reads. When a read encounters a chain with `ItemCount > LazyCleanupThreshold` (default: 8), it attempts a non-blocking cleanup:
+
+```csharp
+// During GetCompRevInfoFromIndex — after finding the visible revision
+if (revInfo.ItemCount > manager.LazyCleanupThreshold)
+{
+    if (chainLock.TryEnterExclusiveAccess())
+    {
+        CleanUpUnusedEntriesCore(table, firstChunkId, minTSN, ...);
+        chainLock.ExitExclusiveAccess();
+        manager.RecordLazyCleanup();
+    }
+    else
+    {
+        manager.RecordLazyCleanupSkipped();  // Lock contention, skip
+    }
+}
+```
+
+This provides a "best-effort" cleanup for hot entities without waiting for the tail transaction to complete.
+
 ### Performance Characteristics
 
 | Aspect | Cost | When |
@@ -840,17 +895,11 @@ This adds a second condition to GC eligibility: `TSN < MinTSN` AND `epoch == Com
 | **Short chain cleanup** (1-3 revisions) | ~1-5µs | Only when tail transaction disposes |
 | **Long chain cleanup** (100+ revisions) | ~50-200µs | Rare (requires long-lived entity with many updates) |
 | **Bitmap update** | ~10-50ns per freed chunk | Per freed revision |
+| **Deferred enqueue** | ~50-200ns per batch | Non-tail commit, amortized over 256 entries |
+| **Deferred processing** | ~1-10µs per entity | Tail completion, outside lock |
+| **Lazy cleanup** | ~1-5µs per entity | During reads, non-blocking |
 
-**Design trade-off**: GC runs inline on the user thread that disposes the oldest transaction. This means one user thread occasionally pays the cleanup cost. The alternative (background GC thread) would add complexity and a synchronization point. For Typhon's target workload (short-lived transactions, bounded revision chains), inline GC is appropriate.
-
-### Future: Background GC
-
-For workloads with very long revision chains (e.g., entities updated thousands of times while a long-running read transaction holds MinTSN low), a background GC thread could amortize cleanup cost:
-- Scan ComponentTables for chains exceeding a length threshold
-- Compact chains during low-activity periods
-- Must coordinate with MinTSN to avoid freeing visible revisions
-
-This is deferred to post-1.0 — the current inline approach handles game server workloads well.
+**Design trade-off**: The hybrid approach (inline + deferred + lazy) ensures revision chains stay bounded even with long-running reader transactions coexisting with heavy write activity. Inline GC handles the common case (tail completes first). Deferred cleanup catches entities that couldn't be cleaned at commit time. Lazy cleanup provides a safety net for hot entities.
 
 ---
 

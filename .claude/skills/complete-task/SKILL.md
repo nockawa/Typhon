@@ -24,15 +24,55 @@ gh issue view <number> --json number,title,state,labels,body
 
 Confirm the issue is currently open and has been worked on.
 
-### 2. Check for Open PR
+### 2. Check PR and Branch State
+
+**Step 2a: Check for existing PRs** (open or merged):
 
 ```bash
-gh pr list --search "<number>" --json number,title,state,url
+gh pr list --search "<number>" --state all --json number,title,state,url,headRefName
 ```
 
-If there's an open PR linked to this issue:
-- Warn the user that the PR should be merged first
-- Ask if they want to proceed anyway
+**Step 2b: Detect unmerged feature branch** (if no merged PR found):
+
+```bash
+# Find the feature/fix branch for this issue
+git branch --list "feature/<number>*" --list "fix/<number>*"
+
+# If a branch exists, check if it has commits ahead of main
+git rev-list --count main..<branch_name>
+```
+
+**Decision matrix:**
+
+| PR State | Branch State | Action |
+|----------|-------------|--------|
+| Merged PR exists | — | Proceed normally (happy path) |
+| Open PR exists | — | Warn: "PR should be merged first" → ask to proceed or wait |
+| No PR | Branch has commits ahead of main | Warn: "Branch has N unmerged commits" → offer to create PR |
+| No PR | No feature branch / branch is even with main | Proceed normally (work may have been committed directly to main) |
+
+**If no PR and branch has unmerged commits**, ask:
+
+```
+Question: "Branch '<branch_name>' has N commits not yet merged to main. A PR should typically be created and merged before completing the task. What would you like to do?"
+Header: "PR"
+Options:
+  - Create a PR now (Recommended) (description: "I'll create a PR from <branch_name> to main, then continue after it's merged")
+  - Skip PR (description: "Proceed without a PR — I'll handle merging manually")
+  - Cancel (description: "Stop — I'll create and merge the PR first, then re-run /complete-task")
+```
+
+**If "Create a PR now":**
+- Push the branch if not already pushed: `git push -u origin <branch_name>`
+- Create the PR using `gh pr create` with a summary derived from the issue title and body
+- **Stop here** — report the PR URL and tell the user to merge it, then re-run `/complete-task`
+- Do NOT proceed to close the issue or update status yet
+
+**If "Skip PR":**
+- Proceed with the rest of the workflow (close issue, update status, etc.)
+
+**If "Cancel":**
+- Stop and report that no changes were made
 
 ### 3. Close the Issue
 
@@ -42,25 +82,21 @@ gh issue close <number>
 
 ### 4. Update Project Status to Done
 
-**Project item lookup:** Read `.claude/skills/_helpers.md` for the robust pattern. **Never pipe `gh project item-list` directly** — always redirect to a temp file first, then parse with Python.
+**Project item lookup:** Read `.claude/skills/_helpers.md` for the robust patterns.
 
 ```bash
-# Step 1: Save project data to temp file (avoids pipe buffer issues on Windows)
-gh project item-list 7 --owner nockawa --limit 200 --format json > "$SCRATCHPAD/project-items.json"
-
-# Step 2: Find the item ID for this issue
-python -c "
+# Step 1: Find the item ID by piping directly to Python (no temp files)
+gh project item-list 7 --owner nockawa --limit 200 --format json 2>&1 | python3 -c "
 import json, sys
-with open(sys.argv[1]) as f:
-    items = json.load(f)['items']
+items = json.load(sys.stdin)['items']
 for item in items:
-    if item.get('content', {}).get('number') == int(sys.argv[2]):
+    if item.get('content', {}).get('number') == int(sys.argv[1]):
         print(item['id'])
         sys.exit(0)
 print('NOT_FOUND')
-" "$SCRATCHPAD/project-items.json" <issue_number>
+" <issue_number>
 
-# Step 3: Update status to Done (using the item ID from step 2)
+# Step 2: Update status to Done (using the item ID from step 1)
 gh project item-edit --project-id PVT_kwHOAud1ac4BNdCj --id <item_id> \
   --field-id PVTSSF_lAHOAud1ac4BNdCjzg8cXYI \
   --single-select-option-id 12503e99  # "Done"
@@ -128,12 +164,25 @@ If yes, help create an ADR in `claude/adr/` following the template.
 
 ### 8. Clean Up Branch (Optional)
 
-If there's a feature branch that was merged:
+Check if a local feature/fix branch still exists for this issue:
+
 ```bash
-git branch -d feature/<number>-name
+git branch --list "feature/<number>*" --list "fix/<number>*"
 ```
 
-Ask before deleting.
+If a branch exists **and** a merged PR was found in step 2 (meaning the code is safely on `main`):
+
+```
+Question: "Branch '<branch_name>' was merged via PR. Delete the local branch?"
+Header: "Branch"
+Options:
+  - Yes, delete it (description: "git branch -d <branch_name>")
+  - Keep it (description: "Leave the branch for now")
+```
+
+If "Yes": `git branch -d <branch_name>`
+
+If no merged PR was found (user chose "Skip PR" in step 2), do **not** offer to delete — the branch may contain the only copy of the work.
 
 ### 9. Report Summary
 
