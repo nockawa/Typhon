@@ -467,7 +467,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     {
         var minActiveEpoch = EpochManager?.MinActiveEpoch ?? long.MaxValue;
         var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
-        AdaptiveWaiter waiter = null;
+        var waiter = new AdaptiveWaiter();
 
         LogAllocatePageEnter();
         while (true)
@@ -562,8 +562,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                             MemPagesCount - _metrics.FreeMemPageCount, MemPagesCount);
                     }
 
-                    waiter ??= new AdaptiveWaiter();
-                    waiter.Spin();
+                    waiter.Wait();
                     continue;
                 }
             }

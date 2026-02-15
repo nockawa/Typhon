@@ -206,9 +206,8 @@ public sealed class UnitOfWork : IDisposable
             throw new InvalidOperationException($"Cannot create transaction: UoW is {_state}");
 
         Interlocked.Increment(ref _transactionCount);
-        var tx = _dbe.TransactionChain.CreateTransaction(_dbe);
-        // Associate transaction with this UoW's ID
-        tx.SetUnitOfWork(this);
+        // UoW is passed to TransactionChain, which forwards it to Transaction.Init()
+        var tx = _dbe.TransactionChain.CreateTransaction(_dbe, this);
         return tx;
     }
 
@@ -285,9 +284,12 @@ public Transaction CreateTransaction() => TransactionChain.CreateTransaction(thi
 
 The `Transaction` class holds a **persistent reference** to its owning UoW. This gives the transaction access to the UoW ID and durability mode at commit time, and prepares for WAL integration (Tier 5) where `Commit()` needs the durability mode to decide FUA vs buffer.
 
+The UoW is passed through the constructor/init path — not via a separate setter — so the association is established at creation time and cannot be forgotten or called out of order.
+
 ```csharp
-// New internal field (8 bytes per pooled Transaction — negligible)
+// New internal fields (9 bytes per pooled Transaction — negligible)
 internal UnitOfWork OwningUnitOfWork { get; private set; }
+internal bool OwnsUnitOfWork { get; set; }  // For CreateQuickTransaction() auto-dispose
 ```
 
 **Init() signature change:**
@@ -297,9 +299,27 @@ internal UnitOfWork OwningUnitOfWork { get; private set; }
 //          OwningUnitOfWork = uow;
 ```
 
-**Reset() addition:**
+**TransactionChain.CreateTransaction() signature change:**
 ```csharp
-// In Reset(): OwningUnitOfWork = null;
+// Current: public Transaction CreateTransaction(DatabaseEngine dbe)
+// New:     public Transaction CreateTransaction(DatabaseEngine dbe, UnitOfWork uow = null)
+//          Forwards uow to Transaction.Init(dbe, tsn, uow)
+```
+
+**Reset() — must clear both fields:**
+```csharp
+// In Reset():
+OwningUnitOfWork = null;
+OwnsUnitOfWork = false;
+```
+
+This is critical for pooled transactions: when a `Transaction` is returned to the pool and later reused by a different UoW (or by the deprecated `CreateTransaction()` with no UoW), stale references must be cleared. `OwnsUnitOfWork` must also be cleared to prevent a reused transaction from disposing an unrelated UoW.
+
+**Dispose() — conditional UoW cleanup:**
+```csharp
+// In Dispose(), after existing cleanup:
+if (OwnsUnitOfWork)
+    OwningUnitOfWork?.Dispose();
 ```
 
 **UoW ID stamping in Commit():** After conflict detection succeeds, the commit path stamps all pending revision elements with `OwningUnitOfWork?.UowId ?? 0`:
@@ -755,10 +775,10 @@ _committedBeforeTSN = (_voidEntryCount > 0) ? 0 : long.MaxValue;
 See [06-durability.md §6.4](../overview/06-durability.md#64-uow-registry) for the full lifecycle reference. Summary:
 
 ```
-                    ┌──────────────────────────────────────┐
-                    ▼                                      │
+                   ┌───────────────────────────────────────┐
+                   ▼                                       │
               ┌──────────┐                                 │
-              │   Free   │◄─── GC (MinTSN past MaxTSN) ───┤
+              │   Free   │◄─── GC (MinTSN past MaxTSN) ────┤
               └────┬─────┘                                 │
                    │ AllocateUowId()                       │
                    │ [WAL record + group commit]           │
@@ -770,9 +790,9 @@ See [06-durability.md §6.4](../overview/06-durability.md#64-uow-registry) for t
                    ▼                                       │
              ┌───────────┐                                 │
              │ WalDurable│                                 │
-             └────┬──────┘                                 │
-                  │ Checkpoint (data pages fsync'd)        │
-                  ▼                                        │
+             └─────┬──────┘                                │
+                   │ Checkpoint (data pages fsync'd)       │
+                   ▼                                       │
              ┌───────────┐                                 │
              │ Committed │─────────────────────────────────┘
              └───────────┘
@@ -796,57 +816,180 @@ See [06-durability.md §6.4](../overview/06-durability.md#64-uow-registry) for t
 
 **File:** `src/Typhon.Engine/Execution/UnitOfWork.cs` (integrated into `CreateUnitOfWork`)
 
+### Scope
+
+This tier implements back-pressure for **UoW Registry slots only**. Future pressure sources (WAL ring buffer, page cache, transaction pool) will be added in their respective tiers. No general `BackPressureGate` abstraction is built now — the four pressure sources have different shapes (binary vs threshold-based, different signal sources) and premature abstraction would be wasteful. When Tier 5 (WAL) lands, the pattern will be clearer.
+
 ### Admission Control
 
-Before allocating a new UoW, the engine checks resource pressure:
+Before allocating a new UoW, the engine checks registry capacity as a **fast-path optimization**. The actual atomicity guarantee is in `AllocateUowId()`'s CAS — the admission check avoids entering the heavier allocation path when the registry is obviously full.
 
 ```csharp
 public UnitOfWork CreateUnitOfWork(DurabilityMode mode, TimeSpan timeout = default)
 {
-    // 1. Check registry capacity
+    var effectiveTimeout = timeout == default
+        ? TimeoutOptions.Current.DefaultUowTimeout
+        : timeout;
+    var wc = WaitContext.FromTimeout(effectiveTimeout);
+
+    // 1. Admission check — fast-path optimization (not a guarantee, see TOCTOU note)
     if (_uowRegistry.ActiveCount >= _uowRegistry.MaxConcurrentUoWs)
     {
-        // Wait for a UoW slot to become free, or throw
-        WaitForFreeSlot(deadline);
+        WaitForFreeSlot(ref wc);
     }
 
-    // 2. Future: check WAL ring buffer pressure (Tier 5)
-    // if (walRingUtilization > 0.80) WaitForWalDrain(deadline);
+    // 2. Allocate UoW ID — CAS provides the real atomicity.
+    //    May still fail if another thread raced past the admission check (TOCTOU).
+    //    AllocateUowId handles this gracefully: retries internally or waits.
+    var uowId = _uowRegistry.AllocateUowId(ref wc);
+    return new UnitOfWork(this, mode, uowId, effectiveTimeout);
 
-    // 3. Future: check page cache pressure
-    // if (pageCacheUtilization > 0.95) WaitForEviction(deadline);
-
-    // 4. Allocate UoW ID and create UoW
-    var uowId = _uowRegistry.AllocateUowId();
-    return new UnitOfWork(this, mode, uowId, timeout);
+    // Future (Tier 5): check WAL ring buffer pressure before allocation
+    // Future: check page cache pressure before allocation
 }
 ```
 
-### Pressure Thresholds
+### TOCTOU Note
+
+The admission check and `AllocateUowId()` are not atomic:
+
+```
+Thread A checks: ActiveCount (99) < Max (100) → proceeds
+Thread B checks: ActiveCount (99) < Max (100) → proceeds
+Both call AllocateUowId() → one gets slot 100, the other finds no free slot
+```
+
+This is by design. The admission check is an **optimization** — it avoids the heavier allocation path when the registry is obviously full. The real atomicity is in `AllocateUowId()`, which uses CAS on individual bitmap words. If CAS fails to find a free slot (all claimed between check and allocation), `AllocateUowId` falls into the same event-based wait path internally.
+
+`AllocateUowId()` signature change to support this:
+
+```csharp
+// In UowRegistry:
+// Returns allocated UoW ID (1–32767).
+// If no free slot available, waits on _slotFreed event until deadline expires.
+// Throws TyphonResourceExhaustedException on timeout.
+public ushort AllocateUowId(ref WaitContext wc)
+{
+    while (true)
+    {
+        // Scan allocation bitmap for first Free slot (O(1) with BitOperations.TrailingZeroCount)
+        var slot = TryClaimFreeSlot();
+        if (slot >= 0)
+        {
+            InitializeEntry(slot);
+            return (ushort)slot;
+        }
+
+        // No free slot — wait for signal from Release()
+        if (!WaitForSlotFreed(ref wc))
+        {
+            throw new TyphonResourceExhaustedException(
+                "Storage/UowRegistry/AllocateUowId", ResourceType.UowRegistrySlot,
+                ActiveCount, MaxConcurrentUoWs);
+        }
+    }
+}
+```
+
+### Event-Based Wait Mechanism
+
+Instead of spin-polling `ActiveCount`, the registry uses a `ManualResetEventSlim` signaled by `Release()`. This gives near-instant wake latency with zero CPU burn while waiting.
+
+```csharp
+// In UowRegistry:
+private readonly ManualResetEventSlim _slotFreed = new(false);
+
+public void Release(ushort uowId)
+{
+    // ... mark slot Free, set allocation bitmap bit ...
+    _slotFreed.Set();  // Wake one or more waiters
+}
+
+/// <summary>
+/// Wait for a registry slot to become free.
+/// Returns true if a slot was freed, false on timeout/cancellation.
+/// </summary>
+private bool WaitForSlotFreed(ref WaitContext wc)
+{
+    // ManualResetEventSlim.Wait supports both timeout (int ms) and CancellationToken
+    try
+    {
+        return _slotFreed.Wait(wc.Deadline.RemainingMilliseconds, wc.CancellationToken);
+    }
+    catch (OperationCanceledException)
+    {
+        return false;
+    }
+    finally
+    {
+        _slotFreed.Reset();  // Re-arm for next wait
+    }
+}
+```
+
+**Why `ManualResetEventSlim` over `AdaptiveWaiter` polling:**
+
+| Aspect | AdaptiveWaiter polling | ManualResetEventSlim |
+|--------|----------------------|----------------------|
+| CPU while waiting | ~1ms poll cycles | Zero (kernel wait) |
+| Wake latency | Up to ~1ms (next poll) | Near-instant (OS wakes thread) |
+| Complexity | Simple loop | Slightly more (event lifecycle) |
+| Best for | Sub-ms spin waits (lock contention) | Longer waits (resource availability) |
+
+The back-pressure wait is fundamentally different from lock contention: locks are held for ~50-500ns (fast spin is appropriate), while UoW slots may be held for milliseconds to seconds (spinning wastes CPU). An event-based wait matches the timescale.
+
+**Spurious wakes are harmless:** If `_slotFreed` fires but another thread claims the slot first, `TryClaimFreeSlot()` simply returns -1 and the loop re-enters the wait. The event is just a hint ("something changed, re-check"), not a guarantee.
+
+### Admission Control in CreateUnitOfWork
+
+The admission check before `AllocateUowId()` is a fast-path optimization:
+
+```csharp
+private void WaitForFreeSlot(ref WaitContext wc)
+{
+    // Fast path: check if registry is full before entering the heavier AllocateUowId path
+    // This avoids bitmap scanning when we know it will fail.
+    if (!_uowRegistry.WaitForSlotFreed(ref wc))
+    {
+        throw new TyphonResourceExhaustedException(
+            "Storage/UowRegistry/WaitForFreeSlot", ResourceType.UowRegistrySlot,
+            _uowRegistry.ActiveCount, _uowRegistry.MaxConcurrentUoWs);
+    }
+}
+```
+
+### Error Semantics
+
+Back-pressure timeout throws `TyphonResourceExhaustedException` (not `TyphonTimeoutException`) to distinguish "resource exhausted after waiting" from "operation timed out during execution". The exception carries diagnostic context:
+
+```csharp
+/// <summary>
+/// Thrown when a bounded resource is exhausted and the wait deadline expired.
+/// </summary>
+public class TyphonResourceExhaustedException : TyphonTimeoutException
+{
+    public string ResourcePath { get; }    // e.g. "Storage/UowRegistry/AllocateUowId"
+    public ResourceType ResourceType { get; }  // e.g. ResourceType.UowRegistrySlot
+    public long CurrentUsage { get; }      // e.g. 32767 (all slots in use)
+    public long MaxCapacity { get; }       // e.g. 32767
+
+    // Inherits from TyphonTimeoutException so existing catch blocks still work,
+    // but operators can catch specifically for resource exhaustion diagnostics.
+}
+```
+
+**Why a subclass of `TyphonTimeoutException`?** The caller experiences this as a timeout — they asked for a UoW and didn't get one within the deadline. The subclass adds *why* it timed out (resource exhaustion vs. lock contention vs. I/O delay). Existing `catch (TyphonTimeoutException)` handlers still work; operators who want finer diagnostics can catch the subclass.
+
+### Pressure Thresholds (Roadmap)
 
 | Resource | Threshold | Action | When Available |
 |----------|-----------|--------|----------------|
-| UoW Registry slots | 100% full | Wait for Free slot | This tier (#51) |
+| UoW Registry slots | 100% full | Event-based wait via `ManualResetEventSlim` | This tier (#52) |
 | WAL ring buffer | > 80% capacity | Wait for WAL Writer to drain | Tier 5 (#53) |
 | Page cache | > 95% capacity | Wait for eviction | Future |
 | Transaction pool | > 80% capacity | Wait for tx completion | Future |
 
-### Wait Mechanism
-
-```csharp
-private void WaitForFreeSlot(Deadline deadline)
-{
-    var waiter = new AdaptiveWaiter();  // Spin → Yield → Sleep
-    while (_uowRegistry.ActiveCount >= _uowRegistry.MaxConcurrentUoWs)
-    {
-        if (deadline.IsExpired)
-            throw new TyphonTimeoutException("Timed out waiting for UoW registry slot");
-        waiter.Wait();
-    }
-}
-```
-
-This uses `AdaptiveWaiter` (already implemented in `src/Typhon.Engine/Misc/AdaptiveWaiter.cs`) for efficient spinning under contention.
+Each future pressure source will use the signaling mechanism most appropriate to its shape. No shared abstraction until at least two sources are implemented.
 
 ---
 
@@ -945,17 +1088,19 @@ Week 3: Integration
 |------|-----------|-------------|
 | `src/Typhon.Engine/Execution/DurabilityMode.cs` | #48 | Enums: DurabilityMode, DurabilityOverride, UnitOfWorkState |
 | `src/Typhon.Engine/Execution/UnitOfWork.cs` | #49 | Core UoW class |
-| `src/Typhon.Engine/Execution/UowRegistry.cs` | #51 | Persistent UoW registry |
+| `src/Typhon.Engine/Execution/UowRegistry.cs` | #51 | Persistent UoW registry with `ManualResetEventSlim` for back-pressure |
+| `src/Typhon.Engine/Execution/TyphonResourceExhaustedException.cs` | #52 | Exception subclass with resource diagnostics |
 | `test/Typhon.Engine.Tests/UnitOfWorkTests.cs` | #49 | UoW lifecycle, transaction ownership |
-| `test/Typhon.Engine.Tests/UowRegistryTests.cs` | #51 | Registry allocation, recovery |
+| `test/Typhon.Engine.Tests/UowRegistryTests.cs` | #51, #52 | Registry allocation, recovery, back-pressure |
 
 ### Modified Files
 
 | File | Sub-Issue | Changes |
 |------|-----------|---------|
 | `src/Typhon.Engine/Data/ComponentTable.cs` | #50 | CompRevStorageElement: 10 → 12 bytes, new `_packedUowId` field |
-| `src/Typhon.Engine/Data/DatabaseEngine.cs` | #49 | Add `CreateUnitOfWork()`, deprecate `CreateTransaction()` |
-| `src/Typhon.Engine/Data/Transaction/Transaction.cs` | #49, #50 | Add `OwningUnitOfWork`, UoW ID stamping in Commit() |
+| `src/Typhon.Engine/Data/DatabaseEngine.cs` | #49, #52 | Add `CreateUnitOfWork()` with admission check, deprecate `CreateTransaction()` |
+| `src/Typhon.Engine/Data/Transaction/Transaction.cs` | #49, #50 | Add `OwningUnitOfWork`/`OwnsUnitOfWork`, UoW ID stamping in Commit() |
+| `src/Typhon.Engine/Data/Transaction/TransactionChain.cs` | #49 | `CreateTransaction(dbe, uow)` — forward UoW to `Init()` |
 | `src/Typhon.Engine/Data/ComponentTable.cs` | #50 | Chunk size constants, visibility check updates |
 | `test/Typhon.Engine.Tests/*.cs` | #49 | Migrate all tests to UoW-based API |
 
@@ -981,6 +1126,22 @@ src/Typhon.Engine/Execution/    (new — UoW, registry, future scheduler)
 | `UoW_StateTransitions` | Free → Pending → WalDurable → Committed → Free |
 | `UoW_Flush_NoOp_WithoutWAL` | Flush succeeds (no-op) without WAL infrastructure |
 | `UoW_CancellationPropagates` | UoW disposal cancels outstanding operations |
+| `UoW_CreateContext_ComposesDeadlines` | `CreateContext(timeout)` returns `Deadline.Min(uow, timeout)` |
+| `UoW_CreateContext_DefaultUsesUowDeadline` | `CreateContext()` without timeout uses UoW's deadline |
+| `UoW_TransactionCount_Increments` | TransactionCount tracks created transactions |
+| `UoW_DoubleDispose_NoThrow` | Dispose() is idempotent |
+
+### Transaction Binding Tests (#49)
+
+| Test | What It Verifies |
+|------|-----------------|
+| `Tx_OwningUnitOfWork_SetViaInit` | `OwningUnitOfWork` is set through `Init()`, not a separate setter |
+| `Tx_Reset_ClearsOwningUnitOfWork` | After `Reset()`, `OwningUnitOfWork` is null |
+| `Tx_Reset_ClearsOwnsUnitOfWork` | After `Reset()`, `OwnsUnitOfWork` is false — prevents stale auto-dispose |
+| `Tx_PoolReuse_NoPriorUowLeak` | A pooled transaction reused by a new UoW has no stale reference |
+| `Tx_DeprecatedCreateTx_UowIdIsZero` | Transaction via deprecated `CreateTransaction()` has `OwningUnitOfWork = null`, effective UoW ID 0 |
+| `QuickTx_DisposesUoW` | `CreateQuickTransaction()` transaction disposes its UoW on `Transaction.Dispose()` |
+| `QuickTx_CommitThenDispose_CleanLifecycle` | Create → commit → dispose chain works end-to-end |
 
 ### Storage Tests (#50)
 
@@ -990,17 +1151,43 @@ src/Typhon.Engine/Execution/    (new — UoW, registry, future scheduler)
 | `CompRevStorageElement_IsolationFlag_InPackedUowId` | Flag moved to bit 15 of `_packedUowId` |
 | `CompRevStorageElement_TSN_FullPrecision` | 48-bit TSN without bit 0 masking |
 | `CompRevStorageElement_Size_Is12Bytes` | `sizeof(CompRevStorageElement) == 12` |
-| `CompRevStorageElement_FitsChunk` | 5 elements per 64-byte chunk |
+| `CompRevStorageElement_FitsChunk` | 5 elements per 64-byte chunk (overflow) |
+| `CompRevStorageElement_FitsRootChunk` | 3 elements per root chunk (with 20-byte header) |
+| `CompRevStorageElement_UowId_MaxValue` | UoW ID 32,767 (all 15 bits set) round-trips correctly |
+| `CompRevStorageElement_UowId_Zero_Sentinel` | UoW ID 0 with IsolationFlag=0 returns correct field values |
+| `CompRevStorageElement_IsolationAndUowId_Independent` | Setting one doesn't corrupt the other (bit-field isolation) |
+
+### Visibility Tests (#50)
+
+| Test | What It Verifies |
+|------|-----------------|
+| `Visibility_CommittedRevision_IsVisible` | IsolationFlag=0, TSN ≤ readerTSN → visible |
+| `Visibility_UncommittedRevision_SameUoW_IsVisible` | IsolationFlag=1, same UoW ID → visible (read-your-writes) |
+| `Visibility_UncommittedRevision_DifferentUoW_NotVisible` | IsolationFlag=1, different UoW ID → invisible |
+| `Visibility_UowIdZero_AlwaysCommitted` | UoW ID 0 never consults registry, treated as committed |
+| `Visibility_CommittedBeforeTSN_FastPath` | When `CommittedBeforeTSN = long.MaxValue`, bitmap never accessed |
+| `Visibility_PostCrash_VoidedUoW_NotVisible` | After simulated crash, voided UoW's revisions are invisible |
 
 ### Registry Tests (#51)
 
 | Test | What It Verifies |
 |------|-----------------|
 | `Registry_AllocateUowId_ReturnsUniqueIds` | No duplicate UoW IDs |
+| `Registry_AllocateUowId_StartsAt1` | UoW ID 0 is never allocated (reserved sentinel) |
 | `Registry_Release_MakesSlotFree` | Released UoW ID can be reused |
 | `Registry_CrashRecovery_VoidsPending` | Pending entries voided on simulated recovery |
+| `Registry_CrashRecovery_WalDurable_Preserved` | WalDurable entries survive recovery (not voided) |
 | `Registry_CommittedBitmap_Accurate` | In-memory bitmap matches persistent state |
-| `Registry_FullCapacity_BlocksAllocation` | Back-pressure when all slots used |
+| `Registry_FullCapacity_WaitsForSlot` | When all slots used, `AllocateUowId` blocks until `Release()` signals the event |
+| `Registry_FullCapacity_TimesOut` | When all slots used and deadline expires, throws `TyphonResourceExhaustedException` with correct usage/capacity |
+| `Registry_BackPressure_SpuriousWake_Retries` | Event fires but another thread claims the slot first → waiter re-enters wait, does not throw |
+| `Registry_BackPressure_TOCTOU_GracefulRetry` | Two threads pass admission check concurrently, one gets the last slot, other falls into event wait inside `AllocateUowId` |
+| `Registry_BackPressure_CancellationToken_Aborts` | Cancellation token fires while waiting → returns promptly, throws `OperationCanceledException` |
+| `Registry_ABA_UowIdReuse_SafeWithCommittedBeforeTSN` | UoW-A commits (ID=2), GC recycles slot 2, UoW-B grabs ID=2 in Pending state. Reader with TSN > UoW-A's revisions still sees UoW-A's data via CommittedBeforeTSN fast path (bitmap not consulted). Verifies no false invisibility from ID reuse |
+| `Registry_VoidEntry_SetsCommittedBeforeTSN_ToZero` | Creating a Void entry transitions CommittedBeforeTSN from `long.MaxValue` to 0 |
+| `Registry_AllVoidFreed_RestoresCommittedBeforeTSN` | When last Void entry is freed, CommittedBeforeTSN returns to `long.MaxValue` |
+| `Registry_ConcurrentAllocation_NoDuplicates` | Multiple threads allocating simultaneously get unique IDs |
+| `Registry_PageGrowth_OnDemand` | Allocating beyond root page capacity (>150) triggers overflow page |
 
 ### Integration Tests
 
@@ -1010,6 +1197,10 @@ src/Typhon.Engine/Execution/    (new — UoW, registry, future scheduler)
 | `ReadEntity_ThroughUoW_SeesCommitted` | MVCC visibility through UoW layer |
 | `MultipleUoWs_ConcurrentAccess` | Parallel UoWs don't interfere |
 | `UoW_WithTimeout_PropagatesDeadline` | Deadline flows from UoW to lock acquisitions |
+| `UoW_CommitStampsUowId` | After commit, revision elements carry the UoW's ID |
+| `UoW_MultipleCommits_AllStampedSameId` | Multiple transactions in one UoW all stamp the same UoW ID |
+| `DeprecatedApi_StampsUowIdZero` | Transactions via deprecated API stamp UoW ID 0 |
+| `CrossUoW_IsolationCorrect` | UoW-A's uncommitted revisions invisible to UoW-B's transactions |
 
 ---
 
@@ -1020,7 +1211,7 @@ src/Typhon.Engine/Execution/    (new — UoW, registry, future scheduler)
 | **UoW pooling** | Not pooled (heap-allocated) | UoWs are infrequent (1 per tick/request), CTS must be fresh each time |
 | **UoW ID size** | 15 bits (32,767 max) | Sufficient for any realistic concurrency level |
 | **UoW ID 0 semantics** | Reserved sentinel = "always committed" | Legacy `CreateTransaction()` uses UoW ID 0. Visibility check treats 0 as implicitly committed. Registry allocates starting at 1. IsolationFlag already handles crash safety for uncommitted revisions |
-| **UoW → Transaction binding** | Persistent reference (`Transaction._unitOfWork`) | 8 bytes per pooled object. Clean access to UoW ID + durability mode at commit time. Avoids expanding UnitOfWorkContext struct. Prepares for WAL (Tier 5) |
+| **UoW → Transaction binding** | Persistent reference via `Init()` parameter (not a separate setter) | 8 bytes per pooled object. Set at creation, cleared at `Reset()`. Init-path avoids forgotten/out-of-order calls. `OwnsUnitOfWork` also cleared at Reset to prevent stale auto-dispose. Prepares for WAL (Tier 5) |
 | **UnitOfWorkState.Free** | Default value (= 0) | Zeroed memory is automatically Free — safe initial state for fresh pages. Enables array-indexed state tables |
 | **CompRevStorageElement growth** | 10 → 12 bytes (per [ADR-027](../adr/027-even-sized-hot-path-structs.md)) | UoW ID + IsolationFlag in 2-byte `_packedUowId` field, root: 3/chunk (was 4), overflow: 5/chunk (was 6) |
 | **CompRevStorageElement field order** | ComponentChunkId first, `_packedUowId` at offset 10 | Preserves 4-byte alignment of most-accessed field. Same as current layout with 2 bytes appended |
@@ -1035,7 +1226,10 @@ src/Typhon.Engine/Execution/    (new — UoW, registry, future scheduler)
 | **CommittedBeforeTSN** | `long.MaxValue` normally, `0` when Void entries exist | Solves UoW ID reuse ABA problem. Binary flag avoids storing MinTSN in entry. Future: precise threshold if MinTSN added to entry |
 | **Committed bitmap role** | Cold-path crash-recovery fallback (not hot-path) | IsolationFlag handles per-transaction visibility. Bitmap only needed for ghost revisions from voided UoWs. Never accessed during normal operation |
 | **RootFileHeader** | New `UowRegistrySPI` field | Same pattern as ComponentTableSPI, FieldTableSPI. Included in format version bump |
-| **Back-pressure** | AdaptiveWaiter spin-wait | Reuses existing primitive, respects deadlines |
+| **Back-pressure wait** | `ManualResetEventSlim` signaled by `Release()` | Event-based, not spin-polling. UoW slots are held ms–seconds (spinning wastes CPU). Near-instant wake, zero CPU burn while waiting. Spurious wakes are harmless (re-check loop) |
+| **Back-pressure scope** | Registry slots only (no general abstraction) | Four future pressure sources have different shapes (binary vs threshold, different signals). Premature abstraction would be wasteful. Generalize when Tier 5 lands |
+| **Back-pressure error** | `TyphonResourceExhaustedException` (subclass of `TyphonTimeoutException`) | Carries diagnostic context (resource path, current usage, max capacity). Existing `catch (TyphonTimeoutException)` still works; operators can catch subclass for finer diagnostics |
+| **Admission check TOCTOU** | Fast-path optimization, not a guarantee | `AllocateUowId()` CAS provides real atomicity. If another thread races past the check, `AllocateUowId` falls into event-based wait internally. No correctness issue |
 | **API deprecation** | `[Obsolete]` first, remove in v1.0 | Smooth migration, tests updated incrementally |
 | **File format version** | Bumped (no in-place migration) | Pre-1.0, no production data to migrate |
 
@@ -1053,4 +1247,4 @@ src/Typhon.Engine/Execution/    (new — UoW, registry, future scheduler)
 
 5. ~~**Visibility check scope:** Resolved → add `IsEpochVisible()` stub in #50, wired into visibility check. See §5.~~
 
-6. **DeferredCleanupManager interaction:** The current Commit()/Dispose() has significant logic around deferred cleanup (tail detection, batch enqueue, processing). When revisions have UoW ID stamps, should voided-UoW revisions be skipped during cleanup? Does the cleanup cutoff change? (Answer: likely no change needed — deferred cleanup operates on TSN-based cutoffs, which are orthogonal to UoW state. Voided UoWs make revisions invisible to *readers*, but cleanup still GCs revision chain entries based on MinTSN.)
+6. ~~**DeferredCleanupManager interaction:** Resolved → no change needed. Deferred cleanup operates on TSN-based cutoffs (`MinTSN`), which are orthogonal to UoW state. Voided UoWs make revisions invisible to *readers*, but cleanup still GCs revision chain entries based on MinTSN. The cleanup path does not need to distinguish voided vs committed UoWs — it only cares whether any active transaction can still reference a revision's TSN.~~

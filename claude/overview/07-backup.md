@@ -190,7 +190,7 @@ retry:
 
 Coordinate the full backup lifecycle: force checkpoint, snapshot dirty bitmap, enable CoW, read changed pages, compress and write the `.pack` file, update the catalog.
 
-<a href="../assets/typhon-pitbackup-creation-flow.svg"><img src="../assets/typhon-pitbackup-creation-flow.svg" width="1200" alt="PIT Backup — Creation Flow"></a>
+<a href="../assets/typhon-pitbackup-creation-flow.svg"><img src="../assets/typhon-pitbackup-creation-flow.svg" width="500" alt="PIT Backup — Creation Flow"></a>
 <sub>🔍 Open `claude/assets/viewer.html` for interactive pan-zoom</sub>
 
 ### Backup Flow (12 Steps)
@@ -245,7 +245,7 @@ Failed backups leave the dirty bitmap intact (changes will be captured by the ne
 │    HeaderCRC: CRC32C                                │
 ├─────────────────────────────────────────────────────┤
 │  Page Data (variable)                               │
-│    [4B size][LZ4(page_0)] [4B size][LZ4(page_1)].. │
+│    [4B size][LZ4(page_0)] [4B size][LZ4(page_1)]..  │
 │    Each page compressed independently               │
 │    Original: 8KB per page                           │
 ├─────────────────────────────────────────────────────┤
@@ -358,7 +358,7 @@ typhon-backup verify   --source <backup-dir> [--point <id|datetime>] [--strict]
 
 Consolidate the backup chain into a single file, bound chain depth, and manage storage via retention policies.
 
-<a href="../assets/typhon-pitbackup-compaction.svg"><img src="../assets/typhon-pitbackup-compaction.svg" width="1200" alt="PIT Backup — Compaction Lifecycle"></a>
+<a href="../assets/typhon-pitbackup-compaction.svg"><img src="../assets/typhon-pitbackup-compaction.svg" width="600" alt="PIT Backup — Compaction Lifecycle"></a>
 <sub>🔍 Open `claude/assets/viewer.html` for interactive pan-zoom</sub>
 
 ### Compaction
