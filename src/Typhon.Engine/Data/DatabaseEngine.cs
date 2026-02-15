@@ -135,13 +135,16 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     /// <param name="durabilityMode">Controls when WAL records become crash-safe. Default is <see cref="DurabilityMode.Deferred"/>.</param>
     /// <param name="timeout">Lifetime timeout for this UoW. Default uses <see cref="TimeoutOptions.DefaultUowTimeout"/>.</param>
     /// <returns>A new <see cref="UnitOfWork"/> in <see cref="UnitOfWorkState.Pending"/> state.</returns>
+    /// <exception cref="ResourceExhaustedException">All UoW registry slots are in use and the deadline expired.</exception>
     [return: TransfersOwnership]
     public UnitOfWork CreateUnitOfWork(DurabilityMode durabilityMode = DurabilityMode.Deferred, TimeSpan timeout = default)
     {
         var effectiveTimeout = timeout == default ? TimeoutOptions.Current.DefaultUowTimeout : timeout;
+        var wc = WaitContext.FromTimeout(effectiveTimeout);
 
-        // Future: back-pressure check (#52)
-        var uowId = UowRegistry.AllocateUowId();
+        // Back-pressure: if registry is full, wait for a slot to be freed.
+        // The admission check is a fast-path optimization — AllocateUowId's CAS provides the real atomicity (TOCTOU by design).
+        var uowId = UowRegistry.AllocateUowId(ref wc);
 
         return new UnitOfWork(this, durabilityMode, uowId, effectiveTimeout);
     }

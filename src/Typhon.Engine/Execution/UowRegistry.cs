@@ -76,6 +76,17 @@ internal class UowRegistry : IDisposable
     private int _activeCount;
     private int _currentCapacity;
 
+    /// <summary>
+    /// Event signaled by <see cref="Release"/> when a slot becomes free.
+    /// Waiters in <see cref="AllocateUowId(ref WaitContext)"/> block on this event instead of spin-polling.
+    /// </summary>
+    /// <remarks>
+    /// UoW slots are held for milliseconds to seconds (not nanoseconds like lock contention),
+    /// so an event-based wait is appropriate: zero CPU burn while waiting, near-instant wake latency.
+    /// Spurious wakes are harmless — the allocation loop re-scans the bitmap.
+    /// </remarks>
+    private readonly ManualResetEventSlim _slotFreed = new(false);
+
     // ═══════════════════════════════════════════════════════════════
     // Public Properties
     // ═══════════════════════════════════════════════════════════════
@@ -91,6 +102,9 @@ internal class UowRegistry : IDisposable
 
     /// <summary>Number of voided entries (crash recovery).</summary>
     internal int VoidEntryCount => _voidEntryCount;
+
+    /// <summary>Maximum number of concurrent UoW IDs (hard limit from 15-bit ID space).</summary>
+    public int MaxConcurrentUoWs => MaxUowId;
 
     // ═══════════════════════════════════════════════════════════════
     // Constructor
@@ -110,11 +124,55 @@ internal class UowRegistry : IDisposable
 
     /// <summary>
     /// Allocates a unique UoW ID from the registry. Returns an ID in the range [1..32767].
+    /// If no slot is available, waits for a slot to be freed (via <see cref="Release"/>) until the deadline expires.
+    /// </summary>
+    /// <param name="wc">
+    /// Wait context with deadline and cancellation token. If <c>Unsafe.IsNullRef</c>, uses unbounded wait.
+    /// </param>
+    /// <exception cref="ResourceExhaustedException">All slots are in use and the deadline expired.</exception>
+    /// <exception cref="OperationCanceledException">The cancellation token was triggered while waiting.</exception>
+    public ushort AllocateUowId(ref WaitContext wc)
+    {
+        while (true)
+        {
+            var slot = TryClaimFreeSlot();
+            if (slot >= 0)
+            {
+                return (ushort)slot;
+            }
+
+            // No free slot — wait for Release() to signal the event
+            if (!WaitForSlotFreed(ref wc))
+            {
+                ThrowHelper.ThrowResourceExhausted("Execution/UowRegistry/AllocateUowId", ResourceType.Service, _activeCount, MaxUowId);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Allocates a unique UoW ID with no timeout (immediate failure if full).
     /// </summary>
     /// <exception cref="ResourceExhaustedException">All slots are in use.</exception>
     public ushort AllocateUowId()
     {
-        // Scan allocation bitmap for first Free slot (bit=1), starting from word 0. Slot 0 is reserved (never set in allocation bitmap), so we always skip it.
+        var slot = TryClaimFreeSlot();
+        if (slot >= 0)
+        {
+            return (ushort)slot;
+        }
+
+        ThrowHelper.ThrowResourceExhausted("Execution/UowRegistry/AllocateUowId", ResourceType.Service, _activeCount, MaxUowId);
+        return 0; // Unreachable
+    }
+
+    /// <summary>
+    /// Scans the allocation bitmap for a free slot, claims it via CAS, and initializes the entry.
+    /// Returns the slot index (1..32767) or -1 if no free slot is available.
+    /// </summary>
+    private int TryClaimFreeSlot()
+    {
+        // Scan allocation bitmap for first Free slot (bit=1), starting from word 0.
+        // Slot 0 is reserved (never set in allocation bitmap), so we always skip it.
         for (int w = 0; w < BitmapWords; w++)
         {
             var word = _allocationBitmap[w];
@@ -148,12 +206,45 @@ internal class UowRegistry : IDisposable
             InitializeEntry(slotIndex);
 
             Interlocked.Increment(ref _activeCount);
-            return (ushort)slotIndex;
+            return slotIndex;
         }
 
-        // No free slots
-        ThrowHelper.ThrowResourceExhausted("Execution/UowRegistry/AllocateUowId", ResourceType.Service, _activeCount, MaxUowId);
-        return 0; // Unreachable
+        return -1;
+    }
+
+    /// <summary>
+    /// Waits for a registry slot to become free, using the <see cref="_slotFreed"/> event.
+    /// Returns <c>true</c> if signaled (a slot was freed), <c>false</c> on timeout or cancellation.
+    /// </summary>
+    private bool WaitForSlotFreed(ref WaitContext wc)
+    {
+        try
+        {
+            if (Unsafe.IsNullRef(ref wc))
+            {
+                // Unbounded wait — block indefinitely
+                _slotFreed.Wait();
+                return true;
+            }
+
+            var ms = wc.Deadline.RemainingMilliseconds;
+            if (ms == 0)
+            {
+                return false; // Already expired
+            }
+
+            return _slotFreed.Wait(ms, wc.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+        finally
+        {
+            // Re-arm for next wait. Spurious wakes are harmless — the allocation loop
+            // re-scans the bitmap and re-enters wait if no slot is found.
+            _slotFreed.Reset();
+        }
     }
 
     /// <summary>
@@ -194,6 +285,9 @@ internal class UowRegistry : IDisposable
                 _committedBeforeTSN = long.MaxValue;
             }
         }
+
+        // Wake any threads waiting in AllocateUowId() for a free slot
+        _slotFreed.Set();
     }
 
     /// <summary>
@@ -494,8 +588,6 @@ internal class UowRegistry : IDisposable
     // IDisposable
     // ═══════════════════════════════════════════════════════════════
 
-    public void Dispose()
-    {
-        // Registry does not own the segment — DatabaseEngine manages segment lifecycle
-    }
+    // Registry does not own the segment — DatabaseEngine manages segment lifecycle
+    public void Dispose() => _slotFreed.Dispose();
 }
