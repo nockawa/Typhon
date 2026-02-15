@@ -1,0 +1,593 @@
+using System;
+using System.Diagnostics;
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Threading;
+
+namespace Typhon.Engine;
+
+/// <summary>
+/// Persistent registry entry for a single UoW slot. Slot index = UoW ID.
+/// </summary>
+/// <remarks>
+/// 40 bytes divides evenly into both root page (6000/40=150) and overflow page (8000/40=200) data areas — zero waste.
+/// <c>Free = 0</c> ensures that zeroed pages are automatically all-free entries.
+/// </remarks>
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+internal struct UowRegistryEntry
+{
+    public UnitOfWorkState State;   // 1 byte
+    public byte Reserved;           // 1 byte
+    public short Reserved2;         // 2 bytes
+    public int TransactionCount;    // 4 bytes
+    public long CreatedTicks;       // 8 bytes
+    public long CommittedTicks;     // 8 bytes
+    public long MaxTSN;             // 8 bytes
+    public long Reserved3;          // 8 bytes
+    // Total: 40 bytes
+}
+
+/// <summary>
+/// Persistent UoW ID allocator with crash-recovery support. Manages a flat array of <see cref="UowRegistryEntry"/> in a growing <see cref="LogicalSegment"/>.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Provides O(1) bitmap-based allocation of UoW IDs (1..32767), crash recovery by voiding Pending entries, and a committed bitmap for post-crash visibility filtering.
+/// </para>
+/// <para>
+/// During normal operation, <see cref="CommittedBeforeTSN"/> is <c>long.MaxValue</c> — the committed bitmap is never touched. After crash recovery with
+/// voided entries, it drops to 0, activating the bitmap as a visibility fallback until voided entries are cleaned up.
+/// </para>
+/// </remarks>
+internal class UowRegistry : IDisposable
+{
+    // ═══════════════════════════════════════════════════════════════
+    // Constants
+    // ═══════════════════════════════════════════════════════════════
+
+    private  const int EntrySize        = 40;
+    internal const int RootCapacity     = 150;      // 6000 / 40
+    internal const int OverflowCapacity = 200;      // 8000 / 40
+    private  const int MaxUowId         = 32767;    // 15-bit max
+    private  const int BitmapWords      = 512;      // 32768 / 64
+
+    // ═══════════════════════════════════════════════════════════════
+    // Fields
+    // ═══════════════════════════════════════════════════════════════
+
+    private readonly LogicalSegment _segment;
+    private readonly ManagedPagedMMF _mmf;
+    private readonly EpochManager _epochManager;
+
+    /// <summary>Bit=1 means Free (available for allocation). Rebuilt on load.</summary>
+    private readonly ulong[] _allocationBitmap = new ulong[BitmapWords];
+
+    /// <summary>Bit=1 means Committed or WalDurable. Used only after crash recovery.</summary>
+    private readonly ulong[] _committedBitmap = new ulong[BitmapWords];
+
+    /// <summary>
+    /// Visibility horizon. <c>long.MaxValue</c> during normal operation (bitmap never touched). <c>0</c> after crash recovery when voided entries
+    /// exist (forces bitmap fallback).
+    /// </summary>
+    private long _committedBeforeTSN = long.MaxValue;
+
+    private int _voidEntryCount;
+    private int _activeCount;
+    private int _currentCapacity;
+
+    /// <summary>
+    /// Event signaled by <see cref="Release"/> when a slot becomes free.
+    /// Waiters in <see cref="AllocateUowId(ref WaitContext)"/> block on this event instead of spin-polling.
+    /// </summary>
+    /// <remarks>
+    /// UoW slots are held for milliseconds to seconds (not nanoseconds like lock contention),
+    /// so an event-based wait is appropriate: zero CPU burn while waiting, near-instant wake latency.
+    /// Spurious wakes are harmless — the allocation loop re-scans the bitmap.
+    /// </remarks>
+    private readonly ManualResetEventSlim _slotFreed = new(false);
+
+    // ═══════════════════════════════════════════════════════════════
+    // Public Properties
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>Visibility horizon for the read path. See design doc §6 CommittedBeforeTSN.</summary>
+    public long CommittedBeforeTSN => _committedBeforeTSN;
+
+    /// <summary>Number of UoW slots currently in use (Pending, WalDurable, Committed, or Void).</summary>
+    public int ActiveCount => _activeCount;
+
+    /// <summary>Total number of entries that fit in the current segment pages.</summary>
+    public int CurrentCapacity => _currentCapacity;
+
+    /// <summary>Number of voided entries (crash recovery).</summary>
+    internal int VoidEntryCount => _voidEntryCount;
+
+    /// <summary>Maximum number of concurrent UoW IDs (hard limit from 15-bit ID space).</summary>
+    public int MaxConcurrentUoWs => MaxUowId;
+
+    // ═══════════════════════════════════════════════════════════════
+    // Constructor
+    // ═══════════════════════════════════════════════════════════════
+
+    internal UowRegistry(LogicalSegment segment, ManagedPagedMMF mmf, EpochManager epochManager)
+    {
+        _segment = segment;
+        _mmf = mmf;
+        _epochManager = epochManager;
+        _currentCapacity = ComputeCapacity(segment.Length);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Public API
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Allocates a unique UoW ID from the registry. Returns an ID in the range [1..32767].
+    /// If no slot is available, waits for a slot to be freed (via <see cref="Release"/>) until the deadline expires.
+    /// </summary>
+    /// <param name="wc">
+    /// Wait context with deadline and cancellation token. If <c>Unsafe.IsNullRef</c>, uses unbounded wait.
+    /// </param>
+    /// <exception cref="ResourceExhaustedException">All slots are in use and the deadline expired.</exception>
+    /// <exception cref="OperationCanceledException">The cancellation token was triggered while waiting.</exception>
+    public ushort AllocateUowId(ref WaitContext wc)
+    {
+        while (true)
+        {
+            var slot = TryClaimFreeSlot();
+            if (slot >= 0)
+            {
+                return (ushort)slot;
+            }
+
+            // No free slot — wait for Release() to signal the event
+            if (!WaitForSlotFreed(ref wc))
+            {
+                ThrowHelper.ThrowResourceExhausted("Execution/UowRegistry/AllocateUowId", ResourceType.Service, _activeCount, MaxUowId);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Allocates a unique UoW ID with no timeout (immediate failure if full).
+    /// </summary>
+    /// <exception cref="ResourceExhaustedException">All slots are in use.</exception>
+    public ushort AllocateUowId()
+    {
+        var slot = TryClaimFreeSlot();
+        if (slot >= 0)
+        {
+            return (ushort)slot;
+        }
+
+        ThrowHelper.ThrowResourceExhausted("Execution/UowRegistry/AllocateUowId", ResourceType.Service, _activeCount, MaxUowId);
+        return 0; // Unreachable
+    }
+
+    /// <summary>
+    /// Scans the allocation bitmap for a free slot, claims it via CAS, and initializes the entry.
+    /// Returns the slot index (1..32767) or -1 if no free slot is available.
+    /// </summary>
+    private int TryClaimFreeSlot()
+    {
+        // Scan allocation bitmap for first Free slot (bit=1), starting from word 0.
+        // Slot 0 is reserved (never set in allocation bitmap), so we always skip it.
+        for (int w = 0; w < BitmapWords; w++)
+        {
+            var word = _allocationBitmap[w];
+            if (word == 0)
+            {
+                continue;
+            }
+
+            // Found a word with at least one free bit
+            var bit = BitOperations.TrailingZeroCount(word);
+            var mask = 1UL << bit;
+
+            // CAS to claim the slot
+            var prev = Interlocked.And(ref _allocationBitmap[w], ~mask);
+            if ((prev & mask) == 0)
+            {
+                // Another thread claimed this bit between our read and CAS — retry
+                w--; // Re-scan this word
+                continue;
+            }
+
+            var slotIndex = (w * 64) + bit;
+
+            // Ensure capacity (may need to grow segment for higher slot indices)
+            if (slotIndex >= _currentCapacity)
+            {
+                EnsureCapacity(slotIndex + 1);
+            }
+
+            // Initialize the entry on the page
+            InitializeEntry(slotIndex);
+
+            Interlocked.Increment(ref _activeCount);
+            return slotIndex;
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// Waits for a registry slot to become free, using the <see cref="_slotFreed"/> event.
+    /// Returns <c>true</c> if signaled (a slot was freed), <c>false</c> on timeout or cancellation.
+    /// </summary>
+    private bool WaitForSlotFreed(ref WaitContext wc)
+    {
+        try
+        {
+            if (Unsafe.IsNullRef(ref wc))
+            {
+                // Unbounded wait — block indefinitely
+                _slotFreed.Wait();
+                return true;
+            }
+
+            var ms = wc.Deadline.RemainingMilliseconds;
+            if (ms == 0)
+            {
+                return false; // Already expired
+            }
+
+            return _slotFreed.Wait(ms, wc.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+        finally
+        {
+            // Re-arm for next wait. Spurious wakes are harmless — the allocation loop
+            // re-scans the bitmap and re-enters wait if no slot is found.
+            _slotFreed.Reset();
+        }
+    }
+
+    /// <summary>
+    /// Releases a UoW ID back to the pool. The slot becomes Free and available for reuse.
+    /// </summary>
+    public void Release(ushort uowId)
+    {
+        if (uowId == 0)
+        {
+            return;
+        }
+
+        bool wasVoid;
+
+        // Write Free state to the page
+        using (var guard = EpochGuard.Enter(_epochManager))
+        {
+            var entry = ReadEntry(uowId, guard.Epoch);
+            wasVoid = entry.State == UnitOfWorkState.Void;
+            WriteEntryState(uowId, UnitOfWorkState.Free, guard.Epoch);
+        }
+
+        // Clear committed bitmap bit
+        var wordIndex = uowId >> 6;
+        var bitMask = 1UL << (uowId & 63);
+        Interlocked.And(ref _committedBitmap[wordIndex], ~bitMask);
+
+        // Set allocation bitmap bit (slot is free again)
+        Interlocked.Or(ref _allocationBitmap[wordIndex], bitMask);
+
+        Interlocked.Decrement(ref _activeCount);
+
+        if (wasVoid)
+        {
+            var remaining = Interlocked.Decrement(ref _voidEntryCount);
+            if (remaining == 0)
+            {
+                _committedBeforeTSN = long.MaxValue;
+            }
+        }
+
+        // Wake any threads waiting in AllocateUowId() for a free slot
+        _slotFreed.Set();
+    }
+
+    /// <summary>
+    /// Checks whether a UoW ID is in a committed state (Committed or WalDurable). Used by the visibility check as a crash-recovery fallback (Layer 4).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool IsCommitted(ushort uowId) => (_committedBitmap[uowId >> 6] & (1UL << (uowId & 63))) != 0;
+
+    /// <summary>
+    /// Records that a UoW has committed. Transitions to Committed state and sets the committed bitmap bit.
+    /// </summary>
+    /// <remarks>
+    /// Without WAL (#53), state goes directly to Committed (skipping WalDurable).
+    /// </remarks>
+    public void RecordCommit(ushort uowId, long maxTSN)
+    {
+        if (uowId == 0)
+        {
+            return;
+        }
+
+        using (var guard = EpochGuard.Enter(_epochManager))
+        {
+            WriteEntryFields(uowId, guard.Epoch, entry =>
+            {
+                entry.State = UnitOfWorkState.Committed;
+                entry.CommittedTicks = Stopwatch.GetTimestamp();
+                entry.MaxTSN = maxTSN;
+                return entry;
+            });
+        }
+
+        // Set committed bitmap bit
+        var wordIndex = uowId >> 6;
+        var bitMask = 1UL << (uowId & 63);
+        Interlocked.Or(ref _committedBitmap[wordIndex], bitMask);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Initialization
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Initializes the registry for a freshly created database. Sets all bitmap bits except slot 0.
+    /// </summary>
+    internal void Initialize()
+    {
+        _currentCapacity = ComputeCapacity(_segment.Length);
+
+        // Mark all slots as Free in the allocation bitmap (bit=1 means Free) Slot 0 is reserved — keep bit 0 cleared
+        _allocationBitmap[0] = ~1UL; // All bits set except bit 0
+        for (int i = 1; i < BitmapWords; i++)
+        {
+            _allocationBitmap[i] = ulong.MaxValue;
+        }
+
+        _activeCount = 0;
+        _voidEntryCount = 0;
+        _committedBeforeTSN = long.MaxValue;
+    }
+
+    /// <summary>
+    /// Loads the registry from an existing database file. Reads entries from pages, rebuilds bitmaps, and voids any Pending entries (crash recovery).
+    /// </summary>
+    internal void LoadFromDisk()
+    {
+        _currentCapacity = ComputeCapacity(_segment.Length);
+
+        // Clear bitmaps
+        Array.Clear(_allocationBitmap, 0, BitmapWords);
+        Array.Clear(_committedBitmap, 0, BitmapWords);
+
+        _activeCount = 0;
+        _voidEntryCount = 0;
+
+        // Slot 0 is always reserved (never free)
+        // _allocationBitmap[0] bit 0 stays 0
+
+        using var guard = EpochGuard.Enter(_epochManager);
+        var epoch = guard.Epoch;
+
+        // Scan all entries up to current capacity
+        for (int slotIndex = 1; slotIndex < _currentCapacity; slotIndex++)
+        {
+            var entry = ReadEntry(slotIndex, epoch);
+
+            switch (entry.State)
+            {
+                case UnitOfWorkState.Free:
+                    // Mark as free in allocation bitmap
+                    SetAllocationBit(slotIndex);
+                    break;
+
+                case UnitOfWorkState.Pending:
+                    // Crash recovery: void this entry
+                    WriteEntryState(slotIndex, UnitOfWorkState.Void, epoch);
+                    _voidEntryCount++;
+                    _activeCount++;
+                    // Void entries are NOT set in committed bitmap
+                    break;
+
+                case UnitOfWorkState.WalDurable:
+                    // Survived crash — keep as-is, mark as committed in bitmap
+                    SetCommittedBit(slotIndex);
+                    _activeCount++;
+                    break;
+
+                case UnitOfWorkState.Committed:
+                    // Fully committed — mark in committed bitmap
+                    SetCommittedBit(slotIndex);
+                    _activeCount++;
+                    break;
+
+                case UnitOfWorkState.Void:
+                    // Already voided from a previous recovery — count it
+                    _voidEntryCount++;
+                    _activeCount++;
+                    break;
+            }
+        }
+
+        // Set remaining slots (beyond current capacity) as free
+        for (int slotIndex = _currentCapacity; slotIndex <= MaxUowId; slotIndex++)
+        {
+            SetAllocationBit(slotIndex);
+        }
+
+        // Set CommittedBeforeTSN based on void entry count
+        _committedBeforeTSN = (_voidEntryCount > 0) ? 0 : long.MaxValue;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Internal Helpers — Page Addressing
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Reads a registry entry from the persistent page. Caller must be inside an EpochGuard.
+    /// </summary>
+    internal UowRegistryEntry ReadEntry(int slotIndex, long epoch)
+    {
+        var (segPageIndex, itemIndex) = LogicalSegment.GetItemLocation(slotIndex, EntrySize);
+        var page = _segment.GetPage(segPageIndex, epoch, out _);
+        var byteOffset = (page.IsRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (itemIndex * EntrySize);
+        return page.RawDataReadOnly<UowRegistryEntry>(byteOffset, 1)[0];
+    }
+
+    /// <summary>
+    /// Acquires an exclusive latch on a segment page with spin-retry for concurrent access.
+    /// Unlike <see cref="LogicalSegment.GetPageExclusive"/> which asserts on latch failure,
+    /// this method handles contention from concurrent AllocateUowId/Release calls on the same page.
+    /// </summary>
+    private PageAccessor LatchPageExclusive(int segPageIndex, long epoch, out int memPageIdx)
+    {
+        _mmf.RequestPageEpoch(_segment.Pages[segPageIndex], epoch, out memPageIdx);
+        while (!_mmf.TryLatchPageExclusive(memPageIdx))
+        {
+            Thread.SpinWait(1);
+            _mmf.RequestPageEpoch(_segment.Pages[segPageIndex], epoch, out memPageIdx);
+        }
+        return _mmf.GetPage(memPageIdx);
+    }
+
+    /// <summary>
+    /// Writes the State field of a registry entry to the persistent page. Caller must be inside an EpochGuard.
+    /// </summary>
+    private void WriteEntryState(int slotIndex, UnitOfWorkState newState, long epoch)
+    {
+        var (segPageIndex, itemIndex) = LogicalSegment.GetItemLocation(slotIndex, EntrySize);
+        var page = LatchPageExclusive(segPageIndex, epoch, out var memPageIdx);
+        var byteOffset = (page.IsRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (itemIndex * EntrySize);
+
+        var cs = _mmf.CreateChangeSet();
+        cs.AddByMemPageIndex(memPageIdx);
+
+        var entries = page.RawData<UowRegistryEntry>(byteOffset, 1);
+        entries[0].State = newState;
+
+        _mmf.UnlatchPageExclusive(memPageIdx);
+        cs.SaveChanges();
+    }
+
+    /// <summary>
+    /// Writes multiple fields of a registry entry using a transform delegate. Caller must be inside an EpochGuard.
+    /// </summary>
+    private void WriteEntryFields(int slotIndex, long epoch, Func<UowRegistryEntry, UowRegistryEntry> transform)
+    {
+        var (segPageIndex, itemIndex) = LogicalSegment.GetItemLocation(slotIndex, EntrySize);
+        var page = LatchPageExclusive(segPageIndex, epoch, out var memPageIdx);
+        var byteOffset = (page.IsRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (itemIndex * EntrySize);
+
+        var cs = _mmf.CreateChangeSet();
+        cs.AddByMemPageIndex(memPageIdx);
+
+        var entries = page.RawData<UowRegistryEntry>(byteOffset, 1);
+        entries[0] = transform(entries[0]);
+
+        _mmf.UnlatchPageExclusive(memPageIdx);
+        cs.SaveChanges();
+    }
+
+    /// <summary>
+    /// Initializes a freshly allocated entry on the persistent page.
+    /// </summary>
+    private void InitializeEntry(int slotIndex)
+    {
+        using var guard = EpochGuard.Enter(_epochManager);
+        var epoch = guard.Epoch;
+        var (segPageIndex, itemIndex) = LogicalSegment.GetItemLocation(slotIndex, EntrySize);
+        var page = LatchPageExclusive(segPageIndex, epoch, out var memPageIdx);
+        var byteOffset = (page.IsRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (itemIndex * EntrySize);
+
+        var cs = _mmf.CreateChangeSet();
+        cs.AddByMemPageIndex(memPageIdx);
+
+        var entries = page.RawData<UowRegistryEntry>(byteOffset, 1);
+        entries[0] = new UowRegistryEntry
+        {
+            State = UnitOfWorkState.Pending,
+            CreatedTicks = Stopwatch.GetTimestamp(),
+            TransactionCount = 0,
+            CommittedTicks = 0,
+            MaxTSN = 0
+        };
+
+        _mmf.UnlatchPageExclusive(memPageIdx);
+        cs.SaveChanges();
+    }
+
+    /// <summary>
+    /// Ensures the segment has enough pages to store entries up to the given capacity.
+    /// </summary>
+    private void EnsureCapacity(int needed)
+    {
+        if (needed <= _currentCapacity)
+        {
+            return;
+        }
+
+        // Calculate pages needed
+        var pagesNeeded = 1; // Root page
+        if (needed > RootCapacity)
+        {
+            pagesNeeded += (needed - RootCapacity + OverflowCapacity - 1) / OverflowCapacity;
+        }
+
+        if (pagesNeeded > _segment.Length)
+        {
+            _segment.Grow(pagesNeeded, true);
+        }
+
+        _currentCapacity = ComputeCapacity(_segment.Length);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Bitmap Helpers
+    // ═══════════════════════════════════════════════════════════════
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SetAllocationBit(int slotIndex)
+    {
+        var wordIndex = slotIndex >> 6;
+        var bitMask = 1UL << (slotIndex & 63);
+        _allocationBitmap[wordIndex] |= bitMask;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SetCommittedBit(int slotIndex)
+    {
+        var wordIndex = slotIndex >> 6;
+        var bitMask = 1UL << (slotIndex & 63);
+        _committedBitmap[wordIndex] |= bitMask;
+    }
+
+    /// <summary>
+    /// Computes entry capacity for a given number of segment pages.
+    /// </summary>
+    private static int ComputeCapacity(int pageCount)
+    {
+        if (pageCount <= 0)
+        {
+            return 0;
+        }
+
+        // Root page: 150 entries. Each overflow page: 200 entries.
+        return RootCapacity + ((pageCount - 1) * OverflowCapacity);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Size Validation
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Compile-time size validation. Called from tests to verify struct layout.
+    /// </summary>
+    internal static unsafe int EntryStructSize => sizeof(UowRegistryEntry);
+
+    // ═══════════════════════════════════════════════════════════════
+    // IDisposable
+    // ═══════════════════════════════════════════════════════════════
+
+    // Registry does not own the segment — DatabaseEngine manages segment lifecycle
+    public void Dispose() => _slotFreed.Dispose();
+}

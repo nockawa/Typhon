@@ -169,7 +169,7 @@ class OwnerAggregatesTests : TestBase<OwnerAggregatesTests>
         var initialAllocated = writer.CapacityCurrent;
 
         // Create some entities to allocate chunks
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             for (int i = 0; i < 10; i++)
             {
@@ -409,7 +409,7 @@ class OwnerAggregatesTests : TestBase<OwnerAggregatesTests>
         var baselineAllocated = writer.CapacityCurrent ?? 0;
 
         // Create entities to allocate chunks
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             for (int i = 0; i < 100; i++)
             {

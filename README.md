@@ -36,7 +36,7 @@ public struct Player
 using var dbe = serviceProvider.GetRequiredService<DatabaseEngine>();
 dbe.RegisterComponent<Player>();
 
-using var tx = dbe.CreateTransaction();
+using var tx = dbe.CreateQuickTransaction();
 
 // Create an entity
 var player = new Player { PlayerId = 42, Health = 100f, Name = "Alice" };

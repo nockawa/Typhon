@@ -8,14 +8,16 @@ internal ref struct ComponentRevision
     private ref ChunkAccessor _accessor;
     private readonly Transaction.ComponentInfoBase _info;
     private readonly int _firstChunkId;
+    private readonly ushort _uowId;
     private readonly ref Transaction.ComponentInfoBase.CompRevInfo _compRevInfo;
 
     internal ComponentRevision(Transaction.ComponentInfoBase info, ref Transaction.ComponentInfoBase.CompRevInfo compRevInfo, int firstChunkId,
-        ref ChunkAccessor accessor)
+        ref ChunkAccessor accessor, ushort uowId = 0)
     {
         _accessor = ref accessor;
         _info = info;
         _firstChunkId = firstChunkId;
+        _uowId = uowId;
         _compRevInfo = ref compRevInfo;
     }
 
@@ -25,8 +27,8 @@ internal ref struct ComponentRevision
     internal ComponentRevisionManager.ElementRevisionHandle GetRevisionElement(short revisionIndex)
         => ComponentRevisionManager.GetRevisionElement(ref _accessor, _firstChunkId, revisionIndex);
     internal void AddCompRev(long tsn, bool isDelete)
-        => ComponentRevisionManager.AddCompRev(_info, ref _compRevInfo, tsn, isDelete);
-    internal int AllocCompRevStorage(long tsn) => ComponentRevisionManager.AllocCompRevStorage(_info, tsn, _firstChunkId);
+        => ComponentRevisionManager.AddCompRev(_info, ref _compRevInfo, tsn, _uowId, isDelete);
+    internal int AllocCompRevStorage(long tsn) => ComponentRevisionManager.AllocCompRevStorage(_info, tsn, _uowId, _firstChunkId);
     internal bool CleanUpUnusedEntries(long nextMinTSN)
         => ComponentRevisionManager.CleanUpUnusedEntries(_info, ref _compRevInfo, ref _accessor, nextMinTSN);
 

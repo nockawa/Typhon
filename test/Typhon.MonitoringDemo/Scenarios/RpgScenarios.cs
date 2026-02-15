@@ -33,7 +33,7 @@ public class RpgWorldSimulationScenario : IScenario
                 var sw = Stopwatch.GetTimestamp();
                 try
                 {
-                    using var t = engine.CreateTransaction();
+                    using var t = engine.CreateQuickTransaction();
                     var ops = localRand.Next(5, 20);
 
                     for (var i = 0; i < ops && !ct.IsCancellationRequested; i++)
@@ -121,7 +121,7 @@ public class RpgWorldSimulationScenario : IScenario
 
     private async Task BootstrapEntitiesAsync(DatabaseEngine engine, Random rand, CancellationToken ct)
     {
-        using var t = engine.CreateTransaction();
+        using var t = engine.CreateQuickTransaction();
 
         // Create initial characters
         var playerNames = new[] { "Hero", "Warrior", "Mage", "Rogue", "Cleric" };
@@ -172,7 +172,7 @@ public class RpgCombatScenario : IScenario
                 var sw = Stopwatch.GetTimestamp();
                 try
                 {
-                    using var t = engine.CreateTransaction();
+                    using var t = engine.CreateQuickTransaction();
 
                     // Simulate a combat round
                     var actions = localRand.Next(5, 15);
@@ -249,7 +249,7 @@ public class RpgCombatScenario : IScenario
 
     private async Task BootstrapEntitiesAsync(DatabaseEngine engine, Random rand, CancellationToken ct)
     {
-        using var t = engine.CreateTransaction();
+        using var t = engine.CreateQuickTransaction();
 
         var combatantNames = new[] { "Fighter", "Berserker", "Archer", "Wizard", "Healer" };
         var skillNames = new[] { "Slash", "Fireball", "Heal", "Shield Bash", "Backstab" };
@@ -311,7 +311,7 @@ public class RpgQuestingScenario : IScenario
                 var sw = Stopwatch.GetTimestamp();
                 try
                 {
-                    using var t = engine.CreateTransaction();
+                    using var t = engine.CreateQuickTransaction();
                     var ops = localRand.Next(5, 15);
 
                     for (var i = 0; i < ops && !ct.IsCancellationRequested; i++)
@@ -398,7 +398,7 @@ public class RpgQuestingScenario : IScenario
 
     private async Task BootstrapEntitiesAsync(DatabaseEngine engine, Random rand, CancellationToken ct)
     {
-        using var t = engine.CreateTransaction();
+        using var t = engine.CreateQuickTransaction();
 
         var heroNames = new[] { "Aldric", "Elara", "Theron", "Lyra", "Gareth" };
 

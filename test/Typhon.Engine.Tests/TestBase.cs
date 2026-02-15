@@ -178,7 +178,7 @@ public abstract class TestBase{
     {
         RegisterComponents(dbe);
         
-        var cur = t ?? dbe.CreateTransaction();
+        var cur = t ?? dbe.CreateQuickTransaction();
 
         var res = new long[count];
         for (int i = 0; i < count; i++)
@@ -200,7 +200,7 @@ public abstract class TestBase{
     {
         RegisterComponents(dbe);
 
-        var cur = t ?? dbe.CreateTransaction();
+        var cur = t ?? dbe.CreateQuickTransaction();
         
         for (var i = 0; i < pks.Length; i++)
         {
@@ -227,7 +227,7 @@ public abstract class TestBase{
     {
         RegisterComponents(dbe);
 
-        var cur = t ?? dbe.CreateTransaction();
+        var cur = t ?? dbe.CreateQuickTransaction();
         
         for (var i = 0; i < pks.Length; i++)
         {

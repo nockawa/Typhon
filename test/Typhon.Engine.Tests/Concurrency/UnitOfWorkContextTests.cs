@@ -15,7 +15,7 @@ public class UnitOfWorkContextTests
     [Test]
     public void StructSize_Is24Bytes()
     {
-        // 16B WaitContext + 2B EpochId + 2B padding + 4B holdoffCount = 24
+        // 16B WaitContext + 2B UowId + 2B padding + 4B holdoffCount = 24
         Assert.That(Unsafe.SizeOf<UnitOfWorkContext>(), Is.EqualTo(24));
     }
 
@@ -78,11 +78,11 @@ public class UnitOfWorkContextTests
     }
 
     [Test]
-    public void Constructor_WithEpochId_PreservesId()
+    public void Constructor_WithUowId_PreservesId()
     {
-        var ctx = new UnitOfWorkContext(WaitContext.FromTimeout(TimeSpan.FromSeconds(1)), epochId: 42);
+        var ctx = new UnitOfWorkContext(WaitContext.FromTimeout(TimeSpan.FromSeconds(1)), uowId: 42);
 
-        Assert.That(ctx.EpochId, Is.EqualTo(42));
+        Assert.That(ctx.UowId, Is.EqualTo(42));
     }
 
     [Test]
@@ -90,10 +90,10 @@ public class UnitOfWorkContextTests
     {
         var deadline = Deadline.FromTimeout(TimeSpan.FromSeconds(5));
         using var cts = new CancellationTokenSource();
-        var ctx = new UnitOfWorkContext(deadline, cts.Token, epochId: 7);
+        var ctx = new UnitOfWorkContext(deadline, cts.Token, uowId: 7);
 
         Assert.That(ctx.Deadline, Is.EqualTo(deadline));
-        Assert.That(ctx.EpochId, Is.EqualTo(7));
+        Assert.That(ctx.UowId, Is.EqualTo(7));
     }
 
     // ========================================

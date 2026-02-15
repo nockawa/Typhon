@@ -127,22 +127,30 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
     internal TransactionChain TransactionChain { get; }
     internal DeferredCleanupManager DeferredCleanupManager { get; }
+    internal UowRegistry UowRegistry { get; private set; }
 
     /// <summary>
-    /// Create a transaction in order to make Queries and CRUD operation on the database
+    /// Creates a new Unit of Work — the durability boundary for user operations. All transactions must be created through a UoW.
     /// </summary>
-    /// <returns>The transaction object</returns>
-    /// <remarks>
-    /// Typhon deals with accesses and changes through transaction only, even for query purpose. When the user creates a transaction, "now" (the
-    /// time when the transaction was created) is used as the reference point, every access will be based on the data that existed up to this point.
-    /// Every change will be isolated from other transactions until the content is committed.
-    /// </remarks>
-    [return: TransfersOwnership] 
-    public Transaction CreateTransaction()
+    /// <param name="durabilityMode">Controls when WAL records become crash-safe. Default is <see cref="DurabilityMode.Deferred"/>.</param>
+    /// <param name="timeout">Lifetime timeout for this UoW. Default uses <see cref="TimeoutOptions.DefaultUowTimeout"/>.</param>
+    /// <returns>A new <see cref="UnitOfWork"/> in <see cref="UnitOfWorkState.Pending"/> state.</returns>
+    /// <exception cref="ResourceExhaustedException">All UoW registry slots are in use and the deadline expired.</exception>
+    [return: TransfersOwnership]
+    public UnitOfWork CreateUnitOfWork(DurabilityMode durabilityMode = DurabilityMode.Deferred, TimeSpan timeout = default)
     {
-        Interlocked.Increment(ref _transactionsCreated);
-        return TransactionChain.CreateTransaction(this);
+        var effectiveTimeout = timeout == default ? TimeoutOptions.Current.DefaultUowTimeout : timeout;
+        var wc = WaitContext.FromTimeout(effectiveTimeout);
+
+        // Back-pressure: if registry is full, wait for a slot to be freed.
+        // The admission check is a fast-path optimization — AllocateUowId's CAS provides the real atomicity (TOCTOU by design).
+        var uowId = UowRegistry.AllocateUowId(ref wc);
+
+        return new UnitOfWork(this, durabilityMode, uowId, effectiveTimeout);
     }
+
+    /// <summary>Records that a transaction was created (for observability counters).</summary>
+    internal void RecordTransactionCreated() => Interlocked.Increment(ref _transactionsCreated);
 
     public DatabaseEngine(IResourceRegistry resourceRegistry, EpochManager epochManager, DeadlineWatchdog watchdog,
         ManagedPagedMMF mmf, DatabaseEngineOptions options, ILogger<DatabaseEngine> log, string name = null) :
@@ -162,6 +170,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
         DBD = new DatabaseDefinitions();
         ConstructComponentStore();
+        InitializeUowRegistry();
 
         if (MMF.IsDatabaseFileCreating)
         {
@@ -181,6 +190,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         if (disposing)
         {
             TransactionChain.Dispose();
+            UowRegistry?.Dispose();
             MMF.Dispose();
         }
         base.Dispose(disposing);
@@ -191,6 +201,52 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     {
         _componentTableByType = new ConcurrentDictionary<Type, ComponentTable>();
         _curPrimaryKey = 0;
+    }
+
+    private void InitializeUowRegistry()
+    {
+        using var guard = EpochGuard.Enter(EpochManager);
+        var epoch = guard.Epoch;
+
+        if (MMF.IsDatabaseFileCreating)
+        {
+            // Creating path: allocate a 1-page segment for the registry (150 entries)
+            var cs = MMF.CreateChangeSet();
+            var segment = MMF.AllocateSegment(PageBlockType.None, 1, cs);
+
+            // Clear the data area so all entries start as Free (State = 0)
+            var page = segment.GetPageExclusive(0, epoch, out var memPageIdx);
+            cs.AddByMemPageIndex(memPageIdx);
+            var offset = LogicalSegment.RootHeaderIndexSectionLength;
+            page.RawData<byte>(offset, PagedMMF.PageRawDataSize - offset).Clear();
+            MMF.UnlatchPageExclusive(memPageIdx);
+
+            // Write SPI to root header
+            MMF.RequestPageEpoch(0, epoch, out var rootMemPageIdx);
+            var rootLatched = MMF.TryLatchPageExclusive(rootMemPageIdx);
+            Debug.Assert(rootLatched, "TryLatchPageExclusive failed on root page during registry init");
+            var rootPage = MMF.GetPage(rootMemPageIdx);
+            cs.AddByMemPageIndex(rootMemPageIdx);
+            ref var header = ref rootPage.As<RootFileHeader>();
+            header.UowRegistrySPI = segment.RootPageIndex;
+            MMF.UnlatchPageExclusive(rootMemPageIdx);
+
+            cs.SaveChanges();
+
+            UowRegistry = new UowRegistry(segment, MMF, EpochManager);
+            UowRegistry.Initialize();
+        }
+        else
+        {
+            // Loading path: read SPI from root header
+            MMF.RequestPageEpoch(0, epoch, out var rootMemPageIdx);
+            var rootPage = MMF.GetPage(rootMemPageIdx);
+            ref var header = ref rootPage.As<RootFileHeader>();
+            var spi = header.UowRegistrySPI;
+            var segment = MMF.GetSegment(spi);
+            UowRegistry = new UowRegistry(segment, MMF, EpochManager);
+            UowRegistry.LoadFromDisk();
+        }
     }
 
     private static int RoundToStandardStride(int size) =>
@@ -242,7 +298,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         _componentsTable = GetComponentTable<ComponentR1>();
 
         using var guard = EpochGuard.Enter(EpochManager);
-        var epoch = EpochManager.GlobalEpoch;
+        var epoch = guard.Epoch;
 
         MMF.RequestPageEpoch(0, epoch, out var memPageIdx);
         var latched = MMF.TryLatchPageExclusive(memPageIdx);
@@ -269,7 +325,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     private void SaveInSystemSchema(ComponentTable table)
     {
         var definition = table.Definition;
-        using var t = CreateTransaction();
+        using var t = this.CreateQuickTransaction();
 
         var comp = new ComponentR1
         {

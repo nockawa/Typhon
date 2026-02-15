@@ -24,7 +24,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var a = new CompA(100, 1.5f, 2.5);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             Assert.That(entityId, Is.Not.Zero, "Entity ID should be non-zero");
@@ -35,7 +35,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Verify entity is readable in new transaction
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA read);
             Assert.That(res, Is.True, "Read should succeed");
@@ -59,7 +59,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var c = new CompC("TestString");
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, ref b, ref c);
             Assert.That(entityId, Is.Not.Zero);
@@ -70,7 +70,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Verify all components are readable
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA readA, out CompB readB, out CompC readC);
             Assert.That(res, Is.True, "Read should succeed");
@@ -92,7 +92,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
 
         long[] entityIds = new long[10];
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             for (int i = 0; i < 10; i++)
             {
@@ -113,7 +113,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Verify all entities are readable with correct values
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             for (int i = 0; i < 10; i++)
             {
@@ -137,14 +137,14 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
 
         for (int i = 0; i < 5; i++)
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var a = new CompA(i * 50);
             entityIds[i] = t.CreateEntity(ref a);
             t.Commit();
         }
 
         // Verify all entities are readable
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             for (int i = 0; i < 5; i++)
             {
@@ -167,7 +167,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var a = new CompA(999);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             Assert.That(entityId, Is.Not.Zero);
@@ -177,7 +177,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Verify entity is not readable
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA _);
             Assert.That(res, Is.False, "Entity should not be readable after rollback");
@@ -194,7 +194,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
 
         var a = new CompA(123, 4.56f, 7.89);
         var entityId = t.CreateEntity(ref a);
@@ -222,7 +222,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
 
         // Try to read an entity that was never created
         var res = t.ReadEntity(999999L, out CompA _);
@@ -242,13 +242,13 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var a = new CompA(42);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             t.Commit();
         }
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             for (int i = 0; i < 5; i++)
             {
@@ -272,14 +272,14 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var b = new CompB(20, 3.0f);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, ref b);
             t.Commit();
         }
 
         // Read individual components
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res1 = t.ReadEntity(entityId, out CompA readA);
             Assert.That(res1, Is.True);
@@ -292,7 +292,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Read both components together
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA readA, out CompB readB);
             Assert.That(res, Is.True);
@@ -313,14 +313,14 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var a = new CompA(100);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             t.Commit();
         }
 
         // Try to read CompB which wasn't added to this entity
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompB _);
             Assert.That(res, Is.False, "Reading component not on entity should return false");
@@ -343,14 +343,14 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var a = new CompA(100);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             t.Commit();
         }
 
         // Update in separate transaction
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updated = new CompA(200, 3.0f, 4.0);
             var res = t.UpdateEntity(entityId, ref updated);
@@ -360,7 +360,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Verify update
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA read);
             Assert.That(res, Is.True);
@@ -379,7 +379,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
 
         var a = new CompA(100);
         var entityId = t.CreateEntity(ref a);
@@ -400,7 +400,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         t.Commit();
 
         // Verify after commit in new transaction
-        using var t2 = dbe.CreateTransaction();
+        using var t2 = dbe.CreateQuickTransaction();
         t2.ReadEntity(entityId, out CompA read2);
         Assert.That(read2.A, Is.EqualTo(200));
         Assert.That(t2.GetComponentRevision<CompA>(entityId), Is.EqualTo(1));
@@ -418,13 +418,13 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var a = new CompA(0);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             t.Commit();
         }
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             for (int i = 1; i <= 5; i++)
             {
@@ -443,7 +443,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Verify final state
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.ReadEntity(entityId, out CompA read);
             Assert.That(read.A, Is.EqualTo(500));
@@ -462,7 +462,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var a = new CompA(0);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             t.Commit();
@@ -470,7 +470,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
 
         for (int i = 1; i <= 5; i++)
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var updated = new CompA(i * 100);
             t.UpdateEntity(entityId, ref updated);
             Assert.That(t.GetComponentRevision<CompA>(entityId), Is.EqualTo(i + 1),
@@ -479,7 +479,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Verify final state
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.ReadEntity(entityId, out CompA read);
             Assert.That(read.A, Is.EqualTo(500));
@@ -499,14 +499,14 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var a = new CompA(100);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             t.Commit();
         }
 
         // Update and rollback
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updated = new CompA(999);
             t.UpdateEntity(entityId, ref updated);
@@ -519,7 +519,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // After rollback, should see original value
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA read);
             Assert.That(res, Is.True, "Entity should still be readable after rollback");
@@ -537,7 +537,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
         var a = new CompA(100);
         var res = t.UpdateEntity(999999L, ref a);
         Assert.That(res, Is.False, "Updating non-existent entity should return false");
@@ -556,14 +556,14 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var b = new CompB(20, 3.0f);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, ref b);
             t.Commit();
         }
 
         // Update both components
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updatedA = new CompA(100);
             var updatedB = new CompB(200, 30.0f);
@@ -572,7 +572,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Verify both were updated
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.ReadEntity(entityId, out CompA readA, out CompB readB);
             Assert.That(readA.A, Is.EqualTo(100));
@@ -593,14 +593,14 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var a = new CompA(100);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             t.Commit();
         }
 
         // Read then update in same transaction
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA read);
             Assert.That(res, Is.True);
@@ -618,7 +618,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Verify final value
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.ReadEntity(entityId, out CompA read);
             Assert.That(read.A, Is.EqualTo(150));
@@ -641,14 +641,14 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var a = new CompA(100);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             t.Commit();
         }
 
         // Delete in separate transaction
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.DeleteEntity<CompA>(entityId);
             Assert.That(res, Is.True, "Delete should succeed");
@@ -656,7 +656,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Verify entity is not readable
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA _);
             Assert.That(res, Is.False, "Entity should not be readable after delete");
@@ -675,7 +675,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
 
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var a = new CompA(100);
             entityId = t.CreateEntity(ref a);
@@ -688,7 +688,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Verify entity is not readable
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA _);
             Assert.That(res, Is.False, "Entity should not be readable");
@@ -707,14 +707,14 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var a = new CompA(100);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             t.Commit();
         }
 
         // Delete and rollback
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var deleted = t.DeleteEntity<CompA>(entityId);
             Assert.That(deleted, Is.True);
@@ -723,7 +723,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // After rollback, entity should be readable
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA read);
             Assert.That(res, Is.True, "Entity should be readable after rollback");
@@ -741,7 +741,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
         var res = t.DeleteEntity<CompA>(999999L);
         Assert.That(res, Is.False, "Deleting non-existent entity should return false");
     }
@@ -760,14 +760,14 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var c = new CompC("Test");
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, ref b, ref c);
             t.Commit();
         }
 
         // Delete all components
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.DeleteEntity<CompA, CompB, CompC>(entityId);
             Assert.That(res, Is.True);
@@ -775,7 +775,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Verify none are readable
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             Assert.That(t.ReadEntity(entityId, out CompA _), Is.False);
             Assert.That(t.ReadEntity(entityId, out CompB _), Is.False);
@@ -796,14 +796,14 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var b = new CompB(20, 3.0f);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, ref b);
             t.Commit();
         }
 
         // Delete only CompA
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.DeleteEntity<CompA>(entityId);
             Assert.That(res, Is.True);
@@ -811,7 +811,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // CompA should be deleted, CompB should remain
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             Assert.That(t.ReadEntity(entityId, out CompA _), Is.False, "CompA should be deleted");
             Assert.That(t.ReadEntity(entityId, out CompB readB), Is.True, "CompB should remain");
@@ -831,14 +831,14 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var a = new CompA(100);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             t.Commit();
         }
 
         // First delete
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.DeleteEntity<CompA>(entityId);
             Assert.That(res, Is.True);
@@ -846,7 +846,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Second delete attempt
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.DeleteEntity<CompA>(entityId);
             Assert.That(res, Is.False, "Second delete should return false");
@@ -869,21 +869,21 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var a = new CompA(100);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             t.Commit();
         }
 
         // Delete
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.DeleteEntity<CompA>(entityId);
             t.Commit();
         }
 
         // Try to update deleted entity
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updated = new CompA(999);
             var res = t.UpdateEntity(entityId, ref updated);
@@ -904,21 +904,21 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         long entityId;
 
         // Create
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             t.Commit();
         }
 
         // Delete and rollback
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.DeleteEntity<CompA>(entityId);
             t.Rollback();
         }
 
         // Entity should be readable
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA read);
             Assert.That(res, Is.True, "Entity should be readable after delete rollback");
@@ -938,14 +938,14 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var a = new CompA(100);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             t.Commit();
         }
 
         // Update then delete, then rollback
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updated = new CompA(999);
             t.UpdateEntity(entityId, ref updated);
@@ -954,7 +954,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Should see original value
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA read);
             Assert.That(res, Is.True, "Entity should be readable");
@@ -978,17 +978,17 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var a = new CompA(100);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             t.Commit();
         }
 
         // Start a long-running transaction
-        using var earlyTxn = dbe.CreateTransaction();
+        using var earlyTxn = dbe.CreateQuickTransaction();
 
         // Update in another transaction
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updated = new CompA(200);
             t.UpdateEntity(entityId, ref updated);
@@ -1001,7 +1001,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         Assert.That(earlyTxn.GetComponentRevision<CompA>(entityId), Is.EqualTo(1));
 
         // New transaction should see updated value
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.ReadEntity(entityId, out CompA readNew);
             Assert.That(readNew.A, Is.EqualTo(200), "New transaction should see updated value");
@@ -1020,17 +1020,17 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var a = new CompA(100);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             t.Commit();
         }
 
         // Start a long-running transaction
-        using var earlyTxn = dbe.CreateTransaction();
+        using var earlyTxn = dbe.CreateQuickTransaction();
 
         // Delete in another transaction
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.DeleteEntity<CompA>(entityId);
             t.Commit();
@@ -1042,7 +1042,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         Assert.That(read.A, Is.EqualTo(100));
 
         // New transaction should not see the entity
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var resNew = t.ReadEntity(entityId, out CompA _);
             Assert.That(resNew, Is.False, "New transaction should not see deleted entity");
@@ -1061,26 +1061,26 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var a = new CompA(0);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             t.Commit();
         }
         
         // Start a long-running transaction
-        using var longRunningTxn = dbe.CreateTransaction();
+        using var longRunningTxn = dbe.CreateQuickTransaction();
 
         // Perform multiple updates
         for (int i = 1; i <= 5; i++)
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var updated = new CompA(i * 100);
             t.UpdateEntity(entityId, ref updated);
             t.Commit();
         }
 
         // Check revision count while long-running transaction is active
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var revCount = t.GetRevisionCount<CompA>(entityId);
             Assert.That(revCount, Is.GreaterThan(1),
@@ -1114,13 +1114,13 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var a = new CompA(); // All default values (0, 0, 0)
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             t.Commit();
         }
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA read);
             Assert.That(res, Is.True);
@@ -1142,13 +1142,13 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var a = new CompA(int.MaxValue, float.MaxValue, double.MaxValue);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             t.Commit();
         }
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA read);
             Assert.That(res, Is.True);
@@ -1158,14 +1158,14 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Update to min values
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updated = new CompA(int.MinValue, float.MinValue, double.MinValue);
             t.UpdateEntity(entityId, ref updated);
             t.Commit();
         }
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.ReadEntity(entityId, out CompA read);
             Assert.That(read.A, Is.EqualTo(int.MinValue));
@@ -1186,13 +1186,13 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var a = new CompA(-100, -1.5f, -2.5);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             t.Commit();
         }
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA read);
             Assert.That(res, Is.True);
@@ -1216,7 +1216,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
             long entityId;
 
             // Create
-            using (var t = dbe.CreateTransaction())
+            using (var t = dbe.CreateQuickTransaction())
             {
                 var a = new CompA(cycle);
                 entityId = t.CreateEntity(ref a);
@@ -1224,7 +1224,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
             }
 
             // Update
-            using (var t = dbe.CreateTransaction())
+            using (var t = dbe.CreateQuickTransaction())
             {
                 var updated = new CompA(cycle * 100);
                 t.UpdateEntity(entityId, ref updated);
@@ -1232,7 +1232,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
             }
 
             // Read and verify
-            using (var t = dbe.CreateTransaction())
+            using (var t = dbe.CreateQuickTransaction())
             {
                 var res = t.ReadEntity(entityId, out CompA read);
                 Assert.That(res, Is.True, $"Cycle {cycle}: Read should succeed");
@@ -1240,14 +1240,14 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
             }
 
             // Delete
-            using (var t = dbe.CreateTransaction())
+            using (var t = dbe.CreateQuickTransaction())
             {
                 t.DeleteEntity<CompA>(entityId);
                 t.Commit();
             }
 
             // Verify deleted
-            using (var t = dbe.CreateTransaction())
+            using (var t = dbe.CreateQuickTransaction())
             {
                 var res = t.ReadEntity(entityId, out CompA _);
                 Assert.That(res, Is.False, $"Cycle {cycle}: Entity should be deleted");
@@ -1264,7 +1264,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        var t = dbe.CreateTransaction();
+        var t = dbe.CreateQuickTransaction();
         var a = new CompA(100);
         var entityId = t.CreateEntity(ref a);
         t.Commit();
@@ -1286,13 +1286,13 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var c = new CompC("");
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref c);
             t.Commit();
         }
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompC read);
             Assert.That(res, Is.True);
@@ -1312,7 +1312,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var a = new CompA(42);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             t.Commit();
@@ -1322,7 +1322,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var transactions = new Transaction[5];
         for (int i = 0; i < 5; i++)
         {
-            transactions[i] = dbe.CreateTransaction();
+            transactions[i] = dbe.CreateQuickTransaction();
         }
 
         // All should read the same value
@@ -1351,21 +1351,21 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
 
         long entityId1, entityId2, entityId3;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var a = new CompA(1);
             entityId1 = t.CreateEntity(ref a);
             t.Commit();
         }
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var a = new CompA(2);
             entityId2 = t.CreateEntity(ref a);
             t.Commit();
         }
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var a = new CompA(3);
             entityId3 = t.CreateEntity(ref a);
@@ -1378,7 +1378,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         Assert.That(entityId1, Is.Not.EqualTo(entityId3));
 
         // All entities should be readable with correct values
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.ReadEntity(entityId1, out CompA read1);
             t.ReadEntity(entityId2, out CompA read2);
@@ -1408,7 +1408,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         long entityId;
 
         // Create
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref d);
             Assert.That(t.GetComponentRevision<CompD>(entityId), Is.EqualTo(1));
@@ -1416,7 +1416,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Read
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompD read);
             Assert.That(res, Is.True);
@@ -1426,7 +1426,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Update
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updated = new CompD(10.0f, 20, 30.0);
             t.UpdateEntity(entityId, ref updated);
@@ -1435,7 +1435,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Verify update
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.ReadEntity(entityId, out CompD read);
             Assert.That(read.A, Is.EqualTo(10.0f));
@@ -1444,14 +1444,14 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Delete
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.DeleteEntity<CompD>(entityId);
             t.Commit();
         }
 
         // Verify deleted
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompD _);
             Assert.That(res, Is.False);
@@ -1471,14 +1471,14 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var d = new CompD(1.0f, 100, 3.0);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref d);
             t.Commit();
         }
 
         // Update the indexed field B
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updated = new CompD(1.0f, 200, 3.0); // Only B changed
             t.UpdateEntity(entityId, ref updated);
@@ -1486,7 +1486,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Verify the change
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.ReadEntity(entityId, out CompD read);
             Assert.That(read.B, Is.EqualTo(200), "Indexed field should be updated");
@@ -1506,14 +1506,14 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         var d = new CompD(1.0f, 100, 3.0);
         long entityId;
 
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref d);
             t.Commit();
         }
 
         // Update and rollback
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updated = new CompD(10.0f, 999, 30.0);
             t.UpdateEntity(entityId, ref updated);
@@ -1521,7 +1521,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Original values should be preserved
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.ReadEntity(entityId, out CompD read);
             Assert.That(read.A, Is.EqualTo(1.0f));
@@ -1547,7 +1547,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         long entityId;
 
         // Create
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             Assert.That(t.GetComponentRevision<CompA>(entityId), Is.EqualTo(1));
@@ -1555,7 +1555,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Read and verify
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA read);
             Assert.That(res, Is.True);
@@ -1564,7 +1564,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Update
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updated = new CompA(200, 3.0f, 4.0);
             t.UpdateEntity(entityId, ref updated);
@@ -1573,7 +1573,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Read updated value
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.ReadEntity(entityId, out CompA read);
             Assert.That(read.A, Is.EqualTo(200));
@@ -1582,14 +1582,14 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Delete
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.DeleteEntity<CompA>(entityId);
             t.Commit();
         }
 
         // Try to read - should fail
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA _);
             Assert.That(res, Is.False, "Deleted entity should not be readable");
@@ -1609,7 +1609,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         long entityId1, entityId2;
 
         // Create first entity
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var a = new CompA(100);
             entityId1 = t.CreateEntity(ref a);
@@ -1617,7 +1617,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Create second entity and update first
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var a2 = new CompA(200);
             entityId2 = t.CreateEntity(ref a2);
@@ -1629,7 +1629,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Update second entity
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updated2 = new CompA(250);
             t.UpdateEntity(entityId2, ref updated2);
@@ -1637,7 +1637,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Verify final state
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.ReadEntity(entityId1, out CompA read1);
             t.ReadEntity(entityId2, out CompA read2);
@@ -1663,14 +1663,14 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         long entityId;
 
         // Create and commit
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a);
             t.Commit();
         }
 
         // Update to 200, commit
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var u = new CompA(200);
             t.UpdateEntity(entityId, ref u);
@@ -1678,7 +1678,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Update to 300, rollback
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var u = new CompA(300);
             t.UpdateEntity(entityId, ref u);
@@ -1686,7 +1686,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Update to 400, commit
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var u = new CompA(400);
             t.UpdateEntity(entityId, ref u);
@@ -1694,7 +1694,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Update to 500, rollback
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var u = new CompA(500);
             t.UpdateEntity(entityId, ref u);
@@ -1702,7 +1702,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Final value should be 400
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.ReadEntity(entityId, out CompA read);
             Assert.That(read.A, Is.EqualTo(400), "Final value should be from last committed update");
@@ -1721,7 +1721,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         long[] entityIds = new long[3];
 
         // Create 3 entities with different component combinations
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var a1 = new CompA(100);
             var b1 = new CompB(110, 1.1f);
@@ -1738,7 +1738,7 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Update different entities
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var ua1 = new CompA(101);
             t.UpdateEntity(entityIds[0], ref ua1);
@@ -1750,14 +1750,14 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
         }
 
         // Delete entity 1's CompB, keep CompA
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.DeleteEntity<CompB>(entityIds[0]);
             t.Commit();
         }
 
         // Verify final state
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             // Entity 0: CompA updated, CompB deleted
             Assert.That(t.ReadEntity(entityIds[0], out CompA a0), Is.True);

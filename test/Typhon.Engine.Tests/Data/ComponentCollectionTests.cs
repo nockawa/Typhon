@@ -49,7 +49,7 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
 
         long e1;
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
 
             var a = new CompA(2);
             var e = new CompE_Eng(1);
@@ -72,7 +72,7 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
         }
 
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
 
             var res = t.ReadEntity(e1, out CompE_Eng e2);
             Assert.That(res, Is.True);
@@ -90,7 +90,7 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
         }
         
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
 
             var res = t.ReadEntity(e1, out CompE_Eng e2);
             Assert.That(res, Is.True);
@@ -112,7 +112,7 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
         }
         
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
 
             var res = t.ReadEntity(e1, out CompE_Eng e2);
             Assert.That(res, Is.True);
@@ -135,7 +135,7 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
 
         long e1;
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
 
             var a = new CompA(2);
             var e = new CompE_Eng(1);
@@ -158,7 +158,7 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
         }
 
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
 
             var res = t.ReadEntity(e1, out CompE_Eng e2);
             Assert.That(res, Is.True);
@@ -178,7 +178,7 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
         }
         
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
 
             var res = t.ReadEntity(e1, out CompE_Eng e2);
             Assert.That(res, Is.True);

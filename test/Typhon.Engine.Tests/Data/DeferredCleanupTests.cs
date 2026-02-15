@@ -15,12 +15,12 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         RegisterComponents(dbe);
 
         // T1 starts — becomes the tail (oldest active transaction)
-        using var t1 = dbe.CreateTransaction();
+        using var t1 = dbe.CreateQuickTransaction();
 
         // T2 creates entity E, commits and disposes
         long pk;
         {
-            using var t2 = dbe.CreateTransaction();
+            using var t2 = dbe.CreateQuickTransaction();
             var a = new CompA(10);
             pk = t2.CreateEntity(ref a);
             t2.Commit();
@@ -28,7 +28,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 
         // T3 updates entity E, commits and disposes
         {
-            using var t3 = dbe.CreateTransaction();
+            using var t3 = dbe.CreateQuickTransaction();
             var a = new CompA(20);
             t3.UpdateEntity(pk, ref a);
             t3.Commit();
@@ -36,7 +36,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 
         // Entity E should have 2 revisions (create + update), because T1 is blocking cleanup
         {
-            using var tCheck = dbe.CreateTransaction();
+            using var tCheck = dbe.CreateQuickTransaction();
             var revCount = tCheck.GetRevisionCount<CompA>(pk);
             Assert.That(revCount, Is.EqualTo(2), "Entity should have 2 revisions while tail is blocking cleanup");
         }
@@ -46,7 +46,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 
         // After T1 commits, deferred cleanup should have removed old revisions
         {
-            using var tVerify = dbe.CreateTransaction();
+            using var tVerify = dbe.CreateQuickTransaction();
             var revCount = tVerify.GetRevisionCount<CompA>(pk);
             Assert.That(revCount, Is.EqualTo(1), "Entity should have 1 revision after tail commits and deferred cleanup runs");
         }
@@ -59,12 +59,12 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         RegisterComponents(dbe);
 
         // T1 starts — becomes the tail
-        using var t1 = dbe.CreateTransaction();
+        using var t1 = dbe.CreateQuickTransaction();
 
         // T2 creates entity E, commits
         long pk;
         {
-            using var t2 = dbe.CreateTransaction();
+            using var t2 = dbe.CreateQuickTransaction();
             var a = new CompA(10);
             pk = t2.CreateEntity(ref a);
             t2.Commit();
@@ -72,7 +72,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 
         // T3 updates entity E, commits
         {
-            using var t3 = dbe.CreateTransaction();
+            using var t3 = dbe.CreateQuickTransaction();
             var a = new CompA(20);
             t3.UpdateEntity(pk, ref a);
             t3.Commit();
@@ -95,12 +95,12 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         RegisterComponents(dbe);
 
         // T1 starts — becomes the tail
-        using var t1 = dbe.CreateTransaction();
+        using var t1 = dbe.CreateQuickTransaction();
 
         // T2 creates entity E, commits
         long pk;
         {
-            using var t2 = dbe.CreateTransaction();
+            using var t2 = dbe.CreateQuickTransaction();
             var a = new CompA(10);
             pk = t2.CreateEntity(ref a);
             t2.Commit();
@@ -110,7 +110,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 
         // T3 updates the same entity E, commits
         {
-            using var t3 = dbe.CreateTransaction();
+            using var t3 = dbe.CreateQuickTransaction();
             var a = new CompA(20);
             t3.UpdateEntity(pk, ref a);
             t3.Commit();
@@ -130,12 +130,12 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         RegisterComponents(dbe);
 
         // T1 starts — becomes the tail
-        using var t1 = dbe.CreateTransaction();
+        using var t1 = dbe.CreateQuickTransaction();
 
         // T2 creates entity E, commits
         long pk;
         {
-            using var t2 = dbe.CreateTransaction();
+            using var t2 = dbe.CreateQuickTransaction();
             var a = new CompA(10);
             pk = t2.CreateEntity(ref a);
             t2.Commit();
@@ -143,7 +143,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 
         // T3 deletes entity E, commits
         {
-            using var t3 = dbe.CreateTransaction();
+            using var t3 = dbe.CreateQuickTransaction();
             t3.DeleteEntity<CompA>(pk);
             t3.Commit();
         }
@@ -164,13 +164,13 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         const int entityCount = 50;
 
         // T1 starts — becomes the tail
-        using var t1 = dbe.CreateTransaction();
+        using var t1 = dbe.CreateQuickTransaction();
 
         // Create many entities in separate transactions
         var pks = new long[entityCount];
         for (int i = 0; i < entityCount; i++)
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var a = new CompA(i);
             pks[i] = t.CreateEntity(ref a);
             t.Commit();
@@ -179,7 +179,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         // Update each entity once more
         for (int i = 0; i < entityCount; i++)
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var a = new CompA(i + 1000);
             t.UpdateEntity(pks[i], ref a);
             t.Commit();
@@ -187,7 +187,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 
         // All entities should have 2 revisions (blocked by T1)
         {
-            using var tCheck = dbe.CreateTransaction();
+            using var tCheck = dbe.CreateQuickTransaction();
             for (int i = 0; i < entityCount; i++)
             {
                 var revCount = tCheck.GetRevisionCount<CompA>(pks[i]);
@@ -200,7 +200,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 
         // All entities should now have 1 revision
         {
-            using var tVerify = dbe.CreateTransaction();
+            using var tVerify = dbe.CreateQuickTransaction();
             for (int i = 0; i < entityCount; i++)
             {
                 var revCount = tVerify.GetRevisionCount<CompA>(pks[i]);
@@ -219,7 +219,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 
         // Single transaction creates and commits — is its own tail
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var a = new CompA(42);
             t.CreateEntity(ref a);
             t.Commit();
@@ -236,13 +236,13 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         RegisterComponents(dbe);
 
         // T1 (tail, TSN=X), T2 (TSN=X+1) both active
-        using var t1 = dbe.CreateTransaction();
-        using var t2 = dbe.CreateTransaction();
+        using var t1 = dbe.CreateQuickTransaction();
+        using var t2 = dbe.CreateQuickTransaction();
 
         // T3 creates entity E, commits → enqueued with blockingTSN = T1.TSN
         long pk;
         {
-            using var t3 = dbe.CreateTransaction();
+            using var t3 = dbe.CreateQuickTransaction();
             var a = new CompA(10);
             pk = t3.CreateEntity(ref a);
             t3.Commit();
@@ -253,7 +253,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         // T4 updates same entity E, commits → same entity enqueued again
         // Should be a no-op because T1.TSN is already the oldest blocker
         {
-            using var t4 = dbe.CreateTransaction();
+            using var t4 = dbe.CreateQuickTransaction();
             var a = new CompA(20);
             t4.UpdateEntity(pk, ref a);
             t4.Commit();
@@ -276,35 +276,35 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         // Setup: create entities A and B, each with 1 revision (the create)
         long pkA, pkB;
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var a = new CompA(1);
             pkA = t.CreateEntity(ref a);
             t.Commit();
         }
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var a = new CompA(2);
             pkB = t.CreateEntity(ref a);
             t.Commit();
         }
 
         // Now start T_a (tail blocker) — all subsequent updates will be blocked by T_a
-        var t_a = dbe.CreateTransaction();
+        var t_a = dbe.CreateQuickTransaction();
 
         // Update entity A → creates 2nd revision, blocked by T_a
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var a = new CompA(11);
             t.UpdateEntity(pkA, ref a);
             t.Commit();
         }
 
         // Start T_b BEFORE updating entity B, so T_b has an intermediate TSN
-        var t_b = dbe.CreateTransaction();
+        var t_b = dbe.CreateQuickTransaction();
 
         // Update entity B → creates 2nd revision, blocked by T_a (still the tail)
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var a = new CompA(22);
             t.UpdateEntity(pkB, ref a);
             t.Commit();
@@ -312,7 +312,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 
         // Both entities should have 2 revisions
         {
-            using var tCheck = dbe.CreateTransaction();
+            using var tCheck = dbe.CreateQuickTransaction();
             Assert.That(tCheck.GetRevisionCount<CompA>(pkA), Is.EqualTo(2),
                 "Entity A should have 2 revisions while T_a is blocking");
             Assert.That(tCheck.GetRevisionCount<CompA>(pkB), Is.EqualTo(2),
@@ -333,7 +333,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 
         // Both entities should now have 1 revision — T_a was blocking both
         {
-            using var tCheck = dbe.CreateTransaction();
+            using var tCheck = dbe.CreateQuickTransaction();
             Assert.That(tCheck.GetRevisionCount<CompA>(pkA), Is.EqualTo(1),
                 "Entity A should have 1 revision after T_a committed");
             Assert.That(tCheck.GetRevisionCount<CompA>(pkB), Is.EqualTo(1),
@@ -359,17 +359,17 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         RegisterComponents(dbe);
 
         // T1 (tail), T2 creates entity + commits, T3 updates + commits → 2 revisions, queued
-        var t1 = dbe.CreateTransaction();
+        var t1 = dbe.CreateQuickTransaction();
 
         long pk;
         {
-            using var t2 = dbe.CreateTransaction();
+            using var t2 = dbe.CreateQuickTransaction();
             var a = new CompA(10);
             pk = t2.CreateEntity(ref a);
             t2.Commit();
         }
         {
-            using var t3 = dbe.CreateTransaction();
+            using var t3 = dbe.CreateQuickTransaction();
             var a = new CompA(20);
             t3.UpdateEntity(pk, ref a);
             t3.Commit();
@@ -377,7 +377,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 
         // Verify 2 revisions and queue has entries
         {
-            using var tCheck = dbe.CreateTransaction();
+            using var tCheck = dbe.CreateQuickTransaction();
             Assert.That(tCheck.GetRevisionCount<CompA>(pk), Is.EqualTo(2));
         }
         Assert.That(dbe.DeferredCleanupManager.QueueSize, Is.GreaterThan(0));
@@ -387,7 +387,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 
         // Verify entity has 1 revision and queue is empty
         {
-            using var tVerify = dbe.CreateTransaction();
+            using var tVerify = dbe.CreateQuickTransaction();
             Assert.That(tVerify.GetRevisionCount<CompA>(pk), Is.EqualTo(1),
                 "Entity should have 1 revision after tail is disposed without commit");
         }
@@ -402,7 +402,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         RegisterComponents(dbe);
 
         // T1 (tail) makes some changes, T2 creates entity + commits
-        var t1 = dbe.CreateTransaction();
+        var t1 = dbe.CreateQuickTransaction();
         {
             // T1 does some work (writes something to make rollback meaningful)
             var a = new CompA(99);
@@ -411,13 +411,13 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 
         long pk;
         {
-            using var t2 = dbe.CreateTransaction();
+            using var t2 = dbe.CreateQuickTransaction();
             var a = new CompA(10);
             pk = t2.CreateEntity(ref a);
             t2.Commit();
         }
         {
-            using var t3 = dbe.CreateTransaction();
+            using var t3 = dbe.CreateQuickTransaction();
             var a = new CompA(20);
             t3.UpdateEntity(pk, ref a);
             t3.Commit();
@@ -425,7 +425,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 
         // Verify 2 revisions
         {
-            using var tCheck = dbe.CreateTransaction();
+            using var tCheck = dbe.CreateQuickTransaction();
             Assert.That(tCheck.GetRevisionCount<CompA>(pk), Is.EqualTo(2));
         }
 
@@ -435,7 +435,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 
         // Verify entity has 1 revision and queue is empty
         {
-            using var tVerify = dbe.CreateTransaction();
+            using var tVerify = dbe.CreateQuickTransaction();
             Assert.That(tVerify.GetRevisionCount<CompA>(pk), Is.EqualTo(1),
                 "Entity should have 1 revision after tail rollback+dispose triggers deferred cleanup");
         }
@@ -452,13 +452,13 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         const int entityCount = 20;
 
         // T_blocker is the tail
-        using var tBlocker = dbe.CreateTransaction();
+        using var tBlocker = dbe.CreateQuickTransaction();
 
         // Create N entities across parallel tasks (each task creates one entity)
         var pks = new long[entityCount];
         for (int i = 0; i < entityCount; i++)
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var a = new CompA(i);
             pks[i] = t.CreateEntity(ref a);
             t.Commit();
@@ -467,7 +467,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         // Update all entities (creates second revision for each)
         Parallel.For(0, entityCount, i =>
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var a = new CompA(i + 1000);
             t.UpdateEntity(pks[i], ref a);
             t.Commit();
@@ -475,7 +475,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 
         // All entities should have 2 revisions (blocked by T_blocker)
         {
-            using var tCheck = dbe.CreateTransaction();
+            using var tCheck = dbe.CreateQuickTransaction();
             for (int i = 0; i < entityCount; i++)
             {
                 Assert.That(tCheck.GetRevisionCount<CompA>(pks[i]), Is.EqualTo(2),
@@ -488,7 +488,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 
         // Verify: all entities have 1 revision, queue is empty
         {
-            using var tVerify = dbe.CreateTransaction();
+            using var tVerify = dbe.CreateQuickTransaction();
             for (int i = 0; i < entityCount; i++)
             {
                 Assert.That(tVerify.GetRevisionCount<CompA>(pks[i]), Is.EqualTo(1),
@@ -554,11 +554,11 @@ class DeferredCleanupLazyTests : TestBase<DeferredCleanupLazyTests>
 
         // Create an entity and update it multiple times in separate transactions
         // while a blocker holds the tail position to prevent immediate cleanup.
-        var tBlocker = dbe.CreateTransaction();
+        var tBlocker = dbe.CreateQuickTransaction();
 
         long pk;
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var a = new CompA(1);
             pk = t.CreateEntity(ref a);
             t.Commit();
@@ -567,7 +567,7 @@ class DeferredCleanupLazyTests : TestBase<DeferredCleanupLazyTests>
         // Update 3 more times to reach ItemCount >= 4 (create + 3 updates)
         for (int i = 2; i <= 4; i++)
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var a = new CompA(i * 10);
             t.UpdateEntity(pk, ref a);
             t.Commit();
@@ -575,7 +575,7 @@ class DeferredCleanupLazyTests : TestBase<DeferredCleanupLazyTests>
 
         // Entity should have 4 revisions (blocked by tBlocker)
         {
-            using var tCheck = dbe.CreateTransaction();
+            using var tCheck = dbe.CreateQuickTransaction();
             Assert.That(tCheck.GetRevisionCount<CompA>(pk), Is.EqualTo(4),
                 "Entity should have 4 revisions while blocker is active");
         }
@@ -586,7 +586,7 @@ class DeferredCleanupLazyTests : TestBase<DeferredCleanupLazyTests>
 
         // After the blocker commits, the entity should be cleaned down to 1 revision
         {
-            using var tVerify = dbe.CreateTransaction();
+            using var tVerify = dbe.CreateQuickTransaction();
             Assert.That(tVerify.GetRevisionCount<CompA>(pk), Is.EqualTo(1),
                 "Entity should have 1 revision after blocker commits");
         }
@@ -595,12 +595,12 @@ class DeferredCleanupLazyTests : TestBase<DeferredCleanupLazyTests>
         // (each commit cleans immediately), but then create a blocker to accumulate,
         // then commit the blocker so MinTSN advances, and finally read the entity
         // to trigger lazy cleanup.
-        var tBlocker2 = dbe.CreateTransaction();
+        var tBlocker2 = dbe.CreateQuickTransaction();
 
         // Update 3 times to get ItemCount >= threshold (3)
         for (int i = 10; i <= 12; i++)
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var a = new CompA(i * 100);
             t.UpdateEntity(pk, ref a);
             t.Commit();
@@ -615,7 +615,7 @@ class DeferredCleanupLazyTests : TestBase<DeferredCleanupLazyTests>
         // Now read the entity — this should trigger lazy cleanup since ItemCount >= threshold
         // and MinTSN has advanced past the old revisions
         {
-            using var tRead = dbe.CreateTransaction();
+            using var tRead = dbe.CreateQuickTransaction();
             tRead.ReadEntity(pk, out CompA result);
             Assert.That(result.A, Is.EqualTo(1200), "Should read the latest value");
         }
@@ -627,7 +627,7 @@ class DeferredCleanupLazyTests : TestBase<DeferredCleanupLazyTests>
 
         // The entity should be cleaned one way or another
         {
-            using var tFinal = dbe.CreateTransaction();
+            using var tFinal = dbe.CreateQuickTransaction();
             Assert.That(tFinal.GetRevisionCount<CompA>(pk), Is.EqualTo(1),
                 "Entity should have 1 revision after lazy or deferred cleanup");
         }

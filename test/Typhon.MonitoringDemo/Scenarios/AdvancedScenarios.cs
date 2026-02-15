@@ -43,7 +43,7 @@ public class MixedWorkloadScenario : IScenario
                     var sw = Stopwatch.GetTimestamp();
                     try
                     {
-                        using var t = engine.CreateTransaction();
+                        using var t = engine.CreateQuickTransaction();
                         var ops = localRand.Next(5, 15);
 
                         for (var i = 0; i < ops && !ct.IsCancellationRequested; i++)
@@ -112,7 +112,7 @@ public class MixedWorkloadScenario : IScenario
                     var sw = Stopwatch.GetTimestamp();
                     try
                     {
-                        using var t = engine.CreateTransaction();
+                        using var t = engine.CreateQuickTransaction();
                         var ops = localRand.Next(5, 15);
 
                         for (var i = 0; i < ops && !ct.IsCancellationRequested; i++)
@@ -175,7 +175,7 @@ public class MixedWorkloadScenario : IScenario
 
     private async Task BootstrapEntitiesAsync(DatabaseEngine engine, Random rand, CancellationToken ct)
     {
-        using var t = engine.CreateTransaction();
+        using var t = engine.CreateQuickTransaction();
 
         // Factory entities
         for (var i = 0; i < 30 && !ct.IsCancellationRequested; i++)
@@ -228,7 +228,7 @@ public class HighContentionScenario : IScenario
                 var sw = Stopwatch.GetTimestamp();
                 try
                 {
-                    using var t = engine.CreateTransaction();
+                    using var t = engine.CreateQuickTransaction();
 
                     // All workers try to update the SAME hotspot entities
                     var updateCount = localRand.Next(3, 8);
@@ -275,7 +275,7 @@ public class HighContentionScenario : IScenario
 
     private async Task BootstrapHotspotsAsync(DatabaseEngine engine, Random rand, CancellationToken ct)
     {
-        using var t = engine.CreateTransaction();
+        using var t = engine.CreateQuickTransaction();
 
         // Create only 5 power grids - these will be the hotspots
         for (var i = 0; i < 5 && !ct.IsCancellationRequested; i++)

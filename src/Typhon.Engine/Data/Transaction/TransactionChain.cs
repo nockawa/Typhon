@@ -112,8 +112,8 @@ internal class TransactionChain : ResourceNode, IDebugPropertiesProvider
         _control.ExitExclusiveAccess();
     }
 
-    [return: TransfersOwnership] 
-    public Transaction CreateTransaction(DatabaseEngine dbe)
+    [return: TransfersOwnership]
+    public Transaction CreateTransaction(DatabaseEngine dbe, UnitOfWork uow = null)
     {
         var wc = WaitContext.FromTimeout(TimeoutOptions.Current.TransactionChainLockTimeout);
         if (!_control.EnterExclusiveAccess(ref wc))
@@ -132,7 +132,7 @@ internal class TransactionChain : ResourceNode, IDebugPropertiesProvider
             t = new Transaction();
         }
 
-        t.Init(dbe, Interlocked.Increment(ref _nextFreeId));
+        t.Init(dbe, Interlocked.Increment(ref _nextFreeId), uow);
         _control.ExitExclusiveAccess();
 
         // Are we getting short on Ids? The max is 1 << 47

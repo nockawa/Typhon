@@ -27,7 +27,7 @@ class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
 
         // Create and commit an entity so revision chains are populated
         var comp = new CompA(42);
-        using var t = _dbe.CreateTransaction();
+        using var t = _dbe.CreateQuickTransaction();
         _entityId = t.CreateEntity(ref comp);
         t.Commit();
 

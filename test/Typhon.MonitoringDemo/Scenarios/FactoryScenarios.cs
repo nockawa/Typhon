@@ -27,7 +27,7 @@ public class FactoryBootstrapScenario : IScenario
                 var sw = Stopwatch.GetTimestamp();
                 try
                 {
-                    using var t = engine.CreateTransaction();
+                    using var t = engine.CreateQuickTransaction();
 
                     // Create a batch of factory entities
                     var batchSize = localRand.Next(5, 20);
@@ -120,7 +120,7 @@ public class FactoryProductionScenario : IScenario
                 var sw = Stopwatch.GetTimestamp();
                 try
                 {
-                    using var t = engine.CreateTransaction();
+                    using var t = engine.CreateQuickTransaction();
                     var updates = localRand.Next(5, 15);
 
                     for (var i = 0; i < updates && !ct.IsCancellationRequested; i++)
@@ -179,7 +179,7 @@ public class FactoryProductionScenario : IScenario
     private async Task BootstrapEntitiesAsync(DatabaseEngine engine, Random rand, CancellationToken ct)
     {
         // Create initial entities for updates
-        using var t = engine.CreateTransaction();
+        using var t = engine.CreateQuickTransaction();
 
         for (var i = 0; i < 100 && !ct.IsCancellationRequested; i++)
         {
@@ -227,7 +227,7 @@ public class FactorySupplyChainScenario : IScenario
                 var sw = Stopwatch.GetTimestamp();
                 try
                 {
-                    using var t = engine.CreateTransaction();
+                    using var t = engine.CreateQuickTransaction();
                     var ops = localRand.Next(10, 30);
 
                     for (var i = 0; i < ops && !ct.IsCancellationRequested; i++)
@@ -303,7 +303,7 @@ public class FactorySupplyChainScenario : IScenario
 
     private async Task BootstrapEntitiesAsync(DatabaseEngine engine, Random rand, CancellationToken ct)
     {
-        using var t = engine.CreateTransaction();
+        using var t = engine.CreateQuickTransaction();
 
         // Create buildings first
         for (var i = 0; i < 50 && !ct.IsCancellationRequested; i++)

@@ -30,14 +30,14 @@ class ExhaustionPolicyTests : TestBase<ExhaustionPolicyTests>
             // Create up to the limit — all should succeed
             for (int i = 0; i < TestMaxActiveTransactions; i++)
             {
-                transactions.Add(dbe.CreateTransaction());
+                transactions.Add(dbe.CreateQuickTransaction());
             }
 
             // One more should throw
             var ex = Assert.Throws<ResourceExhaustedException>(() =>
             {
 #pragma warning disable TYPHON004 // Expected to throw before returning
-                dbe.CreateTransaction();
+                dbe.CreateQuickTransaction();
 #pragma warning restore TYPHON004
             });
 
@@ -72,7 +72,7 @@ class ExhaustionPolicyTests : TestBase<ExhaustionPolicyTests>
             // Fill to capacity
             for (int i = 0; i < TestMaxActiveTransactions; i++)
             {
-                transactions.Add(dbe.CreateTransaction());
+                transactions.Add(dbe.CreateQuickTransaction());
             }
 
             // Dispose one transaction (via rollback + dispose)
@@ -82,7 +82,7 @@ class ExhaustionPolicyTests : TestBase<ExhaustionPolicyTests>
             transactions.RemoveAt(0);
 
             // Should now succeed — slot freed
-            transactions.Add(dbe.CreateTransaction());
+            transactions.Add(dbe.CreateQuickTransaction());
 
             Assert.That(dbe.TransactionChain.ActiveCount, Is.EqualTo(TestMaxActiveTransactions));
         }

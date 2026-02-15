@@ -30,7 +30,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
 
@@ -43,7 +43,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify data persisted correctly
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA readA, out CompE[] readE);
 
@@ -74,7 +74,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         eList[0] = new CompE(99.9f, 88, 77.7);
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             Assert.That(entityId, Is.Not.Zero, "Entity ID should be non-zero");
@@ -84,7 +84,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA readA, out CompE[] readE);
 
@@ -114,7 +114,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             Assert.That(entityId, Is.Not.Zero, "Entity ID should be non-zero");
@@ -124,7 +124,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA _, out CompE[] readE);
 
@@ -155,7 +155,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         eList[1] = new CompE(2.0f, 20, 200.0);
         eList[2] = new CompE(3.0f, 30, 300.0);
 
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
         var entityId = t.CreateEntity(ref a, eList);
         Assert.That(entityId, Is.Not.Zero, "Entity ID should be non-zero");
 
@@ -199,7 +199,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         long entityId;
 
         // Create in first transaction
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             Assert.That(entityId, Is.Not.Zero, "Entity ID should be non-zero");
@@ -209,7 +209,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Read in separate transaction
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA readA, out CompE[] readE);
 
@@ -250,14 +250,14 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
                 eList[i] = new CompE(e * 10.0f + i, e * 100 + i, e * 1000.0 + i);
             }
 
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             entityIds[e] = t.CreateEntity(ref a, eList);
             var res = t.Commit();
             Assert.That(res, Is.True, $"Commit for entity {e} should succeed");
         }
 
         // Verify all entities in a single transaction
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             for (int e = 0; e < 3; e++)
             {
@@ -283,7 +283,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
         var res = t.ReadEntity(999999L, out CompA _, out CompE[] readE);
 
         Assert.That(res, Is.False, "Reading non-existent entity should return false");
@@ -306,14 +306,14 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             t.Commit();
         }
 
         // Read multiple times
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             for (int readAttempt = 0; readAttempt < 5; readAttempt++)
             {
@@ -349,7 +349,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
 
         long entityId;
         // Create in first transaction
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             Assert.That(entityId, Is.Not.Zero, "Entity ID should be non-zero");
@@ -359,7 +359,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Delete CompA in second transaction
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var deletedA = t.DeleteEntity<CompA>(entityId);
             Assert.That(deletedA, Is.True, "Delete CompA should succeed");
@@ -369,7 +369,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify CompA is deleted
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var resA = t.ReadEntity(entityId, out CompA _);
             Assert.That(resA, Is.False, "CompA should not be readable after deletion");
@@ -391,14 +391,14 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         eList[1] = new CompE(2.0f, 2, 2.0);
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             t.Commit();
         }
 
         // Delete both component types
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var deleted = t.DeleteEntity<CompA, CompE>(entityId);
             Assert.That(deleted, Is.True, "Delete should succeed");
@@ -408,7 +408,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify both are deleted
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var resA = t.ReadEntity(entityId, out CompA _);
             Assert.That(resA, Is.False, "CompA should not be readable after deletion");
@@ -439,14 +439,14 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         long entityId;
 
         // Create
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             t.Commit();
         }
 
         // Verify exists
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA _, out CompE[] readE);
             Assert.That(res, Is.True, "Entity should exist after creation");
@@ -454,7 +454,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Delete in separate transaction
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var deleted = t.DeleteEntity<CompA, CompE>(entityId);
             Assert.That(deleted, Is.True, "Delete should succeed");
@@ -462,7 +462,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify deleted
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA _, out CompE[] _);
             Assert.That(res, Is.False, "Entity should not be readable after deletion");
@@ -490,7 +490,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             Assert.That(entityId, Is.Not.Zero, "Entity ID should be non-zero");
@@ -500,7 +500,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify entity is not readable
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA _, out CompE[] _);
             Assert.That(res, Is.False, "Entity should not be readable after rollback");
@@ -524,7 +524,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         long entityId;
 
         // Create entity with AllowMultiple components and rollback
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             Assert.That(entityId, Is.Not.Zero, "Entity ID should be non-zero");
@@ -534,7 +534,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify entity is not readable after rollback
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA _);
             Assert.That(res, Is.False, "Entity should not be readable after rollback");
@@ -567,13 +567,13 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
                 eList[i] = new CompE(i * 0.1f, i, i * 0.01);
             }
 
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             entityIds[e] = t.CreateEntity(ref a, eList.AsSpan());
             t.Commit();
         }
 
         // Verify all entities
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             for (int e = 0; e < 5; e++)
             {
@@ -602,14 +602,14 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         eList[3] = new CompE(-1.5f, -100, -999.999);
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             t.Commit();
         }
 
         // Verify exact values
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA readA, out CompE[] readE);
 
@@ -652,16 +652,16 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             t.Commit();
         }
 
         // Create multiple read transactions simultaneously
-        var t1 = dbe.CreateTransaction();
-        var t2 = dbe.CreateTransaction();
-        var t3 = dbe.CreateTransaction();
+        var t1 = dbe.CreateQuickTransaction();
+        var t2 = dbe.CreateQuickTransaction();
+        var t3 = dbe.CreateQuickTransaction();
 
         try
         {
@@ -702,14 +702,14 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             t.Commit();
         }
 
         // Read only CompA
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA readA);
             Assert.That(res, Is.True, "Reading only CompA should succeed");
@@ -734,7 +734,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
 
@@ -754,7 +754,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Check revisions in new transaction
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.ReadEntity(entityId, out CompA _, out CompE[] _);
 
@@ -789,7 +789,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             if (noiseMode >= 2)
             {
@@ -804,7 +804,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA readA, out CompE[] readE);
             Assert.That(res, Is.True, "Read should succeed");
@@ -830,14 +830,14 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         eList[1] = new CompE(2.0f, 2, 2.0);
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             t.Commit();
         }
 
         // Delete both types using DeleteEntity<TC1, TC2>
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var deleted = t.DeleteEntity<CompA, CompE>(entityId);
             Assert.That(deleted, Is.True, "Delete should succeed");
@@ -845,7 +845,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify both are deleted
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var resA = t.ReadEntity(entityId, out CompA _);
             Assert.That(resA, Is.False, "CompA should not be readable after deletion");
@@ -870,14 +870,14 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         eList[1] = new CompE(22.0f, 222, 2222.0);
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             t.Commit();
         }
 
         // Update only CompA
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updatedA = new CompA(999);
             var updated = t.UpdateEntity(entityId, ref updatedA);
@@ -886,7 +886,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify CompA is updated but CompE is unchanged
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA readA, out CompE[] readE);
             Assert.That(res, Is.True, "Read should succeed");
@@ -917,14 +917,14 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         eList[2] = new CompE(3.0f, 30, 300.0);
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             t.Commit();
         }
 
         // Update with same count (3 items)
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updatedA = new CompA(200);
             Span<CompE> updatedE = stackalloc CompE[3];
@@ -939,7 +939,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify all components are updated
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA readA, out CompE[] readE);
             Assert.That(res, Is.True, "Read should succeed");
@@ -967,14 +967,14 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         eList[1] = new CompE(2.0f, 20, 200.0);
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             t.Commit();
         }
 
         // Update with more items (2 -> 5)
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updatedA = new CompA(200);
             Span<CompE> updatedE = stackalloc CompE[5];
@@ -990,7 +990,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify all components including new ones
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA readA, out CompE[] readE);
             Assert.That(res, Is.True, "Read should succeed");
@@ -1023,14 +1023,14 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             t.Commit();
         }
 
         // Update with fewer items (5 -> 2)
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updatedA = new CompA(200);
             Span<CompE> updatedE = stackalloc CompE[2];
@@ -1044,7 +1044,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify only 2 components remain
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA readA, out CompE[] readE);
             Assert.That(res, Is.True, "Read should succeed");
@@ -1070,7 +1070,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         eList[1] = new CompE(2.0f, 20, 200.0);
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             Assert.That(t.GetComponentRevision<CompE>(entityId), Is.EqualTo(1), "CompE revision should be 1 after create");
@@ -1095,7 +1095,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify after commit
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA readA, out CompE[] readE);
             Assert.That(res, Is.True, "Read should succeed");
@@ -1119,14 +1119,14 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         eList[1] = new CompE(2.0f, 2, 2.0);
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             t.Commit();
         }
 
         // First update: 2 -> 3 items
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updatedA = new CompA(200);
             Span<CompE> updatedE = stackalloc CompE[3];
@@ -1139,7 +1139,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Second update: 3 -> 1 item
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updatedA = new CompA(300);
             Span<CompE> updatedE = stackalloc CompE[1];
@@ -1150,7 +1150,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Third update: 1 -> 4 items
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updatedA = new CompA(400);
             Span<CompE> updatedE = stackalloc CompE[4];
@@ -1164,7 +1164,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify final state
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA readA, out CompE[] readE);
             Assert.That(res, Is.True, "Read should succeed");
@@ -1193,7 +1193,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         eList[1] = new CompE(2.0f, 20, 200.0);
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             Assert.That(t.GetComponentRevision<CompE>(entityId), Is.EqualTo(1), "Initial CompE revision should be 1");
@@ -1201,7 +1201,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Update in separate transaction
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updatedA = new CompA(200);
             Span<CompE> updatedE = stackalloc CompE[2];
@@ -1217,7 +1217,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify revision in new transaction
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.ReadEntity(entityId, out CompA _, out CompE[] _);
             Assert.That(t.GetComponentRevision<CompA>(entityId), Is.EqualTo(2), "CompA revision should be 2");
@@ -1240,14 +1240,14 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         eList[1] = new CompE(2.0f, 20, 200.0);
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             t.Commit();
         }
 
         // Update and rollback
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updatedA = new CompA(999);
             Span<CompE> updatedE = stackalloc CompE[5];
@@ -1263,7 +1263,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify original values preserved
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA readA, out CompE[] readE);
             Assert.That(res, Is.True, "Read should succeed");
@@ -1294,14 +1294,14 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         eList[2] = new CompE(3.0f, 30, 300.0);
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             t.Commit();
         }
 
         // Delete only CompE using DeleteEntities<T>
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.DeleteEntities<CompE>(entityId);
             Assert.That(res, Is.True, "DeleteEntities<CompE> should succeed");
@@ -1309,7 +1309,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify CompA still exists but CompE is gone
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var resA = t.ReadEntity(entityId, out CompA readA);
             Assert.That(resA, Is.True, "CompA should still be readable");
@@ -1336,7 +1336,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         eList[1] = new CompE(2.0f, 20, 200.0);
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
 
@@ -1348,7 +1348,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify CompA exists but CompE is gone
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var resA = t.ReadEntity(entityId, out CompA readA);
             Assert.That(resA, Is.True, "CompA should be readable");
@@ -1374,14 +1374,14 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         eList[1] = new CompE(2.0f, 20, 200.0);
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             t.Commit();
         }
 
         // Delete and rollback
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.DeleteEntities<CompE>(entityId);
             Assert.That(res, Is.True, "DeleteEntities should succeed");
@@ -1390,7 +1390,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify components still exist
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA readA, out CompE[] readE);
             Assert.That(res, Is.True, "Entity should still be readable after rollback");
@@ -1416,28 +1416,28 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         eList[1] = new CompE(2.0f, 20, 200.0);
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             t.Commit();
         }
 
         // Delete CompE
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.DeleteEntities<CompE>(entityId);
             t.Commit();
         }
 
         // Verify deleted
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA _, out CompE[] _);
             Assert.That(res, Is.False, "CompE should be deleted");
         }
 
         // Update to recreate CompE with new values
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var updatedA = new CompA(200);
             Span<CompE> newE = stackalloc CompE[4];
@@ -1452,7 +1452,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // Verify new components
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA readA, out CompE[] readE);
             Assert.That(res, Is.True, "Read should succeed");
@@ -1466,17 +1466,17 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
     #region MVCC Isolation Tests
 
     /// <summary>
-    /// Tests that a transaction started before creation can still read newly created entities.
-    /// Note: This documents the current behavior where new entities are visible to existing transactions.
+    /// Tests MVCC snapshot isolation: a transaction started before entity creation cannot see the entity.
+    /// The creating transaction has a higher TSN than the reader, so the revision is correctly invisible.
     /// </summary>
     [Test]
-    public void TransactionStartedBeforeCreate_CanSeeNewEntity()
+    public void TransactionStartedBeforeCreate_CannotSeeNewEntity()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
         // Start a transaction before creation
-        var earlyTransaction = dbe.CreateTransaction();
+        var earlyTransaction = dbe.CreateQuickTransaction();
 
         var a = new CompA(1000);
         Span<CompE> eList = stackalloc CompE[2];
@@ -1484,7 +1484,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         eList[1] = new CompE(2.0f, 2, 2.0);
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             t.Commit();
@@ -1492,11 +1492,9 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
 
         try
         {
-            // Early transaction can read newly created entities (current behavior)
+            // Earlier transaction cannot see entities created by later transactions (proper MVCC snapshot isolation)
             var res = earlyTransaction.ReadEntity(entityId, out CompA readA, out CompE[] readE);
-            Assert.That(res, Is.True, "Transaction can see newly created entity");
-            Assert.That(readA.A, Is.EqualTo(1000), "CompA.A should match");
-            Assert.That(readE.Length, Is.EqualTo(2), "Should have 2 CompE instances");
+            Assert.That(res, Is.False, "Earlier transaction should not see entity created by later transaction");
         }
         finally
         {
@@ -1519,20 +1517,20 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         eList[1] = new CompE(20.0f, 20, 20.0);
 
         long entityId;
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             entityId = t.CreateEntity(ref a, eList);
             t.Commit();
         }
 
         // Start a transaction before deletion
-        var earlyTransaction = dbe.CreateTransaction();
+        var earlyTransaction = dbe.CreateQuickTransaction();
 
         // Read once to establish snapshot
         earlyTransaction.ReadEntity(entityId, out CompA _, out CompE[] _);
 
         // Delete in a separate transaction
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             t.DeleteEntity<CompA, CompE>(entityId);
             t.Commit();
@@ -1552,7 +1550,7 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
         }
 
         // New transaction should not see the entity
-        using (var t = dbe.CreateTransaction())
+        using (var t = dbe.CreateQuickTransaction())
         {
             var res = t.ReadEntity(entityId, out CompA _, out CompE[] _);
             Assert.That(res, Is.False, "New transaction should not see deleted entity");

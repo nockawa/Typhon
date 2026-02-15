@@ -81,7 +81,7 @@ internal ref struct ComponentRevisionManager
         return new ElementRevisionHandle(ref accessor, curChunkId, false, (short)indexInChunk);
     }
 
-    internal static unsafe void AddCompRev(Transaction.ComponentInfoBase info, ref Transaction.ComponentInfoBase.CompRevInfo compRevInfo, long tsn, bool isDelete)
+    internal static unsafe void AddCompRev(Transaction.ComponentInfoBase info, ref Transaction.ComponentInfoBase.CompRevInfo compRevInfo, long tsn, ushort uowId, bool isDelete)
     {
         ref var compRevTableAccessor = ref info.CompRevTableAccessor;
         var compContent = info.CompContentSegment;
@@ -126,6 +126,7 @@ internal ref struct ComponentRevisionManager
         // Add our new entry
         curChunkElements[indexInChunk].TSN = tsn;
         curChunkElements[indexInChunk].IsolationFlag = true;
+        curChunkElements[indexInChunk].UowId = uowId;
         curChunkElements[indexInChunk].ComponentChunkId = componentChunkId;
 
         // Update the compRevInfo
@@ -141,7 +142,7 @@ internal ref struct ComponentRevisionManager
         firstHeader.Control.ExitExclusiveAccess();
     }
 
-    internal static unsafe int AllocCompRevStorage(Transaction.ComponentInfoBase info, long tsn, int firstChunkId)
+    internal static unsafe int AllocCompRevStorage(Transaction.ComponentInfoBase info, long tsn, ushort uowId, int firstChunkId)
     {
         var chunkId = info.CompRevTableSegment.AllocateChunk(false);
         var chunkSpan = info.CompRevTableAccessor.GetChunkAsSpan(chunkId, true);
@@ -161,6 +162,7 @@ internal ref struct ComponentRevisionManager
         var elements = chunkSpan.Slice(sizeof(CompRevStorageHeader)).Cast<byte, CompRevStorageElement>();
         elements[0].TSN = tsn;
         elements[0].IsolationFlag = true;                                  // Isolate this revision from the rest of the database (other transactions)
+        elements[0].UowId = uowId;
         elements[0].ComponentChunkId = firstChunkId;
 
         return chunkId;
