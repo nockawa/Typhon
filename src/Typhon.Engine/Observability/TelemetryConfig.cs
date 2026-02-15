@@ -2,6 +2,7 @@
 
 using JetBrains.Annotations;
 using Microsoft.Extensions.Configuration;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Runtime.CompilerServices;
 
@@ -74,6 +75,7 @@ public enum PageCacheSpanLevel
 /// </code>
 /// </remarks>
 [PublicAPI]
+[ExcludeFromCodeCoverage]
 public static class TelemetryConfig
 {
     // ═══════════════════════════════════════════════════════════════════════════

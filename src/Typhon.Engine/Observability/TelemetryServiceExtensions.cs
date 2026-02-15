@@ -4,6 +4,7 @@ using JetBrains.Annotations;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using System;
+using System.Diagnostics.CodeAnalysis;
 
 namespace Typhon.Engine;
 
@@ -11,6 +12,7 @@ namespace Typhon.Engine;
 /// Extension methods for registering Typhon telemetry services with dependency injection.
 /// </summary>
 [PublicAPI]
+[ExcludeFromCodeCoverage]
 public static class TelemetryServiceExtensions
 {
     /// <summary>

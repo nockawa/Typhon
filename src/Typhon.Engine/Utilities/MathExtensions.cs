@@ -1,10 +1,12 @@
 using JetBrains.Annotations;
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 
 namespace Typhon.Engine;
 
 [PublicAPI]
+[ExcludeFromCodeCoverage]
 public static class MathExtensions
 {
     #region Constants

@@ -1,9 +1,11 @@
 using JetBrains.Annotations;
 using System;
+using System.Diagnostics.CodeAnalysis;
 
 namespace Typhon.Engine;
 
 [PublicAPI]
+[ExcludeFromCodeCoverage]
 internal ref struct RevisionWalker
 {
     private ref ChunkAccessor _accessor;

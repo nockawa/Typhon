@@ -1,11 +1,13 @@
 ﻿using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Typhon.Engine;
 
+[ExcludeFromCodeCoverage]
 public class ConcurrentBitmapL3Any : IEnumerable<int>
 {
     private volatile int _control;
