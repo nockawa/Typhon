@@ -395,7 +395,9 @@ class TransactionTests : TestBase<TransactionTests>
             // Commit the long-running transaction, this should trigger a cleanup of old revisions, keeping only the last one which is the long running one
             {
                 using var readTransaction = dbe.CreateQuickTransaction();
-                Assert.That(readTransaction.GetRevisionCount<CompA>(e1), Is.EqualTo(curRevisionCount-rbCount), "The number of revisions stored should match the number of committed updates plus the original creation");
+                // With full-precision TSN (no bit 0 masking), lazy cleanup correctly removes the initial
+                // creation entry (its TSN < long-running transaction's MinTSN), so expected count is reduced by 1.
+                Assert.That(readTransaction.GetRevisionCount<CompA>(e1), Is.EqualTo(curRevisionCount - rbCount - 1), "The number of revisions stored should match committed updates minus cleaned-up entries");
                 var res = longRunningTransaction.Commit();
                 Assert.That(res, Is.True);
                 longRunningTransaction.Dispose();

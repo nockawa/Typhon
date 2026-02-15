@@ -19,14 +19,13 @@ namespace Typhon.Engine;
 /// <p>
 /// The <see cref="ComponentTable.CompRevTableSegment"/> is a <see cref="ChunkBasedSegment"/> with chunks of <see cref="ComponentRevisionManager.CompRevChunkSize"/> bytes.
 /// Data is stored as a chain of chunks, the first one contains this header and is followed by <see cref="ComponentRevisionManager.CompRevCountInRoot"/> number
-/// of <see cref="CompRevStorageElement"/> elements.
+/// of <see cref="CompRevStorageElement"/> elements (currently 3 with 12-byte elements).
 /// The following chunks in the chain have just an integer as header (giving the next chunk in the chain) and can
-/// store <see cref="ComponentRevisionManager.CompRevCountInNext"/> number of <see cref="CompRevStorageElement"/> elements.
+/// store <see cref="ComponentRevisionManager.CompRevCountInNext"/> number of <see cref="CompRevStorageElement"/> elements (currently 5).
 /// </p>
 /// <p>
-/// The chain is a circular buffer, location of the first item is given through <see cref="FirstItemIndex"/> 
+/// The chain is a circular buffer, location of the first item is given through <see cref="FirstItemIndex"/>
 /// </p>
-/// 
 /// </remarks>
 internal struct CompRevStorageHeader
 {
@@ -68,53 +67,61 @@ internal struct CompRevStorageHeader
 }
 
 /// <summary>
-/// Stores the information of a component revision element
+/// Stores the information of a component revision element.
 /// </summary>
 /// <remarks>
-/// This structure is 10 bytes long, so we can store 6 of them in a 64 bytes chunk with a 4 bytes header.
+/// 12 bytes (Pack=2, divisible by 4 per ADR-027). Layout:
+/// <code>
+/// Offset  Size  Field
+///   0      4    ComponentChunkId
+///   4      4    _packedTickHigh     (upper 32 bits of TSN)
+///   8      2    _packedTickLow      (full 16 bits of TSN)
+///  10      2    _packedUowId        (bits 0-14: UowId, bit 15: IsolationFlag)
+/// </code>
+/// Root chunk: 3 elements ((64 − 20) / 12). Overflow chunks: 5 elements (64 / 12).
 /// </remarks>
 [PublicAPI]
 [StructLayout(LayoutKind.Sequential, Pack = 2)]
 internal struct CompRevStorageElement
 {
-    private const ushort CompRevTransactionIsolatedFlag = 1;
-    private const ushort CompRevTransactionIsolatedMask = 0xFFFE;
+    private const ushort IsolationBit = 1 << 15;        // bit 15 of _packedUowId
+    private const ushort UowIdMask = 0x7FFF;            // bits 0-14 of _packedUowId
 
     public int ComponentChunkId;
     private uint _packedTickHigh;
     private ushort _packedTickLow;
+    private ushort _packedUowId;
 
     public void Void()
     {
         ComponentChunkId = 0;
         _packedTickHigh = 0;
         _packedTickLow = 0;
+        _packedUowId = 0;
     }
-    
-    public bool IsVoid => ComponentChunkId == 0 &&  _packedTickHigh == 0 && _packedTickLow == 0;
-    
+
+    public bool IsVoid => ComponentChunkId == 0 && _packedTickHigh == 0 && _packedTickLow == 0 && _packedUowId == 0;
+
     public bool IsolationFlag
     {
-        get
-        {
-            return (_packedTickLow & CompRevTransactionIsolatedFlag) != 0;
-        }
-        set
-        {
-            _packedTickLow = (ushort)((_packedTickLow & CompRevTransactionIsolatedMask) | (value ? CompRevTransactionIsolatedFlag : 0));
-        }
+        get => (_packedUowId & IsolationBit) != 0;
+        set => _packedUowId = (ushort)(value ? (_packedUowId | IsolationBit) : (_packedUowId & ~IsolationBit));
+    }
+
+    /// <summary>UoW ID that created this revision (15 bits, max 32,767). 0 until UoW Registry (#51) lands.</summary>
+    public ushort UowId
+    {
+        get => (ushort)(_packedUowId & UowIdMask);
+        set => _packedUowId = (ushort)((_packedUowId & IsolationBit) | (value & UowIdMask));
     }
 
     public long TSN
     {
-        get
-        {
-            return (long)((ulong)_packedTickHigh << 16 | (uint)(_packedTickLow & CompRevTransactionIsolatedMask));
-        }
+        get => (long)((ulong)_packedTickHigh << 16 | _packedTickLow);
         set
         {
             _packedTickHigh = (uint)(value >> 16);
-            _packedTickLow = (ushort)((value & CompRevTransactionIsolatedMask) | (uint)(_packedTickLow & CompRevTransactionIsolatedFlag));
+            _packedTickLow = (ushort)(value & 0xFFFF);
         }
     }
 }

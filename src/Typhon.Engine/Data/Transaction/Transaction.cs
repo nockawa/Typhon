@@ -136,6 +136,9 @@ public unsafe class Transaction : IDisposable
     /// <summary>When true, <see cref="Dispose"/> also disposes <see cref="OwningUnitOfWork"/>. Set by <c>CreateQuickTransaction()</c>.</summary>
     internal bool OwnsUnitOfWork { get; set; }
 
+    /// <summary>UoW ID for revision stamping. 0 until UoW Registry (#51) assigns real IDs.</summary>
+    internal ushort UowId => OwningUnitOfWork?.UowId ?? 0;
+
     public Transaction Previous { get; internal set; }
     public Transaction Next { get; internal set; }
 
@@ -699,7 +702,7 @@ public unsafe class Transaction : IDisposable
         var componentChunkId = info.CompContentSegment.AllocateChunk(false);
 
         // Allocate the component revision storage as it's a new component
-        var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, componentChunkId);
+        var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, componentChunkId);
 
         var entry = new ComponentInfoBase.CompRevInfo
         {
@@ -733,7 +736,7 @@ public unsafe class Transaction : IDisposable
             var componentChunkId = info.CompContentSegment.AllocateChunk(false);
 
             // Allocate the component revision storage as it's a new component
-            var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, componentChunkId);
+            var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, componentChunkId);
 
             var entry = new ComponentInfoBase.CompRevInfo
             {
@@ -897,7 +900,7 @@ public unsafe class Transaction : IDisposable
         {
             // Add a new component version for the current component, if there is no data, it means we are deleting the component, we still
             //  need to add a new version with an empty CurCompContentChunkId
-            ComponentRevisionManager.AddCompRev(info, ref compRevInfo, TSN, isDelete);
+            ComponentRevisionManager.AddCompRev(info, ref compRevInfo, TSN, UowId, isDelete);
         }
 
         // Set up the component header
@@ -991,7 +994,7 @@ public unsafe class Transaction : IDisposable
             {
                 // Add a new component version for the current component, if there is no data, it means we are deleting the component, we still
                 //  need to add a new version with an empty CurCompContentChunkId
-                ComponentRevisionManager.AddCompRev(info, ref compRevInfo, TSN, isDelete);
+                ComponentRevisionManager.AddCompRev(info, ref compRevInfo, TSN, UowId, isDelete);
             }
 
             // Set up the component header
@@ -1029,7 +1032,7 @@ public unsafe class Transaction : IDisposable
             {
                 ref var compRevInfo = ref compRevInfoSpan[j];
                 compRevInfo.Operations |= ComponentInfoBase.OperationType.Deleted;
-                ComponentRevisionManager.AddCompRev(info, ref compRevInfo, TSN, true);
+                ComponentRevisionManager.AddCompRev(info, ref compRevInfo, TSN, UowId, true);
             }
         }
         
@@ -1121,10 +1124,8 @@ public unsafe class Transaction : IDisposable
             ref var header = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(compRevFirstChunkId);
             if (header.ItemCount >= lazyThreshold)
             {
-                // Use (MinTSN & ~1L) to account for 1-bit precision loss in CompRevStorageElement.TSN:
-                // bit 0 of the lower 16 bits is shared with IsolationFlag, so odd TSN values are stored
-                // as their even predecessor. Rounding down prevents removing the tail's own entries.
-                var safeCutoff = _dbe.TransactionChain.MinTSN & ~1L;
+                // IsolationFlag moved to _packedUowId — TSN now has full 48-bit precision, no rounding needed.
+                var safeCutoff = _dbe.TransactionChain.MinTSN;
                 if (safeCutoff > 0)
                 {
                     try
@@ -1301,7 +1302,7 @@ public unsafe class Transaction : IDisposable
         var dirtyFirstChunk = false;
 
         // Get the chunk storing the revision we want to commit as well as the index of the element
-        var compRev = new ComponentRevision(info, ref compRevInfo, firstChunkId, ref compRevTableAccessor);
+        var compRev = new ComponentRevision(info, ref compRevInfo, firstChunkId, ref compRevTableAccessor, UowId);
         var lastCommitRevisionIndex = compRev.LastCommitRevisionIndex;
         var elementHandle = compRev.GetRevisionElement(compRevInfo.CurRevisionIndex);
 
@@ -1345,7 +1346,7 @@ public unsafe class Transaction : IDisposable
                 // Record conflict for observability
                 _dbe?.RecordConflict();
                 // Create a new revision
-                ComponentRevisionManager.AddCompRev(info, ref compRevInfo, TSN, false);
+                ComponentRevisionManager.AddCompRev(info, ref compRevInfo, TSN, UowId, false);
                 
                 // Copy the revision we are dealing with to the new one (the whole data, indices + content)
                 var dstChunk = info.CompContentAccessor.GetChunkAddress(compRevInfo.CurCompContentChunkId, true);

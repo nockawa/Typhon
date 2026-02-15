@@ -1466,11 +1466,11 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
     #region MVCC Isolation Tests
 
     /// <summary>
-    /// Tests that a transaction started before creation can still read newly created entities.
-    /// Note: This documents the current behavior where new entities are visible to existing transactions.
+    /// Tests MVCC snapshot isolation: a transaction started before entity creation cannot see the entity.
+    /// The creating transaction has a higher TSN than the reader, so the revision is correctly invisible.
     /// </summary>
     [Test]
-    public void TransactionStartedBeforeCreate_CanSeeNewEntity()
+    public void TransactionStartedBeforeCreate_CannotSeeNewEntity()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
@@ -1492,11 +1492,9 @@ class AllowMultipleComponentTests : TestBase<AllowMultipleComponentTests>
 
         try
         {
-            // Early transaction can read newly created entities (current behavior)
+            // Earlier transaction cannot see entities created by later transactions (proper MVCC snapshot isolation)
             var res = earlyTransaction.ReadEntity(entityId, out CompA readA, out CompE[] readE);
-            Assert.That(res, Is.True, "Transaction can see newly created entity");
-            Assert.That(readA.A, Is.EqualTo(1000), "CompA.A should match");
-            Assert.That(readE.Length, Is.EqualTo(2), "Should have 2 CompE instances");
+            Assert.That(res, Is.False, "Earlier transaction should not see entity created by later transaction");
         }
         finally
         {
