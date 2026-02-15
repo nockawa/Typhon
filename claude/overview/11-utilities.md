@@ -8,11 +8,6 @@
 
 Shared Utilities contains the foundational code used across all other components. This component is organized into **categories** for progressive deep-dive: from simple type utilities to complex memory allocators and concurrency primitives.
 
-<a href="../assets/typhon-utilities-overview.svg">
-  <img src="../assets/typhon-utilities-overview.svg" width="800"
-       alt="Shared Utilities — Dependency map showing consumer components and utility categories A through F">
-</a>
-<sub>🔍 Click to open full size — D2 source: <code>assets/src/typhon-utilities-overview.d2</code> — open <code>assets/viewer.html</code> for interactive pan-zoom</sub>
 
 ---
 

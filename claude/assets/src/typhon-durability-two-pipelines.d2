@@ -1,0 +1,343 @@
+# Typhon: Durability Architecture — Two Pipelines to Disk
+# Shows how data flows from commit through WAL and Checkpoint pipelines to stable media
+
+direction: right
+
+# ── Title ─────────────────────────────────────────────────────
+title: |md
+  # Durability Architecture — Two Pipelines to Disk
+  WAL provides durability; Checkpoint enables WAL recycling
+| {
+  shape: text
+  near: top-center
+}
+
+# ══════════════════════════════════════════════════════════════
+# USER / API LAYER
+# ══════════════════════════════════════════════════════════════
+
+user_layer: "User Layer" {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.border-radius: 10
+
+  app: "Application" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.border-radius: 6
+  }
+
+  uow: "UnitOfWork\n(DurabilityMode)" {
+    shape: rectangle
+    style.fill: "#90caf9"
+    style.border-radius: 6
+  }
+
+  tx: "Transaction\ntx.Commit()" {
+    shape: rectangle
+    style.fill: "#64b5f6"
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  app -> uow: "creates"
+  uow -> tx: "creates"
+}
+
+# ══════════════════════════════════════════════════════════════
+# MEMORY LAYER (Volatile)
+# ══════════════════════════════════════════════════════════════
+
+memory_layer: "Memory (Volatile)" {
+  style.fill: "#ffebee"
+  style.stroke: "#c62828"
+  style.border-radius: 10
+  style.stroke-dash: 3
+
+  # Data path
+  page_cache: "Page Cache\n(dirty pages)" {
+    shape: cylinder
+    style.fill: "#ffcdd2"
+    style.stroke: "#e57373"
+  }
+
+  revision: "Revision +\nUoW ID Stamp" {
+    shape: rectangle
+    style.fill: "#ef9a9a"
+    style.border-radius: 6
+  }
+
+  # WAL path
+  ring_buffer: "Ring Buffer\n(MPSC, 1-4MB)" {
+    shape: queue
+    style.fill: "#ffcdd2"
+    style.stroke: "#e57373"
+  }
+
+  wal_record: "WAL Record\n+ Checksum" {
+    shape: rectangle
+    style.fill: "#ef9a9a"
+    style.border-radius: 6
+  }
+
+  # Registry (in-memory state)
+  registry_mem: "UoW Registry\n(in-memory)" {
+    shape: cylinder
+    style.fill: "#ffcdd2"
+    style.stroke: "#e57373"
+  }
+}
+
+# ══════════════════════════════════════════════════════════════
+# WAL PIPELINE (Durability Path)
+# ══════════════════════════════════════════════════════════════
+
+wal_pipeline: "WAL Pipeline — DURABILITY" {
+  style.fill: "#fff3e0"
+  style.stroke: "#e65100"
+  style.border-radius: 10
+
+  wal_writer: "WAL Writer\n(dedicated thread)" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#ff9800"
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  triggers: |md
+    **Flush Triggers:**
+    - Immediate mode
+    - GroupCommit timer (5-10ms)
+    - Buffer >80% full
+    - Explicit Flush()
+  | {
+    shape: text
+    style.font-size: 11
+  }
+
+  fua: "FUA Write\n(Force Unit Access)" {
+    shape: hexagon
+    style.fill: "#ffb74d"
+    style.stroke: "#e65100"
+    style.bold: true
+  }
+}
+
+# ══════════════════════════════════════════════════════════════
+# CHECKPOINT PIPELINE (Space Reclamation Path)
+# ══════════════════════════════════════════════════════════════
+
+checkpoint_pipeline: "Checkpoint Pipeline — SPACE RECLAMATION" {
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.border-radius: 10
+
+  checkpoint_mgr: "Checkpoint\nManager" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#4caf50"
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  cp_triggers: |md
+    **Checkpoint Triggers:**
+    - Timer (every 10s)
+    - WAL size threshold
+    - Dirty page threshold
+    - Explicit ForceCheckpoint()
+  | {
+    shape: text
+    style.font-size: 11
+  }
+
+  fsync: "Buffered Write\n+ fsync" {
+    shape: hexagon
+    style.fill: "#a5d6a7"
+    style.stroke: "#2e7d32"
+    style.bold: true
+  }
+}
+
+# ══════════════════════════════════════════════════════════════
+# DISK LAYER (Durable)
+# ══════════════════════════════════════════════════════════════
+
+disk_layer: "Disk (Stable Media)" {
+  style.fill: "#e1bee7"
+  style.stroke: "#6a1b9a"
+  style.border-radius: 10
+
+  wal_file: "WAL Segments\n(4MB each)" {
+    shape: page
+    style.fill: "#ce93d8"
+    style.stroke: "#8e24aa"
+    style.multiple: true
+  }
+
+  data_file: "Data File\n(8KB pages + CRC32C)" {
+    shape: page
+    style.fill: "#ba68c8"
+    style.stroke: "#6a1b9a"
+  }
+
+  fpi: "Full Page Images\n(torn page repair)" {
+    shape: document
+    style.fill: "#ce93d8"
+    style.stroke: "#8e24aa"
+    style.font-size: 12
+  }
+
+  wal_file -> fpi: "contains" { style.stroke: "#9c27b0"; style.stroke-dash: 3 }
+}
+
+# ══════════════════════════════════════════════════════════════
+# RECOVERY (on crash)
+# ══════════════════════════════════════════════════════════════
+
+recovery: "Crash Recovery" {
+  style.fill: "#fce4ec"
+  style.stroke: "#c62828"
+  style.border-radius: 10
+
+  recovery_mgr: "Recovery\nManager" {
+    shape: rectangle
+    style.fill: "#f8bbd0"
+    style.border-radius: 6
+  }
+
+  phases: |md
+    **Recovery Phases:**
+    1. Load registry checkpoint
+    2. Replay WAL delta
+    3. Repair torn pages (FPI)
+    4. Void pending UoWs
+  | {
+    shape: text
+    style.font-size: 11
+  }
+}
+
+# ══════════════════════════════════════════════════════════════
+# CONNECTIONS — Main Data Flow
+# ══════════════════════════════════════════════════════════════
+
+# User to Memory
+user_layer.tx -> memory_layer.revision: "~1-2µs" {
+  style.stroke: "#1565c0"
+  style.bold: true
+}
+user_layer.tx -> memory_layer.wal_record: "serialize" {
+  style.stroke: "#1565c0"
+}
+
+memory_layer.revision -> memory_layer.page_cache: "" {
+  style.stroke: "#c62828"
+}
+memory_layer.wal_record -> memory_layer.ring_buffer: "" {
+  style.stroke: "#c62828"
+}
+memory_layer.revision -> memory_layer.registry_mem: "stamp UoW ID" {
+  style.stroke: "#c62828"
+  style.stroke-dash: 3
+}
+
+# Memory to WAL Pipeline
+memory_layer.ring_buffer -> wal_pipeline.wal_writer: "drain" {
+  style.stroke: "#e65100"
+  style.bold: true
+}
+wal_pipeline.wal_writer -> wal_pipeline.fua: "" {
+  style.stroke: "#e65100"
+}
+wal_pipeline.fua -> disk_layer.wal_file: "10-80µs" {
+  style.stroke: "#e65100"
+  style.bold: true
+}
+
+# Memory to Checkpoint Pipeline
+memory_layer.page_cache -> checkpoint_pipeline.checkpoint_mgr: "dirty pages" {
+  style.stroke: "#2e7d32"
+}
+memory_layer.registry_mem -> checkpoint_pipeline.checkpoint_mgr: "UoW states" {
+  style.stroke: "#2e7d32"
+  style.stroke-dash: 3
+}
+checkpoint_pipeline.checkpoint_mgr -> checkpoint_pipeline.fsync: "" {
+  style.stroke: "#2e7d32"
+}
+checkpoint_pipeline.fsync -> disk_layer.data_file: "~500µs-3ms" {
+  style.stroke: "#2e7d32"
+  style.bold: true
+}
+
+# WAL recycling feedback
+disk_layer.data_file -> disk_layer.wal_file: "enables\nrecycling" {
+  style.stroke: "#9c27b0"
+  style.stroke-dash: 5
+}
+
+# Recovery paths
+disk_layer.wal_file -> recovery.recovery_mgr: "replay" {
+  style.stroke: "#c62828"
+  style.stroke-dash: 3
+}
+disk_layer.data_file -> recovery.recovery_mgr: "checkpoint\nbaseline" {
+  style.stroke: "#c62828"
+  style.stroke-dash: 3
+}
+
+# ══════════════════════════════════════════════════════════════
+# DURABILITY STATES (Legend)
+# ══════════════════════════════════════════════════════════════
+
+legend: "Durability States" {
+  near: bottom-center
+  style.fill: "#fafafa"
+  style.stroke: "#9e9e9e"
+  style.border-radius: 8
+
+  volatile: "VOLATILE\n(in memory only)" {
+    shape: rectangle
+    style.fill: "#ffcdd2"
+    style.stroke: "#c62828"
+    style.font-size: 11
+    style.border-radius: 4
+  }
+
+  durable: "DURABLE\n(WAL on disk)" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+    style.font-size: 11
+    style.border-radius: 4
+  }
+
+  checkpointed: "CHECKPOINTED\n(data file + WAL recyclable)" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+    style.font-size: 11
+    style.border-radius: 4
+  }
+
+  volatile -> durable: "WAL flush" { style.font-size: 10 }
+  durable -> checkpointed: "checkpoint" { style.font-size: 10 }
+}
+
+# ══════════════════════════════════════════════════════════════
+# KEY INSIGHT
+# ══════════════════════════════════════════════════════════════
+
+insight: |md
+  **Key Insight:** The two pipelines are decoupled.
+  - WAL pipeline provides *durability* (crash survival)
+  - Checkpoint pipeline provides *space reclamation* (WAL recycling)
+  - User controls WAL timing (DurabilityMode)
+  - Checkpoint is fully automatic (background)
+| {
+  near: bottom-left
+  shape: text
+  style.font-size: 12
+}

@@ -4,6 +4,12 @@ This document defines the D2 syntax patterns, color palette, and styling convent
 
 > **Quick start:** Copy a similar existing diagram from `claude/assets/src/` and adapt it. This document provides the reference for consistent styling.
 
+> **IMPORTANT — File Encoding:** D2 files must be saved as **UTF-8 without BOM**. A UTF-8 BOM (Byte Order Mark) causes D2 to create a spurious empty rectangle. After creating or editing a D2 file, always strip any BOM and re-render:
+> ```bash
+> sed -i '1s/^\xEF\xBB\xBF//' claude/assets/src/my-diagram.d2
+> "/c/Program Files/D2/d2.exe" --theme 0 assets/src/my-diagram.d2 assets/my-diagram.svg
+> ```
+
 ---
 
 ## Table of Contents
@@ -705,6 +711,67 @@ Reference these for consistent styling patterns:
    ```
 7. **Update `viewer.html`:** Add to `DIAGRAMS` array in appropriate category
 8. **Embed in markdown:** Use thumbnail pattern from `claude/README.md`
+
+---
+
+## Troubleshooting
+
+### Markdown Blocks Rendering as Rectangles
+
+**Symptom:** When using `|md ... |` with `near:` positioning, the text appears inside an unwanted rectangle container.
+
+**Cause:** The default shape for any D2 node is `rectangle`. Markdown blocks inherit this.
+
+**Fix:** Always add `shape: text` when using markdown with positioning:
+
+```d2
+# Wrong - creates rectangle around text
+title: |md
+  # My Title
+| {
+  near: top-center
+}
+
+# Correct - text only, no container
+title: |md
+  # My Title
+| {
+  shape: text
+  near: top-center
+}
+```
+
+### Legend Container Appears Disconnected
+
+**Symptom:** A legend box with child elements appears stranded/disconnected from the main diagram, often placed awkwardly by the layout engine.
+
+**Cause:** Containers with `near:` positioning that have internal connections (e.g., `l1 -> l2`) confuse the layout engine. The container is positioned via `near:`, but its children create a separate layout context.
+
+**Fix:** Use a simple markdown text block for legends instead of containers with shapes:
+
+```d2
+# Wrong - creates disconnected container with awkward layout
+legend: "" {
+  near: bottom-left
+  
+  l1: "State A" { shape: rectangle; style.fill: "#fce4ec" }
+  l2: "State B" { shape: rectangle; style.fill: "#e8f5e9" }
+  l1 -> l2: "transition"
+}
+
+# Correct - simple text note
+legend: |md
+  **Legend:**
+  - *Red*: State A
+  - *Green*: State B
+| {
+  shape: text
+  near: bottom-left
+  style.font-size: 12
+}
+```
+
+**Alternative:** If you need visual legend items, place them as part of the main diagram flow (not with `near:`), or reference the existing diagram from `typhon-durability-two-pipelines.d2` which shows a working legend pattern where the legend container participates in the main layout.
 
 ---
 

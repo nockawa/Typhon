@@ -1,131 +1,184 @@
 # Typhon: Transaction Commit Path
 # Shows the flow from tx.Commit() through WAL to durable storage
 
-direction: right
+direction: down
 
 title: |md
   # Transaction Commit Path
   From tx.Commit() to durable storage
-|
-
-# ── Application Layer ──────────────────────────────────
-app: Application Thread {
-  style.fill: "#e8f4fd"
-  style.stroke: "#2196F3"
-
-  uow: UnitOfWork {
-    shape: rectangle
-    style.fill: "#bbdefb"
-    tooltip: "Durability boundary"
-  }
-  tx: Transaction {
-    shape: rectangle
-    style.fill: "#90caf9"
-    tooltip: "MVCC operations"
-  }
-  commit: tx.Commit() {
-    shape: rectangle
-    style.fill: "#64b5f6"
-    style.font-color: white
-    style.bold: true
-  }
+| {
+  shape: text
+  near: top-center
 }
 
-# ── Commit Pipeline ────────────────────────────────────
-pipeline: Commit Pipeline {
+# ══════════════════════════════════════════════════════════════
+# TOP ROW: Application initiates commit
+# ══════════════════════════════════════════════════════════════
+
+app: "Application Thread" {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.border-radius: 8
+
+  uow: "UnitOfWork\n(DurabilityMode)" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.border-radius: 6
+  }
+  tx: "Transaction" {
+    shape: rectangle
+    style.fill: "#90caf9"
+    style.border-radius: 6
+  }
+  commit: "tx.Commit()" {
+    shape: rectangle
+    style.fill: "#1565c0"
+    style.font-color: white
+    style.bold: true
+    style.border-radius: 6
+  }
+
+  uow -> tx: "creates"
+  tx -> commit: "calls"
+}
+
+# ══════════════════════════════════════════════════════════════
+# MIDDLE: Commit Pipeline (the core logic)
+# ══════════════════════════════════════════════════════════════
+
+pipeline: "Commit Pipeline" {
   style.fill: "#fff3e0"
-  style.stroke: "#FF9800"
+  style.stroke: "#e65100"
+  style.border-radius: 8
 
   conflict: "1. MVCC Conflict\nDetection" {
     shape: rectangle
     style.fill: "#ffe0b2"
+    style.border-radius: 6
   }
-  stamp: "2. Stamp UowEpoch\non Revisions" {
+
+  stamp: "2. Stamp UoW ID\non Revisions" {
     shape: rectangle
     style.fill: "#ffcc80"
+    style.border-radius: 6
   }
-  serialize: "3. Serialize WAL\nRecord to Buffer" {
+
+  serialize: "3. Serialize WAL\nRecord" {
     shape: rectangle
     style.fill: "#ffb74d"
+    style.border-radius: 6
   }
+
   decide: "4. Durability\nDecision" {
     shape: diamond
-    style.fill: "#ffa726"
+    style.fill: "#e65100"
     style.font-color: white
+    style.bold: true
   }
+
+  conflict -> stamp: "pass"
+  stamp -> serialize
+  serialize -> decide
 }
 
-# ── WAL Infrastructure ─────────────────────────────────
-wal: WAL Infrastructure {
-  style.fill: "#fce4ec"
-  style.stroke: "#E91E63"
+# ══════════════════════════════════════════════════════════════
+# BOTTOM LEFT: WAL Pipeline (durability path)
+# ══════════════════════════════════════════════════════════════
 
-  ring: "MPSC Ring Buffer\n(4MB, lock-free)" {
-    shape: cylinder
+wal: "WAL Pipeline" {
+  style.fill: "#fce4ec"
+  style.stroke: "#c62828"
+  style.border-radius: 8
+
+  ring: "Ring Buffer\n(MPSC, 1-4MB)" {
+    shape: queue
     style.fill: "#f8bbd0"
   }
-  writer: "WAL Writer Thread\n(dedicated)" {
+
+  writer: "WAL Writer\n(dedicated thread)" {
     shape: rectangle
     style.fill: "#f48fb1"
     style.bold: true
+    style.border-radius: 6
   }
-  segment: "WAL Segment\n(64MB, FUA)" {
+
+  segment: "WAL Segment\n(4MB, FUA)" {
     shape: page
-    style.fill: "#ec407a"
+    style.fill: "#c62828"
     style.font-color: white
   }
+
+  ring -> writer: "drain"
+  writer -> segment: "FUA\n10-80µs"
 }
 
-# ── Storage Layer ──────────────────────────────────────
-storage: Storage Layer {
-  style.fill: "#e8f5e9"
-  style.stroke: "#4CAF50"
+# ══════════════════════════════════════════════════════════════
+# BOTTOM RIGHT: Checkpoint Pipeline (space reclamation)
+# ══════════════════════════════════════════════════════════════
 
-  pages: "Dirty Pages\n(Buffer Pool)" {
+checkpoint: "Checkpoint Pipeline" {
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.border-radius: 8
+
+  pages: "Dirty Pages\n(Page Cache)" {
     shape: cylinder
     style.fill: "#c8e6c9"
   }
-  checkpoint: "Checkpoint Manager\n(10s interval)" {
+
+  cp_mgr: "Checkpoint\nManager" {
     shape: rectangle
     style.fill: "#a5d6a7"
+    style.border-radius: 6
   }
+
   data: "Data File\n(8KB pages)" {
     shape: page
-    style.fill: "#66bb6a"
+    style.fill: "#2e7d32"
     style.font-color: white
   }
+
+  pages -> cp_mgr: "every 10s"
+  cp_mgr -> data: "fsync"
 }
 
-# ── Connections ────────────────────────────────────────
-app.uow -> app.tx: creates
-app.tx -> app.commit: calls
-app.commit -> pipeline.conflict: ""
+# ══════════════════════════════════════════════════════════════
+# CONNECTIONS: Main flow
+# ══════════════════════════════════════════════════════════════
 
-pipeline.conflict -> pipeline.stamp: pass
-pipeline.stamp -> pipeline.decide: ""
-pipeline.stamp -> pipeline.serialize: ""
-
-pipeline.decide -> wal.ring: "Immediate:\nsignal + wait" {
-  style.stroke: "#d32f2f"
-  style.font-color: "#d32f2f"
+# App to Pipeline
+app.commit -> pipeline.conflict: "~1-2µs" {
+  style.stroke: "#1565c0"
   style.bold: true
 }
-pipeline.decide -> app.tx: "Deferred:\nreturn immediately" {
-  style.stroke: "#388e3c"
-  style.font-color: "#388e3c"
+
+# Pipeline branches based on durability mode
+pipeline.decide -> wal.ring: "Immediate:\nwait for FUA" {
+  style.stroke: "#c62828"
+  style.bold: true
+}
+
+pipeline.decide -> app: "Deferred/GroupCommit:\nreturn immediately" {
+  style.stroke: "#2e7d32"
   style.stroke-dash: 5
 }
 
-pipeline.serialize -> wal.ring: "atomic XADD\n(~100-500ns)"
+# Serialize always writes to ring buffer
+pipeline.serialize -> wal.ring: "atomic\nXADD" {
+  style.stroke: "#e65100"
+  style.stroke-dash: 3
+}
 
-wal.ring -> wal.writer: drain
-wal.writer -> wal.segment: "FUA write\n(~15-85µs)"
-
-# Checkpoint path (async, background)
-wal.segment -> storage.pages: "revisions\nvisible" {
+# WAL to Checkpoint (async, background)
+wal.segment -> checkpoint.pages: "revisions\nvisible" {
+  style.stroke: "#9c27b0"
   style.stroke-dash: 5
 }
-storage.pages -> storage.checkpoint: "periodic"
-storage.checkpoint -> storage.data: "fsync\n(sole owner)" {
-  style.bold: true
+
+# Recycling feedback
+checkpoint.data -> wal.segment: "enables\nrecycling" {
+  style.stroke: "#757575"
+  style.stroke-dash: 5
 }
+
+
