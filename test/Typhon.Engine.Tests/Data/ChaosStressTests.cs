@@ -189,7 +189,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                     {
                         try
                         {
-                            using var txn = dbe.CreateTransaction();
+                            using var txn = dbe.CreateQuickTransaction();
 
                             // Create with random component combination using existing CompA/CompB/CompD
                             var compA = new CompA(threadId * 10000 + i, rand.NextSingle(), rand.NextDouble());
@@ -239,7 +239,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
 
                         try
                         {
-                            using var txn = dbe.CreateTransaction();
+                            using var txn = dbe.CreateQuickTransaction();
 
                             var targetEntity = localEntities[rand.Next(localEntities.Count)];
                             var opRoll = (float)rand.NextDouble();
@@ -321,7 +321,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
 
                         try
                         {
-                            using var txn = dbe.CreateTransaction();
+                            using var txn = dbe.CreateQuickTransaction();
                             var canRead = txn.ReadEntity<CompA>(entityId, out _) ||
                                           txn.ReadEntity<CompB>(entityId, out _) ||
                                           txn.ReadEntity<CompD>(entityId, out _);
@@ -388,7 +388,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
 
         for (int i = 0; i < workerThreads * entitiesPerWorker; i++)
         {
-            using var txn = dbe.CreateTransaction();
+            using var txn = dbe.CreateQuickTransaction();
             var comp = new CompA(i * 100, 0f, 0d); // Use A field as the value we track
             var id = txn.CreateEntity(ref comp);
             txn.Commit();
@@ -404,7 +404,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         for (int i = 0; i < longRunningCount; i++)
         {
 #pragma warning disable TYPHON004 // Intentionally keeping transaction open to test MVCC - disposed in cleanup loop
-            var txn = dbe.CreateTransaction();
+            var txn = dbe.CreateQuickTransaction();
 #pragma warning restore TYPHON004
             var snapshot = new Dictionary<long, int>();
 
@@ -442,7 +442,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
 
                     try
                     {
-                        using var txn = dbe.CreateTransaction();
+                        using var txn = dbe.CreateQuickTransaction();
                         if (txn.ReadEntity<CompA>(targetId, out var comp))
                         {
                             comp.A += 1;
@@ -506,7 +506,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         }
 
         // Verify new transactions see the latest values
-        using (var verifyTxn = dbe.CreateTransaction())
+        using (var verifyTxn = dbe.CreateQuickTransaction())
         {
             foreach (var id in entityIds)
             {
@@ -569,7 +569,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                     // Create multi-component entities
                     for (int i = 0; i < entitiesPerThread; i++)
                     {
-                        using var txn = dbe.CreateTransaction();
+                        using var txn = dbe.CreateQuickTransaction();
 
                         var compA = new CompA(threadId * 1000 + i, rand.NextSingle(), rand.NextDouble());
                         var compB = new CompB(threadId, rand.NextSingle());
@@ -606,7 +606,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
 
                         var targetId = localEntities[rand.Next(localEntities.Count)];
 
-                        using var txn = dbe.CreateTransaction();
+                        using var txn = dbe.CreateQuickTransaction();
 
                         // Read and update all components atomically
                         var hasA = txn.ReadEntity<CompA>(targetId, out var compA);
@@ -640,7 +640,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
 
                     foreach (var entityId in localEntities)
                     {
-                        using var txn = dbe.CreateTransaction();
+                        using var txn = dbe.CreateQuickTransaction();
 
                         var hasA = txn.ReadEntity<CompA>(entityId, out var compA);
                         var hasB = txn.ReadEntity<CompB>(entityId, out var compB);
@@ -694,7 +694,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         // Create a single entity that will be updated rapidly
         long targetEntity;
         {
-            using var txn = dbe.CreateTransaction();
+            using var txn = dbe.CreateQuickTransaction();
             var comp = new CompA(0, 0f, 0d); // Use A field as the counter
             targetEntity = txn.CreateEntity(ref comp);
             txn.Commit();
@@ -720,7 +720,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                 startSignal.Wait();
                 Thread.Sleep(readerId * 20); // Stagger starts
 
-                var txn = dbe.CreateTransaction();
+                var txn = dbe.CreateQuickTransaction();
                 try
                 {
                     // Take snapshot
@@ -764,7 +764,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
 
                 for (int i = 0; i < updatesPerWriter; i++)
                 {
-                    using var txn = dbe.CreateTransaction();
+                    using var txn = dbe.CreateQuickTransaction();
                     if (txn.ReadEntity<CompA>(targetEntity, out var comp))
                     {
                         comp.A += 1;
@@ -789,7 +789,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         Logger.LogInformation("Reader snapshots: {Snapshots}", string.Join(", ", readerSnapshots.Select(x => $"R{x.Key}={x.Value}")));
 
         // Verify final value
-        using (var txn = dbe.CreateTransaction())
+        using (var txn = dbe.CreateQuickTransaction())
         {
             if (txn.ReadEntity<CompA>(targetEntity, out var final))
             {
@@ -826,7 +826,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         var entityIds = new long[entityCount];
         for (int i = 0; i < entityCount; i++)
         {
-            using var txn = dbe.CreateTransaction();
+            using var txn = dbe.CreateQuickTransaction();
             var comp = new CompA(i, i * 10f, 0d); // Use A as Id, B as Value
             entityIds[i] = txn.CreateEntity(ref comp);
             txn.Commit();
@@ -858,7 +858,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
 
                     try
                     {
-                        using var txn = dbe.CreateTransaction();
+                        using var txn = dbe.CreateQuickTransaction();
 
                         if (localRand.NextDouble() < 0.7)
                         {
@@ -903,7 +903,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         // Final verification - read all entities
         for (int i = 0; i < entityCount; i++)
         {
-            using var txn = dbe.CreateTransaction();
+            using var txn = dbe.CreateQuickTransaction();
             if (!txn.ReadEntity<CompA>(entityIds[i], out var comp))
             {
                 errors.Add($"Final verify: Entity {i} not readable");
@@ -942,7 +942,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
 
         for (int i = 0; i < entityCount; i++)
         {
-            using var txn = dbe.CreateTransaction();
+            using var txn = dbe.CreateQuickTransaction();
             var comp = new CompA(i * 100, 0f, 0d); // Use A field as the value we track
             entityIds[i] = txn.CreateEntity(ref comp);
             initialValues[i] = i * 100;
@@ -976,7 +976,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
 
                     try
                     {
-                        using var txn = dbe.CreateTransaction();
+                        using var txn = dbe.CreateQuickTransaction();
 
                         if (txn.ReadEntity<CompA>(targetId, out var comp))
                         {
@@ -1011,7 +1011,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         // Verify final values match expected
         for (int i = 0; i < entityCount; i++)
         {
-            using var txn = dbe.CreateTransaction();
+            using var txn = dbe.CreateQuickTransaction();
             if (txn.ReadEntity<CompA>(entityIds[i], out var comp))
             {
                 var expectedMin = initialValues[i] + committedUpdates[entityIds[i]];

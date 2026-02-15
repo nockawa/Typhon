@@ -1415,21 +1415,21 @@ Stack operations protected by exclusive lock (not lock-free, but efficient).
 **Example:**
 ```csharp
 // Transaction T1 (tick: 100)
-using var t1 = dbe.CreateTransaction();
+using var t1 = dbe.CreateQuickTransaction();
 t1.ReadEntity(1001, out PlayerStats stats);  // Sees version at tick ≤ 100
 
 // Transaction T2 (tick: 110)
-using var t2 = dbe.CreateTransaction();
+using var t2 = dbe.CreateQuickTransaction();
 t2.UpdateEntity(1001, ref newStats);  // Creates new revision at tick 110 (isolated)
 
 // Transaction T3 (tick: 120)
-using var t3 = dbe.CreateTransaction();
+using var t3 = dbe.CreateQuickTransaction();
 t3.ReadEntity(1001, out PlayerStats stats);  // Still sees version at tick ≤ 100 (T2 uncommitted)
 
 t2.Commit();  // Clears IsolationFlag
 
 // Transaction T4 (tick: 130)
-using var t4 = dbe.CreateTransaction();
+using var t4 = dbe.CreateQuickTransaction();
 t4.ReadEntity(1001, out PlayerStats stats);  // Sees T2's committed version at tick 110
 ```
 
@@ -1445,11 +1445,11 @@ t4.ReadEntity(1001, out PlayerStats stats);  // Sees T2's committed version at t
 **Example:**
 ```csharp
 // Transaction T1
-using var t1 = dbe.CreateTransaction();
+using var t1 = dbe.CreateQuickTransaction();
 t1.UpdateEntity(1001, ref stats1);  // Buffered in transaction cache
 
 // Transaction T2 (concurrent)
-using var t2 = dbe.CreateTransaction();
+using var t2 = dbe.CreateQuickTransaction();
 t2.UpdateEntity(1001, ref stats2);  // Also buffered (no conflict yet)
 
 // Commit T1 (succeeds)
@@ -2597,7 +2597,7 @@ using var dbe = serviceProvider.GetRequiredService<DatabaseEngine>();
 dbe.RegisterComponent<PlayerStats>();
 
 // ===== STEP 1: Create Transaction =====
-using var t1 = dbe.CreateTransaction();
+using var t1 = dbe.CreateQuickTransaction();
 // t1.TransactionTick = 638400000000000 (example)
 // t1.State = Created
 
@@ -2650,19 +2650,19 @@ bool committed = t1.Commit();
 
 ```csharp
 // Transaction T1 (tick: 100)
-using var t1 = dbe.CreateTransaction();
+using var t1 = dbe.CreateQuickTransaction();
 var stats1 = new PlayerStats { PlayerId = 1001, Health = 100f };
 var e1 = t1.CreateEntity(ref stats1);
 t1.Commit();  // Revision 0 committed at tick 100
 
 // Transaction T2 (tick: 110)
-using var t2 = dbe.CreateTransaction();
+using var t2 = dbe.CreateQuickTransaction();
 t2.ReadEntity(e1, out var stats2);  // Sees revision 0
 stats2.Health = 90f;
 t2.UpdateEntity(e1, ref stats2);  // Creates revision 1 (isolated)
 
 // Transaction T3 (tick: 120, concurrent with T2)
-using var t3 = dbe.CreateTransaction();
+using var t3 = dbe.CreateQuickTransaction();
 t3.ReadEntity(e1, out var stats3);  // Still sees revision 0 (T2 uncommitted)
 stats3.Health = 85f;
 t3.UpdateEntity(e1, ref stats3);  // Creates revision 2 (isolated)
@@ -2680,7 +2680,7 @@ t3.Commit();
 // Result: T3's changes overwrite T2's changes ("last write wins")
 
 // Transaction T4 (tick: 130)
-using var t4 = dbe.CreateTransaction();
+using var t4 = dbe.CreateQuickTransaction();
 t4.ReadEntity(e1, out var stats4);  // Sees revision 3 (Health=85)
 ```
 
@@ -2718,7 +2718,7 @@ var dbe = provider.GetRequiredService<DatabaseEngine>();
 dbe.RegisterComponent<Player>();
 
 // Create
-using (var t = dbe.CreateTransaction())
+using (var t = dbe.CreateQuickTransaction())
 {
     var player = new Player
     {
@@ -2736,7 +2736,7 @@ using (var t = dbe.CreateTransaction())
 }
 
 // Read
-using (var t = dbe.CreateTransaction())
+using (var t = dbe.CreateQuickTransaction())
 {
     long entityId = 1;
     if (t.ReadEntity(entityId, out Player player))
@@ -2746,7 +2746,7 @@ using (var t = dbe.CreateTransaction())
 }
 
 // Update
-using (var t = dbe.CreateTransaction())
+using (var t = dbe.CreateQuickTransaction())
 {
     long entityId = 1;
     if (t.ReadEntity(entityId, out Player player))
@@ -2758,7 +2758,7 @@ using (var t = dbe.CreateTransaction())
 }
 
 // Delete
-using (var t = dbe.CreateTransaction())
+using (var t = dbe.CreateQuickTransaction())
 {
     long entityId = 1;
     t.DeleteEntity<Player>(entityId);
@@ -2798,7 +2798,7 @@ dbe.RegisterComponent<Velocity>();
 dbe.RegisterComponent<Health>();
 
 // Create entity with multiple components
-using (var t = dbe.CreateTransaction())
+using (var t = dbe.CreateQuickTransaction())
 {
     var pos = new Position { X = 10, Y = 20, Z = 0 };
     var vel = new Velocity { VX = 1, VY = 0, VZ = 0 };
@@ -2810,7 +2810,7 @@ using (var t = dbe.CreateTransaction())
 }
 
 // Read partial components
-using (var t = dbe.CreateTransaction())
+using (var t = dbe.CreateQuickTransaction())
 {
     long entityId = 1;
 
@@ -2841,7 +2841,7 @@ public struct Enemy
 dbe.RegisterComponent<Enemy>();
 
 // Create enemies
-using (var t = dbe.CreateTransaction())
+using (var t = dbe.CreateQuickTransaction())
 {
     var e1 = new Enemy { Level = 5, Name = "Goblin", Health = 50 };
     var e2 = new Enemy { Level = 5, Name = "Orc", Health = 80 };
@@ -2855,7 +2855,7 @@ using (var t = dbe.CreateTransaction())
 }
 
 // Query by index
-using (var t = dbe.CreateTransaction())
+using (var t = dbe.CreateQuickTransaction())
 {
     var table = dbe.GetComponentTable<Enemy>();
     var levelIndex = table.GetIndex<int>("Level");  // Get index for Level field
@@ -2903,7 +2903,7 @@ public class PlayerConflictHandler : ConcurrencyConflictHandler
 }
 
 // Use custom handler
-using (var t = dbe.CreateTransaction())
+using (var t = dbe.CreateQuickTransaction())
 {
     t.SetConflictHandler(new PlayerConflictHandler());
 
@@ -2917,7 +2917,7 @@ using (var t = dbe.CreateTransaction())
 
 ```csharp
 // Batch create 10,000 entities
-using (var t = dbe.CreateTransaction())
+using (var t = dbe.CreateQuickTransaction())
 {
     for (int i = 0; i < 10000; i++)
     {
@@ -2935,7 +2935,7 @@ using (var t = dbe.CreateTransaction())
 }
 
 // Batch update with index lookup
-using (var t = dbe.CreateTransaction())
+using (var t = dbe.CreateQuickTransaction())
 {
     var table = dbe.GetComponentTable<Enemy>();
     var levelIndex = table.GetIndex<int>("Level");
@@ -2961,7 +2961,7 @@ using (var t = dbe.CreateTransaction())
 // Snapshot for analytics (doesn't block writes)
 Task.Run(() =>
 {
-    using var t = dbe.CreateTransaction();
+    using var t = dbe.CreateQuickTransaction();
 
     // This transaction sees a consistent snapshot
     // even if other transactions commit changes
@@ -2985,7 +2985,7 @@ Task.Run(() =>
 });
 
 // Meanwhile, writes proceed normally
-using (var t = dbe.CreateTransaction())
+using (var t = dbe.CreateQuickTransaction())
 {
     // This will commit successfully even though
     // the long-running read transaction is still active
@@ -3006,12 +3006,12 @@ using (var t = dbe.CreateTransaction())
 **Example:**
 ```csharp
 // Transaction T1 starts
-using var t1 = dbe.CreateTransaction();  // Tick: 100
+using var t1 = dbe.CreateQuickTransaction();  // Tick: 100
 
 // Many updates happen
 for (int i = 0; i < 1000; i++)
 {
-    using var t = dbe.CreateTransaction();  // Tick: 100 + i
+    using var t = dbe.CreateQuickTransaction();  // Tick: 100 + i
     t.UpdateEntity(1, ref data);
     t.Commit();
 }
@@ -3036,7 +3036,7 @@ const int batchSize = 1000;
 
 for (int batch = 0; batch < totalCount; batch += batchSize)
 {
-    using var t = dbe.CreateTransaction();
+    using var t = dbe.CreateQuickTransaction();
 
     for (int i = 0; i < batchSize; i++)
     {
@@ -3164,13 +3164,13 @@ Console.WriteLine($"Free pages: {metrics.FreePageCount}");
 // INEFFICIENT: Many small transactions
 for (int i = 0; i < 10000; i++)
 {
-    using var t = dbe.CreateTransaction();
+    using var t = dbe.CreateQuickTransaction();
     t.CreateEntity(ref data);
     t.Commit();  // 10,000 commits (slow!)
 }
 
 // EFFICIENT: Single large transaction
-using (var t = dbe.CreateTransaction())
+using (var t = dbe.CreateQuickTransaction())
 {
     for (int i = 0; i < 10000; i++)
     {
@@ -3186,7 +3186,7 @@ using (var t = dbe.CreateTransaction())
 // Multiple read transactions can run concurrently
 Parallel.ForEach(entityIds, entityId =>
 {
-    using var t = dbe.CreateTransaction();
+    using var t = dbe.CreateQuickTransaction();
     if (t.ReadEntity(entityId, out Player player))
     {
         // Process player...
@@ -3223,7 +3223,7 @@ dotnet build -c Telemetry
 **Transaction Inspection:**
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 Console.WriteLine($"Transaction ID: {t.Id}");
 Console.WriteLine($"Tick: {t.TransactionTick}");

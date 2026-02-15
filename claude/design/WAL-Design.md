@@ -706,7 +706,7 @@ using var tx = dbe.CreateTransaction(new TransactionOptions
 A transaction can start as Deferred and upgrade to GroupCommit/Immediate before commit:
 
 ```csharp
-using var tx = dbe.CreateTransaction();  // Inherits Deferred
+using var tx = dbe.CreateQuickTransaction();  // Inherits Deferred
 // ... do work ...
 
 // Realize this is important — upgrade before commit

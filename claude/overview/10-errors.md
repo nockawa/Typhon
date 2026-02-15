@@ -257,7 +257,7 @@ while (true)
 {
     try
     {
-        using var tx = dbe.CreateTransaction();
+        using var tx = dbe.CreateQuickTransaction();
         var id = tx.CreateEntity(ref comp);
         tx.Commit();
         // Side effects AFTER commit — safe, won't re-execute on retry
@@ -528,7 +528,7 @@ public T ExecuteWithRetry<T>(
     while (true)
     {
         attempt++;
-        using var tx = dbe.CreateTransaction();
+        using var tx = dbe.CreateQuickTransaction();
 
         try
         {

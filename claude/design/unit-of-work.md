@@ -1010,12 +1010,12 @@ public Transaction CreateTransaction();
 
 ### Phase 2: Test Strategy (Incremental)
 
-Existing tests continue using `dbe.CreateTransaction()` with `[Obsolete]` suppression. **New tests** for UoW lifecycle (#49) use the new API. A separate follow-up PR migrates existing tests — keeping the mechanical refactor isolated from the functional changes.
+Existing tests continue using `dbe.CreateQuickTransaction()` with `[Obsolete]` suppression. **New tests** for UoW lifecycle (#49) use the new API. A separate follow-up PR migrates existing tests — keeping the mechanical refactor isolated from the functional changes.
 
 ```csharp
 // Existing tests — unchanged, suppressed warning:
 #pragma warning disable CS0618
-using var tx = dbe.CreateTransaction();
+using var tx = dbe.CreateQuickTransaction();
 #pragma warning restore CS0618
 
 // New UoW tests:
@@ -1028,7 +1028,7 @@ using var tx = uow.CreateTransaction();
 Separate PR that mechanically migrates all existing tests to UoW-based API:
 
 ```csharp
-// Before: using var tx = dbe.CreateTransaction();
+// Before: using var tx = dbe.CreateQuickTransaction();
 // After:  using var uow = dbe.CreateUnitOfWork();
 //         using var tx = uow.CreateTransaction();
 ```

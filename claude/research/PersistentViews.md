@@ -619,14 +619,14 @@ var nearbyEnemies = dbe
     .Build();
 
 // First execution: cold cache
-using (var t = dbe.CreateTransaction())
+using (var t = dbe.CreateQuickTransaction())
 {
     var enemies = nearbyEnemies.Execute(t).ToList();
     // Time: 833µs (initial query) + caching overhead
 }
 
 // Subsequent executions: warm cache
-using (var t = dbe.CreateTransaction())
+using (var t = dbe.CreateQuickTransaction())
 {
     var enemies = nearbyEnemies.Execute(t).ToList();
     // Time: ~5µs (cached results, assuming no invalidations)
@@ -757,7 +757,7 @@ public void OnTransactionCommit(Transaction t)
 {
     var modifiedEntities = GetModifiedEntities(t, _dependentComponentTypes);
 
-    using var maintenanceTx = dbe.CreateTransaction();
+    using var maintenanceTx = dbe.CreateQuickTransaction();
 
     foreach (var entityId in modifiedEntities)
     {
@@ -829,7 +829,7 @@ var leaderboard = dbe
     .Build();
 
 // Query leaderboard (uses materialized component)
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 var topPlayers = dbe
     .Select<LeaderboardEntry>()
@@ -854,12 +854,12 @@ The beauty of this approach is that materialized views are just regular componen
 
 ```csharp
 // Transaction T1: Reads leaderboard
-using var t1 = dbe.CreateTransaction();  // Tick = 1000
+using var t1 = dbe.CreateQuickTransaction();  // Tick = 1000
 var leaderboard1 = QueryLeaderboard(t1);
 // Sees leaderboard as of tick 1000
 
 // Transaction T2: Player scores change, updates materialized view
-using var t2 = dbe.CreateTransaction();  // Tick = 1001
+using var t2 = dbe.CreateQuickTransaction();  // Tick = 1001
 UpdatePlayerScore(player123, newScore: 5000, t2);
 t2.Commit();
 // Materialized view updated with new revision at tick 1001
@@ -869,7 +869,7 @@ var leaderboard2 = QueryLeaderboard(t1);
 // Still sees OLD leaderboard (snapshot isolation!)
 
 // New transaction sees updated view
-using var t3 = dbe.CreateTransaction();  // Tick = 1002
+using var t3 = dbe.CreateQuickTransaction();  // Tick = 1002
 var leaderboard3 = QueryLeaderboard(t3);
 // Sees NEW leaderboard with updated scores
 ```
@@ -1525,7 +1525,7 @@ public class CheckpointedViewPersistence
 
     private async Task PersistView(IView view)
     {
-        using var tx = _dbe.CreateTransaction();
+        using var tx = _dbe.CreateQuickTransaction();
 
         // Write view metadata
         var metadata = new ViewMetadata
@@ -1552,7 +1552,7 @@ public class CheckpointedViewPersistence
 
             // Commit batch to avoid large transactions
             tx.Commit();
-            tx = _dbe.CreateTransaction();
+            tx = _dbe.CreateQuickTransaction();
         }
 
         tx.Commit();
@@ -1562,7 +1562,7 @@ public class CheckpointedViewPersistence
 // Load persisted view on startup
 public IView LoadPersistedView(string viewName)
 {
-    using var tx = _dbe.CreateTransaction();
+    using var tx = _dbe.CreateQuickTransaction();
 
     // Load metadata
     var metadata = tx.Query<ViewMetadata>()

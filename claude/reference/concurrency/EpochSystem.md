@@ -251,7 +251,7 @@ Free → Allocating → Idle ⇄ Exclusive
 ### Transaction (typical)
 ```csharp
 // Transaction.BeginOperation() enters an epoch scope
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 // All operations inside the transaction are epoch-protected
 var entity = t.CreateEntity(ref comp);

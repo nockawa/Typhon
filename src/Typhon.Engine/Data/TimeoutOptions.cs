@@ -69,4 +69,10 @@ public class TimeoutOptions
     /// <see cref="UnitOfWorkContext"/>. Individual lock timeouts (5-10s) provide tighter bounds within this limit.
     /// </summary>
     public TimeSpan DefaultCommitTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Default lifetime timeout for a Unit of Work when none is specified at creation.
+    /// Individual lock timeouts (5-10s) provide tighter bounds within this limit.
+    /// </summary>
+    public TimeSpan DefaultUowTimeout { get; set; } = TimeSpan.FromSeconds(30);
 }

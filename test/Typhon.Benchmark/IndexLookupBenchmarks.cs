@@ -68,7 +68,7 @@ public class IndexLookupBenchmarks
 
         // Pre-populate 10K entities
         _entityIds = new long[PrePopulateCount];
-        using (var t = _dbe.CreateTransaction())
+        using (var t = _dbe.CreateQuickTransaction())
         {
             for (int i = 0; i < PrePopulateCount; i++)
             {
@@ -79,7 +79,7 @@ public class IndexLookupBenchmarks
         }
 
         // Separate entity for delete benchmark (avoids polluting lookup data)
-        using (var t = _dbe.CreateTransaction())
+        using (var t = _dbe.CreateQuickTransaction())
         {
             var comp = new IdxComp { Value = -1, Timestamp = 0 };
             _deleteEntity = t.CreateEntity(ref comp);
@@ -111,7 +111,7 @@ public class IndexLookupBenchmarks
     [Benchmark]
     public void PrimaryKey_PointLookup()
     {
-        using var t = _dbe.CreateTransaction();
+        using var t = _dbe.CreateQuickTransaction();
         t.ReadEntity(_entityIds[5000], out IdxComp _);
     }
 
@@ -122,7 +122,7 @@ public class IndexLookupBenchmarks
     [Benchmark]
     public void PrimaryKey_BatchSequential()
     {
-        using var t = _dbe.CreateTransaction();
+        using var t = _dbe.CreateQuickTransaction();
         for (int i = 0; i < 100; i++)
         {
             t.ReadEntity(_entityIds[i], out IdxComp _);
@@ -136,7 +136,7 @@ public class IndexLookupBenchmarks
     [Benchmark]
     public void PrimaryKey_BatchRandom()
     {
-        using var t = _dbe.CreateTransaction();
+        using var t = _dbe.CreateQuickTransaction();
         for (int i = 0; i < 100; i++)
         {
             t.ReadEntity(_randomOrder[i], out IdxComp _);
@@ -150,7 +150,7 @@ public class IndexLookupBenchmarks
     [Benchmark]
     public void DeleteEntity_SingleComponent()
     {
-        using var t = _dbe.CreateTransaction();
+        using var t = _dbe.CreateQuickTransaction();
         t.DeleteEntity<IdxComp>(_deleteEntity);
         var comp = new IdxComp { Value = -1, Timestamp = 0 };
         _deleteEntity = t.CreateEntity(ref comp);

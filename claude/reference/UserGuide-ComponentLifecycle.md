@@ -71,7 +71,7 @@ Every operation on the database happens **inside a transaction**:
 
 ```csharp
 // Create a transaction
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 // Create a component
 var player = new PlayerComponent
@@ -111,7 +111,7 @@ else
 An entity can have multiple component types:
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 // Create the entity with first component
 var player = new PlayerComponent { PlayerName = "Bob", AccountId = 99999 };
@@ -138,7 +138,7 @@ t.Commit();
 For convenience, you can chain operations:
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 var player = new PlayerComponent { PlayerName = "Charlie", AccountId = 11111 };
 var health = new HealthComponent { HP = 100, MaxHP = 100 };
@@ -155,7 +155,7 @@ t.CreateComponent(entityId, ref health)
 ### Reading a Single Component
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 long entityId = 42;
 
@@ -178,7 +178,7 @@ else
 ### Reading Multiple Components
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 if (t.ReadEntity(entityId, out PlayerComponent player) &&
     t.ReadEntity(entityId, out HealthComponent health))
@@ -192,7 +192,7 @@ if (t.ReadEntity(entityId, out PlayerComponent player) &&
 If you marked a field with `[Index]`, you can query by that field:
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 // Get the index for AccountId field
 var index = t.GetIndex<PlayerComponent, int>(nameof(PlayerComponent.AccountId));
@@ -213,7 +213,7 @@ foreach (var id in entityIds)
 ### Scanning All Entities of a Type
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 // Get all entities that have PlayerComponent
 foreach (var entityId in t.GetEntities<PlayerComponent>())
@@ -232,7 +232,7 @@ foreach (var entityId in t.GetEntities<PlayerComponent>())
 ### Basic Update
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 // 1. Read the current component
 if (t.ReadEntity(entityId, out PlayerComponent player))
@@ -260,7 +260,7 @@ if (t.ReadEntity(entityId, out PlayerComponent player))
 For convenience, you can use a callback pattern:
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 bool updated = t.UpdateEntity<PlayerComponent>(entityId, player =>
 {
@@ -277,7 +277,7 @@ if (updated)
 ### Updating Multiple Components Atomically
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 // Read both components
 if (t.ReadEntity(entityId, out PlayerComponent player) &&
@@ -301,7 +301,7 @@ if (t.ReadEntity(entityId, out PlayerComponent player) &&
 ### Conditional Updates
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 if (t.ReadEntity(entityId, out HealthComponent health))
 {
@@ -327,7 +327,7 @@ if (t.ReadEntity(entityId, out HealthComponent health))
 ### Delete a Specific Component Type
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 // Remove PlayerComponent from entity 42
 // Entity still exists, just doesn't have PlayerComponent anymore
@@ -343,7 +343,7 @@ if (deleted)
 ### Delete Entire Entity
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 // Delete all components for this entity
 // Entity ID 42 no longer exists
@@ -359,7 +359,7 @@ if (deleted)
 ### Conditional Delete
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 if (t.ReadEntity(entityId, out PlayerComponent player))
 {
@@ -380,7 +380,7 @@ if (t.ReadEntity(entityId, out PlayerComponent player))
 
 ```csharp
 // 1. CREATE
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 // At this moment, transaction gets a timestamp (tick)
 // This timestamp defines what data the transaction can see
 
@@ -404,7 +404,7 @@ t.Rollback();                   // Discard all changes
 Within a transaction, you always see your own changes:
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 var player = new PlayerComponent { PlayerName = "Test" };
 long id = t.CreateEntity(ref player);
@@ -423,7 +423,7 @@ if (t.ReadEntity(id, out PlayerComponent readBack))
 ### Rollback on Error
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 try
 {
@@ -453,7 +453,7 @@ catch (Exception ex)
 ```csharp
 // For read-only operations, you still need a transaction
 // But you don't need to commit
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 var allPlayers = t.GetEntities<PlayerComponent>();
 foreach (var id in allPlayers)
@@ -477,12 +477,12 @@ Each transaction sees the database **as it was** when the transaction started:
 
 ```csharp
 // Transaction 1 starts
-using var t1 = dbe.CreateTransaction();
+using var t1 = dbe.CreateQuickTransaction();
 t1.ReadEntity(42, out PlayerComponent player1);
 Console.WriteLine($"T1 sees XP: {player1.Experience}");  // Output: 100
 
 // Transaction 2 starts and modifies
-using (var t2 = dbe.CreateTransaction())
+using (var t2 = dbe.CreateQuickTransaction())
 {
     t2.ReadEntity(42, out PlayerComponent player2);
     player2.Experience = 999f;
@@ -503,8 +503,8 @@ When two transactions modify the same component, the **last commit wins**:
 
 ```csharp
 // Both transactions start at roughly the same time
-using var t1 = dbe.CreateTransaction();
-using var t2 = dbe.CreateTransaction();
+using var t1 = dbe.CreateQuickTransaction();
+using var t2 = dbe.CreateQuickTransaction();
 
 // Both read the same component
 t1.ReadEntity(42, out PlayerComponent p1);
@@ -572,7 +572,7 @@ dbe.RegisterComponent<PlayerComponent>(options =>
 If you want to detect conflicts and handle them yourself:
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 // Read initial version
 if (t.ReadEntity(42, out PlayerComponent initial))
@@ -614,7 +614,7 @@ if (t.ReadEntity(42, out PlayerComponent initial))
 
 ```csharp
 // BAD: Don't do this
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 t.ReadEntity(42, out var component);
 
 // ... do lots of work, make network calls, wait for user input ...
@@ -626,7 +626,7 @@ t.Commit();  // May conflict with many other transactions
 // GOOD: Keep transactions short
 void ProcessEntity(long entityId)
 {
-    using var t = dbe.CreateTransaction();
+    using var t = dbe.CreateQuickTransaction();
     t.ReadEntity(entityId, out var component);
 
     // Compute changes
@@ -646,7 +646,7 @@ bool TryUpdateWithRetry(long entityId, Func<PlayerComponent, PlayerComponent> up
 {
     for (int attempt = 0; attempt < maxRetries; attempt++)
     {
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
 
         if (t.ReadEntity(entityId, out PlayerComponent component))
         {
@@ -682,12 +682,12 @@ bool success = TryUpdateWithRetry(42, player =>
 
 ```csharp
 // GOOD
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 // ... operations ...
 t.Commit();
 
 // BAD - may leak resources
-var t = dbe.CreateTransaction();
+var t = dbe.CreateQuickTransaction();
 // ... operations ...
 t.Commit();
 // Forgot to dispose!
@@ -699,7 +699,7 @@ t.Commit();
 // GOOD - focused transaction
 void AddExperience(long playerId, float xp)
 {
-    using var t = dbe.CreateTransaction();
+    using var t = dbe.CreateQuickTransaction();
     if (t.ReadEntity(playerId, out PlayerComponent p))
     {
         p.Experience += xp;
@@ -711,7 +711,7 @@ void AddExperience(long playerId, float xp)
 // BAD - transaction open too long
 void ProcessUserRequest(long playerId)
 {
-    using var t = dbe.CreateTransaction();  // Transaction starts
+    using var t = dbe.CreateQuickTransaction();  // Transaction starts
 
     // Read data
     t.ReadEntity(playerId, out var player);
@@ -733,7 +733,7 @@ async Task ProcessUserRequest(long playerId)
 {
     // Read data
     PlayerComponent player;
-    using (var t = dbe.CreateTransaction())
+    using (var t = dbe.CreateQuickTransaction())
     {
         t.ReadEntity(playerId, out player);
     }
@@ -743,7 +743,7 @@ async Task ProcessUserRequest(long playerId)
     var response = await HttpClient.GetAsync("...");
 
     // Write result
-    using (var t = dbe.CreateTransaction())
+    using (var t = dbe.CreateQuickTransaction())
     {
         // Re-read to get latest version
         if (t.ReadEntity(playerId, out var latest))
@@ -760,7 +760,7 @@ async Task ProcessUserRequest(long playerId)
 
 ```csharp
 // GOOD - check if read succeeded
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 if (t.ReadEntity(entityId, out PlayerComponent player))
 {
     // Entity exists and has PlayerComponent
@@ -773,7 +773,7 @@ else
 }
 
 // BAD - assume it exists
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 t.ReadEntity(entityId, out PlayerComponent player);
 Console.WriteLine(player.PlayerName);  // May be default/garbage if read failed!
 ```
@@ -782,7 +782,7 @@ Console.WriteLine(player.PlayerName);  // May be default/garbage if read failed!
 
 ```csharp
 // GOOD - explicit commit
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 t.UpdateEntity(id, component);
 bool success = t.Commit();
 if (!success)
@@ -791,13 +791,13 @@ if (!success)
 }
 
 // OKAY - implicit rollback on dispose
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 t.UpdateEntity(id, component);
 t.Commit();
 // If commit fails, changes are lost (rolled back on dispose)
 
 // BAD - forgot to commit
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 t.UpdateEntity(id, component);
 // Transaction disposed without commit = changes lost!
 ```
@@ -809,7 +809,7 @@ t.UpdateEntity(id, component);
 long GetLatestExperience(long playerId)
 {
     // Fresh transaction = latest snapshot
-    using var t = dbe.CreateTransaction();
+    using var t = dbe.CreateQuickTransaction();
     if (t.ReadEntity(playerId, out PlayerComponent p))
     {
         return p.Experience;
@@ -818,7 +818,7 @@ long GetLatestExperience(long playerId)
 }
 
 // Don't reuse old transactions expecting fresh data
-using var t1 = dbe.CreateTransaction();
+using var t1 = dbe.CreateQuickTransaction();
 t1.ReadEntity(42, out var p1);  // XP = 100
 
 // Another transaction commits changes
@@ -834,7 +834,7 @@ t1.ReadEntity(42, out var p2);  // XP = 100 (not updated!)
 // GOOD - batch related operations in one transaction
 void LevelUp(long playerId)
 {
-    using var t = dbe.CreateTransaction();
+    using var t = dbe.CreateQuickTransaction();
 
     if (t.ReadEntity(playerId, out PlayerComponent player) &&
         t.ReadEntity(playerId, out HealthComponent health))
@@ -855,7 +855,7 @@ void LevelUp(long playerId)
 void LevelUp(long playerId)
 {
     // Race condition: another transaction could run between these!
-    using (var t1 = dbe.CreateTransaction())
+    using (var t1 = dbe.CreateQuickTransaction())
     {
         t1.ReadEntity(playerId, out PlayerComponent p);
         p.Level++;
@@ -863,7 +863,7 @@ void LevelUp(long playerId)
         t1.Commit();
     }
 
-    using (var t2 = dbe.CreateTransaction())
+    using (var t2 = dbe.CreateQuickTransaction())
     {
         t2.ReadEntity(playerId, out HealthComponent h);
         h.MaxHP += 10;
@@ -878,7 +878,7 @@ void LevelUp(long playerId)
 ```csharp
 // Components are STRUCTS (value types), not classes
 
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 if (t.ReadEntity(42, out PlayerComponent player))
 {
     // This modifies a LOCAL COPY

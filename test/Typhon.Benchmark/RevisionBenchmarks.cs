@@ -66,7 +66,7 @@ public class RevisionBenchmarks
         _dbe.RegisterComponentFromAccessor<RevComp>();
 
         // Create entity with 1 version
-        using (var t = _dbe.CreateTransaction())
+        using (var t = _dbe.CreateQuickTransaction())
         {
             var comp = new RevComp { Value = 1, Timestamp = 1 };
             _singleVersionEntity = t.CreateEntity(ref comp);
@@ -74,7 +74,7 @@ public class RevisionBenchmarks
         }
 
         // Create entity with 10 versions (1 create + 9 updates)
-        using (var t = _dbe.CreateTransaction())
+        using (var t = _dbe.CreateQuickTransaction())
         {
             var comp = new RevComp { Value = 1, Timestamp = 1 };
             _tenVersionEntity = t.CreateEntity(ref comp);
@@ -82,14 +82,14 @@ public class RevisionBenchmarks
         }
         for (int i = 2; i <= 10; i++)
         {
-            using var t = _dbe.CreateTransaction();
+            using var t = _dbe.CreateQuickTransaction();
             var comp = new RevComp { Value = i, Timestamp = i };
             t.UpdateEntity(_tenVersionEntity, ref comp);
             t.Commit();
         }
 
         // Create entity with 50 versions (1 create + 49 updates)
-        using (var t = _dbe.CreateTransaction())
+        using (var t = _dbe.CreateQuickTransaction())
         {
             var comp = new RevComp { Value = 1, Timestamp = 1 };
             _fiftyVersionEntity = t.CreateEntity(ref comp);
@@ -97,7 +97,7 @@ public class RevisionBenchmarks
         }
         for (int i = 2; i <= 50; i++)
         {
-            using var t = _dbe.CreateTransaction();
+            using var t = _dbe.CreateQuickTransaction();
             var comp = new RevComp { Value = i, Timestamp = i };
             t.UpdateEntity(_fiftyVersionEntity, ref comp);
             t.Commit();
@@ -119,7 +119,7 @@ public class RevisionBenchmarks
     [Benchmark]
     public void Read_SingleVersion()
     {
-        using var t = _dbe.CreateTransaction();
+        using var t = _dbe.CreateQuickTransaction();
         t.ReadEntity(_singleVersionEntity, out RevComp _);
     }
 
@@ -129,7 +129,7 @@ public class RevisionBenchmarks
     [Benchmark]
     public void Read_10Versions()
     {
-        using var t = _dbe.CreateTransaction();
+        using var t = _dbe.CreateQuickTransaction();
         t.ReadEntity(_tenVersionEntity, out RevComp _);
     }
 
@@ -139,7 +139,7 @@ public class RevisionBenchmarks
     [Benchmark]
     public void Read_50Versions()
     {
-        using var t = _dbe.CreateTransaction();
+        using var t = _dbe.CreateQuickTransaction();
         t.ReadEntity(_fiftyVersionEntity, out RevComp _);
     }
 }

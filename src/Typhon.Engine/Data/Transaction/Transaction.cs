@@ -130,6 +130,12 @@ public unsafe class Transaction : IDisposable
     // to flush in a single batch (one lock acquire instead of N). Never re-allocated after warmup.
     private List<DeferredCleanupManager.CleanupEntry> _deferredEnqueueBatch;
 
+    /// <summary>The UoW that owns this transaction (null for legacy <c>CreateTransaction()</c> path, UoW ID effectively 0).</summary>
+    internal UnitOfWork OwningUnitOfWork { get; private set; }
+
+    /// <summary>When true, <see cref="Dispose"/> also disposes <see cref="OwningUnitOfWork"/>. Set by <c>CreateQuickTransaction()</c>.</summary>
+    internal bool OwnsUnitOfWork { get; set; }
+
     public Transaction Previous { get; internal set; }
     public Transaction Next { get; internal set; }
 
@@ -157,12 +163,13 @@ public unsafe class Transaction : IDisposable
         _componentInfos = new Dictionary<Type, ComponentInfoBase>(ComponentInfosMaxCapacity);
     }
 
-    public void Init(DatabaseEngine dbe, long tsn)
+    public void Init(DatabaseEngine dbe, long tsn, UnitOfWork uow = null)
     {
         _dbe = dbe;
         _epochManager = _dbe.EpochManager;
         _ = _epochManager.EnterScope(); // Depth unused: Transaction uses ExitScopeUnordered (not LIFO)
         _isDisposed = false;
+        OwningUnitOfWork = uow;
 #if DEBUG
         _debugOwningThreadId = Environment.CurrentManagedThreadId;
 #endif
@@ -179,6 +186,8 @@ public unsafe class Transaction : IDisposable
     {
         _dbe = null;
         _epochManager = null;
+        OwningUnitOfWork = null;
+        OwnsUnitOfWork = false;
 #if DEBUG
         _debugOwningThreadId = 0;
 #endif
@@ -254,7 +263,14 @@ public unsafe class Transaction : IDisposable
         // (not necessarily LIFO), unlike EpochGuard which is stack-bound.
         _epochManager.ExitScopeUnordered();
 
+        // Capture UoW reference before Remove() — Remove() may call Reset() which clears these fields
+        var owningUow = OwnsUnitOfWork ? OwningUnitOfWork : null;
+
         _dbe.TransactionChain.Remove(this);
+
+        // Auto-dispose UoW if this transaction owns it (CreateQuickTransaction pattern)
+        owningUow?.Dispose();
+
         _isDisposed = true;
     }
 

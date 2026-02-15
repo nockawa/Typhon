@@ -158,7 +158,7 @@ internal sealed class ShellSession : IDisposable
             throw new InvalidOperationException("A transaction is already active.");
         }
 
-        _transaction = _engine.CreateTransaction();
+        _transaction = _engine.CreateQuickTransaction();
         _dirty = false;
         return _transaction;
     }
@@ -211,7 +211,7 @@ internal sealed class ShellSession : IDisposable
         if (AutoCommit)
         {
             isAutoCommit = true;
-            return _engine.CreateTransaction();
+            return _engine.CreateQuickTransaction();
         }
 
         isAutoCommit = false;

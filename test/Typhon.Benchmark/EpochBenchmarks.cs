@@ -307,7 +307,7 @@ public class TransactionBenchmarks
 
         // Pre-populate entities for read/update benchmarks
         _entityIds = new long[EntityCount];
-        using var t = _dbe.CreateTransaction();
+        using var t = _dbe.CreateQuickTransaction();
         for (int i = 0; i < EntityCount; i++)
         {
             var comp = new BenchComp { Value = i, Timestamp = DateTime.UtcNow.Ticks };
@@ -331,7 +331,7 @@ public class TransactionBenchmarks
     [Benchmark]
     public void Transaction_CreateReadCommit()
     {
-        using var t = _dbe.CreateTransaction();
+        using var t = _dbe.CreateQuickTransaction();
         var comp = new BenchComp { Value = 42, Timestamp = 12345 };
         var eid = t.CreateEntity(ref comp);
         t.ReadEntity(eid, out BenchComp _);
@@ -344,7 +344,7 @@ public class TransactionBenchmarks
     [Benchmark]
     public void Transaction_BulkRead()
     {
-        using var t = _dbe.CreateTransaction();
+        using var t = _dbe.CreateQuickTransaction();
         for (int i = 0; i < _entityIds.Length; i++)
         {
             t.ReadEntity(_entityIds[i], out BenchComp _);
@@ -357,7 +357,7 @@ public class TransactionBenchmarks
     [Benchmark]
     public void Transaction_BulkUpdate()
     {
-        using var t = _dbe.CreateTransaction();
+        using var t = _dbe.CreateQuickTransaction();
         for (int i = 0; i < _entityIds.Length; i++)
         {
             var comp = new BenchComp { Value = i + 1000, Timestamp = DateTime.UtcNow.Ticks };

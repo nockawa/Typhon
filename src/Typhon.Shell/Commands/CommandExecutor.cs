@@ -488,7 +488,7 @@ internal sealed class CommandExecutor
         var tempTx = false;
         if (tx == null)
         {
-            tx = _session.Engine.CreateTransaction();
+            tx = _session.Engine.CreateQuickTransaction();
             tempTx = true;
         }
 

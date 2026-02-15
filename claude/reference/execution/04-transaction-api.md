@@ -374,12 +374,12 @@ public void EndToEnd_DeadlineExpired_TransactionTimeoutException()
     dbe.RegisterComponent<TestComponent>();
 
     // Create some contention: start a long-running transaction that holds locks
-    using var blockingTx = dbe.CreateTransaction();
+    using var blockingTx = dbe.CreateQuickTransaction();
     var pk = blockingTx.CreateEntity(new TestComponent { Value = 1 });
     // Don't commit yet — this holds the revision chain
 
     // Try to commit another transaction with a very short deadline
-    using var tx = dbe.CreateTransaction();
+    using var tx = dbe.CreateQuickTransaction();
     tx.UpdateComponent(pk, new TestComponent { Value = 2 });
 
     var ctx = UnitOfWorkContext.FromTimeout(TimeSpan.FromMilliseconds(100));

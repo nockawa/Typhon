@@ -28,7 +28,7 @@ class TransactionTests : TestBase<TransactionTests>
             }
 
             {
-                using var t = dbe.CreateTransaction();
+                using var t = dbe.CreateQuickTransaction();
 
                 if (noiseMode >= 2)
                 {
@@ -55,13 +55,13 @@ class TransactionTests : TestBase<TransactionTests>
 
             if (rollback)
             {
-                using var t = dbe.CreateTransaction();
+                using var t = dbe.CreateQuickTransaction();
                 var res = t.ReadEntity(e1, out CompA ar);
                 Assert.That(res, Is.False, "Entity read on a rolled back component should not be successful");
             }
             else
             {
-                using var t = dbe.CreateTransaction();
+                using var t = dbe.CreateQuickTransaction();
                 var res = t.ReadEntity(e1, out CompA ar);
                 Assert.That(res, Is.True, "Entity read on an existing component should be successful");
                 Assert.That(ar.A, Is.EqualTo(a.A), $"Component should have a value of {a.A}");
@@ -84,7 +84,7 @@ class TransactionTests : TestBase<TransactionTests>
                 noiseIds = CreateNoiseCompA(dbe);
             }
 
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
 
             var a = new CompA(2);
             var b = new CompB(1, 1.2f);
@@ -124,7 +124,7 @@ class TransactionTests : TestBase<TransactionTests>
             long e1;
             int arev;
             {
-                using var t = dbe.CreateTransaction();
+                using var t = dbe.CreateQuickTransaction();
 
                 if (noiseMode >= 1)
                 {
@@ -144,7 +144,7 @@ class TransactionTests : TestBase<TransactionTests>
             }
 
             {
-                using var t = dbe.CreateTransaction();
+                using var t = dbe.CreateQuickTransaction();
 
                 if (noiseMode >= 2)
                 {
@@ -174,7 +174,7 @@ class TransactionTests : TestBase<TransactionTests>
             long[] noiseIds = null;
             long e1;
             {
-                using var t = dbe.CreateTransaction();
+                using var t = dbe.CreateQuickTransaction();
 
                 if (noiseMode >= 1)
                 {
@@ -201,7 +201,7 @@ class TransactionTests : TestBase<TransactionTests>
             }
 
             {
-                using var t = dbe.CreateTransaction();
+                using var t = dbe.CreateQuickTransaction();
 
                 if (noiseMode >= 3)
                 {
@@ -229,7 +229,7 @@ class TransactionTests : TestBase<TransactionTests>
             var c = new CompC("Porcupine Tree");
             long e1;
             {
-                using var t = dbe.CreateTransaction();
+                using var t = dbe.CreateQuickTransaction();
 
                 e1 = t.CreateEntity(ref a, ref b, ref c);
                 Assert.That(e1, Is.Not.Zero, "A valid entity id must be non-zero");
@@ -241,7 +241,7 @@ class TransactionTests : TestBase<TransactionTests>
 
             long[] noiseIds = null;
             {
-                using var t = dbe.CreateTransaction();
+                using var t = dbe.CreateQuickTransaction();
 
                 if (noiseMode >= 1)
                 {
@@ -280,7 +280,7 @@ class TransactionTests : TestBase<TransactionTests>
             }
 
             {
-                using var t = dbe.CreateTransaction();
+                using var t = dbe.CreateQuickTransaction();
 
                 var res = t.ReadEntity(e1, out CompA a2);
                 Assert.That(res, Is.True);
@@ -306,7 +306,7 @@ class TransactionTests : TestBase<TransactionTests>
             RegisterComponents(dbe);
 
             {
-                using var t = dbe.CreateTransaction();
+                using var t = dbe.CreateQuickTransaction();
 
                 e1 = t.CreateEntity(ref a, eList);
                 Assert.That(e1, Is.Not.Zero, "A valid entity id must be non-zero");
@@ -317,7 +317,7 @@ class TransactionTests : TestBase<TransactionTests>
             }
 
             {
-                using var t = dbe.CreateTransaction();
+                using var t = dbe.CreateQuickTransaction();
 
                 var res = t.ReadEntity(e1, out a, out CompE[] eList2);
                 Assert.That(res, Is.True);
@@ -342,7 +342,7 @@ class TransactionTests : TestBase<TransactionTests>
             var curRevisionCount = 0;
             long e1;
             {
-                using var t = dbe.CreateTransaction();
+                using var t = dbe.CreateQuickTransaction();
 
                 var a = new CompA(2, 3, 4);
                 e1 = t.CreateEntity(ref a);
@@ -356,7 +356,7 @@ class TransactionTests : TestBase<TransactionTests>
 
             // Let's keep a long-running transaction that will prevent cleanup of old revisions
             var longRunningValue = new CompA(200, 300, 400);
-            var longRunningTransaction = dbe.CreateTransaction();
+            var longRunningTransaction = dbe.CreateQuickTransaction();
             {
                 longRunningTransaction.UpdateEntity(e1, ref longRunningValue);
                 curRevisionCount++;
@@ -377,7 +377,7 @@ class TransactionTests : TestBase<TransactionTests>
 
                 for (int i = 0; i < opCount; i++)
                 {
-                    using var t = dbe.CreateTransaction();
+                    using var t = dbe.CreateQuickTransaction();
 
                     var a = CompA.Create(Rand);
                     t.UpdateEntity(e1, ref a);
@@ -394,7 +394,7 @@ class TransactionTests : TestBase<TransactionTests>
 
             // Commit the long-running transaction, this should trigger a cleanup of old revisions, keeping only the last one which is the long running one
             {
-                using var readTransaction = dbe.CreateTransaction();
+                using var readTransaction = dbe.CreateQuickTransaction();
                 Assert.That(readTransaction.GetRevisionCount<CompA>(e1), Is.EqualTo(curRevisionCount-rbCount), "The number of revisions stored should match the number of committed updates plus the original creation");
                 var res = longRunningTransaction.Commit();
                 Assert.That(res, Is.True);
@@ -404,7 +404,7 @@ class TransactionTests : TestBase<TransactionTests>
 
             // Create a transaction to read and check
             {
-                using var readTransaction = dbe.CreateTransaction();
+                using var readTransaction = dbe.CreateQuickTransaction();
                 readTransaction.ReadEntity(e1, out CompA aFinal);
                 Assert.That(aFinal, Is.EqualTo(longRunningValue), "The last committed revision should be the one remaining");
             }
@@ -427,7 +427,7 @@ class TransactionTests : TestBase<TransactionTests>
 
         // Create the entity e1, revision R1
         {
-            using var t1 = dbe.CreateTransaction();
+            using var t1 = dbe.CreateQuickTransaction();
             Logger.LogInformation("T1 creation time {tick}", t1.TSN);
 
             e1 = t1.CreateEntity(ref aR1, ref bR1, ref cR1);
@@ -436,14 +436,14 @@ class TransactionTests : TestBase<TransactionTests>
         }
 
         // Create transaction T2 on the main thread (takes a snapshot BEFORE T3 commits)
-        var t2 = dbe.CreateTransaction();
+        var t2 = dbe.CreateQuickTransaction();
         Logger.LogInformation("T2 creation time {tick}", t2.TSN);
 
         // Change the entity on a background thread to create a new revision
         {
             var task = Task.Run(() =>
             {
-                using var t3 = dbe.CreateTransaction();
+                using var t3 = dbe.CreateQuickTransaction();
                 Logger.LogInformation("T3 creation time {tick}", t3.TSN);
                 t3.ReadEntity<CompB>(e1, out var lbR2);
 
@@ -483,7 +483,7 @@ class TransactionTests : TestBase<TransactionTests>
 
         // Create entity
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             e1 = t.CreateEntity(ref a);
             Assert.That(e1, Is.Not.Zero, "Entity ID should be non-zero");
             var res = t.Commit();
@@ -511,7 +511,7 @@ class TransactionTests : TestBase<TransactionTests>
 
         // Delete entity - since this is the only transaction, cleanup should happen immediately
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var deleted = t.DeleteEntity<CompA>(e1);
             Assert.That(deleted, Is.True, "Delete should succeed");
             var res = t.Commit();
@@ -520,7 +520,7 @@ class TransactionTests : TestBase<TransactionTests>
 
         // Verify entity is no longer readable
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var readable = t.ReadEntity(e1, out CompA _);
             Assert.That(readable, Is.False, "Entity should not be readable after deletion");
         }
@@ -561,7 +561,7 @@ class TransactionTests : TestBase<TransactionTests>
 
         // Create entity in first transaction
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             e1 = t.CreateEntity(ref a);
             Assert.That(e1, Is.Not.Zero, "Entity ID should be non-zero");
             var res = t.Commit();
@@ -590,7 +590,7 @@ class TransactionTests : TestBase<TransactionTests>
 
         // Delete entity in second transaction
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var deleted = t.DeleteEntity<CompA>(e1);
             Assert.That(deleted, Is.True, "Delete should succeed");
             var res = t.Commit();
@@ -599,7 +599,7 @@ class TransactionTests : TestBase<TransactionTests>
 
         // Verify entity is not readable
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var readable = t.ReadEntity(e1, out CompA _);
             Assert.That(readable, Is.False, "Entity should not be readable after deletion");
         }
@@ -640,7 +640,7 @@ class TransactionTests : TestBase<TransactionTests>
 
         // Create entity
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             e1 = t.CreateEntity(ref a);
             var res = t.Commit();
             Assert.That(res, Is.True, "Commit should succeed");
@@ -649,14 +649,14 @@ class TransactionTests : TestBase<TransactionTests>
         var ct = dbe.GetComponentTable<CompA>();
 
         // Start a long-running transaction to prevent cleanup
-        var longRunningTxn = dbe.CreateTransaction();
+        var longRunningTxn = dbe.CreateQuickTransaction();
 
         // Read in long-running transaction to establish snapshot
         longRunningTxn.ReadEntity(e1, out CompA _);
 
         // Delete entity in a separate transaction
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var deleted = t.DeleteEntity<CompA>(e1);
             Assert.That(deleted, Is.True, "Delete should succeed");
             var res = t.Commit();
@@ -683,7 +683,7 @@ class TransactionTests : TestBase<TransactionTests>
 
         // Verify multiple revisions exist (create + delete)
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var revCount = t.GetRevisionCount<CompA>(e1);
             Assert.That(revCount, Is.GreaterThanOrEqualTo(2),
                 "Should have at least 2 revisions (create and delete) while long-running transaction exists");
@@ -728,7 +728,7 @@ class TransactionTests : TestBase<TransactionTests>
         // Create multiple entities
         for (int i = 0; i < 5; i++)
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var a = new CompA(i * 10);
             entityIds[i] = t.CreateEntity(ref a);
             t.Commit();
@@ -756,7 +756,7 @@ class TransactionTests : TestBase<TransactionTests>
         // Delete entities 0, 2, 4 (odd indices in the array)
         for (int i = 0; i < 5; i += 2)
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             t.DeleteEntity<CompA>(entityIds[i]);
             t.Commit();
         }
@@ -764,7 +764,7 @@ class TransactionTests : TestBase<TransactionTests>
         // Verify deleted entities are not readable
         for (int i = 0; i < 5; i += 2)
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var readable = t.ReadEntity(entityIds[i], out CompA _);
             Assert.That(readable, Is.False, $"Entity {i} should not be readable after deletion");
         }
@@ -772,7 +772,7 @@ class TransactionTests : TestBase<TransactionTests>
         // Verify remaining entities are still readable
         for (int i = 1; i < 5; i += 2)
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var readable = t.ReadEntity(entityIds[i], out CompA _);
             Assert.That(readable, Is.True, $"Entity {i} should still be readable");
         }
@@ -822,7 +822,7 @@ class TransactionTests : TestBase<TransactionTests>
 
         // Create and rollback
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             e1 = t.CreateEntity(ref a);
             Assert.That(e1, Is.Not.Zero, "Entity ID should be non-zero");
 
@@ -832,7 +832,7 @@ class TransactionTests : TestBase<TransactionTests>
 
         // Verify entity is not readable
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var readable = t.ReadEntity(e1, out CompA _);
             Assert.That(readable, Is.False, "Entity should not be readable after rollback");
         }

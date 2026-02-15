@@ -18,7 +18,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
         t.CreateEntity(ref a);
 
@@ -33,7 +33,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
 
         var res = t.Commit();
         Assert.That(res, Is.True);
@@ -45,7 +45,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
         t.CreateEntity(ref a);
 
@@ -60,7 +60,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
 
         var res = t.Rollback();
         Assert.That(res, Is.True);
@@ -76,7 +76,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
         t.CreateEntity(ref a);
 
@@ -94,7 +94,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
         t.CreateEntity(ref a);
 
@@ -112,7 +112,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
         t.CreateEntity(ref a);
 
@@ -129,7 +129,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
         t.CreateEntity(ref a);
 
@@ -150,7 +150,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
         t.CreateEntity(ref a);
 
@@ -170,7 +170,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
         t.CreateEntity(ref a);
 
@@ -190,7 +190,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
         t.CreateEntity(ref a);
 
@@ -210,7 +210,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
         t.CreateEntity(ref a);
 
@@ -237,7 +237,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
 
         long entityId;
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var a = new CompA(42);
             entityId = t.CreateEntity(ref a);
 
@@ -247,7 +247,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
 
         // Verify the committed data is readable
         {
-            using var t2 = dbe.CreateTransaction();
+            using var t2 = dbe.CreateQuickTransaction();
             var found = t2.ReadEntity(entityId, out CompA readA);
             Assert.That(found, Is.True);
             Assert.That(readA.A, Is.EqualTo(42));
@@ -262,7 +262,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
 
         long entityId;
         {
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var a = new CompA(42);
             entityId = t.CreateEntity(ref a);
 
@@ -272,7 +272,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
 
         // Verify the entity does not exist after rollback
         {
-            using var t2 = dbe.CreateTransaction();
+            using var t2 = dbe.CreateQuickTransaction();
             var found = t2.ReadEntity(entityId, out CompA _);
             Assert.That(found, Is.False);
         }
@@ -301,7 +301,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
             using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
             RegisterComponents(dbe);
 
-            using var t = dbe.CreateTransaction();
+            using var t = dbe.CreateQuickTransaction();
             var a = new CompA(42);
             t.CreateEntity(ref a);
 
@@ -371,7 +371,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
         t.CreateEntity(ref a);
 
@@ -391,7 +391,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        using var t = dbe.CreateTransaction();
+        using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
         t.CreateEntity(ref a);
 

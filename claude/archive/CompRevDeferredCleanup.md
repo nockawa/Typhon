@@ -857,14 +857,14 @@ Test: ProcessEmpty_DeletedEntity
 TestClass: DeferredCleanupIntegrationTests
 
 Test: LongRunningTransaction_AccumulatesRevisions_CleansOnCommit
-    t1 = dbe.CreateTransaction()  // Long-running, tick=100
+    t1 = dbe.CreateQuickTransaction()  // Long-running, tick=100
 
     // Create and update entity while T1 is active
-    t2 = dbe.CreateTransaction()  // tick=200
+    t2 = dbe.CreateQuickTransaction()  // tick=200
     pk = t2.CreateEntity(new CompA { Value = 1 })
     t2.Commit()
 
-    t3 = dbe.CreateTransaction()  // tick=300
+    t3 = dbe.CreateQuickTransaction()  // tick=300
     t3.UpdateEntity(pk, new CompA { Value = 2 })
     t3.Commit()
 
@@ -886,7 +886,7 @@ Test: LongRunningTransaction_AccumulatesRevisions_CleansOnCommit
     assert queueSize == 0
 
 Test: LazyCleanup_CleansOnAccess
-    t1 = dbe.CreateTransaction()  // tick=100
+    t1 = dbe.CreateQuickTransaction()  // tick=100
 
     // Create entity with multiple revisions
     CreateMultipleRevisions(tableA, pk=1, count=20)
@@ -894,7 +894,7 @@ Test: LazyCleanup_CleansOnAccess
     t1.Commit()  // T1 becomes tail and commits
 
     // Create new transaction
-    t2 = dbe.CreateTransaction()  // tick=1000
+    t2 = dbe.CreateQuickTransaction()  // tick=1000
 
     // Access entity - should trigger lazy cleanup
     t2.ReadEntity(pk=1, out comp)
@@ -904,8 +904,8 @@ Test: LazyCleanup_CleansOnAccess
     assert revCount < 20
 
 Test: ConcurrentCommits_ProcessCorrectEntries
-    t1 = dbe.CreateTransaction()  // tick=100
-    t2 = dbe.CreateTransaction()  // tick=200
+    t1 = dbe.CreateQuickTransaction()  // tick=100
+    t2 = dbe.CreateQuickTransaction()  // tick=200
 
     // Create entities updated during T1 and T2
     CreateAndUpdate(pk=1, duringTick=100)  // Should be cleaned when T1 commits
@@ -927,12 +927,12 @@ Test: ConcurrentCommits_ProcessCorrectEntries
 
 ```pseudocode
 Test: HighConcurrency_ManyTransactions_QueueStability
-    longRunner = dbe.CreateTransaction()
+    longRunner = dbe.CreateQuickTransaction()
 
     // Spawn 1000 concurrent transactions that create/update entities
     tasks = for i in 1..1000:
         Task.Run(() => {
-            t = dbe.CreateTransaction()
+            t = dbe.CreateQuickTransaction()
             pk = t.CreateEntity(new CompA { Value = i })
             t.Commit()
         })
@@ -949,11 +949,11 @@ Test: HighConcurrency_ManyTransactions_QueueStability
     assert queueSize < 10
 
 Test: VeryLongTransaction_MillionUpdates
-    longRunner = dbe.CreateTransaction()
+    longRunner = dbe.CreateQuickTransaction()
 
     // Create 1 million distinct entities
     for i in 1..1_000_000:
-        t = dbe.CreateTransaction()
+        t = dbe.CreateQuickTransaction()
         t.CreateEntity(new CompA { Value = i })
         t.Commit()
 

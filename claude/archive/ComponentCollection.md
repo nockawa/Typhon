@@ -70,7 +70,7 @@ public ReadOnlySpan<T> ReadCollection<T>(ComponentCollection<T> collection) wher
 ##### Creating Collections
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 // Build a collection
 var builder = t.CreateCollectionBuilder<int>();
@@ -89,7 +89,7 @@ t.Commit();
 ##### Reading Collections
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 if (t.ReadEntity(entityId, out InventoryComponent inv))
 {
@@ -106,7 +106,7 @@ if (t.ReadEntity(entityId, out InventoryComponent inv))
 ##### Updating Collections (Replace)
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 if (t.ReadEntity(entityId, out InventoryComponent inv))
 {
@@ -130,7 +130,7 @@ if (t.ReadEntity(entityId, out InventoryComponent inv))
 ##### Deleting Collections
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 if (t.ReadEntity(entityId, out InventoryComponent inv))
 {
@@ -187,7 +187,7 @@ public ref struct ComponentCollectionAccessor<T> where T : unmanaged
 ##### Creating Collections
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 var component = new InventoryComponent();
 
@@ -206,7 +206,7 @@ t.Commit();
 ##### Reading Collections
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 if (t.ReadEntity(entityId, out InventoryComponent inv))
 {
@@ -223,7 +223,7 @@ if (t.ReadEntity(entityId, out InventoryComponent inv))
 ##### Updating Collections
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 if (t.ReadEntity(entityId, out InventoryComponent inv))
 {
@@ -240,7 +240,7 @@ if (t.ReadEntity(entityId, out InventoryComponent inv))
 ##### Deleting Collections
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 if (t.ReadEntity(entityId, out InventoryComponent inv))
 {
@@ -302,7 +302,7 @@ public ref struct ComponentCollectionBuilder<T> where T : unmanaged
 ##### Creating Collections
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 // Option 1: Builder for multiple items
 var builder = t.CreateCollectionBuilder<int>();
@@ -325,7 +325,7 @@ t.Commit();
 ##### Reading Collections
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 if (t.ReadEntity(entityId, out InventoryComponent inv))
 {
@@ -346,7 +346,7 @@ if (t.ReadEntity(entityId, out InventoryComponent inv))
 ##### Updating Collections - Simple Operations
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 if (t.ReadEntity(entityId, out InventoryComponent inv))
 {
@@ -361,7 +361,7 @@ if (t.ReadEntity(entityId, out InventoryComponent inv))
 ##### Updating Collections - Complex Modifications
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 if (t.ReadEntity(entityId, out InventoryComponent inv))
 {
@@ -390,7 +390,7 @@ if (t.ReadEntity(entityId, out InventoryComponent inv))
 ##### Updating Collections - Replace Entire Collection
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 if (t.ReadEntity(entityId, out InventoryComponent inv))
 {
@@ -406,7 +406,7 @@ if (t.ReadEntity(entityId, out InventoryComponent inv))
 ##### Deleting Collections
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 if (t.ReadEntity(entityId, out InventoryComponent inv))
 {
@@ -456,7 +456,7 @@ public ComponentCollection<T> UpdateCollection<T>(ComponentCollection<T> collect
 ##### Creating Collections
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 // Create from array/span
 var items = t.CreateCollection<int>(new[] { 100, 200, 300 });
@@ -470,7 +470,7 @@ t.Commit();
 ##### Reading Collections
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 if (t.ReadEntity(entityId, out InventoryComponent inv))
 {
@@ -486,7 +486,7 @@ if (t.ReadEntity(entityId, out InventoryComponent inv))
 ##### Updating Collections
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 if (t.ReadEntity(entityId, out InventoryComponent inv))
 {
@@ -505,7 +505,7 @@ if (t.ReadEntity(entityId, out InventoryComponent inv))
 ##### Deleting Collections
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 if (t.ReadEntity(entityId, out InventoryComponent inv))
 {
@@ -637,7 +637,7 @@ public struct GuildComponent
 }
 
 // Create guild with members
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 var player1 = new PlayerComponent { Name = "Alice" };
 var player2 = new PlayerComponent { Name = "Bob" };
@@ -656,7 +656,7 @@ var guildId = t.CreateEntity(ref guild);
 t.Commit();
 
 // Read guild members
-using var t2 = dbe.CreateTransaction();
+using var t2 = dbe.CreateQuickTransaction();
 
 if (t2.ReadEntity(guildId, out GuildComponent g))
 {
@@ -675,7 +675,7 @@ if (t2.ReadEntity(guildId, out GuildComponent g))
 }
 
 // Add member to guild
-using var t3 = dbe.CreateTransaction();
+using var t3 = dbe.CreateQuickTransaction();
 
 var newPlayer = new PlayerComponent { Name = "Charlie" };
 var newPlayerId = t3.CreateEntity(ref newPlayer);
@@ -706,7 +706,7 @@ public struct InventoryComponent
 }
 
 // Create inventory
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 var itemBuilder = t.CreateCollectionBuilder<int>();
 itemBuilder.AddRange(new[] { 1001, 1002, 1003 });  // Sword, Shield, Potion
@@ -724,7 +724,7 @@ var playerId = t.CreateEntity(ref inventory);
 t.Commit();
 
 // Read inventory
-using var t2 = dbe.CreateTransaction();
+using var t2 = dbe.CreateQuickTransaction();
 
 if (t2.ReadEntity(playerId, out InventoryComponent inv))
 {
@@ -738,7 +738,7 @@ if (t2.ReadEntity(playerId, out InventoryComponent inv))
 }
 
 // Add item to inventory (simple)
-using var t3 = dbe.CreateTransaction();
+using var t3 = dbe.CreateQuickTransaction();
 
 if (t3.ReadEntity(playerId, out InventoryComponent inv))
 {
@@ -750,7 +750,7 @@ if (t3.ReadEntity(playerId, out InventoryComponent inv))
 }
 
 // Update item quantity (complex)
-using var t4 = dbe.CreateTransaction();
+using var t4 = dbe.CreateQuickTransaction();
 
 if (t4.ReadEntity(playerId, out InventoryComponent inv))
 {
@@ -819,7 +819,7 @@ SkillData[] ReadSkills(Transaction t, SkillsComponent skills)
 }
 
 // Create character with skills
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 var skillBuilder = t.CreateCollectionBuilder<ushort>();
 skillBuilder.AddRange(new ushort[] { 101, 102, 201 });  // Fireball, Ice Bolt, Heal
@@ -837,7 +837,7 @@ var charId = t.CreateEntity(ref skills);
 t.Commit();
 
 // Level up a skill
-using var t2 = dbe.CreateTransaction();
+using var t2 = dbe.CreateQuickTransaction();
 
 if (t2.ReadEntity(charId, out SkillsComponent current))
 {
@@ -895,7 +895,7 @@ public struct PlayerComponent
 }
 
 // Create guild with members
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 var alice = new PlayerComponent { Name = "Alice", Level = 50 };
 var bob = new PlayerComponent { Name = "Bob", Level = 45 };
@@ -914,7 +914,7 @@ var guildId = t.CreateEntity(ref guild);
 t.Commit();
 
 // List guild members
-using var t2 = dbe.CreateTransaction();
+using var t2 = dbe.CreateQuickTransaction();
 
 if (t2.ReadEntity(guildId, out GuildComponent g))
 {
@@ -927,7 +927,7 @@ if (t2.ReadEntity(guildId, out GuildComponent g))
 }
 
 // Add new member
-using var t3 = dbe.CreateTransaction();
+using var t3 = dbe.CreateQuickTransaction();
 
 var charlie = new PlayerComponent { Name = "Charlie", Level = 48 };
 var charlieId = t3.CreateEntity(ref charlie);
@@ -940,7 +940,7 @@ if (t3.ReadEntity(guildId, out GuildComponent g))
 }
 
 // Remove member
-using var t4 = dbe.CreateTransaction();
+using var t4 = dbe.CreateQuickTransaction();
 
 if (t4.ReadEntity(guildId, out GuildComponent g))
 {
@@ -958,7 +958,7 @@ Collections participate fully in snapshot isolation:
 
 ```csharp
 // Transaction 1 starts
-using var t1 = dbe.CreateTransaction();
+using var t1 = dbe.CreateQuickTransaction();
 
 if (t1.ReadEntity(entityId, out InventoryComponent inv1))
 {
@@ -966,7 +966,7 @@ if (t1.ReadEntity(entityId, out InventoryComponent inv1))
     Console.WriteLine($"T1 sees {items1.Length} items");  // 3 items
 
     // Transaction 2 modifies collection
-    using (var t2 = dbe.CreateTransaction())
+    using (var t2 = dbe.CreateQuickTransaction())
     {
         if (t2.ReadEntity(entityId, out InventoryComponent inv2))
         {
@@ -985,7 +985,7 @@ if (t1.ReadEntity(entityId, out InventoryComponent inv1))
 }
 
 // New transaction sees updated data
-using var t3 = dbe.CreateTransaction();
+using var t3 = dbe.CreateQuickTransaction();
 if (t3.ReadEntity(entityId, out InventoryComponent inv3))
 {
     var items3 = t3.ReadCollection(inv3.ItemIds);
@@ -998,7 +998,7 @@ if (t3.ReadEntity(entityId, out InventoryComponent inv3))
 When a component is updated but its collection fields remain unchanged, no new buffers are allocated:
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 if (t.ReadEntity(entityId, out InventoryComponent inv))
 {

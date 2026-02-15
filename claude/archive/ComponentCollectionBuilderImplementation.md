@@ -270,7 +270,7 @@ public partial class DatabaseEngine
 ### Example 1: Create Collection
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 // 1. Create builder
 var builder = t.CreateCollectionBuilder<int>();
@@ -317,7 +317,7 @@ VariableSizedBufferSegment<int>:
 ### Example 2: Update Collection (Copy + Modify)
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 if (t.ReadEntity(entityId, out InventoryComponent inv))
 {
@@ -372,7 +372,7 @@ Old revision garbage collected:
 ### Example 3: Rollback Scenario
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 var builder = t.CreateCollectionBuilder<int>();
 builder.Add(100);
@@ -396,7 +396,7 @@ t.Rollback();
 ### Example 4: Builder Without Build() (Abandoned)
 
 ```csharp
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 
 var builder = t.CreateCollectionBuilder<int>();
 builder.Add(100);

@@ -66,7 +66,7 @@ public class ComponentTableBenchmarks
 
         // Pre-populate entities for read/update benchmarks
         _entityIds = new long[PrePopulateCount];
-        using var t = _dbe.CreateTransaction();
+        using var t = _dbe.CreateQuickTransaction();
         for (int i = 0; i < PrePopulateCount; i++)
         {
             var comp = new DataBenchComp { Value = i, Timestamp = DateTime.UtcNow.Ticks };
@@ -91,7 +91,7 @@ public class ComponentTableBenchmarks
     [Benchmark]
     public void CreateEntity_SingleComponent()
     {
-        using var t = _dbe.CreateTransaction();
+        using var t = _dbe.CreateQuickTransaction();
         var comp = new DataBenchComp { Value = 42, Timestamp = 12345 };
         t.CreateEntity(ref comp);
         t.Commit();
@@ -104,7 +104,7 @@ public class ComponentTableBenchmarks
     [Benchmark]
     public void ReadComponent_ById()
     {
-        using var t = _dbe.CreateTransaction();
+        using var t = _dbe.CreateQuickTransaction();
         t.ReadEntity(_entityIds[0], out DataBenchComp _);
     }
 
@@ -115,7 +115,7 @@ public class ComponentTableBenchmarks
     [Benchmark]
     public void UpdateComponent_SingleField()
     {
-        using var t = _dbe.CreateTransaction();
+        using var t = _dbe.CreateQuickTransaction();
         var comp = new DataBenchComp { Value = 9999, Timestamp = DateTime.UtcNow.Ticks };
         t.UpdateEntity(_entityIds[0], ref comp);
         t.Commit();

@@ -129,20 +129,24 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     internal DeferredCleanupManager DeferredCleanupManager { get; }
 
     /// <summary>
-    /// Create a transaction in order to make Queries and CRUD operation on the database
+    /// Creates a new Unit of Work — the durability boundary for user operations. All transactions must be created through a UoW.
     /// </summary>
-    /// <returns>The transaction object</returns>
-    /// <remarks>
-    /// Typhon deals with accesses and changes through transaction only, even for query purpose. When the user creates a transaction, "now" (the
-    /// time when the transaction was created) is used as the reference point, every access will be based on the data that existed up to this point.
-    /// Every change will be isolated from other transactions until the content is committed.
-    /// </remarks>
-    [return: TransfersOwnership] 
-    public Transaction CreateTransaction()
+    /// <param name="durabilityMode">Controls when WAL records become crash-safe. Default is <see cref="DurabilityMode.Deferred"/>.</param>
+    /// <param name="timeout">Lifetime timeout for this UoW. Default uses <see cref="TimeoutOptions.DefaultUowTimeout"/>.</param>
+    /// <returns>A new <see cref="UnitOfWork"/> in <see cref="UnitOfWorkState.Pending"/> state.</returns>
+    [return: TransfersOwnership]
+    public UnitOfWork CreateUnitOfWork(DurabilityMode durabilityMode = DurabilityMode.Deferred, TimeSpan timeout = default)
     {
-        Interlocked.Increment(ref _transactionsCreated);
-        return TransactionChain.CreateTransaction(this);
+        var effectiveTimeout = timeout == default ? TimeoutOptions.Current.DefaultUowTimeout : timeout;
+
+        // Future: back-pressure check (#52)
+        // Future: allocate UoW ID from registry (#51)
+
+        return new UnitOfWork(this, durabilityMode, uowId: 0, effectiveTimeout);
     }
+
+    /// <summary>Records that a transaction was created (for observability counters).</summary>
+    internal void RecordTransactionCreated() => Interlocked.Increment(ref _transactionsCreated);
 
     public DatabaseEngine(IResourceRegistry resourceRegistry, EpochManager epochManager, DeadlineWatchdog watchdog,
         ManagedPagedMMF mmf, DatabaseEngineOptions options, ILogger<DatabaseEngine> log, string name = null) :
@@ -269,7 +273,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     private void SaveInSystemSchema(ComponentTable table)
     {
         var definition = table.Definition;
-        using var t = CreateTransaction();
+        using var t = this.CreateQuickTransaction();
 
         var comp = new ComponentR1
         {

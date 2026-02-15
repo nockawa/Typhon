@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Typhon.Engine;
 
 namespace Typhon.MonitoringDemo.Scenarios;
 
@@ -28,7 +29,7 @@ public class BaselineScenario : IScenario
                 // Pattern 1: Create entity in one transaction, read in another (unit test pattern)
                 long entityId;
                 {
-                    using var t = engine.CreateTransaction();
+                    using var t = engine.CreateQuickTransaction();
 
                     var building = FactoryBuilding.Create(rand, rand.Next(0, 5));
                     entityId = t.CreateEntity(ref building);
@@ -50,7 +51,7 @@ public class BaselineScenario : IScenario
                 // Pattern 2: Read the entity back in a new transaction
                 sw = Stopwatch.GetTimestamp();
                 {
-                    using var t = engine.CreateTransaction();
+                    using var t = engine.CreateQuickTransaction();
 
                     var success = t.ReadEntity<FactoryBuilding>(entityId, out var readBuilding);
                     if (success)

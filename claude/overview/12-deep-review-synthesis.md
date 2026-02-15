@@ -80,7 +80,7 @@ All 5 analysts independently converged on the same core findings. When a perform
 
 ### 3.2 Transaction Model (API Analyst)
 
-- **Clean `using` lifecycle**: `using var t = dbe.CreateTransaction()` with auto-rollback on dispose is idiomatic C#.
+- **Clean `using` lifecycle**: `using var t = dbe.CreateQuickTransaction()` with auto-rollback on dispose is idiomatic C#.
 - **Transparent snapshot isolation**: Users don't need to think about MVCC. Transactions see a consistent snapshot automatically.
 - **Read-your-own-writes**: Creating an entity and reading it back in the same transaction works correctly.
 - **Transaction pooling**: Invisible to users, reuses up to 16 transaction objects, zero steady-state allocation.

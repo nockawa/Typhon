@@ -78,7 +78,7 @@ public class WorkloadBenchmarks
 
         // Pre-populate entities for read-heavy benchmarks
         _entityIds = new long[PrePopulateCount];
-        using var t = _dbe.CreateTransaction();
+        using var t = _dbe.CreateQuickTransaction();
         for (int i = 0; i < PrePopulateCount; i++)
         {
             var comp = new WorkComp { Value = i, Timestamp = DateTime.UtcNow.Ticks };
@@ -103,7 +103,7 @@ public class WorkloadBenchmarks
     [Benchmark]
     public void CrudLifecycle()
     {
-        using var t = _dbe.CreateTransaction();
+        using var t = _dbe.CreateQuickTransaction();
         var comp = new WorkComp { Value = 42, Timestamp = 12345 };
         var eid = t.CreateEntity(ref comp);
         t.ReadEntity(eid, out WorkComp _);
@@ -120,7 +120,7 @@ public class WorkloadBenchmarks
     [Benchmark]
     public void ReadHeavy_90_10()
     {
-        using var t = _dbe.CreateTransaction();
+        using var t = _dbe.CreateQuickTransaction();
         for (int i = 0; i < 90; i++)
         {
             t.ReadEntity(_entityIds[i], out WorkComp _);
@@ -140,7 +140,7 @@ public class WorkloadBenchmarks
     [Benchmark]
     public void WriteHeavy_Batch()
     {
-        using var t = _dbe.CreateTransaction();
+        using var t = _dbe.CreateQuickTransaction();
         for (int i = 0; i < 100; i++)
         {
             var comp = new WorkComp { Value = i, Timestamp = 12345 };
@@ -156,7 +156,7 @@ public class WorkloadBenchmarks
     [Benchmark]
     public void MultiComponent_Crud()
     {
-        using var t = _dbe.CreateTransaction();
+        using var t = _dbe.CreateQuickTransaction();
         var comp1 = new WorkComp { Value = 42, Timestamp = 12345 };
         var comp2 = new WorkCompB { Score = 3.14f, Category = 1 };
         var eid = t.CreateEntity(ref comp1, ref comp2);

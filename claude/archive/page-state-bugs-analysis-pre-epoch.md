@@ -244,7 +244,7 @@ Removed `ChangeSet.Add()` call for dirty pages - this would cause Bug #1 when th
 ### Trigger Scenario
 
 ```csharp
-using (var t = dbe.CreateTransaction())
+using (var t = dbe.CreateQuickTransaction())
 {
     t.CreateEntity(ref component);  // Acquires pages via ChunkAccessor
     t.Commit();
@@ -441,7 +441,7 @@ The TYPHON004 analyzer (implemented in this session) correctly identified:
 ```csharp
 tw.AddStage(stage0, thread1, _ =>
 {
-    t2 = dbe.CreateTransaction();  // Created but never disposed!
+    t2 = dbe.CreateQuickTransaction();  // Created but never disposed!
     // ...
 });
 ```
@@ -451,7 +451,7 @@ tw.AddStage(stage0, thread1, _ =>
 tw.AddStage(stage0, thread1, _ =>
 {
     t2?.Dispose();  // Dispose previous if re-entering
-    t2 = dbe.CreateTransaction();
+    t2 = dbe.CreateQuickTransaction();
     // ...
 });
 

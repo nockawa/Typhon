@@ -180,7 +180,7 @@ var query = dbe
     .Build();  // Analyze and create execution plan
 
 // Execute in transaction
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 foreach (var (entityId, player, stats, location) in query.Execute(t))
 {
     Console.WriteLine($"Player: {player.Name}, Age: {player.Age}, Score: {stats.Score}");
@@ -1266,14 +1266,14 @@ var query = dbe
     .Build();  // Creates and caches plan
 
 // Execute multiple times
-using var t1 = dbe.CreateTransaction();
+using var t1 = dbe.CreateQuickTransaction();
 var results1 = query.Execute(t1);  // Uses cached plan
 
-using var t2 = dbe.CreateTransaction();
+using var t2 = dbe.CreateQuickTransaction();
 var results2 = query.Execute(t2);  // Uses cached plan
 
 // ❌ BAD: Recreate query each time
-using var t = dbe.CreateTransaction();
+using var t = dbe.CreateQuickTransaction();
 var results = dbe
     .Select<Player, Stats>()
     .Where((p, s) => p.Age < 18 && s.Score > 1000)
