@@ -171,12 +171,12 @@ class UnitOfWorkTests : TestBase<UnitOfWorkTests>
     }
 
     [Test]
-    public void UoW_UowId_IsZero_UntilRegistryLands()
+    public void UoW_UowId_IsAllocated_FromRegistry()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
 
         using var uow = dbe.CreateUnitOfWork();
-        Assert.That(uow.UowId, Is.EqualTo(0), "UoW ID should be 0 until UoW Registry (#51) is implemented");
+        Assert.That(uow.UowId, Is.GreaterThan((ushort)0), "UoW ID should be allocated from registry (1+)");
     }
 
     // ═══════════════════════════════════════════════════════════════

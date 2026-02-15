@@ -127,6 +127,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
     internal TransactionChain TransactionChain { get; }
     internal DeferredCleanupManager DeferredCleanupManager { get; }
+    internal UowRegistry UowRegistry { get; private set; }
 
     /// <summary>
     /// Creates a new Unit of Work — the durability boundary for user operations. All transactions must be created through a UoW.
@@ -140,9 +141,9 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         var effectiveTimeout = timeout == default ? TimeoutOptions.Current.DefaultUowTimeout : timeout;
 
         // Future: back-pressure check (#52)
-        // Future: allocate UoW ID from registry (#51)
+        var uowId = UowRegistry.AllocateUowId();
 
-        return new UnitOfWork(this, durabilityMode, uowId: 0, effectiveTimeout);
+        return new UnitOfWork(this, durabilityMode, uowId, effectiveTimeout);
     }
 
     /// <summary>Records that a transaction was created (for observability counters).</summary>
@@ -166,6 +167,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
         DBD = new DatabaseDefinitions();
         ConstructComponentStore();
+        InitializeUowRegistry();
 
         if (MMF.IsDatabaseFileCreating)
         {
@@ -185,6 +187,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         if (disposing)
         {
             TransactionChain.Dispose();
+            UowRegistry?.Dispose();
             MMF.Dispose();
         }
         base.Dispose(disposing);
@@ -195,6 +198,52 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     {
         _componentTableByType = new ConcurrentDictionary<Type, ComponentTable>();
         _curPrimaryKey = 0;
+    }
+
+    private void InitializeUowRegistry()
+    {
+        using var guard = EpochGuard.Enter(EpochManager);
+        var epoch = guard.Epoch;
+
+        if (MMF.IsDatabaseFileCreating)
+        {
+            // Creating path: allocate a 1-page segment for the registry (150 entries)
+            var cs = MMF.CreateChangeSet();
+            var segment = MMF.AllocateSegment(PageBlockType.None, 1, cs);
+
+            // Clear the data area so all entries start as Free (State = 0)
+            var page = segment.GetPageExclusive(0, epoch, out var memPageIdx);
+            cs.AddByMemPageIndex(memPageIdx);
+            var offset = LogicalSegment.RootHeaderIndexSectionLength;
+            page.RawData<byte>(offset, PagedMMF.PageRawDataSize - offset).Clear();
+            MMF.UnlatchPageExclusive(memPageIdx);
+
+            // Write SPI to root header
+            MMF.RequestPageEpoch(0, epoch, out var rootMemPageIdx);
+            var rootLatched = MMF.TryLatchPageExclusive(rootMemPageIdx);
+            Debug.Assert(rootLatched, "TryLatchPageExclusive failed on root page during registry init");
+            var rootPage = MMF.GetPage(rootMemPageIdx);
+            cs.AddByMemPageIndex(rootMemPageIdx);
+            ref var header = ref rootPage.As<RootFileHeader>();
+            header.UowRegistrySPI = segment.RootPageIndex;
+            MMF.UnlatchPageExclusive(rootMemPageIdx);
+
+            cs.SaveChanges();
+
+            UowRegistry = new UowRegistry(segment, MMF, EpochManager);
+            UowRegistry.Initialize();
+        }
+        else
+        {
+            // Loading path: read SPI from root header
+            MMF.RequestPageEpoch(0, epoch, out var rootMemPageIdx);
+            var rootPage = MMF.GetPage(rootMemPageIdx);
+            ref var header = ref rootPage.As<RootFileHeader>();
+            var spi = header.UowRegistrySPI;
+            var segment = MMF.GetSegment(spi);
+            UowRegistry = new UowRegistry(segment, MMF, EpochManager);
+            UowRegistry.LoadFromDisk();
+        }
     }
 
     private static int RoundToStandardStride(int size) =>
@@ -246,7 +295,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         _componentsTable = GetComponentTable<ComponentR1>();
 
         using var guard = EpochGuard.Enter(EpochManager);
-        var epoch = EpochManager.GlobalEpoch;
+        var epoch = guard.Epoch;
 
         MMF.RequestPageEpoch(0, epoch, out var memPageIdx);
         var latched = MMF.TryLatchPageExclusive(memPageIdx);

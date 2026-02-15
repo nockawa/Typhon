@@ -20,6 +20,7 @@ unsafe internal struct RootFileHeader
     public int SystemSchemaRevision;
     public int ComponentTableSPI;
     public int FieldTableSPI;
+    public int UowRegistrySPI;
 
     public string HeaderSignatureString
     {
@@ -186,7 +187,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         base.OnFileCreating();
 
         using var guard = EpochGuard.Enter(EpochManager);
-        var epoch = EpochManager.GlobalEpoch;
+        var epoch = guard.Epoch;
 
         RequestPageEpoch(0, epoch, out var memPageIdx);
         var latched = TryLatchPageExclusive(memPageIdx);
@@ -238,7 +239,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         base.OnFileLoading();
 
         using var guard = EpochGuard.Enter(EpochManager);
-        var epoch = EpochManager.GlobalEpoch;
+        var epoch = guard.Epoch;
 
         RequestPageEpoch(0, epoch, out var memPageIdx);
         var page = GetPage(memPageIdx);

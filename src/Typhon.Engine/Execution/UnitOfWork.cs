@@ -40,7 +40,7 @@ public sealed class UnitOfWork : IDisposable
     /// <summary>Current lifecycle state of this UoW.</summary>
     public UnitOfWorkState State => _state;
 
-    /// <summary>UoW identifier for revision stamping and crash recovery. 0 until UoW Registry (#51) lands.</summary>
+    /// <summary>UoW identifier for revision stamping and crash recovery. Allocated from UoW Registry.</summary>
     public ushort UowId => _uowId;
 
     /// <summary>Number of transactions created within this UoW.</summary>
@@ -140,7 +140,10 @@ public sealed class UnitOfWork : IDisposable
         _cts.Cancel();
         _cts.Dispose();
 
-        // Future: return UoW ID to registry (#51)
+        if (_uowId != 0)
+        {
+            _dbe.UowRegistry.Release(_uowId);
+        }
 
         _state = UnitOfWorkState.Free;
     }
