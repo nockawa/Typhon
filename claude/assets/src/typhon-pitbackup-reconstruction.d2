@@ -1,0 +1,185 @@
+# Typhon: PIT Backup — Reconstruction Chain Walk
+# Shows how pages are assembled by walking the backup chain backward
+
+direction: down
+
+# ── Title ─────────────────────────────────────────────────────
+title: "PIT Backup — Reconstruction Chain Walk" {
+  shape: text
+  style.font-size: 22
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+# ── Backup Chain (horizontal) ─────────────────────────────────
+chain: "Backup Chain (oldest to newest)" {
+  style.fill: "#fafafa"
+  style.stroke: "#607d8b"
+  style.border-radius: 10
+
+  direction: right
+
+  base: |md
+    **base-0001**
+    Full backup
+    Pages: A, B, C
+  | {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+    style.bold: true
+  }
+
+  incr2: |md
+    **incr-0002**
+    Incremental
+    Pages: B
+  | {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1565c0"
+    style.bold: true
+  }
+
+  incr3: |md
+    **incr-0003**
+    Incremental
+    Pages: A
+  | {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1565c0"
+    style.bold: true
+  }
+
+  incr4: |md
+    **incr-0004**
+    Incremental
+    Pages: A, D
+  | {
+    shape: rectangle
+    style.fill: "#e1bee7"
+    style.stroke: "#6a1b9a"
+    style.bold: true
+  }
+
+  base -> incr2: "" {style.stroke: "#78909c"}
+  incr2 -> incr3: "" {style.stroke: "#78909c"}
+  incr3 -> incr4: "" {style.stroke: "#78909c"}
+}
+
+# ── Chain Walk (backward) ────────────────────────────────────
+walk: "Page Map — Walk BACKWARD (newest first)" {
+  style.fill: "#fff8e1"
+  style.stroke: "#f9a825"
+  style.border-radius: 10
+
+  direction: right
+
+  scan4: |md
+    **Scan incr-0004**
+    Page A -> slot (first hit)
+    Page D -> slot (first hit)
+  | {
+    shape: rectangle
+    style.fill: "#fff3e0"
+    style.stroke: "#e65100"
+    style.border-radius: 6
+  }
+
+  scan3: |md
+    **Scan incr-0003**
+    Page A -> SKIP (already found)
+  | {
+    shape: rectangle
+    style.fill: "#fff3e0"
+    style.stroke: "#e65100"
+    style.border-radius: 6
+  }
+
+  scan2: |md
+    **Scan incr-0002**
+    Page B -> slot (first hit)
+  | {
+    shape: rectangle
+    style.fill: "#fff3e0"
+    style.stroke: "#e65100"
+    style.border-radius: 6
+  }
+
+  scan1: |md
+    **Scan base-0001**
+    Page A -> SKIP
+    Page B -> SKIP
+    Page C -> slot (first hit)
+  | {
+    shape: rectangle
+    style.fill: "#fff3e0"
+    style.stroke: "#e65100"
+    style.border-radius: 6
+  }
+
+  scan4 -> scan3: "walk back" {style.stroke: "#e65100"; style.bold: true}
+  scan3 -> scan2: "walk back" {style.stroke: "#e65100"; style.bold: true}
+  scan2 -> scan1: "walk back" {style.stroke: "#e65100"; style.bold: true}
+}
+
+# ── Rule highlight ────────────────────────────────────────────
+rule: "First Hit Wins — newest version of each page is used\nWalk from restore target backward to base" {
+  shape: text
+  style.font-size: 14
+  style.font-color: "#bf360c"
+  style.bold: true
+}
+
+# ── Result: Reconstructed Database ────────────────────────────
+result: "Reconstructed Database" {
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.border-radius: 10
+
+  direction: right
+
+  page_a: "Page A\nfrom incr-0004" {
+    shape: page
+    style.fill: "#e1bee7"
+    style.stroke: "#6a1b9a"
+    style.bold: true
+  }
+
+  page_b: "Page B\nfrom incr-0002" {
+    shape: page
+    style.fill: "#bbdefb"
+    style.stroke: "#1565c0"
+    style.bold: true
+  }
+
+  page_c: "Page C\nfrom base-0001" {
+    shape: page
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+    style.bold: true
+  }
+
+  page_d: "Page D\nfrom incr-0004" {
+    shape: page
+    style.fill: "#e1bee7"
+    style.stroke: "#6a1b9a"
+    style.bold: true
+  }
+}
+
+# ── Connections ──────────────────────────────────────────────
+
+chain -> walk: "Build page map" {
+  style.stroke: "#f9a825"
+  style.bold: true
+}
+
+walk -> result: "Assemble all pages" {
+  style.stroke: "#2e7d32"
+  style.bold: true
+}
+
+walk -> rule: "" {style.opacity: 0}

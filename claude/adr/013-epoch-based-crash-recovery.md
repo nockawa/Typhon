@@ -1,8 +1,11 @@
-# ADR-013: Epoch-Based Crash Recovery
+# ADR-013: UoW ID-Based Crash Recovery
 
-**Status**: Accepted
+**Status**: Accepted (updated 2026-02 — terminology and state machine aligned with current design)
 **Date**: 2025-01 (inferred from conversation history)
+**Updated**: 2026-02-15 — Renamed "epoch" → "UoW ID", updated state machine, aligned with WAL-based registry
 **Deciders**: Developer + Claude (design session)
+
+> **Terminology note:** This ADR was originally titled "Epoch-Based Crash Recovery" and used "epoch" throughout. The term was renamed to **UoW ID** to avoid ambiguity with `EpochManager.GlobalEpoch` (a separate 64-bit EBRM counter for page cache eviction safety). See the [UoW design doc](../design/unit-of-work.md) terminology note.
 
 ## Context
 
@@ -15,18 +18,19 @@ Typhon's UoW model provides a natural grouping: each UoW has a set of transactio
 
 ## Decision
 
-Use **epoch-based crash recovery** with a persistent UoW Registry:
+Use **UoW ID-based crash recovery** with a WAL-backed UoW Registry:
 
-1. Each UoW is assigned a unique `ushort Epoch` (2 bytes) from a registry
-2. Every revision element is stamped with its owning UoW's epoch at write time
-3. The registry segment tracks epoch lifecycle: `Active → Flushed → Recycled`
+1. Each UoW is assigned a unique **15-bit UoW ID** (max 32,767) from a registry. Bit 15 of the 2-byte `_packedUowId` field is reserved for the IsolationFlag.
+2. Every revision element is stamped with its owning UoW's ID at commit time
+3. The registry tracks UoW lifecycle: `Free → Pending → WalDurable → Committed → Free` (normal), or `Pending → Void → Free` (crash recovery)
 4. On crash recovery:
-   - Scan registry: identify epochs that were `Active` (never flushed) at crash time
-   - Mark those epochs as `Voided`
-   - During normal reads, revisions with voided epochs are invisible (as if rolled back)
-   - WAL replay restores any committed-but-not-yet-checkpointed data
+   - Load registry checkpoint from ManagedMMF, replay WAL delta since last checkpoint
+   - Identify UoW IDs that were `Pending` at crash time → mark `Void`
+   - Set `CommittedBeforeTSN = 0` → activates committed bitmap as visibility filter
+   - WAL replay restores any WalDurable-but-not-yet-checkpointed data
+   - Ghost revisions (from voided UoWs physically on disk) are invisible via the committed bitmap
 
-**Epoch stamping happens in ComponentTable** at write time — the CT is UoW-aware and receives the epoch from the transaction.
+**UoW ID stamping happens in `CompRevStorageElement._packedUowId`** at commit time — the transaction stamps each pending revision with `OwningUnitOfWork.UowId`.
 
 ## Alternatives Considered
 
@@ -38,20 +42,24 @@ Use **epoch-based crash recovery** with a persistent UoW Registry:
 ## Consequences
 
 **Positive:**
-- O(1) recovery initialization (just scan registry, mark voided epochs)
-- Minimal per-revision overhead (2 bytes for epoch vs 4+ for transaction ID)
+- O(registry checkpoint + WAL delta) recovery initialization — registry scan + replay, typically 15-60ms
+- Minimal per-revision overhead (2 bytes for UoW ID + IsolationFlag)
 - No undo I/O during normal operation
 - Natural integration with UoW lifecycle
-- 65536 concurrent epochs sufficient (recycled after GC)
+- 32,767 concurrent UoW IDs sufficient (recycled after GC)
+- Two-tier visibility: `CommittedBeforeTSN` fast path during normal operation (zero bitmap overhead), bitmap fallback only post-crash
 
 **Negative:**
 - Recovery granularity is UoW-level (cannot partially recover a UoW)
-- Epoch space limited to 65536 concurrent UoWs (sufficient for embedded use)
-- Registry segment requires its own fsync lifecycle
-- Voided epochs must be cleaned up during subsequent operations (lazy scan)
+- UoW ID space limited to 32,767 concurrent UoWs (sufficient for embedded use)
+- Voided UoW ghost revisions must be cleaned up by `DeferredCleanupManager` as `MinTSN` advances
+- Post-crash visibility uses committed bitmap (~5-10 cycles per read) until void entries are GC'd
 
 **Cross-references:**
 - [06-durability.md](../overview/06-durability.md) §6.7 — Recovery algorithm
-- [02-execution.md](../overview/02-execution.md) §2.1 — UoW epoch allocation
-- [04-data.md](../overview/04-data.md) §4.5 — Epoch in revision element (12 bytes)
+- [06-durability.md](../overview/06-durability.md) §6.4 — UoW Registry (WAL-based, checkpoint cache)
+- [06-durability.md](../overview/06-durability.md) §6.8 — Visibility & Isolation (CommittedBeforeTSN + bitmap)
+- [02-execution.md](../overview/02-execution.md) §2.1 — UoW ID allocation and lifecycle
+- [design/unit-of-work.md](../design/unit-of-work.md) §5 — UoW ID stamping in CompRevStorageElement
+- [design/unit-of-work.md](../design/unit-of-work.md) §6 — UoW Registry detailed design
 - [ideas/uow-crash-recovery/](../ideas/uow-crash-recovery/) — Original exploration

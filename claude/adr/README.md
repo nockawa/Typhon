@@ -107,9 +107,9 @@ What becomes easier or more difficult because of this decision?
 
 | # | Title | Status | Date |
 |---|-------|--------|------|
-| [028](028-cow-snapshot-backup.md) | Copy-on-Write Snapshot Backup (No WAL Dependency) | Accepted | 2025-01 |
-| [029](029-reverse-delta-incremental-snapshots.md) | Reverse-Delta Incremental Snapshots | Accepted | 2025-01 |
-| [030](030-dual-limit-retention-policy.md) | Dual-Limit Retention Policy for Backup Snapshots | Accepted | 2025-01 |
+| [028](028-cow-snapshot-backup.md) | Copy-on-Write Snapshot Backup (No WAL Dependency) | Accepted (enhanced) | 2025-01 |
+| [029](029-reverse-delta-incremental-snapshots.md) | Reverse-Delta Incremental Snapshots | Superseded | 2025-01 |
+| [030](030-dual-limit-retention-policy.md) | Dual-Limit Retention Policy for Backup Snapshots | Accepted (updated) | 2025-01 |
 
 ### Resource System & Observability (032)
 

@@ -43,7 +43,7 @@ Backup-based restore is checkpoint-consistent (no WAL replay needed for backups)
 - Simple WAL lifecycle: segments recycled after checkpoint, bounded disk usage
 - No WAL archive infrastructure needed
 - Faster checkpoints (no need to wait for archive confirmation)
-- Predictable disk usage: max WAL size = segments × segment_size (default 4 × 64MB = 256MB)
+- Predictable disk usage: max WAL size = segments × segment_size (default 4 × 4MB = 16MB initial; grows dynamically under load)
 
 **Negative:**
 - Cannot restore to arbitrary point in time
@@ -54,6 +54,7 @@ Backup-based restore is checkpoint-consistent (no WAL replay needed for backups)
 **Future option:** WAL archiving can be added later without changing the core WAL format — the architecture supports streaming (records are self-contained with LSNs).
 
 **Cross-references:**
-- [06-durability.md](../overview/06-durability.md) §6.9 — Design decisions
-- [07-backup.md](../overview/07-backup.md) §7.3 — Checkpoint-consistent restore
-- [09-resources.md](../overview/09-resources.md) — WAL budget (4 × 64MB segments)
+- [06-durability.md](../overview/06-durability.md) — Design decisions
+- [07-backup.md](../overview/07-backup.md) §7.6 — Reconstruction & Restore (checkpoint-consistent)
+- [09-resources.md](../overview/09-resources.md) — WAL budget (4 × 4MB segments)
+- [PIT Backup Design](../design/pit-backup/README.md) — Forward-incremental backup (no WAL dependency)

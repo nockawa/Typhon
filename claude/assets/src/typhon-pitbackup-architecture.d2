@@ -1,0 +1,156 @@
+# Typhon: PIT Backup — Architecture Overview
+# Three-layer architecture: Transaction Hot Path, Checkpoint Pipeline, Backup Manager
+
+direction: down
+
+# ── Title ─────────────────────────────────────────────────────
+title: "PIT Backup — Architecture Overview" {
+  shape: text
+  style.font-size: 22
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+# ── Transaction Hot Path (red/orange) ─────────────────────────
+txn: "Transaction Hot Path" {
+  style.fill: "#fbe9e7"
+  style.stroke: "#bf360c"
+  style.border-radius: 10
+
+  transaction: |md
+    **Transaction**
+    Modify page + Incr ChangeRevision
+  | {
+    shape: rectangle
+    style.fill: "#ffccbc"
+    style.stroke: "#e64a19"
+    style.bold: true
+  }
+}
+
+# ── Checkpoint Pipeline (blue) ────────────────────────────────
+ckpt: "Checkpoint Pipeline" {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.border-radius: 10
+
+  pipeline: |md
+    **Checkpoint Steps**
+    Seqlock copy -> CRC -> Write data file -> OR dirty bitmap
+  | {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1976d2"
+    style.bold: true
+  }
+}
+
+dirty_bitmap: |md
+  **Persistent Dirty Bitmap**
+  1 bit per page, 128KB / 1M pages
+| {
+  shape: rectangle
+  style.fill: "#e1f5fe"
+  style.stroke: "#0277bd"
+  style.font-size: 13
+}
+
+# ── Backup Manager (green) ────────────────────────────────────
+backup_mgr: "Backup Manager" {
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.border-radius: 10
+
+  flow: |md
+    **Backup Steps**
+    1. Force checkpoint
+    2. Read dirty bitmap
+    3. Enable CoW
+    4. Read changed pages
+    5. Compress (LZ4)
+    6. Write .pack file
+    7. Update catalog
+  | {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#388e3c"
+    style.bold: true
+  }
+}
+
+# ── CoW Shadow Buffer ────────────────────────────────────────
+cow: |md
+  **Scoped CoW**
+  (changed pages only)
+| {
+  shape: rectangle
+  style.fill: "#fff3e0"
+  style.stroke: "#e65100"
+  style.bold: true
+}
+
+# ── Backup Storage (bottom) ──────────────────────────────────
+backup_storage: "Backup Storage (separate disk)" {
+  shape: cylinder
+  style.fill: "#f3e5f5"
+  style.stroke: "#6a1b9a"
+  style.bold: true
+
+  catalog: "catalog.dat" {
+    shape: page
+    style.fill: "#e1bee7"
+    style.stroke: "#7b1fa2"
+  }
+  packs: ".pack files" {
+    shape: page
+    style.fill: "#ce93d8"
+    style.stroke: "#7b1fa2"
+  }
+}
+
+# ── WAL Pipeline (side, isolated) ─────────────────────────────
+wal: |md
+  **WAL Writer**
+  No interaction with backup
+| {
+  shape: rectangle
+  style.fill: "#eceff1"
+  style.stroke: "#90a4ae"
+  style.font-size: 13
+}
+
+# ── Connections ──────────────────────────────────────────────
+
+txn.transaction -> ckpt.pipeline: "dirty pages flow down" {
+  style.stroke: "#1565c0"
+  style.bold: true
+}
+
+ckpt.pipeline -> dirty_bitmap: "OR bit on flush" {
+  style.stroke: "#0277bd"
+}
+
+dirty_bitmap -> backup_mgr.flow: "read changed set" {
+  style.stroke: "#2e7d32"
+  style.bold: true
+}
+
+txn.transaction -> cow: "page about to change\nduring backup" {
+  style.stroke: "#e65100"
+  style.bold: true
+}
+
+cow -> backup_mgr.flow: "shadow copies of\npre-modification pages" {
+  style.stroke: "#e65100"
+}
+
+backup_mgr.flow -> backup_storage: "compress + write" {
+  style.stroke: "#6a1b9a"
+  style.bold: true
+}
+
+ckpt.pipeline -> backup_mgr.flow: "force checkpoint first" {
+  style.stroke: "#2e7d32"
+  style.stroke-dash: 3
+}

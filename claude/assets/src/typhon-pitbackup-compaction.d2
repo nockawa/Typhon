@@ -1,0 +1,155 @@
+# Typhon: PIT Backup — Compaction Lifecycle
+# Shows how chain compaction reduces restore cost
+
+direction: down
+
+# ── Title ─────────────────────────────────────────────────────
+title: "PIT Backup — Compaction Lifecycle" {
+  shape: text
+  style.font-size: 22
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+# ── Before Compaction ─────────────────────────────────────────
+before: "Before Compaction\nChain depth: 7 — Restore reads 7 files" {
+  style.fill: "#fce4ec"
+  style.stroke: "#c62828"
+  style.border-radius: 10
+  style.font-color: "#c62828"
+
+  direction: right
+
+  b1: "base-001\n(full)" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+    style.bold: true
+  }
+  i2: "incr-002" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1565c0"
+  }
+  i3: "incr-003" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1565c0"
+  }
+  i4: "incr-004" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1565c0"
+  }
+  i5: "incr-005" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1565c0"
+  }
+  i6: "incr-006" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1565c0"
+  }
+  i7: "incr-007" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1565c0"
+  }
+
+  b1 -> i2: "" {style.stroke: "#78909c"}
+  i2 -> i3: "" {style.stroke: "#78909c"}
+  i3 -> i4: "" {style.stroke: "#78909c"}
+  i4 -> i5: "" {style.stroke: "#78909c"}
+  i5 -> i6: "" {style.stroke: "#78909c"}
+  i6 -> i7: "" {style.stroke: "#78909c"}
+}
+
+# ── Compaction Operation ──────────────────────────────────────
+compact_op: "Compact at 007\nMerge base + all incrementals into single file\nWalk chain, collect latest version of every page" {
+  shape: rectangle
+  style.fill: "#fff3e0"
+  style.stroke: "#e65100"
+  style.border-radius: 8
+  style.bold: true
+}
+
+# ── After Compaction ──────────────────────────────────────────
+after: "After Compaction\nChain depth: 1 — Instant restore from single file" {
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.border-radius: 10
+  style.font-color: "#2e7d32"
+
+  direction: right
+
+  c7: "compact-007\n(full)" {
+    shape: rectangle
+    style.fill: "#a5d6a7"
+    style.stroke: "#2e7d32"
+    style.bold: true
+  }
+
+  future: "future incrementals\nchain from here" {
+    shape: rectangle
+    style.fill: "#e0e0e0"
+    style.stroke: "#9e9e9e"
+    style.stroke-dash: 5
+    style.font-size: 12
+  }
+
+  c7 -> future: "" {style.stroke: "#78909c"; style.stroke-dash: 3}
+}
+
+# ── Deleted files ─────────────────────────────────────────────
+deleted: "Deleted After Compaction" {
+  style.fill: "#f5f5f5"
+  style.stroke: "#bdbdbd"
+  style.border-radius: 10
+  style.stroke-dash: 5
+
+  direction: right
+
+  d1: "base-001" {
+    shape: rectangle
+    style.fill: "#eeeeee"
+    style.stroke: "#bdbdbd"
+    style.font-color: "#9e9e9e"
+    style.stroke-dash: 5
+  }
+  d2: "incr-002" {
+    shape: rectangle
+    style.fill: "#eeeeee"
+    style.stroke: "#bdbdbd"
+    style.font-color: "#9e9e9e"
+    style.stroke-dash: 5
+  }
+  d3: "incr-003" {
+    shape: rectangle
+    style.fill: "#eeeeee"
+    style.stroke: "#bdbdbd"
+    style.font-color: "#9e9e9e"
+    style.stroke-dash: 5
+  }
+  d4: "..." {
+    shape: rectangle
+    style.fill: "#eeeeee"
+    style.stroke: "#bdbdbd"
+    style.font-color: "#9e9e9e"
+    style.stroke-dash: 5
+  }
+  d5: "incr-007" {
+    shape: rectangle
+    style.fill: "#eeeeee"
+    style.stroke: "#bdbdbd"
+    style.font-color: "#9e9e9e"
+    style.stroke-dash: 5
+  }
+}
+
+# ── Connections ──────────────────────────────────────────────
+
+before -> compact_op: "" {style.stroke: "#e65100"; style.bold: true}
+compact_op -> after: "" {style.stroke: "#2e7d32"; style.bold: true}
+after -> deleted: "old files removed" {style.stroke: "#bdbdbd"; style.stroke-dash: 5}

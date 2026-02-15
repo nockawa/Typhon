@@ -34,7 +34,7 @@ public enum DurabilityOverride
 ```
 
 - **Deferred**: ~1µs commit, explicit flush at UoW boundary. May lose unflushed work on crash.
-- **GroupCommit**: ~1µs commit + ≤10ms implicit flush. Amortizes FUA across N transactions.
+- **GroupCommit**: ~1µs commit + ≤5ms implicit flush (default interval). Amortizes FUA across N transactions.
 - **Immediate**: ~15–85µs commit. Zero data loss window.
 - **DurabilityOverride**: Allows a single critical transaction within a Deferred UoW to escalate to Immediate.
 
@@ -62,5 +62,5 @@ Override can only **escalate** (never downgrade). This prevents accidental data 
 
 **Cross-references:**
 - [02-execution.md](../overview/02-execution.md) §2.3 — Durability modes detailed
-- [06-durability.md](../overview/06-durability.md) §6.3 — Implementation details
+- [06-durability.md](../overview/06-durability.md) §6.5 — Durability modes implementation details
 - [ADR-001](001-three-tier-api-hierarchy.md) — UoW as durability boundary

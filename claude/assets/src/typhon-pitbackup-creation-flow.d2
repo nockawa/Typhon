@@ -1,0 +1,163 @@
+# Typhon: PIT Backup — Backup Creation Flow
+# Step-by-step sequence for creating a backup (3-column phase layout)
+
+direction: down
+
+# ── Title ─────────────────────────────────────────────────────
+title: "PIT Backup — Creation Flow" {
+  shape: text
+  style.font-size: 22
+  style.bold: true
+  style.font-color: "#37474f"
+  near: top-center
+}
+
+# ── Phase 1: Prepare ──────────────────────────────────────────
+prepare: "Prepare" {
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.border-radius: 10
+  style.font-size: 16
+  style.bold: true
+  direction: down
+
+  step1: "1. Force Checkpoint\nData file consistent at epoch E" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1565c0"
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  step2: "2. Read Dirty Bitmap\nChanged page set {P1..Pn}" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1565c0"
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  step3: "3. Enable CoW\nSet _backupActive=1\nInstall bitmap ref" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  step1 -> step2: "" {style.stroke: "#546e7a"}
+  step2 -> step3: "" {style.stroke: "#546e7a"}
+}
+
+# ── Phase 2: Copy Pages ──────────────────────────────────────
+copy: "Copy Pages" {
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.border-radius: 10
+  style.font-size: 16
+  style.bold: true
+  direction: down
+
+  step4: "4. Read Changed Pages" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  decision: "CoW'd?" {
+    shape: diamond
+    style.fill: "#fff9c4"
+    style.stroke: "#f9a825"
+    style.bold: true
+  }
+
+  yes_path: "Read from\nshadow buffer" {
+    shape: rectangle
+    style.fill: "#ffecb3"
+    style.stroke: "#ff8f00"
+    style.border-radius: 6
+    style.font-size: 13
+  }
+
+  no_path: "Read from\ndata file" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#388e3c"
+    style.border-radius: 6
+    style.font-size: 13
+  }
+
+  step5: "5. LZ4 Compress\nWrite to .pack file" {
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#2e7d32"
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  step6: "6. Disable CoW\nSet _backupActive=0\nDrain queue" {
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#e65100"
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  step4 -> decision: "for each page" {style.stroke: "#546e7a"}
+  decision -> yes_path: "Yes" {style.stroke: "#ff8f00"; style.bold: true}
+  decision -> no_path: "No" {style.stroke: "#388e3c"; style.bold: true}
+  yes_path -> step5: "" {style.stroke: "#546e7a"}
+  no_path -> step5: "" {style.stroke: "#546e7a"}
+  step5 -> step6: "" {style.stroke: "#546e7a"}
+}
+
+# ── Phase 3: Finalize ────────────────────────────────────────
+finalize: "Finalize" {
+  style.fill: "#f3e5f5"
+  style.stroke: "#6a1b9a"
+  style.border-radius: 10
+  style.font-size: 16
+  style.bold: true
+  direction: down
+
+  step7: "7. Write Index + Footer" {
+    shape: rectangle
+    style.fill: "#e1bee7"
+    style.stroke: "#6a1b9a"
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  step8: "8. Update Catalog" {
+    shape: rectangle
+    style.fill: "#e1bee7"
+    style.stroke: "#6a1b9a"
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  step9: "9. Clear Bitmap" {
+    shape: rectangle
+    style.fill: "#bbdefb"
+    style.stroke: "#1565c0"
+    style.border-radius: 6
+    style.bold: true
+  }
+
+  done: "Backup\nComplete" {
+    shape: circle
+    style.fill: "#a5d6a7"
+    style.stroke: "#2e7d32"
+    style.bold: true
+  }
+
+  step7 -> step8: "" {style.stroke: "#546e7a"}
+  step8 -> step9: "" {style.stroke: "#546e7a"}
+  step9 -> done: "" {style.stroke: "#2e7d32"; style.bold: true}
+}
+
+# ── Cross-Phase Connections ──────────────────────────────────
+prepare.step3 -> copy.step4: "" {style.stroke: "#546e7a"; style.bold: true}
+copy.step6 -> finalize.step7: "" {style.stroke: "#546e7a"; style.bold: true}

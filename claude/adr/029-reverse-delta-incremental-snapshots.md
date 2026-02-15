@@ -1,8 +1,11 @@
 # ADR-029: Reverse-Delta Incremental Snapshots
 
-**Status**: Accepted
+**Status**: Superseded by forward incrementals ([PIT Backup Design](../design/pit-backup/README.md))
 **Date**: 2025-01 (design session)
+**Superseded**: 2026-02-15
 **Deciders**: Developer + Claude (design session)
+
+> **Note:** This ADR's decision (reverse deltas) was superseded in February 2026 after analysis showed prohibitive I/O costs at scale — a 100 GB database requires ~205 GB of I/O per backup with reverse deltas, vs ~15 GB with forward incrementals. See [rationale below](#why-superseded) and the [PIT Backup Design](../design/pit-backup/README.md) for the replacement design.
 
 ## Context
 
@@ -88,8 +91,51 @@ Page needs backup when: page.ChangeRevision != lastBackup[page].ChangeRevision
 - Full snapshot size: LZ4 compression typically reduces by 50%+
 
 **Cross-references:**
-- [ADR-028](028-cow-snapshot-backup.md) — CoW mechanism that captures consistent page state
+- [ADR-028](028-cow-snapshot-backup.md) — CoW mechanism that captures consistent page state (still valid, enhanced with scoped CoW)
 - [ADR-014](014-no-point-in-time-recovery.md) — No WAL retention, backup is primary recovery
 - [ADR-006](006-8kb-page-size.md) — 8KB pages: the unit of backup and delta
-- [07-backup.md](../overview/07-backup.md) §7.3 — Reverse Delta Engine design
-- [07-backup.md](../overview/07-backup.md) §7.5 — File format (.typhon-snap, .typhon-rdelta)
+
+---
+
+## Why Superseded
+
+**Date:** 2026-02-15
+
+Analysis of I/O costs at production database sizes (10-100 GB) revealed that the reverse-delta approach has a fundamental scaling problem: **every backup requires reading the entire database**, regardless of how many pages changed.
+
+### The Core Problem
+
+Each reverse-delta backup must:
+1. Read ALL pages from the data file to create a new full snapshot
+2. Read the previous full snapshot to compute XOR deltas
+3. Write the new full snapshot
+4. Write the reverse delta for the previous snapshot
+
+For a 100 GB database with 10% churn:
+- **Reverse delta I/O per backup:** ~205 GB (100 read + 50 write + 50 read + 5 write)
+- **Forward incremental I/O per backup:** ~15 GB (10 read + 5 write)
+- **Ratio:** 13.7× more I/O for reverse deltas
+
+Over a week (42 backups at 4-hour intervals):
+- **Reverse delta weekly I/O:** ~8,610 GB (~8.4 TB)
+- **Forward incremental weekly I/O:** ~915 GB (including weekly compaction)
+- **Ratio:** 9.4× more I/O
+
+### What Replaced It
+
+The [PIT Backup forward-incremental design](../design/pit-backup/README.md) captures only changed pages per backup. Chain management is handled by periodic compaction (weekly), which amortizes the O(DB size) cost over ~42 backup intervals.
+
+The trade-off: "restore latest" is no longer instant (requires walking a chain of ~6-42 files), but restore time only increases from ~50s to ~62s for a 100 GB database — a 12-second penalty that disappears after compaction.
+
+### What Was Preserved
+
+- **CoW shadow buffer** ([ADR-028](028-cow-snapshot-backup.md)) — still used, enhanced with dirty bitmap scoping
+- **No WAL dependency** ([ADR-014](014-no-point-in-time-recovery.md)) — unchanged
+- **LZ4/Zstd compression** — still per-page, same algorithms
+- **Self-contained backups** — each .pack file is independently verifiable
+
+### Cross-references (Updated)
+
+- [07-backup.md](../overview/07-backup.md) — Rewritten with forward-incremental design
+- [PIT Backup Design Series](../design/pit-backup/README.md) — 6-part deep design document
+- [PIT Backup Analysis](../design/pit-backup/06-analysis.md) — Full I/O comparison and simulations

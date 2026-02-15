@@ -1,0 +1,100 @@
+# Typhon: UowRegistryEntry State Machine
+# Shows legal states and transitions for UoW Registry entries
+
+direction: down
+
+title: |md
+  # UoW Registry Entry Lifecycle
+  State transitions for `UowRegistryEntry` — normal path and crash recovery
+|
+
+# ── States ────────────────────────────────────────────────────
+
+free: "Free\n(slot available)" {
+  shape: circle
+  style.fill: "#c8e6c9"
+  style.stroke: "#388e3c"
+  style.bold: true
+}
+
+pending: "Pending\n(UoW active)" {
+  shape: rectangle
+  style.fill: "#fff3e0"
+  style.stroke: "#f57c00"
+  style.font-color: "#e65100"
+  style.bold: true
+}
+
+wal_durable: "WalDurable\n(WAL FUA complete)" {
+  shape: rectangle
+  style.fill: "#bbdefb"
+  style.stroke: "#1976d2"
+  style.bold: true
+}
+
+committed: "Committed\n(data pages checkpointed)" {
+  shape: rectangle
+  style.fill: "#1565c0"
+  style.font-color: white
+  style.stroke: "#0d47a1"
+  style.bold: true
+}
+
+void: "Void\n(crash recovery)" {
+  shape: rectangle
+  style.fill: "#ffcdd2"
+  style.stroke: "#c62828"
+  style.font-color: "#b71c1c"
+  style.bold: true
+}
+
+# ── Normal Path ───────────────────────────────────────────────
+
+free -> pending: "AllocateUowId()\n[WAL record + group commit]" {
+  style.stroke: "#388e3c"
+  style.bold: true
+}
+
+pending -> wal_durable: "WAL flush\n(FUA complete)" {
+  style.stroke: "#1976d2"
+}
+
+wal_durable -> committed: "Checkpoint\n(pages fsync'd)" {
+  style.stroke: "#0d47a1"
+}
+
+committed -> free: "GC\nMinTSN past MaxTSN" {
+  style.stroke: "#757575"
+  style.stroke-dash: 5
+}
+
+# ── Crash Recovery Path ──────────────────────────────────────
+
+pending -> void: "CRASH\n(recovery on startup)" {
+  style.stroke: "#c62828"
+  style.bold: true
+}
+
+void -> free: "GC\nMinTSN past MaxTSN" {
+  style.stroke: "#757575"
+  style.stroke-dash: 5
+}
+
+# ── Notes ─────────────────────────────────────────────────────
+
+note: |md
+  **Critical invariant:** "UoW Created" WAL record must
+  be durable before any revision uses this UoW ID.
+
+  **Free = 0:** Zeroed memory is automatically Free.
+
+  **WAL is authority:** Registry pages are a checkpoint
+  cache. UoW state transitions are WAL records.
+
+  **Two bitmaps (in-memory, rebuilt on startup):**
+  - *Allocation*: tracks Free slots for O(1) alloc
+  - *Committed*: crash-recovery fallback for visibility
+| {
+  shape: text
+  style.font-size: 13
+}

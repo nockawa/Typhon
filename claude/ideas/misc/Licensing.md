@@ -1,18 +1,81 @@
 # Licensing Strategy for Typhon
 
-**Date:** 2025-12-26 (original conversation), 2026-02-14 (captured)
-**Status:** Needs decision
-**Captures:** Conversation exploring licensing models for commercial protection while enabling adoption
+**Date:** 2025-12-26 (original conversation), 2026-02-15 (decisions made)
+**Status:** Decided — LICENSE.md committed
+**Captures:** Licensing model exploration and final decisions
 
-## Overview
+## Decision Summary
 
-Typhon currently has **no LICENSE file** — which defaults to "all rights reserved" under copyright law. Before any public release, a deliberate licensing decision is needed that balances community adoption against commercial protection (particularly the "AWS problem" — cloud providers offering your database as a managed service).
+Typhon uses a **source-available** license combining two PolyForm concepts:
 
-## Key Findings
+| Component | Based On | Purpose |
+|-----------|----------|---------|
+| **Size gate** | PolyForm Small Business | Free for small organizations, paid for large ones |
+| **Competition restriction** | PolyForm Shield | Prevents competing products/services regardless of size |
+| **Pre-1.0 exemption** | Custom clause | All pre-release versions free for any use |
 
-### Polyform Licenses
+### Thresholds
 
-Polyform is a family of source-available licenses with distinct variants:
+- **Revenue:** $2,000,000 USD annual
+- **Headcount:** 50 individuals (employees + contractors)
+- Organizations exceeding **either** threshold must obtain a commercial license (for versions 1.0.0+)
+
+### Commercial Contact
+
+licensing@log2n.io
+
+## Rationale
+
+### Why Source-Available (Not OSS)
+
+- **Direct revenue path** — the license creates paying customers, no need for separate monetization layers
+- **Free-rider protection** — large companies cannot use Typhon without contributing financially
+- **No bait-and-switch risk** — starting source-available from day one means no future license change backlash
+- **Contributor impact is minimal** — database engines get very few external contributors regardless of license (SQLite, DuckDB precedent)
+- **Fork protection** — competitors cannot fork and compete, cloud providers cannot offer managed service
+
+### Why Pre-1.0 Exemption
+
+- Eliminates any perception of overvaluing unfinished software
+- Acts as a natural beta program — early adopters get free usage as reward for risk
+- Clean transition: everyone knows from day one that 1.0 = license enforcement
+- No license change needed at 1.0 — the terms were always there
+
+### Why $2M / 50 Employees
+
+- **$2M** catches mid-size indie studios and above — solo developers and small teams are safely free
+- **50 employees** is tighter than the PolyForm default (100) — catches AA studios while keeping small teams free
+- Thresholds can be adjusted in future versions without affecting existing users (each version keeps its own terms)
+
+### Why Shield (Competition Restriction)
+
+- Prevents a cloud provider from offering "Managed Typhon" at any organization size
+- Prevents competitors from building a competing database product on Typhon's code
+- Applies regardless of organization size — even a small company can't build a competing service
+- Low cost (no one is building Typhon-as-a-Service today) but provides peace of mind
+
+## Key Design Decisions
+
+| Decision | Choice | Alternative Considered |
+|----------|--------|----------------------|
+| License family | PolyForm-based custom | BSL (time-based conversion), SSPL, MIT |
+| Starting position | Source-available from day one | Start OSS, switch later |
+| Revenue threshold | $2M | $5M, $10M |
+| Headcount threshold | 50 | 100 (PolyForm default), 200 |
+| Competition clause | Yes (Shield) | Size-gate only (Small Business) |
+| Pre-1.0 exemption | Yes | No (enforce from first release) |
+| Threshold evolution | Per-version (old versions keep old terms) | Global retroactive changes |
+
+## Future Considerations
+
+- **Threshold adjustments** — can tighten or loosen in future versions; existing versions keep their terms
+- **CLA for contributors** — may be needed if/when external contributions arrive; keeps option to adjust license terms
+- **Commercial pricing structure** — currently "contact us"; formalize tiers when paying customers exist
+- **Formal legal review** — the LICENSE.md is a clear-language document based on PolyForm concepts; consider professional legal review before 1.0
+
+## Research Background
+
+### PolyForm License Family
 
 | License | Who Can Use Freely | Who Must Pay |
 |---------|-------------------|--------------|
@@ -22,57 +85,20 @@ Polyform is a family of source-available licenses with distinct variants:
 | **Polyform Small Business** | Organizations under revenue/employee threshold | Larger organizations regardless of use |
 | **Polyform Free Trial** | Evaluation/trial use only | Production use |
 
-### Polyform Small Business — Best Fit for "I Want Them to Pay"
+### Database Licensing Landscape
 
-The conversation converged on **PolyForm Small Business** as the best match for Typhon's goals. Standard thresholds:
-- Less than **$2M annual revenue**, or
-- Fewer than **100 employees**
+| Database | License | Model |
+|----------|---------|-------|
+| CockroachDB | BSL | Converts to Apache 2.0 after 3 years |
+| MariaDB | BSL | Created BSL originally |
+| MongoDB | SSPL | Server Side Public License |
+| Redis | RSALv2 + SSPLv1 | Dual restrictive |
+| Elasticsearch | Elastic License 2.0 + SSPL | Dual restrictive |
+| YugabyteDB | Apache 2.0 + Polyform Free Trial | Core OSS, platform restricted |
+| EPPlus (.NET) | PolyForm Noncommercial + commercial | Similar model to Typhon |
+| **Typhon** | **PolyForm Small Business + Shield + pre-1.0 exemption** | **Size gate + competition protection** |
 
-These thresholds are adjustable in the commercial terms.
+## Sources
 
-### Business Model with PolyForm Small Business
-
-1. Release under PolyForm Small Business
-2. Small startups, hobbyists, and small shops use it **free** (builds adoption)
-3. Enterprises contact you for a **commercial license**
-4. Pricing negotiated based on size, usage, and support needs
-
-### Real-World Precedent
-
-**EPPlus** (popular .NET Excel library) uses a similar model: PolyForm Noncommercial for the open version + commercial license for business use.
-
-### Alternative: BSL (Business Source License)
-
-BSL is more established in the database world. Key difference from Polyform:
-
-| Aspect | Polyform (Perimeter/Shield) | BSL |
-|--------|---------------------------|-----|
-| Anti-competition | Yes | Yes |
-| Converts to open source | No (stays source-available) | Yes (typically after 3-4 years) |
-| Customization | Pick from preset variants | Parameterized (you define restrictions) |
-| Community perception | Less known | More established in database world |
-| Used by | YugabyteDB (Polyform Free Trial) | CockroachDB, MariaDB, Couchbase |
-
-Other source-available licenses used by databases:
-- **MongoDB** — SSPL (Server Side Public License)
-- **Redis** — RSALv2 + SSPLv1
-- **Elasticsearch** — Elastic License 2.0 + SSPL
-
-## Considerations
-
-- **No LICENSE file currently** — legally ambiguous; blocks any community contribution or adoption
-- **Dual licensing is common** — e.g., YugabyteDB uses Apache 2.0 for the core database + Polyform Free Trial for the managed platform layer
-- **Enterprises need a clear commercial path** — some won't evaluate software without visible pricing/licensing
-- **The license is self-enforcing** — but you won't know who's using it; consider telemetry or registration for commercial users
-- **Community perception matters** — permissive licenses (MIT, Apache 2.0) build trust fastest, but make monetization harder
-
-## Open Questions
-
-1. **Which license family?** Polyform Small Business (revenue-based gate) vs BSL (time-based conversion to open source) vs dual licensing (free core + commercial enterprise tier)?
-2. **What thresholds?** $2M revenue / 100 employees is the Polyform default — is that right for Typhon's target market (game studios)?
-3. **Dual licensing split?** Should the core engine be more permissive (Apache 2.0) with enterprise features (replication, advanced telemetry, support) under commercial license?
-4. **When to decide?** Before first public release is mandatory, but earlier decisions shape architecture (e.g., what goes in "core" vs "enterprise")
-
-## Source
-
-Original conversation: [Polyform license model in databases](https://claude.ai/share/06df499c-d24e-49e6-a4ed-a092205e73db)
+- Original conversation: [Polyform license model in databases](https://claude.ai/share/06df499c-d24e-49e6-a4ed-a092205e73db)
+- Analysis session: Claude Code, 2026-02-15 (OSS vs source-available trade-offs, contributor/fork analysis, threshold selection)

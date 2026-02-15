@@ -56,6 +56,5 @@ This is a **recommendation**, not a requirement. Typhon works on a single SSD bu
 - Overkill for development/testing (single SSD is fine for non-production)
 
 **Cross-references:**
-- [06-durability.md](../overview/06-durability.md) §6.9 — Deployment recommendations
-- [design/WAL-Design.md](../design/WAL-Design.md) — I/O patterns analysis
+- [06-durability.md](../overview/06-durability.md) — WAL I/O patterns (see §6.1, §6.5)
 - [ADR-020](020-dedicated-wal-writer-thread.md) — WAL writer thread design

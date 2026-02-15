@@ -58,7 +58,5 @@ Consumer (WAL Writer Thread):
 - Memory overhead: 2 × 4MB buffers always allocated
 
 **Cross-references:**
-- [06-durability.md](../overview/06-durability.md) §6.1 — Ring buffer in commit path
-- [design/WAL-Design.md](../design/WAL-Design.md) — Buffer implementation details
-- [research/LMAX-Disruptor-Aeron-RingBuffers.md](../research/LMAX-Disruptor-Aeron-RingBuffers.md) — Comparative study
+- [06-durability.md](../overview/06-durability.md) §6.1 — Ring buffer in commit path (authoritative WAL record format)
 - [ADR-020](020-dedicated-wal-writer-thread.md) — Consumer thread design

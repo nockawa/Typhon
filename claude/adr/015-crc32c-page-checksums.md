@@ -52,6 +52,6 @@ Use **CRC32C (Castagnoli polynomial)** with hardware acceleration via SSE4.2 `CR
 
 **Cross-references:**
 - [03-storage.md](../overview/03-storage.md) — CRC32C in PageBaseHeader
-- [06-durability.md](../overview/06-durability.md) §6.1 — WAL record CRC
-- [design/WAL-Design.md](../design/WAL-Design.md) — Hardware intrinsics details
+- [06-durability.md](../overview/06-durability.md) §6.1 — WAL record CRC (authoritative header format)
+- [06-durability.md](../overview/06-durability.md) §6.2 — Page checksums design
 - [11-utilities.md](../overview/11-utilities.md) — CRC32C utility implementation

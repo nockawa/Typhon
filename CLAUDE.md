@@ -52,6 +52,14 @@ The `claude/overview/` directory is the **authoritative architectural reference*
 ### Documentation-Heavy Project
 This project is documentation-first. Most work involves creating, updating, or refining markdown design docs, ADRs, and planning documents. When updating docs, preserve existing structure and version headers. Cross-reference related documents. Always check for consistency across the full doc set when making changes.
 
+### D2 Diagrams
+Architecture diagrams use the **D2** language. Source files live in `claude/assets/src/*.d2`, rendered SVGs in `claude/assets/*.svg`.
+
+- **Conventions:** See [`claude/d2-conventions.md`](claude/d2-conventions.md) for color palette, shapes, and patterns
+- **Render:** `"/c/Program Files/D2/d2.exe" --theme 0 assets/src/name.d2 assets/name.svg`
+- **Viewer:** Open `claude/assets/viewer.html` for interactive pan-zoom
+- **After adding:** Update the `DIAGRAMS` array in `viewer.html`
+
 ## Build & Development Commands
 
 **Build the solution:**

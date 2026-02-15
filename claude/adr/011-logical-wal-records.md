@@ -18,17 +18,18 @@ Typhon's ECS model means most transactions modify one or a few small components 
 Use **logical WAL records** that capture component-level operations:
 
 ```
-WAL Record (48B header + variable payload):
-  - Header: LSN, TxId, UowEpoch, RecordType, ComponentTableId, EntityId, CRC32C
+WAL Record (32B header + variable payload):
+  - Header: LSN (8B), TransactionTSN (8B), UowId (2B), ComponentTypeId (2B),
+            EntityId (4B), PayloadLength (2B), OperationType (1B), Flags (1B), Checksum (4B)
   - Payload: Component data (32–256 bytes typical)
 ```
 
 Typical record sizes:
-- Component Create: 48B header + 32–256B component = **80–304B total**
-- Component Update: 48B header + 32–256B component = **80–304B total**
-- Component Delete: 48B header + 8B entity ID = **56B total**
+- Component Create: 32B header + 32–256B component = **64–288B total**
+- Component Update: 32B header + 32–256B component = **64–288B total**
+- Component Delete: 32B header + 4B entity ID = **36B total**
 
-Compare with physical page logging: **8048B per modified page** (header + 8000B payload).
+Compare with physical page logging: **8224B per modified page** (header + 8192B page image).
 
 ## Alternatives Considered
 
@@ -51,6 +52,5 @@ Compare with physical page logging: **8048B per modified page** (header + 8000B 
 - Recovery time proportional to WAL length × replay cost (not just copy cost)
 
 **Cross-references:**
-- [06-durability.md](../overview/06-durability.md) §6.1 — WAL record format
-- [design/WAL-Design.md](../design/WAL-Design.md) — Detailed specification
+- [06-durability.md](../overview/06-durability.md) §6.1 — WAL record format (authoritative 32B header struct)
 - [ADR-024](024-fpi-over-double-write-buffer.md) — Torn page repair via FPI

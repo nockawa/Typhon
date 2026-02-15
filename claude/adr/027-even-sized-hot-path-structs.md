@@ -32,15 +32,15 @@ When adding fields to an existing struct:
 - If the new field would make the struct odd-sized, **pack it with an adjacent field** using bit manipulation (see CompRevStorageElement's IsolationFlag packed into TSN).
 - If packing isn't possible, add a 1-byte padding field explicitly (`private byte _reserved;`) rather than leaving the struct at an odd size.
 
-### Current Struct Sizes
+### Struct Sizes
 
 | Struct | Size | Divisible by | Status |
 |--------|------|-------------|--------|
-| CompRevStorageElement | 12 bytes | 4 ✓ | Compliant |
+| CompRevStorageElement | 10 bytes (→ 12 bytes after UoW ID field added) | 2 ✓ (→ 4 ✓) | Compliant |
 | B+Tree L32 Node | 64 bytes | 64 ✓ | Compliant (1 cache line) |
 | B+Tree L64 Node | 64 bytes | 64 ✓ | Compliant |
 | PageBaseHeader | 8 bytes | 8 ✓ | Compliant |
-| BackupPageEntry | 22 bytes | 2 ✓ | Compliant |
+| PackPageEntry | 16 bytes | 4 ✓ | Compliant |
 
 ## Alternatives Considered
 
@@ -68,4 +68,4 @@ When adding fields to an existing struct:
 - [ADR-022](022-64byte-cache-aligned-nodes.md) — B+Tree nodes: the extreme case (exactly 1 cache line)
 - [ADR-008](008-chunk-based-segments.md) — ChunkBasedSegment chunk size determines packing
 - [04-data.md](../overview/04-data.md) §4.6 — CompRevStorageElement physical layout
-- [07-backup.md](../overview/07-backup.md) §7.5 — BackupPageEntry (22 bytes)
+- [07-backup.md](../overview/07-backup.md) §7.4 — PackPageEntry (16 bytes)

@@ -1,6 +1,6 @@
 # Component 6: Durability & Recovery
 
-> Crash-safe persistence via WAL + epoch-based UoW tracking, decoupled async flush, page checksums, and consistent recovery.
+> Crash-safe persistence via WAL + UoW ID-based tracking, decoupled async flush, page checksums, and consistent recovery.
 
 ---
 
@@ -10,7 +10,7 @@ Typhon's durability model combines two complementary mechanisms:
 
 1. **Write-Ahead Log (WAL):** The durability backbone. Every committed change is sequentially written to a dedicated WAL file with FUA (Force Unit Access) guarantees before being considered durable. This enables torn page repair and provable crash recovery.
 
-2. **Epoch-based UoW Registry:** The visibility and fast-recovery layer. Each revision is stamped with an epoch, and the registry tracks which UoWs are committed. This provides O(1) crash recovery initialization and MVCC visibility control.
+2. **UoW Registry:** The visibility and fast-recovery layer. Each revision is stamped with a UoW ID, and the registry tracks which UoWs are committed. UoW state transitions are recorded as WAL records (WAL is the authority); the registry pages in the data file are a checkpoint cache that accelerates recovery.
 
 Together, they provide: instant in-memory commits, configurable durability guarantees (from fully async to per-transaction durable), torn page detection and repair, and sub-100ms crash recovery.
 
@@ -34,12 +34,12 @@ This component does not yet exist in the codebase. The design is finalized based
 |---|------|---------|--------|
 | **6.1** | [Write-Ahead Log (WAL)](#61-write-ahead-log-wal) | Sequential durable record of all changes | 🆕 New |
 | **6.2** | [Page Checksums](#62-page-checksums) | Torn write detection via CRC32C | 🆕 New |
-| **6.3** | [UoW Epoch Stamping](#63-uow-epoch-stamping) | Tag each revision with its owning UoW's epoch | 🆕 New |
+| **6.3** | [UoW ID Stamping](#63-uow-id-stamping) | Tag each revision with its owning UoW's ID | 🆕 New |
 | **6.4** | [UoW Registry](#64-uow-registry) | Track pending/committed UoW status | 🆕 New |
 | **6.5** | [Durability Modes](#65-durability-modes) | User-controlled durability granularity | 🆕 New |
 | **6.6** | [Checkpoint Pipeline](#66-checkpoint-pipeline) | Background data page persistence + WAL recycling | 🆕 New |
 | **6.7** | [Crash Recovery](#67-crash-recovery) | Registry scan + WAL replay + torn page repair | 🆕 New |
-| **6.8** | [Visibility & Isolation](#68-visibility--isolation) | Epoch-aware read path for pending UoWs | 🆕 New |
+| **6.8** | [Visibility & Isolation](#68-visibility--isolation) | UoW-aware read path for pending UoWs | 🆕 New |
 
 ---
 
@@ -49,8 +49,8 @@ This component does not yet exist in the codebase. The design is finalized based
 2. **Durability = WAL.** A change is durable when its WAL record reaches stable media (FUA). Not before.
 3. **User controls the tradeoff.** `DurabilityMode` (Deferred / GroupCommit / Immediate) determines when WAL flush occurs.
 4. **Torn pages are detectable and repairable.** Page checksums detect corruption; WAL full-page images enable repair.
-5. **Recovery = O(registry) + O(WAL tail).** Read registry (<1ms), replay WAL since last checkpoint (10-50ms typical).
-6. **Epochs = visibility, not durability.** The epoch system controls what data is visible to which transactions, independent of whether it's durable.
+5. **Recovery = O(registry checkpoint) + O(WAL delta).** Read registry checkpoint (<2ms), replay WAL since last checkpoint (10-50ms typical). Registry pages are disposable — rebuild from WAL if torn.
+6. **UoW IDs = visibility, not durability.** The UoW ID system controls what data is visible to which transactions, independent of whether it's durable.
 
 ---
 
@@ -140,7 +140,7 @@ struct WalRecordHeader  // 32 bytes
 {
     public long LSN;               // 8B - Log Sequence Number (monotonic, never reused)
     public long TransactionTSN;    // 8B - Transaction timestamp (links to MVCC)
-    public ushort UowEpoch;        // 2B - Links to epoch registry
+    public ushort UowId;           // 2B - Links to UoW registry
     public ushort ComponentTypeId; // 2B - Which component table
     public int EntityId;           // 4B - Which entity (primary key)
     public ushort PayloadLength;   // 2B - Bytes of component data following header
@@ -250,7 +250,7 @@ After 10 min without Flush(): ~780 MB of WAL (~195 segments)
 - **No data loss risk**: The ring buffer drains to WAL file via back-pressure regardless; only WAL *file* space grows
 - **No silent behavior changes**: The engine never force-flushes, force-checkpoints, or aborts a UoW behind the user's back
 
-Once the user calls `Flush()`, the epoch transitions to `WalDurable`, the next checkpoint can advance it to `Committed`, and all accumulated segments become recyclable.
+Once the user calls `Flush()`, the UoW transitions to `WalDurable`, the next checkpoint can advance it to `Committed`, and all accumulated segments become recyclable.
 
 **Segment allocation strategy:**
 - New segments are pre-allocated (fallocate/SetFileValidData) to avoid file growth stalls during FUA writes
@@ -363,20 +363,20 @@ Page load → Checksum mismatch detected!
   → If no FPI available:
       → Page belongs to a pre-checkpoint epoch
       → Mark page as corrupt, log critical error
-      → If page contains non-committed data: void the epoch (safe)
+      → If page contains non-committed data: void the UoW (safe)
       → If page contains committed data: DATA LOSS (should not happen with proper checkpointing)
 ```
 
 ---
 
-## 6.3 UoW Epoch Stamping
+## 6.3 UoW ID Stamping
 
 ### Purpose
 
-Every revision created within a Unit of Work is stamped with a 2-byte **epoch** value. This provides:
+Every revision created within a Unit of Work is stamped with a 2-byte **UoW ID** value. This provides:
 - **Visibility control:** Unflushed UoW data is invisible to external transactions
-- **Fast crash recovery:** Void pending epochs instantly without scanning data pages
-- **UoW grouping:** Multiple transactions within one UoW share an epoch
+- **Fast crash recovery:** Void pending UoW IDs instantly without scanning data pages
+- **UoW grouping:** Multiple transactions within one UoW share a UoW ID
 
 ### Data Structure Change
 
@@ -386,8 +386,8 @@ internal struct CompRevStorageElement  // Was 10 bytes, now 12 bytes (see ADR-02
 {
     public int ComponentChunkId;       // 4 bytes - chunk containing component data
     private uint _packedTickHigh;      // 4 bytes - TSN high bits
-    private ushort _packedTickLow;     // 2 bytes - TSN low bits + IsolationFlag (bit 0)
-    public ushort UowEpoch;            // 2 bytes - NEW: owning UoW's epoch
+    private ushort _packedTickLow;     // 2 bytes - full 16 bits of TSN (bit 0 freed)
+    private ushort _packedUowId;       // 2 bytes - bits 0-14: UoW ID, bit 15: IsolationFlag
 }
 ```
 
@@ -397,25 +397,25 @@ When a transaction commits, the revision element is stamped:
 
 ```csharp
 // In Transaction.CommitComponent():
-element.UowEpoch = CurrentUow.Epoch;  // Stamp with UoW's epoch
+element.UowId = CurrentUow.UowId;  // Stamp with UoW's ID
 element.IsolationFlag = false;         // Visible within UoW scope
 ```
 
-### Epoch Lifecycle
+### UoW ID Lifecycle
 
 | Value | Meaning |
 |-------|---------|
 | `0` | Legacy / no-UoW (always visible, for backward compatibility) |
-| `1–65535` | Valid epoch assigned by UoW Registry |
+| `1–32767` | Valid UoW ID assigned by UoW Registry |
 
-Epochs are recycled when the UoW's `MaxTSN < TransactionChain.MinTSN` (no active transaction can reference it).
+UoW IDs are recycled when the UoW's `MaxTSN < TransactionChain.MinTSN` (no active transaction can reference it).
 
 ### Storage Impact
 
 +2 bytes per revision (10 → 12 bytes). This is a **20% size increase** per revision element but acceptable given:
 - Revisions are typically short-lived (GC'd after older transactions complete)
 - 12 bytes maintains good alignment (divisible by 4)
-- The epoch enables O(1) crash recovery without full-database scanning
+- The UoW ID enables O(1) crash recovery without full-database scanning
 
 ---
 
@@ -423,40 +423,31 @@ Epochs are recycled when the UoW's `MaxTSN < TransactionChain.MinTSN` (no active
 
 ### Purpose
 
-A dedicated segment tracking the status of all active and recently-committed Units of Work. Combined with the WAL, the registry provides:
-- **O(1) crash recovery initialization:** Read registry, void pending epochs — instant
-- **Visibility control:** Bitmap of pending epochs for MVCC read filtering
-- **Checkpoint coordination:** Registry marks epochs as committed when their data pages are checkpointed
+A growing logical segment tracking the status of all active and recently-completed Units of Work. The WAL is the authority for UoW state transitions; the registry pages are a checkpoint cache. Combined, they provide:
+- **Fast crash recovery:** Read registry checkpoint (baseline) + replay WAL delta since last checkpoint
+- **Visibility control:** Committed bitmap for MVCC read filtering (crash-recovery fallback, not hot path)
+- **Checkpoint coordination:** Registry marks UoWs as committed when their data pages are checkpointed
 
 ### Data Structures
 
 ```csharp
-// Registry Header (80 bytes, at start of registry segment)
-struct UowRegistryHeader
-{
-    ushort CurrentEpoch;          // Next epoch to allocate
-    ushort ActiveCount;           // Currently active entries
-    uint Reserved;
-    ulong PendingBitmap0;         // 512 epochs fast-path bitmap (8 x 64 bits)
-    ulong PendingBitmap1;
-    ulong PendingBitmap2;
-    ulong PendingBitmap3;
-    ulong PendingBitmap4;
-    ulong PendingBitmap5;
-    ulong PendingBitmap6;
-    ulong PendingBitmap7;
-}
+// No separate header struct — the root page's usable space is entirely UowRegistryEntry[150].
+// The allocation bitmap and committed bitmap are in-memory only (rebuilt from entry states on startup).
+// Metadata (max allocated ID, high water mark, etc.) can be stored in the LogicalSegment's
+// standard root page header or derived from the entry array on startup.
 
-// Registry Entry (32 bytes each, 253 entries fit in one 8KB page)
+// Registry Entry (40 bytes each, slot index = UoW ID)
+// Padded to 40 bytes: divides evenly into root (6000/40=150) and overflow (8000/40=200) pages
 struct UowRegistryEntry
 {
-    ushort Epoch;                 // This entry's epoch value
     UowStatus Status;             // Free=0, Pending=1, WalDurable=2, Committed=3, Void=4
     byte Reserved;
-    int Reserved2;
-    long MinTSN;                  // First TSN in this UoW
-    long MaxTSN;                  // Last TSN in this UoW
-    long CheckpointLSN;           // WAL LSN at which this epoch was checkpointed
+    short Reserved2;
+    int TransactionCount;         // Number of transactions committed in this UoW
+    long CreatedTicks;            // Stopwatch ticks at creation
+    long CommittedTicks;          // Stopwatch ticks at WAL flush (0 if not yet)
+    long MaxTSN;                  // Highest TSN — for GC: MinTSN > MaxTSN → recyclable
+    long Reserved3;               // Future use (e.g., MinTSN for precise CommittedBeforeTSN)
 }
 
 enum UowStatus : byte
@@ -464,7 +455,7 @@ enum UowStatus : byte
     Free = 0,        // Slot available for reuse
     Pending = 1,     // UoW created, WAL records being written
     WalDurable = 2,  // All WAL records flushed (FUA complete), data pages not yet checkpointed
-    Committed = 3,   // Data pages checkpointed, WAL can be recycled for this epoch
+    Committed = 3,   // Data pages checkpointed, WAL can be recycled for this UoW
     Void = 4         // Rolled back or recovered from crash
 }
 ```
@@ -479,39 +470,66 @@ Pending → WalDurable → Committed → Free
 
 | Transition | Trigger | Meaning |
 |-----------|---------|---------|
-| Free → Pending | `CreateUnitOfWork()` | UoW started, epoch allocated |
+| Free → Pending | `CreateUnitOfWork()` | UoW started, UoW ID allocated (in-memory), "UoW Created" WAL record flushed via group commit |
 | Pending → WalDurable | WAL flush completes for all UoW records | Changes survive any crash (via WAL replay) |
 | WalDurable → Committed | Checkpoint writes data pages + fsync | Data pages match WAL, WAL segment recyclable |
 | Pending → Void | Crash recovery | UoW was in-flight at crash time |
-| Void/Committed → Free | Epoch GC (no active tx references it) | Slot recycled |
+| Void/Committed → Free | UoW GC (no active tx references it) | Slot recycled |
 
-### Layout
+### Storage: Flat Array in Growing Logical Segment
+
+The registry is stored as a **flat array** in a growing `LogicalSegment` — not chunks. Each entry is addressed directly by slot index (= UoW ID). No page headers, no overflow chains, no chunk metadata.
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│ Registry Page 0 (8KB)                                                   │
-├─────────────────────────────────────────────────────────────────────────┤
-│   UowRegistryHeader: 80 bytes                                           │
-│   UowRegistryEntry[253]: 253 x 32 = 8096 bytes                          │
-├─────────────────────────────────────────────────────────────────────────┤
-│ Overflow Pages (if > 253 concurrent UoWs needed)                        │
-│   UowRegistryEntry[250] per overflow page                               │
-└─────────────────────────────────────────────────────────────────────────┘
+Root page:     entries[  0 .. 149]     150 × 40 = 6000 bytes (exact fit)
+Overflow 0:    entries[150 .. 349]     200 × 40 = 8000 bytes (exact fit)
+Overflow 1:    entries[350 .. 549]     200 × 40 = 8000 bytes (exact fit)
+...
 ```
 
-### Fast-Path Bitmap
+Pages are allocated on demand: unit tests creating 1-5 UoWs use just 1 page (8 KB). Production at full capacity: ~164 pages (~1.3 MB). `Free = 0` ensures fresh pages are automatically all-Free entries.
 
-The `PendingBitmap` (512 bits) is a **thread-local cacheable** summary of which epochs are currently pending or void. This avoids reading registry entries on the hot read path:
+### Durability: WAL-Based (No Per-Allocation FUA)
 
-```csharp
-[MethodImpl(MethodImplOptions.AggressiveInlining)]
-bool IsNotYetVisible(ushort epoch)
-{
-    int word = epoch >> 6;       // epoch / 64
-    int bit = epoch & 63;        // epoch % 64
-    return (_cachedBitmap[word] & (1UL << bit)) != 0;
-}
-```
+The registry pages are a **checkpoint cache**, not the durable source of truth. UoW state transitions are recorded as WAL records and flushed via the WAL's existing group commit mechanism. No blocking FUA on registry pages.
+
+- **UoW creation:** "UoW Created" WAL record written to ring buffer → flushed via group commit (amortized across batch).
+- **Checkpoint:** Registry pages written to `ManagedMMF` during regular checkpoints alongside other dirty data pages — one `fsync` for all.
+- **Recovery:** Read checkpoint baseline + replay WAL delta since last checkpoint. If registry pages are torn, rebuild entirely from WAL (slower recovery, never data loss).
+
+This eliminates the per-allocation FUA bottleneck (~15-85µs each) and reuses the WAL's existing durability infrastructure.
+
+### Entry Lifecycle
+
+<a href="../assets/typhon-uow-registry-lifecycle.svg">
+  <img src="../assets/typhon-uow-registry-lifecycle.svg" width="1177"
+       alt="UoW Registry Entry Lifecycle — state machine showing Free, Pending, WalDurable, Committed, and Void states with normal and crash recovery paths">
+</a>
+<sub>🔍 Click to open full size (Ctrl+Scroll to zoom) — For pan-zoom: open <code>claude/assets/viewer.html</code> in browser</sub>
+
+#### Normal Path: Free → Pending → WalDurable → Committed → Free
+
+1. **Free → Pending:** `AllocateUowId()` claims a free slot via allocation bitmap scan (`BitOperations.TrailingZeroCount`). The entry's `State = Pending` is set in-memory and a "UoW Created" WAL record is written to the ring buffer. The WAL group flush makes this durable — batched with other pending writes. No FUA on registry pages. The critical invariant is preserved: the WAL record must be durable before any revision references this UoW ID. `CreatedTicks` is set, other fields zeroed.
+
+2. **Pending → WalDurable:** All WAL records for this UoW have been flushed via FUA. The UoW's changes now survive any crash — WAL replay can recover them. This transition is triggered by `uow.Flush()` / `uow.FlushAsync()`, the GroupCommit timer, or `DurabilityOverride.Immediate` on individual transactions.
+
+3. **WalDurable → Committed:** The Checkpoint Manager has written all dirty data pages for this UoW to the data file and called `fsync`. The data is now directly readable from data pages without WAL replay. WAL segments covering this UoW are now eligible for recycling. The committed bitmap bit is set atomically (in-memory).
+
+4. **Committed → Free:** GC condition — `TransactionChain.MinTSN > entry.MaxTSN`. This means no active transaction could possibly reference any revision stamped with this UoW ID. The slot is recycled: committed bitmap bit cleared, allocation bitmap bit set. The entry's fields are zeroed.
+
+#### Crash Recovery Path: Pending → Void → Free
+
+5. **Pending → Void:** On startup after a crash, any entry still in `Pending` state means the UoW was in-flight when the crash happened. Its WAL records (if any) may be partial or absent. Recovery sets `State = Void`, making all revisions with this UoW ID instantly invisible — the committed bitmap bit stays unset, so `IsCommitted(uowId)` returns `false`.
+
+6. **Void → Free:** Same GC condition as Committed → Free. Once no active transaction can reference the voided UoW's revisions, the slot is recycled. The voided revisions themselves get cleaned up by `DeferredCleanupManager` during normal revision chain GC — they are physically present but invisible until cleanup removes them.
+
+#### Key Properties
+
+- **`Free = 0` default:** Zeroed memory (fresh pages) is automatically `Free`. No explicit initialization needed. Growing segment pages require no initialization.
+- **WAL-based durability:** No blocking FUA on registry pages. UoW state transitions are WAL records, flushed via group commit. Registry pages are a checkpoint cache — written during regular checkpoints, disposable if torn.
+- **Recovery:** Read checkpoint baseline + replay WAL delta. If registry pages are corrupted, rebuild entirely from WAL (slower, never data loss). No FPI needed for registry pages.
+- **Two in-memory bitmaps:** The *allocation bitmap* (`ulong[512]`, 32,768 bits) tracks Free slots for O(1) allocation. The *committed bitmap* (`ulong[512]`, 32,768 bits) is a **crash-recovery fallback** — it filters ghost revisions from voided UoWs. Both are rebuilt from entry states on startup.
+- **CommittedBeforeTSN:** A `long` value that enables zero-overhead visibility checks during normal operation. Set to `long.MaxValue` when no Void entries exist (all reads bypass the committed bitmap). Set to `0` after crash recovery while voided entries are being cleaned up (all reads fall through to the bitmap). See [§6.8 Visibility & Isolation](#68-visibility--isolation) for the full two-tier architecture.
 
 ---
 
@@ -658,9 +676,9 @@ public enum DurabilityGuarantee
 | **Deferred** | ~1-2 µs | N/A (batch-durable) | N/A |
 | **GroupCommit (5ms)** | ~1-2 µs | ~200K+ (amortized) | Millions (shared flush) |
 | **Immediate** | ~15-85 µs | ~12K-65K | ~12K-65K (FUA-limited) |
-| **Epoch-only (old design)** | ~100-400 µs (immediate) | ~2.5K-10K | Same |
+| **Registry-only (old design)** | ~100-400 µs (immediate) | ~2.5K-10K | Same |
 
-The WAL-based Immediate mode is **5-40x faster** than the old epoch-only immediate flush (which required writing all dirty data pages + 2 fsyncs).
+The WAL-based Immediate mode is **5-40x faster** than the old registry-only immediate flush (which required writing all dirty data pages + 2 fsyncs).
 
 ---
 
@@ -716,33 +734,44 @@ The checkpoint pipeline benefits directly from the storage engine's sequential a
 
 ### Purpose
 
-On startup after a crash, restore the database to a consistent state using the epoch registry and WAL.
+On startup after a crash, restore the database to a consistent state using the UoW registry and WAL.
 
 ### Recovery Algorithm
 
 ```csharp
 void RecoverFromCrash()
 {
-    // Phase 1: Registry scan — O(1), < 1ms
-    var registry = LoadRegistrySegment();
+    // Phase 1: Registry reconstruction — checkpoint baseline + WAL delta
+    var registry = LoadRegistryFromCheckpoint();  // Read registry pages from ManagedMMF
+    if (!registry.ChecksumsValid)
+        registry = new EmptyRegistry();            // Torn pages? Rebuild entirely from WAL
+
+    // Replay WAL registry records to bring checkpoint baseline up to date
+    var checkpointLSN = ReadCheckpointLSN();
+    var walRecords = ReadWalFrom(checkpointLSN);
+
+    foreach (var record in walRecords.Where(r => r.IsRegistryRecord))
+    {
+        // Apply UoW state transitions: Created → Pending, WalDurable, Committed, etc.
+        registry.ApplyStateTransition(record);
+    }
+
+    // Void any UoWs that were Pending at crash time
     foreach (ref var entry in registry.Entries)
     {
         if (entry.Status == UowStatus.Pending)
         {
             entry.Status = UowStatus.Void;
-            // Revisions with this epoch become invisible immediately
+            // Revisions with this UoW ID become invisible immediately
         }
     }
-    RebuildPendingBitmap(registry);
+    RebuildBitmaps(registry);  // allocation + committed bitmaps
 
-    // Phase 2: WAL replay — O(WAL since last checkpoint), 10-50ms typical
-    var checkpointLSN = ReadCheckpointLSN();
-    var walRecords = ReadWalFrom(checkpointLSN);
-
-    foreach (var record in walRecords)
+    // Phase 2: WAL data replay — O(WAL since last checkpoint), 10-50ms typical
+    foreach (var record in walRecords.Where(r => r.IsDataRecord))
     {
-        // Skip records for voided epochs (already handled in Phase 1)
-        if (IsVoidedEpoch(record.UowEpoch)) continue;
+        // Skip records for voided UoW IDs (handled in Phase 1)
+        if (IsVoidedUow(record.UowId)) continue;
 
         // Replay committed records that may not be in data pages yet
         ReplayWalRecord(record);
@@ -764,19 +793,19 @@ void RecoverFromCrash()
             else
             {
                 // No FPI — page was checkpointed before corruption
-                // This means the corrupting write was uncommitted
-                LogCritical($"Torn page {pageIndex} with no FPI — voiding affected epoch");
-                VoidEpochForPage(pageIndex);
+                LogCritical($"Torn page {pageIndex} with no FPI — voiding affected UoW");
+                VoidUowForPage(pageIndex);
             }
         }
     }
 
-    // Phase 4: Persist recovery state
-    registry.SaveChanges();
-    Fsync(_registryFileHandle);
+    // Phase 4: Persist recovery state (write registry to checkpoint cache)
+    registry.WriteToSegment();   // Written to ManagedMMF, will be fsync'd at next checkpoint
 
     // Phase 5: Database is ready
-    // - Voided epochs are invisible via bitmap
+    // - Registry reconstructed from checkpoint + WAL delta
+    // - Voided UoW IDs are invisible via committed bitmap
+    // - CommittedBeforeTSN = 0 (Void entries exist) — bitmap handles all reads
     // - WAL-durable but uncheckpointed data has been replayed
     // - Torn pages have been repaired
 }
@@ -786,38 +815,39 @@ void RecoverFromCrash()
 
 | Phase | Time | Depends On |
 |-------|------|-----------|
-| Phase 1: Registry | < 1 ms | Fixed (one 8KB page) |
-| Phase 2: WAL replay | 10-50 ms | Records since last checkpoint (10s default) |
+| Phase 1: Registry reconstruction | < 2 ms | Checkpoint pages + WAL registry delta (small) |
+| Phase 2: WAL data replay | 10-50 ms | Data records since last checkpoint (10s default) |
 | Phase 3: Torn page repair | 0-10 ms | Number of torn pages (rare, typically 0-1) |
-| Phase 4: Persist | < 1 ms | One registry write |
-| **Total** | **~15-60 ms** | Dominated by WAL replay |
+| Phase 4: Persist | < 1 ms | Write registry to checkpoint cache |
+| **Total** | **~15-60 ms** | Dominated by WAL data replay |
 
 ### Crash Scenarios
 
 **Scenario 1: Crash during UoW operations (before any WAL flush)**
 ```
 Timeline:
-  UoW created → epoch = Pending in registry
+  UoW created → "UoW Created" WAL record in ring buffer (not flushed)
   tx1.Commit() → WAL record buffered (not flushed)
   tx2.Commit() → WAL record buffered (not flushed)
   [CRASH]
 
 Recovery:
-  Phase 1: Registry → Pending → Void ✓
-  Phase 2: WAL has no records for this epoch (never flushed)
-  Result: Database state = before UoW started ✓
+  Phase 1: Registry checkpoint has no entry for this UoW (created after checkpoint)
+           WAL has no flushed records for this UoW → entry doesn't exist
+  Phase 2: No data records to replay
+  Result: Database state = before UoW started ✓ (UoW never existed)
 ```
 
 **Scenario 2: Crash after WAL flush, before checkpoint**
 ```
 Timeline:
   UoW operations complete
-  WAL flush (FUA) succeeds → epoch = WalDurable
+  WAL flush (FUA) succeeds → UoW = WalDurable
   [CRASH before checkpoint]
 
 Recovery:
   Phase 1: Registry → WalDurable (not voided — WAL records exist)
-  Phase 2: Replay WAL records for this epoch → apply to data pages
+  Phase 2: Replay WAL records for this UoW → apply to data pages
   Result: UoW fully recovered from WAL ✓
 ```
 
@@ -838,26 +868,26 @@ Recovery:
 **Scenario 4: Torn page on committed data (the critical case)**
 ```
 Timeline:
-  Epoch-1 fully committed (checkpointed, data pages on disk)
-  Epoch-2 modifies page B (same page as epoch-1 used)
-  Epoch-2 WAL flush succeeds → WalDurable
-  [POWER LOSS during epoch-2 data page write → page B torn]
+  UoW-1 fully committed (checkpointed, data pages on disk)
+  UoW-2 modifies page B (same page as UoW-1 used)
+  UoW-2 WAL flush succeeds → WalDurable
+  [POWER LOSS during UoW-2 data page write → page B torn]
 
 Recovery:
-  Phase 1: Registry → Epoch-1 Committed, Epoch-2 WalDurable
+  Phase 1: Registry → UoW-1 Committed, UoW-2 WalDurable
   Phase 3: Checksum detects page B is torn
-  Phase 3: Find FPI for page B in WAL → epoch-2 recorded the FPI
-  Phase 3: Restore page B from FPI, replay epoch-2 WAL records
-  Result: Page B correctly reflects epoch-2 data ✓
+  Phase 3: Find FPI for page B in WAL → UoW-2 recorded the FPI
+  Phase 3: Restore page B from FPI, replay UoW-2 WAL records
+  Result: Page B correctly reflects UoW-2 data ✓
 ```
 
 ### Why Both Registry AND WAL Are Needed
 
 | Mechanism | Provides |
 |-----------|----------|
-| **Registry alone** | Instant crash recovery initialization (which epochs are valid), but CANNOT repair torn pages or recover uncheckpointed data |
-| **WAL alone** | Full replay capability and torn page repair, but recovery requires reading entire WAL from last checkpoint |
-| **Registry + WAL** | Instant initialization (registry) + minimal replay (WAL tail) + torn page repair (FPI) |
+| **WAL alone** | Full replay capability, torn page repair, UoW state transitions. Authority for durability. Recovery requires reading WAL from last checkpoint. |
+| **Registry checkpoint alone** | Fast recovery baseline (which UoWs exist and their states). But CANNOT repair torn pages or recover uncheckpointed data. Disposable if corrupted. |
+| **WAL + Registry checkpoint** | WAL provides authoritative durability. Registry checkpoint accelerates recovery (baseline state, minimal WAL delta). Torn registry pages → fall back to WAL-only rebuild. |
 
 ---
 
@@ -865,41 +895,76 @@ Recovery:
 
 ### Purpose
 
-The epoch system integrates with MVCC reads to ensure unflushed UoW data is only visible to transactions within the **same** UoW — and never to external observers after a crash.
+The UoW ID system integrates with MVCC reads to handle two distinct concerns:
+
+1. **Transaction isolation** (normal operation): The `IsolationFlag` per revision controls whether a transaction's uncommitted writes are visible to other readers. This is the only visibility mechanism needed during normal operation.
+2. **Ghost revision filtering** (crash recovery): After a crash, some revisions may be physically present on disk but belong to voided UoWs. The `CommittedBeforeTSN` + committed bitmap mechanism filters these out.
+
+**Key design principle:** During normal operation, the UoW state (Pending/WalDurable/Committed) is about **durability**, not **visibility**. A revision from a Pending UoW is fully visible — the user chose `DurabilityMode.Deferred`, accepting the crash-loss tradeoff. This is what makes "Commit = instant (~1-2µs)" possible.
+
+### Two-Tier Visibility Architecture
+
+The read path uses two tiers that separate performance from crash-recovery correctness:
+
+- **Tier 1 — CommittedBeforeTSN:** A single `long` threshold maintained by the registry. Any revision with `TSN < CommittedBeforeTSN` is guaranteed from a committed UoW. During normal operation, `CommittedBeforeTSN = long.MaxValue` → this tier handles 100% of reads with zero bitmap overhead.
+- **Tier 2 — Committed Bitmap:** A per-UoW-ID bitmap (`ulong[512]`, 4KB, L1-resident). Only activated after crash recovery while voided UoW entries exist (`CommittedBeforeTSN = 0`). Goes cold once voided entries are cleaned up.
 
 ### Visibility Check (Hot Path)
 
 ```csharp
 [MethodImpl(MethodImplOptions.AggressiveInlining)]
-bool IsVisible(ref CompRevStorageElement el, long readerTSN, ushort readerEpoch)
+bool IsVisible(ref CompRevStorageElement rev, long readerTSN, ushort readerUowId)
 {
-    // 1. Transaction isolation (uncommitted tx data)
-    if (el.IsolationFlag) return false;
+    // ── Layer 1: Transaction Isolation ──────────────────────────────
+    // IsolationFlag = 1 → transaction hasn't committed yet.
+    // Only same UoW can see its own in-progress revisions.
+    if (rev.IsolationFlag)
+        return rev.UowId == readerUowId;
 
-    // 2. MVCC snapshot isolation (future data)
-    if (el.TSN > readerTSN) return false;
+    // ── Layer 2: CommittedBeforeTSN Fast Path ───────────────────────
+    // Normal operation: _committedBeforeTSN = long.MaxValue → ALWAYS succeeds.
+    // Post-crash: _committedBeforeTSN = 0 → NEVER succeeds → falls through.
+    if (rev.TSN < _committedBeforeTSN)
+        return rev.TSN <= readerTSN;
 
-    // 3. Epoch checks
-    var epoch = el.UowEpoch;
-    if (epoch == 0) return true;               // Legacy/no-UoW → always visible
-    if (epoch == readerEpoch) return true;      // Same UoW → visible (intra-UoW reads)
+    // ── Layer 3: UoW Identity ───────────────────────────────────────
+    var uowId = rev.UowId;
+    if (uowId == 0) return rev.TSN <= readerTSN;   // Legacy: always committed
+    if (uowId == readerUowId) return true;          // Same UoW: read-your-writes
 
-    // 4. Pending/Void check (cold path for cross-UoW reads)
-    return !IsNotYetVisible(epoch);            // Not pending/void → visible
+    // ── Layer 4: Committed Bitmap (crash-recovery fallback) ─────────
+    // Only reached post-crash while voided UoWs exist.
+    // Returns false for voided UoW IDs → ghost revisions invisible.
+    return _uowRegistry.IsCommitted(uowId) && rev.TSN <= readerTSN;
 }
 ```
 
+### CommittedBeforeTSN — Visibility Horizon
+
+`CommittedBeforeTSN` enables **zero-overhead visibility** during normal operation by bypassing the committed bitmap entirely:
+
+| Engine State | Value | Read Path Effect |
+|---|---|---|
+| **Normal operation** (no Void entries) | `long.MaxValue` | Layer 2 always succeeds. Bitmap never touched. |
+| **After crash** (Void entries exist) | `0` | Layer 2 always fails. All reads use bitmap. |
+| **Void entries cleaned up** | `long.MaxValue` | Back to normal. Bitmap goes cold. |
+
+**Why this works during normal operation:** `IsolationFlag` handles per-transaction visibility. The UoW's durability state is irrelevant for reads. No ghost revisions exist (they only appear after crashes). UoW ID reuse (ABA problem) is safe because the fast path uses TSN comparison, not the bitmap — old revisions from recycled UoW IDs are visible via `rev.TSN < long.MaxValue`.
+
+**Why `0` after crash:** Ghost revisions may be on disk (pages flushed before crash, UoW voided on recovery). Their `IsolationFlag = 0` (transaction committed pre-crash), so Layer 1 can't filter them. Setting `CommittedBeforeTSN = 0` forces all reads through the bitmap (Layer 4), which returns false for voided UoW IDs.
+
+See the [UoW design doc §6](../design/unit-of-work.md#committedbeforetsn--visibility-horizon) for the full CommittedBeforeTSN specification including ABA problem analysis, startup computation, and future enhancements.
+
 ### Performance Characteristics
 
-| Case | Cost | Frequency |
-|------|------|-----------|
-| `IsolationFlag` check | 1 compare | Always (fast reject) |
-| `TSN` check | 1 compare | Always (MVCC) |
-| `epoch == 0` | 1 compare | Common (legacy data) |
-| `epoch == readerEpoch` | 1 compare | Common (same UoW) |
-| `IsNotYetVisible()` | Bitmap lookup (~5 cycles) | Rare (cross-UoW, recent) |
+| Case | Cost | Frequency | When |
+|------|------|-----------|------|
+| Layer 1: `IsolationFlag` | 1 bit test (~1 cycle) | Every read | Always |
+| Layer 2: `CommittedBeforeTSN` | 1 compare (~1 cycle) | Every committed read | Always (succeeds during normal operation) |
+| Layer 3: UoW identity | 1-2 compares | Rare | Only post-crash |
+| Layer 4: Bitmap lookup | ~5-10 cycles | Rare | Only post-crash while Void entries exist |
 
-**Total hot-path cost**: 3 integer comparisons (~1-3 cycles). The bitmap lookup is the cold path.
+**Normal operation total: 2 cycles** (Layer 1 + Layer 2). The bitmap is never touched.
 
 ### Intra-UoW Visibility
 
@@ -910,25 +975,31 @@ using var uow = db.CreateUnitOfWork(DurabilityMode.Deferred);
 
 using (var tx1 = uow.CreateTransaction())
 {
-    tx1.CreateEntity(ref player);  // Entity 100, epoch=42
-    tx1.Commit();
+    tx1.CreateEntity(ref player);  // Entity 100, uowId=42
+    tx1.Commit();                  // IsolationFlag cleared → revision visible
 }
 
 using (var tx2 = uow.CreateTransaction())
 {
-    // tx2 has readerEpoch=42, matches entity's epoch=42
+    // tx2 has readerUowId=42, matches revision's uowId=42
+    // Layer 2 succeeds (CommittedBeforeTSN = long.MaxValue) → visible
     tx2.ReadEntity(100, out var p);  // Visible!
     tx2.Commit();
 }
 ```
 
-### Bitmap Refresh Strategy
+### Ghost Revisions — Why the Bitmap Exists
 
-The pending bitmap is cached thread-locally for performance. Refresh happens:
-- At transaction creation (new snapshot boundary)
-- At UoW status transitions (Pending → WalDurable → Committed)
+Ghost revisions are revisions physically present on disk but logically invalid. They appear when:
 
-Staleness is acceptable: a briefly stale bitmap means a recently-committed UoW's data is temporarily invisible — equivalent to the read starting slightly earlier.
+1. A UoW creates transactions that commit (clearing IsolationFlag)
+2. The page cache flushes dirty pages to disk (normal background I/O, unrelated to UoW durability)
+3. A crash occurs before the UoW reaches WalDurable/Committed state
+4. Recovery voids the UoW, but the revision is on disk with `IsolationFlag = 0`
+
+Without the bitmap, the read path would see `IsolationFlag = 0` and treat the ghost as committed data. The bitmap (activated via `CommittedBeforeTSN = 0`) returns false for voided UoW IDs, correctly filtering ghosts.
+
+**Ghost revisions are cleaned up** by `DeferredCleanupManager` during normal revision chain GC as `MinTSN` advances. Once all ghost revisions are removed and Void entries transition to Free, `CommittedBeforeTSN` returns to `long.MaxValue` and the bitmap goes cold.
 
 ---
 
@@ -960,9 +1031,9 @@ ExecutionSystem.UnitOfWork
 
 | Data Feature | Durability Integration |
 |-------------|----------------------|
-| CompRevStorageElement | +2 bytes for UowEpoch field |
-| Transaction.Commit | Stamps epoch + serializes WAL record |
-| ComponentRevisionManager | Epoch-aware GC (void epoch cleanup) |
+| CompRevStorageElement | +2 bytes for `_packedUowId` field |
+| Transaction.Commit | Stamps UoW ID + serializes WAL record |
+| ComponentRevisionManager | UoW-aware GC (void UoW cleanup) |
 
 ---
 
@@ -976,15 +1047,15 @@ ExecutionSystem.UnitOfWork
 | **NEW** `PlatformIO.cs` | Cross-platform P/Invoke (O_DIRECT, fdatasync, etc.) | Phase 1 |
 | `PageBaseHeader` (in PagedMMF.cs) | Add `PageChecksum` + `ChecksumEpoch` fields | Phase 1 |
 | `PagedMMF.cs` | Checksum compute on flush, verify on load | Phase 1 |
-| `CompRevStorageElement` (in ComponentTable.cs) | Add `UowEpoch` field (+2 bytes) | Phase 2 |
-| `Transaction.cs` | Stamp `UowEpoch` + serialize WAL record in `Commit()` | Phase 2 |
+| `CompRevStorageElement` (in ComponentTable.cs) | Add `_packedUowId` field (+2 bytes) | Phase 2 |
+| `Transaction.cs` | Stamp UoW ID + serialize WAL record in `Commit()` | Phase 2 |
 | **NEW** `UowRegistry.cs` | Registry segment management | Phase 2 |
 | `ManagedPagedMMF.cs` | Add registry segment to `RootFileHeader` | Phase 2 |
 | **NEW** `UnitOfWork.cs` | UoW lifecycle, durability mode, flush API | Phase 3 |
 | **NEW** `CheckpointManager.cs` | Background checkpoint logic | Phase 3 |
 | `DatabaseEngine.cs` | UoW creation, WAL/checkpoint coordination | Phase 3 |
 | **NEW** `CrashRecovery.cs` | Recovery: registry scan + WAL replay + torn page repair | Phase 4 |
-| `ComponentRevisionManager.cs` | Epoch-aware GC in `CleanUpUnusedEntries` | Phase 4 |
+| `ComponentRevisionManager.cs` | UoW-aware GC in `CleanUpUnusedEntries` | Phase 4 |
 
 ### Implementation Phases
 
@@ -1001,9 +1072,9 @@ gantt
     WalWriter thread + ring buffer            :p1d, after p1c, 2
     Page checksum compute/verify              :p1e, after p1a, 2
 
-    section Phase 2: Epoch + Registry
-    Add UowEpoch to CompRevStorageElement     :p2a, after p1d, 1
-    Stamp epoch + WAL record in Commit        :p2b, after p2a, 1
+    section Phase 2: UoW ID + Registry
+    Add UowId to CompRevStorageElement        :p2a, after p1d, 1
+    Stamp UoW ID + WAL record in Commit       :p2b, after p2a, 1
     UowRegistry segment                       :p2c, after p2b, 2
 
     section Phase 3: UoW + Checkpoint
@@ -1014,7 +1085,7 @@ gantt
     section Phase 4: Recovery + Cleanup
     CrashRecovery (registry + WAL replay)     :p4a, after p3c, 2
     Torn page repair (FPI)                    :p4b, after p4a, 1
-    Epoch-aware GC                            :p4c, after p4b, 1
+    UoW-aware GC                              :p4c, after p4b, 1
     Crash injection testing                   :p4d, after p4c, 2
 ```
 
@@ -1033,11 +1104,12 @@ gantt
 | Page checksum verify (8KB) | ~0.4 µs | Same |
 | Checkpoint (100 sequential pages) | ~500 µs | Batch write + fsync |
 | Checkpoint (100 random pages) | ~2.8 ms | Multiple I/Os + fsync |
-| Recovery Phase 1 (registry) | < 1 ms | One 8KB page read |
+| UoW creation (AllocateUowId) | ~0.1 µs + amortized FUA | In-memory alloc + WAL record via group commit |
+| Recovery Phase 1 (registry) | < 2 ms | Checkpoint pages + WAL registry delta |
 | Recovery Phase 2 (WAL replay) | 10-50 ms | 10s of WAL records |
 | Recovery Phase 3 (torn repair) | 0-10 ms | Rare (0-1 pages typically) |
-| Read path (hot, same epoch) | 3 compares (~1-3 cycles) | No bitmap access |
-| Read path (cold, cross-epoch) | + bitmap lookup (~5-10 cycles) | Thread-local cache |
+| Read path (normal operation) | 2 compares (~1-2 cycles) | IsolationFlag + TSN; CommittedBeforeTSN = long.MaxValue bypasses bitmap |
+| Read path (post-crash, pre-GC) | + bitmap lookup (~5-10 cycles) | CommittedBeforeTSN = 0 forces bitmap fallback until void entries are GC'd |
 
 ---
 
@@ -1048,7 +1120,7 @@ gantt
 | WAL write stall (NVMe latency spike) | Timeout + fallback to buffered (degrade gracefully) |
 | WAL growth (long-lived Deferred UoW) | Dynamic segment allocation; segments recycled after Flush() + checkpoint; user bears disk cost of their durability choice |
 | Ring buffer overflow (commits faster than WAL flush) | Back-pressure: block commit threads until space available |
-| Epoch exhaustion (65536 max) | GC recycles committed epochs; 4096 concurrent far beyond typical |
+| UoW ID exhaustion (32,768 max) | GC recycles committed UoW IDs; 4096 concurrent far beyond typical |
 | Registry corruption | CRC32C checksum on registry page; WAL contains registry state |
 | Torn WAL record | WAL record has CRC32C — partial record detected, truncated on recovery |
 | CRC32C collision (false positive checksum) | 1 in 4 billion chance per page read; acceptable for 8KB pages |
@@ -1061,7 +1133,7 @@ gantt
 
 | Question | Decision | Rationale |
 |----------|----------|-----------|
-| **Durability mechanism** | WAL + Epoch Registry | WAL provides repair capability; registry provides O(1) recovery init |
+| **Durability mechanism** | WAL (authority) + UoW Registry (checkpoint cache) | WAL provides repair + UoW state transitions; registry checkpoint accelerates recovery |
 | **Checksum algorithm** | CRC32C | Hardware-accelerated (~0.4µs/8KB), proven in databases |
 | **Checksum scope** | Mandatory (Phase 1) | Torn pages are undetectable without; consumer NVMe AWUPF=4KB |
 | **WAL record format** | Fixed header (32B) + variable payload | Minimal overhead, supports CRC32C verification |
@@ -1071,9 +1143,13 @@ gantt
 | **Commit buffer** | Lock-free MPSC ring buffer | Zero-allocation commits, minimal contention |
 | **Checkpoint interval** | 10s default (configurable) | Balance WAL size vs recovery time |
 | **Durability modes** | Three (Deferred/GroupCommit/Immediate) + per-tx override | Covers all workload types: games → financial |
-| **Epoch size** | `ushort` (2 bytes) | 65536 values, recycled via GC, minimal per-revision overhead |
-| **Registry location** | Dedicated segment | Cleaner separation, independent fsync, easy to extend |
-| **Bitmap caching** | Thread-local, refresh per-transaction | Amortizes bitmap read cost, acceptable staleness |
+| **UoW ID size** | 15 bits (packed in `ushort` with IsolationFlag) | 32,768 values, recycled via GC, minimal per-revision overhead |
+| **Registry storage** | Flat array in growing `LogicalSegment`, 40-byte entries | 150/root + 200/overflow (exact fit). No chunks. 1 page for tests, ~1.3MB at max capacity |
+| **Registry durability** | WAL-based (no per-allocation FUA) | UoW creation = WAL record, flushed via group commit. Registry pages = checkpoint cache, disposable if torn |
+| **Visibility architecture** | Two-tier: IsolationFlag (per-tx) + CommittedBeforeTSN (global horizon) | Normal reads never touch the bitmap; crash-recovery reads use bitmap as fallback |
+| **CommittedBeforeTSN** | `long.MaxValue` normal, `0` post-crash, `long.MaxValue` after void GC | Solves ABA problem of UoW ID reuse; binary approach (no MinTSN stored in entry) |
+| **Committed bitmap role** | Crash-recovery fallback only | NOT on normal read path; filters ghost revisions from voided UoWs after crash |
+| **Bitmap caching** | Thread-local, refresh per-transaction | Amortizes bitmap read cost during post-crash window, acceptable staleness |
 | **Point-in-time recovery** | Not supported (WAL recycled after checkpoint) | Acceptable for embedded game databases; future option |
 | **WAL-based replication** | Deferred to future | Architecture supports it (WAL streaming), not needed for v1 |
 
@@ -1083,7 +1159,7 @@ gantt
 
 1. **Ring buffer size**: How large should the WAL ring buffer be? 1MB handles ~5000-20000 records. Should it be configurable?
 
-2. **GroupCommit interval**: Default 5ms or 10ms? Lower = less risk, higher = better throughput. Make configurable with a sensible default.
+2. ~~**GroupCommit interval**~~: **Resolved** — 5ms is the default. Fits within one game tick (16ms at 60fps), below human perception, ~1% CPU overhead from FUA waits. Configurable via `UnitOfWork.GroupCommitInterval`. See [02-execution.md §2.3](02-execution.md#23-durability-modes) for the full trade-off analysis.
 
 3. **WAL initial segment count**: Pre-allocate N segments at database creation (default 4 = 16MB). Should be configurable for workloads that expect large bursts.
 
@@ -1101,19 +1177,19 @@ gantt
 
 ## Design History
 
-The final design (WAL + Epoch Registry + Checksums) was selected after evaluating multiple approaches:
+The final design (WAL + UoW Registry + Checksums) was selected after evaluating multiple approaches:
 
 | Approach | Key Idea | Why Not Chosen (Alone) |
 |----------|----------|----------------------|
-| A: Epoch + Registry only | Registry tracks pending/committed epochs | Cannot repair torn pages; cannot recover uncheckpointed data |
+| A: Registry only | Registry tracks pending/committed UoWs | Cannot repair torn pages; cannot recover uncheckpointed data |
 | B: WAL only | Full write-ahead logging | Recovery requires full WAL scan (no instant init) |
 | C: Double-write buffer | Write pages to reserved area first, then final location | 2x write amplification; no replay capability |
 | D: Copy-on-Write (COW) | Never overwrite pages | Complex space management; doesn't fit Typhon's architecture |
-| E: Epoch + Checksums (no WAL) | Detect torn pages, void affected epochs | Detects but cannot REPAIR torn pages; committed data lost |
+| E: Registry + Checksums (no WAL) | Detect torn pages, void affected UoWs | Detects but cannot REPAIR torn pages; committed data lost |
 
-**Winner: WAL + Epoch + Checksums** — combines:
-- WAL: durability guarantee + torn page repair + replay capability
-- Epoch Registry: O(1) recovery initialization + MVCC visibility
+**Winner: WAL + UoW Registry + Checksums** — combines:
+- WAL: durability authority for all state transitions (data + UoW registry) + torn page repair + replay capability
+- UoW Registry: checkpoint cache for fast recovery + in-memory visibility bitmaps (crash-recovery fallback)
 - Checksums: torn page detection at the point of read
 
 Each mechanism is insufficient alone; together they provide complete crash safety with minimal performance overhead.
@@ -1122,7 +1198,7 @@ Each mechanism is insufficient alone; together they provide complete crash safet
 
 ## Comparison: Old Design vs New Design
 
-| Aspect | Old (Epoch-Only) | New (WAL + Epoch) |
+| Aspect | Old (Registry-Only) | New (WAL + UoW Registry) |
 |--------|-------------------|-------------------|
 | Commit latency (deferred) | ~1 µs | ~1-2 µs |
 | Commit latency (immediate) | 100-400 µs (2 fsyncs) | 15-85 µs (1 FUA) |

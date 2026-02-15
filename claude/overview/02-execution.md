@@ -29,7 +29,7 @@ The timeout/cancellation foundation (§2.4–§2.6) is implemented. The Unit of 
 | **2.1** | [Unit of Work](#21-unit-of-work) | Durability boundary, owns UnitOfWorkContext | 🆕 New |
 | **2.2** | [Transaction Commit Path](#22-transaction-commit-path) | UoW ID stamp, WAL serialization, durability decision | 🆕 New |
 | **2.3** | [Durability Modes](#23-durability-modes) | Deferred / GroupCommit / Immediate + per-tx override | 🆕 New |
-| **2.4** | [UnitOfWorkContext](#24-executioncontext) | Deadline, cancellation, holdoff state | ✅ Implemented |
+| **2.4** | [UnitOfWorkContext](#24-unitofworkcontext) | Deadline, cancellation, holdoff state | ✅ Implemented |
 | **2.5** | [Deadline Management](#25-deadline-management) | Monotonic time, timeout conversion | ✅ Implemented |
 | **2.6** | [Cancellation & Holdoff](#26-cancellation--holdoff) | Cooperative cancellation, critical sections | ✅ Implemented |
 | **2.7** | [Background Workers](#27-background-workers) | WAL Writer, Checkpoint Manager, Watchdog, GC | 🚧 Partial (Watchdog only) |
@@ -81,7 +81,7 @@ await uow.FlushAsync();  // Single FUA for all changes (~15-85µs)
 
 ### Crash Recovery Semantics
 
-**Design Decision**: On crash, uncommitted Units of Work are **rolled back entirely** via the UoW registry. Their UoW ID is marked `Void`, making all stamped revisions instantly invisible.
+**Design Decision**: On crash, unflushed (Pending) Units of Work are **rolled back entirely** via the UoW registry. Their UoW ID is marked `Void`, making all stamped revisions instantly invisible.
 
 ```csharp
 using var uow = db.CreateUnitOfWork(DurabilityMode.Deferred);
@@ -226,7 +226,7 @@ public enum DurabilityMode
 ```
 CreateUnitOfWork(mode)
   → Allocate UoW ID from UoW Registry (Pending)
-  → Rent UnitOfWorkContext from pool
+  → Initialize UnitOfWorkContext (24-byte struct, inline in UoW)
   → Return UoW
 
 UoW in use:
@@ -242,7 +242,6 @@ Flush() / FlushAsync():
 Dispose():
   → If flushed: normal cleanup
   → If NOT flushed: changes remain volatile (crash = rolled back)
-  → Return UnitOfWorkContext to pool
   → UoW ID eventually recycled when no active tx references it
 ```
 
@@ -253,10 +252,10 @@ Each UoW is assigned a UoW ID from a **fixed-size registry array** (see [06-dura
 **UoW ID state machine:**
 
 ```
-Pending ──→ WalDurable ──→ Committed ──→ Recyclable
+Pending ──→ WalDurable ──→ Committed ──→ Free
    │                                          │
    │  (crash)                                 │
-   └──→ Void ──→ Recyclable                  │
+   └──→ Void ──→ Free                        │
                                               ↓
                                     Slot reused by new UoW
 ```
@@ -265,16 +264,16 @@ Pending ──→ WalDurable ──→ Committed ──→ Recyclable
 |-----------|---------|-----|
 | Pending → WalDurable | `uow.Flush()` or WAL writer completes FUA | WAL Writer thread |
 | WalDurable → Committed | Checkpoint Manager flushes dirty pages + fsyncs data file | Checkpoint Manager |
-| Committed → Recyclable | `TransactionChain.MinTSN` advances past all revisions stamped with this UoW ID | GC on transaction disposal |
+| Committed → Free | `TransactionChain.MinTSN` advances past all revisions stamped with this UoW ID | GC on transaction disposal |
 | Pending → Void | Crash recovery finds UoW ID still Pending | Recovery algorithm |
-| Void → Recyclable | Recovery completes | Recovery algorithm |
+| Void → Free | Recovery completes | Recovery algorithm |
 
 **The MinTSN condition** is the most subtle transition: a UoW ID can only be recycled when *no active transaction* can still observe its revisions. Since transactions use snapshot isolation (they see revisions with TSN ≤ their own), the UoW ID is safe to recycle once `MinTSN` (the oldest active transaction's TSN) exceeds all TSNs stamped by that UoW's transactions. This is analogous to PostgreSQL's `xmin` horizon driving tuple vacuuming.
 
 **Consequences of stale UoW IDs:**
 - A fixed-size registry means stale UoW IDs **block new UoW creation** (no free slots available). This is the engine's natural back-pressure mechanism.
 - Stale UoW IDs also increase crash recovery time: the registry scan must examine each slot, and pending/stale UoW IDs require WAL segment retention.
-- Long-running read-only transactions are the primary cause of UoW ID stall (they hold `MinTSN` low, preventing Committed → Recyclable transitions). This mirrors the "long transaction" problem in PostgreSQL's MVCC vacuum.
+- Long-running read-only transactions are the primary cause of UoW ID stall (they hold `MinTSN` low, preventing Committed → Free transitions). This mirrors the "long transaction" problem in PostgreSQL's MVCC vacuum.
 
 **Design rationale for fixed-size registry:**
 - **Predictable memory**: Registry is a single cache-line-aligned array, no dynamic allocation
@@ -333,6 +332,10 @@ This section describes the hot path executed inside `tx.Commit()` — the sequen
 //   public bool Commit(ConcurrencyConflictHandler handler = null)  // backward-compatible wrapper
 // The UnitOfWorkContext overload propagates deadlines to all internal lock acquisitions.
 // The parameterless overload uses UnitOfWorkContext.FromTimeout(TimeoutOptions.Current.DefaultCommitTimeout).
+//
+// FUTURE: DurabilityOverride parameter shown below is designed but not yet in the
+// actual Commit() signature. It will be added when the WAL Writer and UoW infrastructure
+// are implemented (Tier 4). The current signature has no durability parameter.
 public bool Commit(DurabilityOverride durability = DurabilityOverride.Default)
 {
     // 0. Yield point: safe to cancel before any modifications (via UnitOfWorkContext)
@@ -689,46 +692,11 @@ using var tx = uow.CreateTransaction();
 tx.ReadEntity(entityId, out MyComponent comp);
 ```
 
-### Pooling Integration
+### No Pooling Needed
 
-UnitOfWorkContext is pooled alongside UnitOfWork:
+Since `UnitOfWorkContext` is a 24-byte struct passed by `ref`, there is no heap allocation and no pooling. The struct is created on the stack (or inline in the owning `UnitOfWork`) and flows through the call stack by reference. This eliminates GC pressure entirely — no `ConcurrentQueue`, no rent/return overhead, no pool sizing concerns.
 
-```csharp
-internal class UnitOfWorkContextPool
-{
-    private readonly ConcurrentQueue<UnitOfWorkContext> _pool = new();
-
-    public UnitOfWorkContext Rent(Deadline deadline, ushort epoch)
-    {
-        if (!_pool.TryDequeue(out var ctx))
-            ctx = new UnitOfWorkContext();
-
-        ctx.Initialize(deadline, epoch);
-        return ctx;
-    }
-
-    public void Return(UnitOfWorkContext ctx)
-    {
-        ctx.Reset();
-        _pool.Enqueue(ctx);
-    }
-}
-```
-
-### Pool Sizing & Exhaustion
-
-The UnitOfWorkContext pool is an **unbounded `ConcurrentQueue`** — it allocates on-demand if the pool is empty, and never shrinks. This design has specific trade-offs:
-
-| Property | Behavior | Rationale |
-|----------|----------|-----------|
-| **Initial size** | 0 (grows on demand) | Avoids paying for unused contexts at startup |
-| **Hard cap** | None | Pool exhaustion is impossible — worst case is a heap allocation |
-| **Shrinking** | Never | Avoids deallocation churn in bursty workloads |
-| **Thread safety** | Lock-free (`ConcurrentQueue`) | No contention on Rent/Return |
-
-**GC benefit**: The primary value of pooling UnitOfWorkContext is avoiding Gen0 GC pressure from its managed fields — specifically the `CancellationTokenSource` (which internally allocates a `Timer` and state objects). In a game server processing 1000+ transactions per tick, this avoids ~1000 CTS allocations per tick.
-
-**Comparison with TransactionChain pool**: The transaction pool (in `TransactionChain`) uses a bounded `Queue<Transaction>` with `PoolMaxSize = 16` and `ExclusiveAccess` synchronization. The UnitOfWorkContext pool is simpler because contexts are higher-level (one per UoW, not one per transaction) and contention is inherently lower.
+**Comparison with TransactionChain pool**: The transaction pool (in `TransactionChain`) uses a bounded `Queue<Transaction>` with `PoolMaxSize = 16` and `ExclusiveAccess` synchronization. Transactions are classes (heap-allocated), so pooling them avoids Gen0 GC pressure. UnitOfWorkContext avoids this problem at the type level (struct = stack-allocated).
 
 ---
 
@@ -1048,13 +1016,12 @@ The Checkpoint Manager is a **dedicated background thread** that periodically pe
 
 **Pipeline:**
 1. Record checkpoint-start LSN
-2. Write all dirty data pages to OS cache (compute + store page checksums)
-3. `fsync` data file
-4. Update registry: WalDurable epochs → Committed
-5. Write checkpoint record to WAL
-6. `fsync` registry
-7. Advance checkpoint LSN in file header
-8. Recycle old WAL segments
+2. Write all dirty data pages + registry pages to OS cache (compute + store page checksums)
+3. `fsync` data file (one fsync covers both data and registry pages)
+4. Update registry in-memory: WalDurable → Committed, set committed bitmap bits
+5. Write checkpoint completion record to WAL
+6. Advance checkpoint LSN in file header
+7. Recycle old WAL segments
 
 For detailed checkpoint pipeline steps and performance characteristics, see [06-durability.md §6.6](06-durability.md#66-checkpoint-pipeline).
 
@@ -1265,7 +1232,7 @@ public static async ValueTask<UnitOfWork> CreateUnitOfWorkAsync(
     TimeSpan timeout,
     DurabilityMode durability = DurabilityMode.Deferred)
 {
-    var ctx = UnitOfWorkContextPool.Rent(Deadline.FromTimeout(timeout), durability);
+    var ctx = new UnitOfWorkContext(Deadline.FromTimeout(timeout), durability);
 
     // Set ambient context for async flow
     TyphonContext.Current = ctx;
@@ -1440,14 +1407,14 @@ public sealed class UnitOfWork : IDisposable, IAsyncDisposable
     // Sync creation (no AsyncLocal)
     public static UnitOfWork Create(TimeSpan timeout, DurabilityMode mode)
     {
-        var ctx = UnitOfWorkContextPool.Rent(Deadline.FromTimeout(timeout), mode);
+        var ctx = new UnitOfWorkContext(Deadline.FromTimeout(timeout), mode);
         return new UnitOfWork(ctx, ambient: false);
     }
 
     // Async creation (sets AsyncLocal)
     public static ValueTask<UnitOfWork> CreateAsync(TimeSpan timeout, DurabilityMode mode)
     {
-        var ctx = UnitOfWorkContextPool.Rent(Deadline.FromTimeout(timeout), mode);
+        var ctx = new UnitOfWorkContext(Deadline.FromTimeout(timeout), mode);
         _ambient.Value = ctx;
         return new ValueTask<UnitOfWork>(new UnitOfWork(ctx, ambient: true));
     }
@@ -1459,13 +1426,13 @@ public sealed class UnitOfWork : IDisposable, IAsyncDisposable
     public void Dispose()
     {
         if (_ambient) _ambient.Value = null;
-        UnitOfWorkContextPool.Return(_context);
+        // UnitOfWorkContext is a struct — no pooling or deallocation needed
     }
 
     public async ValueTask DisposeAsync()
     {
         if (_ambient) _ambient.Value = null;
-        UnitOfWorkContextPool.Return(_context);
+        // UnitOfWorkContext is a struct — no pooling or deallocation needed
     }
 }
 ```
@@ -1812,4 +1779,4 @@ gantt
 
 3. **Parent-child UoW coordination?** - When spawning independent UoWs on other threads, should there be a mechanism to link CancellationTokens (parent cancellation propagates to children)? This would be task coordination, not transaction nesting.
 
-4. **GroupCommit default interval?** - 5ms or 10ms? Lower = less risk, higher = better throughput. Currently defaulting to 5ms.
+4. ~~**GroupCommit default interval?**~~ — **Resolved**: 5ms is the default. See [§2.3 GroupCommit Interval Analysis](#23-durability-modes) for the full trade-off analysis.

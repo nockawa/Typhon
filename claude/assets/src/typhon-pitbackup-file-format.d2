@@ -1,0 +1,59 @@
+# Typhon: PIT Backup — .pack File Format Layout
+
+direction: down
+
+header: "Header (128 bytes)\nMagic: TYPHBACK | Version | Flags\nBackupId | Epoch | DateTime\nTotalAllocatedPages | PageCount\nCompression | HeaderCRC" {
+  shape: rectangle
+  style.fill: "#e3f2fd"
+  style.stroke: "#1565c0"
+  style.bold: true
+  style.border-radius: 6
+}
+
+page_data: "Page Data (variable)\n[4B size][LZ4(page_0)] [4B size][LZ4(page_1)] ...\nEach page compressed independently\nOriginal: 8KB per page" {
+  shape: rectangle
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  style.bold: true
+  style.border-radius: 6
+}
+
+alloc_bitmap: "Allocation Bitmap (optional)\n1 bit per page — which pages exist in DB\nPresent in compacted/full backups\nSize: ceil(TotalAllocatedPages / 8)" {
+  shape: rectangle
+  style.fill: "#fff3e0"
+  style.stroke: "#e65100"
+  style.border-radius: 6
+}
+
+page_index: "Page Index (N x 16 bytes)\nPackPageEntry per page, sorted by PageId:\n  PageId (4B) | ChangeRevision (4B)\n  DataOffset (4B) | CompressedSize (4B)" {
+  shape: rectangle
+  style.fill: "#f3e5f5"
+  style.stroke: "#6a1b9a"
+  style.bold: true
+  style.border-radius: 6
+}
+
+footer: "Footer (32 bytes)\nPageIndexOffset (8B) | PageCount (4B)\nAllocBitmapOffset (4B) | FooterMagic\nFileCRC: CRC32C of entire file" {
+  shape: rectangle
+  style.fill: "#fce4ec"
+  style.stroke: "#c62828"
+  style.bold: true
+  style.border-radius: 6
+}
+
+header -> page_data: "" {style.stroke: "#78909c"}
+page_data -> alloc_bitmap: "" {style.stroke: "#78909c"}
+alloc_bitmap -> page_index: "" {style.stroke: "#78909c"}
+page_index -> footer: "" {style.stroke: "#78909c"}
+
+footer -> page_index: "PageIndexOffset\n(seek backward)" {
+  style.stroke: "#c62828"
+  style.stroke-dash: 5
+  style.bold: true
+}
+
+sizes: "Typical sizes:\n100K pages: Index = 1.6 MB\n1M pages: Index = 16 MB\nCompressed pages: ~4KB avg (2:1 LZ4)" {
+  shape: text
+  style.font-size: 13
+  style.font-color: "#546e7a"
+}

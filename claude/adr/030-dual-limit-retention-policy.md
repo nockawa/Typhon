@@ -1,39 +1,43 @@
 # ADR-030: Dual-Limit Retention Policy for Backup Snapshots
 
-**Status**: Accepted
+**Status**: Accepted (updated for forward incrementals)
 **Date**: 2025-01 (design session)
+**Updated**: 2026-02-15 — Adapted for forward-incremental backup chain
 **Deciders**: Developer + Claude (design session)
 
 ## Context
 
-Typhon's backup system creates reverse-delta incremental snapshots (see [ADR-029](029-reverse-delta-incremental-snapshots.md)). Over time, reverse-delta files accumulate and must be cleaned up. The retention policy must:
+Typhon's backup system creates forward-incremental backup files (see [07-backup.md](../overview/07-backup.md) and the [PIT Backup Design](../design/pit-backup/README.md)). Over time, `.pack` files accumulate in the backup chain and must be cleaned up. The retention policy must:
 
 - Support wildly different backup frequencies (every 10 minutes to once a day)
 - Give users direct control over storage consumption
 - Be simple to configure and reason about
-- Leverage reverse deltas' property: oldest deltas can always be deleted freely (no cascade)
+- Integrate with the compaction lifecycle (forward incrementals require periodic compaction to bound chain depth)
 
 ## Decision
 
-Use a **dual-limit** retention strategy with three configurable thresholds — **any** exceeded limit triggers cleanup (most restrictive wins):
+Use a **dual-limit** retention strategy with configurable thresholds — **any** exceeded limit triggers cleanup (most restrictive wins):
 
 ```
-MaxCount:     int       — max reverse deltas to keep (0 = unlimited)
-MaxAge:       TimeSpan  — delete deltas older than this (Zero = unlimited)
-MaxTotalSize: long      — total backup directory size in bytes (0 = unlimited)
-MinKeep:      int       — always keep at least N deltas (default: 1)
+MaxCount:         int       — max backups to keep (0 = unlimited)
+MaxAge:           TimeSpan  — delete backups older than this (Zero = unlimited)
+MaxTotalSize:     long      — total backup directory size in bytes (0 = unlimited)
+CompactThreshold: int       — compact after this many incrementals (default: 42)
+MinKeep:          int       — always keep at least N backups (default: 3)
 ```
 
-**Cleanup runs after each new snapshot**, iterating oldest-to-newest:
-1. If `deltaCount > MaxCount` → delete oldest
-2. If `delta.Timestamp + MaxAge < now` → delete oldest
-3. If `TotalDirectorySize > MaxTotalSize AND deltaCount > MinKeep` → delete oldest
-4. Stop when all limits are satisfied
+**Cleanup runs after each new backup**, iterating oldest-to-newest:
+1. If `backupCount > MaxCount` → compact + prune oldest
+2. If `backup.Timestamp + MaxAge < now` → compact + prune oldest
+3. If `TotalDirectorySize > MaxTotalSize AND backupCount > MinKeep` → compact + prune oldest
+4. If chain depth exceeds `CompactThreshold` → trigger compaction
+5. Stop when all limits are satisfied
 
 **Invariants:**
-- The full snapshot (`.typhon-snap`) is **never** deleted by retention
+- The chain base (compacted or initial full `.pack`) is **never** deleted without first compacting
 - `MinKeep` prevents volume spikes from purging all history
 - At least one of MaxCount/MaxAge/MaxTotalSize must be non-zero
+- Pruning mid-chain requires orphan promotion (pages only in the deleted file must be copied forward)
 
 ## Alternatives Considered
 
@@ -50,21 +54,21 @@ MinKeep:      int       — always keep at least N deltas (default: 1)
 ## Consequences
 
 **Positive:**
-- Only 2-3 knobs to configure (most users set MaxCount + MaxAge, optionally MaxTotalSize)
-- Predictable: "I'll always have at least 7 days" or "at most 30 snapshots"
+- Only 3-4 knobs to configure (most users set MaxAge + CompactThreshold, optionally MaxCount/MaxTotalSize)
+- Predictable: "I'll always have at least 7 days" or "at most 30 backups"
 - Frequency-independent: same config works for hourly and daily backups
 - `MinKeep` provides safety net against volume spikes
-- `PreviewRetention` API lets users verify before tightening policy
-- Deletion is always from oldest — trivial implementation, no chain rebuild
+- `CompactThreshold` automatically bounds chain depth and restore time
 - Works identically regardless of database size or delta sizes
 
 **Negative:**
-- No "thin old history" capability — either a delta exists or it doesn't
+- No "thin old history" capability — either a backup exists or it doesn't
 - Users who back up every 10 minutes and want 30-day history need MaxCount=4320 (many files)
 - Count and Age can feel redundant for users with regular schedules (both achieve same thing)
-- Volume cap is a blunt instrument — large delta spikes can cause older history to be trimmed unexpectedly (mitigated by MinKeep)
+- Volume cap is a blunt instrument — large backup spikes can cause older history to be trimmed unexpectedly (mitigated by MinKeep)
+- Pruning mid-chain is more complex than the original reverse-delta design (requires orphan page promotion); compaction-then-prune is the recommended pattern
 
 **Cross-references:**
-- [ADR-029](029-reverse-delta-incremental-snapshots.md) — Reverse deltas: deletion is free (no cascade)
-- [ADR-028](028-cow-snapshot-backup.md) — CoW snapshot mechanism
-- [07-backup.md](../overview/07-backup.md) §7.6 — Retention Policy design
+- [ADR-028](028-cow-snapshot-backup.md) — CoW snapshot mechanism (enhanced with scoped CoW)
+- [07-backup.md](../overview/07-backup.md) §7.7 — Compaction & Pruning design
+- [PIT Backup Design — Part 5](../design/pit-backup/05-compaction-pruning.md) — Detailed compaction and retention spec

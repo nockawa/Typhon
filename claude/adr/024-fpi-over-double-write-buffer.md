@@ -22,7 +22,7 @@ Use **Full-Page Images (FPI)** — write the complete 8KB page to the WAL on fir
 
 ```
 First write to page P after checkpoint:
-  1. Write FPI record to WAL: [Header(32B) + PageData(8000B)]
+  1. Write FPI record to WAL: [Header(32B) + PageData(8192B)]
   2. Modify page P in memory
   3. (Eventually) Checkpoint writes P to disk
 
@@ -58,7 +58,6 @@ Only the **first modification per page per checkpoint interval** writes an FPI. 
 - Cold pages modified once per checkpoint get worst-case amplification
 
 **Cross-references:**
-- [06-durability.md](../overview/06-durability.md) §6.4 — FPI mechanism
+- [06-durability.md](../overview/06-durability.md) §6.1 — Full-Page Images (FPI) in WAL record format
 - [ADR-015](015-crc32c-page-checksums.md) — CRC32C detects torn pages
 - [ADR-011](011-logical-wal-records.md) — Logical records for subsequent modifications
-- [design/WAL-Design.md](../design/WAL-Design.md) — FPI record format
