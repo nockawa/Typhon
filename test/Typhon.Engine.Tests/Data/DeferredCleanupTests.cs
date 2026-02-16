@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
 using Serilog;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace Typhon.Engine.Tests;
@@ -497,6 +498,146 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         }
         Assert.That(dbe.DeferredCleanupManager.QueueSize, Is.EqualTo(0),
             "Queue should be empty after all concurrent entries are cleaned");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // RemoveFromList Coverage Tests — direct EnqueueBatch calls
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    public void DeferredCleanup_EnqueueBatch_MigratesToOlderBlockingTSN()
+    {
+        // Exercises DeferredCleanupManager.RemoveFromList (lines 304-325):
+        // When the same entity is enqueued with a SMALLER blockingTSN than its existing entry,
+        // the entry is migrated from the old bucket to the new (older) bucket.
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        var table = dbe.GetComponentTable<CompA>();
+        var dcm = dbe.DeferredCleanupManager;
+
+        // Enqueue entity pk=1 under blockingTSN=10
+        dcm.EnqueueBatch(10, new List<DeferredCleanupManager.CleanupEntry>
+        {
+            new() { Table = table, PrimaryKey = 1 }
+        });
+        Assert.That(dcm.QueueSize, Is.EqualTo(1));
+        Assert.That(dcm.EnqueuedTotal, Is.EqualTo(1));
+
+        // Enqueue same entity under blockingTSN=5 (older) → triggers RemoveFromList(10, table, 1)
+        // Entity moves from TSN=10 bucket to TSN=5 bucket
+        dcm.EnqueueBatch(5, new List<DeferredCleanupManager.CleanupEntry>
+        {
+            new() { Table = table, PrimaryKey = 1 }
+        });
+        Assert.That(dcm.QueueSize, Is.EqualTo(1), "Queue should still have 1 entry after migration (not duplicated)");
+        Assert.That(dcm.EnqueuedTotal, Is.EqualTo(2), "EnqueuedTotal should reflect both enqueue operations");
+    }
+
+    [Test]
+    public void DeferredCleanup_EnqueueBatch_MigrationRemovesEmptyBucket()
+    {
+        // Tests the empty-list cleanup path in RemoveFromList (lines 320-324):
+        // When migration removes the last entity from a TSN bucket, the empty bucket is removed
+        // and its list is returned to the pool.
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        var table = dbe.GetComponentTable<CompA>();
+        var dcm = dbe.DeferredCleanupManager;
+
+        // Enqueue single entity pk=1 under blockingTSN=10 (creates TSN=10 bucket with 1 entry)
+        dcm.EnqueueBatch(10, new List<DeferredCleanupManager.CleanupEntry>
+        {
+            new() { Table = table, PrimaryKey = 1 }
+        });
+        Assert.That(dcm.QueueSize, Is.EqualTo(1));
+
+        // Migrate pk=1 to blockingTSN=5 → RemoveFromList removes pk=1 from TSN=10 bucket
+        // TSN=10 bucket is now empty → should be removed, list returned to pool
+        dcm.EnqueueBatch(5, new List<DeferredCleanupManager.CleanupEntry>
+        {
+            new() { Table = table, PrimaryKey = 1 }
+        });
+        Assert.That(dcm.QueueSize, Is.EqualTo(1), "Queue should have 1 entry in TSN=5 bucket");
+
+        // Enqueue a new entity under TSN=10 → should reuse the pooled list
+        dcm.EnqueueBatch(10, new List<DeferredCleanupManager.CleanupEntry>
+        {
+            new() { Table = table, PrimaryKey = 2 }
+        });
+        Assert.That(dcm.QueueSize, Is.EqualTo(2), "Queue should have 2 entries across two buckets");
+    }
+
+    [Test]
+    public void DeferredCleanup_EnqueueBatch_MigrationWithMultipleEntitiesInBucket()
+    {
+        // Tests RemoveFromList when the bucket has multiple entries (only the migrated one is removed).
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        var table = dbe.GetComponentTable<CompA>();
+        var dcm = dbe.DeferredCleanupManager;
+
+        // Enqueue two entities under blockingTSN=10
+        dcm.EnqueueBatch(10, new List<DeferredCleanupManager.CleanupEntry>
+        {
+            new() { Table = table, PrimaryKey = 1 },
+            new() { Table = table, PrimaryKey = 2 }
+        });
+        Assert.That(dcm.QueueSize, Is.EqualTo(2));
+
+        // Migrate pk=1 to blockingTSN=5 → RemoveFromList removes pk=1 from TSN=10 bucket
+        // TSN=10 bucket still has pk=2, so it stays
+        dcm.EnqueueBatch(5, new List<DeferredCleanupManager.CleanupEntry>
+        {
+            new() { Table = table, PrimaryKey = 1 }
+        });
+        Assert.That(dcm.QueueSize, Is.EqualTo(2), "Queue should still have 2 entries (pk=2 in TSN=10, pk=1 in TSN=5)");
+
+        // Migrate pk=2 to blockingTSN=3 → RemoveFromList removes pk=2 from TSN=10 bucket
+        // TSN=10 bucket is now empty → removed, list returned to pool
+        dcm.EnqueueBatch(3, new List<DeferredCleanupManager.CleanupEntry>
+        {
+            new() { Table = table, PrimaryKey = 2 }
+        });
+        Assert.That(dcm.QueueSize, Is.EqualTo(2), "Queue should have 2 entries (pk=1 in TSN=5, pk=2 in TSN=3)");
+    }
+
+    [Test]
+    public void DeferredCleanup_EnqueueBatch_SameOrNewerTSN_NopDedup()
+    {
+        // Verifies the dedup path (lines 121-123): when blockingTSN >= existingTSN, the entry is
+        // skipped (already queued under an older blocking TSN).
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        var table = dbe.GetComponentTable<CompA>();
+        var dcm = dbe.DeferredCleanupManager;
+
+        // Enqueue entity pk=1 under blockingTSN=5
+        dcm.EnqueueBatch(5, new List<DeferredCleanupManager.CleanupEntry>
+        {
+            new() { Table = table, PrimaryKey = 1 }
+        });
+        Assert.That(dcm.QueueSize, Is.EqualTo(1));
+        Assert.That(dcm.EnqueuedTotal, Is.EqualTo(1));
+
+        // Re-enqueue same entity under blockingTSN=10 (newer/larger) → should be skipped
+        dcm.EnqueueBatch(10, new List<DeferredCleanupManager.CleanupEntry>
+        {
+            new() { Table = table, PrimaryKey = 1 }
+        });
+        Assert.That(dcm.QueueSize, Is.EqualTo(1), "Queue should still have 1 entry (dedup skipped)");
+        Assert.That(dcm.EnqueuedTotal, Is.EqualTo(1), "EnqueuedTotal should not increment for skipped entries");
+
+        // Re-enqueue under same blockingTSN=5 → should also be skipped
+        dcm.EnqueueBatch(5, new List<DeferredCleanupManager.CleanupEntry>
+        {
+            new() { Table = table, PrimaryKey = 1 }
+        });
+        Assert.That(dcm.QueueSize, Is.EqualTo(1));
+        Assert.That(dcm.EnqueuedTotal, Is.EqualTo(1));
     }
 }
 

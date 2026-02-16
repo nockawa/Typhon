@@ -2,11 +2,13 @@ using JetBrains.Annotations;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 
 namespace Typhon.Engine;
 
 [PublicAPI]
+[ExcludeFromCodeCoverage]
 public class ConcurrentCollection<T> : ICollection<T>
 {
     private Lock _lock;
