@@ -3,6 +3,7 @@ using NUnit.Framework;
 using System;
 using System.Collections.Concurrent;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -609,5 +610,242 @@ class UowRegistryTests : TestBase<UowRegistryTests>
         var registry = dbe.UowRegistry;
 
         Assert.That(registry.MaxConcurrentUoWs, Is.EqualTo(32767));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // EnsureCapacity Tests (#codecoverage P1)
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    public void Registry_EnsureCapacity_GrowsBeyondRootCapacity()
+    {
+        // Exercises UowRegistry.EnsureCapacity (lines 522-542):
+        // When a slot index >= _currentCapacity is claimed, the segment grows to accommodate it.
+        // RootCapacity = 150 (one page), OverflowCapacity = 200 per page.
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        var registry = dbe.UowRegistry;
+
+        Assert.That(registry.CurrentCapacity, Is.EqualTo(UowRegistry.RootCapacity),
+            "Initial capacity should be RootCapacity (150)");
+
+        // Allocate 160 IDs — the 151st triggers EnsureCapacity growth
+        const int allocCount = 160;
+        var ids = new ushort[allocCount];
+        for (int i = 0; i < allocCount; i++)
+        {
+            ids[i] = registry.AllocateUowId();
+        }
+
+        // After allocating 160 slots (0 reserved, 1-160 used), capacity should have grown
+        // to RootCapacity + OverflowCapacity = 150 + 200 = 350
+        Assert.That(registry.CurrentCapacity, Is.EqualTo(UowRegistry.RootCapacity + UowRegistry.OverflowCapacity),
+            "Capacity should grow to 350 after exceeding root page");
+        Assert.That(registry.ActiveCount, Is.EqualTo(allocCount));
+
+        // Cleanup
+        foreach (var id in ids)
+        {
+            registry.Release(id);
+        }
+    }
+
+    [Test]
+    public void Registry_EnsureCapacity_MultipleOverflowPages()
+    {
+        // Verify growth across multiple overflow pages (350 → 550 → ...)
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        var registry = dbe.UowRegistry;
+
+        // Allocate enough IDs to trigger two overflow page growths
+        // After 351st slot: needs 3 pages → capacity = 150 + 2*200 = 550
+        const int allocCount = 360;
+        var ids = new ushort[allocCount];
+        for (int i = 0; i < allocCount; i++)
+        {
+            ids[i] = registry.AllocateUowId();
+        }
+
+        Assert.That(registry.CurrentCapacity, Is.EqualTo(UowRegistry.RootCapacity + 2 * UowRegistry.OverflowCapacity),
+            "Capacity should grow to 550 after exceeding first overflow page");
+
+        // Cleanup
+        foreach (var id in ids)
+        {
+            registry.Release(id);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // WaitForSlotFreed Tests (#codecoverage P1)
+    // Uses reflection to clear the allocation bitmap to simulate
+    // exhaustion without needing 32K actual allocations.
+    // ═══════════════════════════════════════════════════════════════
+
+    private static ulong[] GetAllocationBitmap(UowRegistry registry)
+    {
+        var field = typeof(UowRegistry).GetField("_allocationBitmap", BindingFlags.NonPublic | BindingFlags.Instance);
+        return (ulong[])field.GetValue(registry);
+    }
+
+    [Test]
+    [CancelAfter(5000)]
+    public void Registry_WaitForSlotFreed_ExpiredDeadline_ThrowsResourceExhausted()
+    {
+        // Exercises WaitForSlotFreed timeout path (lines 230-234):
+        // When deadline is already expired (ms == 0), returns false immediately.
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        var registry = dbe.UowRegistry;
+
+        var bitmap = GetAllocationBitmap(registry);
+        var savedBitmap = new ulong[bitmap.Length];
+        Array.Copy(bitmap, savedBitmap, bitmap.Length);
+
+        try
+        {
+            // Clear all bits → TryClaimFreeSlot returns -1 (no free slots)
+            Array.Clear(bitmap, 0, bitmap.Length);
+
+            // AllocateUowId with expired deadline → WaitForSlotFreed returns false → throws
+            var wc = WaitContext.FromTimeout(TimeSpan.Zero);
+            Assert.Throws<ResourceExhaustedException>(() => registry.AllocateUowId(ref wc));
+        }
+        finally
+        {
+            Array.Copy(savedBitmap, bitmap, savedBitmap.Length);
+        }
+    }
+
+    [Test]
+    [CancelAfter(5000)]
+    public void Registry_WaitForSlotFreed_ShortTimeout_ThrowsResourceExhausted()
+    {
+        // Exercises WaitForSlotFreed timed wait path (lines 236):
+        // _slotFreed.Wait(ms, token) returns false after timeout → throws.
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        var registry = dbe.UowRegistry;
+
+        var bitmap = GetAllocationBitmap(registry);
+        var savedBitmap = new ulong[bitmap.Length];
+        Array.Copy(bitmap, savedBitmap, bitmap.Length);
+
+        try
+        {
+            Array.Clear(bitmap, 0, bitmap.Length);
+
+            // 50ms timeout — no slot will be freed
+            var wc = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(50));
+            Assert.Throws<ResourceExhaustedException>(() => registry.AllocateUowId(ref wc));
+        }
+        finally
+        {
+            Array.Copy(savedBitmap, bitmap, savedBitmap.Length);
+        }
+    }
+
+    [Test]
+    [CancelAfter(5000)]
+    public void Registry_WaitForSlotFreed_SlotReleased_WakesWaiterSuccessfully()
+    {
+        // Exercises WaitForSlotFreed success path (lines 236):
+        // Thread blocks on _slotFreed.Wait, another thread calls Release, waiter wakes.
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        var registry = dbe.UowRegistry;
+
+        // Allocate one slot normally (so Release has a valid entry to free)
+        var seedId = registry.AllocateUowId();
+
+        var bitmap = GetAllocationBitmap(registry);
+        var savedBitmap = new ulong[bitmap.Length];
+        Array.Copy(bitmap, savedBitmap, bitmap.Length);
+
+        try
+        {
+            // Clear all bits → simulates full exhaustion
+            Array.Clear(bitmap, 0, bitmap.Length);
+
+            ushort allocatedId = 0;
+            var bgDone = new ManualResetEventSlim(false);
+
+            // Background thread attempts allocation → blocks in WaitForSlotFreed
+            var bgTask = Task.Run(() =>
+            {
+                var wc = WaitContext.FromTimeout(TimeSpan.FromSeconds(3));
+                allocatedId = registry.AllocateUowId(ref wc);
+                bgDone.Set();
+            });
+
+            // Give background thread time to enter WaitForSlotFreed
+            Thread.Sleep(200);
+
+            // Release the seed slot → sets bitmap bit AND signals _slotFreed event
+            registry.Release(seedId);
+
+            // Background thread should wake and claim the freed slot
+            Assert.That(bgDone.Wait(TimeSpan.FromSeconds(3)), Is.True,
+                "Background allocation should succeed after slot was freed");
+            Assert.That(allocatedId, Is.EqualTo(seedId),
+                "Should reuse the freed slot");
+
+            // Cleanup the reallocated slot
+            registry.Release(allocatedId);
+        }
+        finally
+        {
+            Array.Copy(savedBitmap, bitmap, savedBitmap.Length);
+        }
+    }
+
+    [Test]
+    [CancelAfter(5000)]
+    public void Registry_WaitForSlotFreed_Cancellation_ThrowsResourceExhausted()
+    {
+        // Exercises WaitForSlotFreed cancellation path (lines 238-241):
+        // OperationCanceledException caught → returns false → throws ResourceExhaustedException.
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        var registry = dbe.UowRegistry;
+
+        var bitmap = GetAllocationBitmap(registry);
+        var savedBitmap = new ulong[bitmap.Length];
+        Array.Copy(bitmap, savedBitmap, bitmap.Length);
+
+        try
+        {
+            Array.Clear(bitmap, 0, bitmap.Length);
+
+            using var cts = new CancellationTokenSource();
+            Exception caught = null;
+            var bgDone = new ManualResetEventSlim(false);
+
+            // Background thread attempts allocation with cancellation token
+            var bgTask = Task.Run(() =>
+            {
+                try
+                {
+                    var wc = WaitContext.FromTimeout(TimeSpan.FromSeconds(30), cts.Token);
+                    registry.AllocateUowId(ref wc);
+                }
+                catch (Exception ex)
+                {
+                    caught = ex;
+                }
+                bgDone.Set();
+            });
+
+            // Give background thread time to enter WaitForSlotFreed
+            Thread.Sleep(200);
+
+            // Cancel the token → triggers OperationCanceledException in _slotFreed.Wait
+            cts.Cancel();
+
+            Assert.That(bgDone.Wait(TimeSpan.FromSeconds(3)), Is.True,
+                "Background thread should complete after cancellation");
+            Assert.That(caught, Is.Not.Null, "Cancellation should cause an exception");
+            Assert.That(caught, Is.TypeOf<ResourceExhaustedException>(),
+                "Cancelled wait should result in ResourceExhaustedException");
+        }
+        finally
+        {
+            Array.Copy(savedBitmap, bitmap, savedBitmap.Length);
+        }
     }
 }

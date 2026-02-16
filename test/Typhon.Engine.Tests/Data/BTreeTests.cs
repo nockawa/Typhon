@@ -327,6 +327,198 @@ class BtreeTests
     }
 
     [Test]
+    unsafe public void CheckRemoveL16()
+    {
+        var values = new short[] {
+            1, 2, 3, 10, 100, 20, 33, 5, 50, 70,
+            35, 9, 99, 101, 109, 103, 102, 40, 51, 200,
+            241, 148, 400, 123, 89, 77, 91, 142, 22, 88,
+            404, 6, 221, 301, 298, 87, 550, 403, 503, 531,
+            72, 81, 499, 98, 912
+        };
+
+        var valuesToRemove = new short[] {
+            200, 10, 100, 5, 50, 70,
+            35, 9, 99, 3,
+            241, 148, 77, 91, 142, 22, 88,
+            404, 6, 87, 550, 403, 503, 531,
+            72, 81, 499, 98, 912
+        };
+
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index16Chunk));
+        var depth = epochManager.EnterScope();
+        try
+        {
+            var accessor = segment.CreateChunkAccessor();
+            var tree = new ShortSingleBTree(segment);
+
+            for (int loopC = 0; loopC < 2; loopC++)
+            {
+                foreach (var v in values)
+                {
+                    tree.Add(v, v + 1, ref accessor);
+                }
+
+                Assert.That(tree.Remove((short)8080, out var _, ref accessor), Is.False);
+                tree.CheckConsistency(ref accessor);
+
+                foreach (var v in valuesToRemove)
+                {
+                    Assert.That(tree.Remove(v, out var val, ref accessor), Is.True, () => $"Failed removed key {v}");
+                    Assert.That(val, Is.EqualTo(v + 1));
+                    tree.CheckConsistency(ref accessor);
+                }
+
+                for (int i = 0; i < values.Length; i++)
+                {
+                    short value = values[i];
+                    if (valuesToRemove.Contains(value)) continue;
+
+                    Assert.That(tree.Remove(value, out var val, ref accessor), Is.True, () => $"Failed removed key {value}");
+                    Assert.That(val, Is.EqualTo(value + 1));
+                    tree.CheckConsistency(ref accessor);
+                }
+            }
+
+            accessor.Dispose();
+        }
+        finally
+        {
+            epochManager.ExitScope(depth);
+        }
+    }
+
+    [Test]
+    unsafe public void CheckRemoveL64()
+    {
+        var values = new long[] {
+            1, 2, 3, 10, 100, 20, 33, 5, 50, 70,
+            35, 9, 99, 101, 109, 103, 102, 40, 51, 200,
+            241, 148, 400, 123, 89, 77, 91, 142, 22, 88,
+            404, 6, 221, 301, 298, 87, 550, 403, 503, 531,
+            72, 81, 499, 98, 912
+        };
+
+        var valuesToRemove = new long[] {
+            200, 10, 100, 5, 50, 70,
+            35, 9, 99, 3,
+            241, 148, 77, 91, 142, 22, 88,
+            404, 6, 87, 550, 403, 503, 531,
+            72, 81, 499, 98, 912
+        };
+
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index64Chunk));
+        var depth = epochManager.EnterScope();
+        try
+        {
+            var accessor = segment.CreateChunkAccessor();
+            var tree = new LongSingleBTree(segment);
+
+            for (int loopC = 0; loopC < 2; loopC++)
+            {
+                foreach (var v in values)
+                {
+                    tree.Add(v, (int)(v + 1), ref accessor);
+                }
+
+                Assert.That(tree.Remove(8080L, out var _, ref accessor), Is.False);
+                tree.CheckConsistency(ref accessor);
+
+                foreach (var v in valuesToRemove)
+                {
+                    Assert.That(tree.Remove(v, out var val, ref accessor), Is.True, () => $"Failed removed key {v}");
+                    Assert.That(val, Is.EqualTo((int)(v + 1)));
+                    tree.CheckConsistency(ref accessor);
+                }
+
+                for (int i = 0; i < values.Length; i++)
+                {
+                    long value = values[i];
+                    if (valuesToRemove.Contains(value)) continue;
+
+                    Assert.That(tree.Remove(value, out var val, ref accessor), Is.True, () => $"Failed removed key {value}");
+                    Assert.That(val, Is.EqualTo((int)(value + 1)));
+                    tree.CheckConsistency(ref accessor);
+                }
+            }
+
+            accessor.Dispose();
+        }
+        finally
+        {
+            epochManager.ExitScope(depth);
+        }
+    }
+
+    [Test]
+    unsafe public void CheckRemoveString64()
+    {
+        var values = new[] {
+            "001", "002", "003", "010", "100", "020", "033", "005", "050", "070",
+            "035", "009", "099", "101", "109", "103", "102", "040", "051", "200",
+            "241", "148", "400", "123", "089", "077", "091", "142", "022", "088",
+            "404", "006", "221", "301", "298", "087", "550", "403", "503", "531",
+            "072", "081", "499", "098", "912"
+        };
+
+        var valuesToRemove = new[] {
+            "200", "010", "100", "005", "050", "070",
+            "035", "009", "099", "003",
+            "241", "148", "077", "091", "142", "022", "088",
+            "404", "006", "087", "550", "403", "503", "531",
+            "072", "081", "499", "098", "912"
+        };
+
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(IndexString64Chunk));
+        var depth = epochManager.EnterScope();
+        try
+        {
+            var accessor = segment.CreateChunkAccessor();
+            var tree = new String64SingleBTree(segment);
+
+            for (int loopC = 0; loopC < 2; loopC++)
+            {
+                foreach (var v in values)
+                {
+                    tree.Add(v, int.Parse(v) + 1, ref accessor);
+                }
+
+                Assert.That(tree.Remove("8080", out var _, ref accessor), Is.False);
+                tree.CheckConsistency(ref accessor);
+
+                foreach (var v in valuesToRemove)
+                {
+                    Assert.That(tree.Remove(v, out var val, ref accessor), Is.True, () => $"Failed removed key {v}");
+                    Assert.That(val, Is.EqualTo(int.Parse(v) + 1));
+                    tree.CheckConsistency(ref accessor);
+                }
+
+                for (int i = 0; i < values.Length; i++)
+                {
+                    string value = values[i];
+                    if (valuesToRemove.Contains(value)) continue;
+
+                    Assert.That(tree.Remove(value, out var val, ref accessor), Is.True, () => $"Failed removed key {value}");
+                    Assert.That(val, Is.EqualTo(int.Parse(value) + 1));
+                    tree.CheckConsistency(ref accessor);
+                }
+            }
+
+            accessor.Dispose();
+        }
+        finally
+        {
+            epochManager.ExitScope(depth);
+        }
+    }
+
+    [Test]
     unsafe public void BitRandomTest()
     {
         const int sampleCount = 10000;

@@ -1,6 +1,7 @@
 using JetBrains.Annotations;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics.Metrics;
 
 namespace Typhon.Engine;
@@ -33,6 +34,7 @@ namespace Typhon.Engine;
 /// </example>
 /// </remarks>
 [PublicAPI]
+[ExcludeFromCodeCoverage]
 public sealed class ResourceMetricsExporter : IDisposable
 {
     /// <summary>

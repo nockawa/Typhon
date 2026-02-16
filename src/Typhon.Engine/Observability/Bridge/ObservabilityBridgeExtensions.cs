@@ -2,6 +2,7 @@ using JetBrains.Annotations;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using System;
+using System.Diagnostics.CodeAnalysis;
 
 namespace Typhon.Engine;
 
@@ -9,6 +10,7 @@ namespace Typhon.Engine;
 /// Extension methods for registering Typhon Observability Bridge services with dependency injection.
 /// </summary>
 [PublicAPI]
+[ExcludeFromCodeCoverage]
 public static class ObservabilityBridgeExtensions
 {
     /// <summary>

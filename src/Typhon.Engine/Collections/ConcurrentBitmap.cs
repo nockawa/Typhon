@@ -1,9 +1,11 @@
 ﻿using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Typhon.Engine;
 
+[ExcludeFromCodeCoverage]
 public class ConcurrentBitmap
 {
     private readonly Memory<long> _data;

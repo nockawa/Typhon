@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
@@ -10,6 +11,7 @@ namespace Typhon.Engine;
 /// Each resource in deep mode owns a chain of blocks in this allocator.
 /// Chain grows unbounded until resource disables deep mode and frees the chain.
 /// </summary>
+[ExcludeFromCodeCoverage]
 public class ResourceTelemetryAllocator : IDisposable
 {
     private readonly ChainedBlockAllocator<ResourceOperationBlock> _allocator;

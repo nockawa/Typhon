@@ -5,6 +5,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -41,6 +42,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     #region Debug Info
 
 
+    [ExcludeFromCodeCoverage]
     private void GetMemPageExtraInfo(out Metrics.MemPageExtraInfo res)
     {
         int free = 0;

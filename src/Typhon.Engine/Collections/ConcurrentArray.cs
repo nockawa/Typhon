@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 
 namespace Typhon.Engine;
@@ -21,6 +22,7 @@ namespace Typhon.Engine;
 /// If calling <see cref="Pick"/> return false, then the item is already being processed by another thread (or the entry is free), you just have
 /// to move on to the next one.
 /// </remarks>
+[ExcludeFromCodeCoverage]
 internal class ConcurrentArray<T> where T : class
 {
     private readonly Memory<T> _data;

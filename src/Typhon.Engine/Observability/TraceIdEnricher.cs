@@ -5,6 +5,7 @@ using Serilog;
 using Serilog.Configuration;
 using Serilog.Core;
 using Serilog.Events;
+using System.Diagnostics.CodeAnalysis;
 
 namespace Typhon.Engine;
 
@@ -22,6 +23,7 @@ public static class TraceIdLogExtensions
 /// Usage: <c>.Enrich.WithTraceId()</c> in Serilog configuration.
 /// When no <see cref="Activity"/> is active, no properties are added (zero allocation).
 /// </remarks>
+[ExcludeFromCodeCoverage]
 public class TraceIdEnricher : ILogEventEnricher
 {
     public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)

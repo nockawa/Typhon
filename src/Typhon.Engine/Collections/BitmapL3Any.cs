@@ -3,10 +3,12 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine;
 
+[ExcludeFromCodeCoverage]
 public class BitmapL3Any : IEnumerable<int>
 {
     private readonly Memory<long>[] _data;
