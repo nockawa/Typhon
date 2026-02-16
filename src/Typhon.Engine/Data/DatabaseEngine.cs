@@ -141,9 +141,14 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
     /// <summary>
     /// Optional WAL manager for durability. Null when WAL is not configured.
-    /// Will be constructed internally from <see cref="DatabaseEngineOptions"/> when WAL integration lands.
     /// </summary>
     internal WalManager WalManager { get; private set; }
+
+    /// <summary>
+    /// Optional checkpoint manager. Null when WAL is not configured. Periodically flushes dirty data pages
+    /// and advances CheckpointLSN to enable WAL segment recycling.
+    /// </summary>
+    internal CheckpointManager CheckpointManager { get; private set; }
 
     /// <summary>
     /// Creates a new Unit of Work — the durability boundary for user operations. All transactions must be created through a UoW.
@@ -167,6 +172,12 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
     /// <summary>Records that a transaction was created (for observability counters).</summary>
     internal void RecordTransactionCreated() => Interlocked.Increment(ref _transactionsCreated);
+
+    /// <summary>
+    /// Triggers an immediate checkpoint cycle. Flushes all dirty data pages, advances CheckpointLSN, and recycles WAL segments.
+    /// No-op if WAL/checkpoint is not configured.
+    /// </summary>
+    public void ForceCheckpoint() => CheckpointManager?.ForceCheckpoint();
 
     public DatabaseEngine(IResourceRegistry resourceRegistry, EpochManager epochManager, DeadlineWatchdog watchdog, ManagedPagedMMF mmf, 
         IMemoryAllocator memoryAllocator, DatabaseEngineOptions options, ILogger<DatabaseEngine> log, IWalFileIO walFileIO = null, string name = null) 
@@ -197,6 +208,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         }
 
         InitializeWalManager();
+        InitializeCheckpointManager();
     }
 
     public bool IsDisposed { get; private set; }
@@ -210,6 +222,10 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
         if (disposing)
         {
+            // Checkpoint must dispose first: runs final cycle, writes pages + advances LSN before WAL shuts down
+            CheckpointManager?.Dispose();
+            CheckpointManager = null;
+
             WalManager?.Dispose();
             WalManager = null;
             TransactionChain.Dispose();
@@ -236,6 +252,27 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         var lastSegmentId = 0L; // Segment continuity is handled by WalSegmentManager scanning existing files
         WalManager.Initialize(lastSegmentId, lastLSN > 0 ? lastLSN + 1 : 1);
         WalManager.Start();
+    }
+
+    private void InitializeCheckpointManager()
+    {
+        if (WalManager == null)
+        {
+            return;
+        }
+
+        // Read initial CheckpointLSN from file header
+        long initialCheckpointLsn = 0;
+        using (var guard = EpochGuard.Enter(EpochManager))
+        {
+            MMF.RequestPageEpoch(0, guard.Epoch, out var memPageIdx);
+            var page = MMF.GetPage(memPageIdx);
+            ref var header = ref page.As<RootFileHeader>();
+            initialCheckpointLsn = header.CheckpointLSN;
+        }
+
+        CheckpointManager = new CheckpointManager(MMF, UowRegistry, WalManager, _options.Resources, EpochManager, _durabilityNode, initialCheckpointLsn);
+        CheckpointManager.Start();
     }
 
     private void ConstructComponentStore()

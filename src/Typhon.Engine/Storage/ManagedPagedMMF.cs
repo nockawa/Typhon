@@ -465,6 +465,39 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
 
     public bool DeleteSegment(LogicalSegment segment, ChangeSet changeSet = null) => DeleteSegment(segment.RootPageIndex, changeSet);
 
+    // ═══════════════════════════════════════════════════════════════
+    // Checkpoint Support
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Updates the <see cref="RootFileHeader.CheckpointLSN"/> field in page 0 and flushes to disk. Called by the Checkpoint Manager after dirty pages have
+    /// been written and fsynced.
+    /// </summary>
+    /// <param name="checkpointLSN">The new checkpoint LSN to persist.</param>
+    /// <param name="epochManager">Epoch manager for page access.</param>
+    internal void UpdateCheckpointLSN(long checkpointLSN, EpochManager epochManager)
+    {
+        using var guard = EpochGuard.Enter(epochManager);
+        var epoch = guard.Epoch;
+
+        RequestPageEpoch(0, epoch, out var memPageIdx);
+        var latched = TryLatchPageExclusive(memPageIdx);
+        Debug.Assert(latched, "TryLatchPageExclusive failed on root page during checkpoint LSN update");
+
+        var page = GetPage(memPageIdx);
+        var cs = CreateChangeSet();
+        cs.AddByMemPageIndex(memPageIdx);
+
+        ref var header = ref page.As<RootFileHeader>();
+        header.CheckpointLSN = checkpointLSN;
+
+        UnlatchPageExclusive(memPageIdx);
+        cs.SaveChanges();
+
+        // Fsync to make the checkpoint LSN durable
+        FlushToDisk();
+    }
+
     #region IMetricSource Implementation
 
     /// <inheritdoc />

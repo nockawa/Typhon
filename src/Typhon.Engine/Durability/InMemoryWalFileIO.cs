@@ -139,6 +139,9 @@ public sealed class InMemoryWalFileIO : IWalFileIO
     public bool Exists(string path) => Segments.ContainsKey(NormalizePath(path));
 
     /// <inheritdoc />
+    public void Delete(string path) => Segments.TryRemove(NormalizePath(path), out _);
+
+    /// <inheritdoc />
     public void Dispose()
     {
         _handleToPath.Clear();

@@ -57,6 +57,9 @@ public sealed class WalFileIO : IWalFileIO
     public bool Exists(string path) => File.Exists(path);
 
     /// <inheritdoc />
+    public void Delete(string path) => File.Delete(path);
+
+    /// <inheritdoc />
     public void Dispose()
     {
         // No per-instance resources to dispose; file handles are owned by callers.

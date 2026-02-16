@@ -484,6 +484,35 @@ internal unsafe class UowRegistry : IDisposable
     }
 
     // ═══════════════════════════════════════════════════════════════
+    // Checkpoint Support
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Transitions all <see cref="UnitOfWorkState.WalDurable"/> entries to <see cref="UnitOfWorkState.Committed"/>. Called by the Checkpoint Manager after
+    /// data pages have been fsynced. The committed bitmap is already set for WalDurable entries (set during <see cref="PromoteToWalDurable"/>
+    /// or <see cref="LoadFromDiskRaw"/>), so no bitmap update is needed.
+    /// </summary>
+    /// <returns>The number of entries transitioned.</returns>
+    internal int TransitionWalDurableToCommitted()
+    {
+        int count = 0;
+        using var guard = EpochGuard.Enter(_epochManager);
+        var epoch = guard.Epoch;
+
+        for (int slotIndex = 1; slotIndex < _currentCapacity; slotIndex++)
+        {
+            var entry = ReadEntry(slotIndex, epoch);
+            if (entry.State == UnitOfWorkState.WalDurable)
+            {
+                WriteEntryState(slotIndex, UnitOfWorkState.Committed, epoch);
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
     // Internal Helpers — Page Addressing
     // ═══════════════════════════════════════════════════════════════
 

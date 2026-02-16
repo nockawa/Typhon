@@ -24,7 +24,6 @@ public sealed class WalManager : ResourceNode
     private readonly IMemoryAllocator _allocator;
     private readonly IWalFileIO _fileIO;
 
-    private WalSegmentManager _segmentManager;
     private WalWriter _writer;
 
     private bool _initialized;
@@ -59,6 +58,9 @@ public sealed class WalManager : ResourceNode
     /// <summary>The commit buffer for producer threads to claim and publish WAL records.</summary>
     public WalCommitBuffer CommitBuffer { get; private set; }
 
+    /// <summary>The segment manager for WAL file lifecycle operations. Used by <see cref="CheckpointManager"/> for segment reclamation.</summary>
+    internal WalSegmentManager SegmentManager { get; private set; }
+
     /// <summary>The highest LSN durably written to stable media.</summary>
     public long DurableLsn => _writer?.DurableLsn ?? 0;
 
@@ -84,9 +86,9 @@ public sealed class WalManager : ResourceNode
             ThrowHelper.ThrowInvalidOp("WalManager is already initialized.");
         }
 
-        _segmentManager = new WalSegmentManager(_fileIO, _options.WalDirectory, _options.SegmentSize, _options.PreAllocateSegments, _options.UseFUA);
-        _segmentManager.Initialize(lastSegmentId, firstLSN);
-        _writer = new WalWriter(CommitBuffer, _segmentManager, _fileIO, _options, _allocator, this);
+        SegmentManager = new WalSegmentManager(_fileIO, _options.WalDirectory, _options.SegmentSize, _options.PreAllocateSegments, _options.UseFUA);
+        SegmentManager.Initialize(lastSegmentId, firstLSN);
+        _writer = new WalWriter(CommitBuffer, SegmentManager, _fileIO, _options, _allocator, this);
         _initialized = true;
     }
 
@@ -132,8 +134,8 @@ public sealed class WalManager : ResourceNode
             _writer?.Dispose();
             _writer = null;
 
-            _segmentManager?.Dispose();
-            _segmentManager = null;
+            SegmentManager?.Dispose();
+            SegmentManager = null;
 
             CommitBuffer?.Dispose();
             CommitBuffer = null;

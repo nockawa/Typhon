@@ -72,4 +72,10 @@ public interface IWalFileIO : IDisposable
     /// <param name="path">File path to check.</param>
     /// <returns><c>true</c> if the segment exists; otherwise <c>false</c>.</returns>
     bool Exists(string path);
+
+    /// <summary>
+    /// Deletes a WAL segment file. Used by segment reclamation after checkpoint advances past all records in the segment.
+    /// </summary>
+    /// <param name="path">File path of the segment to delete.</param>
+    void Delete(string path);
 }

@@ -1,6 +1,5 @@
 using NUnit.Framework;
 using System;
-using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine.Tests;
 

@@ -1,6 +1,7 @@
 using JetBrains.Annotations;
 using Microsoft.Win32.SafeHandles;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
 
@@ -66,6 +67,12 @@ internal sealed class WalSegmentManager : IDisposable
     private long _nextSegmentId;
     private long _lastPreAllocatedSegmentId;
     private bool _disposed;
+
+    /// <summary>
+    /// Sealed segments awaiting reclamation. Each entry records the segment's file path and last LSN so that <see cref="MarkReclaimable"/> can determine
+    /// if all records have been checkpointed.
+    /// </summary>
+    private readonly List<(string Path, long LastLSN)> _sealedSegments = new();
 
     /// <summary>The currently active segment for writing.</summary>
     public WalSegmentContext ActiveSegment { get; private set; }
@@ -155,7 +162,8 @@ internal sealed class WalSegmentManager : IDisposable
 
         ActiveSegment = newSegment;
 
-        // Close old segment handle
+        // Track the sealed segment for checkpoint-based reclamation, then close its handle
+        _sealedSegments.Add((oldSegment.Path, oldSegment.LastLSN));
         oldSegment.Dispose();
 
         // Replenish pre-allocated pool
@@ -165,14 +173,32 @@ internal sealed class WalSegmentManager : IDisposable
     }
 
     /// <summary>
-    /// Marks segments with all LSNs below checkpointLSN as reclaimable. Reclaimable segments can be deleted or recycled.
+    /// Deletes sealed WAL segment files whose records have all been checkpointed (LastLSN &lt; checkpointLSN). Returns the number of segments reclaimed.
     /// </summary>
-    /// <param name="checkpointLSN">The checkpoint LSN — segments fully below this are safe to reclaim.</param>
-    public void MarkReclaimable(long checkpointLSN)
+    /// <param name="checkpointLSN">The checkpoint LSN — segments with LastLSN below this are safe to delete.</param>
+    /// <returns>The number of segment files deleted.</returns>
+    public int MarkReclaimable(long checkpointLSN)
     {
-        // Future: implement actual reclamation. For now this is a placeholder.
-        // Segment reclamation will be implemented with the checkpoint pipeline.
+        int reclaimed = 0;
+
+        for (int i = _sealedSegments.Count - 1; i >= 0; i--)
+        {
+            var (path, lastLSN) = _sealedSegments[i];
+            if (lastLSN < checkpointLSN)
+            {
+                _fileIO.Delete(path);
+                _sealedSegments.RemoveAt(i);
+                reclaimed++;
+            }
+        }
+
+        return reclaimed;
     }
+
+    /// <summary>
+    /// Returns the number of sealed segments awaiting reclamation.
+    /// </summary>
+    public int SealedSegmentCount => _sealedSegments.Count;
 
     /// <summary>
     /// Ensures the pre-allocation pool is full (creates new empty segment files as needed).
