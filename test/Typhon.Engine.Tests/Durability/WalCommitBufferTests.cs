@@ -374,13 +374,13 @@ public class WalCommitBufferTests : AllocatorTestBase
         using var buffer = CreateBuffer();
         var claimSize = 1024;
         var frameSize = WalCommitBuffer.Align8(8 + claimSize);
-        var producersDone = false;
+        var consumerStop = 0;
         var producerClaimCount = 0;
 
-        // Background consumer that drains and completes
+        // Background consumer that drains and completes (enables swap)
         var consumer = new System.Threading.Thread(() =>
         {
-            while (!producersDone || buffer.Utilization > 0)
+            while (consumerStop == 0)
             {
                 if (buffer.TryDrain(out var data, out _))
                 {
@@ -406,7 +406,8 @@ public class WalCommitBufferTests : AllocatorTestBase
             producerClaimCount++;
         }
 
-        producersDone = true;
+        consumerStop = 1;
+        buffer.Signal(); // Wake consumer if blocked in WaitForData
         consumer.Join(3000);
 
         Assert.That(producerClaimCount, Is.EqualTo(totalClaims));

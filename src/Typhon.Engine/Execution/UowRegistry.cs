@@ -363,8 +363,19 @@ internal unsafe class UowRegistry : IDisposable
 
     /// <summary>
     /// Loads the registry from an existing database file. Reads entries from pages, rebuilds bitmaps, and voids any Pending entries (crash recovery).
+    /// This is the legacy non-WAL path — voids all Pending entries immediately.
     /// </summary>
     internal void LoadFromDisk()
+    {
+        LoadFromDiskRaw();
+        VoidRemainingPending();
+    }
+
+    /// <summary>
+    /// Loads the registry from disk but preserves Pending entries as-is (does NOT void them).
+    /// Call <see cref="PromoteToWalDurable"/> for WAL-confirmed UoWs, then <see cref="VoidRemainingPending"/> to void the rest.
+    /// </summary>
+    internal void LoadFromDiskRaw()
     {
         _currentCapacity = ComputeCapacity(_segment.Length);
 
@@ -393,11 +404,10 @@ internal unsafe class UowRegistry : IDisposable
                     break;
 
                 case UnitOfWorkState.Pending:
-                    // Crash recovery: void this entry
-                    WriteEntryState(slotIndex, UnitOfWorkState.Void, epoch);
-                    _voidEntryCount++;
+                    // Keep Pending — WAL recovery will determine fate
                     _activeCount++;
-                    // Void entries are NOT set in committed bitmap
+                    // NOT in allocation bitmap (slot is occupied)
+                    // NOT in committed bitmap (not yet confirmed)
                     break;
 
                 case UnitOfWorkState.WalDurable:
@@ -425,6 +435,49 @@ internal unsafe class UowRegistry : IDisposable
         {
             SetAllocationBit(slotIndex);
         }
+    }
+
+    /// <summary>
+    /// Promotes a Pending UoW to WalDurable after WAL scan confirms it has a commit marker. Sets the committed bitmap bit so the read path treats
+    /// its revisions as visible.
+    /// </summary>
+    /// <param name="uowId">The UoW ID to promote. Must currently be in Pending state.</param>
+    internal void PromoteToWalDurable(ushort uowId)
+    {
+        if (uowId == 0)
+        {
+            return;
+        }
+
+        using var guard = EpochGuard.Enter(_epochManager);
+        var entry = ReadEntry(uowId, guard.Epoch);
+
+        if (entry.State != UnitOfWorkState.Pending)
+        {
+            return; // Already promoted or in another state
+        }
+
+        WriteEntryState(uowId, UnitOfWorkState.WalDurable, guard.Epoch);
+        SetCommittedBit(uowId);
+    }
+
+    /// <summary>
+    /// Voids all remaining Pending entries after WAL recovery promotions are complete. Sets <see cref="CommittedBeforeTSN"/> based on whether any entries were voided.
+    /// </summary>
+    internal void VoidRemainingPending()
+    {
+        using var guard = EpochGuard.Enter(_epochManager);
+        var epoch = guard.Epoch;
+
+        for (int slotIndex = 1; slotIndex < _currentCapacity; slotIndex++)
+        {
+            var entry = ReadEntry(slotIndex, epoch);
+            if (entry.State == UnitOfWorkState.Pending)
+            {
+                WriteEntryState(slotIndex, UnitOfWorkState.Void, epoch);
+                _voidEntryCount++;
+            }
+        }
 
         // Set CommittedBeforeTSN based on void entry count
         _committedBeforeTSN = (_voidEntryCount > 0) ? 0 : long.MaxValue;
@@ -446,9 +499,8 @@ internal unsafe class UowRegistry : IDisposable
     }
 
     /// <summary>
-    /// Acquires an exclusive latch on a segment page with spin-retry for concurrent access.
-    /// Unlike <see cref="LogicalSegment.GetPageExclusive"/> which asserts on latch failure,
-    /// this method handles contention from concurrent AllocateUowId/Release calls on the same page.
+    /// Acquires an exclusive latch on a segment page with spin-retry for concurrent access. Unlike <see cref="LogicalSegment.GetPageExclusive"/> which
+    /// asserts on latch failure, this method handles contention from concurrent AllocateUowId/Release calls on the same page.
     /// </summary>
     private PageAccessor LatchPageExclusive(int segPageIndex, long epoch, out int memPageIdx)
     {

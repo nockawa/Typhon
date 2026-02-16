@@ -22,6 +22,9 @@ public enum WalRecordFlags : byte
 
     /// <summary>The payload is compressed.</summary>
     Compressed = 1 << 2,
+
+    /// <summary>The payload contains a full page image for torn-page repair.</summary>
+    FullPageImage = 1 << 3,
 }
 
 /// <summary>

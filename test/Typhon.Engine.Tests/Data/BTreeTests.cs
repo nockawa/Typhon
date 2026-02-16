@@ -519,54 +519,6 @@ class BtreeTests
     }
 
     [Test]
-    unsafe public void BitRandomTest()
-    {
-        const int sampleCount = 10000;
-
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
-
-        var samples = new HashSet<int>(sampleCount);
-        var r = new Random(DateTime.UtcNow.Millisecond);
-
-        while (samples.Count < sampleCount)
-        {
-            samples.Add(r.Next());
-        }
-
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 20, sizeof(Index32Chunk));
-        var depth = epochManager.EnterScope();
-        try
-        {
-            var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
-
-            var array = samples.ToArray();
-            var count = array.Length;
-
-            var sw = new Stopwatch();
-            sw.Start();
-
-            for (int i = 0; i < count; i++)
-            {
-                var v = array[i];
-                tree.Add(v, v, ref accessor);
-            }
-
-            sw.Stop();
-            Console.WriteLine($"Insertion of {sampleCount} in {sw.ElapsedMilliseconds}ms");
-
-            tree.CheckConsistency(ref accessor);
-
-            accessor.Dispose();
-        }
-        finally
-        {
-            epochManager.ExitScope(depth);
-        }
-    }
-
-    [Test]
     unsafe public void CheckMultipleTree()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();

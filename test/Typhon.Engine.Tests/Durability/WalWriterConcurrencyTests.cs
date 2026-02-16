@@ -112,7 +112,7 @@ public class WalWriterConcurrencyTests : AllocatorTestBase
             }
 
             // Wait for writer to drain everything
-            Thread.Sleep(500);
+            SpinWait.SpinUntil(() => writer.DurableLsn >= totalRecords, 2000);
 
             Assert.That(writer.DurableLsn, Is.GreaterThanOrEqualTo(totalRecords));
             Assert.That(writer.TotalBytesWritten, Is.GreaterThan(0));
@@ -149,7 +149,7 @@ public class WalWriterConcurrencyTests : AllocatorTestBase
             }
 
             // Wait for drain
-            Thread.Sleep(500);
+            SpinWait.SpinUntil(() => writer.DurableLsn >= totalFrames, 2000);
 
             Assert.That(writer.DurableLsn, Is.GreaterThanOrEqualTo(totalFrames));
             Assert.That(writer.HasFatalError, Is.False);
@@ -190,7 +190,7 @@ public class WalWriterConcurrencyTests : AllocatorTestBase
             }
 
             // Wait for drain
-            Thread.Sleep(200);
+            SpinWait.SpinUntil(() => writer.DurableLsn >= iterations, 2000);
 
             // DurableLsn should be at or near the last assigned LSN
             Assert.That(writer.DurableLsn, Is.GreaterThanOrEqualTo(iterations));

@@ -43,6 +43,10 @@ public class HighResolutionTimerServiceTests
         // Run for 200ms — expect ~20 invocations (±50% margin for CI)
         Thread.Sleep(200);
 
+        // Stop the timer before reading counters to avoid a race where the
+        // timer fires between reading `count` and `InvocationCount`.
+        timer.Dispose();
+
         var invocations = Interlocked.Read(ref count);
 
         Assert.That(invocations, Is.GreaterThanOrEqualTo(10), "Too few invocations");
@@ -93,7 +97,8 @@ public class HighResolutionTimerServiceTests
             _registry.TimerDedicated);
 
         timer.Start();
-        Thread.Sleep(100); // Should survive multiple exceptions
+        // Wait until callback has fired multiple times (surviving exceptions each time)
+        SpinWait.SpinUntil(() => Interlocked.Read(ref callCount) > 1, 2000);
 
         // Timer should still be running and have invoked callback multiple times
         Assert.That(timer.IsRunning, Is.True);
@@ -129,7 +134,7 @@ public class HighResolutionTimerServiceTests
             _registry.TimerDedicated);
 
         timer.Start();
-        Thread.Sleep(100); // Wait for a few ticks
+        SpinWait.SpinUntil(() => timer.InvocationCount > 0, 2000);
 
         Assert.That(timer.InvocationCount, Is.GreaterThan(0));
         // LastCallbackDuration should be non-negative

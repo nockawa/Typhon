@@ -69,7 +69,7 @@ public class WalWriterTests : AllocatorTestBase
         try
         {
             writer.Start();
-            Thread.Sleep(50); // Give thread time to start
+            SpinWait.SpinUntil(() => writer.IsRunning, 2000);
 
             Assert.That(writer.IsRunning, Is.True);
         }
@@ -89,7 +89,7 @@ public class WalWriterTests : AllocatorTestBase
         {
             writer.Start();
             writer.Start(); // Should not throw or create second thread
-            Thread.Sleep(50);
+            SpinWait.SpinUntil(() => writer.IsRunning, 2000);
 
             Assert.That(writer.IsRunning, Is.True);
         }
@@ -102,14 +102,14 @@ public class WalWriterTests : AllocatorTestBase
     }
 
     [Test]
+    [CancelAfter(5000)]
     public void Dispose_StopsThread()
     {
         var (buffer, writer, segMgr) = CreateWriterPipeline();
         writer.Start();
-        Thread.Sleep(50);
+        SpinWait.SpinUntil(() => writer.IsRunning, 2000);
 
-        writer.Dispose();
-        Thread.Sleep(100);
+        writer.Dispose(); // Join() inside blocks until the writer thread exits
 
         Assert.That(writer.IsRunning, Is.False);
 
@@ -140,7 +140,7 @@ public class WalWriterTests : AllocatorTestBase
             buffer.Publish(ref claim);
 
             // Wait for writer to drain
-            Thread.Sleep(100);
+            SpinWait.SpinUntil(() => writer.TotalBytesWritten > 0, 2000);
 
             Assert.That(writer.TotalBytesWritten, Is.GreaterThan(0));
             Assert.That(writer.TotalFlushes, Is.GreaterThan(0));
@@ -169,7 +169,7 @@ public class WalWriterTests : AllocatorTestBase
             buffer.Publish(ref claim);
 
             // Wait for drain
-            Thread.Sleep(100);
+            SpinWait.SpinUntil(() => writer.DurableLsn > 0, 2000);
 
             Assert.That(writer.DurableLsn, Is.GreaterThan(0));
         }
@@ -199,10 +199,9 @@ public class WalWriterTests : AllocatorTestBase
                 buffer.Publish(ref claim);
             }
 
-            // Wait for all to be drained
-            Thread.Sleep(200);
-
             // 5 frames × 2 records each = 10 total records → LSNs 1-10
+            SpinWait.SpinUntil(() => writer.DurableLsn >= 10, 2000);
+
             Assert.That(writer.DurableLsn, Is.GreaterThanOrEqualTo(10));
             Assert.That(writer.TotalBytesWritten, Is.GreaterThan(0));
         }
@@ -233,7 +232,7 @@ public class WalWriterTests : AllocatorTestBase
             claim.DataSpan.Fill(0xCC);
             buffer.Publish(ref claim);
 
-            Thread.Sleep(100);
+            SpinWait.SpinUntil(() => writer.DurableLsn >= 1, 2000);
 
             // Should return immediately since already durable
             var waitCtx = WaitContext.FromTimeout(TimeSpan.FromSeconds(1));
@@ -281,7 +280,7 @@ public class WalWriterTests : AllocatorTestBase
     [CancelAfter(5000)]
     public void RequestFlush_TriggersFlush()
     {
-        var (buffer, writer, segMgr) = CreateWriterPipeline(groupCommitMs: 1000); // Long interval
+        var (buffer, writer, segMgr) = CreateWriterPipeline(groupCommitMs: 10_000); // Very long interval to prove RequestFlush bypasses it
         try
         {
             writer.Start();
@@ -292,12 +291,15 @@ public class WalWriterTests : AllocatorTestBase
             claim.DataSpan.Fill(0xDD);
             buffer.Publish(ref claim);
 
-            // Wait for drain, then request explicit flush
-            Thread.Sleep(100);
+            // Wait for drain (writer thread picks up data from buffer)
+            SpinWait.SpinUntil(() => writer.DurableLsn >= 1, 2000);
+
+            // Request explicit flush — Signal() wakes the writer immediately
             writer.RequestFlush();
-            Thread.Sleep(100);
+            SpinWait.SpinUntil(() => writer.TotalFlushes > 0, 2000);
 
             Assert.That(writer.TotalBytesWritten, Is.GreaterThan(0));
+            Assert.That(writer.TotalFlushes, Is.GreaterThan(0));
         }
         finally
         {

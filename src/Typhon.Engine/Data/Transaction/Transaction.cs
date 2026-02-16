@@ -1878,6 +1878,21 @@ public unsafe class Transaction : IDisposable
         activity?.SetTag(TyphonSpanAttributes.TransactionConflictDetected, hasConflict);
         activity?.SetTag(TyphonSpanAttributes.TransactionStatus, "committed");
 
+        // WAL serialization (after conflict resolution, before state transition)
+        long walHighLsn = 0;
+        if (_dbe.WalManager != null && State != TransactionState.Created)
+        {
+            walHighLsn = SerializeToWal(ref ctx);
+        }
+
+        // Durability wait for Immediate mode
+        if (walHighLsn > 0 && OwningUnitOfWork?.DurabilityMode == DurabilityMode.Immediate)
+        {
+            _dbe.WalManager.RequestFlush();
+            var wc = ComposeWaitContext(ref ctx, TimeoutOptions.Current.DefaultCommitTimeout);
+            _dbe.WalManager.WaitForDurable(walHighLsn, ref wc);
+        }
+
         // New state
         State = TransactionState.Committed;
 
@@ -1892,5 +1907,231 @@ public unsafe class Transaction : IDisposable
     {
         var ctx = UnitOfWorkContext.FromTimeout(TimeoutOptions.Current.DefaultCommitTimeout);
         return Commit(ref ctx, handler);
+    }
+
+    /// <summary>
+    /// Serializes all committed component changes into the WAL commit buffer. Called after CommitComponent loop completes (all conflicts resolved,
+    /// revisions visible) but before State = Committed.
+    /// </summary>
+    /// <returns>The highest LSN assigned to the serialized records, or 0 if nothing was serialized.</returns>
+    private long SerializeToWal(ref UnitOfWorkContext ctx)
+    {
+        // Count non-Read operations and total payload size
+        int recordCount = 0;
+        int totalPayload = 0;
+
+        foreach (var kvp in _componentInfos)
+        {
+            var info = kvp.Value;
+            var storageSize = info.ComponentTable.ComponentStorageSize;
+
+            switch (info)
+            {
+                case ComponentInfoSingle single:
+                    foreach (var pk in single.CompRevInfoCache.Keys)
+                    {
+                        ref var cri = ref CollectionsMarshal.GetValueRefOrNullRef(single.CompRevInfoCache, pk);
+                        if (cri.Operations == ComponentInfoBase.OperationType.Read)
+                        {
+                            continue;
+                        }
+
+                        recordCount++;
+                        var isDelete = (cri.Operations & ComponentInfoBase.OperationType.Deleted) != 0;
+                        totalPayload += WalRecordHeader.SizeInBytes + (isDelete ? 0 : storageSize);
+                    }
+                    break;
+
+                case ComponentInfoMultiple multiple:
+                    foreach (var pk in multiple.CompRevInfoCache.Keys)
+                    {
+                        var list = CollectionsMarshal.AsSpan(CollectionsMarshal.GetValueRefOrNullRef(multiple.CompRevInfoCache, pk));
+                        foreach (ref var cri in list)
+                        {
+                            if (cri.Operations == ComponentInfoBase.OperationType.Read)
+                            {
+                                continue;
+                            }
+
+                            recordCount++;
+                            var isDelete = (cri.Operations & ComponentInfoBase.OperationType.Deleted) != 0;
+                            totalPayload += WalRecordHeader.SizeInBytes + (isDelete ? 0 : storageSize);
+                        }
+                    }
+                    break;
+            }
+        }
+
+        if (recordCount == 0)
+        {
+            return 0;
+        }
+
+        // Claim space in the commit buffer
+        var wc = ComposeWaitContext(ref ctx, TimeoutOptions.Current.DefaultCommitTimeout);
+        var claim = _dbe.WalManager.CommitBuffer.TryClaim(totalPayload, recordCount, ref wc);
+
+        if (!claim.IsValid)
+        {
+            return 0;
+        }
+
+        try
+        {
+            // Initialize writer state for the claimed region
+            var writer = new WalRecordWriter
+            {
+                DataSpan = claim.DataSpan,
+                WriteOffset = 0,
+                RecordIndex = 0,
+                CurrentLsn = claim.FirstLSN,
+                PrevCrc = 0,
+                TotalRecordCount = recordCount
+            };
+
+            foreach (var kvp in _componentInfos)
+            {
+                var info = kvp.Value;
+                var componentTypeId = info.ComponentTable.WalTypeId;
+                var storageSize = info.ComponentTable.ComponentStorageSize;
+
+                switch (info)
+                {
+                    case ComponentInfoSingle single:
+                        foreach (var pk in single.CompRevInfoCache.Keys)
+                        {
+                            ref var cri = ref CollectionsMarshal.GetValueRefOrNullRef(single.CompRevInfoCache, pk);
+                            if (cri.Operations == ComponentInfoBase.OperationType.Read)
+                            {
+                                continue;
+                            }
+
+                            WriteWalRecord(ref writer, pk, componentTypeId, storageSize, ref cri, info);
+                        }
+                        break;
+
+                    case ComponentInfoMultiple multiple:
+                        foreach (var pk in multiple.CompRevInfoCache.Keys)
+                        {
+                            var list = CollectionsMarshal.AsSpan(CollectionsMarshal.GetValueRefOrNullRef(multiple.CompRevInfoCache, pk));
+                            foreach (ref var cri in list)
+                            {
+                                if (cri.Operations == ComponentInfoBase.OperationType.Read)
+                                {
+                                    continue;
+                                }
+
+                                WriteWalRecord(ref writer, pk, componentTypeId, storageSize, ref cri, info);
+                            }
+                        }
+                        break;
+                }
+            }
+
+            _dbe.WalManager.CommitBuffer.Publish(ref claim);
+            return writer.HighestLsn;
+        }
+        catch
+        {
+            _dbe.WalManager.CommitBuffer.AbandonClaim(ref claim);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Mutable state for writing WAL records within a single claim.
+    /// Groups the cursor state that advances as records are written.
+    /// </summary>
+    private ref struct WalRecordWriter
+    {
+        public Span<byte> DataSpan;
+        public int WriteOffset;
+        public int RecordIndex;
+        public long CurrentLsn;
+        public uint PrevCrc;
+        public int TotalRecordCount;
+
+        /// <summary>
+        /// Returns the highest LSN that was written (CurrentLsn - 1 after writing).
+        /// </summary>
+        public readonly long HighestLsn => CurrentLsn - 1;
+    }
+
+    /// <summary>
+    /// Writes a single WAL record (header + payload) into the claim data span.
+    /// </summary>
+    private void WriteWalRecord(ref WalRecordWriter writer, long entityId, ushort componentTypeId, int storageSize,
+        ref ComponentInfoBase.CompRevInfo cri, ComponentInfoBase info)
+    {
+        var isDelete = (cri.Operations & ComponentInfoBase.OperationType.Deleted) != 0;
+        var isCreate = (cri.Operations & ComponentInfoBase.OperationType.Created) != 0;
+        var payloadLength = isDelete ? 0 : storageSize;
+
+        // Determine WAL operation type
+        WalOperationType opType;
+        if (isDelete)
+        {
+            opType = WalOperationType.Delete;
+        }
+        else if (isCreate)
+        {
+            opType = WalOperationType.Create;
+        }
+        else
+        {
+            opType = WalOperationType.Update;
+        }
+
+        // Build flags
+        var flags = WalRecordFlags.None;
+        if (writer.RecordIndex == 0)
+        {
+            flags |= WalRecordFlags.UowBegin;
+        }
+
+        if (writer.RecordIndex == writer.TotalRecordCount - 1)
+        {
+            flags |= WalRecordFlags.UowCommit;
+        }
+
+        // Build header
+        var header = new WalRecordHeader
+        {
+            LSN = writer.CurrentLsn,
+            TransactionTSN = TSN,
+            TotalRecordLength = (uint)(WalRecordHeader.SizeInBytes + payloadLength),
+            UowEpoch = UowId,
+            ComponentTypeId = componentTypeId,
+            EntityId = entityId,
+            PayloadLength = (ushort)payloadLength,
+            OperationType = (byte)opType,
+            Flags = (byte)flags,
+            PrevCRC = writer.RecordIndex == 0 ? 0 : writer.PrevCrc,
+            CRC = 0, // Computed below
+        };
+
+        // Write header to span
+        MemoryMarshal.Write(writer.DataSpan[writer.WriteOffset..], in header);
+
+        // Write payload (component data) for non-delete operations
+        if (payloadLength > 0 && cri.CurCompContentChunkId > 0)
+        {
+            var srcSpan = info.CompContentAccessor.GetChunkAsReadOnlySpan(cri.CurCompContentChunkId);
+            var payloadDst = writer.DataSpan.Slice(writer.WriteOffset + WalRecordHeader.SizeInBytes, payloadLength);
+            srcSpan[..payloadLength].CopyTo(payloadDst);
+        }
+
+        // Compute CRC over header+payload with CRC field zeroed
+        var recordSpan = writer.DataSpan.Slice(writer.WriteOffset, WalRecordHeader.SizeInBytes + payloadLength);
+        var crcFieldOffset = (int)Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.CRC));
+        var crc = WalCrc.ComputeSkipping(recordSpan, crcFieldOffset, sizeof(uint));
+
+        // Write CRC back into header
+        MemoryMarshal.Write(writer.DataSpan[(writer.WriteOffset + crcFieldOffset)..], in crc);
+
+        writer.PrevCrc = crc;
+        writer.WriteOffset += WalRecordHeader.SizeInBytes + payloadLength;
+        writer.CurrentLsn++;
+        writer.RecordIndex++;
     }
 }

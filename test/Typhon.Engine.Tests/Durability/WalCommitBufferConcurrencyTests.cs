@@ -199,11 +199,10 @@ public class WalCommitBufferConcurrencyTests : AllocatorTestBase
     {
         using var buffer = CreateBuffer();
         const int threadCount = 4;
+        const int claimsPerThread = 500;
         const int payloadSize = 48;
-        var runDurationMs = 1500;
         long totalProducedFrames = 0;
         long totalConsumedFrames = 0;
-        var running = 1;
         var consumerStop = 0;
 
         var consumer = new Thread(() =>
@@ -248,43 +247,28 @@ public class WalCommitBufferConcurrencyTests : AllocatorTestBase
         {
             threads[t] = new Thread(() =>
             {
-                while (Volatile.Read(ref running) == 1)
+                for (var i = 0; i < claimsPerThread; i++)
                 {
                     var ctx = WaitContext.FromTimeout(TimeSpan.FromSeconds(2));
-                    try
-                    {
-                        var claim = buffer.TryClaim(payloadSize, 1, ref ctx);
-                        claim.DataSpan.Fill(0xBB);
-                        buffer.Publish(ref claim);
-                        Interlocked.Increment(ref totalProducedFrames);
-                    }
-                    catch (WalBackPressureTimeoutException)
-                    {
-                        // Expected under heavy load — retry
-                    }
+                    var claim = buffer.TryClaim(payloadSize, 1, ref ctx);
+                    claim.DataSpan.Fill(0xBB);
+                    buffer.Publish(ref claim);
+                    Interlocked.Increment(ref totalProducedFrames);
                 }
             });
             threads[t].IsBackground = true;
             threads[t].Start();
         }
 
-        Thread.Sleep(runDurationMs);
-        Volatile.Write(ref running, 0);
-
         foreach (var thread in threads)
         {
             thread.Join();
         }
 
-        // Give the consumer time to drain remaining data while producers
-        // are stopped — avoids the race where a swap produces an empty new
-        // buffer right before the consumer checks its stop flag.
-        Thread.Sleep(100);
-
         Volatile.Write(ref consumerStop, 1);
         consumer.Join();
 
-        Assert.That(totalProducedFrames, Is.GreaterThan(0), "Should have produced some frames");
+        Assert.That(totalProducedFrames, Is.EqualTo(threadCount * claimsPerThread));
         Assert.That(totalConsumedFrames, Is.EqualTo(totalProducedFrames),
             $"Consumed {totalConsumedFrames} but produced {totalProducedFrames}");
     }
@@ -450,8 +434,8 @@ public class WalCommitBufferConcurrencyTests : AllocatorTestBase
         latePublisher.Join();
         fastProducer.Join();
 
-        // Give consumer time to drain everything
-        Thread.Sleep(200);
+        // Wait for consumer to see the late publisher's data, then stop
+        SpinWait.SpinUntil(() => lateFrameSeen, 2000);
         Volatile.Write(ref consumerStop, 1);
         consumer.Join();
 

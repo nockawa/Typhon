@@ -158,7 +158,11 @@ public sealed unsafe class WalWriter : ResourceNode, IMetricSource
     /// Requests a flush of the current buffer contents. Used by <see cref="DurabilityMode.Deferred"/>
     /// for explicit <c>Flush()</c> calls.
     /// </summary>
-    public void RequestFlush() => _flushRequested = true;                   // The commit buffer's data available event will be checked by the writer loop
+    public void RequestFlush()
+    {
+        _flushRequested = true;
+        _commitBuffer.Signal(); // Wake the writer thread so it doesn't wait for the full GroupCommit interval
+    }
 
     /// <summary>
     /// Blocks the caller until the specified LSN has been durably written to stable media.
@@ -500,6 +504,7 @@ public sealed unsafe class WalWriter : ResourceNode, IMetricSource
         if (disposing)
         {
             _shutdown = true;
+            _commitBuffer.Signal(); // Wake the writer thread so it sees _shutdown immediately
             _thread?.Join(TimeSpan.FromSeconds(5));
 
             _durabilityEvent.Dispose();

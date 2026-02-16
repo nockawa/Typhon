@@ -155,6 +155,10 @@ Also read existing usage patterns in the codebase before writing new code.
 - Test case sources for parameterized tests: `BuildNoiseCasesL1`, `BuildNoiseCasesL2`
 - Located in: `test/Typhon.Engine.Tests/`
 
+### Unit test code generation
+- Avoid relying on Thread.Sleep, prefer thread synchronization mechanisms.
+- Unit test execution time should be below < 30ms for very simple test, < 100 for medium and < 300 for complex ones.
+
 ### Debugging Approach
 When debugging issues, do NOT propose root cause explanations without evidence. Follow the user's diagnostic guidance (traces, logs, specific code paths). Avoid jumping to conclusions — enumerate hypotheses, then systematically verify each one starting with the most likely based on available data.
 

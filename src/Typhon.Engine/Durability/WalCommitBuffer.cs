@@ -392,6 +392,12 @@ public sealed unsafe class WalCommitBuffer : IDisposable
     }
 
     /// <summary>
+    /// Wakes the consumer thread if it is blocked in <see cref="WaitForData"/>.
+    /// Used by <see cref="WalWriter.RequestFlush"/> to avoid waiting for the full GroupCommit interval.
+    /// </summary>
+    public void Signal() => _dataAvailableEvent.Set();
+
+    /// <summary>
     /// Waits for data to become available. Call this when <see cref="TryDrain"/> returns false.
     /// </summary>
     /// <param name="timeoutMs">Maximum time to wait in milliseconds, or -1 for infinite.</param>

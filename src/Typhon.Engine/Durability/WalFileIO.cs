@@ -45,6 +45,9 @@ public sealed class WalFileIO : IWalFileIO
     public void WriteAligned(SafeFileHandle handle, long offset, ReadOnlySpan<byte> data) => RandomAccess.Write(handle, data, offset);
 
     /// <inheritdoc />
+    public void ReadAligned(SafeFileHandle handle, long offset, Span<byte> buffer) => RandomAccess.Read(handle, buffer, offset);
+
+    /// <inheritdoc />
     public void FlushBuffers(SafeFileHandle handle) => RandomAccess.FlushToDisk(handle);
 
     /// <inheritdoc />

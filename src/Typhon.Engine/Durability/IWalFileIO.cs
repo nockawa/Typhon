@@ -59,6 +59,14 @@ public interface IWalFileIO : IDisposable
     void PreAllocate(SafeFileHandle handle, long size);
 
     /// <summary>
+    /// Reads aligned data from a segment file.
+    /// </summary>
+    /// <param name="handle">File handle from <see cref="OpenSegment"/>.</param>
+    /// <param name="offset">File offset to read from (must be 4096-aligned for O_DIRECT).</param>
+    /// <param name="buffer">Buffer to read into (length must be a multiple of 4096).</param>
+    void ReadAligned(SafeFileHandle handle, long offset, Span<byte> buffer);
+
+    /// <summary>
     /// Checks whether a segment file exists at the given path.
     /// </summary>
     /// <param name="path">File path to check.</param>

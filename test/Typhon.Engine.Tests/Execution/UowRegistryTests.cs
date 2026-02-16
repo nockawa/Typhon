@@ -268,6 +268,179 @@ class UowRegistryTests : TestBase<UowRegistryTests>
     }
 
     // ═══════════════════════════════════════════════════════════════
+    // Two-Phase WAL Recovery Tests (LoadFromDiskRaw / PromoteToWalDurable / VoidRemainingPending)
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    public void Registry_LoadFromDiskRaw_PreservesPendingEntries()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        var registry = dbe.UowRegistry;
+
+        // Allocate UoW IDs (Pending on disk)
+        var id1 = registry.AllocateUowId();
+        var id2 = registry.AllocateUowId();
+
+        // Commit one, leave id2 Pending
+        registry.RecordCommit(id1, maxTSN: 10);
+
+        // LoadFromDiskRaw preserves Pending entries (unlike LoadFromDisk which voids them)
+        registry.LoadFromDiskRaw();
+
+        // id1 was Committed → should be in committed bitmap
+        Assert.That(registry.IsCommitted(id1), Is.True, "Committed UoW should survive LoadFromDiskRaw");
+
+        // id2 was Pending → should NOT be voided (still Pending, not in committed bitmap)
+        Assert.That(registry.IsCommitted(id2), Is.False, "Pending UoW should not be in committed bitmap");
+
+        // Void count should be 0 — LoadFromDiskRaw doesn't void anything
+        Assert.That(registry.VoidEntryCount, Is.EqualTo(0), "LoadFromDiskRaw should not void any entries");
+
+        // Both slots should be occupied in the allocation bitmap
+        Assert.That(registry.ActiveCount, Is.EqualTo(2));
+
+        // Cleanup
+        registry.Release(id1);
+        registry.Release(id2);
+    }
+
+    [Test]
+    public void Registry_PromoteToWalDurable_TransitionsPendingToWalDurable()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        var registry = dbe.UowRegistry;
+
+        var id1 = registry.AllocateUowId();
+        var id2 = registry.AllocateUowId();
+
+        // Both are Pending. LoadFromDiskRaw preserves them.
+        registry.LoadFromDiskRaw();
+
+        // Promote id1 to WalDurable (simulating WAL scan found commit marker)
+        registry.PromoteToWalDurable(id1);
+
+        // id1 should now be in the committed bitmap
+        Assert.That(registry.IsCommitted(id1), Is.True, "Promoted UoW should be in committed bitmap");
+
+        // id2 still Pending — not in committed bitmap
+        Assert.That(registry.IsCommitted(id2), Is.False, "Non-promoted UoW should not be in committed bitmap");
+
+        // Cleanup
+        registry.Release(id1);
+        registry.Release(id2);
+    }
+
+    [Test]
+    public void Registry_PromoteToWalDurable_IgnoresNonPendingEntries()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        var registry = dbe.UowRegistry;
+
+        var id1 = registry.AllocateUowId();
+
+        // Commit id1 (transitions to Committed, not Pending)
+        registry.RecordCommit(id1, maxTSN: 10);
+
+        // LoadFromDiskRaw
+        registry.LoadFromDiskRaw();
+
+        // PromoteToWalDurable on already-committed entry → no-op
+        registry.PromoteToWalDurable(id1);
+
+        // Should still be in committed bitmap
+        Assert.That(registry.IsCommitted(id1), Is.True);
+
+        // PromoteToWalDurable on UoW ID 0 → no-op
+        Assert.DoesNotThrow(() => registry.PromoteToWalDurable(0));
+
+        registry.Release(id1);
+    }
+
+    [Test]
+    public void Registry_VoidRemainingPending_VoidsOnlyPendingEntries()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        var registry = dbe.UowRegistry;
+
+        var id1 = registry.AllocateUowId();
+        var id2 = registry.AllocateUowId();
+        var id3 = registry.AllocateUowId();
+
+        // Commit id1, leave id2 and id3 Pending
+        registry.RecordCommit(id1, maxTSN: 10);
+
+        // LoadFromDiskRaw preserves Pending entries
+        registry.LoadFromDiskRaw();
+
+        // Promote id2 (simulating WAL found its commit marker)
+        registry.PromoteToWalDurable(id2);
+
+        // Record void count before
+        var voidBefore = registry.VoidEntryCount;
+
+        // VoidRemainingPending — should void id3 (still Pending) but not id1 or id2
+        registry.VoidRemainingPending();
+
+        var voided = registry.VoidEntryCount - voidBefore;
+        Assert.That(voided, Is.EqualTo(1), "Only one Pending entry (id3) should be voided");
+
+        // id1 (Committed) and id2 (WalDurable) should be in committed bitmap
+        Assert.That(registry.IsCommitted(id1), Is.True);
+        Assert.That(registry.IsCommitted(id2), Is.True);
+
+        // id3 (Voided) should not be in committed bitmap
+        Assert.That(registry.IsCommitted(id3), Is.False);
+
+        // CommittedBeforeTSN should be 0 (voided entries exist)
+        Assert.That(registry.CommittedBeforeTSN, Is.EqualTo(0));
+
+        // Cleanup
+        registry.Release(id1);
+        registry.Release(id2);
+        registry.Release(id3);
+    }
+
+    [Test]
+    public void Registry_TwoPhaseRecovery_FullWorkflow()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        var registry = dbe.UowRegistry;
+
+        // Set up: 4 UoWs — commit id1 and id3, leave id2 and id4 Pending
+        var id1 = registry.AllocateUowId();
+        var id2 = registry.AllocateUowId();
+        var id3 = registry.AllocateUowId();
+        var id4 = registry.AllocateUowId();
+
+        registry.RecordCommit(id1, maxTSN: 10);
+        registry.RecordCommit(id3, maxTSN: 30);
+
+        // Phase 1: LoadFromDiskRaw — preserves Pending entries
+        registry.LoadFromDiskRaw();
+        Assert.That(registry.VoidEntryCount, Is.EqualTo(0));
+        Assert.That(registry.ActiveCount, Is.EqualTo(4));
+
+        // Phase 2: Simulate WAL scan found commit markers for id2 only
+        registry.PromoteToWalDurable(id2);
+
+        // Phase 3: Void remaining Pending (id4 only)
+        registry.VoidRemainingPending();
+
+        // Verify final state
+        Assert.That(registry.IsCommitted(id1), Is.True, "id1 was Committed → in committed bitmap");
+        Assert.That(registry.IsCommitted(id2), Is.True, "id2 was promoted → in committed bitmap");
+        Assert.That(registry.IsCommitted(id3), Is.True, "id3 was Committed → in committed bitmap");
+        Assert.That(registry.IsCommitted(id4), Is.False, "id4 was Pending with no WAL commit → voided");
+        Assert.That(registry.VoidEntryCount, Is.EqualTo(1));
+
+        // Cleanup
+        registry.Release(id1);
+        registry.Release(id2);
+        registry.Release(id3);
+        registry.Release(id4);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
     // Concurrent Allocation Tests
     // ═══════════════════════════════════════════════════════════════
 
@@ -768,7 +941,7 @@ class UowRegistryTests : TestBase<UowRegistryTests>
             });
 
             // Give background thread time to enter WaitForSlotFreed
-            Thread.Sleep(200);
+            Thread.Sleep(50);
 
             // Release the seed slot → sets bitmap bit AND signals _slotFreed event
             registry.Release(seedId);
@@ -824,7 +997,7 @@ class UowRegistryTests : TestBase<UowRegistryTests>
             });
 
             // Give background thread time to enter WaitForSlotFreed
-            Thread.Sleep(200);
+            Thread.Sleep(50);
 
             // Cancel the token → triggers OperationCanceledException in _slotFreed.Wait
             cts.Cancel();

@@ -92,7 +92,7 @@ public class WalManagerTests : AllocatorTestBase
         mgr.Initialize();
 
         mgr.Start();
-        Thread.Sleep(50);
+        SpinWait.SpinUntil(() => mgr.IsRunning, 2000);
 
         Assert.That(mgr.IsRunning, Is.True);
     }
@@ -119,7 +119,7 @@ public class WalManagerTests : AllocatorTestBase
         buffer.Publish(ref claim);
 
         // Wait for writer to drain
-        Thread.Sleep(200);
+        SpinWait.SpinUntil(() => mgr.DurableLsn > 0, 2000);
 
         Assert.That(mgr.DurableLsn, Is.GreaterThan(0));
         Assert.That(mgr.HasFatalError, Is.False);
@@ -145,10 +145,9 @@ public class WalManagerTests : AllocatorTestBase
             buffer.Publish(ref claim);
         }
 
-        // Wait for all to be drained
-        Thread.Sleep(300);
-
         // 10 frames × 2 records = 20 records → LSNs 1-20
+        SpinWait.SpinUntil(() => mgr.DurableLsn >= 20, 2000);
+
         Assert.That(mgr.DurableLsn, Is.GreaterThanOrEqualTo(20));
     }
 
@@ -193,15 +192,15 @@ public class WalManagerTests : AllocatorTestBase
     #region Dispose
 
     [Test]
+    [CancelAfter(5000)]
     public void Dispose_StopsWriter()
     {
         var mgr = CreateManager();
         mgr.Initialize();
         mgr.Start();
-        Thread.Sleep(50);
+        SpinWait.SpinUntil(() => mgr.IsRunning, 2000);
 
-        mgr.Dispose();
-        Thread.Sleep(100);
+        mgr.Dispose(); // Internally joins the writer thread
 
         Assert.That(mgr.IsRunning, Is.False);
     }

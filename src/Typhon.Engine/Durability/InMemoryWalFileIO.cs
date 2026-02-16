@@ -84,6 +84,29 @@ public sealed class InMemoryWalFileIO : IWalFileIO
     }
 
     /// <inheritdoc />
+    public void ReadAligned(SafeFileHandle handle, long offset, Span<byte> buffer)
+    {
+        var seg = FindSegment(handle);
+        if (seg == null)
+        {
+            return;
+        }
+
+        var available = seg.Data.Length - (int)offset;
+        var toCopy = Math.Min(available, buffer.Length);
+        if (toCopy > 0)
+        {
+            seg.Data.AsSpan((int)offset, toCopy).CopyTo(buffer);
+        }
+
+        // Zero any remaining buffer space beyond available data
+        if (toCopy < buffer.Length)
+        {
+            buffer[toCopy..].Clear();
+        }
+    }
+
+    /// <inheritdoc />
     public void FlushBuffers(SafeFileHandle handle)
     {
         var seg = FindSegment(handle);

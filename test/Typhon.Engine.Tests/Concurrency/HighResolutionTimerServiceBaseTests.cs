@@ -39,7 +39,7 @@ public class HighResolutionTimerServiceBaseTests
         Assert.That(timer.IsRunning, Is.False);
 
         timer.Start();
-        Thread.Sleep(50); // Give thread time to start
+        SpinWait.SpinUntil(() => timer.IsRunning, 2000);
 
         Assert.That(timer.IsRunning, Is.True);
     }
@@ -54,7 +54,7 @@ public class HighResolutionTimerServiceBaseTests
             _registry.TimerDedicated);
 
         timer.Start();
-        Thread.Sleep(50);
+        SpinWait.SpinUntil(() => timer.IsRunning, 2000);
         Assert.That(timer.IsRunning, Is.True);
 
         timer.Dispose();
@@ -111,7 +111,7 @@ public class HighResolutionTimerServiceBaseTests
         Assert.That(timer.IsRunning, Is.False, "Before Start");
 
         timer.Start();
-        Thread.Sleep(50);
+        SpinWait.SpinUntil(() => timer.IsRunning, 2000);
         Assert.That(timer.IsRunning, Is.True, "After Start");
 
         timer.Dispose();
@@ -146,7 +146,7 @@ public class HighResolutionTimerServiceBaseTests
 
         timer.Start();
         timer.Start(); // Second call should not throw or create a second thread
-        Thread.Sleep(50);
+        SpinWait.SpinUntil(() => timer.IsRunning, 2000);
 
         Assert.That(timer.IsRunning, Is.True);
     }

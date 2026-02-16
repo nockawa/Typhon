@@ -84,6 +84,11 @@ public class DatabaseEngineOptions
     /// Deferred cleanup subsystem configuration for MVCC revision management.
     /// </summary>
     public DeferredCleanupOptions DeferredCleanup { get; set; } = new();
+
+    /// <summary>
+    /// WAL writer configuration. Null disables WAL durability (in-memory only).
+    /// </summary>
+    public WalWriterOptions Wal { get; set; }
 }
 
 /// <summary>
@@ -101,6 +106,9 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     private readonly DatabaseEngineOptions      _options;
     private readonly ILogger<DatabaseEngine>    _log;
     private readonly IMemoryAllocator           _memoryAllocator;
+    private readonly IWalFileIO                 _walFileIO;
+    private readonly IResource                  _durabilityNode;
+    private WalRecoveryResult                   _lastRecoveryResult;
 
     // Transaction counters for observability
     private long _transactionsCreated;
@@ -117,6 +125,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     private ComponentTable _fieldsTable;
     private ComponentTable _componentsTable;
     private ConcurrentDictionary<Type, ComponentTable> _componentTableByType;
+    private ConcurrentDictionary<ushort, ComponentTable> _componentTableByWalTypeId;
     private long _curPrimaryKey;
     private ConcurrentDictionary<int, ChunkBasedSegment> _componentCollectionSegmentByStride;
     private ConcurrentDictionary<Type, VariableSizedBufferSegmentBase> _componentCollectionVSBSByType;
@@ -159,9 +168,9 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     /// <summary>Records that a transaction was created (for observability counters).</summary>
     internal void RecordTransactionCreated() => Interlocked.Increment(ref _transactionsCreated);
 
-    public DatabaseEngine(IResourceRegistry resourceRegistry, EpochManager epochManager, DeadlineWatchdog watchdog,
-        ManagedPagedMMF mmf, IMemoryAllocator memoryAllocator, DatabaseEngineOptions options, ILogger<DatabaseEngine> log, string name = null) :
-        base(name ?? $"DatabaseEngine_{Guid.NewGuid():N}", ResourceType.Engine, resourceRegistry.DataEngine)
+    public DatabaseEngine(IResourceRegistry resourceRegistry, EpochManager epochManager, DeadlineWatchdog watchdog, ManagedPagedMMF mmf, 
+        IMemoryAllocator memoryAllocator, DatabaseEngineOptions options, ILogger<DatabaseEngine> log, IWalFileIO walFileIO = null, string name = null) 
+        : base(name ?? $"DatabaseEngine_{Guid.NewGuid():N}", ResourceType.Engine, resourceRegistry.DataEngine)
     {
         // Engine initialization
         MMF = mmf;
@@ -170,6 +179,8 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         _log = log;
         _options = options;
         _memoryAllocator = memoryAllocator;
+        _walFileIO = walFileIO;
+        _durabilityNode = resourceRegistry.Durability;
         TimeoutOptions.Current = _options.Timeouts;
         _componentCollectionSegmentByStride = new ConcurrentDictionary<int, ChunkBasedSegment>();
         _componentCollectionVSBSByType = new ConcurrentDictionary<Type, VariableSizedBufferSegmentBase>();
@@ -184,6 +195,8 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         {
             CreateSystemSchemaR1();
         }
+
+        InitializeWalManager();
     }
 
     public bool IsDisposed { get; private set; }
@@ -197,6 +210,8 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
         if (disposing)
         {
+            WalManager?.Dispose();
+            WalManager = null;
             TransactionChain.Dispose();
             UowRegistry?.Dispose();
             MMF.Dispose();
@@ -205,9 +220,28 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         IsDisposed = true;
     }
     
+    private void InitializeWalManager()
+    {
+        var walOptions = _options.Wal;
+        if (walOptions == null || _walFileIO == null)
+        {
+            return;
+        }
+
+        var commitBufferCapacity = _options.Resources.WalRingBufferSizeBytes / 2;
+        WalManager = new WalManager(walOptions, _memoryAllocator, _walFileIO, _durabilityNode, commitBufferCapacity);
+
+        // Determine continuation point from recovery or fresh start
+        var lastLSN = _lastRecoveryResult.LastValidLSN;
+        var lastSegmentId = 0L; // Segment continuity is handled by WalSegmentManager scanning existing files
+        WalManager.Initialize(lastSegmentId, lastLSN > 0 ? lastLSN + 1 : 1);
+        WalManager.Start();
+    }
+
     private void ConstructComponentStore()
     {
         _componentTableByType = new ConcurrentDictionary<Type, ComponentTable>();
+        _componentTableByWalTypeId = new ConcurrentDictionary<ushort, ComponentTable>();
         _curPrimaryKey = 0;
     }
 
@@ -251,9 +285,24 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             var rootPage = MMF.GetPage(rootMemPageIdx);
             ref var header = ref rootPage.As<RootFileHeader>();
             var spi = header.UowRegistrySPI;
+            var checkpointLSN = header.CheckpointLSN;
             var segment = MMF.GetSegment(spi);
             UowRegistry = new UowRegistry(segment, MMF, EpochManager, _memoryAllocator, this);
-            UowRegistry.LoadFromDisk();
+
+            var walDir = _options.Wal?.WalDirectory;
+            if (walDir != null && _walFileIO != null && System.IO.Directory.Exists(walDir) && System.IO.Directory.GetFiles(walDir, "*.wal").Length > 0)
+            {
+                // Two-phase WAL recovery: LoadFromDiskRaw preserves Pending entries for WAL cross-referencing
+                UowRegistry.LoadFromDiskRaw();
+                using var recovery = new WalRecovery(_walFileIO, walDir);
+                // Pass null for dbe: replay is deferred until component tables are registered (system schema auto-loading, #57)
+                _lastRecoveryResult = recovery.Recover(UowRegistry, checkpointLSN, null);
+            }
+            else
+            {
+                // No WAL segments — original path (voids all Pending entries)
+                UowRegistry.LoadFromDisk();
+            }
         }
     }
 
@@ -379,12 +428,23 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         var componentTable = new ComponentTable(this, definition, this);
         _componentTableByType.TryAdd(typeof(T), componentTable);
 
+        // Assign a stable WAL type ID derived from the component segment's persistent root page index
+        var walTypeId = (ushort)componentTable.ComponentSegment.RootPageIndex;
+        componentTable.WalTypeId = walTypeId;
+        _componentTableByWalTypeId.TryAdd(walTypeId, componentTable);
+
         return true;
     }
 
     public ComponentTable GetComponentTable<T>() where T : unmanaged => GetComponentTable(typeof(T));
 
     public ComponentTable GetComponentTable(Type type) => _componentTableByType.GetValueOrDefault(type);
+
+    /// <summary>
+    /// Looks up a <see cref="ComponentTable"/> by its WAL type ID (derived from <see cref="ChunkBasedSegment.RootPageIndex"/>).
+    /// Returns null if the type ID is unknown.
+    /// </summary>
+    internal ComponentTable GetComponentTableByWalTypeId(ushort id) => _componentTableByWalTypeId.GetValueOrDefault(id);
 
     #region Instrumentation Methods
 
