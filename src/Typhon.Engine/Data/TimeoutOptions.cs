@@ -75,4 +75,10 @@ public class TimeoutOptions
     /// Individual lock timeouts (5-10s) provide tighter bounds within this limit.
     /// </summary>
     public TimeSpan DefaultUowTimeout { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Timeout for WAL commit buffer back-pressure waits.
+    /// When the ring buffer is full, commit threads spin-wait for the WAL writer to drain it.
+    /// </summary>
+    public TimeSpan WalBackPressureTimeout { get; set; } = TimeSpan.FromSeconds(5);
 }

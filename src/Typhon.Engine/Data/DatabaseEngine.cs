@@ -100,6 +100,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 {
     private readonly DatabaseEngineOptions      _options;
     private readonly ILogger<DatabaseEngine>    _log;
+    private readonly IMemoryAllocator           _memoryAllocator;
 
     // Transaction counters for observability
     private long _transactionsCreated;
@@ -153,7 +154,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     internal void RecordTransactionCreated() => Interlocked.Increment(ref _transactionsCreated);
 
     public DatabaseEngine(IResourceRegistry resourceRegistry, EpochManager epochManager, DeadlineWatchdog watchdog,
-        ManagedPagedMMF mmf, DatabaseEngineOptions options, ILogger<DatabaseEngine> log, string name = null) :
+        ManagedPagedMMF mmf, IMemoryAllocator memoryAllocator, DatabaseEngineOptions options, ILogger<DatabaseEngine> log, string name = null) :
         base(name ?? $"DatabaseEngine_{Guid.NewGuid():N}", ResourceType.Engine, resourceRegistry.DataEngine)
     {
         // Engine initialization
@@ -162,6 +163,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         Watchdog = watchdog;
         _log = log;
         _options = options;
+        _memoryAllocator = memoryAllocator;
         TimeoutOptions.Current = _options.Timeouts;
         _componentCollectionSegmentByStride = new ConcurrentDictionary<int, ChunkBasedSegment>();
         _componentCollectionVSBSByType = new ConcurrentDictionary<Type, VariableSizedBufferSegmentBase>();
@@ -233,7 +235,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
             cs.SaveChanges();
 
-            UowRegistry = new UowRegistry(segment, MMF, EpochManager);
+            UowRegistry = new UowRegistry(segment, MMF, EpochManager, _memoryAllocator, this);
             UowRegistry.Initialize();
         }
         else
@@ -244,7 +246,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             ref var header = ref rootPage.As<RootFileHeader>();
             var spi = header.UowRegistrySPI;
             var segment = MMF.GetSegment(spi);
-            UowRegistry = new UowRegistry(segment, MMF, EpochManager);
+            UowRegistry = new UowRegistry(segment, MMF, EpochManager, _memoryAllocator, this);
             UowRegistry.LoadFromDisk();
         }
     }

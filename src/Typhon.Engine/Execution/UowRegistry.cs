@@ -40,7 +40,7 @@ internal struct UowRegistryEntry
 /// voided entries, it drops to 0, activating the bitmap as a visibility fallback until voided entries are cleaned up.
 /// </para>
 /// </remarks>
-internal class UowRegistry : IDisposable
+internal unsafe class UowRegistry : IDisposable
 {
     // ═══════════════════════════════════════════════════════════════
     // Constants
@@ -60,11 +60,17 @@ internal class UowRegistry : IDisposable
     private readonly ManagedPagedMMF _mmf;
     private readonly EpochManager _epochManager;
 
+    /// <summary>
+    /// Single pinned allocation holding both bitmaps contiguously:
+    /// [allocationBitmap (512 ulongs)] [committedBitmap (512 ulongs)]
+    /// </summary>
+    private readonly PinnedMemoryBlock _bitmapBlock;
+
     /// <summary>Bit=1 means Free (available for allocation). Rebuilt on load.</summary>
-    private readonly ulong[] _allocationBitmap = new ulong[BitmapWords];
+    private readonly ulong* _allocationBitmap;
 
     /// <summary>Bit=1 means Committed or WalDurable. Used only after crash recovery.</summary>
-    private readonly ulong[] _committedBitmap = new ulong[BitmapWords];
+    private readonly ulong* _committedBitmap;
 
     /// <summary>
     /// Visibility horizon. <c>long.MaxValue</c> during normal operation (bitmap never touched). <c>0</c> after crash recovery when voided entries
@@ -110,12 +116,18 @@ internal class UowRegistry : IDisposable
     // Constructor
     // ═══════════════════════════════════════════════════════════════
 
-    internal UowRegistry(LogicalSegment segment, ManagedPagedMMF mmf, EpochManager epochManager)
+    internal UowRegistry(LogicalSegment segment, ManagedPagedMMF mmf, EpochManager epochManager,
+        IMemoryAllocator allocator, IResource parent)
     {
         _segment = segment;
         _mmf = mmf;
         _epochManager = epochManager;
         _currentCapacity = ComputeCapacity(segment.Length);
+
+        // Single pinned allocation for both bitmaps: 2 x 512 ulongs = 8192 bytes, cache-line aligned.
+        _bitmapBlock = allocator.AllocatePinned("UowRegistry-Bitmaps", parent, BitmapWords * sizeof(ulong) * 2, zeroed: true, alignment: 64);
+        _allocationBitmap = (ulong*)_bitmapBlock.DataAsPointer;
+        _committedBitmap = _allocationBitmap + BitmapWords;
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -356,9 +368,8 @@ internal class UowRegistry : IDisposable
     {
         _currentCapacity = ComputeCapacity(_segment.Length);
 
-        // Clear bitmaps
-        Array.Clear(_allocationBitmap, 0, BitmapWords);
-        Array.Clear(_committedBitmap, 0, BitmapWords);
+        // Clear both bitmaps (single contiguous block)
+        _bitmapBlock.DataAsSpan.Clear();
 
         _activeCount = 0;
         _voidEntryCount = 0;
@@ -576,18 +587,29 @@ internal class UowRegistry : IDisposable
     }
 
     // ═══════════════════════════════════════════════════════════════
+    // Test Helpers
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>Returns the allocation bitmap as a span for test manipulation.</summary>
+    internal Span<ulong> AllocationBitmapSpan => new(_allocationBitmap, BitmapWords);
+
+    // ═══════════════════════════════════════════════════════════════
     // Size Validation
     // ═══════════════════════════════════════════════════════════════
 
     /// <summary>
     /// Compile-time size validation. Called from tests to verify struct layout.
     /// </summary>
-    internal static unsafe int EntryStructSize => sizeof(UowRegistryEntry);
+    internal static int EntryStructSize => sizeof(UowRegistryEntry);
 
     // ═══════════════════════════════════════════════════════════════
     // IDisposable
     // ═══════════════════════════════════════════════════════════════
 
     // Registry does not own the segment — DatabaseEngine manages segment lifecycle
-    public void Dispose() => _slotFreed.Dispose();
+    public void Dispose()
+    {
+        _slotFreed.Dispose();
+        _bitmapBlock.Dispose();
+    }
 }

@@ -40,4 +40,14 @@ internal static class ThrowHelper
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static void ThrowTransactionTimeout(long transactionId, TimeSpan waitDuration)
         => throw new TransactionTimeoutException(transactionId, waitDuration);
+
+    // --- Durability ---
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowWalBackPressureTimeout(int requestedBytes, TimeSpan waitDuration)
+        => throw new WalBackPressureTimeoutException(requestedBytes, waitDuration);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowWalClaimTooLarge(int requestedBytes, int bufferCapacity)
+        => throw new WalClaimTooLargeException(requestedBytes, bufferCapacity);
 }

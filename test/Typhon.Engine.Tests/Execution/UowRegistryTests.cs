@@ -3,7 +3,7 @@ using NUnit.Framework;
 using System;
 using System.Collections.Concurrent;
 using System.Linq;
-using System.Reflection;
+
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -681,11 +681,7 @@ class UowRegistryTests : TestBase<UowRegistryTests>
     // exhaustion without needing 32K actual allocations.
     // ═══════════════════════════════════════════════════════════════
 
-    private static ulong[] GetAllocationBitmap(UowRegistry registry)
-    {
-        var field = typeof(UowRegistry).GetField("_allocationBitmap", BindingFlags.NonPublic | BindingFlags.Instance);
-        return (ulong[])field.GetValue(registry);
-    }
+    private static Span<ulong> GetAllocationBitmap(UowRegistry registry) => registry.AllocationBitmapSpan;
 
     [Test]
     [CancelAfter(5000)]
@@ -696,14 +692,13 @@ class UowRegistryTests : TestBase<UowRegistryTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         var registry = dbe.UowRegistry;
 
-        var bitmap = GetAllocationBitmap(registry);
-        var savedBitmap = new ulong[bitmap.Length];
-        Array.Copy(bitmap, savedBitmap, bitmap.Length);
+        var savedBitmap = new ulong[512];
+        GetAllocationBitmap(registry).CopyTo(savedBitmap);
 
         try
         {
             // Clear all bits → TryClaimFreeSlot returns -1 (no free slots)
-            Array.Clear(bitmap, 0, bitmap.Length);
+            GetAllocationBitmap(registry).Clear();
 
             // AllocateUowId with expired deadline → WaitForSlotFreed returns false → throws
             var wc = WaitContext.FromTimeout(TimeSpan.Zero);
@@ -711,7 +706,7 @@ class UowRegistryTests : TestBase<UowRegistryTests>
         }
         finally
         {
-            Array.Copy(savedBitmap, bitmap, savedBitmap.Length);
+            savedBitmap.AsSpan().CopyTo(GetAllocationBitmap(registry));
         }
     }
 
@@ -724,13 +719,12 @@ class UowRegistryTests : TestBase<UowRegistryTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         var registry = dbe.UowRegistry;
 
-        var bitmap = GetAllocationBitmap(registry);
-        var savedBitmap = new ulong[bitmap.Length];
-        Array.Copy(bitmap, savedBitmap, bitmap.Length);
+        var savedBitmap = new ulong[512];
+        GetAllocationBitmap(registry).CopyTo(savedBitmap);
 
         try
         {
-            Array.Clear(bitmap, 0, bitmap.Length);
+            GetAllocationBitmap(registry).Clear();
 
             // 50ms timeout — no slot will be freed
             var wc = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(50));
@@ -738,7 +732,7 @@ class UowRegistryTests : TestBase<UowRegistryTests>
         }
         finally
         {
-            Array.Copy(savedBitmap, bitmap, savedBitmap.Length);
+            savedBitmap.AsSpan().CopyTo(GetAllocationBitmap(registry));
         }
     }
 
@@ -754,14 +748,13 @@ class UowRegistryTests : TestBase<UowRegistryTests>
         // Allocate one slot normally (so Release has a valid entry to free)
         var seedId = registry.AllocateUowId();
 
-        var bitmap = GetAllocationBitmap(registry);
-        var savedBitmap = new ulong[bitmap.Length];
-        Array.Copy(bitmap, savedBitmap, bitmap.Length);
+        var savedBitmap = new ulong[512];
+        GetAllocationBitmap(registry).CopyTo(savedBitmap);
 
         try
         {
             // Clear all bits → simulates full exhaustion
-            Array.Clear(bitmap, 0, bitmap.Length);
+            GetAllocationBitmap(registry).Clear();
 
             ushort allocatedId = 0;
             var bgDone = new ManualResetEventSlim(false);
@@ -791,7 +784,7 @@ class UowRegistryTests : TestBase<UowRegistryTests>
         }
         finally
         {
-            Array.Copy(savedBitmap, bitmap, savedBitmap.Length);
+            savedBitmap.AsSpan().CopyTo(GetAllocationBitmap(registry));
         }
     }
 
@@ -804,13 +797,12 @@ class UowRegistryTests : TestBase<UowRegistryTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         var registry = dbe.UowRegistry;
 
-        var bitmap = GetAllocationBitmap(registry);
-        var savedBitmap = new ulong[bitmap.Length];
-        Array.Copy(bitmap, savedBitmap, bitmap.Length);
+        var savedBitmap = new ulong[512];
+        GetAllocationBitmap(registry).CopyTo(savedBitmap);
 
         try
         {
-            Array.Clear(bitmap, 0, bitmap.Length);
+            GetAllocationBitmap(registry).Clear();
 
             using var cts = new CancellationTokenSource();
             Exception caught = null;
@@ -845,7 +837,7 @@ class UowRegistryTests : TestBase<UowRegistryTests>
         }
         finally
         {
-            Array.Copy(savedBitmap, bitmap, savedBitmap.Length);
+            savedBitmap.AsSpan().CopyTo(GetAllocationBitmap(registry));
         }
     }
 }
