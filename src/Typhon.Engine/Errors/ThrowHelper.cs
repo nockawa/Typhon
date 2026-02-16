@@ -30,24 +30,23 @@ internal static class ThrowHelper
     public static void ThrowCorruption(string componentName, int pageIndex, string detail) => throw new CorruptionException(componentName, pageIndex, detail);
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static void ThrowEpochRegistryExhausted()
-        => throw new ResourceExhaustedException(
-            "Concurrency/EpochThreadRegistry",
-            ResourceType.Synchronization,
-            EpochThreadRegistry.MaxSlots,
-            EpochThreadRegistry.MaxSlots);
+    public static void ThrowEpochRegistryExhausted() => throw new ResourceExhaustedException("Concurrency/EpochThreadRegistry", 
+        ResourceType.Synchronization, EpochThreadRegistry.MaxSlots, EpochThreadRegistry.MaxSlots);
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static void ThrowTransactionTimeout(long transactionId, TimeSpan waitDuration)
-        => throw new TransactionTimeoutException(transactionId, waitDuration);
+    public static void ThrowTransactionTimeout(long transactionId, TimeSpan waitDuration) => throw new TransactionTimeoutException(transactionId, waitDuration);
 
     // --- Durability ---
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static void ThrowWalBackPressureTimeout(int requestedBytes, TimeSpan waitDuration)
-        => throw new WalBackPressureTimeoutException(requestedBytes, waitDuration);
+    public static void ThrowWalBackPressureTimeout(int requestedBytes, TimeSpan waitDuration) => throw new WalBackPressureTimeoutException(requestedBytes, waitDuration);
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static void ThrowWalClaimTooLarge(int requestedBytes, int bufferCapacity)
-        => throw new WalClaimTooLargeException(requestedBytes, bufferCapacity);
+    public static void ThrowWalClaimTooLarge(int requestedBytes, int bufferCapacity) => throw new WalClaimTooLargeException(requestedBytes, bufferCapacity);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowWalWriteFailure(Exception innerException) => throw new WalWriteException(innerException);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowWalSegmentError(string segmentPath, string detail) => throw new WalSegmentException(segmentPath, detail);
 }

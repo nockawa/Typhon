@@ -131,6 +131,12 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     internal UowRegistry UowRegistry { get; private set; }
 
     /// <summary>
+    /// Optional WAL manager for durability. Null when WAL is not configured.
+    /// Will be constructed internally from <see cref="DatabaseEngineOptions"/> when WAL integration lands.
+    /// </summary>
+    internal WalManager WalManager { get; private set; }
+
+    /// <summary>
     /// Creates a new Unit of Work — the durability boundary for user operations. All transactions must be created through a UoW.
     /// </summary>
     /// <param name="durabilityMode">Controls when WAL records become crash-safe. Default is <see cref="DurabilityMode.Deferred"/>.</param>
