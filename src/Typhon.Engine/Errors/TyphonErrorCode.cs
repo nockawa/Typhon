@@ -17,6 +17,7 @@ public enum TyphonErrorCode : int
     // 2xxx — Storage
     DataCorruption              = 2003,
     StorageCapacityExceeded     = 2004,
+    PageChecksumMismatch        = 2005,
 
     // 3xxx — Component (reserved)
     // 4xxx — Index (reserved)

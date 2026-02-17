@@ -281,6 +281,9 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         // Enable FPI capture — creates FpiBitmap internally using cache page count
         MMF.EnableFpiCapture(WalManager);
 
+        // Activate CRC verification mode — recovery is complete, so OnLoad checks are now safe
+        MMF.SetPageChecksumVerification(_options.Resources.PageChecksumVerification);
+
         CheckpointManager = new CheckpointManager(MMF, UowRegistry, WalManager, _options.Resources, EpochManager, _stagingBufferPool, _durabilityNode,
             initialCheckpointLsn);
         CheckpointManager.Start();
@@ -342,7 +345,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             {
                 // Two-phase WAL recovery: LoadFromDiskRaw preserves Pending entries for WAL cross-referencing
                 UowRegistry.LoadFromDiskRaw();
-                using var recovery = new WalRecovery(_walFileIO, walDir);
+                using var recovery = new WalRecovery(_walFileIO, walDir, MMF);
                 // Pass null for dbe: replay is deferred until component tables are registered (system schema auto-loading, #57)
                 _lastRecoveryResult = recovery.Recover(UowRegistry, checkpointLSN, null);
             }

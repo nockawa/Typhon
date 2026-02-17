@@ -1,5 +1,6 @@
 using JetBrains.Annotations;
 using System;
+using System.Runtime.InteropServices;
 
 namespace Typhon.Engine;
 
@@ -116,6 +117,68 @@ public sealed class WalManager : ResourceNode
     /// Used by <see cref="DurabilityMode.Deferred"/> callers.
     /// </summary>
     public void RequestFlush() => _writer?.RequestFlush();
+
+    // ═══════════════════════════════════════════════════════════════
+    // FPI Search (on-the-fly repair)
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Scans all WAL segments for the most recent Full-Page Image (FPI) matching the given file page index. Returns the page data (8192 bytes) if found,
+    /// or null if no FPI exists. Used by <see cref="PagedMMF.TryRepairPageFromFpi"/> for on-the-fly repair during normal operation.
+    /// </summary>
+    internal byte[] SearchFpiForPage(int filePageIndex)
+    {
+        if (SegmentManager == null)
+        {
+            return null;
+        }
+
+        var segmentPaths = SegmentManager.GetAllSegmentPaths();
+        if (segmentPaths.Count == 0)
+        {
+            return null;
+        }
+
+        byte[] bestPageData = null;
+        long bestLSN = -1;
+
+        using var reader = new WalSegmentReader(_fileIO);
+
+        foreach (var path in segmentPaths)
+        {
+            if (!reader.OpenSegment(path))
+            {
+                continue;
+            }
+
+            while (reader.TryReadNext(out var header, out var payload))
+            {
+                if ((header.Flags & (byte)WalRecordFlags.FullPageImage) == 0)
+                {
+                    continue;
+                }
+
+                if (payload.Length < FpiMetadata.SizeInBytes + PagedMMF.PageSize)
+                {
+                    continue;
+                }
+
+                var meta = MemoryMarshal.Read<FpiMetadata>(payload);
+                if (meta.FilePageIndex != filePageIndex)
+                {
+                    continue;
+                }
+
+                if (header.LSN > bestLSN)
+                {
+                    bestLSN = header.LSN;
+                    bestPageData = payload.Slice(FpiMetadata.SizeInBytes, PagedMMF.PageSize).ToArray();
+                }
+            }
+        }
+
+        return bestPageData;
+    }
 
     // ═══════════════════════════════════════════════════════════════
     // Dispose

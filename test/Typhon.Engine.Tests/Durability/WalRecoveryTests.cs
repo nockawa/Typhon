@@ -461,7 +461,7 @@ class WalRecoveryTests : TestBase<WalRecoveryTests>
         Assert.That(result.SegmentsScanned, Is.EqualTo(1));
         Assert.That(result.RecordsScanned, Is.EqualTo(1));
         Assert.That(result.LastValidLSN, Is.EqualTo(1));
-        Assert.That(result.FpiRecordsApplied, Is.EqualTo(0), "FPI repair not yet implemented");
+        Assert.That(result.FpiRecordsApplied, Is.EqualTo(0), "No torn pages in this test — FPI repair should not trigger");
 
         registry.Release(id1);
     }
@@ -486,5 +486,272 @@ class WalRecoveryTests : TestBase<WalRecoveryTests>
         Assert.That(result.UowsVoided, Is.GreaterThan(0));
 
         registry.Release(id1);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // FPI Helpers
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Creates a page buffer with a valid CRC32C checksum in the PageBaseHeader.
+    /// The data region is filled with a recognizable pattern.
+    /// </summary>
+    private static byte[] BuildPageWithCrc(int filePageIndex, byte fillByte = 0xAA)
+    {
+        var page = new byte[PagedMMF.PageSize];
+
+        // Write a minimal PageBaseHeader
+        ref var header = ref Unsafe.As<byte, PageBaseHeader>(ref page[0]);
+        header.Flags = PageBlockFlags.None;
+        header.Type = PageBlockType.None;
+        header.FormatRevision = 1;
+        header.ChangeRevision = 1;
+        header.ModificationCounter = 0;
+        header.PageChecksum = 0; // Will be computed below
+
+        // Fill data region with pattern
+        for (int i = PagedMMF.PageHeaderSize; i < PagedMMF.PageSize; i++)
+        {
+            page[i] = fillByte;
+        }
+
+        // Compute and stamp CRC
+        var crc = WalCrc.ComputeSkipping(page, PageBaseHeader.PageChecksumOffset, PageBaseHeader.PageChecksumSize);
+        Unsafe.As<byte, uint>(ref page[PageBaseHeader.PageChecksumOffset]) = crc;
+
+        return page;
+    }
+
+    /// <summary>
+    /// Builds a WAL segment containing FPI records (and optionally UoW records).
+    /// </summary>
+    private static unsafe byte[] BuildSegmentWithFpi(long segmentId, long firstLSN, params (int FilePageIndex, byte[] PageData)[] fpiEntries)
+    {
+        var data = new byte[TestSegmentSize];
+
+        // Write segment header
+        fixed (byte* p = data)
+        {
+            ref var header = ref *(WalSegmentHeader*)p;
+            header.Initialize(segmentId, firstLSN, prevSegmentLsn: 0, TestSegmentSize);
+            header.ComputeAndSetCrc();
+        }
+
+        if (fpiEntries.Length == 0)
+        {
+            return data;
+        }
+
+        // Calculate total record bytes
+        var totalRecordBytes = 0;
+        foreach (var entry in fpiEntries)
+        {
+            totalRecordBytes += WalRecordHeader.SizeInBytes + FpiMetadata.SizeInBytes + PagedMMF.PageSize;
+        }
+
+        var frameLength = WalFrameHeader.SizeInBytes + totalRecordBytes;
+
+        // Write frame header
+        var offset = WalSegmentHeader.SizeInBytes;
+        ref var frameHeader = ref Unsafe.As<byte, WalFrameHeader>(ref data[offset]);
+        frameHeader.FrameLength = frameLength;
+        frameHeader.RecordCount = fpiEntries.Length;
+
+        // Write FPI records
+        var recordOffset = offset + WalFrameHeader.SizeInBytes;
+        var lsn = firstLSN;
+        uint prevCrc = 0;
+
+        for (int i = 0; i < fpiEntries.Length; i++)
+        {
+            var entry = fpiEntries[i];
+            var payloadLen = FpiMetadata.SizeInBytes + PagedMMF.PageSize;
+
+            ref var recHeader = ref Unsafe.As<byte, WalRecordHeader>(ref data[recordOffset]);
+            recHeader.LSN = lsn++;
+            recHeader.TransactionTSN = 0;
+            recHeader.TotalRecordLength = (uint)(WalRecordHeader.SizeInBytes + payloadLen);
+            recHeader.UowEpoch = 0; // FPI records have no UoW association
+            recHeader.ComponentTypeId = 0;
+            recHeader.EntityId = 0;
+            recHeader.PayloadLength = (ushort)payloadLen;
+            recHeader.OperationType = 0;
+            recHeader.Flags = (byte)WalRecordFlags.FullPageImage;
+            recHeader.PrevCRC = prevCrc;
+            recHeader.CRC = 0;
+
+            // Write FpiMetadata
+            var metaOffset = recordOffset + WalRecordHeader.SizeInBytes;
+            ref var meta = ref Unsafe.As<byte, FpiMetadata>(ref data[metaOffset]);
+            meta.FilePageIndex = entry.FilePageIndex;
+            meta.SegmentId = 0;
+            meta.ChangeRevision = 1;
+            meta.UncompressedSize = (ushort)PagedMMF.PageSize;
+            meta.CompressionAlgo = 0;
+            meta.Reserved = 0;
+
+            // Write page data
+            entry.PageData.AsSpan().CopyTo(data.AsSpan(metaOffset + FpiMetadata.SizeInBytes));
+
+            // Compute CRC
+            var recordSpan = data.AsSpan(recordOffset, WalRecordHeader.SizeInBytes + payloadLen);
+            var crcFieldOffset = (int)Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.CRC));
+            var computedCrc = WalCrc.ComputeSkipping(recordSpan, crcFieldOffset, sizeof(uint));
+            Unsafe.As<byte, uint>(ref data[recordOffset + crcFieldOffset]) = computedCrc;
+            prevCrc = computedCrc;
+
+            recordOffset += WalRecordHeader.SizeInBytes + payloadLen;
+        }
+
+        return data;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // FPI Torn Page Repair Tests
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    public void Recover_TornPage_RepairedFromFpi()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        var registry = dbe.UowRegistry;
+        var mmf = dbe.MMF;
+
+        registry.LoadFromDiskRaw();
+
+        const int targetPage = 5;
+
+        // Build a valid page with CRC
+        var goodPageData = BuildPageWithCrc(targetPage, 0xAA);
+
+        // Write the good page to disk
+        mmf.WritePageDirect(targetPage, goodPageData);
+
+        // Build WAL segment with FPI record for the good page
+        var segmentData = BuildSegmentWithFpi(1, 1, (targetPage, goodPageData));
+        CreateWalSegmentFile(1, segmentData);
+
+        // Corrupt the page on disk (flip bytes in data area, leaving CRC as-is → mismatch)
+        var corruptedPage = (byte[])goodPageData.Clone();
+        for (int i = PagedMMF.PageHeaderSize; i < PagedMMF.PageSize; i++)
+        {
+            corruptedPage[i] = 0xFF; // Overwrite data with different pattern
+        }
+        mmf.WritePageDirect(targetPage, corruptedPage);
+
+        // Run recovery — Phase 4 should detect CRC mismatch and repair from FPI
+        using var recovery = new WalRecovery(_fileIO, _walDir, mmf);
+        var result = recovery.Recover(registry, checkpointLSN: 0, dbe: null);
+
+        Assert.That(result.FpiRecordsApplied, Is.EqualTo(1), "Torn page should be repaired from FPI");
+    }
+
+    [Test]
+    public void Recover_ConsistentPage_NotRepaired()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        var registry = dbe.UowRegistry;
+        var mmf = dbe.MMF;
+
+        registry.LoadFromDiskRaw();
+
+        const int targetPage = 5;
+
+        // Build a valid page with CRC
+        var goodPageData = BuildPageWithCrc(targetPage, 0xBB);
+
+        // Write the good page to disk — CRC is valid
+        mmf.WritePageDirect(targetPage, goodPageData);
+
+        // Build WAL segment with FPI record for this page (FPI exists but page is fine)
+        var segmentData = BuildSegmentWithFpi(1, 1, (targetPage, goodPageData));
+        CreateWalSegmentFile(1, segmentData);
+
+        // Run recovery — CRC matches, so FPI should NOT be applied
+        using var recovery = new WalRecovery(_fileIO, _walDir, mmf);
+        var result = recovery.Recover(registry, checkpointLSN: 0, dbe: null);
+
+        Assert.That(result.FpiRecordsApplied, Is.EqualTo(0), "Consistent page should not be repaired");
+    }
+
+    [Test]
+    public void Recover_MultipleFpi_UsesHighestLSN()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        var registry = dbe.UowRegistry;
+        var mmf = dbe.MMF;
+
+        registry.LoadFromDiskRaw();
+
+        const int targetPage = 5;
+
+        // Build two versions of the page — the second (higher LSN) should win
+        var oldPageData = BuildPageWithCrc(targetPage, 0x11);
+        var newPageData = BuildPageWithCrc(targetPage, 0x22);
+
+        // Build WAL segment with two FPI records for the same page (LSN 1 and 2)
+        // We need to use a larger test segment size to fit 2 FPI records
+        var segmentData = BuildSegmentWithFpi(1, 1, (targetPage, oldPageData), (targetPage, newPageData));
+        CreateWalSegmentFile(1, segmentData);
+
+        // Corrupt the page on disk
+        var corruptedPage = BuildPageWithCrc(targetPage, 0xFF);
+        // Manually corrupt it: change data but keep the old CRC from newPageData
+        Array.Copy(newPageData, 0, corruptedPage, 0, PageBaseHeader.PageChecksumOffset);
+        Array.Copy(newPageData, PageBaseHeader.PageChecksumOffset, corruptedPage, PageBaseHeader.PageChecksumOffset, PageBaseHeader.PageChecksumSize);
+        Array.Copy(newPageData, PageBaseHeader.PageChecksumOffset + PageBaseHeader.PageChecksumSize, corruptedPage,
+            PageBaseHeader.PageChecksumOffset + PageBaseHeader.PageChecksumSize,
+            PagedMMF.PageSize - PageBaseHeader.PageChecksumOffset - PageBaseHeader.PageChecksumSize);
+        // Now flip data bytes to create corruption
+        for (int i = PagedMMF.PageHeaderSize; i < PagedMMF.PageSize; i++)
+        {
+            corruptedPage[i] ^= 0xFF;
+        }
+        mmf.WritePageDirect(targetPage, corruptedPage);
+
+        // Run recovery — should use highest-LSN FPI (newPageData, LSN 2)
+        using var recovery = new WalRecovery(_fileIO, _walDir, mmf);
+        var result = recovery.Recover(registry, checkpointLSN: 0, dbe: null);
+
+        Assert.That(result.FpiRecordsApplied, Is.EqualTo(1));
+
+        // Verify the repaired page matches newPageData (0x22 pattern)
+        var repairedPage = new byte[PagedMMF.PageSize];
+        mmf.ReadPageDirect(targetPage, repairedPage);
+        Assert.That(repairedPage[PagedMMF.PageHeaderSize], Is.EqualTo(0x22),
+            "Repaired page should contain data from highest-LSN FPI");
+    }
+
+    [Test]
+    public void Recover_ZeroChecksum_SkipsRepair()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        var registry = dbe.UowRegistry;
+        var mmf = dbe.MMF;
+
+        registry.LoadFromDiskRaw();
+
+        const int targetPage = 5;
+
+        // Build a page with CRC = 0 (never checkpointed)
+        var page = new byte[PagedMMF.PageSize];
+        for (int i = PagedMMF.PageHeaderSize; i < PagedMMF.PageSize; i++)
+        {
+            page[i] = 0xCC;
+        }
+        // PageChecksum is already 0 (default)
+
+        mmf.WritePageDirect(targetPage, page);
+
+        // Build WAL segment with FPI record
+        var fpiPageData = BuildPageWithCrc(targetPage, 0xDD);
+        var segmentData = BuildSegmentWithFpi(1, 1, (targetPage, fpiPageData));
+        CreateWalSegmentFile(1, segmentData);
+
+        // Run recovery — CRC == 0 means "never checkpointed", should be skipped
+        using var recovery = new WalRecovery(_fileIO, _walDir, mmf);
+        var result = recovery.Recover(registry, checkpointLSN: 0, dbe: null);
+
+        Assert.That(result.FpiRecordsApplied, Is.EqualTo(0), "Zero-checksum page should be skipped");
     }
 }

@@ -29,7 +29,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Typhon.Engine\Typhon.Engine.csproj" />
-    <ProjectReference Include="..\Typhon.Engine.Tests\Typhon.Engine.Tests.csproj" />
   </ItemGroup>
 
   <ItemGroup>

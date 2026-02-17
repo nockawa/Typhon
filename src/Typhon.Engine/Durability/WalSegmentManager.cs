@@ -288,6 +288,26 @@ internal sealed class WalSegmentManager : IDisposable
         _fileIO.PreAllocate(handle, _segmentSize);
     }
 
+    /// <summary>
+    /// Returns paths of all known WAL segment files: sealed segments (awaiting reclamation) plus the active segment.
+    /// Used by <see cref="WalManager.SearchFpiForPage"/> for on-the-fly FPI lookup.
+    /// </summary>
+    internal List<string> GetAllSegmentPaths()
+    {
+        var paths = new List<string>(_sealedSegments.Count + 1);
+        foreach (var (path, _) in _sealedSegments)
+        {
+            paths.Add(path);
+        }
+
+        if (ActiveSegment != null)
+        {
+            paths.Add(ActiveSegment.Path);
+        }
+
+        return paths;
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {

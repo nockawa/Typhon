@@ -1,7 +1,6 @@
 ﻿using BenchmarkDotNet.Attributes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using NUnit.Framework;
 using System.Collections.Generic;
 using System.Diagnostics;
 using Typhon.Engine;
@@ -114,13 +113,10 @@ public class BTreeBenchmark
             {
                 var c = 0;
                 using var a = tree.TryGetMultiple(i, ref accessor);
-                Assert.That(a.IsValid, Is.True);
                 do
                 {
                     c += a.ReadOnlyElements.Length;
                 } while (a.NextChunk());
-
-                Assert.That(c, Is.EqualTo(i));
             }
 
             // Now this is the nasty part, we delete half of the chunk of the buffer to create fragmentation that
