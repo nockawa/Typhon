@@ -277,6 +277,10 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         }
 
         _stagingBufferPool = new StagingBufferPool(_memoryAllocator, _durabilityNode);
+
+        // Enable FPI capture — creates FpiBitmap internally using cache page count
+        MMF.EnableFpiCapture(WalManager);
+
         CheckpointManager = new CheckpointManager(MMF, UowRegistry, WalManager, _options.Resources, EpochManager, _stagingBufferPool, _durabilityNode,
             initialCheckpointLsn);
         CheckpointManager.Start();

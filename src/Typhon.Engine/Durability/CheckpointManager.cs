@@ -254,6 +254,9 @@ internal sealed class CheckpointManager : ResourceNode, IMetricSource
 
         try
         {
+            // Step 0: Reset FPI bitmap — new modifications from this point need fresh FPIs
+            _mmf.FpiBitmap?.ClearAll();
+
             // Step 1: Capture target LSN (already passed as parameter)
             // This is the DurableLsn read atomically before entering the cycle.
 
