@@ -69,7 +69,12 @@ public class FpiCaptureTests : AllocatorTestBase
     /// <summary>
     /// Creates and initializes a WalManager with InMemoryWalFileIO.
     /// </summary>
-    private WalManager CreateWalManager(int commitBufferCapacity = 64 * 1024)
+    /// <param name="commitBufferCapacity">Commit buffer size in bytes.</param>
+    /// <param name="startWriter">
+    /// Whether to start the background writer thread. Tests that call <see cref="WalCommitBuffer.TryDrain"/>
+    /// directly must pass <c>false</c> to avoid a race with the writer thread consuming records first.
+    /// </param>
+    private WalManager CreateWalManager(int commitBufferCapacity = 64 * 1024, bool startWriter = true)
     {
         var options = new WalWriterOptions
         {
@@ -83,9 +88,12 @@ public class FpiCaptureTests : AllocatorTestBase
 
         var mgr = new WalManager(options, MemoryAllocator, _fileIO, AllocationResource, commitBufferCapacity);
         mgr.Initialize();
-        mgr.Start();
 
-        SpinWait.SpinUntil(() => mgr.IsRunning, 2000);
+        if (startWriter)
+        {
+            mgr.Start();
+            SpinWait.SpinUntil(() => mgr.IsRunning, 2000);
+        }
 
         return mgr;
     }
@@ -193,7 +201,7 @@ public class FpiCaptureTests : AllocatorTestBase
     public void FpiRecord_CorrectHeaderFields()
     {
         CreateTestInfrastructure();
-        _walManager = CreateWalManager();
+        _walManager = CreateWalManager(startWriter: false);
         _mmf.EnableFpiCapture(_walManager);
 
         var lsnBefore = _walManager.CommitBuffer.NextLsn;
@@ -250,7 +258,7 @@ public class FpiCaptureTests : AllocatorTestBase
     public void FpiRecord_CorrectMetadata()
     {
         CreateTestInfrastructure();
-        _walManager = CreateWalManager();
+        _walManager = CreateWalManager(startWriter: false);
         _mmf.EnableFpiCapture(_walManager);
 
         const int targetFilePageIndex = 2;
