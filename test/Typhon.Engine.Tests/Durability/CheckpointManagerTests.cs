@@ -92,7 +92,7 @@ public class CheckpointManagerTests : AllocatorTestBase
         var latched = _mmf.TryLatchPageExclusive(rootMemPageIdx);
         var rootPage = _mmf.GetPage(rootMemPageIdx);
         cs.AddByMemPageIndex(rootMemPageIdx);
-        ref var header = ref rootPage.As<RootFileHeader>();
+        ref var header = ref rootPage.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
         header.UowRegistrySPI = segment.RootPageIndex;
         _mmf.UnlatchPageExclusive(rootMemPageIdx);
         cs.SaveChanges();
@@ -405,7 +405,7 @@ public class CheckpointManagerTests : AllocatorTestBase
         {
             _mmf.RequestPageEpoch(0, guard.Epoch, out var memPageIdx);
             var page = _mmf.GetPage(memPageIdx);
-            ref var header = ref page.As<RootFileHeader>();
+            ref var header = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
             Assert.That(header.CheckpointLSN, Is.EqualTo(durableLsn));
         }
     }

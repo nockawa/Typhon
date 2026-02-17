@@ -99,7 +99,7 @@ public class ManagedPagedMMFTests
 
             var guard = EpochGuard.Enter(epochManager);
             pmmf.RequestPageEpoch(0, epochManager.GlobalEpoch, out var memPageIndex);
-            ref var h = ref *(RootFileHeader*)pmmf.GetMemPageAddress(memPageIndex);
+            ref var h = ref *(RootFileHeader*)(pmmf.GetMemPageAddress(memPageIndex) + PagedMMF.PageBaseHeaderSize);
             Assert.That(h.HeaderSignatureString, Is.EqualTo(ManagedPagedMMF.HeaderSignature));
             Assert.That(h.DatabaseNameString, Is.EqualTo(CurrentDatabaseName));
             guard.Dispose();

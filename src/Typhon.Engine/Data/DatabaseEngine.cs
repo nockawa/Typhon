@@ -161,7 +161,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     [return: TransfersOwnership]
     public UnitOfWork CreateUnitOfWork(DurabilityMode durabilityMode = DurabilityMode.Deferred, TimeSpan timeout = default)
     {
-        var effectiveTimeout = timeout == default ? TimeoutOptions.Current.DefaultUowTimeout : timeout;
+        var effectiveTimeout = timeout == TimeSpan.Zero ? TimeoutOptions.Current.DefaultUowTimeout : timeout;
         var wc = WaitContext.FromTimeout(effectiveTimeout);
 
         // Back-pressure: if registry is full, wait for a slot to be freed.
@@ -267,12 +267,12 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         }
 
         // Read initial CheckpointLSN from file header
-        long initialCheckpointLsn = 0;
+        long initialCheckpointLsn;
         using (var guard = EpochGuard.Enter(EpochManager))
         {
             MMF.RequestPageEpoch(0, guard.Epoch, out var memPageIdx);
             var page = MMF.GetPage(memPageIdx);
-            ref var header = ref page.As<RootFileHeader>();
+            ref var header = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
             initialCheckpointLsn = header.CheckpointLSN;
         }
 
@@ -317,7 +317,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             Debug.Assert(rootLatched, "TryLatchPageExclusive failed on root page during registry init");
             var rootPage = MMF.GetPage(rootMemPageIdx);
             cs.AddByMemPageIndex(rootMemPageIdx);
-            ref var header = ref rootPage.As<RootFileHeader>();
+            ref var header = ref rootPage.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
             header.UowRegistrySPI = segment.RootPageIndex;
             MMF.UnlatchPageExclusive(rootMemPageIdx);
 
@@ -331,7 +331,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             // Loading path: read SPI from root header
             MMF.RequestPageEpoch(0, epoch, out var rootMemPageIdx);
             var rootPage = MMF.GetPage(rootMemPageIdx);
-            ref var header = ref rootPage.As<RootFileHeader>();
+            ref var header = ref rootPage.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
             var spi = header.UowRegistrySPI;
             var checkpointLSN = header.CheckpointLSN;
             var segment = MMF.GetSegment(spi);
@@ -413,7 +413,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         // Save the entry points in the file header
         var cs = MMF.CreateChangeSet();
         cs.AddByMemPageIndex(memPageIdx);
-        ref var rootFileHeader = ref page.As<RootFileHeader>();
+        ref var rootFileHeader = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
 
         rootFileHeader.SystemSchemaRevision = 1;
         rootFileHeader.FieldTableSPI = _fieldsTable.ComponentSegment.RootPageIndex;

@@ -23,9 +23,9 @@ public enum PageBlockType : byte
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
 public struct PageBaseHeader
 {
-    public static readonly int Offset = 0;
+    public static readonly int Offset;
     unsafe public static readonly int Size = sizeof(PageBaseHeader);
-    
+
     /// <summary>
     /// Combination of one to many flags
     /// </summary>

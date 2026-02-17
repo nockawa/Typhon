@@ -10,10 +10,16 @@ using System.Threading;
 namespace Typhon.Engine;
 
 /// <summary>
-/// On-disk header stored at page 0 of every Typhon database file.
+/// On-disk header stored in the metadata zone (bytes 64–191) of page 0 of every Typhon database file.
 /// Identifies the file format, tracks the database name and format version,
 /// and holds the root page indices (SPIs) of the core system segments.
 /// </summary>
+/// <remarks>
+/// Page 0 has a standard <see cref="PageBaseHeader"/> at bytes 0–63 (managed by the infrastructure
+/// for seqlock, checksum, and change tracking). The <see cref="RootFileHeader"/> is placed immediately
+/// after, at offset <see cref="PagedMMF.PageBaseHeaderSize"/> (64), using
+/// <c>page.StructAt&lt;RootFileHeader&gt;(PagedMMF.PageBaseHeaderSize)</c>.
+/// </remarks>
 [StructLayout(LayoutKind.Sequential)]
 unsafe internal struct RootFileHeader
 {
@@ -46,6 +52,12 @@ unsafe internal struct RootFileHeader
 
     /// <summary>LSN up to which all WAL records have been checkpointed. Default 0 = scan all WAL segments on recovery.</summary>
     public long CheckpointLSN;
+
+    /// <summary>Pre-allocated page index for the next occupancy map growth.</summary>
+    public int OccupancyNextReservedPageIndex;
+
+    /// <summary>Pre-allocated page index for the next occupancy map data page.</summary>
+    public int OccupancyNextReservedMapPageIndex;
 
     /// <summary>Returns <see cref="HeaderSignature"/> decoded as a managed string.</summary>
     public string HeaderSignatureString
@@ -165,6 +177,9 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
             // Now that we can allocate many more pages, reserve the next page to be used when the occupancy map needs to grow again
             // Use core method directly to avoid deadlock (we already hold the lock)
             _occupancyNextReservedPageIndex = AllocatePageCore(changeSet);
+
+            // Persist the updated reserved page indices to the root file header
+            UpdateOccupancyReservedPages();
         }
     }
 
@@ -225,7 +240,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         // Set header information
         var cs = CreateChangeSet();
         cs.AddByMemPageIndex(memPageIdx);
-        ref var rootFileHeader = ref page.As<RootFileHeader>();
+        ref var rootFileHeader = ref page.StructAt<RootFileHeader>(PageBaseHeaderSize);
         fixed (byte* headerSignature = rootFileHeader.HeaderSignature)
         {
             StringExtensions.StoreString(HeaderSignature, headerSignature, 32);
@@ -258,8 +273,12 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         _occupancyMap.SetL0(_occupancyNextReservedMapPageIndex);
         // ReSharper restore InconsistentlySynchronizedField
 
+        rootFileHeader.OccupancyNextReservedPageIndex = _occupancyNextReservedPageIndex;
+        rootFileHeader.OccupancyNextReservedMapPageIndex = _occupancyNextReservedMapPageIndex;
+
         UnlatchPageExclusive(memPageIdx);
         cs.SaveChanges();
+        FlushToDisk();
     }
 
     protected override void OnFileLoading()
@@ -271,16 +290,24 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
 
         RequestPageEpoch(0, epoch, out var memPageIdx);
         var page = GetPage(memPageIdx);
-        ref var h = ref page.As<RootFileHeader>();
+        ref var h = ref page.StructAt<RootFileHeader>(PageBaseHeaderSize);
 
         if (h.HeaderSignatureString != HeaderSignature)
         {
-            throw new NotImplementedException();
+            throw new InvalidOperationException(
+                $"Invalid database file: expected header signature '{HeaderSignature}', found '{h.HeaderSignatureString}'. File: {Options.BuildDatabasePathFileName()}");
         }
 
         if (h.DatabaseNameString != Options.DatabaseName)
         {
-            throw new NotImplementedException();
+            throw new InvalidOperationException(
+                $"Database name mismatch: expected '{Options.DatabaseName}', found '{h.DatabaseNameString}'. File: {Options.BuildDatabasePathFileName()}");
+        }
+
+        if (h.DatabaseFormatRevision != DatabaseFormatRevision)
+        {
+            throw new InvalidOperationException(
+                $"Incompatible database format: file version {h.DatabaseFormatRevision}, engine version {DatabaseFormatRevision}. File: {Options.BuildDatabasePathFileName()}");
         }
 
         Logger.LogInformation("Load Database '{DatabaseName}' from file '{FilePathName}'", h.DatabaseNameString, Options.BuildDatabasePathFileName());
@@ -290,8 +317,12 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
 
         _occupancySegment = LoadOccupancySegment(h.OccupancyMapSPI, PageBlockType.OccupancyMap);
 
-        // ReSharper disable once InconsistentlySynchronizedField
+        // ReSharper disable InconsistentlySynchronizedField
         _occupancyMap = new BitmapL3(_occupancySegment);
+
+        _occupancyNextReservedPageIndex = h.OccupancyNextReservedPageIndex;
+        _occupancyNextReservedMapPageIndex = h.OccupancyNextReservedMapPageIndex;
+        // ReSharper restore InconsistentlySynchronizedField
     }
     public LogicalSegment GetSegment(int filePageIndex)
     {
@@ -470,6 +501,32 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
     // ═══════════════════════════════════════════════════════════════
 
     /// <summary>
+    /// Persists the current <see cref="_occupancyNextReservedPageIndex"/> and <see cref="_occupancyNextReservedMapPageIndex"/> values
+    /// to the <see cref="RootFileHeader"/> on page 0. Called after the occupancy map grows and new reserved pages are allocated.
+    /// </summary>
+    /// <remarks>Caller must hold <see cref="_occupancyMapAccess"/> exclusive lock.</remarks>
+    private void UpdateOccupancyReservedPages()
+    {
+        using var guard = EpochGuard.Enter(EpochManager);
+        var epoch = guard.Epoch;
+
+        RequestPageEpoch(0, epoch, out var memPageIdx);
+        var latched = TryLatchPageExclusive(memPageIdx);
+        Debug.Assert(latched, "TryLatchPageExclusive failed on root page during occupancy reserved pages update");
+
+        var page = GetPage(memPageIdx);
+        var cs = CreateChangeSet();
+        cs.AddByMemPageIndex(memPageIdx);
+
+        ref var header = ref page.StructAt<RootFileHeader>(PageBaseHeaderSize);
+        header.OccupancyNextReservedPageIndex = _occupancyNextReservedPageIndex;
+        header.OccupancyNextReservedMapPageIndex = _occupancyNextReservedMapPageIndex;
+
+        UnlatchPageExclusive(memPageIdx);
+        cs.SaveChanges();
+    }
+
+    /// <summary>
     /// Updates the <see cref="RootFileHeader.CheckpointLSN"/> field in page 0 and flushes to disk. Called by the Checkpoint Manager after dirty pages have
     /// been written and fsynced.
     /// </summary>
@@ -488,7 +545,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         var cs = CreateChangeSet();
         cs.AddByMemPageIndex(memPageIdx);
 
-        ref var header = ref page.As<RootFileHeader>();
+        ref var header = ref page.StructAt<RootFileHeader>(PageBaseHeaderSize);
         header.CheckpointLSN = checkpointLSN;
 
         UnlatchPageExclusive(memPageIdx);
