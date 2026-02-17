@@ -160,6 +160,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     // FPI (Full-Page Image) support — null until EnableFpiCapture() is called (WAL disabled = no FPI)
     private FpiBitmap _fpiBitmap;
     private WalManager _walManager;
+    private bool _enableFpiCompression;
 
     // CRC verification mode — defaults to RecoveryOnly to avoid on-load checks during recovery itself.
     // Set to OnLoad after recovery completes via SetPageChecksumVerification().
@@ -175,10 +176,13 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     /// Enables FPI capture by creating an <see cref="FpiBitmap"/> sized to the page cache and linking to the WAL manager.
     /// Called by <see cref="DatabaseEngine"/> after WAL initialization.
     /// </summary>
-    internal void EnableFpiCapture(WalManager walManager)
+    /// <param name="walManager">The WAL manager to write FPI records to.</param>
+    /// <param name="enableFpiCompression">When true, FPI page payloads are LZ4-compressed before writing to the WAL.</param>
+    internal void EnableFpiCapture(WalManager walManager, bool enableFpiCompression = false)
     {
         _fpiBitmap = new FpiBitmap(MemPagesCount);
         _walManager = walManager;
+        _enableFpiCompression = enableFpiCompression;
     }
 
     /// <summary>
@@ -834,77 +838,109 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
     /// <summary>
     /// Serializes a Full-Page Image (FPI) WAL record capturing the before-image of a page. Called under exclusive latch — the page is stable during the copy.
+    /// When <see cref="_enableFpiCompression"/> is true, the page payload is LZ4-compressed to reduce WAL bandwidth.
+    /// Incompressible pages (e.g., random data) automatically fall back to uncompressed format.
     /// </summary>
     private unsafe void WriteFpiRecord(int memPageIndex, int filePageIndex, PageBaseHeader* headerAddr)
     {
-        // FPI payload = FpiMetadata (16B) + full page data (8192B) = 8208B
-        // Total bytes written into DataSpan = WalRecordHeader (48B) + FPI payload (8208B) = 8256B
-        const int fpiPayloadSize = FpiMetadata.SizeInBytes + PageSize;
-        const int fpiTotalRecordSize = WalRecordHeader.SizeInBytes + fpiPayloadSize;
+        var pageAddr = _memPagesAddr + (memPageIndex * (long)PageSize);
+        var pageSpan = new ReadOnlySpan<byte>(pageAddr, PageSize);
 
-        // Claim WAL buffer space for 1 FPI record
-        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.DefaultCommitTimeout);
-        var claim = _walManager.CommitBuffer.TryClaim(fpiTotalRecordSize, 1, ref wc);
-
-        if (!claim.IsValid)
-        {
-            // WAL back-pressure — FPI is best-effort in this path.
-            // The page will still be dirty and the next checkpoint will re-capture if needed.
-            return;
-        }
-
+        byte[] rentedBuffer = null;
         try
         {
-            // Build FPI WAL record header
-            var header = new WalRecordHeader
+            bool useCompression = false;
+            int compressedSize = 0;
+
+            // Try LZ4 compression if enabled
+            if (_enableFpiCompression)
             {
-                LSN = claim.FirstLSN,
-                TransactionTSN = 0,
-                TotalRecordLength = fpiTotalRecordSize,
-                UowEpoch = 0,
-                ComponentTypeId = 0,
-                EntityId = 0,
-                PayloadLength = fpiPayloadSize,
-                OperationType = 0,
-                Flags = (byte)WalRecordFlags.FullPageImage,
-                PrevCRC = 0,
-                CRC = 0,
-            };
+                rentedBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(FpiCompression.MaxCompressedSize(PageSize));
+                compressedSize = FpiCompression.Compress(pageSpan, rentedBuffer);
+                useCompression = compressedSize > 0;
+            }
 
-            // Write header into claim
-            int offset = 0;
-            MemoryMarshal.Write(claim.DataSpan[offset..], in header);
-            offset += WalRecordHeader.SizeInBytes;
+            int pagePayloadSize = useCompression ? compressedSize : PageSize;
+            int fpiPayloadSize = FpiMetadata.SizeInBytes + pagePayloadSize;
+            int fpiTotalRecordSize = WalRecordHeader.SizeInBytes + fpiPayloadSize;
 
-            // Write FPI metadata
-            var meta = new FpiMetadata
+            // Claim WAL buffer space for 1 FPI record
+            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.DefaultCommitTimeout);
+            var claim = _walManager.CommitBuffer.TryClaim(fpiTotalRecordSize, 1, ref wc);
+
+            if (!claim.IsValid)
             {
-                FilePageIndex = filePageIndex,
-                SegmentId = 0,
-                ChangeRevision = headerAddr->ChangeRevision,
-                UncompressedSize = PageSize,
-                CompressionAlgo = 0,
-                Reserved = 0,
-            };
-            MemoryMarshal.Write(claim.DataSpan[offset..], in meta);
-            offset += FpiMetadata.SizeInBytes;
+                // WAL back-pressure — FPI is best-effort in this path.
+                // The page will still be dirty and the next checkpoint will re-capture if needed.
+                return;
+            }
 
-            // Write full page data (before-image) — we hold the Exclusive latch, so the page is stable
-            var pageAddr = _memPagesAddr + (memPageIndex * (long)PageSize);
-            new ReadOnlySpan<byte>(pageAddr, PageSize).CopyTo(claim.DataSpan[offset..]);
-            offset += PageSize;
+            try
+            {
+                // Build FPI WAL record header
+                var header = new WalRecordHeader
+                {
+                    LSN = claim.FirstLSN,
+                    TransactionTSN = 0,
+                    TotalRecordLength = (uint)fpiTotalRecordSize,
+                    UowEpoch = 0,
+                    ComponentTypeId = 0,
+                    EntityId = 0,
+                    PayloadLength = (ushort)fpiPayloadSize,
+                    OperationType = 0,
+                    Flags = (byte)(WalRecordFlags.FullPageImage | (useCompression ? WalRecordFlags.Compressed : 0)),
+                    PrevCRC = 0,
+                    CRC = 0,
+                };
 
-            // Compute CRC over entire record (header + metadata + page) with CRC field zeroed
-            var crcFieldOffset = (int)Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.CRC));
-            var crc = WalCrc.ComputeSkipping(claim.DataSpan[..offset], crcFieldOffset, sizeof(uint));
-            MemoryMarshal.Write(claim.DataSpan[crcFieldOffset..], in crc);
+                // Write header into claim
+                int offset = 0;
+                MemoryMarshal.Write(claim.DataSpan[offset..], in header);
+                offset += WalRecordHeader.SizeInBytes;
 
-            _walManager.CommitBuffer.Publish(ref claim);
+                // Write FPI metadata
+                var meta = new FpiMetadata
+                {
+                    FilePageIndex = filePageIndex,
+                    SegmentId = 0,
+                    ChangeRevision = headerAddr->ChangeRevision,
+                    UncompressedSize = (ushort)PageSize,
+                    CompressionAlgo = useCompression ? FpiCompression.AlgoLZ4 : FpiCompression.AlgoNone,
+                    Reserved = 0,
+                };
+                MemoryMarshal.Write(claim.DataSpan[offset..], in meta);
+                offset += FpiMetadata.SizeInBytes;
+
+                // Write page data — compressed from rented buffer, or uncompressed from page address
+                if (useCompression)
+                {
+                    new ReadOnlySpan<byte>(rentedBuffer, 0, compressedSize).CopyTo(claim.DataSpan[offset..]);
+                }
+                else
+                {
+                    pageSpan.CopyTo(claim.DataSpan[offset..]);
+                }
+                offset += pagePayloadSize;
+
+                // Compute CRC over entire record (header + metadata + page) with CRC field zeroed
+                var crcFieldOffset = (int)Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.CRC));
+                var crc = WalCrc.ComputeSkipping(claim.DataSpan[..offset], crcFieldOffset, sizeof(uint));
+                MemoryMarshal.Write(claim.DataSpan[crcFieldOffset..], in crc);
+
+                _walManager.CommitBuffer.Publish(ref claim);
+            }
+            catch
+            {
+                _walManager.CommitBuffer.AbandonClaim(ref claim);
+                throw;
+            }
         }
-        catch
+        finally
         {
-            _walManager.CommitBuffer.AbandonClaim(ref claim);
-            throw;
+            if (rentedBuffer != null)
+            {
+                System.Buffers.ArrayPool<byte>.Shared.Return(rentedBuffer);
+            }
         }
     }
 

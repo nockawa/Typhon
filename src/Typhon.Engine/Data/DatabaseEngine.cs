@@ -279,7 +279,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         _stagingBufferPool = new StagingBufferPool(_memoryAllocator, _durabilityNode);
 
         // Enable FPI capture — creates FpiBitmap internally using cache page count
-        MMF.EnableFpiCapture(WalManager);
+        MMF.EnableFpiCapture(WalManager, _options.Wal?.EnableFpiCompression ?? false);
 
         // Activate CRC verification mode — recovery is complete, so OnLoad checks are now safe
         MMF.SetPageChecksumVerification(_options.Resources.PageChecksumVerification);

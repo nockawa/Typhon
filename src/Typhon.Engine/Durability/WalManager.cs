@@ -124,7 +124,8 @@ public sealed class WalManager : ResourceNode
 
     /// <summary>
     /// Scans all WAL segments for the most recent Full-Page Image (FPI) matching the given file page index. Returns the page data (8192 bytes) if found,
-    /// or null if no FPI exists. Used by <see cref="PagedMMF.TryRepairPageFromFpi"/> for on-the-fly repair during normal operation.
+    /// or null if no FPI exists. Handles both compressed (LZ4) and uncompressed FPI payloads.
+    /// Used by <see cref="PagedMMF.TryRepairPageFromFpi"/> for on-the-fly repair during normal operation.
     /// </summary>
     internal byte[] SearchFpiForPage(int filePageIndex)
     {
@@ -158,7 +159,7 @@ public sealed class WalManager : ResourceNode
                     continue;
                 }
 
-                if (payload.Length < FpiMetadata.SizeInBytes + PagedMMF.PageSize)
+                if (payload.Length <= FpiMetadata.SizeInBytes)
                 {
                     continue;
                 }
@@ -169,10 +170,41 @@ public sealed class WalManager : ResourceNode
                     continue;
                 }
 
-                if (header.LSN > bestLSN)
+                if (header.LSN <= bestLSN)
                 {
+                    continue;
+                }
+
+                var pagePayload = payload.Slice(FpiMetadata.SizeInBytes);
+
+                if ((header.Flags & (byte)WalRecordFlags.Compressed) != 0)
+                {
+                    // Compressed FPI — decompress the page payload
+                    if (meta.CompressionAlgo != FpiCompression.AlgoLZ4)
+                    {
+                        continue; // Unknown algorithm — try older FPI
+                    }
+
+                    var decompressed = new byte[meta.UncompressedSize];
+                    var decompressedSize = FpiCompression.Decompress(pagePayload, decompressed);
+                    if (decompressedSize != meta.UncompressedSize)
+                    {
+                        continue; // Decompression failure — try older FPI
+                    }
+
                     bestLSN = header.LSN;
-                    bestPageData = payload.Slice(FpiMetadata.SizeInBytes, PagedMMF.PageSize).ToArray();
+                    bestPageData = decompressed;
+                }
+                else
+                {
+                    // Uncompressed FPI — validate and extract
+                    if (pagePayload.Length < PagedMMF.PageSize)
+                    {
+                        continue;
+                    }
+
+                    bestLSN = header.LSN;
+                    bestPageData = pagePayload.Slice(0, PagedMMF.PageSize).ToArray();
                 }
             }
         }

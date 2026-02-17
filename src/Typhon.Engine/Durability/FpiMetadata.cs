@@ -8,11 +8,13 @@ namespace Typhon.Engine;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Layout: [WalRecordHeader (48 B)] [FpiMetadata (16 B)] [Page data (8192 B)] = 8256 B total.
+/// Uncompressed layout: [WalRecordHeader (48 B)] [FpiMetadata (16 B)] [Page data (8192 B)] = 8256 B total.
+/// Compressed layout:   [WalRecordHeader (48 B)] [FpiMetadata (16 B)] [Compressed data (variable)] — smaller total.
 /// </para>
 /// <para>
-/// <see cref="CompressionAlgo"/> and <see cref="UncompressedSize"/> are reserved for Phase 5 (LZ4 compression).
-/// Currently <see cref="CompressionAlgo"/> is always 0 (none) and <see cref="UncompressedSize"/> equals <see cref="PagedMMF.PageSize"/>.
+/// When <see cref="CompressionAlgo"/> is 0 (none), the page data immediately follows at full <see cref="PagedMMF.PageSize"/>.
+/// When <see cref="CompressionAlgo"/> is 1 (LZ4), the data is LZ4-compressed and <see cref="UncompressedSize"/> records the original size.
+/// The <see cref="WalRecordFlags.Compressed"/> flag on the WAL header indicates compressed payloads.
 /// </para>
 /// </remarks>
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -27,10 +29,10 @@ internal struct FpiMetadata
     /// <summary>ChangeRevision of the page at capture time.</summary>
     public int ChangeRevision;
 
-    /// <summary>Uncompressed page size in bytes (always 8192, forward-compat for Phase 5 compression).</summary>
+    /// <summary>Uncompressed page size in bytes. Always <see cref="PagedMMF.PageSize"/> (8192). Used during decompression to allocate the target buffer.</summary>
     public ushort UncompressedSize;
 
-    /// <summary>Compression algorithm: 0 = none, 1 = LZ4 (Phase 5).</summary>
+    /// <summary>Compression algorithm applied to the page payload: 0 = none (<see cref="FpiCompression.AlgoNone"/>), 1 = LZ4 (<see cref="FpiCompression.AlgoLZ4"/>).</summary>
     public byte CompressionAlgo;
 
     /// <summary>Padding for 16-byte alignment.</summary>

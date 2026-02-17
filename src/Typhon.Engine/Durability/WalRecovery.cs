@@ -264,16 +264,44 @@ internal sealed class WalRecovery : IDisposable
 
     /// <summary>
     /// Collects an FPI record into the map, keeping only the highest-LSN entry per file page index.
+    /// Handles both compressed (LZ4) and uncompressed FPI payloads.
     /// </summary>
     private static void CollectFpiRecord(Dictionary<int, FpiScanEntry> fpiMap, WalRecordHeader header, ReadOnlySpan<byte> payload)
     {
-        if (payload.Length < FpiMetadata.SizeInBytes + PagedMMF.PageSize)
+        if (payload.Length <= FpiMetadata.SizeInBytes)
         {
             return; // Malformed FPI record — skip
         }
 
         var meta = MemoryMarshal.Read<FpiMetadata>(payload);
-        var pageData = payload.Slice(FpiMetadata.SizeInBytes, PagedMMF.PageSize).ToArray();
+        var pagePayload = payload.Slice(FpiMetadata.SizeInBytes);
+
+        byte[] pageData;
+        if ((header.Flags & (byte)WalRecordFlags.Compressed) != 0)
+        {
+            // Compressed FPI — decompress the page payload
+            if (meta.CompressionAlgo != FpiCompression.AlgoLZ4)
+            {
+                return; // Unknown compression algorithm — skip
+            }
+
+            pageData = new byte[meta.UncompressedSize];
+            var decompressedSize = FpiCompression.Decompress(pagePayload, pageData);
+            if (decompressedSize != meta.UncompressedSize)
+            {
+                return; // Decompression failure — skip
+            }
+        }
+        else
+        {
+            // Uncompressed FPI — validate size and extract
+            if (pagePayload.Length < PagedMMF.PageSize)
+            {
+                return; // Malformed — skip
+            }
+
+            pageData = pagePayload.Slice(0, PagedMMF.PageSize).ToArray();
+        }
 
         if (fpiMap.TryGetValue(meta.FilePageIndex, out var existing))
         {
