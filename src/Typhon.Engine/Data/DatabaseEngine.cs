@@ -109,6 +109,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     private readonly IWalFileIO                 _walFileIO;
     private readonly IResource                  _durabilityNode;
     private WalRecoveryResult                   _lastRecoveryResult;
+    private StagingBufferPool                   _stagingBufferPool;
 
     // Transaction counters for observability
     private long _transactionsCreated;
@@ -226,6 +227,10 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             CheckpointManager?.Dispose();
             CheckpointManager = null;
 
+            // Dispose staging pool after checkpoint manager (checkpoint may use it during final cycle)
+            _stagingBufferPool?.Dispose();
+            _stagingBufferPool = null;
+
             WalManager?.Dispose();
             WalManager = null;
             TransactionChain.Dispose();
@@ -271,7 +276,9 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             initialCheckpointLsn = header.CheckpointLSN;
         }
 
-        CheckpointManager = new CheckpointManager(MMF, UowRegistry, WalManager, _options.Resources, EpochManager, _durabilityNode, initialCheckpointLsn);
+        _stagingBufferPool = new StagingBufferPool(_memoryAllocator, _durabilityNode);
+        CheckpointManager = new CheckpointManager(MMF, UowRegistry, WalManager, _options.Resources, EpochManager, _stagingBufferPool, _durabilityNode,
+            initialCheckpointLsn);
         CheckpointManager.Start();
     }
 

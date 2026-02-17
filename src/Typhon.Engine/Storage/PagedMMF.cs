@@ -730,6 +730,14 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         // Acquire the latch (records thread ownership atomically)
         pi.PageExclusiveLatch.EnterExclusiveAccess(ref WaitContext.Null);
         pi.ExclusiveLatchDepth = 0;
+
+        // Seqlock: signal modification in progress (even -> odd)
+        unsafe
+        {
+            var headerAddr = (PageBaseHeader*)(_memPagesAddr + (memPageIndex * (long)PageSize));
+            ++headerAddr->ModificationCounter;
+        }
+
         return true;
     }
 
@@ -745,6 +753,13 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         {
             pi.ExclusiveLatchDepth--;
             return;
+        }
+
+        // Seqlock: signal modification complete (odd -> even)
+        unsafe
+        {
+            var headerAddr = (PageBaseHeader*)(_memPagesAddr + (memPageIndex * (long)PageSize));
+            ++headerAddr->ModificationCounter;
         }
 
         pi.PageExclusiveLatch.ExitExclusiveAccess();
@@ -810,78 +825,100 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     }
 
     /// <summary>
-    /// Writes dirty pages to the data file WITHOUT decrementing their DirtyCounter. This is used by the Checkpoint Manager, which must fsync before
-    /// decrementing counters to ensure crash safety. Pages that are re-dirtied between collection and write will naturally keep DirtyCounter &gt; 0 after decrement.
+    /// Copies a live page into a destination buffer using a seqlock read protocol.
+    /// Spins while the page's <see cref="PageBaseHeader.ModificationCounter"/> is odd (writer in progress),
+    /// then memcpys the page and validates the counter hasn't changed. Retries on torn reads.
     /// </summary>
-    unsafe internal Task WritePagesForCheckpoint(int[] memPageIndices)
+    private unsafe void CopyPageWithSeqlock(byte* pageAddr, byte* destAddr)
+    {
+        var sw = new SpinWait();
+        while (true)
+        {
+            // Read the modification counter (must be even = quiescent)
+            var counter = ((PageBaseHeader*)pageAddr)->ModificationCounter;
+            if ((counter & 1) != 0)
+            {
+                // Writer in progress — spin and retry
+                sw.SpinOnce();
+                continue;
+            }
+
+            // Copy the full page
+            Buffer.MemoryCopy(pageAddr, destAddr, PageSize, PageSize);
+
+            // Validate counter hasn't changed (no torn read)
+            if (((PageBaseHeader*)pageAddr)->ModificationCounter == counter)
+            {
+                return; // Consistent snapshot obtained
+            }
+
+            // Counter changed — torn read, retry
+            sw.SpinOnce();
+        }
+    }
+
+    /// <summary>
+    /// Writes dirty pages to the data file via staging buffers WITHOUT decrementing their DirtyCounter.
+    /// Each page is snapshot-copied through the seqlock protocol, then CRC-stamped on the staging copy,
+    /// and written synchronously to the data file. Called on the checkpoint thread.
+    /// </summary>
+    /// <param name="memPageIndices">Memory page indices of dirty pages to write.</param>
+    /// <param name="stagingPool">Pool from which to rent page-sized staging buffers.</param>
+    unsafe internal void WritePagesForCheckpoint(int[] memPageIndices, StagingBufferPool stagingPool)
     {
         if (memPageIndices.Length == 0)
         {
-            return Task.CompletedTask;
+            return;
         }
 
-        // Sort for I/O coalescing (same as SavePages)
-        Array.Sort(memPageIndices, (x, y) => x - y);
-
-        var operations = new List<(int memPageIndex, int length)>();
-
-        var curPageInfo = _memPagesInfo[memPageIndices[0]];
-        var curOperation = (memPageIndex: memPageIndices[0], length: 1);
         var memPageBaseAddr = _memPagesAddr;
 
-        for (int i = 1; i < memPageIndices.Length; i++)
+        for (int i = 0; i < memPageIndices.Length; i++)
         {
-            // Increment ChangeRevision for non-root pages
-            if (curPageInfo.FilePageIndex > 0)
-            {
-                var ioTask = curPageInfo.IOReadTask;
-                if (ioTask != null && !ioTask.IsCompletedSuccessfully)
-                {
-                    ioTask.GetAwaiter().GetResult();
-                }
+            var memPageIndex = memPageIndices[i];
+            var pi = _memPagesInfo[memPageIndex];
 
-                var headerAddr = (PageBaseHeader*)(memPageBaseAddr + (curPageInfo.MemPageIndex * PageSize));
-                ++headerAddr->ChangeRevision;
-            }
-
-            var nextMemPageIndex = memPageIndices[i];
-            var nextPageInfo = _memPagesInfo[nextMemPageIndex];
-            if ((curPageInfo.MemPageIndex + 1) == nextPageInfo.MemPageIndex && (curPageInfo.FilePageIndex + 1) == nextPageInfo.FilePageIndex)
-            {
-                curOperation.length++;
-            }
-            else
-            {
-                operations.Add(curOperation);
-                curOperation = (nextMemPageIndex, 1);
-            }
-
-            curPageInfo = nextPageInfo;
-        }
-
-        // Increment ChangeRevision for the last page
-        if (curPageInfo.FilePageIndex > 0)
-        {
-            var ioTask = curPageInfo.IOReadTask;
+            // Wait for any pending I/O read to complete
+            var ioTask = pi.IOReadTask;
             if (ioTask != null && !ioTask.IsCompletedSuccessfully)
             {
                 ioTask.GetAwaiter().GetResult();
             }
 
-            var headerAddr = (PageBaseHeader*)(memPageBaseAddr + (curPageInfo.MemPageIndex * PageSize));
-            ++headerAddr->ChangeRevision;
+            var livePageAddr = memPageBaseAddr + (memPageIndex * (long)PageSize);
+
+            // Rent a staging buffer and snapshot the live page via seqlock
+            using var staging = stagingPool.Rent();
+            CopyPageWithSeqlock(livePageAddr, staging.Pointer);
+
+            // Increment ChangeRevision and compute CRC on the staging copy (not the live page)
+            if (pi.FilePageIndex > 0)
+            {
+                var stagingHeader = (PageBaseHeader*)staging.Pointer;
+                ++stagingHeader->ChangeRevision;
+                stagingHeader->PageChecksum = WalCrc.ComputeSkipping(staging.Span, PageBaseHeader.PageChecksumOffset, PageBaseHeader.PageChecksumSize);
+            }
+
+            // Write staging buffer to the data file (synchronous — checkpoint runs on dedicated thread)
+            var filePageIndex = pi.FilePageIndex;
+            var pageOffset = filePageIndex * (long)PageSize;
+            RandomAccess.Write(_fileHandle, staging.Span, pageOffset);
+
+            // Track file size growth
+            var newSize = pageOffset + PageSize;
+            long oldSize;
+            do
+            {
+                oldSize = _fileSize;
+                if (newSize <= oldSize)
+                {
+                    break;
+                }
+            } while (Interlocked.CompareExchange(ref _fileSize, newSize, oldSize) != oldSize);
+
+            _metrics.PageWrittenToDiskCount++;
+            _metrics.WrittenOperationCount++;
         }
-
-        operations.Add(curOperation);
-
-        var tasks = new Task[operations.Count];
-        for (int i = 0; i < operations.Count; i++)
-        {
-            tasks[i] = SavePageInternal(operations[i].memPageIndex, operations[i].length).AsTask();
-        }
-
-        // No ContinueWith for dirty decrement — caller is responsible after fsync
-        return Task.WhenAll(tasks);
     }
 
     unsafe internal Task SavePages(int[] memPageIndices)

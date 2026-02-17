@@ -42,6 +42,7 @@ internal sealed class CheckpointManager : ResourceNode, IMetricSource
     private readonly WalManager _walManager;
     private readonly ResourceOptions _resourceOptions;
     private readonly EpochManager _epochManager;
+    private readonly StagingBufferPool _stagingPool;
 
     // ═══════════════════════════════════════════════════════════════
     // Thread lifecycle
@@ -83,22 +84,25 @@ internal sealed class CheckpointManager : ResourceNode, IMetricSource
     /// <param name="walManager">WAL manager for reading DurableLsn and segment reclamation.</param>
     /// <param name="resourceOptions">Configuration (CheckpointIntervalMs, CheckpointMaxDirtyPages).</param>
     /// <param name="epochManager">Epoch manager for page access.</param>
+    /// <param name="stagingPool">Pre-allocated staging buffer pool for snapshot-based checkpoint writes.</param>
     /// <param name="parent">Parent resource node.</param>
     /// <param name="initialCheckpointLsn">Initial checkpoint LSN from file header (0 for fresh database).</param>
-    internal CheckpointManager(ManagedPagedMMF mmf, UowRegistry uowRegistry, WalManager walManager, ResourceOptions resourceOptions, EpochManager epochManager, 
-        IResource parent, long initialCheckpointLsn = 0) : base("CheckpointManager", ResourceType.WAL, parent)
+    internal CheckpointManager(ManagedPagedMMF mmf, UowRegistry uowRegistry, WalManager walManager, ResourceOptions resourceOptions, EpochManager epochManager,
+        StagingBufferPool stagingPool, IResource parent, long initialCheckpointLsn = 0) : base("CheckpointManager", ResourceType.WAL, parent)
     {
         ArgumentNullException.ThrowIfNull(mmf);
         ArgumentNullException.ThrowIfNull(uowRegistry);
         ArgumentNullException.ThrowIfNull(walManager);
         ArgumentNullException.ThrowIfNull(resourceOptions);
         ArgumentNullException.ThrowIfNull(epochManager);
+        ArgumentNullException.ThrowIfNull(stagingPool);
 
         _mmf = mmf;
         _uowRegistry = uowRegistry;
         _walManager = walManager;
         _resourceOptions = resourceOptions;
         _epochManager = epochManager;
+        _stagingPool = stagingPool;
         _checkpointLsn = initialCheckpointLsn;
     }
 
@@ -256,10 +260,10 @@ internal sealed class CheckpointManager : ResourceNode, IMetricSource
             // Step 2: Collect dirty pages
             var dirtyPages = _mmf.CollectDirtyMemPageIndices();
 
-            // Step 3: Write dirty pages (without decrementing DirtyCounter)
+            // Step 3: Write dirty pages via staging buffers (without decrementing DirtyCounter)
             if (dirtyPages.Length > 0)
             {
-                _mmf.WritePagesForCheckpoint(dirtyPages).GetAwaiter().GetResult();
+                _mmf.WritePagesForCheckpoint(dirtyPages, _stagingPool);
             }
 
             if (_shutdown)
