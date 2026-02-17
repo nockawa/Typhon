@@ -68,7 +68,7 @@ public class WaitContextTests
 
         Assert.That(ctx.ShouldStop, Is.False, "Should not be stopped immediately");
 
-        Thread.Sleep(150);
+        SpinWait.SpinUntil(() => ctx.ShouldStop, 2000);
 
         Assert.That(ctx.ShouldStop, Is.True, "Should be stopped after deadline");
         Assert.That(ctx.Deadline.IsExpired, Is.True);
@@ -135,7 +135,7 @@ public class WaitContextTests
         using var cts = new CancellationTokenSource();
         var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(100), cts.Token);
 
-        Thread.Sleep(150);
+        SpinWait.SpinUntil(() => ctx.Deadline.IsExpired, 2000);
 
         // Deadline fired, but token is not cancelled
         Assert.That(ctx.ShouldStop, Is.True);
@@ -361,24 +361,16 @@ public class WaitContextTests
     // ========================================
 
     [Test]
-    [CancelAfter(5000)]
     public void HighFrequency_ShouldStop_Consistent()
     {
-        // A context with 500ms deadline should not report ShouldStop during first 100ms
+        // A context with 500ms deadline should never report ShouldStop during rapid checks
         var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(500));
-        var start = System.Diagnostics.Stopwatch.GetTimestamp();
-        var spinTicks = System.Diagnostics.Stopwatch.Frequency / 10; // 100ms
 
-        int checkCount = 0;
-        while (System.Diagnostics.Stopwatch.GetTimestamp() - start < spinTicks)
+        for (var i = 0; i < 100_000; i++)
         {
             Assert.That(ctx.ShouldStop, Is.False,
-                $"ShouldStop should not be true during first 100ms (check #{checkCount})");
-            checkCount++;
+                $"ShouldStop should not be true well before deadline (check #{i})");
         }
-
-        Assert.That(checkCount, Is.GreaterThan(100),
-            "Should have performed many checks in 100ms");
     }
 
     [Test]

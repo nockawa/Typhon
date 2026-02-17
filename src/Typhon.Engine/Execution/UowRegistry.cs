@@ -40,7 +40,7 @@ internal struct UowRegistryEntry
 /// voided entries, it drops to 0, activating the bitmap as a visibility fallback until voided entries are cleaned up.
 /// </para>
 /// </remarks>
-internal class UowRegistry : IDisposable
+internal unsafe class UowRegistry : IDisposable
 {
     // ═══════════════════════════════════════════════════════════════
     // Constants
@@ -60,11 +60,17 @@ internal class UowRegistry : IDisposable
     private readonly ManagedPagedMMF _mmf;
     private readonly EpochManager _epochManager;
 
+    /// <summary>
+    /// Single pinned allocation holding both bitmaps contiguously:
+    /// [allocationBitmap (512 ulongs)] [committedBitmap (512 ulongs)]
+    /// </summary>
+    private readonly PinnedMemoryBlock _bitmapBlock;
+
     /// <summary>Bit=1 means Free (available for allocation). Rebuilt on load.</summary>
-    private readonly ulong[] _allocationBitmap = new ulong[BitmapWords];
+    private readonly ulong* _allocationBitmap;
 
     /// <summary>Bit=1 means Committed or WalDurable. Used only after crash recovery.</summary>
-    private readonly ulong[] _committedBitmap = new ulong[BitmapWords];
+    private readonly ulong* _committedBitmap;
 
     /// <summary>
     /// Visibility horizon. <c>long.MaxValue</c> during normal operation (bitmap never touched). <c>0</c> after crash recovery when voided entries
@@ -110,12 +116,18 @@ internal class UowRegistry : IDisposable
     // Constructor
     // ═══════════════════════════════════════════════════════════════
 
-    internal UowRegistry(LogicalSegment segment, ManagedPagedMMF mmf, EpochManager epochManager)
+    internal UowRegistry(LogicalSegment segment, ManagedPagedMMF mmf, EpochManager epochManager,
+        IMemoryAllocator allocator, IResource parent)
     {
         _segment = segment;
         _mmf = mmf;
         _epochManager = epochManager;
         _currentCapacity = ComputeCapacity(segment.Length);
+
+        // Single pinned allocation for both bitmaps: 2 x 512 ulongs = 8192 bytes, cache-line aligned.
+        _bitmapBlock = allocator.AllocatePinned("UowRegistry-Bitmaps", parent, BitmapWords * sizeof(ulong) * 2, zeroed: true, alignment: 64);
+        _allocationBitmap = (ulong*)_bitmapBlock.DataAsPointer;
+        _committedBitmap = _allocationBitmap + BitmapWords;
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -351,14 +363,24 @@ internal class UowRegistry : IDisposable
 
     /// <summary>
     /// Loads the registry from an existing database file. Reads entries from pages, rebuilds bitmaps, and voids any Pending entries (crash recovery).
+    /// This is the legacy non-WAL path — voids all Pending entries immediately.
     /// </summary>
     internal void LoadFromDisk()
     {
+        LoadFromDiskRaw();
+        VoidRemainingPending();
+    }
+
+    /// <summary>
+    /// Loads the registry from disk but preserves Pending entries as-is (does NOT void them).
+    /// Call <see cref="PromoteToWalDurable"/> for WAL-confirmed UoWs, then <see cref="VoidRemainingPending"/> to void the rest.
+    /// </summary>
+    internal void LoadFromDiskRaw()
+    {
         _currentCapacity = ComputeCapacity(_segment.Length);
 
-        // Clear bitmaps
-        Array.Clear(_allocationBitmap, 0, BitmapWords);
-        Array.Clear(_committedBitmap, 0, BitmapWords);
+        // Clear both bitmaps (single contiguous block)
+        _bitmapBlock.DataAsSpan.Clear();
 
         _activeCount = 0;
         _voidEntryCount = 0;
@@ -382,11 +404,10 @@ internal class UowRegistry : IDisposable
                     break;
 
                 case UnitOfWorkState.Pending:
-                    // Crash recovery: void this entry
-                    WriteEntryState(slotIndex, UnitOfWorkState.Void, epoch);
-                    _voidEntryCount++;
+                    // Keep Pending — WAL recovery will determine fate
                     _activeCount++;
-                    // Void entries are NOT set in committed bitmap
+                    // NOT in allocation bitmap (slot is occupied)
+                    // NOT in committed bitmap (not yet confirmed)
                     break;
 
                 case UnitOfWorkState.WalDurable:
@@ -414,9 +435,81 @@ internal class UowRegistry : IDisposable
         {
             SetAllocationBit(slotIndex);
         }
+    }
+
+    /// <summary>
+    /// Promotes a Pending UoW to WalDurable after WAL scan confirms it has a commit marker. Sets the committed bitmap bit so the read path treats
+    /// its revisions as visible.
+    /// </summary>
+    /// <param name="uowId">The UoW ID to promote. Must currently be in Pending state.</param>
+    internal void PromoteToWalDurable(ushort uowId)
+    {
+        if (uowId == 0)
+        {
+            return;
+        }
+
+        using var guard = EpochGuard.Enter(_epochManager);
+        var entry = ReadEntry(uowId, guard.Epoch);
+
+        if (entry.State != UnitOfWorkState.Pending)
+        {
+            return; // Already promoted or in another state
+        }
+
+        WriteEntryState(uowId, UnitOfWorkState.WalDurable, guard.Epoch);
+        SetCommittedBit(uowId);
+    }
+
+    /// <summary>
+    /// Voids all remaining Pending entries after WAL recovery promotions are complete. Sets <see cref="CommittedBeforeTSN"/> based on whether any entries were voided.
+    /// </summary>
+    internal void VoidRemainingPending()
+    {
+        using var guard = EpochGuard.Enter(_epochManager);
+        var epoch = guard.Epoch;
+
+        for (int slotIndex = 1; slotIndex < _currentCapacity; slotIndex++)
+        {
+            var entry = ReadEntry(slotIndex, epoch);
+            if (entry.State == UnitOfWorkState.Pending)
+            {
+                WriteEntryState(slotIndex, UnitOfWorkState.Void, epoch);
+                _voidEntryCount++;
+            }
+        }
 
         // Set CommittedBeforeTSN based on void entry count
         _committedBeforeTSN = (_voidEntryCount > 0) ? 0 : long.MaxValue;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Checkpoint Support
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Transitions all <see cref="UnitOfWorkState.WalDurable"/> entries to <see cref="UnitOfWorkState.Committed"/>. Called by the Checkpoint Manager after
+    /// data pages have been fsynced. The committed bitmap is already set for WalDurable entries (set during <see cref="PromoteToWalDurable"/>
+    /// or <see cref="LoadFromDiskRaw"/>), so no bitmap update is needed.
+    /// </summary>
+    /// <returns>The number of entries transitioned.</returns>
+    internal int TransitionWalDurableToCommitted()
+    {
+        int count = 0;
+        using var guard = EpochGuard.Enter(_epochManager);
+        var epoch = guard.Epoch;
+
+        for (int slotIndex = 1; slotIndex < _currentCapacity; slotIndex++)
+        {
+            var entry = ReadEntry(slotIndex, epoch);
+            if (entry.State == UnitOfWorkState.WalDurable)
+            {
+                WriteEntryState(slotIndex, UnitOfWorkState.Committed, epoch);
+                count++;
+            }
+        }
+
+        return count;
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -435,9 +528,8 @@ internal class UowRegistry : IDisposable
     }
 
     /// <summary>
-    /// Acquires an exclusive latch on a segment page with spin-retry for concurrent access.
-    /// Unlike <see cref="LogicalSegment.GetPageExclusive"/> which asserts on latch failure,
-    /// this method handles contention from concurrent AllocateUowId/Release calls on the same page.
+    /// Acquires an exclusive latch on a segment page with spin-retry for concurrent access. Unlike <see cref="LogicalSegment.GetPageExclusive"/> which
+    /// asserts on latch failure, this method handles contention from concurrent AllocateUowId/Release calls on the same page.
     /// </summary>
     private PageAccessor LatchPageExclusive(int segPageIndex, long epoch, out int memPageIdx)
     {
@@ -576,18 +668,29 @@ internal class UowRegistry : IDisposable
     }
 
     // ═══════════════════════════════════════════════════════════════
+    // Test Helpers
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>Returns the allocation bitmap as a span for test manipulation.</summary>
+    internal Span<ulong> AllocationBitmapSpan => new(_allocationBitmap, BitmapWords);
+
+    // ═══════════════════════════════════════════════════════════════
     // Size Validation
     // ═══════════════════════════════════════════════════════════════
 
     /// <summary>
     /// Compile-time size validation. Called from tests to verify struct layout.
     /// </summary>
-    internal static unsafe int EntryStructSize => sizeof(UowRegistryEntry);
+    internal static int EntryStructSize => sizeof(UowRegistryEntry);
 
     // ═══════════════════════════════════════════════════════════════
     // IDisposable
     // ═══════════════════════════════════════════════════════════════
 
     // Registry does not own the segment — DatabaseEngine manages segment lifecycle
-    public void Dispose() => _slotFreed.Dispose();
+    public void Dispose()
+    {
+        _slotFreed.Dispose();
+        _bitmapBlock.Dispose();
+    }
 }

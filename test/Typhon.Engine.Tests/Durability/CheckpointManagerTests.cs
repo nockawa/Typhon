@@ -1,0 +1,441 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using NUnit.Framework;
+using System;
+using System.IO;
+using System.Threading;
+
+namespace Typhon.Engine.Tests;
+
+/// <summary>
+/// Unit tests for <see cref="CheckpointManager"/>. Tests cover lifecycle, pipeline execution, triggers,
+/// UoW state transitions, segment recycling, and error handling.
+/// </summary>
+[TestFixture]
+public class CheckpointManagerTests : AllocatorTestBase
+{
+    private InMemoryWalFileIO _fileIO;
+    private string _walDir;
+    private ManagedPagedMMF _mmf;
+    private EpochManager _epochManager;
+    private UowRegistry _uowRegistry;
+    private WalManager _walManager;
+    private ResourceOptions _resourceOptions;
+
+    private static string CurrentDatabaseName => $"T_Chkpt_{TestContext.CurrentContext.Test.Name}_db";
+
+    public override void Setup()
+    {
+        base.Setup();
+        _fileIO = new InMemoryWalFileIO();
+        _walDir = Path.Combine(Path.GetTempPath(), $"typhon_chkpt_test_{Guid.NewGuid():N}");
+        _resourceOptions = new ResourceOptions { CheckpointIntervalMs = 100 };
+        _mmf = null;
+        _epochManager = null;
+        _uowRegistry = null;
+        _walManager = null;
+    }
+
+    public override void TearDown()
+    {
+        _walManager?.Dispose();
+        _walManager = null;
+        _uowRegistry?.Dispose();
+        _uowRegistry = null;
+        _mmf?.Dispose();
+        _mmf = null;
+        _fileIO?.Dispose();
+        _fileIO = null;
+        if (Directory.Exists(_walDir))
+        {
+            Directory.Delete(_walDir, true);
+        }
+
+        base.TearDown();
+    }
+
+    /// <summary>
+    /// Creates a minimal ManagedPagedMMF + EpochManager + UowRegistry setup for testing.
+    /// </summary>
+    private void CreateTestInfrastructure()
+    {
+        _epochManager = new EpochManager("TestEpochManager", AllocationResource);
+
+        var logger = ServiceProvider.GetRequiredService<ILogger<PagedMMF>>();
+        var options = new ManagedPagedMMFOptions
+        {
+            DatabaseDirectory = Path.GetTempPath(),
+            DatabaseName = CurrentDatabaseName,
+            DatabaseCacheSize = PagedMMF.MinimumCacheSize,
+        };
+        options.EnsureFileDeleted();
+
+        _mmf = new ManagedPagedMMF(ResourceRegistry, _epochManager, MemoryAllocator, options, AllocationResource, "TestMMF", logger);
+
+        // Initialize UowRegistry on the freshly created file
+        using var guard = EpochGuard.Enter(_epochManager);
+        var epoch = guard.Epoch;
+        var cs = _mmf.CreateChangeSet();
+        var segment = _mmf.AllocateSegment(PageBlockType.None, 1, cs);
+
+        var page = segment.GetPageExclusive(0, epoch, out var memPageIdx);
+        cs.AddByMemPageIndex(memPageIdx);
+        var offset = LogicalSegment.RootHeaderIndexSectionLength;
+        page.RawData<byte>(offset, PagedMMF.PageRawDataSize - offset).Clear();
+        _mmf.UnlatchPageExclusive(memPageIdx);
+
+        // Write SPI to root header
+        _mmf.RequestPageEpoch(0, epoch, out var rootMemPageIdx);
+        var latched = _mmf.TryLatchPageExclusive(rootMemPageIdx);
+        var rootPage = _mmf.GetPage(rootMemPageIdx);
+        cs.AddByMemPageIndex(rootMemPageIdx);
+        ref var header = ref rootPage.As<RootFileHeader>();
+        header.UowRegistrySPI = segment.RootPageIndex;
+        _mmf.UnlatchPageExclusive(rootMemPageIdx);
+        cs.SaveChanges();
+
+        _uowRegistry = new UowRegistry(segment, _mmf, _epochManager, MemoryAllocator, AllocationResource);
+        _uowRegistry.Initialize();
+    }
+
+    /// <summary>
+    /// Creates and initializes a WalManager with InMemoryWalFileIO.
+    /// </summary>
+    private WalManager CreateWalManager(int commitBufferCapacity = 64 * 1024)
+    {
+        var options = new WalWriterOptions
+        {
+            WalDirectory = _walDir,
+            GroupCommitIntervalMs = 2,
+            SegmentSize = 1024 * 1024,
+            PreAllocateSegments = 1,
+            StagingBufferSize = 8192,
+            UseFUA = false,
+        };
+
+        var mgr = new WalManager(options, MemoryAllocator, _fileIO, AllocationResource, commitBufferCapacity);
+        mgr.Initialize();
+        mgr.Start();
+
+        // Wait for writer thread to be running
+        SpinWait.SpinUntil(() => mgr.IsRunning, 2000);
+
+        return mgr;
+    }
+
+    /// <summary>
+    /// Produces WAL records to advance DurableLsn past 0.
+    /// </summary>
+    private void ProduceWalRecords(WalManager mgr, int count = 1)
+    {
+        var buffer = mgr.CommitBuffer;
+        for (int i = 0; i < count; i++)
+        {
+            var ctx = WaitContext.FromTimeout(TimeSpan.FromSeconds(2));
+            var claim = buffer.TryClaim(64, 1, ref ctx);
+            claim.DataSpan.Fill((byte)(i + 1));
+            buffer.Publish(ref claim);
+        }
+
+        // Wait for records to become durable
+        SpinWait.SpinUntil(() => mgr.DurableLsn > 0, 2000);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Lifecycle Tests
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    public void Start_SetsIsRunning()
+    {
+        CreateTestInfrastructure();
+        _walManager = CreateWalManager();
+
+        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+        ckpt.Start();
+
+        SpinWait.SpinUntil(() => ckpt.IsRunning, 2000);
+        Assert.That(ckpt.IsRunning, Is.True);
+    }
+
+    [Test]
+    [CancelAfter(5000)]
+    public void Dispose_StopsThread()
+    {
+        CreateTestInfrastructure();
+        _walManager = CreateWalManager();
+
+        var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+        ckpt.Start();
+        SpinWait.SpinUntil(() => ckpt.IsRunning, 2000);
+
+        ckpt.Dispose();
+
+        Assert.That(ckpt.IsRunning, Is.False);
+    }
+
+    [Test]
+    public void Dispose_Idempotent()
+    {
+        CreateTestInfrastructure();
+        _walManager = CreateWalManager();
+
+        var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+        ckpt.Start();
+
+        ckpt.Dispose();
+        Assert.DoesNotThrow(() => ckpt.Dispose());
+    }
+
+    [Test]
+    public void InitialState_DefaultValues()
+    {
+        CreateTestInfrastructure();
+        _walManager = CreateWalManager();
+
+        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+
+        Assert.That(ckpt.CheckpointLsn, Is.EqualTo(0));
+        Assert.That(ckpt.IsRunning, Is.False);
+        Assert.That(ckpt.HasFatalError, Is.False);
+        Assert.That(ckpt.TotalCheckpoints, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void InitialCheckpointLsn_PreservedFromConstructor()
+    {
+        CreateTestInfrastructure();
+        _walManager = CreateWalManager();
+
+        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource, initialCheckpointLsn: 42);
+
+        Assert.That(ckpt.CheckpointLsn, Is.EqualTo(42));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Pipeline Tests
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    [CancelAfter(5000)]
+    public void RunCheckpointCycle_NoDirtyPages_AdvancesLsn()
+    {
+        CreateTestInfrastructure();
+        _walManager = CreateWalManager();
+        ProduceWalRecords(_walManager);
+
+        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+
+        var durableLsn = _walManager.DurableLsn;
+        ckpt.RunCheckpointCycle(durableLsn);
+
+        Assert.That(ckpt.CheckpointLsn, Is.EqualTo(durableLsn));
+        Assert.That(ckpt.TotalCheckpoints, Is.EqualTo(1));
+        Assert.That(ckpt.TotalPagesWritten, Is.EqualTo(0));
+    }
+
+    [Test]
+    [CancelAfter(5000)]
+    public void RunCheckpointCycle_WithDirtyPages_WritesAndAdvances()
+    {
+        CreateTestInfrastructure();
+        _walManager = CreateWalManager();
+        ProduceWalRecords(_walManager);
+
+        // Dirty a page by writing to it via ChangeSet
+        using (var guard = EpochGuard.Enter(_epochManager))
+        {
+            var cs = _mmf.CreateChangeSet();
+            _mmf.RequestPageEpoch(0, guard.Epoch, out var memPageIdx);
+            var latched = _mmf.TryLatchPageExclusive(memPageIdx);
+            cs.AddByMemPageIndex(memPageIdx);
+            _mmf.UnlatchPageExclusive(memPageIdx);
+            // Don't call SaveChanges — leave page dirty
+        }
+
+        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+
+        var durableLsn = _walManager.DurableLsn;
+        ckpt.RunCheckpointCycle(durableLsn);
+
+        Assert.That(ckpt.CheckpointLsn, Is.EqualTo(durableLsn));
+        Assert.That(ckpt.TotalCheckpoints, Is.EqualTo(1));
+        Assert.That(ckpt.TotalPagesWritten, Is.GreaterThan(0));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Trigger Tests
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    [CancelAfter(5000)]
+    public void ForceCheckpoint_WakesThread()
+    {
+        CreateTestInfrastructure();
+        _walManager = CreateWalManager();
+        ProduceWalRecords(_walManager);
+
+        // Use a long interval so only ForceCheckpoint triggers the cycle
+        _resourceOptions.CheckpointIntervalMs = 60000;
+
+        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+        ckpt.Start();
+        SpinWait.SpinUntil(() => ckpt.IsRunning, 2000);
+
+        ckpt.ForceCheckpoint();
+
+        // Wait for the checkpoint to complete
+        SpinWait.SpinUntil(() => ckpt.TotalCheckpoints > 0, 3000);
+
+        Assert.That(ckpt.TotalCheckpoints, Is.GreaterThan(0));
+        Assert.That(ckpt.CheckpointLsn, Is.GreaterThan(0));
+    }
+
+    [Test]
+    [CancelAfter(5000)]
+    public void Timer_TriggersCheckpoint()
+    {
+        CreateTestInfrastructure();
+        _walManager = CreateWalManager();
+        ProduceWalRecords(_walManager);
+
+        // Short interval to trigger quickly
+        _resourceOptions.CheckpointIntervalMs = 50;
+
+        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+        ckpt.Start();
+
+        // Wait for at least one checkpoint via timer
+        SpinWait.SpinUntil(() => ckpt.TotalCheckpoints > 0, 3000);
+
+        Assert.That(ckpt.TotalCheckpoints, Is.GreaterThan(0));
+        Assert.That(ckpt.CheckpointLsn, Is.GreaterThan(0));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // UoW Transition Tests
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    [CancelAfter(5000)]
+    public void Checkpoint_TransitionsWalDurableToCommitted()
+    {
+        CreateTestInfrastructure();
+        _walManager = CreateWalManager();
+        ProduceWalRecords(_walManager);
+
+        // Allocate a UoW and transition it to WalDurable
+        var uowId = _uowRegistry.AllocateUowId();
+        _uowRegistry.PromoteToWalDurable(uowId);
+
+        // Verify it's WalDurable before checkpoint
+        using (var guard = EpochGuard.Enter(_epochManager))
+        {
+            var entry = _uowRegistry.ReadEntry(uowId, guard.Epoch);
+            Assert.That(entry.State, Is.EqualTo(UnitOfWorkState.WalDurable));
+        }
+
+        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+        ckpt.RunCheckpointCycle(_walManager.DurableLsn);
+
+        // Verify it's Committed after checkpoint
+        using (var guard = EpochGuard.Enter(_epochManager))
+        {
+            var entry = _uowRegistry.ReadEntry(uowId, guard.Epoch);
+            Assert.That(entry.State, Is.EqualTo(UnitOfWorkState.Committed));
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Segment Recycling Tests
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    [CancelAfter(5000)]
+    public void MarkReclaimable_DeletesSegmentsBelowCheckpointLsn()
+    {
+        // Test WalSegmentManager.MarkReclaimable directly
+        var segMgr = new WalSegmentManager(_fileIO, _walDir, 64 * 1024, 1, false);
+        segMgr.Initialize(0, 1);
+
+        // Rotate twice to create sealed segments
+        segMgr.RotateSegment(100, 99);
+        segMgr.RotateSegment(200, 199);
+
+        Assert.That(segMgr.SealedSegmentCount, Is.EqualTo(2));
+
+        // Reclaim segments below LSN 100 (only the first sealed segment with LastLSN=99)
+        var reclaimed = segMgr.MarkReclaimable(100);
+
+        Assert.That(reclaimed, Is.EqualTo(1));
+        Assert.That(segMgr.SealedSegmentCount, Is.EqualTo(1));
+
+        // Reclaim the remaining one
+        reclaimed = segMgr.MarkReclaimable(200);
+        Assert.That(reclaimed, Is.EqualTo(1));
+        Assert.That(segMgr.SealedSegmentCount, Is.EqualTo(0));
+
+        segMgr.Dispose();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CheckpointLSN Persistence Tests
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    [CancelAfter(5000)]
+    public void RunCheckpointCycle_PersistsCheckpointLsnToHeader()
+    {
+        CreateTestInfrastructure();
+        _walManager = CreateWalManager();
+        ProduceWalRecords(_walManager);
+
+        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+
+        var durableLsn = _walManager.DurableLsn;
+        ckpt.RunCheckpointCycle(durableLsn);
+
+        // Read the CheckpointLSN from the file header to verify persistence
+        using (var guard = EpochGuard.Enter(_epochManager))
+        {
+            _mmf.RequestPageEpoch(0, guard.Epoch, out var memPageIdx);
+            var page = _mmf.GetPage(memPageIdx);
+            ref var header = ref page.As<RootFileHeader>();
+            Assert.That(header.CheckpointLSN, Is.EqualTo(durableLsn));
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Dispose Runs Final Checkpoint
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    [CancelAfter(5000)]
+    public void Dispose_RunsFinalCheckpoint()
+    {
+        CreateTestInfrastructure();
+        _walManager = CreateWalManager();
+        ProduceWalRecords(_walManager);
+
+        // Verify DurableLsn is > 0 before creating the checkpoint manager
+        var durableLsn = _walManager.DurableLsn;
+        Assert.That(durableLsn, Is.GreaterThan(0), "Precondition: DurableLsn should be > 0");
+
+        // Use short interval so the first cycle runs before dispose
+        _resourceOptions.CheckpointIntervalMs = 50;
+
+        var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+        ckpt.Start();
+        SpinWait.SpinUntil(() => ckpt.IsRunning, 2000);
+
+        // Wait for at least one checkpoint to complete before disposing
+        SpinWait.SpinUntil(() => ckpt.TotalCheckpoints > 0, 3000);
+
+        ckpt.Dispose();
+
+        // The checkpoint should have run at least once (either via timer or final cycle)
+        Assert.That(ckpt.HasFatalError, Is.False, "Checkpoint should not have a fatal error");
+        Assert.That(ckpt.CheckpointLsn, Is.GreaterThan(0));
+        Assert.That(ckpt.TotalCheckpoints, Is.GreaterThan(0));
+    }
+}

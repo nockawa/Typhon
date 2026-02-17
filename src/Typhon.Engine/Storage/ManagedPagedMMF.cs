@@ -9,19 +9,45 @@ using System.Threading;
 
 namespace Typhon.Engine;
 
+/// <summary>
+/// On-disk header stored at page 0 of every Typhon database file.
+/// Identifies the file format, tracks the database name and format version,
+/// and holds the root page indices (SPIs) of the core system segments.
+/// </summary>
 [StructLayout(LayoutKind.Sequential)]
 unsafe internal struct RootFileHeader
 {
+    /// <summary>UTF-8 magic string (<c>"TyphonDatabase"</c>) used to identify and validate the file format.</summary>
     public fixed byte HeaderSignature[32];
+
+    /// <summary>On-disk format version. Incremented on breaking layout changes to detect incompatible files.</summary>
     public int DatabaseFormatRevision;
+
+    /// <summary>Chunk size (in bytes) used when growing the underlying database files.</summary>
     public ulong DatabaseFilesChunkSize;
+
+    /// <summary>UTF-8 database name (max 64 bytes). Verified on load to prevent opening the wrong file.</summary>
     public fixed byte DatabaseName[64];
+
+    /// <summary>Root page index of the occupancy-map segment (page allocation bitmap).</summary>
     public int OccupancyMapSPI;
+
+    /// <summary>Revision counter for the built-in system schema (component/field table layout).</summary>
     public int SystemSchemaRevision;
+
+    /// <summary>Root page index of the <see cref="ComponentTable"/> segment.</summary>
     public int ComponentTableSPI;
+
+    /// <summary>Root page index of the field-table segment (component field metadata).</summary>
     public int FieldTableSPI;
+
+    /// <summary>Root page index of the <see cref="UowRegistry"/> segment (Unit of Work tracking).</summary>
     public int UowRegistrySPI;
 
+    /// <summary>LSN up to which all WAL records have been checkpointed. Default 0 = scan all WAL segments on recovery.</summary>
+    public long CheckpointLSN;
+
+    /// <summary>Returns <see cref="HeaderSignature"/> decoded as a managed string.</summary>
     public string HeaderSignatureString
     {
         get
@@ -32,6 +58,8 @@ unsafe internal struct RootFileHeader
             }
         }
     }
+
+    /// <summary>Returns <see cref="DatabaseName"/> decoded as a managed string.</summary>
     public string DatabaseNameString
     {
         get
@@ -436,6 +464,39 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
     }
 
     public bool DeleteSegment(LogicalSegment segment, ChangeSet changeSet = null) => DeleteSegment(segment.RootPageIndex, changeSet);
+
+    // ═══════════════════════════════════════════════════════════════
+    // Checkpoint Support
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Updates the <see cref="RootFileHeader.CheckpointLSN"/> field in page 0 and flushes to disk. Called by the Checkpoint Manager after dirty pages have
+    /// been written and fsynced.
+    /// </summary>
+    /// <param name="checkpointLSN">The new checkpoint LSN to persist.</param>
+    /// <param name="epochManager">Epoch manager for page access.</param>
+    internal void UpdateCheckpointLSN(long checkpointLSN, EpochManager epochManager)
+    {
+        using var guard = EpochGuard.Enter(epochManager);
+        var epoch = guard.Epoch;
+
+        RequestPageEpoch(0, epoch, out var memPageIdx);
+        var latched = TryLatchPageExclusive(memPageIdx);
+        Debug.Assert(latched, "TryLatchPageExclusive failed on root page during checkpoint LSN update");
+
+        var page = GetPage(memPageIdx);
+        var cs = CreateChangeSet();
+        cs.AddByMemPageIndex(memPageIdx);
+
+        ref var header = ref page.As<RootFileHeader>();
+        header.CheckpointLSN = checkpointLSN;
+
+        UnlatchPageExclusive(memPageIdx);
+        cs.SaveChanges();
+
+        // Fsync to make the checkpoint LSN durable
+        FlushToDisk();
+    }
 
     #region IMetricSource Implementation
 

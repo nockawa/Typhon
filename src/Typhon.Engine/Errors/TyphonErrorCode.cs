@@ -26,5 +26,9 @@ public enum TyphonErrorCode : int
     ResourceExhausted           = 6001,
     LockTimeout                 = 6003,
 
-    // 7xxx — Durability (reserved)
+    // 7xxx — Durability
+    WalBackPressureTimeout      = 7001,
+    WalClaimTooLarge            = 7002,
+    WalWriteFailure             = 7003,
+    WalSegmentError             = 7004,
 }

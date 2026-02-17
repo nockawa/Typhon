@@ -71,7 +71,7 @@ public class HighResolutionSharedTimerServiceTests
         using var shared = new HighResolutionSharedTimerService(_registry.Timer);
 
         var reg = shared.Register("LazyStart", Stopwatch.Frequency / 10, (_, _) => { });
-        Thread.Sleep(50); // Give thread time to start
+        SpinWait.SpinUntil(() => shared.IsRunning, 2000);
 
         Assert.That(shared.IsRunning, Is.True);
         Assert.That(shared.ActiveRegistrations, Is.EqualTo(1));
@@ -168,7 +168,7 @@ public class HighResolutionSharedTimerServiceTests
 
         var reg = shared.Register("Tracked", Stopwatch.Frequency / 100, (_, _) => { }); // 10ms
 
-        Thread.Sleep(200); // ~20 invocations
+        SpinWait.SpinUntil(() => reg.InvocationCount > 0, 2000);
 
         Assert.That(reg.InvocationCount, Is.GreaterThan(0));
 
@@ -187,9 +187,9 @@ public class HighResolutionSharedTimerServiceTests
         var goodReg = shared.Register("Good", Stopwatch.Frequency / 100,
             (_, _) => Interlocked.Increment(ref goodCount));
 
-        Thread.Sleep(100);
+        // Wait until good callback has fired despite bad callback throwing
+        SpinWait.SpinUntil(() => Interlocked.Read(ref goodCount) > 0, 2000);
 
-        // Good callback should still fire despite bad callback throwing
         Assert.That(Interlocked.Read(ref goodCount), Is.GreaterThan(0), "Good callback should survive bad callback's exceptions");
         Assert.That(shared.IsRunning, Is.True);
 

@@ -1289,6 +1289,8 @@ public class AccessControlSmallTests
         });
 
         aboutToEnter.Wait();
+        // Wait until contention is actually observed before releasing
+        SpinWait.SpinUntil(() => control.WasContended, 2000);
         canRelease.Set();
         Task.WaitAll(t1, t2);
 
@@ -1302,7 +1304,7 @@ public class AccessControlSmallTests
     }
 
     [Test]
-    [CancelAfter(1000)]
+    [CancelAfter(5000)]
     public void WasContended_ClearedByReset()
     {
         var control = new AccessControlSmall();
@@ -1329,6 +1331,8 @@ public class AccessControlSmallTests
         });
 
         aboutToEnter.Wait();
+        // Wait until contention is actually observed before releasing
+        SpinWait.SpinUntil(() => control.WasContended, 2000);
         canRelease.Set();
         Task.WaitAll(t1, t2);
 

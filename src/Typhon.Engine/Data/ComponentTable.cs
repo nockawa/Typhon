@@ -174,6 +174,12 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     internal DatabaseEngine DBE { get; private set; }
     internal int ComponentOverhead => Definition.MultipleIndicesCount * sizeof(int);
     internal int ComponentTotalSize => Definition.ComponentStorageTotalSize;
+
+    /// <summary>
+    /// Stable WAL type identifier derived from <see cref="LogicalSegment.RootPageIndex"/>. Set during registration.
+    /// Used to identify component types in WAL records for crash recovery replay.
+    /// </summary>
+    internal ushort WalTypeId { get; set; }
     internal IndexedFieldInfo[] IndexedFieldInfos { get; private set; }
 
     internal Dictionary<int, VariableSizedBufferSegmentBase> ComponentCollectionVSBSByOffset { get; private set; }

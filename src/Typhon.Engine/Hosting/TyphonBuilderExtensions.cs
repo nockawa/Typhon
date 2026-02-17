@@ -313,8 +313,10 @@ public static class ServiceCollectionExtensions
             var resourceRegistry = serviceProvider.GetRequiredService<IResourceRegistry>();
             var epochManager = serviceProvider.GetRequiredService<EpochManager>();
             var watchdog = serviceProvider.GetRequiredService<DeadlineWatchdog>();
+            var memoryAllocator = serviceProvider.GetRequiredService<IMemoryAllocator>();
+            var walFileIO = serviceProvider.GetService<IWalFileIO>();
 
-            return new DatabaseEngine(resourceRegistry, epochManager, watchdog, mpmmf, options.Value, logger);
+            return new DatabaseEngine(resourceRegistry, epochManager, watchdog, mpmmf, memoryAllocator, options.Value, logger, walFileIO);
         }
         catch (Exception e)
         {

@@ -104,21 +104,35 @@ public sealed class UnitOfWork : IDisposable
     internal void RecordTransactionCommitted() => Interlocked.Increment(ref _committedTransactionCount);
 
     /// <summary>
-    /// Force WAL flush. No-op until WAL is implemented in Tier 5.
-    /// For <see cref="DurabilityMode.Deferred"/> mode, transitions state to <see cref="UnitOfWorkState.WalDurable"/>.
+    /// Force WAL flush. When a <see cref="WalManager"/> is available, signals the WAL writer to flush
+    /// buffered data and waits for durability. Otherwise, transitions state directly.
     /// </summary>
     public void Flush()
     {
-        // Future: signal WAL writer, wait for FUA
-        // For now: transition state directly
-        if (_state == UnitOfWorkState.Pending)
+        if (_state != UnitOfWorkState.Pending)
         {
-            _state = UnitOfWorkState.WalDurable;
+            return;
         }
+
+        var walManager = _dbe.WalManager;
+        if (walManager != null)
+        {
+            // Signal the WAL writer to flush and wait for durable LSN
+            walManager.RequestFlush();
+            var currentLsn = walManager.CommitBuffer.NextLsn - 1;
+            if (currentLsn > 0)
+            {
+                var ctx = _deadline == Deadline.Infinite ? WaitContext.Null : WaitContext.FromDeadline(_deadline);
+                walManager.WaitForDurable(currentLsn, ref ctx);
+            }
+        }
+
+        _state = UnitOfWorkState.WalDurable;
     }
 
     /// <summary>
-    /// Async version of <see cref="Flush"/>. No-op until WAL is implemented in Tier 5.
+    /// Async version of <see cref="Flush"/>. Currently synchronous — true async will be added
+    /// when the checkpoint pipeline is implemented.
     /// </summary>
     public Task FlushAsync()
     {

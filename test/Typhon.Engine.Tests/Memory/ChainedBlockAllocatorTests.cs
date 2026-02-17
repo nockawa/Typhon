@@ -1738,6 +1738,11 @@ public class ChainedBlockAllocatorTests
         var exceptions = new ConcurrentBag<Exception>();
         var appendedValues = new ConcurrentBag<long>();
 
+        // Use fewer operations per thread than the default HeavyOperationsPerThread because
+        // all threads append to a single chain, making each traversal O(n). With the full
+        // count the test becomes O(n²) and takes over a second.
+        const int opsPerThread = 50;
+
         ref var root = ref allocator.Allocate(out var rootId, true);
         root = -1; // Mark root
 
@@ -1746,7 +1751,7 @@ public class ChainedBlockAllocatorTests
         {
             try
             {
-                for (int i = 0; i < HeavyOperationsPerThread; i++)
+                for (int i = 0; i < opsPerThread; i++)
                 {
                     var value = threadIndex * 1_000_000L + i;
 

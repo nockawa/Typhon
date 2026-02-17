@@ -780,10 +780,113 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         pi.StateSyncRoot.ExitExclusiveAccess();
     }
 
+    /// <summary>
+    /// Flushes all pending writes to the underlying data file. Calls <c>RandomAccess.FlushToDisk</c> which issues an OS-level fsync.
+    /// </summary>
+    internal void FlushToDisk()
+    {
+        if (_fileHandle != null && !_fileHandle.IsInvalid)
+        {
+            RandomAccess.FlushToDisk(_fileHandle);
+        }
+    }
+
+    /// <summary>
+    /// Scans the in-memory page cache and returns the memory page indices of all dirty pages (DirtyCounter &gt; 0). The scan is approximate
+    /// (no locking) — pages dirtied concurrently may be missed, which is safe because they will be caught in the next checkpoint cycle.
+    /// </summary>
+    internal int[] CollectDirtyMemPageIndices()
+    {
+        var dirty = new List<int>();
+        for (int i = 0; i < MemPagesCount; i++)
+        {
+            var pi = _memPagesInfo[i];
+            if (pi != null && pi.DirtyCounter > 0 && pi.PageState != PageState.Free)
+            {
+                dirty.Add(i);
+            }
+        }
+        return dirty.ToArray();
+    }
+
+    /// <summary>
+    /// Writes dirty pages to the data file WITHOUT decrementing their DirtyCounter. This is used by the Checkpoint Manager, which must fsync before
+    /// decrementing counters to ensure crash safety. Pages that are re-dirtied between collection and write will naturally keep DirtyCounter &gt; 0 after decrement.
+    /// </summary>
+    unsafe internal Task WritePagesForCheckpoint(int[] memPageIndices)
+    {
+        if (memPageIndices.Length == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        // Sort for I/O coalescing (same as SavePages)
+        Array.Sort(memPageIndices, (x, y) => x - y);
+
+        var operations = new List<(int memPageIndex, int length)>();
+
+        var curPageInfo = _memPagesInfo[memPageIndices[0]];
+        var curOperation = (memPageIndex: memPageIndices[0], length: 1);
+        var memPageBaseAddr = _memPagesAddr;
+
+        for (int i = 1; i < memPageIndices.Length; i++)
+        {
+            // Increment ChangeRevision for non-root pages
+            if (curPageInfo.FilePageIndex > 0)
+            {
+                var ioTask = curPageInfo.IOReadTask;
+                if (ioTask != null && !ioTask.IsCompletedSuccessfully)
+                {
+                    ioTask.GetAwaiter().GetResult();
+                }
+
+                var headerAddr = (PageBaseHeader*)(memPageBaseAddr + (curPageInfo.MemPageIndex * PageSize));
+                ++headerAddr->ChangeRevision;
+            }
+
+            var nextMemPageIndex = memPageIndices[i];
+            var nextPageInfo = _memPagesInfo[nextMemPageIndex];
+            if ((curPageInfo.MemPageIndex + 1) == nextPageInfo.MemPageIndex && (curPageInfo.FilePageIndex + 1) == nextPageInfo.FilePageIndex)
+            {
+                curOperation.length++;
+            }
+            else
+            {
+                operations.Add(curOperation);
+                curOperation = (nextMemPageIndex, 1);
+            }
+
+            curPageInfo = nextPageInfo;
+        }
+
+        // Increment ChangeRevision for the last page
+        if (curPageInfo.FilePageIndex > 0)
+        {
+            var ioTask = curPageInfo.IOReadTask;
+            if (ioTask != null && !ioTask.IsCompletedSuccessfully)
+            {
+                ioTask.GetAwaiter().GetResult();
+            }
+
+            var headerAddr = (PageBaseHeader*)(memPageBaseAddr + (curPageInfo.MemPageIndex * PageSize));
+            ++headerAddr->ChangeRevision;
+        }
+
+        operations.Add(curOperation);
+
+        var tasks = new Task[operations.Count];
+        for (int i = 0; i < operations.Count; i++)
+        {
+            tasks[i] = SavePageInternal(operations[i].memPageIndex, operations[i].length).AsTask();
+        }
+
+        // No ContinueWith for dirty decrement — caller is responsible after fsync
+        return Task.WhenAll(tasks);
+    }
+
     unsafe internal Task SavePages(int[] memPageIndices)
     {
-        // Flush is a child of the current activity (typically Transaction.Commit or UnitOfWork)
-        // DiskWrite spans will become children of Flush
+        // Flush is a child of the current activity (typically Transaction.Commit or UnitOfWork) DiskWrite spans will become children of Flush
         Activity flushActivity = null;
         if (TelemetryConfig.PagedMMFSpanIOOnly)
         {
@@ -805,7 +908,6 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             // Increment the ChangeRevision for the page (File Page 0 is the file header, it's a different format so ignore it)
             if (curPageInfo.FilePageIndex > 0)
             {
-                // Make sure the page to save is properly loaded first (wait for any pending IO read to complete)
                 // Make sure the page to save is properly loaded first (wait for any pending IO read to complete).
                 var ioTask = curPageInfo.IOReadTask;
                 if (ioTask != null && !ioTask.IsCompletedSuccessfully)
