@@ -42,4 +42,24 @@ public struct PageBaseHeader
     /// The Change Revision is incremented every time the Page is written to disk.
     /// </summary>
     public int ChangeRevision;
+
+    /// <summary>
+    /// CRC32C checksum of the page contents, excluding this field itself.
+    /// Zero means "never checksummed" (correct sentinel for pages that predate FPI support).
+    /// Computed via <c>WalCrc.ComputeSkipping(pageSpan, PageChecksumOffset, PageChecksumSize)</c>.
+    /// </summary>
+    public uint PageChecksum;
+
+    /// <summary>
+    /// Seqlock-style modification counter for torn-page detection.
+    /// Even values indicate the page is quiescent; odd values indicate an in-progress modification.
+    /// Readers compare before/after to detect torn writes.
+    /// </summary>
+    public int ModificationCounter;
+
+    /// <summary>Byte offset of <see cref="PageChecksum"/> within the page header.</summary>
+    public const int PageChecksumOffset = 8;
+
+    /// <summary>Size in bytes of <see cref="PageChecksum"/> (for CRC skip region).</summary>
+    public const int PageChecksumSize = 4;
 }
