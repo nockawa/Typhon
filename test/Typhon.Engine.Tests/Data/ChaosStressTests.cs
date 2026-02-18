@@ -150,7 +150,6 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     [Test]
     [TestCaseSource(nameof(ChaosTestCases))]
     [Property("CacheSize", StressCacheSize)]
-    [Ignore("Pre-existing BTree concurrency bug: process crash during concurrent CRUD")]
     public void ChaosTest_MultiThreadedCRUD(int threadCount, int entitiesPerThread, int operationsPerEntity, float readWriteRatio, 
         bool includeDeletes, int seed)
     {
@@ -238,10 +237,9 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                         if (localEntities.Count == 0)
                             break;
 
+                        var txn = dbe.CreateQuickTransaction();
                         try
                         {
-                            using var txn = dbe.CreateQuickTransaction();
-
                             var targetEntity = localEntities[rand.Next(localEntities.Count)];
                             var opRoll = (float)rand.NextDouble();
 
@@ -272,7 +270,6 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                                         localEntities.Remove(targetEntity);
                                         stats.AddOrUpdate("Deletes", 1, (_, v) => v + 1);
                                         stats.AddOrUpdate("Commits", 1, (_, v) => v + 1);
-                                        continue;
                                     }
                                 }
                             }
@@ -295,7 +292,8 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                                     txn.UpdateEntity(targetEntity, ref compD);
                                 }
 
-                                if (txn.Commit())
+                                var committed = txn.Commit();
+                                if (committed)
                                 {
                                     stats.AddOrUpdate("Updates", 1, (_, v) => v + 1);
                                     stats.AddOrUpdate("Commits", 1, (_, v) => v + 1);
@@ -308,7 +306,11 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                         }
                         catch (Exception ex)
                         {
-                            errors.Add($"Thread {threadId} Op {op} failed: {ex.Message}");
+                            errors.Add($"Thread {threadId} Op {op} failed: {ex}");
+                        }
+                        finally
+                        {
+                            txn.Dispose();
                         }
                     }
 

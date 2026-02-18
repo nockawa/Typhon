@@ -748,13 +748,6 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public bool RemoveValue(TKey key, int elementId, int value, ref ChunkAccessor accessor)
     {
-        var result = TryGet(key, ref accessor);
-        if (result.IsFailure)
-        {
-            return false;
-        }
-        var bufferId = result.Value;
-
         Activity activity = null;
         if (TelemetryConfig.BTreeActive)
         {
@@ -769,6 +762,15 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
         try
         {
+            // Lookup under exclusive lock to avoid race with concurrent Remove/RemoveValue
+            // that could delete the buffer between a shared-lock read and this exclusive section.
+            var leaf = FindLeaf(key, out var index, ref accessor);
+            if (index < 0)
+            {
+                return false;
+            }
+            var bufferId = leaf.GetItem(index, ref accessor).Value;
+
             var res = _storage.RemoveFromBuffer(bufferId, elementId, value, ref accessor);
             if (res == -1)
             {
@@ -801,12 +803,25 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public VariableSizedBufferAccessor<int> TryGetMultiple(TKey key, ref ChunkAccessor accessor)
     {
-        var result = TryGet(key, ref accessor);
-        if (result.IsFailure)
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
+        if (!_access.EnterSharedAccess(ref wc))
         {
-            return default;
+            ThrowHelper.ThrowLockTimeout("BTree/TryGetMultiple", TimeoutOptions.Current.BTreeLockTimeout);
         }
-        return _storage.GetBufferReadOnlyAccessor(result.Value, ref accessor);
+        try
+        {
+            var leaf = FindLeaf(key, out var index, ref accessor);
+            if (index < 0)
+            {
+                return default;
+            }
+            var bufferId = leaf.GetItem(index, ref accessor).Value;
+            return _storage.GetBufferReadOnlyAccessor(bufferId, ref accessor);
+        }
+        finally
+        {
+            _access.ExitSharedAccess();
+        }
     }
 
     #endregion

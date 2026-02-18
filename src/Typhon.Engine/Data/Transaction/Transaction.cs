@@ -770,7 +770,11 @@ public unsafe class Transaction : IDisposable
             var result = GetCompRevInfoFromIndex(pk, info, TSN);
             if (result.IsFailure)
             {
-                // NotFound, SnapshotInvisible, or Deleted — all mean no readable component
+                // NotFound, SnapshotInvisible, or Deleted — all mean no readable component.
+                // Remove the default entry that GetValueRefOrAddDefault added to avoid leaving
+                // a zombie CompRevInfo (all zeros) that would corrupt subsequent operations on
+                // the same PK within this transaction.
+                info.CompRevInfoCache.Remove(pk);
                 t = default;
                 return false;
             }
@@ -897,6 +901,10 @@ public unsafe class Transaction : IDisposable
             var result = GetCompRevInfoFromIndex(pk, info, TSN);
             if (result.Status == RevisionReadStatus.NotFound || result.Status == RevisionReadStatus.SnapshotInvisible)
             {
+                // Remove the default entry that GetValueRefOrAddDefault added to avoid leaving
+                // a zombie CompRevInfo (all zeros) that would corrupt subsequent operations on
+                // the same PK within this transaction.
+                info.CompRevInfoCache.Remove(pk);
                 return false;
             }
             compRevInfo = result.Value; // Works for both Success AND Deleted (3-arg constructor)

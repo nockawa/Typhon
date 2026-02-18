@@ -254,8 +254,27 @@ internal class DeferredCleanupManager
         var compRevTableAccessor = table.CompRevTableSegment.CreateChunkAccessor(changeSet);
         var compContentAccessor = table.ComponentSegment.CreateChunkAccessor(changeSet);
 
-        var isDeleted = ComponentRevisionManager.CleanUpUnusedEntriesCore(
-            table, firstChunkId, nextMinTSN, ref compRevTableAccessor, ref compContentAccessor);
+        // Acquire exclusive lock — cleanup restructures the chain, must be serialized with AddCompRev.
+        // Use TryEnter: if contended, skip this entry — it will be retried on the next cleanup pass.
+        ref var header = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(firstChunkId, true);
+        if (!header.Control.TryEnterExclusiveAccess())
+        {
+            compRevTableAccessor.Dispose();
+            compContentAccessor.Dispose();
+            return false;
+        }
+
+        bool isDeleted;
+        try
+        {
+            isDeleted = ComponentRevisionManager.CleanUpUnusedEntriesCore(
+                table, firstChunkId, nextMinTSN, ref compRevTableAccessor, ref compContentAccessor);
+        }
+        finally
+        {
+            header = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(firstChunkId);
+            header.Control.ExitExclusiveAccess();
+        }
 
         if (isDeleted)
         {
