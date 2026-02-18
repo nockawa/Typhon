@@ -542,7 +542,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     [Test]
     [TestCaseSource(nameof(MultiComponentTestCases))]
     [Property("CacheSize", StressCacheSize)]
-    [Ignore("Pre-existing BTree concurrency bug: NullRef in NodeWrapper.GetLast during concurrent creates")]
+    // [Ignore("Pre-existing BTree concurrency bug: NullRef in NodeWrapper.GetLast during concurrent creates")]
     public void MultiComponent_AtomicOperations(int threadCount, int entitiesPerThread, int componentsPerEntity, int updateRounds, int seed)
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
@@ -627,7 +627,10 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                         }
                         if (hasD)
                         {
-                            compD.B += 1;
+                            // Only update AllowMultiple-indexed fields (A, C) — not B which has a unique index
+                            // and incrementing it would collide with adjacent entities' B values.
+                            compD.A += 0.1f;
+                            compD.C += 0.1;
                             txn.UpdateEntity(targetId, ref compD);
                         }
 

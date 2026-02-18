@@ -695,14 +695,14 @@ public abstract class L16BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
     protected override BaseNodeStorage GetStorage() => new L16NodeStorage();
     public override bool AllowMultiple => false;
-    protected L16BTree(ChunkBasedSegment segment, bool load = false) : base(segment, load)
+    protected L16BTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
     {
     }
 }
 
 public class L16MultipleBTree<TKey> : L16BTree<TKey> where TKey : unmanaged
 {
-    public L16MultipleBTree(ChunkBasedSegment segment, bool load = false) : base(segment, load)
+    public L16MultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
     {
     }
 
@@ -732,69 +732,69 @@ public class L16MultipleBTree<TKey> : L16BTree<TKey> where TKey : unmanaged
 
 public class CharSingleBTree : L16BTree<char>
 {
-    public CharSingleBTree(ChunkBasedSegment segment, bool load = false) : base(segment, load)
+    public CharSingleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
     {
     }
 }
 
 public class CharMultipleBTree : L16MultipleBTree<char>
 {
-    public CharMultipleBTree(ChunkBasedSegment segment, bool load = false) : base(segment, load)
+    public CharMultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
     {
     }
 }
 
 public class ByteSingleBTree : L16BTree<sbyte>
 {
-    public ByteSingleBTree(ChunkBasedSegment segment, bool load = false) : base(segment, load)
+    public ByteSingleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
     {
     }
 }
 
 public class ByteMultipleBTree : L16MultipleBTree<sbyte>
 {
-    public ByteMultipleBTree(ChunkBasedSegment segment, bool load = false) : base(segment, load)
+    public ByteMultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
     {
     }
 }
 
 public class ShortSingleBTree : L16BTree<short>
 {
-    public ShortSingleBTree(ChunkBasedSegment segment, bool load = false) : base(segment, load)
+    public ShortSingleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
     {
     }
 }
 
 public class ShortMultipleBTree : L16MultipleBTree<short>
 {
-    public ShortMultipleBTree(ChunkBasedSegment segment, bool load = false) : base(segment, load)
+    public ShortMultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
     {
     }
 }
 public class UByteSingleBTree : L16BTree<byte>
 {
-    public UByteSingleBTree(ChunkBasedSegment segment, bool load = false) : base(segment, load)
+    public UByteSingleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
     {
     }
 }
 
 public class UByteMultipleBTree : L16MultipleBTree<byte>
 {
-    public UByteMultipleBTree(ChunkBasedSegment segment, bool load = false) : base(segment, load)
+    public UByteMultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
     {
     }
 }
 
 public class UShortSingleBTree : L16BTree<ushort>
 {
-    public UShortSingleBTree(ChunkBasedSegment segment, bool load = false) : base(segment, load)
+    public UShortSingleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
     {
     }
 }
 
 public class UShortMultipleBTree : L16MultipleBTree<ushort>
 {
-    public UShortMultipleBTree(ChunkBasedSegment segment, bool load = false) : base(segment, load)
+    public UShortMultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
     {
     }
 }

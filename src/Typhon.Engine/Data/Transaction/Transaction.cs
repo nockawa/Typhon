@@ -438,7 +438,7 @@ public unsafe class Transaction : IDisposable
         activity?.SetTag(TyphonSpanAttributes.EntityId, pk);
         activity?.SetTag(TyphonSpanAttributes.ComponentType, typeof(T).Name);
 
-        return UpdateComponent(pk, ref Unsafe.NullRef<T>());
+        return DeleteComponent<T>(pk);
     }
 
     public bool DeleteEntity<TC1, TC2>(long pk) where TC1 : unmanaged where TC2 : unmanaged
@@ -449,8 +449,8 @@ public unsafe class Transaction : IDisposable
         }
         State = TransactionState.InProgress;
 
-        var res = UpdateComponent(pk, ref Unsafe.NullRef<TC1>());
-        res &= UpdateComponent(pk, ref Unsafe.NullRef<TC2>());
+        var res = DeleteComponent<TC1>(pk);
+        res &= DeleteComponent<TC2>(pk);
         return res;
     }
 
@@ -462,9 +462,9 @@ public unsafe class Transaction : IDisposable
         }
         State = TransactionState.InProgress;
 
-        var res = UpdateComponent(pk, ref Unsafe.NullRef<TC1>());
-        res &= UpdateComponent(pk, ref Unsafe.NullRef<TC2>());
-        res &= UpdateComponent(pk, ref Unsafe.NullRef<TC3>());
+        var res = DeleteComponent<TC1>(pk);
+        res &= DeleteComponent<TC2>(pk);
+        res &= DeleteComponent<TC3>(pk);
         return res;
     }
 
@@ -852,6 +852,16 @@ public unsafe class Transaction : IDisposable
         return true;
     }
     
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool DeleteComponent<T>(long pk) where T : unmanaged
+    {
+        if (_dbe.GetComponentTable(typeof(T)).Definition.AllowMultiple)
+        {
+            return UpdateComponents(pk, ReadOnlySpan<T>.Empty);
+        }
+        return UpdateComponent(pk, ref Unsafe.NullRef<T>());
+    }
+
     private bool UpdateComponent<T>(long pk, ref T comp) where T : unmanaged
     {
         AssertThreadAffinity();

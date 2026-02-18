@@ -184,6 +184,28 @@ public partial class ChunkBasedSegment : LogicalSegment
     private static readonly ThreadLocal<Memory<int>> SingleAlloc = new(() => new Memory<int>(new int[1]));
 
     public void ReserveChunk(int index) => _map.SetL0(index);
+
+    /// <summary>
+    /// Reserves a specific chunk by index. If the chunk was not previously reserved and <paramref name="clearContent"/> is true,
+    /// the chunk data is zeroed.
+    /// </summary>
+    /// <returns>True if the chunk was newly reserved; false if it was already reserved.</returns>
+    public void ReserveChunk(int index, bool clearContent)
+    {
+        _map.SetL0(index);
+        if (clearContent)
+        {
+            var accessor = CreateChunkAccessor();
+            try
+            {
+                accessor.ClearChunk(index);
+            }
+            finally
+            {
+                accessor.Dispose();
+            }
+        }
+    }
     
     /// <summary>
     /// Allocates a single chunk from the segment.
