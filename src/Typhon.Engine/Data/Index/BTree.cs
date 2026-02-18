@@ -940,6 +940,10 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             {
                 args.ElementId = _storage.Append(GetLast(ref accessor).Value, args.GetValue(), ref accessor);
             }
+            else
+            {
+                ThrowHelper.ThrowUniqueConstraintViolation();
+            }
             return;
         }
 
@@ -969,6 +973,10 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             {
                 args.ElementId = _storage.Append(GetFirst(ref accessor).Value, args.GetValue(), ref accessor);
             }
+            else
+            {
+                ThrowHelper.ThrowUniqueConstraintViolation();
+            }
             return;
         }
 
@@ -978,6 +986,10 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         if (args.Added)
         {
             IncCount();
+        }
+        else if (!AllowMultiple)
+        {
+            ThrowHelper.ThrowUniqueConstraintViolation();
         }
 
         // if split occurred at root, make a new root and increase height.

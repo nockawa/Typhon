@@ -20,7 +20,8 @@ public enum TyphonErrorCode : int
     PageChecksumMismatch        = 2005,
 
     // 3xxx — Component (reserved)
-    // 4xxx — Index (reserved)
+    // 4xxx — Index
+    UniqueConstraintViolation   = 4001,
     // 5xxx — Query (reserved)
 
     // 6xxx — Resource

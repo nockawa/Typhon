@@ -1395,10 +1395,14 @@ public unsafe class Transaction : IDisposable
             {
                 // Update the indices (PK and secondary), the revision will be indexed, but as long as the CompRevTransactionIsolatedFlag flag is set,
                 //  it won't be visible to queries
-                // Skip index updates for deleted components (CurCompContentChunkId == 0)
                 if (compRevInfo.CurCompContentChunkId != 0)
                 {
                     UpdateIndices(pk, info, compRevInfo, readCompChunkId);
+                }
+                // For deletes: remove stale secondary index entries from the previous revision
+                else if (readCompChunkId != 0)
+                {
+                    RemoveSecondaryIndices(info, readCompChunkId, compRevInfo.CompRevTableFirstChunkId);
                 }
 
                 // Set the TSN of the revision to the transaction's one, removing the Isolation flag
@@ -1497,6 +1501,12 @@ public unsafe class Transaction : IDisposable
                     }
                     accessor.Dispose();
                 }
+                else if (ifi.Index.AllowMultiple)
+                {
+                    // Carry forward the elementId for unchanged AllowMultiple fields so that
+                    // the new content chunk has valid buffer references for later removal (e.g., on delete).
+                    *(int*)&cur[ifi.OffsetToIndexElementId] = *(int*)&prev[ifi.OffsetToIndexElementId];
+                }
             }
         }
 
@@ -1529,6 +1539,26 @@ public unsafe class Transaction : IDisposable
                 }
                 accessor.Dispose();
             }
+        }
+    }
+
+    private void RemoveSecondaryIndices(ComponentInfoBase info, int prevCompChunkId, int startChunkId)
+    {
+        var prev = info.CompContentAccessor.GetChunkAddress(prevCompChunkId);
+        var indexedFieldInfos = info.ComponentTable.IndexedFieldInfos;
+        for (int i = 0; i < indexedFieldInfos.Length; i++)
+        {
+            ref var ifi = ref indexedFieldInfos[i];
+            var accessor = ifi.Index.Segment.CreateChunkAccessor(_changeSet);
+            if (ifi.Index.AllowMultiple)
+            {
+                ifi.Index.RemoveValue(&prev[ifi.OffsetToField], *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref accessor);
+            }
+            else
+            {
+                ifi.Index.Remove(&prev[ifi.OffsetToField], out _, ref accessor);
+            }
+            accessor.Dispose();
         }
     }
 
