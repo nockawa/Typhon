@@ -51,11 +51,16 @@ internal class TransactionChain : ResourceNode, IDebugPropertiesProvider
         var curHead = Head;
         Head = transaction;
         transaction.Next = curHead;
+        transaction.Previous = null; // New head has no predecessor (clear stale link from pool recycling)
 
         if (curHead == null)
         {
             Tail = transaction;
             MinTSN = transaction.TSN;
+        }
+        else
+        {
+            curHead.Previous = transaction; // Maintain reverse link for Tail→Head traversal
         }
     }
 

@@ -5,8 +5,6 @@ using System;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Threading;
-
 namespace Typhon.Engine.Tests;
 
 /// <summary>
@@ -76,9 +74,10 @@ public class FpiCompressionTests : AllocatorTestBase
 
         var mgr = new WalManager(options, MemoryAllocator, _fileIO, AllocationResource, commitBufferCapacity);
         mgr.Initialize();
-        mgr.Start();
 
-        SpinWait.SpinUntil(() => mgr.IsRunning, 2000);
+        // Do NOT call mgr.Start() — the WalWriter background thread is the single consumer
+        // of the MPSC CommitBuffer and would drain FPI records before the test can inspect them.
+        // None of the tests in this class need the writer thread running.
 
         return mgr;
     }

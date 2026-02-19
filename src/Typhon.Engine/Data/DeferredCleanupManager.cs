@@ -70,20 +70,11 @@ internal class DeferredCleanupManager
     /// <summary>Total entities cleaned via the deferred path.</summary>
     public long ProcessedTotal { get; private set; }
 
-    /// <summary>Total lazy cleanups performed during entity reads.</summary>
-    public long LazyCleanupTotal { get; private set; }
-
-    /// <summary>Total lazy cleanups skipped because the revision chain lock was unavailable.</summary>
-    public long LazyCleanupSkipped { get; private set; }
-
     /// <summary>Current number of content chunks awaiting deferred freeing.</summary>
     public int ChunkFreeQueueSize;
 
     /// <summary>Total content chunks freed via the deferred path.</summary>
     public long ChunkFreedTotal { get; private set; }
-
-    /// <summary>Minimum ItemCount before lazy cleanup is attempted.</summary>
-    internal int LazyCleanupThreshold => _options.LazyCleanupThreshold;
 
     public DeferredCleanupManager(DeferredCleanupOptions options, ILogger log = null)
     {
@@ -93,12 +84,6 @@ internal class DeferredCleanupManager
         _entityToBlockingTSN = new Dictionary<(ComponentTable, long), long>();
         _pendingChunkFrees = new SortedDictionary<long, List<DeferredChunkFreeEntry>>();
     }
-
-    /// <summary>Record a successful lazy cleanup operation.</summary>
-    internal void RecordLazyCleanup() => LazyCleanupTotal++;
-
-    /// <summary>Record a lazy cleanup that was skipped (lock unavailable).</summary>
-    internal void RecordLazyCleanupSkipped() => LazyCleanupSkipped++;
 
     /// <summary>
     /// Enqueue a batch of entities for deferred cleanup under a single lock acquisition.
@@ -278,9 +263,10 @@ internal class DeferredCleanupManager
 
         _lock.ExitExclusiveAccess();
 
-        // ── Free mature content chunks OUTSIDE the lock ──
+        // ── Free mature content chunks OUTSIDE the lock (requires epoch scope for chunk accessors) ──
         if (chunksToFree != null)
         {
+            using var chunkFreeGuard = EpochGuard.Enter(dbe.EpochManager);
             foreach (var entry in chunksToFree)
             {
                 FreeContentChunk(entry.Table, entry.ChunkId);
@@ -349,7 +335,7 @@ internal class DeferredCleanupManager
     /// <summary>
     /// Flush all pending chunk frees regardless of TSN maturity. For test/diagnostic use.
     /// </summary>
-    internal void FlushChunkFrees()
+    internal void FlushChunkFrees(EpochManager epochManager)
     {
         var wc = WaitContext.FromTimeout(TimeoutOptions.Current.TransactionChainLockTimeout);
         if (!_lock.EnterExclusiveAccess(ref wc))
@@ -367,11 +353,15 @@ internal class DeferredCleanupManager
         ChunkFreeQueueSize = 0;
         _lock.ExitExclusiveAccess();
 
-        foreach (var entry in allEntries)
+        if (allEntries.Count > 0)
         {
-            FreeContentChunk(entry.Table, entry.ChunkId);
+            using var guard = EpochGuard.Enter(epochManager);
+            foreach (var entry in allEntries)
+            {
+                FreeContentChunk(entry.Table, entry.ChunkId);
+            }
+            ChunkFreedTotal += allEntries.Count;
         }
-        ChunkFreedTotal += allEntries.Count;
     }
 
     /// <summary>
@@ -419,15 +409,22 @@ internal class DeferredCleanupManager
             header = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(firstChunkId);
             header.Control.ExitExclusiveAccess();
         }
-
         if (isDeleted)
         {
-            // Entity is fully deleted — remove from PK index and free revision chain
-            var accessor = table.PrimaryKeyIndex.Segment.CreateChunkAccessor(changeSet);
-            table.PrimaryKeyIndex.Remove(pk, out _, ref accessor);
-            accessor.Dispose();
+            if (table.Definition.AllowMultiple)
+            {
+                // Don't free the revision chain — the PK buffer still references it.
+                // The entry will show as deleted when read (ComponentChunkId == 0).
+            }
+            else
+            {
+                // Entity is fully deleted — remove from PK index and free revision chain
+                var accessor = table.PrimaryKeyIndex.Segment.CreateChunkAccessor(changeSet);
+                table.PrimaryKeyIndex.Remove(pk, out _, ref accessor);
+                accessor.Dispose();
 
-            table.CompRevTableSegment.FreeChunk(firstChunkId);
+                table.CompRevTableSegment.FreeChunk(firstChunkId);
+            }
         }
         else
         {

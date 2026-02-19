@@ -176,7 +176,10 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
             res = t.Commit();
             Assert.That(res, Is.True, "Transaction commit should be successful");
         }
-        
+
+        // Flush deferred cleanup so the old revision is removed and refcount decremented
+        dbe.FlushDeferredCleanups();
+
         {
             using var t = dbe.CreateQuickTransaction();
 

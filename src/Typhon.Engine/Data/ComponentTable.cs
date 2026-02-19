@@ -51,6 +51,10 @@ internal struct CompRevStorageHeader
     /// Index in the chain of the last committed revision, allows us to detect concurrency conflicts
     public short LastCommitRevisionIndex;
 
+    /// Monotonically increasing counter incremented on every commit to this entity.
+    /// Used for conflict detection — immune to revision index ordering and cleanup compaction.
+    public int CommitSequence;
+
     internal void EnterControlLockForTest() => Control.EnterExclusiveAccess(ref WaitContext.Null);
     internal void ExitControlLockForTest() => Control.ExitExclusiveAccess();
 

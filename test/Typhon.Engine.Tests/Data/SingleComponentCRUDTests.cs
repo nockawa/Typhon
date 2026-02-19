@@ -845,6 +845,9 @@ class SingleComponentCRUDTests : TestBase<SingleComponentCRUDTests>
             t.Commit();
         }
 
+        // Flush deferred cleanup so the deletion is fully processed (PK index entry removed)
+        dbe.FlushDeferredCleanups();
+
         // Second delete attempt
         using (var t = dbe.CreateQuickTransaction())
         {

@@ -31,10 +31,4 @@ public class DeferredCleanupOptions
     /// Maximum number of entities to clean up in a single deferred cleanup pass.
     /// </summary>
     public int MaxCleanupBatchSize { get; set; } = 1000;
-
-    /// <summary>
-    /// Minimum <see cref="CompRevStorageHeader.ItemCount"/> before lazy cleanup is attempted
-    /// during entity reads. Set to 0 to disable lazy cleanup.
-    /// </summary>
-    public int LazyCleanupThreshold { get; set; } = 10;
 }

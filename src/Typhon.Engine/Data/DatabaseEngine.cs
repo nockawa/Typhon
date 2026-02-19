@@ -138,6 +138,26 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
     internal TransactionChain TransactionChain { get; }
     internal DeferredCleanupManager DeferredCleanupManager { get; }
+
+    /// <summary>
+    /// Process all pending deferred cleanups. Intended for test/diagnostic use.
+    /// Creates its own ChangeSet and processes ALL queued entries regardless of blockingTSN.
+    /// </summary>
+    /// <param name="nextMinTSN">Cutoff TSN for revision cleanup. 0 = use TransactionChain.NextFreeId + 1 (clean everything eligible).</param>
+    /// <returns>Number of entities cleaned up.</returns>
+    internal int FlushDeferredCleanups(long nextMinTSN = 0)
+    {
+        if (nextMinTSN == 0)
+        {
+            nextMinTSN = TransactionChain.NextFreeId + 1;
+        }
+
+        var changeSet = new ChangeSet(MMF);
+        var result = DeferredCleanupManager.ProcessDeferredCleanups(long.MaxValue, nextMinTSN, this, changeSet);
+        changeSet.SaveChanges();
+        return result;
+    }
+
     internal UowRegistry UowRegistry { get; private set; }
 
     /// <summary>
@@ -542,7 +562,6 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         // Deferred cleanup throughput
         writer.WriteThroughput("Cleanup.Enqueued", DeferredCleanupManager.EnqueuedTotal);
         writer.WriteThroughput("Cleanup.Processed", DeferredCleanupManager.ProcessedTotal);
-        writer.WriteThroughput("Cleanup.LazyTriggered", DeferredCleanupManager.LazyCleanupTotal);
     }
 
     /// <inheritdoc />

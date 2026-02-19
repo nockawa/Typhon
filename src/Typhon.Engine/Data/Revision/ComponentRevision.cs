@@ -24,14 +24,18 @@ internal ref struct ComponentRevision
     internal short LastCommitRevisionIndex => _accessor.GetChunk<CompRevStorageHeader>(_firstChunkId).LastCommitRevisionIndex;
     internal void SetLastCommitRevisionIndex(short index) => _accessor.GetChunk<CompRevStorageHeader>(_firstChunkId, true).LastCommitRevisionIndex = index;
 
+    internal int CommitSequence => _accessor.GetChunk<CompRevStorageHeader>(_firstChunkId).CommitSequence;
+    internal void IncrementCommitSequence()
+    {
+        ref var header = ref _accessor.GetChunk<CompRevStorageHeader>(_firstChunkId, true);
+        header.CommitSequence++;
+    }
+
     internal ComponentRevisionManager.ElementRevisionHandle GetRevisionElement(short revisionIndex)
         => ComponentRevisionManager.GetRevisionElement(ref _accessor, _firstChunkId, revisionIndex);
     internal void AddCompRev(long tsn, bool isDelete)
         => ComponentRevisionManager.AddCompRev(_info, ref _compRevInfo, tsn, _uowId, isDelete);
     internal int AllocCompRevStorage(long tsn) => ComponentRevisionManager.AllocCompRevStorage(_info, tsn, _uowId, _firstChunkId);
-    internal bool CleanUpUnusedEntries(long nextMinTSN)
-        => ComponentRevisionManager.CleanUpUnusedEntries(_info, ref _compRevInfo, ref _accessor, nextMinTSN);
-
     public void VoidElement(ComponentRevisionManager.ElementRevisionHandle elementRevisionHandle)
     {
         ref var firstHeader = ref _accessor.GetChunk<CompRevStorageHeader>(_firstChunkId, true);
