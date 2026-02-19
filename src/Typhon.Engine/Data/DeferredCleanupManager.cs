@@ -27,6 +27,12 @@ internal class DeferredCleanupManager
         public long PrimaryKey;
     }
 
+    internal struct DeferredChunkFreeEntry
+    {
+        public ComponentTable Table;
+        public int ChunkId;
+    }
+
     // Primary storage: sorted by blocking TSN for efficient range queries
     private readonly SortedDictionary<long, List<CleanupEntry>> _pendingCleanups;
 
@@ -37,6 +43,10 @@ internal class DeferredCleanupManager
     // All access is under _lock, so no additional synchronization needed.
     private const int ListPoolMaxSize = 16;
     private readonly Stack<List<CleanupEntry>> _listPool = new();
+
+    // Deferred content chunk freeing: keyed by safeAfterTSN — chunks freed when nextMinTSN >= key
+    private readonly SortedDictionary<long, List<DeferredChunkFreeEntry>> _pendingChunkFrees;
+    private readonly Stack<List<DeferredChunkFreeEntry>> _chunkFreeListPool = new();
 
     // Thread safety
     private AccessControl _lock;
@@ -66,6 +76,12 @@ internal class DeferredCleanupManager
     /// <summary>Total lazy cleanups skipped because the revision chain lock was unavailable.</summary>
     public long LazyCleanupSkipped { get; private set; }
 
+    /// <summary>Current number of content chunks awaiting deferred freeing.</summary>
+    public int ChunkFreeQueueSize;
+
+    /// <summary>Total content chunks freed via the deferred path.</summary>
+    public long ChunkFreedTotal { get; private set; }
+
     /// <summary>Minimum ItemCount before lazy cleanup is attempted.</summary>
     internal int LazyCleanupThreshold => _options.LazyCleanupThreshold;
 
@@ -75,6 +91,7 @@ internal class DeferredCleanupManager
         _log = log;
         _pendingCleanups = new SortedDictionary<long, List<CleanupEntry>>();
         _entityToBlockingTSN = new Dictionary<(ComponentTable, long), long>();
+        _pendingChunkFrees = new SortedDictionary<long, List<DeferredChunkFreeEntry>>();
     }
 
     /// <summary>Record a successful lazy cleanup operation.</summary>
@@ -150,6 +167,36 @@ internal class DeferredCleanupManager
     }
 
     /// <summary>
+    /// Enqueue content chunks for deferred freeing. Chunks will be freed when <c>nextMinTSN ≥ safeAfterTSN</c>,
+    /// meaning all transactions that were active at enqueue time have departed.
+    /// </summary>
+    /// <param name="safeAfterTSN">The NextFreeId at enqueue time — chunks become safe to free once nextMinTSN reaches this value</param>
+    /// <param name="entries">The chunk entries to enqueue. Ownership transfers to the manager.</param>
+    public void EnqueueChunkFrees(long safeAfterTSN, List<DeferredChunkFreeEntry> entries)
+    {
+        if (entries.Count == 0)
+        {
+            return;
+        }
+
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.TransactionChainLockTimeout);
+        if (!_lock.EnterExclusiveAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("DeferredCleanup/EnqueueChunkFrees", TimeoutOptions.Current.TransactionChainLockTimeout);
+        }
+
+        if (!_pendingChunkFrees.TryGetValue(safeAfterTSN, out var list))
+        {
+            list = RentChunkFreeList();
+            _pendingChunkFrees[safeAfterTSN] = list;
+        }
+
+        list.AddRange(entries);
+        ChunkFreeQueueSize += entries.Count;
+        _lock.ExitExclusiveAccess();
+    }
+
+    /// <summary>
     /// Process all deferred cleanups for entities blocked by transactions with TSN ≤ <paramref name="completedTSN"/>.
     /// </summary>
     /// <param name="completedTSN">The TSN of the tail transaction that just committed</param>
@@ -161,7 +208,7 @@ internal class DeferredCleanupManager
     {
         // Lockless early-exit: Count is a plain int field read (atomic on x64).
         // Stale zero → skip (entries caught on next call). Stale non-zero → acquire lock, find nothing, exit.
-        if (_pendingCleanups.Count == 0)
+        if (_pendingCleanups.Count == 0 && _pendingChunkFrees.Count == 0)
         {
             return 0;
         }
@@ -172,18 +219,8 @@ internal class DeferredCleanupManager
             ThrowHelper.ThrowLockTimeout("DeferredCleanup/Process", TimeoutOptions.Current.TransactionChainLockTimeout);
         }
 
-        // Peek at the smallest key — if it's beyond completedTSN, nothing to collect
-        using (var peek = _pendingCleanups.GetEnumerator())
-        {
-            if (!peek.MoveNext() || peek.Current.Key > completedTSN)
-            {
-                _lock.ExitExclusiveAccess();
-                return 0;
-            }
-        }
-
-        // We have work to do — allocate collection lists
-        var toCleanup = new List<CleanupEntry>();
+        // ── Collect mature entity cleanup entries ──
+        List<CleanupEntry> toCleanup = null;
         var tsnsToRemove = new List<long>();
 
         foreach (var kvp in _pendingCleanups)
@@ -193,6 +230,7 @@ internal class DeferredCleanupManager
                 break; // SortedDictionary — no more relevant entries
             }
 
+            toCleanup ??= new List<CleanupEntry>();
             toCleanup.AddRange(kvp.Value);
             tsnsToRemove.Add(kvp.Key);
 
@@ -204,22 +242,65 @@ internal class DeferredCleanupManager
             ReturnList(kvp.Value);
         }
 
-        // Remove processed TSN buckets
         foreach (var tsn in tsnsToRemove)
         {
             _pendingCleanups.Remove(tsn);
         }
 
         QueueSize = _entityToBlockingTSN.Count;
+
+        // ── Collect mature chunk free entries (keyed by safeAfterTSN, mature when nextMinTSN >= key) ──
+        List<DeferredChunkFreeEntry> chunksToFree = null;
+        tsnsToRemove.Clear();
+
+        foreach (var kvp in _pendingChunkFrees)
+        {
+            if (kvp.Key > nextMinTSN)
+            {
+                break;
+            }
+
+            chunksToFree ??= new List<DeferredChunkFreeEntry>();
+            chunksToFree.AddRange(kvp.Value);
+            tsnsToRemove.Add(kvp.Key);
+            ReturnChunkFreeList(kvp.Value);
+        }
+
+        foreach (var tsn in tsnsToRemove)
+        {
+            _pendingChunkFrees.Remove(tsn);
+        }
+
+        if (chunksToFree != null)
+        {
+            ChunkFreeQueueSize -= chunksToFree.Count;
+        }
+
         _lock.ExitExclusiveAccess();
 
-        // Perform cleanup OUTSIDE the lock (I/O operations)
-        var cleanedCount = 0;
-        foreach (var entry in toCleanup)
+        // ── Free mature content chunks OUTSIDE the lock ──
+        if (chunksToFree != null)
         {
-            if (CleanupEntityRevisions(entry.Table, entry.PrimaryKey, nextMinTSN, dbe, changeSet))
+            foreach (var entry in chunksToFree)
             {
-                cleanedCount++;
+                FreeContentChunk(entry.Table, entry.ChunkId);
+            }
+            ChunkFreedTotal += chunksToFree.Count;
+        }
+
+        // ── Perform entity cleanup OUTSIDE the lock (I/O operations) ──
+        var cleanedCount = 0;
+        List<DeferredChunkFreeEntry> collectedChunkFrees = null;
+
+        if (toCleanup != null)
+        {
+            collectedChunkFrees = new List<DeferredChunkFreeEntry>();
+            foreach (var entry in toCleanup)
+            {
+                if (CleanupEntityRevisions(entry.Table, entry.PrimaryKey, nextMinTSN, dbe, changeSet, collectedChunkFrees))
+                {
+                    cleanedCount++;
+                }
             }
         }
 
@@ -228,13 +309,76 @@ internal class DeferredCleanupManager
             ProcessedTotal += cleanedCount;
         }
 
+        // Entity cleanup may have produced new deferred chunk frees — enqueue them with the current safeAfterTSN
+        if (collectedChunkFrees is { Count: > 0 })
+        {
+            var safeAfterTSN = dbe.TransactionChain.NextFreeId;
+            EnqueueChunkFrees(safeAfterTSN, collectedChunkFrees);
+        }
+
         return cleanedCount;
+    }
+
+    /// <summary>
+    /// Frees a content chunk and its associated collection buffers. Used by the deferred chunk free path
+    /// (creates its own accessor since the cleanup's accessor is disposed by the time deferred freeing runs).
+    /// </summary>
+    internal static void FreeContentChunk(ComponentTable ct, int chunkId)
+    {
+        if (chunkId == 0)
+        {
+            return;
+        }
+
+        if (ct.HasCollections)
+        {
+            var accessor = ct.ComponentSegment.CreateChunkAccessor();
+            foreach (var kvp in ct.ComponentCollectionVSBSByOffset)
+            {
+                var bufferId = accessor.GetChunkAsReadOnlySpan(chunkId).Slice(kvp.Key).Cast<byte, int>()[0];
+                var collAccessor = kvp.Value.Segment.CreateChunkAccessor();
+                kvp.Value.BufferRelease(bufferId, ref collAccessor);
+                collAccessor.Dispose();
+            }
+            accessor.Dispose();
+        }
+
+        ct.ComponentSegment.FreeChunk(chunkId);
+    }
+
+    /// <summary>
+    /// Flush all pending chunk frees regardless of TSN maturity. For test/diagnostic use.
+    /// </summary>
+    internal void FlushChunkFrees()
+    {
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.TransactionChainLockTimeout);
+        if (!_lock.EnterExclusiveAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("DeferredCleanup/FlushChunkFrees", TimeoutOptions.Current.TransactionChainLockTimeout);
+        }
+
+        var allEntries = new List<DeferredChunkFreeEntry>();
+        foreach (var kvp in _pendingChunkFrees)
+        {
+            allEntries.AddRange(kvp.Value);
+            ReturnChunkFreeList(kvp.Value);
+        }
+        _pendingChunkFrees.Clear();
+        ChunkFreeQueueSize = 0;
+        _lock.ExitExclusiveAccess();
+
+        foreach (var entry in allEntries)
+        {
+            FreeContentChunk(entry.Table, entry.ChunkId);
+        }
+        ChunkFreedTotal += allEntries.Count;
     }
 
     /// <summary>
     /// Clean up old revisions for a single entity. Creates its own accessors within an epoch scope.
     /// </summary>
-    private static bool CleanupEntityRevisions(ComponentTable table, long pk, long nextMinTSN, DatabaseEngine dbe, ChangeSet changeSet)
+    private static bool CleanupEntityRevisions(ComponentTable table, long pk, long nextMinTSN, DatabaseEngine dbe, ChangeSet changeSet,
+        List<DeferredChunkFreeEntry> collectedChunkFrees)
     {
         using var guard = EpochGuard.Enter(dbe.EpochManager);
 
@@ -268,7 +412,7 @@ internal class DeferredCleanupManager
         try
         {
             isDeleted = ComponentRevisionManager.CleanUpUnusedEntriesCore(
-                table, firstChunkId, nextMinTSN, ref compRevTableAccessor, ref compContentAccessor);
+                table, firstChunkId, nextMinTSN, ref compRevTableAccessor, ref compContentAccessor, collectedChunkFrees);
         }
         finally
         {
@@ -340,6 +484,26 @@ internal class DeferredCleanupManager
         {
             ReturnList(list);
             _pendingCleanups.Remove(tsn);
+        }
+    }
+
+    /// <summary>Rent a chunk free list from the pool or create a new one. Must be called under lock.</summary>
+    private List<DeferredChunkFreeEntry> RentChunkFreeList()
+    {
+        if (_chunkFreeListPool.TryPop(out var list))
+        {
+            return list;
+        }
+        return [];
+    }
+
+    /// <summary>Clear and return a chunk free list to the pool. Must be called under lock.</summary>
+    private void ReturnChunkFreeList(List<DeferredChunkFreeEntry> list)
+    {
+        list.Clear();
+        if (_chunkFreeListPool.Count < ListPoolMaxSize)
+        {
+            _chunkFreeListPool.Push(list);
         }
     }
 }

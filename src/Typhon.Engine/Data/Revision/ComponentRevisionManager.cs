@@ -1,5 +1,6 @@
 using JetBrains.Annotations;
 using System;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine;
@@ -232,7 +233,8 @@ internal ref struct ComponentRevisionManager
     /// revision before the cutoff, needed because active transactions at MinTSN may have cached its content chunk ID.</para>
     /// </remarks>
     internal static unsafe bool CleanUpUnusedEntriesCore(ComponentTable ct, int firstChunkId, long nextMinTSN,
-        ref ChunkAccessor compRevTableAccessor, ref ChunkAccessor compContentAccessor)
+        ref ChunkAccessor compRevTableAccessor, ref ChunkAccessor compContentAccessor,
+        List<DeferredCleanupManager.DeferredChunkFreeEntry> deferredChunkFrees = null)
     {
         ref var firstChunkHeader = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(firstChunkId);
 
@@ -287,10 +289,10 @@ internal ref struct ComponentRevisionManager
 
                     if (isCommitted)
                     {
-                        // Supersede previous sentinel: free its chunk, promote current entry
+                        // Supersede previous sentinel: free/defer its chunk, promote current entry
                         if (hasSentinel)
                         {
-                            FreeCompContentChunk(ct, ref compContentAccessor, sentinelCompChunkId, hasCollections);
+                            DeferOrFreeContentChunk(ct, ref compContentAccessor, sentinelCompChunkId, hasCollections, deferredChunkFrees);
                         }
                         sentinelEntry = enumerator.Current;
                         sentinelCompChunkId = revChunkId;
@@ -298,8 +300,8 @@ internal ref struct ComponentRevisionManager
                     }
                     else
                     {
-                        // Non-committed entry (void/isolated): safe to free immediately
-                        FreeCompContentChunk(ct, ref compContentAccessor, revChunkId, hasCollections);
+                        // Non-committed entry (void/isolated): chunk is typically 0 (no-op)
+                        DeferOrFreeContentChunk(ct, ref compContentAccessor, revChunkId, hasCollections, deferredChunkFrees);
                     }
 
                     enumerator.CurrentAsSpan.Clear();
@@ -337,7 +339,7 @@ internal ref struct ComponentRevisionManager
                         else
                         {
                             // Sentinel not needed: the first kept entry is visible to all remaining transactions
-                            FreeCompContentChunk(ct, ref compContentAccessor, sentinelCompChunkId, hasCollections);
+                            DeferOrFreeContentChunk(ct, ref compContentAccessor, sentinelCompChunkId, hasCollections, deferredChunkFrees);
                         }
                     }
                 }
@@ -394,6 +396,28 @@ internal ref struct ComponentRevisionManager
 
         // Is the component totally deleted? Return true, otherwise false
         return (tempFirstHeader[0].ItemCount == 1 && tempElements[0].ComponentChunkId == 0);
+    }
+
+    /// <summary>
+    /// Either defers content chunk freeing (when <paramref name="deferredChunkFrees"/> is non-null) or frees immediately.
+    /// The deferred path collects entries for later freeing when all referencing transactions have departed.
+    /// The immediate path is used during the transaction commit path where the caller is the tail.
+    /// </summary>
+    private static void DeferOrFreeContentChunk(ComponentTable ct, ref ChunkAccessor compContentAccessor, int chunkId, bool hasCollections,
+        List<DeferredCleanupManager.DeferredChunkFreeEntry> deferredChunkFrees)
+    {
+        if (chunkId == 0)
+        {
+            return;
+        }
+
+        if (deferredChunkFrees != null)
+        {
+            deferredChunkFrees.Add(new DeferredCleanupManager.DeferredChunkFreeEntry { Table = ct, ChunkId = chunkId });
+            return;
+        }
+
+        FreeCompContentChunk(ct, ref compContentAccessor, chunkId, hasCollections);
     }
 
     /// <summary>
