@@ -122,7 +122,7 @@ public interface IBTree
 {
     ChunkBasedSegment Segment { get; }
     bool AllowMultiple { get; }
-    // int Count { get; }
+    int EntryCount { get; }
     unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor);
     unsafe bool Remove(void* keyAddr, out int value, ref ChunkAccessor accessor);
     unsafe Result<int, BTreeLookupStatus> TryGet(void* keyAddr, ref ChunkAccessor accessor);
@@ -383,6 +383,30 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public bool IsEmpty() => _count == 0;
 
+    public int EntryCount => _count;
+
+    /// <summary>
+    /// Returns the maximum key in the BTree. Single-threaded use only (engine init).
+    /// </summary>
+    public TKey GetMaxKey()
+    {
+        if (_count == 0)
+        {
+            return default;
+        }
+
+        using var guard = EpochGuard.Enter(_segment.Manager.EpochManager);
+        var accessor = _segment.CreateChunkAccessor();
+        try
+        {
+            return GetLast(ref accessor).Key;
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+    }
+
     public int IncCount() => ++_count;
 
     public int DecCount() => --_count;
@@ -430,11 +454,14 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         if (!load)
         {
             // Reserve chunks 0-3 for the BTree directory overflow entries.
-            // Chunk 0 is already reserved by CBS but call to clear its content anyway.
-            // clearContent: true ensures first reservation zeros the chunk; subsequent BTrees are no-ops.
+            // Only clear content for chunks not yet allocated — subsequent BTrees sharing this
+            // segment must NOT re-clear, as that would wipe existing directory entries.
             for (int i = 0; i < DirectoryChunkCount; i++)
             {
-                _segment.ReserveChunk(i, true);
+                if (!_segment.IsChunkAllocated(i))
+                {
+                    _segment.ReserveChunk(i, true);
+                }
             }
 
             // Register this BTree in the directory (append a new entry, cache its location)

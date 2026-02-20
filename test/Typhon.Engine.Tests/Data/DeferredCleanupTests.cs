@@ -521,6 +521,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 
         var table = dbe.GetComponentTable<CompA>();
         var dcm = dbe.DeferredCleanupManager;
+        var baselineEnqueued = dcm.EnqueuedTotal; // System schema registration may have enqueued cleanup entries
 
         // Enqueue entity pk=1 under blockingTSN=10
         dcm.EnqueueBatch(10, new List<DeferredCleanupManager.CleanupEntry>
@@ -528,7 +529,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
             new() { Table = table, PrimaryKey = 1 }
         });
         Assert.That(dcm.QueueSize, Is.EqualTo(1));
-        Assert.That(dcm.EnqueuedTotal, Is.EqualTo(1));
+        Assert.That(dcm.EnqueuedTotal, Is.EqualTo(baselineEnqueued + 1));
 
         // Enqueue same entity under blockingTSN=5 (older) → triggers RemoveFromList(10, table, 1)
         // Entity moves from TSN=10 bucket to TSN=5 bucket
@@ -537,7 +538,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
             new() { Table = table, PrimaryKey = 1 }
         });
         Assert.That(dcm.QueueSize, Is.EqualTo(1), "Queue should still have 1 entry after migration (not duplicated)");
-        Assert.That(dcm.EnqueuedTotal, Is.EqualTo(2), "EnqueuedTotal should reflect both enqueue operations");
+        Assert.That(dcm.EnqueuedTotal, Is.EqualTo(baselineEnqueued + 2), "EnqueuedTotal should reflect both enqueue operations");
     }
 
     [Test]
@@ -620,6 +621,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 
         var table = dbe.GetComponentTable<CompA>();
         var dcm = dbe.DeferredCleanupManager;
+        var baselineEnqueued = dcm.EnqueuedTotal; // System schema registration may have enqueued cleanup entries
 
         // Enqueue entity pk=1 under blockingTSN=5
         dcm.EnqueueBatch(5, new List<DeferredCleanupManager.CleanupEntry>
@@ -627,7 +629,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
             new() { Table = table, PrimaryKey = 1 }
         });
         Assert.That(dcm.QueueSize, Is.EqualTo(1));
-        Assert.That(dcm.EnqueuedTotal, Is.EqualTo(1));
+        Assert.That(dcm.EnqueuedTotal, Is.EqualTo(baselineEnqueued + 1));
 
         // Re-enqueue same entity under blockingTSN=10 (newer/larger) → should be skipped
         dcm.EnqueueBatch(10, new List<DeferredCleanupManager.CleanupEntry>
@@ -635,7 +637,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
             new() { Table = table, PrimaryKey = 1 }
         });
         Assert.That(dcm.QueueSize, Is.EqualTo(1), "Queue should still have 1 entry (dedup skipped)");
-        Assert.That(dcm.EnqueuedTotal, Is.EqualTo(1), "EnqueuedTotal should not increment for skipped entries");
+        Assert.That(dcm.EnqueuedTotal, Is.EqualTo(baselineEnqueued + 1), "EnqueuedTotal should not increment for skipped entries");
 
         // Re-enqueue under same blockingTSN=5 → should also be skipped
         dcm.EnqueueBatch(5, new List<DeferredCleanupManager.CleanupEntry>
@@ -643,6 +645,6 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
             new() { Table = table, PrimaryKey = 1 }
         });
         Assert.That(dcm.QueueSize, Is.EqualTo(1));
-        Assert.That(dcm.EnqueuedTotal, Is.EqualTo(1));
+        Assert.That(dcm.EnqueuedTotal, Is.EqualTo(baselineEnqueued + 1));
     }
 }

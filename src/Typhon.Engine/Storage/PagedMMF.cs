@@ -1095,6 +1095,29 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     }
 
     /// <summary>
+    /// Writes ALL non-free cached pages to the data file, regardless of their dirty state.
+    /// Called after database creation to ensure all pages (including those allocated without a ChangeSet)
+    /// are persisted before the first checkpoint cycle.
+    /// </summary>
+    internal void FlushAllCachedPages()
+    {
+        var cs = CreateChangeSet();
+        int count = 0;
+        for (int i = 0; i < MemPagesCount; i++)
+        {
+            var pi = _memPagesInfo[i];
+            if (pi != null && pi.PageState != PageState.Free)
+            {
+                cs.AddByMemPageIndex(i);
+                count++;
+            }
+        }
+
+        cs.SaveChanges();
+        FlushToDisk();
+    }
+
+    /// <summary>
     /// Flushes all pending writes to the underlying data file. Calls <c>RandomAccess.FlushToDisk</c> which issues an OS-level fsync.
     /// </summary>
     internal void FlushToDisk()

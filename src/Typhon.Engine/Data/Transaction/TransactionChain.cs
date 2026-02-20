@@ -42,6 +42,12 @@ internal class TransactionChain : ResourceNode, IDebugPropertiesProvider
         }
     }
 
+    /// <summary>
+    /// Sets the next free TSN to the given value. Used during engine reload to restore the TSN counter
+    /// from the persisted header so that MVCC visibility works for entities created by previous sessions.
+    /// </summary>
+    internal void SetNextFreeId(long value) => _nextFreeId = value;
+
     public ref AccessControl Control => ref _control;
 
     // Under lock of the caller

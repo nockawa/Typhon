@@ -991,7 +991,6 @@ class ChaosStressTests : TestBase<ChaosStressTests>
 
                         if (txn.ReadEntity<CompA>(targetId, out var comp))
                         {
-                            var oldValue = comp.A;
                             comp.A += 1;
                             txn.UpdateEntity(targetId, ref comp);
 
@@ -1002,7 +1001,15 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                             }
                             else
                             {
-                                if (txn.Commit())
+                                // Delta-rebase handler: on conflict, apply our +1 delta on top of the latest committed value
+                                // instead of blindly overwriting. This guarantees no lost updates under contention.
+                                Transaction.ConcurrencyConflictHandler handler = (ref Transaction.ConcurrencyConflictSolver solver) =>
+                                {
+                                    var committed = solver.CommittedData<CompA>();
+                                    solver.ToCommitData<CompA>().A = committed.A + 1;
+                                };
+
+                                if (txn.Commit(handler))
                                 {
                                     committedUpdates.AddOrUpdate(targetId, 1, (_, v) => v + 1);
                                 }
@@ -1025,13 +1032,12 @@ class ChaosStressTests : TestBase<ChaosStressTests>
             using var txn = dbe.CreateQuickTransaction();
             if (txn.ReadEntity<CompA>(entityIds[i], out var comp))
             {
-                var expectedMin = initialValues[i] + committedUpdates[entityIds[i]];
+                var expected = initialValues[i] + committedUpdates[entityIds[i]];
 
-                // Value should be exactly initial + committed updates
-                // (allowing for some variance due to concurrent commit detection)
-                if (comp.A < expectedMin)
+                // With a delta-rebase conflict handler, every committed update is reflected exactly
+                if (comp.A != expected)
                 {
-                    errors.Add($"Entity {i}: Value {comp.A} < expected minimum {expectedMin}");
+                    errors.Add($"Entity {i}: Value {comp.A} != expected {expected}");
                 }
             }
             else
@@ -1369,7 +1375,6 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     /// </summary>
     [Test]
     [Property("CacheSize", StressCacheSize)]
-    [Ignore("WIP")]
     public void UniqueIndexViolation_UnderLoad()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
@@ -2254,7 +2259,6 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     /// </summary>
     [Test]
     [Property("CacheSize", StressCacheSize)]
-    [Ignore("WIP")]
     public void DurabilityRestart_DataSurvivesReopen()
     {
         const int entityCount = 50;
@@ -2284,6 +2288,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         using (var scope2 = ServiceProvider.CreateScope())
         {
             using var dbe = scope2.ServiceProvider.GetRequiredService<DatabaseEngine>();
+
             RegisterComponents(dbe);
 
             var errors = new List<string>();
@@ -2428,7 +2433,6 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     /// </summary>
     [Test]
     [Property("CacheSize", StressCacheSize)]
-    [Ignore("WIP")]
     public void UltimateStress_AllSubsystems()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
@@ -2532,6 +2536,9 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         }
 
         // Role 5-6: CompA atomic transfer updaters (sum invariant)
+        // Uses a delta-rebase conflict handler to preserve the sum invariant under concurrent
+        // modifications: if another transaction committed since our read, we rebase our delta
+        // (±1) onto the committed value instead of blindly overwriting ("last writer wins").
         for (int i = 0; i < 2; i++)
         {
             var updaterId = i;
@@ -2559,7 +2566,17 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                             dst.A += 1;
                             txn.UpdateEntity(compAIds[srcIdx], ref src);
                             txn.UpdateEntity(compAIds[dstIdx], ref dst);
-                            if (txn.Commit())
+
+                            // Delta-rebase handler: apply our delta onto the committed value
+                            Transaction.ConcurrencyConflictHandler handler = (ref Transaction.ConcurrencyConflictSolver solver) =>
+                            {
+                                ref var r = ref solver.ReadData<CompA>();
+                                ref var c = ref solver.CommittedData<CompA>();
+                                ref var m = ref solver.CommittingData<CompA>();
+                                solver.ToCommitData<CompA>().A = c.A + (m.A - r.A);
+                            };
+
+                            if (txn.Commit(handler))
                             {
                                 stats.AddOrUpdate("CompA_Updates", 1, (_, v) => v + 1);
                             }

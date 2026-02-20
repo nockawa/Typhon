@@ -128,6 +128,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     private ConcurrentDictionary<Type, ComponentTable> _componentTableByType;
     private ConcurrentDictionary<ushort, ComponentTable> _componentTableByWalTypeId;
     private long _curPrimaryKey;
+    private Dictionary<string, ComponentR1> _persistedComponents;
     private ConcurrentDictionary<int, ChunkBasedSegment> _componentCollectionSegmentByStride;
     private ConcurrentDictionary<Type, VariableSizedBufferSegmentBase> _componentCollectionVSBSByType;
 
@@ -227,6 +228,10 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         {
             CreateSystemSchemaR1();
         }
+        else
+        {
+            LoadSystemSchemaR1();
+        }
 
         InitializeWalManager();
         InitializeCheckpointManager();
@@ -250,6 +255,11 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             // Dispose staging pool after checkpoint manager (checkpoint may use it during final cycle)
             _stagingBufferPool?.Dispose();
             _stagingBufferPool = null;
+
+            // Persist final TSN counter and flush all dirty pages to disk. This ensures:
+            // 1. TSN counter survives restart (MVCC visibility)
+            // 2. All committed transaction data is on disk even without WAL/checkpoint
+            PersistEngineState();
 
             WalManager?.Dispose();
             WalManager = null;
@@ -442,12 +452,24 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         rootFileHeader.FieldTableSPI = _fieldsTable.ComponentSegment.RootPageIndex;
         rootFileHeader.ComponentTableSPI = _componentsTable.ComponentSegment.RootPageIndex;
 
+        rootFileHeader.FieldTableVersionSPI            = _fieldsTable.CompRevTableSegment.RootPageIndex;
+        rootFileHeader.FieldTableDefaultIndexSPI       = _fieldsTable.DefaultIndexSegment.RootPageIndex;
+        rootFileHeader.FieldTableString64IndexSPI      = _fieldsTable.String64IndexSegment.RootPageIndex;
+        rootFileHeader.ComponentTableVersionSPI        = _componentsTable.CompRevTableSegment.RootPageIndex;
+        rootFileHeader.ComponentTableDefaultIndexSPI   = _componentsTable.DefaultIndexSegment.RootPageIndex;
+        rootFileHeader.ComponentTableString64IndexSPI  = _componentsTable.String64IndexSegment.RootPageIndex;
+        rootFileHeader.NextFreeTSN = TransactionChain.NextFreeId;
+
         MMF.UnlatchPageExclusive(memPageIdx);
         cs.SaveChanges();
-        
+
         // Now save the system components schema in the database (to load them next time we open the database)
         SaveInSystemSchema(_fieldsTable);
         SaveInSystemSchema(_componentsTable);
+
+        // Flush ALL cached pages to disk. During creation, many pages are allocated and modified without ChangeSets (segments, BTree directories, occupancy
+        // bitmap), so they're never marked dirty and would be lost when the page cache is discarded.
+        MMF.FlushAllCachedPages();
     }
 
     private void SaveInSystemSchema(ComponentTable table)
@@ -484,8 +506,133 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
                 a.Add(f);
             }
         }
-        
+
+        t.CreateEntity(ref comp);
         t.Commit();
+    }
+
+    /// <summary>
+    /// Restores the system schema (FieldR1 and ComponentR1 tables) from persisted SPIs on database reopen.
+    /// Populates <see cref="_persistedComponents"/> so that subsequent <see cref="RegisterComponentFromAccessor{T}"/> calls load existing segments instead
+    /// of allocating fresh ones.
+    /// </summary>
+    private void LoadSystemSchemaR1()
+    {
+        using var guard = EpochGuard.Enter(EpochManager);
+        var epoch = guard.Epoch;
+
+        MMF.RequestPageEpoch(0, epoch, out var memPageIdx);
+        var page = MMF.GetPage(memPageIdx);
+        ref var h = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
+
+        // Restore the TSN counter so MVCC visibility works for entities from previous sessions
+        if (h.NextFreeTSN > 0)
+        {
+            TransactionChain.SetNextFreeId(h.NextFreeTSN);
+        }
+
+        if (h.SystemSchemaRevision == 0)
+        {
+            return;
+        }
+
+        // Register system type definitions in DBD
+        DBD.CreateFromAccessor<FieldR1>();
+        DBD.CreateFromAccessor<ComponentR1>();
+
+        var fieldDef = DBD.GetComponent(FieldR1.SchemaName, 1);
+        var compDef  = DBD.GetComponent(ComponentR1.SchemaName, 1);
+
+        // Load system tables using the persisted SPIs
+        _fieldsTable = new ComponentTable(this, fieldDef, this, h.FieldTableSPI, h.FieldTableVersionSPI, h.FieldTableDefaultIndexSPI, h.FieldTableString64IndexSPI);
+        _componentsTable = new ComponentTable(this, compDef, this, h.ComponentTableSPI, h.ComponentTableVersionSPI, h.ComponentTableDefaultIndexSPI, h.ComponentTableString64IndexSPI);
+
+        _componentTableByType.TryAdd(typeof(FieldR1), _fieldsTable);
+        _componentTableByType.TryAdd(typeof(ComponentR1), _componentsTable);
+
+        var fieldsWalTypeId = (ushort)_fieldsTable.ComponentSegment.RootPageIndex;
+        _fieldsTable.WalTypeId = fieldsWalTypeId;
+        _componentTableByWalTypeId.TryAdd(fieldsWalTypeId, _fieldsTable);
+
+        var compsWalTypeId = (ushort)_componentsTable.ComponentSegment.RootPageIndex;
+        _componentsTable.WalTypeId = compsWalTypeId;
+        _componentTableByWalTypeId.TryAdd(compsWalTypeId, _componentsTable);
+
+        // Read all ComponentR1 entries to build the persisted components dictionary
+        _persistedComponents = new Dictionary<string, ComponentR1>();
+        var entryCount = _componentsTable.PrimaryKeyIndex.EntryCount;
+        if (entryCount > 0)
+        {
+            long maxPk = 0;
+            int found = 0;
+
+            using var tx = this.CreateQuickTransaction();
+            for (long pk = 1; found < entryCount; pk++)
+            {
+                if (pk > entryCount * 10)
+                {
+                    break;
+                }
+
+                if (!tx.ReadEntity<ComponentR1>(pk, out var comp))
+                {
+                    continue;
+                }
+
+                found++;
+                if (pk > maxPk)
+                {
+                    maxPk = pk;
+                }
+
+                var pocoType = comp.POCOType.AsString;
+                _persistedComponents[pocoType] = comp;
+            }
+
+            // Update _curPrimaryKey from both system tables
+            UpdateCurPrimaryKey(maxPk);
+
+            if (_fieldsTable.PrimaryKeyIndex.EntryCount > 0)
+            {
+                var fieldsMaxPk = _fieldsTable.PrimaryKeyIndex.GetMaxKey();
+                UpdateCurPrimaryKey(fieldsMaxPk);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Persists critical engine state to disk during Dispose:
+    /// 1. Writes the current TSN counter to the root file header (MVCC visibility on reopen)
+    /// 2. Flushes ALL dirty cached pages to disk (ensures committed data survives even without WAL/checkpoint)
+    /// </summary>
+    private void PersistEngineState()
+    {
+        using var guard = EpochGuard.Enter(EpochManager);
+        var epoch = guard.Epoch;
+
+        // Write TSN counter to root file header
+        MMF.RequestPageEpoch(0, epoch, out var memPageIdx);
+        var latched = MMF.TryLatchPageExclusive(memPageIdx);
+        Debug.Assert(latched, "TryLatchPageExclusive failed on root page during engine state save");
+        var page = MMF.GetPage(memPageIdx);
+
+        ref var header = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
+        header.NextFreeTSN = TransactionChain.NextFreeId;
+
+        MMF.UnlatchPageExclusive(memPageIdx);
+
+        // Flush all cached pages (including the root header we just modified) to disk
+        MMF.FlushAllCachedPages();
+    }
+
+    private void UpdateCurPrimaryKey(long pk)
+    {
+        long current;
+        do
+        {
+            current = _curPrimaryKey;
+        }
+        while (pk > current && Interlocked.CompareExchange(ref _curPrimaryKey, pk, current) != current);
     }
 
     public bool RegisterComponentFromAccessor<T>() where T : unmanaged
@@ -496,7 +643,38 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             return false;
         }
 
-        var componentTable = new ComponentTable(this, definition, this);
+        ComponentTable componentTable;
+        var typeName = typeof(T).FullName;
+
+        if (_persistedComponents != null && _persistedComponents.TryGetValue(typeName, out var persisted))
+        {
+            // Load path: restore from saved SPIs
+            componentTable = new ComponentTable(this, definition, this, persisted.ComponentSPI, persisted.VersionSPI, 
+                persisted.DefaultIndexSPI, persisted.String64IndexSPI);
+
+            // Update _curPrimaryKey from loaded PK index
+            if (componentTable.PrimaryKeyIndex.EntryCount > 0)
+            {
+                var maxPk = componentTable.PrimaryKeyIndex.GetMaxKey();
+                UpdateCurPrimaryKey(maxPk);
+            }
+        }
+        else
+        {
+            // Create path: allocate new segments
+            componentTable = new ComponentTable(this, definition, this);
+
+            // Save metadata for future reload (skip during initial CreateSystemSchemaR1)
+            if (_componentsTable != null)
+            {
+                SaveInSystemSchema(componentTable);
+
+                // Flush all pages — segment allocation doesn't use ChangeSets, so
+                // those pages aren't marked dirty and would be lost on engine close.
+                MMF.FlushAllCachedPages();
+            }
+        }
+
         _componentTableByType.TryAdd(typeof(T), componentTable);
 
         // Assign a stable WAL type ID derived from the component segment's persistent root page index

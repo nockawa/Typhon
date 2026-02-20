@@ -59,6 +59,29 @@ unsafe internal struct RootFileHeader
     /// <summary>Pre-allocated page index for the next occupancy map data page.</summary>
     public int OccupancyNextReservedMapPageIndex;
 
+    // ── Additional system table SPIs (appended to preserve existing offsets) ──
+
+    /// <summary>Root page index of the CompRevTable segment for the FieldR1 system table.</summary>
+    public int FieldTableVersionSPI;
+
+    /// <summary>Root page index of the DefaultIndex segment for the FieldR1 system table.</summary>
+    public int FieldTableDefaultIndexSPI;
+
+    /// <summary>Root page index of the String64Index segment for the FieldR1 system table.</summary>
+    public int FieldTableString64IndexSPI;
+
+    /// <summary>Root page index of the CompRevTable segment for the ComponentR1 system table.</summary>
+    public int ComponentTableVersionSPI;
+
+    /// <summary>Root page index of the DefaultIndex segment for the ComponentR1 system table.</summary>
+    public int ComponentTableDefaultIndexSPI;
+
+    /// <summary>Root page index of the String64Index segment for the ComponentR1 system table.</summary>
+    public int ComponentTableString64IndexSPI;
+
+    /// <summary>Next free Transaction Sequence Number. Restored on reopen so MVCC visibility works across engine restarts.</summary>
+    public long NextFreeTSN;
+
     /// <summary>Returns <see cref="HeaderSignature"/> decoded as a managed string.</summary>
     public string HeaderSignatureString
     {
