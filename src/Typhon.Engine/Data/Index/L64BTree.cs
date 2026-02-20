@@ -695,14 +695,14 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
     protected override BaseNodeStorage GetStorage() => new L64NodeStorage();
     public override bool AllowMultiple => false;
-    protected L64BTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
+    protected L64BTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }
 
 public class L64MultipleBTree<TKey> : L64BTree<TKey> where TKey : unmanaged
 {
-    public L64MultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
+    public L64MultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 
@@ -733,41 +733,41 @@ public class L64MultipleBTree<TKey> : L64BTree<TKey> where TKey : unmanaged
 
 public class LongSingleBTree : L64BTree<long>
 {
-    public LongSingleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
+    public LongSingleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }
 
 public class LongMultipleBTree : L64MultipleBTree<long>
 {
-    public LongMultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
+    public LongMultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }
 public class ULongSingleBTree : L64BTree<long>
 {
-    public ULongSingleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
+    public ULongSingleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }
 
 public class ULongMultipleBTree : L64MultipleBTree<long>
 {
-    public ULongMultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
+    public ULongMultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }
 
 public class DoubleSingleBTree : L64BTree<double>
 {
-    public DoubleSingleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
+    public DoubleSingleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }
 
 public class DoubleMultipleBTree : L64MultipleBTree<double>
 {
-    public DoubleMultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
+    public DoubleMultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }

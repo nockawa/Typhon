@@ -293,32 +293,32 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
 
     #endregion
     
-    public ComponentTable(DatabaseEngine dbe, DBComponentDefinition definition, IResource parent, ExhaustionPolicy exhaustionPolicy = ExhaustionPolicy.None) : 
-        base($"ComponentTable_{definition.Name}", ResourceType.ComponentTable, parent, exhaustionPolicy)
+    public ComponentTable(DatabaseEngine dbe, DBComponentDefinition definition, IResource parent, ExhaustionPolicy exhaustionPolicy = ExhaustionPolicy.None,
+        ChangeSet changeSet = null) : base($"ComponentTable_{definition.Name}", ResourceType.ComponentTable, parent, exhaustionPolicy)
     {
         DBE = dbe;
         Definition = definition;
-        
+
         var mmf = DBE.MMF;
-        ComponentSegment    = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, ComponentTotalSize);
-        CompRevTableSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, ComponentRevisionManager.CompRevChunkSize);
+        ComponentSegment    = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, ComponentTotalSize, changeSet);
+        CompRevTableSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, ComponentRevisionManager.CompRevChunkSize, changeSet);
 
         // This segment will be used for all kinds of index types except String64 which needs a dedicated one because its chunk size is different (all others are 64 bytes)
-        DefaultIndexSegment  = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(Index64Chunk));
-        String64IndexSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(IndexString64Chunk));
+        DefaultIndexSegment  = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(Index64Chunk), changeSet);
+        String64IndexSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(IndexString64Chunk), changeSet);
 
         // PK index uses stableId -1 on DefaultIndexSegment; secondary indexes use Field.FieldId
         if (definition.AllowMultiple)
         {
-            PrimaryKeyIndex = new LongMultipleBTree(DefaultIndexSegment, stableId: -1);
+            PrimaryKeyIndex = new LongMultipleBTree(DefaultIndexSegment, stableId: -1, changeSet: changeSet);
         }
         else
         {
-            PrimaryKeyIndex = new LongSingleBTree(DefaultIndexSegment, stableId: -1);
+            PrimaryKeyIndex = new LongSingleBTree(DefaultIndexSegment, stableId: -1, changeSet: changeSet);
         }
 
-        BuildIndexedFieldInfo(false);
-        BuildComponentCollectionInfo();
+        BuildIndexedFieldInfo(false, changeSet);
+        BuildComponentCollectionInfo(changeSet);
     }
 
     /// <summary>
@@ -347,7 +347,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         ComponentCollectionVSBSByOffset = new Dictionary<int, VariableSizedBufferSegmentBase>();
     }
 
-    private void BuildIndexedFieldInfo(bool load)
+    private void BuildIndexedFieldInfo(bool load, ChangeSet changeSet = null)
     {
         var l = new List<IndexedFieldInfo>();
 
@@ -367,7 +367,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
             {
                 OffsetToField = ro + f.OffsetInComponentStorage,
                 Size          = f.SizeInComponentStorage,
-                Index         = CreateIndexForField(f, (short)f.FieldId, load),
+                Index         = CreateIndexForField(f, (short)f.FieldId, load, changeSet),
             };
             fi.OffsetToIndexElementId = fi.Index.AllowMultiple ? (j++ * sizeof(int)) : 0;
             l.Add(fi);
@@ -376,7 +376,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         IndexedFieldInfos = l.ToArray();
     }
 
-    private void BuildComponentCollectionInfo()
+    private void BuildComponentCollectionInfo(ChangeSet changeSet = null)
     {
         ComponentCollectionVSBSByOffset = new Dictionary<int, VariableSizedBufferSegmentBase>();
         foreach (var field in Definition.FieldsByName.Values)
@@ -386,29 +386,29 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
                 continue;
             }
 
-            var vsbs = DBE.GetComponentCollectionVSBS(field.DotNetUnderlyingType);
+            var vsbs = DBE.GetComponentCollectionVSBS(field.DotNetUnderlyingType, changeSet);
             ComponentCollectionVSBSByOffset.Add(field.OffsetInComponentStorage, vsbs);
             _flags |= ComponentTableFlags.HasCollections;
         }
     }
 
-    private IBTree CreateIndexForField(DBComponentDefinition.Field field, short stableId, bool load = false)
+    private IBTree CreateIndexForField(DBComponentDefinition.Field field, short stableId, bool load = false, ChangeSet changeSet = null)
     {
         var s = field.Type == FieldType.String64 ? String64IndexSegment : DefaultIndexSegment;
         IBTree index = field.Type switch
         {
-            FieldType.Byte     => field.IndexAllowMultiple ? new ByteMultipleBTree      (s, load, stableId) : new ByteSingleBTree    (s, load, stableId),
-            FieldType.Short    => field.IndexAllowMultiple ? new ShortMultipleBTree     (s, load, stableId) : new ShortSingleBTree   (s, load, stableId),
-            FieldType.Int      => field.IndexAllowMultiple ? new IntMultipleBTree       (s, load, stableId) : new IntSingleBTree     (s, load, stableId),
-            FieldType.Long     => field.IndexAllowMultiple ? new LongMultipleBTree      (s, load, stableId) : new LongSingleBTree    (s, load, stableId),
-            FieldType.UByte    => field.IndexAllowMultiple ? new UByteMultipleBTree     (s, load, stableId) : new UByteSingleBTree   (s, load, stableId),
-            FieldType.UShort   => field.IndexAllowMultiple ? new UShortMultipleBTree    (s, load, stableId) : new UShortSingleBTree  (s, load, stableId),
-            FieldType.UInt     => field.IndexAllowMultiple ? new UIntMultipleBTree      (s, load, stableId) : new UIntSingleBTree    (s, load, stableId),
-            FieldType.ULong    => field.IndexAllowMultiple ? new ULongMultipleBTree     (s, load, stableId) : new ULongSingleBTree   (s, load, stableId),
-            FieldType.Float    => field.IndexAllowMultiple ? new FloatMultipleBTree     (s, load, stableId) : new FloatSingleBTree   (s, load, stableId),
-            FieldType.Double   => field.IndexAllowMultiple ? new DoubleMultipleBTree    (s, load, stableId) : new DoubleSingleBTree  (s, load, stableId),
-            FieldType.Char     => field.IndexAllowMultiple ? new CharMultipleBTree      (s, load, stableId) : new CharSingleBTree    (s, load, stableId),
-            FieldType.String64 => field.IndexAllowMultiple ? new String64MultipleBTree  (s, load, stableId) : new String64SingleBTree(s, load, stableId),
+            FieldType.Byte     => field.IndexAllowMultiple ? new ByteMultipleBTree      (s, load, stableId, changeSet) : new ByteSingleBTree    (s, load, stableId, changeSet),
+            FieldType.Short    => field.IndexAllowMultiple ? new ShortMultipleBTree     (s, load, stableId, changeSet) : new ShortSingleBTree   (s, load, stableId, changeSet),
+            FieldType.Int      => field.IndexAllowMultiple ? new IntMultipleBTree       (s, load, stableId, changeSet) : new IntSingleBTree     (s, load, stableId, changeSet),
+            FieldType.Long     => field.IndexAllowMultiple ? new LongMultipleBTree      (s, load, stableId, changeSet) : new LongSingleBTree    (s, load, stableId, changeSet),
+            FieldType.UByte    => field.IndexAllowMultiple ? new UByteMultipleBTree     (s, load, stableId, changeSet) : new UByteSingleBTree   (s, load, stableId, changeSet),
+            FieldType.UShort   => field.IndexAllowMultiple ? new UShortMultipleBTree    (s, load, stableId, changeSet) : new UShortSingleBTree  (s, load, stableId, changeSet),
+            FieldType.UInt     => field.IndexAllowMultiple ? new UIntMultipleBTree      (s, load, stableId, changeSet) : new UIntSingleBTree    (s, load, stableId, changeSet),
+            FieldType.ULong    => field.IndexAllowMultiple ? new ULongMultipleBTree     (s, load, stableId, changeSet) : new ULongSingleBTree   (s, load, stableId, changeSet),
+            FieldType.Float    => field.IndexAllowMultiple ? new FloatMultipleBTree     (s, load, stableId, changeSet) : new FloatSingleBTree   (s, load, stableId, changeSet),
+            FieldType.Double   => field.IndexAllowMultiple ? new DoubleMultipleBTree    (s, load, stableId, changeSet) : new DoubleSingleBTree  (s, load, stableId, changeSet),
+            FieldType.Char     => field.IndexAllowMultiple ? new CharMultipleBTree      (s, load, stableId, changeSet) : new CharSingleBTree    (s, load, stableId, changeSet),
+            FieldType.String64 => field.IndexAllowMultiple ? new String64MultipleBTree  (s, load, stableId, changeSet) : new String64SingleBTree(s, load, stableId, changeSet),
             _                  => null
         };
         return index;

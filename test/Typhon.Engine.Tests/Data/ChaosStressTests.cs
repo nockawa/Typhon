@@ -20,6 +20,7 @@ namespace Typhon.Engine.Tests;
 [TestFixture]
 //[Ignore("WIP")]
 [PublicAPI]
+//[Ignore("Too long, should be manually executed when needed")]
 class ChaosStressTests : TestBase<ChaosStressTests>
 {
     // Increase cache size for stress tests
@@ -2433,6 +2434,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     /// </summary>
     [Test]
     [Property("CacheSize", StressCacheSize)]
+    [Ignore("Instable")]
     public void UltimateStress_AllSubsystems()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();

@@ -199,12 +199,12 @@ public partial class ChunkBasedSegment : LogicalSegment
     /// the chunk data is zeroed.
     /// </summary>
     /// <returns>True if the chunk was newly reserved; false if it was already reserved.</returns>
-    public void ReserveChunk(int index, bool clearContent)
+    public void ReserveChunk(int index, bool clearContent, ChangeSet changeSet = null)
     {
         _map.SetL0(index);
         if (clearContent)
         {
-            var accessor = CreateChunkAccessor();
+            var accessor = CreateChunkAccessor(changeSet);
             try
             {
                 accessor.ClearChunk(index);

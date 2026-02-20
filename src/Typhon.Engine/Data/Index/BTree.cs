@@ -437,7 +437,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     
     public ChunkBasedSegment Segment => _segment;
 
-    protected BTree(ChunkBasedSegment segment, bool load, short stableId = 0)
+    protected BTree(ChunkBasedSegment segment, bool load, short stableId = 0, ChangeSet changeSet = null)
     {
         Comparer = Comparer<TKey>.Default;
         _segment = segment;
@@ -460,12 +460,12 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             {
                 if (!_segment.IsChunkAllocated(i))
                 {
-                    _segment.ReserveChunk(i, true);
+                    _segment.ReserveChunk(i, true, changeSet);
                 }
             }
 
             // Register this BTree in the directory (append a new entry, cache its location)
-            var accessor = _segment.CreateChunkAccessor();
+            var accessor = _segment.CreateChunkAccessor(changeSet);
             try
             {
                 RegisterInDirectory(stableId, ref accessor);

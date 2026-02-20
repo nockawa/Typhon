@@ -16,8 +16,9 @@ namespace Typhon.Engine;
 /// Create via <see cref="DatabaseEngine.CreateUnitOfWork"/>.
 /// </para>
 /// <para>
-/// Currently only <see cref="DurabilityMode.Deferred"/> is functional (no WAL yet). The full durability
-/// model activates when Tier 5 (WAL) lands.
+/// In WAL mode, durability is achieved via WAL FUA writes. In WAL-less mode (no <see cref="WalManager"/>),
+/// durability uses ChangeSet-based page tracking: <see cref="ChangeSet.SaveChanges"/> writes dirty pages
+/// to OS cache, and <see cref="PagedMMF.FlushToDisk"/> issues fsync. See §2.3 of 02-execution.md.
 /// </para>
 /// </remarks>
 [PublicAPI]
@@ -126,6 +127,11 @@ public sealed class UnitOfWork : IDisposable
                 walManager.WaitForDurable(currentLsn, ref ctx);
             }
         }
+        else
+        {
+            // WAL-less mode: fsync the data file to ensure all SaveChanges writes are on stable storage.
+            _dbe.MMF.FlushToDisk();
+        }
 
         _state = UnitOfWorkState.WalDurable;
     }
@@ -149,6 +155,9 @@ public sealed class UnitOfWork : IDisposable
         }
 
         _disposed = true;
+
+        // Ensure durability: flush WAL (WAL mode) or fsync data file (WAL-less mode)
+        Flush();
 
         // Cancel any outstanding operations
         _cts.Cancel();

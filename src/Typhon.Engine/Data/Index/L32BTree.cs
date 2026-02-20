@@ -695,14 +695,14 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
     protected override BaseNodeStorage GetStorage() => new L32NodeStorage();
     public override bool AllowMultiple => false;
-    protected L32BTree(ChunkBasedSegment segment, bool load, short stableId = 0) : base(segment, load, stableId)
+    protected L32BTree(ChunkBasedSegment segment, bool load, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }
 
 public class L32MultipleBTree<TKey> : L32BTree<TKey> where TKey : unmanaged
 {
-    public L32MultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
+    public L32MultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 
@@ -733,21 +733,21 @@ public class L32MultipleBTree<TKey> : L32BTree<TKey> where TKey : unmanaged
 
 public class IntSingleBTree : L32BTree<int>
 {
-    public IntSingleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
+    public IntSingleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }
 
 public class IntMultipleBTree : L32MultipleBTree<int>
 {
-    public IntMultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
+    public IntMultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }
 
 public class UIntSingleBTree : L32BTree<uint>
 {
-    public UIntSingleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
+    public UIntSingleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 
@@ -755,21 +755,21 @@ public class UIntSingleBTree : L32BTree<uint>
 
 public class UIntMultipleBTree : L32MultipleBTree<uint>
 {
-    public UIntMultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
+    public UIntMultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }
 
 public class FloatSingleBTree : L32BTree<float>
 {
-    public FloatSingleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
+    public FloatSingleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }
 
 public class FloatMultipleBTree : L32MultipleBTree<float>
 {
-    public FloatMultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0) : base(segment, load, stableId)
+    public FloatMultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }

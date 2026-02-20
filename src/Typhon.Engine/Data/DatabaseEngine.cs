@@ -403,14 +403,14 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         (VariableSizedBufferSegment<T>)_componentCollectionVSBSByType.GetOrAdd(typeof(T),
             _ => new VariableSizedBufferSegment<T>(GetComponentCollectionSegment<T>()));
 
-    internal VariableSizedBufferSegmentBase GetComponentCollectionVSBS(Type itemType) =>
+    internal VariableSizedBufferSegmentBase GetComponentCollectionVSBS(Type itemType, ChangeSet changeSet = null) =>
         _componentCollectionVSBSByType.GetOrAdd(itemType,
             type =>
             {
                 // Create the type for ComponentCollection<T>
                 var ctType = typeof(VariableSizedBufferSegment<>).MakeGenericType(type);
                 var fieldSize = DatabaseSchemaExtensions.FromType(type).field.SizeInComp();
-                var segment = GetComponentCollectionSegment(fieldSize);
+                var segment = GetComponentCollectionSegment(fieldSize, changeSet);
                 return (VariableSizedBufferSegmentBase)Activator.CreateInstance(ctType, segment);
             });
 
@@ -418,18 +418,22 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         _componentCollectionSegmentByStride.GetOrAdd(RoundToStandardStride(sizeof(T) * 8),
             stride => MMF.AllocateChunkBasedSegment(PageBlockType.None, ComponentCollectionSegmentStartingSize, stride));
 
-    internal ChunkBasedSegment GetComponentCollectionSegment(int itemSize) =>
+    internal ChunkBasedSegment GetComponentCollectionSegment(int itemSize, ChangeSet changeSet = null) =>
         _componentCollectionSegmentByStride.GetOrAdd(RoundToStandardStride(itemSize * 8),
-            stride => MMF.AllocateChunkBasedSegment(PageBlockType.None, ComponentCollectionSegmentStartingSize, stride));
+            stride => MMF.AllocateChunkBasedSegment(PageBlockType.None, ComponentCollectionSegmentStartingSize, stride, changeSet));
 
     internal long GetNewPrimaryKey() => Interlocked.Increment(ref _curPrimaryKey);
 
     // Create the first revision of the system schema
     private void CreateSystemSchemaR1()
     {
-        // Register the system components
-        RegisterComponentFromAccessor<FieldR1>();
-        RegisterComponentFromAccessor<ComponentR1>();
+        // Single ChangeSet tracks all structural pages (segments, BTree directories, occupancy bitmaps)
+        // allocated during component registration. This replaces the old FlushAllCachedPages() nuclear approach.
+        var cs = MMF.CreateChangeSet();
+
+        // Register the system components, passing the ChangeSet so all structural mutations are tracked
+        RegisterComponentFromAccessor<FieldR1>(cs);
+        RegisterComponentFromAccessor<ComponentR1>(cs);
 
         // Get their table
         _fieldsTable = GetComponentTable<FieldR1>();
@@ -444,7 +448,6 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         var page = MMF.GetPage(memPageIdx);
 
         // Save the entry points in the file header
-        var cs = MMF.CreateChangeSet();
         cs.AddByMemPageIndex(memPageIdx);
         ref var rootFileHeader = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
 
@@ -461,21 +464,20 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         rootFileHeader.NextFreeTSN = TransactionChain.NextFreeId;
 
         MMF.UnlatchPageExclusive(memPageIdx);
-        cs.SaveChanges();
 
         // Now save the system components schema in the database (to load them next time we open the database)
+        // These use transactions internally which have their own ChangeSets
         SaveInSystemSchema(_fieldsTable);
         SaveInSystemSchema(_componentsTable);
 
-        // Flush ALL cached pages to disk. During creation, many pages are allocated and modified without ChangeSets (segments, BTree directories, occupancy
-        // bitmap), so they're never marked dirty and would be lost when the page cache is discarded.
-        MMF.FlushAllCachedPages();
+        cs.SaveChanges();
+        MMF.FlushToDisk();
     }
 
     private void SaveInSystemSchema(ComponentTable table)
     {
         var definition = table.Definition;
-        using var t = this.CreateQuickTransaction();
+        using var t = this.CreateQuickTransaction(DurabilityMode.Immediate);
 
         var comp = new ComponentR1
         {
@@ -610,19 +612,22 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         using var guard = EpochGuard.Enter(EpochManager);
         var epoch = guard.Epoch;
 
+        var cs = MMF.CreateChangeSet();
+
         // Write TSN counter to root file header
         MMF.RequestPageEpoch(0, epoch, out var memPageIdx);
         var latched = MMF.TryLatchPageExclusive(memPageIdx);
         Debug.Assert(latched, "TryLatchPageExclusive failed on root page during engine state save");
         var page = MMF.GetPage(memPageIdx);
 
+        cs.AddByMemPageIndex(memPageIdx);
         ref var header = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
         header.NextFreeTSN = TransactionChain.NextFreeId;
 
         MMF.UnlatchPageExclusive(memPageIdx);
 
-        // Flush all cached pages (including the root header we just modified) to disk
-        MMF.FlushAllCachedPages();
+        cs.SaveChanges();
+        MMF.FlushToDisk();
     }
 
     private void UpdateCurPrimaryKey(long pk)
@@ -635,7 +640,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         while (pk > current && Interlocked.CompareExchange(ref _curPrimaryKey, pk, current) != current);
     }
 
-    public bool RegisterComponentFromAccessor<T>() where T : unmanaged
+    public bool RegisterComponentFromAccessor<T>(ChangeSet changeSet = null) where T : unmanaged
     {
         var definition = DBD.CreateFromAccessor<T>();
         if (definition == null)
@@ -649,7 +654,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         if (_persistedComponents != null && _persistedComponents.TryGetValue(typeName, out var persisted))
         {
             // Load path: restore from saved SPIs
-            componentTable = new ComponentTable(this, definition, this, persisted.ComponentSPI, persisted.VersionSPI, 
+            componentTable = new ComponentTable(this, definition, this, persisted.ComponentSPI, persisted.VersionSPI,
                 persisted.DefaultIndexSPI, persisted.String64IndexSPI);
 
             // Update _curPrimaryKey from loaded PK index
@@ -661,17 +666,16 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         }
         else
         {
-            // Create path: allocate new segments
-            componentTable = new ComponentTable(this, definition, this);
+            // Create path: use the provided ChangeSet, or create a new one for standalone registration
+            var cs = changeSet ?? MMF.CreateChangeSet();
+            componentTable = new ComponentTable(this, definition, this, changeSet: cs);
 
             // Save metadata for future reload (skip during initial CreateSystemSchemaR1)
             if (_componentsTable != null)
             {
                 SaveInSystemSchema(componentTable);
-
-                // Flush all pages — segment allocation doesn't use ChangeSets, so
-                // those pages aren't marked dirty and would be lost on engine close.
-                MMF.FlushAllCachedPages();
+                cs.SaveChanges();
+                MMF.FlushToDisk();
             }
         }
 

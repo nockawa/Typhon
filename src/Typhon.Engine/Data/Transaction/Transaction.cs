@@ -267,6 +267,13 @@ public unsafe class Transaction : IDisposable
             info.DisposeAccessors();
         }
 
+        // WAL-less mode: write dirty data pages to OS cache. For Immediate mode this is a no-op (already saved in Commit).
+        // For Deferred mode this writes pages without fsync — the UoW.Dispose will fsync at the durability boundary.
+        if (State == TransactionState.Committed && _dbe.WalManager == null)
+        {
+            _changeSet.SaveChanges();
+        }
+
         // Exit epoch scope after accessors are disposed but before removing from the chain. This allows pages to be evicted once no transaction
         // references them. Use unordered exit because transactions on the same thread can be disposed in any order (not necessarily LIFO), unlike EpochGuard
         // which is stack-bound.
@@ -1959,6 +1966,22 @@ public unsafe class Transaction : IDisposable
             _dbe.WalManager.RequestFlush();
             var wc = ComposeWaitContext(ref ctx, TimeoutOptions.Current.DefaultCommitTimeout);
             _dbe.WalManager.WaitForDurable(walHighLsn, ref wc);
+        }
+
+        // WAL-less Immediate: persist dirty data pages and fsync before returning from Commit.
+        // This is the WAL-less equivalent of the WAL FUA path above — data is on stable storage when Commit returns.
+        if (_dbe.WalManager == null && OwningUnitOfWork?.DurabilityMode == DurabilityMode.Immediate)
+        {
+            // Flush batched dirty flags from long-lived accessors to the ChangeSet (BTree accessors are already
+            // disposed inline during CommitComponent, so their pages are already tracked).
+            foreach (var kvp in _componentInfos)
+            {
+                kvp.Value.CompContentAccessor.CommitChanges();
+                kvp.Value.CompRevTableAccessor.CommitChanges();
+            }
+
+            _changeSet.SaveChanges();
+            _dbe.MMF.FlushToDisk();
         }
 
         // New state
