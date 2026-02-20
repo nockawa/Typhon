@@ -216,7 +216,7 @@ public class FpiCaptureTests : AllocatorTestBase
         Assert.That(_walManager.CommitBuffer.TryDrain(out var data, out var frameCount), Is.True, "Should have data to drain");
         Assert.That(frameCount, Is.GreaterThanOrEqualTo(1));
 
-        // Walk frames and find the FPI record
+        // Walk frames and find the FPI chunk
         bool foundFpi = false;
         WalCommitBuffer.WalkFrames(data, (payload, recordCount) =>
         {
@@ -225,29 +225,36 @@ public class FpiCaptureTests : AllocatorTestBase
                 return;
             }
 
-            // Read the WalRecordHeader from the payload
-            var header = MemoryMarshal.Read<WalRecordHeader>(payload);
+            // Read chunk header
+            var chunkHeader = MemoryMarshal.Read<WalChunkHeader>(payload);
 
-            if ((header.Flags & (byte)WalRecordFlags.FullPageImage) != 0)
+            if ((WalChunkType)chunkHeader.ChunkType != WalChunkType.FullPageImage)
             {
-                foundFpi = true;
-
-                // Verify header fields
-                Assert.That(header.LSN, Is.EqualTo(lsnBefore), "FPI should have the expected LSN");
-                Assert.That(header.UowEpoch, Is.EqualTo(0), "FPI records are not UoW-scoped");
-                Assert.That(header.TransactionTSN, Is.EqualTo(0), "FPI is page-level, not transaction-level");
-                Assert.That(header.ComponentTypeId, Is.EqualTo(0));
-                Assert.That(header.EntityId, Is.EqualTo(0));
-
-                // PayloadLength = FpiMetadata (16) + PageSize (8192) = 8208
-                Assert.That(header.PayloadLength, Is.EqualTo(FpiMetadata.SizeInBytes + PagedMMF.PageSize));
-
-                // TotalRecordLength = WalRecordHeader (48) + PayloadLength (8208) = 8256
-                Assert.That(header.TotalRecordLength, Is.EqualTo((uint)(WalRecordHeader.SizeInBytes + header.PayloadLength)));
-
-                // Verify CRC is non-zero (was computed)
-                Assert.That(header.CRC, Is.Not.EqualTo(0), "CRC should be computed");
+                return;
             }
+
+            foundFpi = true;
+
+            // Extract body (between chunk header and footer)
+            var body = payload.Slice(WalChunkHeader.SizeInBytes, chunkHeader.ChunkSize - WalChunkHeader.SizeInBytes - WalChunkFooter.SizeInBytes);
+
+            // Verify LSN at body[0..8]
+            var lsn = MemoryMarshal.Read<long>(body);
+            Assert.That(lsn, Is.EqualTo(lsnBefore), "FPI should have the expected LSN");
+
+            // Verify FpiMetadata at body[8..24]
+            var meta = MemoryMarshal.Read<FpiMetadata>(body.Slice(sizeof(long)));
+
+            // Body length = LSN (8) + FpiMetadata (16) + PageSize (8192) = 8216
+            Assert.That(body.Length, Is.EqualTo(sizeof(long) + FpiMetadata.SizeInBytes + PagedMMF.PageSize),
+                "FPI body should contain LSN + metadata + full page data");
+
+            // ChunkSize = header (8) + body (8216) + footer (4) = 8228
+            Assert.That(chunkHeader.ChunkSize,
+                Is.EqualTo(WalChunkHeader.SizeInBytes + sizeof(long) + FpiMetadata.SizeInBytes + PagedMMF.PageSize + WalChunkFooter.SizeInBytes),
+                "ChunkSize should cover header + LSN + metadata + page data + footer");
+
+            // CRC is in the footer and set by WAL writer (not running in this test) — no CRC assertion needed
         });
 
         Assert.That(foundFpi, Is.True, "FPI record should be found in the WAL commit buffer");
@@ -279,16 +286,19 @@ public class FpiCaptureTests : AllocatorTestBase
                 return;
             }
 
-            var header = MemoryMarshal.Read<WalRecordHeader>(payload);
-            if ((header.Flags & (byte)WalRecordFlags.FullPageImage) == 0)
+            var chunkHeader = MemoryMarshal.Read<WalChunkHeader>(payload);
+            if ((WalChunkType)chunkHeader.ChunkType != WalChunkType.FullPageImage)
             {
                 return;
             }
 
             foundFpi = true;
 
-            // Read FpiMetadata from after the WalRecordHeader
-            var meta = MemoryMarshal.Read<FpiMetadata>(payload[WalRecordHeader.SizeInBytes..]);
+            // Extract body (between chunk header and footer)
+            var body = payload.Slice(WalChunkHeader.SizeInBytes, chunkHeader.ChunkSize - WalChunkHeader.SizeInBytes - WalChunkFooter.SizeInBytes);
+
+            // Read FpiMetadata from body[8..24] (after LSN)
+            var meta = MemoryMarshal.Read<FpiMetadata>(body.Slice(sizeof(long)));
 
             Assert.That(meta.FilePageIndex, Is.EqualTo(targetFilePageIndex));
             Assert.That(meta.SegmentId, Is.EqualTo(0), "SegmentId should be 0 (no multi-segment yet)");

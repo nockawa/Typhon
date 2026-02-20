@@ -152,32 +152,35 @@ public sealed class WalManager : ResourceNode
                 continue;
             }
 
-            while (reader.TryReadNext(out var header, out var payload))
+            while (reader.TryReadNext(out var chunkHeader, out var body))
             {
-                if ((header.Flags & (byte)WalRecordFlags.FullPageImage) == 0)
+                if ((WalChunkType)chunkHeader.ChunkType != WalChunkType.FullPageImage)
                 {
                     continue;
                 }
 
-                if (payload.Length <= FpiMetadata.SizeInBytes)
+                // FPI body: [LSN (8B)] [FpiMetadata (16B)] [page data]
+                if (body.Length < sizeof(long) + FpiMetadata.SizeInBytes)
                 {
                     continue;
                 }
 
-                var meta = MemoryMarshal.Read<FpiMetadata>(payload);
+                var lsn = MemoryMarshal.Read<long>(body);
+                var meta = MemoryMarshal.Read<FpiMetadata>(body.Slice(sizeof(long)));
+
                 if (meta.FilePageIndex != filePageIndex)
                 {
                     continue;
                 }
 
-                if (header.LSN <= bestLSN)
+                if (lsn <= bestLSN)
                 {
                     continue;
                 }
 
-                var pagePayload = payload.Slice(FpiMetadata.SizeInBytes);
+                var pagePayload = body.Slice(sizeof(long) + FpiMetadata.SizeInBytes);
 
-                if ((header.Flags & (byte)WalRecordFlags.Compressed) != 0)
+                if (meta.CompressionAlgo != FpiCompression.AlgoNone)
                 {
                     // Compressed FPI — decompress the page payload
                     if (meta.CompressionAlgo != FpiCompression.AlgoLZ4)
@@ -192,7 +195,7 @@ public sealed class WalManager : ResourceNode
                         continue; // Decompression failure — try older FPI
                     }
 
-                    bestLSN = header.LSN;
+                    bestLSN = lsn;
                     bestPageData = decompressed;
                 }
                 else
@@ -203,7 +206,7 @@ public sealed class WalManager : ResourceNode
                         continue;
                     }
 
-                    bestLSN = header.LSN;
+                    bestLSN = lsn;
                     bestPageData = pagePayload.Slice(0, PagedMMF.PageSize).ToArray();
                 }
             }

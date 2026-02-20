@@ -470,15 +470,23 @@ public class LogicalSegment : IDisposable
     /// </summary>
     internal static unsafe void InitHeader(byte* pageAddr, PageClearMode clearMode, PageBlockFlags flags, PageBlockType type, short formatRevision)
     {
+        ref var header = ref Unsafe.AsRef<PageBaseHeader>(pageAddr + PageBaseHeader.Offset);
+
         if (clearMode == PageClearMode.Header)
         {
+            // Preserve ModificationCounter across clear — it's the seqlock counter managed by TryLatchPageExclusive/UnlatchPageExclusive. Zeroing it while
+            // the page is latched leaves the counter odd after unlatch, causing CopyPageWithSeqlock to spin forever.
+            var savedModCounter = header.ModificationCounter;
             new Span<byte>(pageAddr, PagedMMF.PageHeaderSize).Clear();
+            header.ModificationCounter = savedModCounter;
         }
         else if (clearMode == PageClearMode.WholePage)
         {
+            var savedModCounter = header.ModificationCounter;
             new Span<byte>(pageAddr, PagedMMF.PageSize).Clear();
+            header.ModificationCounter = savedModCounter;
         }
-        ref var header = ref Unsafe.AsRef<PageBaseHeader>(pageAddr + PageBaseHeader.Offset);
+
         header.Flags = flags;
         header.Type = type;
         header.FormatRevision = formatRevision;

@@ -3,18 +3,16 @@ using System.Runtime.InteropServices;
 namespace Typhon.Engine;
 
 /// <summary>
-/// 16-byte blittable metadata written immediately after the <see cref="WalRecordHeader"/> in an FPI WAL record.
-/// Identifies which data-file page the full-page image belongs to.
+/// 16-byte blittable metadata written inside a <see cref="WalChunkType.FullPageImage"/> chunk body,
+/// immediately after the LSN field. Identifies which data-file page the full-page image belongs to.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Uncompressed layout: [WalRecordHeader (48 B)] [FpiMetadata (16 B)] [Page data (8192 B)] = 8256 B total.
-/// Compressed layout:   [WalRecordHeader (48 B)] [FpiMetadata (16 B)] [Compressed data (variable)] — smaller total.
+/// FPI chunk body layout: [LSN (8 B)] [FpiMetadata (16 B)] [Page data (variable)].
 /// </para>
 /// <para>
 /// When <see cref="CompressionAlgo"/> is 0 (none), the page data immediately follows at full <see cref="PagedMMF.PageSize"/>.
 /// When <see cref="CompressionAlgo"/> is 1 (LZ4), the data is LZ4-compressed and <see cref="UncompressedSize"/> records the original size.
-/// The <see cref="WalRecordFlags.Compressed"/> flag on the WAL header indicates compressed payloads.
 /// </para>
 /// </remarks>
 [StructLayout(LayoutKind.Sequential, Pack = 1)]

@@ -109,6 +109,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     private readonly IWalFileIO                 _walFileIO;
     private readonly IResource                  _durabilityNode;
     private WalRecoveryResult                   _lastRecoveryResult;
+    internal WalRecoveryResult                  LastRecoveryResult => _lastRecoveryResult;
     private StagingBufferPool                   _stagingBufferPool;
 
     // Transaction counters for observability

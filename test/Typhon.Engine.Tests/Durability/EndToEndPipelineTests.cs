@@ -3,7 +3,6 @@ using NUnit.Framework;
 using System;
 using System.IO;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 
 namespace Typhon.Engine.Tests;
 
@@ -161,7 +160,8 @@ class EndToEndPipelineTests : TestBase<EndToEndPipelineTests>
     }
 
     /// <summary>
-    /// Builds a WAL segment containing an uncompressed FPI record for a single page.
+    /// Builds a WAL segment containing an uncompressed FPI chunk for a single page.
+    /// Layout: [WalSegmentHeader] [WalFrameHeader] [WalChunkHeader] [LSN] [FpiMetadata] [page data] [WalChunkFooter]
     /// </summary>
     private static unsafe byte[] BuildFpiSegment(long segmentId, long firstLSN, int filePageIndex, byte[] pageData)
     {
@@ -176,8 +176,12 @@ class EndToEndPipelineTests : TestBase<EndToEndPipelineTests>
             header.ComputeAndSetCrc();
         }
 
-        var payloadLen = FpiMetadata.SizeInBytes + PagedMMF.PageSize;
-        var frameLength = WalFrameHeader.SizeInBytes + WalRecordHeader.SizeInBytes + payloadLen;
+        // FPI chunk body: [LSN 8B] [FpiMetadata 16B] [page data]
+        var bodyLen = sizeof(long) + FpiMetadata.SizeInBytes + PagedMMF.PageSize;
+        var chunkSize = WalChunkHeader.SizeInBytes + bodyLen + WalChunkFooter.SizeInBytes;
+
+        // Frame contains one chunk
+        var frameLength = WalFrameHeader.SizeInBytes + chunkSize;
 
         // Write frame header
         var offset = WalSegmentHeader.SizeInBytes;
@@ -185,24 +189,18 @@ class EndToEndPipelineTests : TestBase<EndToEndPipelineTests>
         frameHeader.FrameLength = frameLength;
         frameHeader.RecordCount = 1;
 
-        // Write FPI record
+        // Write WalChunkHeader
         var recordOffset = offset + WalFrameHeader.SizeInBytes;
-        ref var recHeader = ref Unsafe.As<byte, WalRecordHeader>(ref data[recordOffset]);
-        recHeader.LSN = firstLSN;
-        recHeader.TransactionTSN = 0;
-        recHeader.TotalRecordLength = (uint)(WalRecordHeader.SizeInBytes + payloadLen);
-        recHeader.UowEpoch = 0;
-        recHeader.ComponentTypeId = 0;
-        recHeader.EntityId = 0;
-        recHeader.PayloadLength = (ushort)payloadLen;
-        recHeader.OperationType = 0;
-        recHeader.Flags = (byte)WalRecordFlags.FullPageImage;
-        recHeader.PrevCRC = 0;
-        recHeader.CRC = 0;
+        ref var ch = ref Unsafe.As<byte, WalChunkHeader>(ref data[recordOffset]);
+        ch.ChunkType = (ushort)WalChunkType.FullPageImage;
+        ch.ChunkSize = (ushort)chunkSize;
+        ch.PrevCRC = 0; // first chunk in segment
 
-        // Write FpiMetadata
-        var metaOffset = recordOffset + WalRecordHeader.SizeInBytes;
-        ref var meta = ref Unsafe.As<byte, FpiMetadata>(ref data[metaOffset]);
+        // Write LSN at body[0]
+        Unsafe.As<byte, long>(ref data[recordOffset + WalChunkHeader.SizeInBytes]) = firstLSN;
+
+        // Write FpiMetadata at body[8]
+        ref var meta = ref Unsafe.As<byte, FpiMetadata>(ref data[recordOffset + WalChunkHeader.SizeInBytes + sizeof(long)]);
         meta.FilePageIndex = filePageIndex;
         meta.SegmentId = 0;
         meta.ChangeRevision = 1;
@@ -210,14 +208,14 @@ class EndToEndPipelineTests : TestBase<EndToEndPipelineTests>
         meta.CompressionAlgo = 0;
         meta.Reserved = 0;
 
-        // Write page data
-        pageData.AsSpan().CopyTo(data.AsSpan(metaOffset + FpiMetadata.SizeInBytes));
+        // Write page data at body[24]
+        pageData.AsSpan().CopyTo(
+            data.AsSpan(recordOffset + WalChunkHeader.SizeInBytes + sizeof(long) + FpiMetadata.SizeInBytes));
 
-        // Compute CRC
-        var recordSpan = data.AsSpan(recordOffset, WalRecordHeader.SizeInBytes + payloadLen);
-        var crcFieldOffset = (int)Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.CRC));
-        var computedCrc = WalCrc.ComputeSkipping(recordSpan, crcFieldOffset, sizeof(uint));
-        Unsafe.As<byte, uint>(ref data[recordOffset + crcFieldOffset]) = computedCrc;
+        // Write footer CRC: CRC32C over [0, ChunkSize - 4)
+        var crcSpan = data.AsSpan(recordOffset, chunkSize - WalChunkFooter.SizeInBytes);
+        var crc = WalCrc.Compute(crcSpan);
+        Unsafe.As<byte, uint>(ref data[recordOffset + chunkSize - WalChunkFooter.SizeInBytes]) = crc;
 
         return data;
     }

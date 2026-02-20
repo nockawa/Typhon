@@ -2029,7 +2029,8 @@ public unsafe class Transaction : IDisposable
 
                         recordCount++;
                         var isDelete = (cri.Operations & ComponentInfoBase.OperationType.Deleted) != 0;
-                        totalPayload += WalRecordHeader.SizeInBytes + (isDelete ? 0 : storageSize);
+                        var bodyLen = WalRecordHeader.SizeInBytes + (isDelete ? 0 : storageSize);
+                        totalPayload += WalChunkHeader.SizeInBytes + bodyLen + WalChunkFooter.SizeInBytes;
                     }
                     break;
 
@@ -2046,7 +2047,8 @@ public unsafe class Transaction : IDisposable
 
                             recordCount++;
                             var isDelete = (cri.Operations & ComponentInfoBase.OperationType.Deleted) != 0;
-                            totalPayload += WalRecordHeader.SizeInBytes + (isDelete ? 0 : storageSize);
+                            var bodyLen = WalRecordHeader.SizeInBytes + (isDelete ? 0 : storageSize);
+                            totalPayload += WalChunkHeader.SizeInBytes + bodyLen + WalChunkFooter.SizeInBytes;
                         }
                     }
                     break;
@@ -2076,7 +2078,6 @@ public unsafe class Transaction : IDisposable
                 WriteOffset = 0,
                 RecordIndex = 0,
                 CurrentLsn = claim.FirstLSN,
-                PrevCrc = 0,
                 TotalRecordCount = recordCount
             };
 
@@ -2139,7 +2140,6 @@ public unsafe class Transaction : IDisposable
         public int WriteOffset;
         public int RecordIndex;
         public long CurrentLsn;
-        public uint PrevCrc;
         public int TotalRecordCount;
 
         /// <summary>
@@ -2149,7 +2149,8 @@ public unsafe class Transaction : IDisposable
     }
 
     /// <summary>
-    /// Writes a single WAL record (header + payload) into the claim data span.
+    /// Writes a single WAL chunk (chunk header + record header + payload + chunk footer) into the claim data span.
+    /// CRC and PrevCRC are left as 0 — the WAL writer thread patches them before disk write.
     /// </summary>
     private void WriteWalRecord(ref WalRecordWriter writer, long entityId, ushort componentTypeId, int storageSize,
         ref ComponentInfoBase.CompRevInfo cri, ComponentInfoBase info)
@@ -2185,43 +2186,47 @@ public unsafe class Transaction : IDisposable
             flags |= WalRecordFlags.UowCommit;
         }
 
-        // Build header
+        var bodyLen = WalRecordHeader.SizeInBytes + payloadLength;
+        var chunkSize = (ushort)(WalChunkHeader.SizeInBytes + bodyLen + WalChunkFooter.SizeInBytes);
+
+        // Write chunk header (PrevCRC=0 — patched by WAL writer)
+        var chunkHeader = new WalChunkHeader
+        {
+            ChunkType = (ushort)WalChunkType.Transaction,
+            ChunkSize = chunkSize,
+            PrevCRC = 0,
+        };
+        MemoryMarshal.Write(writer.DataSpan[writer.WriteOffset..], in chunkHeader);
+
+        // Write record header
+        var recordOffset = writer.WriteOffset + WalChunkHeader.SizeInBytes;
         var header = new WalRecordHeader
         {
             LSN = writer.CurrentLsn,
             TransactionTSN = TSN,
-            TotalRecordLength = (uint)(WalRecordHeader.SizeInBytes + payloadLength),
             UowEpoch = UowId,
             ComponentTypeId = componentTypeId,
             EntityId = entityId,
             PayloadLength = (ushort)payloadLength,
             OperationType = (byte)opType,
             Flags = (byte)flags,
-            PrevCRC = writer.RecordIndex == 0 ? 0 : writer.PrevCrc,
-            CRC = 0, // Computed below
         };
-
-        // Write header to span
-        MemoryMarshal.Write(writer.DataSpan[writer.WriteOffset..], in header);
+        MemoryMarshal.Write(writer.DataSpan[recordOffset..], in header);
 
         // Write payload (component data) for non-delete operations
         if (payloadLength > 0 && cri.CurCompContentChunkId > 0)
         {
             var srcSpan = info.CompContentAccessor.GetChunkAsReadOnlySpan(cri.CurCompContentChunkId);
-            var payloadDst = writer.DataSpan.Slice(writer.WriteOffset + WalRecordHeader.SizeInBytes, payloadLength);
+            var payloadDst = writer.DataSpan.Slice(recordOffset + WalRecordHeader.SizeInBytes, payloadLength);
             srcSpan[..payloadLength].CopyTo(payloadDst);
         }
 
-        // Compute CRC over header+payload with CRC field zeroed
-        var recordSpan = writer.DataSpan.Slice(writer.WriteOffset, WalRecordHeader.SizeInBytes + payloadLength);
-        var crcFieldOffset = (int)Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.CRC));
-        var crc = WalCrc.ComputeSkipping(recordSpan, crcFieldOffset, sizeof(uint));
+        // Write chunk footer (CRC=0 — patched by WAL writer)
+        var footerOffset = writer.WriteOffset + chunkSize - WalChunkFooter.SizeInBytes;
+        var footer = new WalChunkFooter { CRC = 0 };
+        MemoryMarshal.Write(writer.DataSpan[footerOffset..], in footer);
 
-        // Write CRC back into header
-        MemoryMarshal.Write(writer.DataSpan[(writer.WriteOffset + crcFieldOffset)..], in crc);
-
-        writer.PrevCrc = crc;
-        writer.WriteOffset += WalRecordHeader.SizeInBytes + payloadLength;
+        writer.WriteOffset += chunkSize;
         writer.CurrentLsn++;
         writer.RecordIndex++;
     }

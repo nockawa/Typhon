@@ -794,10 +794,21 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             var headerAddr = (PageBaseHeader*)(_memPagesAddr + (memPageIndex * (long)PageSize));
             ++headerAddr->ModificationCounter;
 
-            // FPI: capture full-page before-image on first dirty per checkpoint cycle
+            // FPI: capture full-page before-image on first dirty per checkpoint cycle.
+            // FPI is best-effort: if the WAL buffer is full or an error occurs, the page will still be dirty and the next checkpoint cycle will re-capture.
+            // Exceptions must NOT propagate here because ModificationCounter is already odd — an unhandled exception would leave the seqlock permanently
+            // stuck, causing CopyPageWithSeqlock to spin forever.
             if (_walManager != null && !_fpiBitmap.TestAndSet(memPageIndex))
             {
-                WriteFpiRecord(memPageIndex, pi.FilePageIndex, headerAddr);
+                try
+                {
+                    WriteFpiRecord(memPageIndex, pi.FilePageIndex, headerAddr);
+                }
+                catch
+                {
+                    // Clear the FPI bitmap flag so the next checkpoint cycle will retry the capture.
+                    _fpiBitmap.Clear(memPageIndex);
+                }
             }
         }
 
@@ -861,12 +872,13 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             }
 
             int pagePayloadSize = useCompression ? compressedSize : PageSize;
-            int fpiPayloadSize = FpiMetadata.SizeInBytes + pagePayloadSize;
-            int fpiTotalRecordSize = WalRecordHeader.SizeInBytes + fpiPayloadSize;
+            // FPI body: LSN (8B) + FpiMetadata (16B) + page data
+            int fpiBodySize = sizeof(long) + FpiMetadata.SizeInBytes + pagePayloadSize;
+            int fpiChunkSize = WalChunkHeader.SizeInBytes + fpiBodySize + WalChunkFooter.SizeInBytes;
 
-            // Claim WAL buffer space for 1 FPI record
+            // Claim WAL buffer space for 1 FPI chunk
             var wc = WaitContext.FromTimeout(TimeoutOptions.Current.DefaultCommitTimeout);
-            var claim = _walManager.CommitBuffer.TryClaim(fpiTotalRecordSize, 1, ref wc);
+            var claim = _walManager.CommitBuffer.TryClaim(fpiChunkSize, 1, ref wc);
 
             if (!claim.IsValid)
             {
@@ -877,26 +889,22 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
             try
             {
-                // Build FPI WAL record header
-                var header = new WalRecordHeader
-                {
-                    LSN = claim.FirstLSN,
-                    TransactionTSN = 0,
-                    TotalRecordLength = (uint)fpiTotalRecordSize,
-                    UowEpoch = 0,
-                    ComponentTypeId = 0,
-                    EntityId = 0,
-                    PayloadLength = (ushort)fpiPayloadSize,
-                    OperationType = 0,
-                    Flags = (byte)(WalRecordFlags.FullPageImage | (useCompression ? WalRecordFlags.Compressed : 0)),
-                    PrevCRC = 0,
-                    CRC = 0,
-                };
-
-                // Write header into claim
                 int offset = 0;
-                MemoryMarshal.Write(claim.DataSpan[offset..], in header);
-                offset += WalRecordHeader.SizeInBytes;
+
+                // Write chunk header (PrevCRC=0, CRC=0 — patched by WAL writer)
+                var chunkHeader = new WalChunkHeader
+                {
+                    ChunkType = (ushort)WalChunkType.FullPageImage,
+                    ChunkSize = (ushort)fpiChunkSize,
+                    PrevCRC = 0,
+                };
+                MemoryMarshal.Write(claim.DataSpan[offset..], in chunkHeader);
+                offset += WalChunkHeader.SizeInBytes;
+
+                // Write LSN (always at body offset 0 for all chunk types)
+                var lsn = claim.FirstLSN;
+                MemoryMarshal.Write(claim.DataSpan[offset..], in lsn);
+                offset += sizeof(long);
 
                 // Write FPI metadata
                 var meta = new FpiMetadata
@@ -922,10 +930,9 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                 }
                 offset += pagePayloadSize;
 
-                // Compute CRC over entire record (header + metadata + page) with CRC field zeroed
-                var crcFieldOffset = (int)Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.CRC));
-                var crc = WalCrc.ComputeSkipping(claim.DataSpan[..offset], crcFieldOffset, sizeof(uint));
-                MemoryMarshal.Write(claim.DataSpan[crcFieldOffset..], in crc);
+                // Write chunk footer (CRC=0 — patched by WAL writer)
+                var footer = new WalChunkFooter { CRC = 0 };
+                MemoryMarshal.Write(claim.DataSpan[offset..], in footer);
 
                 _walManager.CommitBuffer.Publish(ref claim);
             }

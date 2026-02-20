@@ -9,8 +9,9 @@ namespace Typhon.Engine.Tests;
 
 /// <summary>
 /// Tests for <see cref="WalRecovery"/> — the crash recovery orchestrator.
-/// Builds raw WAL segment files, sets up UowRegistry state, and verifies
-/// that recovery correctly promotes committed UoWs and voids pending ones.
+/// Builds raw WAL segment files using the chunk envelope format (v2),
+/// sets up UowRegistry state, and verifies that recovery correctly
+/// promotes committed UoWs and voids pending ones.
 /// </summary>
 [TestFixture]
 class WalRecoveryTests : TestBase<WalRecoveryTests>
@@ -39,7 +40,7 @@ class WalRecoveryTests : TestBase<WalRecoveryTests>
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // Helper: Build WAL segment binary data
+    // Helper: Build WAL segment binary data (chunk envelope v2)
     // ═══════════════════════════════════════════════════════════════
 
     /// <summary>Defines a WAL record for test segment building.</summary>
@@ -53,7 +54,8 @@ class WalRecoveryTests : TestBase<WalRecoveryTests>
         byte[] Payload = null);
 
     /// <summary>
-    /// Builds a complete WAL segment with header, a single frame, and records.
+    /// Builds a complete WAL segment with header, a single frame, and chunk-wrapped transaction records.
+    /// Each record is wrapped: [WalChunkHeader 8B] [WalRecordHeader 32B] [payload] [WalChunkFooter 4B].
     /// </summary>
     private static unsafe byte[] BuildSegment(long segmentId, long firstLSN, params RecordDef[] records)
     {
@@ -72,14 +74,17 @@ class WalRecoveryTests : TestBase<WalRecoveryTests>
             return data;
         }
 
-        // Calculate total record bytes
-        var totalRecordBytes = 0;
+        // Calculate total frame bytes (sum of all chunk sizes)
+        var totalChunkBytes = 0;
         foreach (var rec in records)
         {
-            totalRecordBytes += WalRecordHeader.SizeInBytes + (rec.Payload?.Length ?? 0);
+            var payloadLen = rec.Payload?.Length ?? 0;
+            var bodyLen = WalRecordHeader.SizeInBytes + payloadLen;
+            var chunkSize = WalChunkHeader.SizeInBytes + bodyLen + WalChunkFooter.SizeInBytes;
+            totalChunkBytes += chunkSize;
         }
 
-        var frameLength = WalFrameHeader.SizeInBytes + totalRecordBytes;
+        var frameLength = WalFrameHeader.SizeInBytes + totalChunkBytes;
 
         // Write frame header
         var offset = WalSegmentHeader.SizeInBytes;
@@ -87,43 +92,48 @@ class WalRecoveryTests : TestBase<WalRecoveryTests>
         frameHeader.FrameLength = frameLength;
         frameHeader.RecordCount = records.Length;
 
-        // Write records
+        // Write chunk-wrapped records
         var recordOffset = offset + WalFrameHeader.SizeInBytes;
         var lsn = firstLSN;
-        uint prevCrc = 0;
+        uint prevFooterCrc = 0;
 
         for (int i = 0; i < records.Length; i++)
         {
             var rec = records[i];
             var payloadLen = rec.Payload?.Length ?? 0;
+            var bodyLen = WalRecordHeader.SizeInBytes + payloadLen;
+            var chunkSize = WalChunkHeader.SizeInBytes + bodyLen + WalChunkFooter.SizeInBytes;
 
-            ref var recHeader = ref Unsafe.As<byte, WalRecordHeader>(ref data[recordOffset]);
-            recHeader.LSN = lsn++;
-            recHeader.TransactionTSN = rec.TSN;
-            recHeader.TotalRecordLength = (uint)(WalRecordHeader.SizeInBytes + payloadLen);
-            recHeader.UowEpoch = rec.UowId;
-            recHeader.ComponentTypeId = rec.ComponentTypeId;
-            recHeader.EntityId = rec.EntityId;
-            recHeader.PayloadLength = (ushort)payloadLen;
-            recHeader.OperationType = rec.OperationType;
-            recHeader.Flags = rec.Flags;
-            recHeader.PrevCRC = prevCrc;
-            recHeader.CRC = 0;
+            // Write WalChunkHeader
+            ref var ch = ref Unsafe.As<byte, WalChunkHeader>(ref data[recordOffset]);
+            ch.ChunkType = (ushort)WalChunkType.Transaction;
+            ch.ChunkSize = (ushort)chunkSize;
+            ch.PrevCRC = prevFooterCrc;
 
-            // Write payload
+            // Write WalRecordHeader (32B body)
+            ref var rh = ref Unsafe.As<byte, WalRecordHeader>(ref data[recordOffset + WalChunkHeader.SizeInBytes]);
+            rh.LSN = lsn++;
+            rh.TransactionTSN = rec.TSN;
+            rh.UowEpoch = rec.UowId;
+            rh.ComponentTypeId = rec.ComponentTypeId;
+            rh.EntityId = rec.EntityId;
+            rh.PayloadLength = (ushort)payloadLen;
+            rh.OperationType = rec.OperationType;
+            rh.Flags = rec.Flags;
+
+            // Write payload after record header
             if (payloadLen > 0)
             {
-                rec.Payload.AsSpan().CopyTo(data.AsSpan(recordOffset + WalRecordHeader.SizeInBytes));
+                rec.Payload.AsSpan().CopyTo(data.AsSpan(recordOffset + WalChunkHeader.SizeInBytes + WalRecordHeader.SizeInBytes));
             }
 
-            // Compute CRC
-            var recordSpan = data.AsSpan(recordOffset, WalRecordHeader.SizeInBytes + payloadLen);
-            var crcFieldOffset = (int)Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.CRC));
-            var computedCrc = WalCrc.ComputeSkipping(recordSpan, crcFieldOffset, sizeof(uint));
-            Unsafe.As<byte, uint>(ref data[recordOffset + crcFieldOffset]) = computedCrc;
-            prevCrc = computedCrc;
+            // Compute CRC over [0, ChunkSize - 4) and write footer
+            var crcSpan = data.AsSpan(recordOffset, chunkSize - WalChunkFooter.SizeInBytes);
+            var crc = WalCrc.Compute(crcSpan);
+            Unsafe.As<byte, uint>(ref data[recordOffset + chunkSize - WalChunkFooter.SizeInBytes]) = crc;
+            prevFooterCrc = crc;
 
-            recordOffset += WalRecordHeader.SizeInBytes + payloadLen;
+            recordOffset += chunkSize;
         }
 
         return data;
@@ -299,9 +309,9 @@ class WalRecoveryTests : TestBase<WalRecoveryTests>
         Assert.That(result.UowsPromoted, Is.EqualTo(2), "id1 and id3 should be promoted");
         Assert.That(result.UowsVoided, Is.EqualTo(1), "id2 should be voided");
 
-        Assert.That(registry.IsCommitted(id1), Is.True, "id1 had commit marker → promoted");
-        Assert.That(registry.IsCommitted(id2), Is.False, "id2 had no commit marker → voided");
-        Assert.That(registry.IsCommitted(id3), Is.True, "id3 had commit marker → promoted");
+        Assert.That(registry.IsCommitted(id1), Is.True, "id1 had commit marker -> promoted");
+        Assert.That(registry.IsCommitted(id2), Is.False, "id2 had no commit marker -> voided");
+        Assert.That(registry.IsCommitted(id3), Is.True, "id3 had commit marker -> promoted");
 
         registry.Release(id1);
         registry.Release(id2);
@@ -324,18 +334,19 @@ class WalRecoveryTests : TestBase<WalRecoveryTests>
 
         var payload = new byte[] { 0xBB };
 
-        // Build segment with records — we'll corrupt the second record's CRC
+        // Build segment with records — we'll corrupt the second chunk's footer CRC
         var segmentData = BuildSegment(1, 1,
             // id1 committed (begin+commit in single record)
             new RecordDef(UowId: id1, Flags: (byte)(WalRecordFlags.UowBegin | WalRecordFlags.UowCommit), Payload: payload),
-            // id2 committed — but we'll corrupt its CRC
+            // id2 committed — but we'll corrupt its footer CRC
             new RecordDef(UowId: id2, Flags: (byte)(WalRecordFlags.UowBegin | WalRecordFlags.UowCommit), Payload: payload));
 
-        // Corrupt the second record's CRC field
-        var record1Size = WalRecordHeader.SizeInBytes + payload.Length;
-        var record2Offset = WalSegmentHeader.SizeInBytes + WalFrameHeader.SizeInBytes + record1Size;
-        var crcFieldOffset = (int)Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.CRC));
-        segmentData[record2Offset + crcFieldOffset] ^= 0xFF;
+        // Find the second chunk's footer CRC and corrupt it
+        var chunk1Size = WalChunkHeader.SizeInBytes + WalRecordHeader.SizeInBytes + payload.Length + WalChunkFooter.SizeInBytes;
+        var chunk2Start = WalSegmentHeader.SizeInBytes + WalFrameHeader.SizeInBytes + chunk1Size;
+        var chunk2Header = Unsafe.As<byte, WalChunkHeader>(ref segmentData[chunk2Start]);
+        var chunk2FooterOffset = chunk2Start + chunk2Header.ChunkSize - WalChunkFooter.SizeInBytes;
+        segmentData[chunk2FooterOffset] ^= 0xFF;
 
         CreateWalSegmentFile(1, segmentData);
 
@@ -428,7 +439,7 @@ class WalRecoveryTests : TestBase<WalRecoveryTests>
         // All 3 records were scanned (reader sees them all), but only the one with LSN > 2 is processed
         Assert.That(result.RecordsScanned, Is.EqualTo(3));
 
-        // Only LSN 3 (with UowCommit flag) is past the checkpoint → UoW should still be promoted
+        // Only LSN 3 (with UowCommit flag) is past the checkpoint -> UoW should still be promoted
         // because the commit marker at LSN 3 is after checkpoint
         Assert.That(result.UowsPromoted, Is.EqualTo(1));
 
@@ -523,7 +534,8 @@ class WalRecoveryTests : TestBase<WalRecoveryTests>
     }
 
     /// <summary>
-    /// Builds a WAL segment containing FPI records (and optionally UoW records).
+    /// Builds a WAL segment containing FPI chunks (WalChunkType.FullPageImage).
+    /// FPI chunk body = [LSN 8B] [FpiMetadata 16B] [page data].
     /// </summary>
     private static unsafe byte[] BuildSegmentWithFpi(long segmentId, long firstLSN, params (int FilePageIndex, byte[] PageData)[] fpiEntries)
     {
@@ -542,14 +554,16 @@ class WalRecoveryTests : TestBase<WalRecoveryTests>
             return data;
         }
 
-        // Calculate total record bytes
-        var totalRecordBytes = 0;
+        // Calculate total chunk bytes
+        var totalChunkBytes = 0;
         foreach (var entry in fpiEntries)
         {
-            totalRecordBytes += WalRecordHeader.SizeInBytes + FpiMetadata.SizeInBytes + PagedMMF.PageSize;
+            var bodyLen = sizeof(long) + FpiMetadata.SizeInBytes + PagedMMF.PageSize;
+            var chunkSize = WalChunkHeader.SizeInBytes + bodyLen + WalChunkFooter.SizeInBytes;
+            totalChunkBytes += chunkSize;
         }
 
-        var frameLength = WalFrameHeader.SizeInBytes + totalRecordBytes;
+        var frameLength = WalFrameHeader.SizeInBytes + totalChunkBytes;
 
         // Write frame header
         var offset = WalSegmentHeader.SizeInBytes;
@@ -557,32 +571,28 @@ class WalRecoveryTests : TestBase<WalRecoveryTests>
         frameHeader.FrameLength = frameLength;
         frameHeader.RecordCount = fpiEntries.Length;
 
-        // Write FPI records
+        // Write FPI chunks
         var recordOffset = offset + WalFrameHeader.SizeInBytes;
         var lsn = firstLSN;
-        uint prevCrc = 0;
+        uint prevFooterCrc = 0;
 
         for (int i = 0; i < fpiEntries.Length; i++)
         {
             var entry = fpiEntries[i];
-            var payloadLen = FpiMetadata.SizeInBytes + PagedMMF.PageSize;
+            var bodyLen = sizeof(long) + FpiMetadata.SizeInBytes + PagedMMF.PageSize;
+            var chunkSize = WalChunkHeader.SizeInBytes + bodyLen + WalChunkFooter.SizeInBytes;
 
-            ref var recHeader = ref Unsafe.As<byte, WalRecordHeader>(ref data[recordOffset]);
-            recHeader.LSN = lsn++;
-            recHeader.TransactionTSN = 0;
-            recHeader.TotalRecordLength = (uint)(WalRecordHeader.SizeInBytes + payloadLen);
-            recHeader.UowEpoch = 0; // FPI records have no UoW association
-            recHeader.ComponentTypeId = 0;
-            recHeader.EntityId = 0;
-            recHeader.PayloadLength = (ushort)payloadLen;
-            recHeader.OperationType = 0;
-            recHeader.Flags = (byte)WalRecordFlags.FullPageImage;
-            recHeader.PrevCRC = prevCrc;
-            recHeader.CRC = 0;
+            // Write chunk header
+            ref var ch = ref Unsafe.As<byte, WalChunkHeader>(ref data[recordOffset]);
+            ch.ChunkType = (ushort)WalChunkType.FullPageImage;
+            ch.ChunkSize = (ushort)chunkSize;
+            ch.PrevCRC = prevFooterCrc;
 
-            // Write FpiMetadata
-            var metaOffset = recordOffset + WalRecordHeader.SizeInBytes;
-            ref var meta = ref Unsafe.As<byte, FpiMetadata>(ref data[metaOffset]);
+            // Write LSN at body offset 0
+            Unsafe.As<byte, long>(ref data[recordOffset + WalChunkHeader.SizeInBytes]) = lsn++;
+
+            // Write FpiMetadata at body offset 8
+            ref var meta = ref Unsafe.As<byte, FpiMetadata>(ref data[recordOffset + WalChunkHeader.SizeInBytes + sizeof(long)]);
             meta.FilePageIndex = entry.FilePageIndex;
             meta.SegmentId = 0;
             meta.ChangeRevision = 1;
@@ -590,17 +600,17 @@ class WalRecoveryTests : TestBase<WalRecoveryTests>
             meta.CompressionAlgo = 0;
             meta.Reserved = 0;
 
-            // Write page data
-            entry.PageData.AsSpan().CopyTo(data.AsSpan(metaOffset + FpiMetadata.SizeInBytes));
+            // Write page data at body offset 24
+            entry.PageData.AsSpan().CopyTo(
+                data.AsSpan(recordOffset + WalChunkHeader.SizeInBytes + sizeof(long) + FpiMetadata.SizeInBytes));
 
-            // Compute CRC
-            var recordSpan = data.AsSpan(recordOffset, WalRecordHeader.SizeInBytes + payloadLen);
-            var crcFieldOffset = (int)Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.CRC));
-            var computedCrc = WalCrc.ComputeSkipping(recordSpan, crcFieldOffset, sizeof(uint));
-            Unsafe.As<byte, uint>(ref data[recordOffset + crcFieldOffset]) = computedCrc;
-            prevCrc = computedCrc;
+            // Compute CRC over [0, ChunkSize - 4) and write footer
+            var crcSpan = data.AsSpan(recordOffset, chunkSize - WalChunkFooter.SizeInBytes);
+            var crc = WalCrc.Compute(crcSpan);
+            Unsafe.As<byte, uint>(ref data[recordOffset + chunkSize - WalChunkFooter.SizeInBytes]) = crc;
+            prevFooterCrc = crc;
 
-            recordOffset += WalRecordHeader.SizeInBytes + payloadLen;
+            recordOffset += chunkSize;
         }
 
         return data;
@@ -631,7 +641,7 @@ class WalRecoveryTests : TestBase<WalRecoveryTests>
         var segmentData = BuildSegmentWithFpi(1, 1, (targetPage, goodPageData));
         CreateWalSegmentFile(1, segmentData);
 
-        // Corrupt the page on disk (flip bytes in data area, leaving CRC as-is → mismatch)
+        // Corrupt the page on disk (flip bytes in data area, leaving CRC as-is -> mismatch)
         var corruptedPage = (byte[])goodPageData.Clone();
         for (int i = PagedMMF.PageHeaderSize; i < PagedMMF.PageSize; i++)
         {
@@ -690,7 +700,6 @@ class WalRecoveryTests : TestBase<WalRecoveryTests>
         var newPageData = BuildPageWithCrc(targetPage, 0x22);
 
         // Build WAL segment with two FPI records for the same page (LSN 1 and 2)
-        // We need to use a larger test segment size to fit 2 FPI records
         var segmentData = BuildSegmentWithFpi(1, 1, (targetPage, oldPageData), (targetPage, newPageData));
         CreateWalSegmentFile(1, segmentData);
 
@@ -756,12 +765,13 @@ class WalRecoveryTests : TestBase<WalRecoveryTests>
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // FPI Repair + WAL Replay Ordering (Phase 4 → Phase 5)
+    // FPI Repair + WAL Replay Ordering (Phase 4 -> Phase 5)
     // ═══════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Builds a WAL segment containing both FPI records and UoW records in a single frame.
-    /// FPI records come first (lower LSNs), then UoW records, matching the typical WAL write order.
+    /// Builds a WAL segment containing both FPI chunks and transaction chunks in a single frame.
+    /// FPI chunks come first (lower LSNs), then transaction chunks, matching the typical WAL write order.
+    /// All chunks share the same prevFooterCrc chain.
     /// </summary>
     private static unsafe byte[] BuildSegmentWithFpiAndUow(
         long segmentId, long firstLSN,
@@ -784,18 +794,23 @@ class WalRecoveryTests : TestBase<WalRecoveryTests>
             return data;
         }
 
-        // Calculate total bytes for all records
-        var totalRecordBytes = 0;
+        // Calculate total chunk bytes for all records
+        var totalChunkBytes = 0;
         foreach (var entry in fpiEntries)
         {
-            totalRecordBytes += WalRecordHeader.SizeInBytes + FpiMetadata.SizeInBytes + PagedMMF.PageSize;
+            var bodyLen = sizeof(long) + FpiMetadata.SizeInBytes + PagedMMF.PageSize;
+            var chunkSize = WalChunkHeader.SizeInBytes + bodyLen + WalChunkFooter.SizeInBytes;
+            totalChunkBytes += chunkSize;
         }
         foreach (var rec in uowRecords)
         {
-            totalRecordBytes += WalRecordHeader.SizeInBytes + (rec.Payload?.Length ?? 0);
+            var payloadLen = rec.Payload?.Length ?? 0;
+            var bodyLen = WalRecordHeader.SizeInBytes + payloadLen;
+            var chunkSize = WalChunkHeader.SizeInBytes + bodyLen + WalChunkFooter.SizeInBytes;
+            totalChunkBytes += chunkSize;
         }
 
-        var frameLength = WalFrameHeader.SizeInBytes + totalRecordBytes;
+        var frameLength = WalFrameHeader.SizeInBytes + totalChunkBytes;
 
         // Write frame header
         var offset = WalSegmentHeader.SizeInBytes;
@@ -805,30 +820,27 @@ class WalRecoveryTests : TestBase<WalRecoveryTests>
 
         var recordOffset = offset + WalFrameHeader.SizeInBytes;
         var lsn = firstLSN;
-        uint prevCrc = 0;
+        uint prevFooterCrc = 0;
 
-        // Write FPI records first
+        // Write FPI chunks first
         for (int i = 0; i < fpiEntries.Length; i++)
         {
             var entry = fpiEntries[i];
-            var payloadLen = FpiMetadata.SizeInBytes + PagedMMF.PageSize;
+            var bodyLen = sizeof(long) + FpiMetadata.SizeInBytes + PagedMMF.PageSize;
+            var chunkSize = WalChunkHeader.SizeInBytes + bodyLen + WalChunkFooter.SizeInBytes;
 
-            ref var recHeader = ref Unsafe.As<byte, WalRecordHeader>(ref data[recordOffset]);
-            recHeader.LSN = lsn++;
-            recHeader.TransactionTSN = 0;
-            recHeader.TotalRecordLength = (uint)(WalRecordHeader.SizeInBytes + payloadLen);
-            recHeader.UowEpoch = 0;
-            recHeader.ComponentTypeId = 0;
-            recHeader.EntityId = 0;
-            recHeader.PayloadLength = (ushort)payloadLen;
-            recHeader.OperationType = 0;
-            recHeader.Flags = (byte)WalRecordFlags.FullPageImage;
-            recHeader.PrevCRC = prevCrc;
-            recHeader.CRC = 0;
+            // Write chunk header
+            ref var ch = ref Unsafe.As<byte, WalChunkHeader>(ref data[recordOffset]);
+            ch.ChunkType = (ushort)WalChunkType.FullPageImage;
+            ch.ChunkSize = (ushort)chunkSize;
+            ch.PrevCRC = prevFooterCrc;
 
-            // Write FpiMetadata
-            var metaOffset = recordOffset + WalRecordHeader.SizeInBytes;
-            ref var meta = ref Unsafe.As<byte, FpiMetadata>(ref data[metaOffset]);
+            // Write LSN at body offset 0
+            Unsafe.As<byte, long>(ref data[recordOffset + WalChunkHeader.SizeInBytes]) = lsn++;
+
+            // Write FpiMetadata at body offset 8
+            ref var meta = ref Unsafe.As<byte, FpiMetadata>(
+                ref data[recordOffset + WalChunkHeader.SizeInBytes + sizeof(long)]);
             meta.FilePageIndex = entry.FilePageIndex;
             meta.SegmentId = 0;
             meta.ChangeRevision = 1;
@@ -836,47 +848,56 @@ class WalRecoveryTests : TestBase<WalRecoveryTests>
             meta.CompressionAlgo = 0;
             meta.Reserved = 0;
 
-            entry.PageData.AsSpan().CopyTo(data.AsSpan(metaOffset + FpiMetadata.SizeInBytes));
+            // Write page data at body offset 24
+            entry.PageData.AsSpan().CopyTo(
+                data.AsSpan(recordOffset + WalChunkHeader.SizeInBytes + sizeof(long) + FpiMetadata.SizeInBytes));
 
-            // Compute CRC
-            var recordSpan = data.AsSpan(recordOffset, WalRecordHeader.SizeInBytes + payloadLen);
-            var crcFieldOffset = (int)Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.CRC));
-            var computedCrc = WalCrc.ComputeSkipping(recordSpan, crcFieldOffset, sizeof(uint));
-            Unsafe.As<byte, uint>(ref data[recordOffset + crcFieldOffset]) = computedCrc;
-            prevCrc = computedCrc;
+            // Compute CRC over [0, ChunkSize - 4) and write footer
+            var crcSpan = data.AsSpan(recordOffset, chunkSize - WalChunkFooter.SizeInBytes);
+            var crc = WalCrc.Compute(crcSpan);
+            Unsafe.As<byte, uint>(ref data[recordOffset + chunkSize - WalChunkFooter.SizeInBytes]) = crc;
+            prevFooterCrc = crc;
 
-            recordOffset += WalRecordHeader.SizeInBytes + payloadLen;
+            recordOffset += chunkSize;
         }
 
-        // Write UoW records
+        // Write transaction chunks
         for (int i = 0; i < uowRecords.Length; i++)
         {
             var rec = uowRecords[i];
             var payloadLen = rec.Payload?.Length ?? 0;
+            var bodyLen = WalRecordHeader.SizeInBytes + payloadLen;
+            var chunkSize = WalChunkHeader.SizeInBytes + bodyLen + WalChunkFooter.SizeInBytes;
 
-            ref var recHeader = ref Unsafe.As<byte, WalRecordHeader>(ref data[recordOffset]);
-            recHeader.LSN = lsn++;
-            recHeader.TransactionTSN = rec.TSN;
-            recHeader.TotalRecordLength = (uint)(WalRecordHeader.SizeInBytes + payloadLen);
-            recHeader.UowEpoch = rec.UowId;
-            recHeader.ComponentTypeId = rec.ComponentTypeId;
-            recHeader.EntityId = rec.EntityId;
-            recHeader.PayloadLength = (ushort)payloadLen;
-            recHeader.OperationType = rec.OperationType;
-            recHeader.Flags = rec.Flags;
-            recHeader.PrevCRC = prevCrc;
-            recHeader.CRC = 0;
+            // Write chunk header
+            ref var ch = ref Unsafe.As<byte, WalChunkHeader>(ref data[recordOffset]);
+            ch.ChunkType = (ushort)WalChunkType.Transaction;
+            ch.ChunkSize = (ushort)chunkSize;
+            ch.PrevCRC = prevFooterCrc;
 
+            // Write WalRecordHeader (32B body)
+            ref var rh = ref Unsafe.As<byte, WalRecordHeader>(ref data[recordOffset + WalChunkHeader.SizeInBytes]);
+            rh.LSN = lsn++;
+            rh.TransactionTSN = rec.TSN;
+            rh.UowEpoch = rec.UowId;
+            rh.ComponentTypeId = rec.ComponentTypeId;
+            rh.EntityId = rec.EntityId;
+            rh.PayloadLength = (ushort)payloadLen;
+            rh.OperationType = rec.OperationType;
+            rh.Flags = rec.Flags;
+
+            // Write payload
             if (payloadLen > 0)
             {
-                rec.Payload.AsSpan().CopyTo(data.AsSpan(recordOffset + WalRecordHeader.SizeInBytes));
+                rec.Payload.AsSpan().CopyTo(
+                    data.AsSpan(recordOffset + WalChunkHeader.SizeInBytes + WalRecordHeader.SizeInBytes));
             }
 
-            var recordSpan = data.AsSpan(recordOffset, WalRecordHeader.SizeInBytes + payloadLen);
-            var crcFieldOffset = (int)Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.CRC));
-            var computedCrc = WalCrc.ComputeSkipping(recordSpan, crcFieldOffset, sizeof(uint));
-            Unsafe.As<byte, uint>(ref data[recordOffset + crcFieldOffset]) = computedCrc;
-            prevCrc = computedCrc;
+            // Compute CRC over [0, ChunkSize - 4) and write footer
+            var crcSpan = data.AsSpan(recordOffset, chunkSize - WalChunkFooter.SizeInBytes);
+            var crc = WalCrc.Compute(crcSpan);
+            Unsafe.As<byte, uint>(ref data[recordOffset + chunkSize - WalChunkFooter.SizeInBytes]) = crc;
+            prevFooterCrc = crc;
 
             recordOffset += WalRecordHeader.SizeInBytes + payloadLen;
         }
@@ -901,7 +922,7 @@ class WalRecoveryTests : TestBase<WalRecoveryTests>
         var goodPageData = BuildPageWithCrc(targetPage, 0xAA);
         mmf.WritePageDirect(targetPage, goodPageData);
 
-        // Build WAL segment with: FPI record (before-image) + committed UoW
+        // Build WAL segment with: FPI chunk (before-image) + committed UoW chunk
         var payload = new byte[] { 0x01, 0x02, 0x03, 0x04 };
         var segmentData = BuildSegmentWithFpiAndUow(1, 1,
             [(targetPage, goodPageData)],
@@ -911,7 +932,7 @@ class WalRecoveryTests : TestBase<WalRecoveryTests>
             ]);
         CreateWalSegmentFile(1, segmentData);
 
-        // Corrupt the page on disk (change data but keep old CRC → CRC mismatch)
+        // Corrupt the page on disk (change data but keep old CRC -> CRC mismatch)
         var corruptedPage = (byte[])goodPageData.Clone();
         for (int i = PagedMMF.PageHeaderSize; i < PagedMMF.PageSize; i++)
         {

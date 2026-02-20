@@ -181,24 +181,31 @@ public class FpiCompressionTests : AllocatorTestBase
                 return;
             }
 
-            var header = MemoryMarshal.Read<WalRecordHeader>(payload);
-            if ((header.Flags & (byte)WalRecordFlags.FullPageImage) == 0)
+            // Read chunk header from start of payload
+            var chunkHeader = MemoryMarshal.Read<WalChunkHeader>(payload);
+
+            if ((WalChunkType)chunkHeader.ChunkType != WalChunkType.FullPageImage)
             {
                 return;
             }
 
             foundFpi = true;
 
-            // Verify Compressed flag is set
-            Assert.That(header.Flags & (byte)WalRecordFlags.Compressed, Is.Not.EqualTo(0), "Compressed flag should be set");
+            // Body starts after chunk header, ends before footer
+            var body = payload.Slice(WalChunkHeader.SizeInBytes, chunkHeader.ChunkSize - WalChunkHeader.SizeInBytes - WalChunkFooter.SizeInBytes);
 
-            // Verify payload is smaller than uncompressed (48 header + 16 meta + 8192 page = 8256)
-            Assert.That(header.TotalRecordLength, Is.LessThan((uint)(WalRecordHeader.SizeInBytes + FpiMetadata.SizeInBytes + PagedMMF.PageSize)),
-                "Compressed record should be smaller than uncompressed");
+            // LSN at body[0], FpiMetadata at body[8]
+            var meta = MemoryMarshal.Read<FpiMetadata>(body.Slice(sizeof(long)));
 
-            // Verify metadata
-            var meta = MemoryMarshal.Read<FpiMetadata>(payload[WalRecordHeader.SizeInBytes..]);
-            Assert.That(meta.CompressionAlgo, Is.EqualTo(FpiCompression.AlgoLZ4));
+            // Verify compression algo is LZ4
+            Assert.That(meta.CompressionAlgo, Is.EqualTo(FpiCompression.AlgoLZ4), "CompressionAlgo should be LZ4");
+
+            // Verify chunk is smaller than uncompressed (header 8 + LSN 8 + meta 16 + page 8192 + footer 4)
+            var uncompressedChunkSize = WalChunkHeader.SizeInBytes + sizeof(long) + FpiMetadata.SizeInBytes + PagedMMF.PageSize + WalChunkFooter.SizeInBytes;
+            Assert.That((int)chunkHeader.ChunkSize, Is.LessThan(uncompressedChunkSize),
+                "Compressed chunk should be smaller than uncompressed");
+
+            // Verify metadata fields
             Assert.That(meta.UncompressedSize, Is.EqualTo(PagedMMF.PageSize));
         });
 
@@ -229,23 +236,27 @@ public class FpiCompressionTests : AllocatorTestBase
                 return;
             }
 
-            var header = MemoryMarshal.Read<WalRecordHeader>(payload);
-            if ((header.Flags & (byte)WalRecordFlags.FullPageImage) == 0)
+            // Read chunk header from start of payload
+            var chunkHeader = MemoryMarshal.Read<WalChunkHeader>(payload);
+
+            if ((WalChunkType)chunkHeader.ChunkType != WalChunkType.FullPageImage)
             {
                 return;
             }
 
             foundFpi = true;
 
-            // Verify Compressed flag is NOT set
-            Assert.That(header.Flags & (byte)WalRecordFlags.Compressed, Is.EqualTo(0), "Compressed flag should NOT be set");
-
-            // Verify standard uncompressed size
-            Assert.That(header.PayloadLength, Is.EqualTo(FpiMetadata.SizeInBytes + PagedMMF.PageSize));
+            // Body starts after chunk header, ends before footer
+            var body = payload.Slice(WalChunkHeader.SizeInBytes, chunkHeader.ChunkSize - WalChunkHeader.SizeInBytes - WalChunkFooter.SizeInBytes);
 
             // Verify metadata shows no compression
-            var meta = MemoryMarshal.Read<FpiMetadata>(payload[WalRecordHeader.SizeInBytes..]);
-            Assert.That(meta.CompressionAlgo, Is.EqualTo(FpiCompression.AlgoNone));
+            var meta = MemoryMarshal.Read<FpiMetadata>(body.Slice(sizeof(long)));
+            Assert.That(meta.CompressionAlgo, Is.EqualTo(FpiCompression.AlgoNone), "CompressionAlgo should be None");
+
+            // Expected body size: LSN (8) + FpiMetadata (16) + full page
+            var expectedBodySize = sizeof(long) + FpiMetadata.SizeInBytes + PagedMMF.PageSize;
+            var actualBodySize = chunkHeader.ChunkSize - WalChunkHeader.SizeInBytes - WalChunkFooter.SizeInBytes;
+            Assert.That(actualBodySize, Is.EqualTo(expectedBodySize));
         });
 
         Assert.That(foundFpi, Is.True, "FPI record should be found");
@@ -288,21 +299,28 @@ public class FpiCompressionTests : AllocatorTestBase
                 return;
             }
 
-            var header = MemoryMarshal.Read<WalRecordHeader>(payload);
-            if ((header.Flags & (byte)WalRecordFlags.FullPageImage) == 0)
+            // Read chunk header from start of payload
+            var chunkHeader = MemoryMarshal.Read<WalChunkHeader>(payload);
+
+            if ((WalChunkType)chunkHeader.ChunkType != WalChunkType.FullPageImage)
             {
                 return;
             }
 
             foundFpi = true;
 
-            // Random data is incompressible — should fall back to uncompressed
-            Assert.That(header.Flags & (byte)WalRecordFlags.Compressed, Is.EqualTo(0),
-                "Incompressible page should fall back to uncompressed");
-            Assert.That(header.PayloadLength, Is.EqualTo(FpiMetadata.SizeInBytes + PagedMMF.PageSize));
+            // Body starts after chunk header, ends before footer
+            var body = payload.Slice(WalChunkHeader.SizeInBytes, chunkHeader.ChunkSize - WalChunkHeader.SizeInBytes - WalChunkFooter.SizeInBytes);
 
-            var meta = MemoryMarshal.Read<FpiMetadata>(payload[WalRecordHeader.SizeInBytes..]);
-            Assert.That(meta.CompressionAlgo, Is.EqualTo(FpiCompression.AlgoNone));
+            // Random data is incompressible — should fall back to uncompressed
+            var meta = MemoryMarshal.Read<FpiMetadata>(body.Slice(sizeof(long)));
+            Assert.That(meta.CompressionAlgo, Is.EqualTo(FpiCompression.AlgoNone),
+                "Incompressible page should fall back to uncompressed");
+
+            // Expected body size: LSN (8) + FpiMetadata (16) + full page
+            var expectedBodySize = sizeof(long) + FpiMetadata.SizeInBytes + PagedMMF.PageSize;
+            var actualBodySize = chunkHeader.ChunkSize - WalChunkHeader.SizeInBytes - WalChunkFooter.SizeInBytes;
+            Assert.That(actualBodySize, Is.EqualTo(expectedBodySize));
         });
 
         Assert.That(foundFpi, Is.True, "FPI record should be found");
@@ -338,9 +356,11 @@ public class FpiCompressionTests : AllocatorTestBase
     }
 
     /// <summary>
-    /// Builds a WAL segment containing a compressed FPI record.
+    /// Builds a WAL segment containing a compressed FPI chunk in the new chunk envelope format.
+    /// Layout: [WalSegmentHeader] [WalFrameHeader] [WalChunkHeader 8B] [LSN 8B] [FpiMetadata 16B] [compressed page data] [WalChunkFooter 4B]
     /// </summary>
-    internal static unsafe byte[] BuildSegmentWithCompressedFpi(long segmentId, long firstLSN, int filePageIndex, byte[] pageData,
+    internal static unsafe byte[] BuildSegmentWithCompressedFpi(
+        long segmentId, long firstLSN, int filePageIndex, byte[] pageData,
         uint segmentSize = TestSegmentSize)
     {
         // Compress the page data
@@ -358,8 +378,10 @@ public class FpiCompressionTests : AllocatorTestBase
             header.ComputeAndSetCrc();
         }
 
-        var payloadLen = FpiMetadata.SizeInBytes + compressedSize;
-        var frameLength = WalFrameHeader.SizeInBytes + WalRecordHeader.SizeInBytes + payloadLen;
+        // Body: LSN (8B) + FpiMetadata (16B) + compressed page data
+        var bodyLen = sizeof(long) + FpiMetadata.SizeInBytes + compressedSize;
+        var chunkSize = WalChunkHeader.SizeInBytes + bodyLen + WalChunkFooter.SizeInBytes;
+        var frameLength = WalFrameHeader.SizeInBytes + chunkSize;
 
         // Write frame header
         var offset = WalSegmentHeader.SizeInBytes;
@@ -367,24 +389,18 @@ public class FpiCompressionTests : AllocatorTestBase
         frameHeader.FrameLength = frameLength;
         frameHeader.RecordCount = 1;
 
-        // Write FPI record header
+        // Write chunk header
         var recordOffset = offset + WalFrameHeader.SizeInBytes;
-        ref var recHeader = ref Unsafe.As<byte, WalRecordHeader>(ref data[recordOffset]);
-        recHeader.LSN = firstLSN;
-        recHeader.TransactionTSN = 0;
-        recHeader.TotalRecordLength = (uint)(WalRecordHeader.SizeInBytes + payloadLen);
-        recHeader.UowEpoch = 0;
-        recHeader.ComponentTypeId = 0;
-        recHeader.EntityId = 0;
-        recHeader.PayloadLength = (ushort)payloadLen;
-        recHeader.OperationType = 0;
-        recHeader.Flags = (byte)(WalRecordFlags.FullPageImage | WalRecordFlags.Compressed);
-        recHeader.PrevCRC = 0;
-        recHeader.CRC = 0;
+        ref var ch = ref Unsafe.As<byte, WalChunkHeader>(ref data[recordOffset]);
+        ch.ChunkType = (ushort)WalChunkType.FullPageImage;
+        ch.ChunkSize = (ushort)chunkSize;
+        ch.PrevCRC = 0;
+
+        // Write LSN
+        Unsafe.As<byte, long>(ref data[recordOffset + WalChunkHeader.SizeInBytes]) = firstLSN;
 
         // Write FpiMetadata
-        var metaOffset = recordOffset + WalRecordHeader.SizeInBytes;
-        ref var meta = ref Unsafe.As<byte, FpiMetadata>(ref data[metaOffset]);
+        ref var meta = ref Unsafe.As<byte, FpiMetadata>(ref data[recordOffset + WalChunkHeader.SizeInBytes + sizeof(long)]);
         meta.FilePageIndex = filePageIndex;
         meta.SegmentId = 0;
         meta.ChangeRevision = 1;
@@ -393,13 +409,13 @@ public class FpiCompressionTests : AllocatorTestBase
         meta.Reserved = 0;
 
         // Write compressed page data
-        compressedBuffer.AsSpan(0, compressedSize).CopyTo(data.AsSpan(metaOffset + FpiMetadata.SizeInBytes));
+        compressedBuffer.AsSpan(0, compressedSize)
+            .CopyTo(data.AsSpan(recordOffset + WalChunkHeader.SizeInBytes + sizeof(long) + FpiMetadata.SizeInBytes));
 
-        // Compute CRC
-        var recordSpan = data.AsSpan(recordOffset, WalRecordHeader.SizeInBytes + payloadLen);
-        var crcFieldOffset = (int)Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.CRC));
-        var computedCrc = WalCrc.ComputeSkipping(recordSpan, crcFieldOffset, sizeof(uint));
-        Unsafe.As<byte, uint>(ref data[recordOffset + crcFieldOffset]) = computedCrc;
+        // Compute footer CRC over [0, ChunkSize - 4) relative to chunk start
+        var crcSpan = data.AsSpan(recordOffset, chunkSize - WalChunkFooter.SizeInBytes);
+        var crc = WalCrc.Compute(crcSpan);
+        Unsafe.As<byte, uint>(ref data[recordOffset + chunkSize - WalChunkFooter.SizeInBytes]) = crc;
 
         return data;
     }

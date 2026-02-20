@@ -50,6 +50,16 @@ internal class UowScanState
 }
 
 /// <summary>
+/// Tracks the most recent FPI for a given file page index during WAL scan.
+/// </summary>
+internal class FpiScanEntry
+{
+    public long LSN;
+    public byte[] PageData;
+    public FpiMetadata Metadata;
+}
+
+/// <summary>
 /// Orchestrates WAL crash recovery: scans WAL segments, identifies committed UoWs,
 /// voids pending ones, and replays committed records to restore data consistency.
 /// </summary>
@@ -58,14 +68,6 @@ internal sealed class WalRecovery : IDisposable
     private readonly IWalFileIO _fileIO;
     private readonly string _walDirectory;
     private readonly PagedMMF _mmf;
-
-    /// <summary>Tracks the most recent FPI for a given file page index during WAL scan.</summary>
-    private class FpiScanEntry
-    {
-        public long LSN;
-        public byte[] PageData;
-        public FpiMetadata Metadata;
-    }
 
     public WalRecovery(IWalFileIO fileIO, string walDirectory, PagedMMF mmf = null)
     {
@@ -122,47 +124,24 @@ internal sealed class WalRecovery : IDisposable
 
             result.SegmentsScanned++;
 
-            while (reader.TryReadNext(out var header, out var payload))
+            while (reader.TryReadNext(out var chunkHeader, out var body))
             {
                 result.RecordsScanned++;
 
-                // Intercept FPI records before UoW processing (FPIs have UowEpoch == 0)
-                if ((header.Flags & (byte)WalRecordFlags.FullPageImage) != 0)
+                switch ((WalChunkType)chunkHeader.ChunkType)
                 {
-                    CollectFpiRecord(fpiMap, header, payload);
-                    continue;
-                }
+                    case WalChunkType.FullPageImage:
+                        CollectFpiChunk(fpiMap, body);
+                        break;
 
-                var uowId = header.UowEpoch;
-                if (uowId == 0)
-                {
-                    continue; // Skip records with no UoW association
-                }
+                    case WalChunkType.Transaction:
+                        ProcessTransactionChunk(uowStates, body, checkpointLSN);
+                        break;
 
-                // Skip records before checkpoint LSN
-                if (checkpointLSN > 0 && header.LSN <= checkpointLSN)
-                {
-                    continue;
+                    default:
+                        // Unknown chunk type — skip (forward compatibility via ChunkSize)
+                        break;
                 }
-
-                if (!uowStates.TryGetValue(uowId, out var state))
-                {
-                    state = new UowScanState();
-                    uowStates[uowId] = state;
-                }
-
-                if ((header.Flags & (byte)WalRecordFlags.UowBegin) != 0)
-                {
-                    state.HasBegin = true;
-                }
-
-                if ((header.Flags & (byte)WalRecordFlags.UowCommit) != 0)
-                {
-                    state.HasCommit = true;
-                }
-
-                // Buffer the record for potential replay
-                state.Records.Add((header, payload.ToArray()));
             }
 
             if (reader.WasTruncated)
@@ -263,21 +242,71 @@ internal sealed class WalRecovery : IDisposable
     }
 
     /// <summary>
-    /// Collects an FPI record into the map, keeping only the highest-LSN entry per file page index.
-    /// Handles both compressed (LZ4) and uncompressed FPI payloads.
+    /// Processes a Transaction chunk body: parses the WalRecordHeader, extracts payload,
+    /// groups by UowEpoch, and tracks UowBegin/UowCommit flags.
     /// </summary>
-    private static void CollectFpiRecord(Dictionary<int, FpiScanEntry> fpiMap, WalRecordHeader header, ReadOnlySpan<byte> payload)
+    private static void ProcessTransactionChunk(Dictionary<ushort, UowScanState> uowStates, ReadOnlySpan<byte> body, long checkpointLSN)
     {
-        if (payload.Length <= FpiMetadata.SizeInBytes)
+        if (body.Length < WalRecordHeader.SizeInBytes)
         {
-            return; // Malformed FPI record — skip
+            return; // Malformed transaction chunk — skip
         }
 
-        var meta = MemoryMarshal.Read<FpiMetadata>(payload);
-        var pagePayload = payload.Slice(FpiMetadata.SizeInBytes);
+        var header = MemoryMarshal.Read<WalRecordHeader>(body);
+        var payload = body.Length > WalRecordHeader.SizeInBytes ? 
+            body.Slice(WalRecordHeader.SizeInBytes, Math.Min(header.PayloadLength, body.Length - WalRecordHeader.SizeInBytes)) : ReadOnlySpan<byte>.Empty;
+
+        var uowId = header.UowEpoch;
+        if (uowId == 0)
+        {
+            return; // Skip records with no UoW association
+        }
+
+        // Skip records before checkpoint LSN
+        if (checkpointLSN > 0 && header.LSN <= checkpointLSN)
+        {
+            return;
+        }
+
+        if (!uowStates.TryGetValue(uowId, out var state))
+        {
+            state = new UowScanState();
+            uowStates[uowId] = state;
+        }
+
+        if ((header.Flags & (byte)WalRecordFlags.UowBegin) != 0)
+        {
+            state.HasBegin = true;
+        }
+
+        if ((header.Flags & (byte)WalRecordFlags.UowCommit) != 0)
+        {
+            state.HasCommit = true;
+        }
+
+        // Buffer the record for potential replay
+        state.Records.Add((header, payload.ToArray()));
+    }
+
+    /// <summary>
+    /// Collects an FPI chunk body into the map, keeping only the highest-LSN entry per file page index.
+    /// FPI body layout: [LSN (8B)] [FpiMetadata (16B)] [page data (variable)].
+    /// Handles both compressed (LZ4) and uncompressed FPI payloads.
+    /// </summary>
+    private static void CollectFpiChunk(Dictionary<int, FpiScanEntry> fpiMap, ReadOnlySpan<byte> body)
+    {
+        // Minimum body: LSN (8) + FpiMetadata (16) = 24 bytes
+        if (body.Length < sizeof(long) + FpiMetadata.SizeInBytes)
+        {
+            return; // Malformed FPI chunk — skip
+        }
+
+        var lsn = MemoryMarshal.Read<long>(body);
+        var meta = MemoryMarshal.Read<FpiMetadata>(body.Slice(sizeof(long)));
+        var pagePayload = body.Slice(sizeof(long) + FpiMetadata.SizeInBytes);
 
         byte[] pageData;
-        if ((header.Flags & (byte)WalRecordFlags.Compressed) != 0)
+        if (meta.CompressionAlgo != FpiCompression.AlgoNone)
         {
             // Compressed FPI — decompress the page payload
             if (meta.CompressionAlgo != FpiCompression.AlgoLZ4)
@@ -306,9 +335,9 @@ internal sealed class WalRecovery : IDisposable
         if (fpiMap.TryGetValue(meta.FilePageIndex, out var existing))
         {
             // Keep only the most recent FPI (highest LSN)
-            if (header.LSN > existing.LSN)
+            if (lsn > existing.LSN)
             {
-                existing.LSN = header.LSN;
+                existing.LSN = lsn;
                 existing.PageData = pageData;
                 existing.Metadata = meta;
             }
@@ -317,7 +346,7 @@ internal sealed class WalRecovery : IDisposable
         {
             fpiMap[meta.FilePageIndex] = new FpiScanEntry
             {
-                LSN = header.LSN,
+                LSN = lsn,
                 PageData = pageData,
                 Metadata = meta,
             };
