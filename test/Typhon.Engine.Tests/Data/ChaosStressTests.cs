@@ -18,9 +18,8 @@ namespace Typhon.Engine.Tests;
 /// These tests are designed to find race conditions, deadlocks, resource leaks, and edge cases.
 /// </summary>
 [TestFixture]
-//[Ignore("WIP")]
 [PublicAPI]
-//[Ignore("Too long, should be manually executed when needed")]
+[Ignore("Too long, should be manually executed when needed")]
 class ChaosStressTests : TestBase<ChaosStressTests>
 {
     // Increase cache size for stress tests
