@@ -183,7 +183,7 @@ public unsafe class Transaction : IDisposable
 #endif
         _committedOperationCount = null;
         _deletedComponentCount = 0;
-        _changeSet = _dbe.MMF.CreateChangeSet();
+        _changeSet = uow?.ChangeSet ?? _dbe.MMF.CreateChangeSet();
         State = TransactionState.Created;
         TSN = tsn;
 
@@ -267,9 +267,11 @@ public unsafe class Transaction : IDisposable
             info.DisposeAccessors();
         }
 
-        // WAL-less mode: write dirty data pages to OS cache. For Immediate mode this is a no-op (already saved in Commit).
-        // For Deferred mode this writes pages without fsync — the UoW.Dispose will fsync at the durability boundary.
-        if (State == TransactionState.Committed && _dbe.WalManager == null)
+        // WAL-less mode: GroupCommit writes dirty pages to OS cache (Layer 1→2) per transaction.
+        // Deferred skips this — UoW.Flush handles the full SaveChangesAsync → FlushToDisk pipeline.
+        // Immediate already saved in Commit.
+        if (State == TransactionState.Committed && _dbe.WalManager == null
+            && OwningUnitOfWork?.DurabilityMode == DurabilityMode.GroupCommit)
         {
             _changeSet.SaveChanges();
         }

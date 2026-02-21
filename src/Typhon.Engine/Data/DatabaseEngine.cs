@@ -186,11 +186,15 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         var effectiveTimeout = timeout == TimeSpan.Zero ? TimeoutOptions.Current.DefaultUowTimeout : timeout;
         var wc = WaitContext.FromTimeout(effectiveTimeout);
 
+        // For Deferred/GroupCommit: create the ChangeSet early so AllocateUowId can track
+        // the registry page mutation in it (avoiding a synchronous SaveChanges).
+        var changeSet = durabilityMode != DurabilityMode.Immediate ? MMF.CreateChangeSet() : null;
+
         // Back-pressure: if registry is full, wait for a slot to be freed.
         // The admission check is a fast-path optimization — AllocateUowId's CAS provides the real atomicity (TOCTOU by design).
-        var uowId = UowRegistry.AllocateUowId(ref wc);
+        var uowId = UowRegistry.AllocateUowId(ref wc, changeSet);
 
-        return new UnitOfWork(this, durabilityMode, uowId, effectiveTimeout);
+        return new UnitOfWork(this, durabilityMode, uowId, effectiveTimeout, changeSet);
     }
 
     /// <summary>Records that a transaction was created (for observability counters).</summary>
@@ -605,8 +609,9 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
     /// <summary>
     /// Persists critical engine state to disk during Dispose:
-    /// 1. Writes the current TSN counter to the root file header (MVCC visibility on reopen)
-    /// 2. Flushes ALL dirty cached pages to disk (ensures committed data survives even without WAL/checkpoint)
+    /// 1. Flushes any dirty pages left by unflushed Deferred UoWs (safety net)
+    /// 2. Writes the current TSN counter to the root file header (MVCC visibility on reopen)
+    /// 3. Flushes ALL changes to stable storage via SaveChanges + FlushToDisk
     /// </summary>
     private void PersistEngineState()
     {
@@ -614,6 +619,18 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         var epoch = guard.Epoch;
 
         var cs = MMF.CreateChangeSet();
+
+        // Safety net: collect dirty pages left by unflushed Deferred UoWs and include
+        // them in this ChangeSet so they are persisted during the final SaveChanges.
+        var dirtyPages = MMF.CollectDirtyMemPageIndices();
+        if (dirtyPages.Length > 0)
+        {
+            _log?.LogWarning("Engine shutdown: flushing {Count} dirty page(s) to disk", dirtyPages.Length);
+            foreach (var idx in dirtyPages)
+            {
+                cs.AddByMemPageIndex(idx);
+            }
+        }
 
         // Write TSN counter to root file header
         MMF.RequestPageEpoch(0, epoch, out var memPageIdx);
@@ -719,6 +736,10 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     internal void RecordRollback() => Interlocked.Increment(ref _transactionsRolledBack);
 
     internal void RecordConflict() => Interlocked.Increment(ref _transactionConflicts);
+
+    internal void LogDeferredUowNotFlushed(ushort uowId, int committedCount) =>
+        _log?.LogWarning("Deferred UoW #{UowId} disposed with {Count} committed transaction(s) without Flush/FlushAsync. " +
+                         "Data relies on engine shutdown safety net.", uowId, committedCount);
 
     #endregion
 

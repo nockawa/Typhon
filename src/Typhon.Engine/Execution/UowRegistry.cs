@@ -143,11 +143,11 @@ internal unsafe class UowRegistry : IDisposable
     /// </param>
     /// <exception cref="ResourceExhaustedException">All slots are in use and the deadline expired.</exception>
     /// <exception cref="OperationCanceledException">The cancellation token was triggered while waiting.</exception>
-    public ushort AllocateUowId(ref WaitContext wc)
+    public ushort AllocateUowId(ref WaitContext wc, ChangeSet externalCs = null)
     {
         while (true)
         {
-            var slot = TryClaimFreeSlot();
+            var slot = TryClaimFreeSlot(externalCs);
             if (slot >= 0)
             {
                 return (ushort)slot;
@@ -165,9 +165,9 @@ internal unsafe class UowRegistry : IDisposable
     /// Allocates a unique UoW ID with no timeout (immediate failure if full).
     /// </summary>
     /// <exception cref="ResourceExhaustedException">All slots are in use.</exception>
-    public ushort AllocateUowId()
+    public ushort AllocateUowId(ChangeSet externalCs = null)
     {
-        var slot = TryClaimFreeSlot();
+        var slot = TryClaimFreeSlot(externalCs);
         if (slot >= 0)
         {
             return (ushort)slot;
@@ -181,7 +181,7 @@ internal unsafe class UowRegistry : IDisposable
     /// Scans the allocation bitmap for a free slot, claims it via CAS, and initializes the entry.
     /// Returns the slot index (1..32767) or -1 if no free slot is available.
     /// </summary>
-    private int TryClaimFreeSlot()
+    private int TryClaimFreeSlot(ChangeSet externalCs = null)
     {
         // Scan allocation bitmap for first Free slot (bit=1), starting from word 0.
         // Slot 0 is reserved (never set in allocation bitmap), so we always skip it.
@@ -215,7 +215,7 @@ internal unsafe class UowRegistry : IDisposable
             }
 
             // Initialize the entry on the page
-            InitializeEntry(slotIndex);
+            InitializeEntry(slotIndex, externalCs);
 
             Interlocked.Increment(ref _activeCount);
             return slotIndex;
@@ -262,7 +262,7 @@ internal unsafe class UowRegistry : IDisposable
     /// <summary>
     /// Releases a UoW ID back to the pool. The slot becomes Free and available for reuse.
     /// </summary>
-    public void Release(ushort uowId)
+    public void Release(ushort uowId, ChangeSet externalCs = null)
     {
         if (uowId == 0)
         {
@@ -276,7 +276,7 @@ internal unsafe class UowRegistry : IDisposable
         {
             var entry = ReadEntry(uowId, guard.Epoch);
             wasVoid = entry.State == UnitOfWorkState.Void;
-            WriteEntryState(uowId, UnitOfWorkState.Free, guard.Epoch);
+            WriteEntryState(uowId, UnitOfWorkState.Free, guard.Epoch, externalCs);
         }
 
         // Clear committed bitmap bit
@@ -545,20 +545,25 @@ internal unsafe class UowRegistry : IDisposable
     /// <summary>
     /// Writes the State field of a registry entry to the persistent page. Caller must be inside an EpochGuard.
     /// </summary>
-    private void WriteEntryState(int slotIndex, UnitOfWorkState newState, long epoch)
+    private void WriteEntryState(int slotIndex, UnitOfWorkState newState, long epoch, ChangeSet externalCs = null)
     {
         var (segPageIndex, itemIndex) = LogicalSegment.GetItemLocation(slotIndex, EntrySize);
         var page = LatchPageExclusive(segPageIndex, epoch, out var memPageIdx);
         var byteOffset = (page.IsRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (itemIndex * EntrySize);
 
-        var cs = _mmf.CreateChangeSet();
+        var cs = externalCs ?? _mmf.CreateChangeSet();
         cs.AddByMemPageIndex(memPageIdx);
 
         var entries = page.RawData<UowRegistryEntry>(byteOffset, 1);
         entries[0].State = newState;
 
         _mmf.UnlatchPageExclusive(memPageIdx);
-        cs.SaveChanges();
+
+        // When using an external ChangeSet, the caller handles flushing (e.g., UoW.FlushAsync pipeline).
+        if (externalCs == null)
+        {
+            cs.SaveChanges();
+        }
     }
 
     /// <summary>
@@ -583,7 +588,7 @@ internal unsafe class UowRegistry : IDisposable
     /// <summary>
     /// Initializes a freshly allocated entry on the persistent page.
     /// </summary>
-    private void InitializeEntry(int slotIndex)
+    private void InitializeEntry(int slotIndex, ChangeSet externalCs = null)
     {
         using var guard = EpochGuard.Enter(_epochManager);
         var epoch = guard.Epoch;
@@ -591,7 +596,7 @@ internal unsafe class UowRegistry : IDisposable
         var page = LatchPageExclusive(segPageIndex, epoch, out var memPageIdx);
         var byteOffset = (page.IsRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (itemIndex * EntrySize);
 
-        var cs = _mmf.CreateChangeSet();
+        var cs = externalCs ?? _mmf.CreateChangeSet();
         cs.AddByMemPageIndex(memPageIdx);
 
         var entries = page.RawData<UowRegistryEntry>(byteOffset, 1);
@@ -605,7 +610,12 @@ internal unsafe class UowRegistry : IDisposable
         };
 
         _mmf.UnlatchPageExclusive(memPageIdx);
-        cs.SaveChanges();
+
+        // When using an external ChangeSet, the caller handles flushing.
+        if (externalCs == null)
+        {
+            cs.SaveChanges();
+        }
     }
 
     /// <summary>
