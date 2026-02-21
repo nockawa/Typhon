@@ -6,9 +6,9 @@ using System.Threading.Tasks;
 namespace Typhon.Engine.Tests;
 
 /// <summary>
-/// Canonical tests for write-write conflict detection and resolution via <see cref="Transaction.ConcurrencyConflictHandler"/>.
-/// Covers: no-conflict path, "last wins" without handler, handler-based resolution (delta rebase, take-committed, take-read),
-/// multi-entity conflicts, and concurrent thread scenarios.
+/// Canonical tests for write-write conflict detection and resolution via <see cref="ConcurrencyConflictHandler"/>.
+/// Covers: no-conflict path, "last wins" without handler, handler-based resolution (delta rebase, take-committed, take-read), multi-entity conflicts,
+/// and concurrent thread scenarios.
 /// </summary>
 class ConcurrencyConflictTests : TestBase<ConcurrencyConflictTests>
 {
@@ -37,12 +37,13 @@ class ConcurrencyConflictTests : TestBase<ConcurrencyConflictTests>
         t1.UpdateEntity(pk, ref update);
 
         var handlerCalled = false;
-        Transaction.ConcurrencyConflictHandler handler = (ref Transaction.ConcurrencyConflictSolver solver) =>
+
+        void ConcurrencyConflictHandler(ref ConcurrencyConflictSolver solver)
         {
             handlerCalled = true;
-        };
+        }
 
-        Assert.That(t1.Commit(handler), Is.True);
+        Assert.That(t1.Commit(ConcurrencyConflictHandler), Is.True);
         Assert.That(handlerCalled, Is.False, "Handler should not be invoked when there is no conflict");
 
         using var tRead = dbe.CreateQuickTransaction();
@@ -127,7 +128,8 @@ class ConcurrencyConflictTests : TestBase<ConcurrencyConflictTests>
 
         // T1 commits with delta rebase handler
         var handlerCalled = false;
-        Transaction.ConcurrencyConflictHandler handler = (ref Transaction.ConcurrencyConflictSolver solver) =>
+
+        void ConcurrencyConflictHandler(ref ConcurrencyConflictSolver solver)
         {
             handlerCalled = true;
             Assert.That(solver.HasConflict, Is.True);
@@ -144,9 +146,9 @@ class ConcurrencyConflictTests : TestBase<ConcurrencyConflictTests>
             // Delta rebase: apply our intent on top of latest committed
             var delta = committing.A - read.A; // -10
             solver.ToCommitData<CompA>().A = committed.A + delta; // 130 + (-10) = 120
-        };
+        }
 
-        Assert.That(t1.Commit(handler), Is.True);
+        Assert.That(t1.Commit(ConcurrencyConflictHandler), Is.True);
         Assert.That(handlerCalled, Is.True, "Handler must be called when a conflict exists");
 
         using var tRead = dbe.CreateQuickTransaction();
@@ -186,12 +188,12 @@ class ConcurrencyConflictTests : TestBase<ConcurrencyConflictTests>
         }
 
         // Handler accepts the committed (T2's) value
-        Transaction.ConcurrencyConflictHandler handler = (ref Transaction.ConcurrencyConflictSolver solver) =>
+        void ConcurrencyConflictHandler(ref ConcurrencyConflictSolver solver)
         {
             solver.TakeCommitted<CompA>();
-        };
+        }
 
-        Assert.That(t1.Commit(handler), Is.True);
+        Assert.That(t1.Commit(ConcurrencyConflictHandler), Is.True);
 
         using var tRead = dbe.CreateQuickTransaction();
         tRead.ReadEntity(pk, out CompA result);
@@ -230,12 +232,12 @@ class ConcurrencyConflictTests : TestBase<ConcurrencyConflictTests>
         }
 
         // Handler reverts to original read snapshot
-        Transaction.ConcurrencyConflictHandler handler = (ref Transaction.ConcurrencyConflictSolver solver) =>
+        void ConcurrencyConflictHandler(ref ConcurrencyConflictSolver solver)
         {
             solver.TakeRead<CompA>();
-        };
+        }
 
-        Assert.That(t1.Commit(handler), Is.True);
+        Assert.That(t1.Commit(ConcurrencyConflictHandler), Is.True);
 
         using var tRead = dbe.CreateQuickTransaction();
         tRead.ReadEntity(pk, out CompA result);
@@ -285,7 +287,8 @@ class ConcurrencyConflictTests : TestBase<ConcurrencyConflictTests>
 
         // T1 commits with delta rebase handler — should be called twice (once per entity)
         var handlerCallCount = 0;
-        Transaction.ConcurrencyConflictHandler handler = (ref Transaction.ConcurrencyConflictSolver solver) =>
+
+        void ConcurrencyConflictHandler(ref ConcurrencyConflictSolver solver)
         {
             handlerCallCount++;
             var read = solver.ReadData<CompA>();
@@ -293,9 +296,9 @@ class ConcurrencyConflictTests : TestBase<ConcurrencyConflictTests>
             var committing = solver.CommittingData<CompA>();
             var delta = committing.A - read.A;
             solver.ToCommitData<CompA>().A = committed.A + delta;
-        };
+        }
 
-        Assert.That(t1.Commit(handler), Is.True);
+        Assert.That(t1.Commit(ConcurrencyConflictHandler), Is.True);
         Assert.That(handlerCallCount, Is.EqualTo(2), "Handler should be called once per conflicting entity");
 
         // Verify: pk1 = 150 + (-10) = 140, pk2 = 250 + (+10) = 260
@@ -347,7 +350,8 @@ class ConcurrencyConflictTests : TestBase<ConcurrencyConflictTests>
         // Handler should only be called for pk1 (conflict), not pk2 (no conflict)
         var handlerCallCount = 0;
         long conflictedPk = 0;
-        Transaction.ConcurrencyConflictHandler handler = (ref Transaction.ConcurrencyConflictSolver solver) =>
+
+        void ConcurrencyConflictHandler(ref ConcurrencyConflictSolver solver)
         {
             handlerCallCount++;
             conflictedPk = solver.PrimaryKey;
@@ -356,9 +360,9 @@ class ConcurrencyConflictTests : TestBase<ConcurrencyConflictTests>
             var committing = solver.CommittingData<CompA>();
             var delta = committing.A - read.A;
             solver.ToCommitData<CompA>().A = committed.A + delta;
-        };
+        }
 
-        Assert.That(t1.Commit(handler), Is.True);
+        Assert.That(t1.Commit(ConcurrencyConflictHandler), Is.True);
         Assert.That(handlerCallCount, Is.EqualTo(1), "Handler should only be called for the conflicting entity");
         Assert.That(conflictedPk, Is.EqualTo(pk1), "The conflicting entity should be pk1");
 
@@ -402,14 +406,15 @@ class ConcurrencyConflictTests : TestBase<ConcurrencyConflictTests>
             tx.UpdateEntity(pk, ref update);
             barrier.SignalAndWait();
 
-            Transaction.ConcurrencyConflictHandler handler = (ref Transaction.ConcurrencyConflictSolver solver) =>
+            void ConcurrencyConflictHandler(ref ConcurrencyConflictSolver solver)
             {
                 var r = solver.ReadData<CompA>();
                 var c = solver.CommittedData<CompA>();
                 var m = solver.CommittingData<CompA>();
                 solver.ToCommitData<CompA>().A = c.A + (m.A - r.A);
-            };
-            result1 = tx.Commit(handler);
+            }
+
+            result1 = tx.Commit(ConcurrencyConflictHandler);
         });
 
         var t2Task = Task.Run(() =>
@@ -420,14 +425,15 @@ class ConcurrencyConflictTests : TestBase<ConcurrencyConflictTests>
             tx.UpdateEntity(pk, ref update);
             barrier.SignalAndWait();
 
-            Transaction.ConcurrencyConflictHandler handler = (ref Transaction.ConcurrencyConflictSolver solver) =>
+            void ConcurrencyConflictHandler(ref ConcurrencyConflictSolver solver)
             {
                 var r = solver.ReadData<CompA>();
                 var c = solver.CommittedData<CompA>();
                 var m = solver.CommittingData<CompA>();
                 solver.ToCommitData<CompA>().A = c.A + (m.A - r.A);
-            };
-            result2 = tx.Commit(handler);
+            }
+
+            result2 = tx.Commit(ConcurrencyConflictHandler);
         });
 
         Task.WaitAll(t1Task, t2Task);
@@ -463,8 +469,12 @@ class ConcurrencyConflictTests : TestBase<ConcurrencyConflictTests>
             using var t1 = dbe.CreateQuickTransaction();
             var update = new CompA(2);
             t1.UpdateEntity(pk, ref update);
-            Transaction.ConcurrencyConflictHandler handler = (ref Transaction.ConcurrencyConflictSolver solver) => { };
-            t1.Commit(handler);
+
+            void ConcurrencyConflictHandler(ref ConcurrencyConflictSolver solver)
+            {
+            }
+
+            t1.Commit(ConcurrencyConflictHandler);
         }
 
         // Second commit with handler — reuses solver (Reset path)
@@ -472,8 +482,12 @@ class ConcurrencyConflictTests : TestBase<ConcurrencyConflictTests>
             using var t2 = dbe.CreateQuickTransaction();
             var update = new CompA(3);
             t2.UpdateEntity(pk, ref update);
-            Transaction.ConcurrencyConflictHandler handler = (ref Transaction.ConcurrencyConflictSolver solver) => { };
-            Assert.That(t2.Commit(handler), Is.True, "Second commit should succeed (solver reuse via Reset)");
+
+            void ConcurrencyConflictHandler(ref ConcurrencyConflictSolver solver)
+            {
+            }
+
+            Assert.That(t2.Commit(ConcurrencyConflictHandler), Is.True, "Second commit should succeed (solver reuse via Reset)");
         }
 
         using var tRead = dbe.CreateQuickTransaction();
@@ -514,12 +528,12 @@ class ConcurrencyConflictTests : TestBase<ConcurrencyConflictTests>
         }
 
         // No-op handler: ToCommitData is pre-initialized with CommittingData (T1's dirty write = 50)
-        Transaction.ConcurrencyConflictHandler handler = (ref Transaction.ConcurrencyConflictSolver solver) =>
+        void ConcurrencyConflictHandler(ref ConcurrencyConflictSolver solver)
         {
             // Intentionally empty — default behavior should be "last wins" (T1's value = 50)
-        };
+        }
 
-        Assert.That(t1.Commit(handler), Is.True);
+        Assert.That(t1.Commit(ConcurrencyConflictHandler), Is.True);
 
         using var tRead = dbe.CreateQuickTransaction();
         tRead.ReadEntity(pk, out CompA result);

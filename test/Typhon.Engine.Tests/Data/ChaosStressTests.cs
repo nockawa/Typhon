@@ -1003,13 +1003,13 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                             {
                                 // Delta-rebase handler: on conflict, apply our +1 delta on top of the latest committed value
                                 // instead of blindly overwriting. This guarantees no lost updates under contention.
-                                Transaction.ConcurrencyConflictHandler handler = (ref Transaction.ConcurrencyConflictSolver solver) =>
+                                void ConcurrencyConflictHandler(ref ConcurrencyConflictSolver solver)
                                 {
                                     var committed = solver.CommittedData<CompA>();
                                     solver.ToCommitData<CompA>().A = committed.A + 1;
-                                };
+                                }
 
-                                if (txn.Commit(handler))
+                                if (txn.Commit(ConcurrencyConflictHandler))
                                 {
                                     committedUpdates.AddOrUpdate(targetId, 1, (_, v) => v + 1);
                                 }
@@ -1904,7 +1904,8 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                             // applying our delta (dirtyVal - readVal) onto the committed value.
                             // Track handler values per entity for diagnostics.
                             var handlerLog = new ConcurrentBag<string>();
-                            Transaction.ConcurrencyConflictHandler handler = (ref Transaction.ConcurrencyConflictSolver solver) =>
+
+                            void ConcurrencyConflictHandler(ref ConcurrencyConflictSolver solver)
                             {
                                 ref var r = ref solver.ReadData<CompA>();
                                 ref var c = ref solver.CommittedData<CompA>();
@@ -1915,13 +1916,14 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                                     Interlocked.Increment(ref badDeltaCount[0]);
                                     errors.Add($"T{threadId} op {i}: bad delta={delta} read={r.A} committed={c.A} committing={m.A} pk={solver.PrimaryKey}");
                                 }
+
                                 Interlocked.Increment(ref conflictCount[0]);
                                 var resolved = c.A + delta;
                                 solver.ToCommitData<CompA>().A = resolved;
                                 handlerLog.Add($"pk={solver.PrimaryKey} r={r.A} c={c.A} m={m.A} d={delta} res={resolved}");
-                            };
+                            }
 
-                            if (txn.Commit(handler))
+                            if (txn.Commit(ConcurrencyConflictHandler))
                             {
                                 Interlocked.Add(ref expectedDeltas[srcIdx], -1);
                                 Interlocked.Add(ref expectedDeltas[dstIdx], 1);
@@ -2569,15 +2571,15 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                             txn.UpdateEntity(compAIds[dstIdx], ref dst);
 
                             // Delta-rebase handler: apply our delta onto the committed value
-                            Transaction.ConcurrencyConflictHandler handler = (ref Transaction.ConcurrencyConflictSolver solver) =>
+                            void ConcurrencyConflictHandler(ref ConcurrencyConflictSolver solver)
                             {
                                 ref var r = ref solver.ReadData<CompA>();
                                 ref var c = ref solver.CommittedData<CompA>();
                                 ref var m = ref solver.CommittingData<CompA>();
                                 solver.ToCommitData<CompA>().A = c.A + (m.A - r.A);
-                            };
+                            }
 
-                            if (txn.Commit(handler))
+                            if (txn.Commit(ConcurrencyConflictHandler))
                             {
                                 stats.AddOrUpdate("CompA_Updates", 1, (_, v) => v + 1);
                             }

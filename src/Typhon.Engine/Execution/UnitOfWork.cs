@@ -105,7 +105,7 @@ public sealed class UnitOfWork : IDisposable
     }
 
     /// <summary>
-    /// Creates a <see cref="UnitOfWorkContext"/> for use with <see cref="Transaction.Commit(ref UnitOfWorkContext, Transaction.ConcurrencyConflictHandler)"/>.
+    /// Creates a <see cref="UnitOfWorkContext"/> for use with <see cref="Transaction.Commit(ref UnitOfWorkContext, ConcurrencyConflictHandler)"/>.
     /// Composes the UoW's deadline with the provided timeout (tighter deadline wins).
     /// </summary>
     public UnitOfWorkContext CreateContext(TimeSpan timeout = default)
