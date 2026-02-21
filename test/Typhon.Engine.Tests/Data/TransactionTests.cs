@@ -868,4 +868,200 @@ class TransactionTests : TestBase<TransactionTests>
             }
         }
     }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Phase 0 Safety Net — State Machine Invariant Tests (Issue #91)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Test 0.1: Verifies that committing a transaction twice returns false the second time
+    /// and does not corrupt the transaction state.
+    /// </summary>
+    [Test]
+    public void DoubleCommit_ReturnsFalse()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        using var t = dbe.CreateQuickTransaction();
+        var a = new CompA(1);
+        t.CreateEntity(ref a);
+
+        var firstCommit = t.Commit();
+        Assert.That(firstCommit, Is.True, "First commit should succeed");
+        Assert.That(t.State, Is.EqualTo(Transaction.TransactionState.Committed));
+
+        var secondCommit = t.Commit();
+        Assert.That(secondCommit, Is.False, "Second commit should return false");
+        Assert.That(t.State, Is.EqualTo(Transaction.TransactionState.Committed), "State should remain Committed after double commit");
+    }
+
+    /// <summary>
+    /// Test 0.2: Verifies that rolling back a transaction twice returns false the second time
+    /// and does not corrupt the transaction state.
+    /// </summary>
+    [Test]
+    public void DoubleRollback_ReturnsFalse()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        using var t = dbe.CreateQuickTransaction();
+        var a = new CompA(1);
+        t.CreateEntity(ref a);
+
+        var firstRollback = t.Rollback();
+        Assert.That(firstRollback, Is.True, "First rollback should succeed");
+        Assert.That(t.State, Is.EqualTo(Transaction.TransactionState.Rollbacked));
+
+        var secondRollback = t.Rollback();
+        Assert.That(secondRollback, Is.False, "Second rollback should return false");
+        Assert.That(t.State, Is.EqualTo(Transaction.TransactionState.Rollbacked), "State should remain Rollbacked after double rollback");
+    }
+
+    /// <summary>
+    /// Test 0.3: Verifies that CRUD operations after commit/rollback return appropriate failure codes.
+    /// Documents that ReadEntity has no state guard (unlike Create/Update/Delete) — this
+    /// inconsistency will be addressed in Phase 4.
+    /// </summary>
+    [Test]
+    public void CrudAfterCommitOrRollback_ReturnsFailure()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        // --- After Commit ---
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(42);
+            var e1 = t.CreateEntity(ref a);
+            Assert.That(t.Commit(), Is.True);
+
+            var a2 = new CompA(99);
+            Assert.That(t.CreateEntity(ref a2), Is.EqualTo(-1), "CreateEntity after commit should return -1");
+
+            var a3 = new CompA(100);
+            Assert.That(t.UpdateEntity(e1, ref a3), Is.False, "UpdateEntity after commit should return false");
+
+            Assert.That(t.DeleteEntity<CompA>(e1), Is.False, "DeleteEntity after commit should return false");
+
+            // ReadEntity after commit: NO state guard — documents current inconsistency.
+            // The read proceeds because ReadEntity does not check State > InProgress.
+            var readResult = t.ReadEntity(e1, out CompA _);
+            Assert.That(readResult, Is.True, "ReadEntity has no state guard — reads succeed on committed data");
+
+            Assert.That(t.State, Is.EqualTo(Transaction.TransactionState.Committed), "State should remain Committed throughout");
+        }
+
+        // --- After Rollback ---
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(55);
+            var e2 = t.CreateEntity(ref a);
+            Assert.That(t.Rollback(), Is.True);
+
+            var a2 = new CompA(99);
+            Assert.That(t.CreateEntity(ref a2), Is.EqualTo(-1), "CreateEntity after rollback should return -1");
+
+            var a3 = new CompA(100);
+            Assert.That(t.UpdateEntity(e2, ref a3), Is.False, "UpdateEntity after rollback should return false");
+
+            Assert.That(t.DeleteEntity<CompA>(e2), Is.False, "DeleteEntity after rollback should return false");
+
+            // ReadEntity after rollback: NO state guard — entity was rolled back so read finds nothing
+            var readResult = t.ReadEntity(e2, out CompA _);
+            Assert.That(readResult, Is.False, "ReadEntity after rollback — rolled-back entity should not be found");
+
+            Assert.That(t.State, Is.EqualTo(Transaction.TransactionState.Rollbacked), "State should remain Rollbacked throughout");
+        }
+    }
+
+    /// <summary>
+    /// Test 0.4: Verifies that a pooled transaction starts with clean state after Reset().
+    /// Exercises the pool-reuse path: create+commit+dispose, then create again and verify the
+    /// reused transaction has no stale ComponentInfo from the prior lifetime.
+    /// </summary>
+    [Test]
+    public void TransactionReset_ClearsComponentInfoState()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        // First transaction: work with CompA + CompB
+        {
+            using var t1 = dbe.CreateQuickTransaction();
+            var a = new CompA(10);
+            var b = new CompB(20, 3.14f);
+            t1.CreateEntity(ref a, ref b);
+            Assert.That(t1.Commit(), Is.True);
+            Assert.That(t1.CommittedOperationCount, Is.GreaterThanOrEqualTo(2),
+                "t1 should have at least 2 operations (CompA + CompB)");
+        }
+        // t1 disposed → returns to pool, Reset() clears _componentInfos
+
+        // Second transaction: verify clean start, operate with CompA only
+        {
+            using var t2 = dbe.CreateQuickTransaction();
+            Assert.That(t2.State, Is.EqualTo(Transaction.TransactionState.Created),
+                "Reused transaction should start in Created state");
+
+            var a = new CompA(30);
+            var e2 = t2.CreateEntity(ref a);
+            Assert.That(e2, Is.GreaterThan(0), "Entity creation on reused transaction should succeed");
+
+            Assert.That(t2.Commit(), Is.True, "Commit on reused transaction should succeed");
+            Assert.That(t2.CommittedOperationCount, Is.EqualTo(1),
+                "t2 should have exactly 1 operation (CompA only — no stale CompB from prior lifetime)");
+        }
+    }
+
+    /// <summary>
+    /// Test 0.5: Verifies that committing a transaction with zero entity operations still
+    /// processes deferred cleanup when the transaction is the chain tail.
+    /// </summary>
+    [Test]
+    public void CommitWithZeroEntities_ProcessesDeferredCleanup()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+
+        // Step 1: Create an entity
+        {
+            using var t1 = dbe.CreateQuickTransaction();
+            var a = new CompA(42);
+            e1 = t1.CreateEntity(ref a);
+            Assert.That(t1.Commit(), Is.True);
+        }
+
+        // Step 2: Create a blocking transaction that holds the chain tail
+        var tBlocker = dbe.CreateQuickTransaction();
+        try
+        {
+            // Step 3: Delete the entity — cleanup deferred because tBlocker is the chain tail
+            {
+                using var t2 = dbe.CreateQuickTransaction();
+                Assert.That(t2.DeleteEntity<CompA>(e1), Is.True, "Delete should succeed");
+                Assert.That(t2.Commit(), Is.True);
+            }
+
+            // Step 4: Verify deferred cleanup is pending
+            Assert.That(dbe.DeferredCleanupManager.QueueSize, Is.GreaterThan(0),
+                "Deferred cleanup should be pending while blocking transaction holds the tail");
+
+            // Step 5: Commit the blocker (zero entity operations, State == Created).
+            // The empty-commit path processes deferred cleanup when this transaction is the tail.
+            var commitResult = tBlocker.Commit();
+            Assert.That(commitResult, Is.True, "Empty transaction commit should return true");
+        }
+        finally
+        {
+            tBlocker.Dispose();
+        }
+
+        // Step 6: Verify deferred cleanup was processed
+        Assert.That(dbe.DeferredCleanupManager.QueueSize, Is.EqualTo(0),
+            "Deferred cleanup queue should be empty after empty transaction commit + dispose");
+    }
 }
