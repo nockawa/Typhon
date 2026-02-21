@@ -179,17 +179,31 @@ public unsafe class Transaction : IDisposable
 
         AssertThreadAffinity();
 
+        EnsureCompleted();
+        ProcessDeferredCleanups();
+        FlushAccessors();
+        PersistIfNeeded();
+        ExitEpochAndRemove();
+
+        _isDisposed = true;
+    }
+
+    /// <summary>Auto-rollback if not yet committed.</summary>
+    private void EnsureCompleted()
+    {
         if (State != TransactionState.Committed)
         {
             Rollback();
         }
+    }
 
-        // Process deferred cleanups if this transaction was blocking them. The queue holds entries from OTHER transactions whose cleanup was deferred because
-        // this transaction (as tail) was blocking.
+    /// <summary>Process deferred cleanups if this transaction was blocking them as tail.</summary>
+    private void ProcessDeferredCleanups()
+    {
         if (_dbe.DeferredCleanupManager.QueueSize > 0)
         {
-            var wcDeferred = WaitContext.FromTimeout(TimeoutOptions.Current.TransactionChainLockTimeout);
-            if (_dbe.TransactionChain.Control.EnterSharedAccess(ref wcDeferred))
+            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.TransactionChainLockTimeout);
+            if (_dbe.TransactionChain.Control.EnterSharedAccess(ref wc))
             {
                 var isTail = _dbe.TransactionChain.Tail == this;
                 var nextMinTSN = isTail ? Previous?.TSN ?? (_dbe.TransactionChain.NextFreeId + 1) : 0;
@@ -201,36 +215,34 @@ public unsafe class Transaction : IDisposable
                 }
             }
         }
+    }
 
-        // Dispose all ChunkAccessors to flush dirty pages.
+    /// <summary>Dispose all ChunkAccessors to flush dirty pages.</summary>
+    private void FlushAccessors()
+    {
         foreach (var info in _componentInfos.Values)
         {
             info.DisposeAccessors();
         }
+    }
 
-        // WAL-less mode: GroupCommit writes dirty pages to OS cache (Layer 1→2) per transaction.
-        // Deferred skips this — UoW.Flush handles the full SaveChangesAsync → FlushToDisk pipeline.
-        // Immediate already saved in Commit.
+    /// <summary>WAL-less GroupCommit: write dirty pages to OS cache.</summary>
+    private void PersistIfNeeded()
+    {
         if (State == TransactionState.Committed && _dbe.WalManager == null
             && OwningUnitOfWork?.DurabilityMode == DurabilityMode.GroupCommit)
         {
             _changeSet.SaveChanges();
         }
+    }
 
-        // Exit epoch scope after accessors are disposed but before removing from the chain. This allows pages to be evicted once no transaction
-        // references them. Use unordered exit because transactions on the same thread can be disposed in any order (not necessarily LIFO), unlike EpochGuard
-        // which is stack-bound.
+    /// <summary>Exit epoch scope, remove from chain, auto-dispose owned UoW.</summary>
+    private void ExitEpochAndRemove()
+    {
         _epochManager.ExitScopeUnordered();
-
-        // Capture UoW reference before Remove() — Remove() may call Reset() which clears these fields
         var owningUow = OwnsUnitOfWork ? OwningUnitOfWork : null;
-
         _dbe.TransactionChain.Remove(this);
-
-        // Auto-dispose UoW if this transaction owns it (CreateQuickTransaction pattern)
         owningUow?.Dispose();
-
-        _isDisposed = true;
     }
 
     public long CreateEntity<T>(ref T t) where T : unmanaged
