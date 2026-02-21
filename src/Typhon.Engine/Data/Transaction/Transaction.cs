@@ -6,7 +6,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using Typhon.Engine.BPTree;
 using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
@@ -791,7 +790,6 @@ public unsafe class Transaction : IDisposable
                     }
                 }
             }
-            return true;
         }
 
         return true;
@@ -1347,6 +1345,49 @@ public unsafe class Transaction : IDisposable
         return Rollback(ref ctx);
     }
 
+    /// <summary>Serialize to WAL (or flush pages for WAL-less), transition to Committed, and record metrics.</summary>
+    private void PersistAndFinalize(ref UnitOfWorkContext ctx, long startTicks)
+    {
+        // WAL serialization (after conflict resolution, before state transition)
+        long walHighLsn = 0;
+        if (_dbe.WalManager != null && State != TransactionState.Created)
+        {
+            walHighLsn = WalSerializer.SerializeToWal(_componentInfos, _dbe.WalManager, TSN, UowId, ref ctx);
+        }
+
+        // Durability wait for Immediate mode
+        if (walHighLsn > 0 && OwningUnitOfWork?.DurabilityMode == DurabilityMode.Immediate)
+        {
+            Debug.Assert(_dbe.WalManager != null);
+            _dbe.WalManager.RequestFlush();
+            var wc = ComposeWaitContext(ref ctx, TimeoutOptions.Current.DefaultCommitTimeout);
+            _dbe.WalManager.WaitForDurable(walHighLsn, ref wc);
+        }
+
+        // WAL-less Immediate: persist dirty data pages and fsync before returning from Commit.
+        // This is the WAL-less equivalent of the WAL FUA path above — data is on stable storage when Commit returns.
+        if (_dbe.WalManager == null && OwningUnitOfWork?.DurabilityMode == DurabilityMode.Immediate)
+        {
+            // Flush batched dirty flags from long-lived accessors to the ChangeSet (BTree accessors are already
+            // disposed inline during CommitComponentCore, so their pages are already tracked).
+            foreach (var kvp in _componentInfos)
+            {
+                kvp.Value.CompContentAccessor.CommitChanges();
+                kvp.Value.CompRevTableAccessor.CommitChanges();
+            }
+
+            _changeSet.SaveChanges();
+            _dbe.MMF.FlushToDisk();
+        }
+
+        // New state
+        TransitionTo(TransactionState.Committed);
+
+        // Record commit duration for observability
+        var elapsedUs = (Stopwatch.GetTimestamp() - startTicks) * 1_000_000 / Stopwatch.Frequency;
+        _dbe?.RecordCommitDuration(elapsedUs);
+    }
+
     public bool Commit(ref UnitOfWorkContext ctx, ConcurrencyConflictHandler handler = null)
     {
         AssertThreadAffinity();
@@ -1440,44 +1481,7 @@ public unsafe class Transaction : IDisposable
         activity?.SetTag(TyphonSpanAttributes.TransactionConflictDetected, hasConflict);
         activity?.SetTag(TyphonSpanAttributes.TransactionStatus, "committed");
 
-        // WAL serialization (after conflict resolution, before state transition)
-        long walHighLsn = 0;
-        if (_dbe.WalManager != null && State != TransactionState.Created)
-        {
-            walHighLsn = WalSerializer.SerializeToWal(_componentInfos, _dbe.WalManager, TSN, UowId, ref ctx);
-        }
-
-        // Durability wait for Immediate mode
-        if (walHighLsn > 0 && OwningUnitOfWork?.DurabilityMode == DurabilityMode.Immediate)
-        {
-            _dbe.WalManager.RequestFlush();
-            var wc = ComposeWaitContext(ref ctx, TimeoutOptions.Current.DefaultCommitTimeout);
-            _dbe.WalManager.WaitForDurable(walHighLsn, ref wc);
-        }
-
-        // WAL-less Immediate: persist dirty data pages and fsync before returning from Commit.
-        // This is the WAL-less equivalent of the WAL FUA path above — data is on stable storage when Commit returns.
-        if (_dbe.WalManager == null && OwningUnitOfWork?.DurabilityMode == DurabilityMode.Immediate)
-        {
-            // Flush batched dirty flags from long-lived accessors to the ChangeSet (BTree accessors are already
-            // disposed inline during CommitComponentCore, so their pages are already tracked).
-            foreach (var kvp in _componentInfos)
-            {
-                kvp.Value.CompContentAccessor.CommitChanges();
-                kvp.Value.CompRevTableAccessor.CommitChanges();
-            }
-
-            _changeSet.SaveChanges();
-            _dbe.MMF.FlushToDisk();
-        }
-
-        // New state
-        TransitionTo(TransactionState.Committed);
-
-        // Record commit duration for observability
-        var elapsedUs = (Stopwatch.GetTimestamp() - startTicks) * 1_000_000 / Stopwatch.Frequency;
-        _dbe?.RecordCommitDuration(elapsedUs);
-
+        PersistAndFinalize(ref ctx, startTicks);
         return true;
     }
 

@@ -71,8 +71,10 @@ internal sealed class ComponentInfo
     public ChunkAccessor CompRevTableAccessor;
 
     // Dual caches (one is always null)
+    // ReSharper disable InconsistentNaming
     internal Dictionary<long, CompRevInfo> SingleCache;
     internal Dictionary<long, List<CompRevInfo>> MultipleCache;
+    // ReSharper restore InconsistentNaming
 
     public ComponentInfo(bool isMultiple)
     {
