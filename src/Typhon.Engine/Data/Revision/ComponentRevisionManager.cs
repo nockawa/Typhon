@@ -82,8 +82,8 @@ internal ref struct ComponentRevisionManager
         return new ElementRevisionHandle(ref accessor, curChunkId, false, (short)indexInChunk);
     }
 
-    internal static unsafe void AddCompRev(Transaction.ComponentInfoBase info, ref Transaction.ComponentInfoBase.CompRevInfo compRevInfo, long tsn, 
-        ushort uowId, bool isDelete, bool lockAlreadyHeld = false)
+    internal static unsafe void AddCompRev(ComponentInfoBase info, ref ComponentInfoBase.CompRevInfo compRevInfo, long tsn, ushort uowId, bool isDelete,
+        bool lockAlreadyHeld = false)
     {
         ref var compRevTableAccessor = ref info.CompRevTableAccessor;
         var compContent = info.CompContentSegment;
@@ -154,7 +154,7 @@ internal ref struct ComponentRevisionManager
         }
     }
 
-    internal static unsafe int AllocCompRevStorage(Transaction.ComponentInfoBase info, long tsn, ushort uowId, int firstChunkId)
+    internal static unsafe int AllocCompRevStorage(ComponentInfoBase info, long tsn, ushort uowId, int firstChunkId)
     {
         var chunkId = info.CompRevTableSegment.AllocateChunk(false);
         var chunkSpan = info.CompRevTableAccessor.GetChunkAsSpan(chunkId, true);
@@ -451,7 +451,7 @@ internal ref struct ComponentRevisionManager
         ct.ComponentSegment.FreeChunk(chunkId);
     }
 
-    private static void GrowChain(Transaction.ComponentInfoBase info, int firstChunkId, ref CompRevStorageHeader firstHeader)
+    private static void GrowChain(ComponentInfoBase info, int firstChunkId, ref CompRevStorageHeader firstHeader)
     {
         ref var compRevTableAccessor = ref info.CompRevTableAccessor;
         var compRevTable = info.CompRevTableSegment;
