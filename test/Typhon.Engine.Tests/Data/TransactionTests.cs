@@ -276,12 +276,15 @@ class TransactionTests : TestBase<TransactionTests>
                 Assert.That(res, Is.True);
                 Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(1), "Committing three components should lead to at least one operation");
                 Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(2), "Update after create in different transaction should lead to two distinct revisions");
-                Assert.That(t.GetRevisionCount<CompA>(e1), Is.EqualTo(1), "Committing an update should remove the previous revision (as the transaction is alone).");
             }
 
+            // Flush deferred cleanup and verify with a fresh transaction (committed tx's ChangeSet
+            // shadows the MMF pages — a new transaction is needed to see the cleanup results).
+            dbe.FlushDeferredCleanups();
             {
                 using var t = dbe.CreateQuickTransaction();
 
+                Assert.That(t.GetRevisionCount<CompA>(e1), Is.EqualTo(1), "Committing an update should remove the previous revision (as the transaction is alone).");
                 var res = t.ReadEntity(e1, out CompA a2);
                 Assert.That(res, Is.True);
                 Assert.That(a2.A, Is.EqualTo(12), "Read after update should reflect the updated value");
@@ -392,21 +395,24 @@ class TransactionTests : TestBase<TransactionTests>
                 commit = !commit;
             }
 
-            // Commit the long-running transaction, this should trigger a cleanup of old revisions, keeping only the last one which is the long running one
+            // Verify revision count before cleanup (no lazy/inline cleanup — all revisions accumulate)
             {
                 using var readTransaction = dbe.CreateQuickTransaction();
-                // With full-precision TSN (no bit 0 masking), lazy cleanup correctly removes the initial
-                // creation entry (its TSN < long-running transaction's MinTSN), so expected count is reduced by 1.
-                Assert.That(readTransaction.GetRevisionCount<CompA>(e1), Is.EqualTo(curRevisionCount - rbCount - 1), "The number of revisions stored should match committed updates minus cleaned-up entries");
+                Assert.That(readTransaction.GetRevisionCount<CompA>(e1), Is.EqualTo(curRevisionCount - rbCount), "The number of revisions stored should match committed updates (no inline cleanup)");
+            }
+
+            // Commit the long-running transaction — cleanup happens in Dispose (deferred path)
+            {
                 var res = longRunningTransaction.Commit();
                 Assert.That(res, Is.True);
                 longRunningTransaction.Dispose();
-                Assert.That(readTransaction.GetRevisionCount<CompA>(e1), Is.EqualTo(1), "After committing the long-running transaction, only one revision should remain");
+                dbe.FlushDeferredCleanups();
             }
 
-            // Create a transaction to read and check
+            // Verify with a fresh transaction: chain should be compacted to 1 revision
             {
                 using var readTransaction = dbe.CreateQuickTransaction();
+                Assert.That(readTransaction.GetRevisionCount<CompA>(e1), Is.EqualTo(1), "After committing the long-running transaction, only one revision should remain");
                 readTransaction.ReadEntity(e1, out CompA aFinal);
                 Assert.That(aFinal, Is.EqualTo(longRunningValue), "The last committed revision should be the one remaining");
             }
@@ -606,8 +612,10 @@ class TransactionTests : TestBase<TransactionTests>
             Assert.That(readable, Is.False, "Entity should not be readable after deletion");
         }
 
+        // Flush deferred cleanup so deletion removes the PK index entry
+        dbe.FlushDeferredCleanups();
+
         // Check primary key index - entry should be removed after cleanup
-        // NOTE: This assertion documents the EXPECTED behavior.
         {
             var depth = dbe.EpochManager.EnterScope();
             try

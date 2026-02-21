@@ -19,12 +19,6 @@ public enum WalRecordFlags : byte
 
     /// <summary>This record is the last in a Unit of Work (commit marker).</summary>
     UowCommit = 1 << 1,
-
-    /// <summary>The payload is compressed.</summary>
-    Compressed = 1 << 2,
-
-    /// <summary>The payload contains a full page image for torn-page repair.</summary>
-    FullPageImage = 1 << 3,
 }
 
 /// <summary>
@@ -44,14 +38,13 @@ public enum WalOperationType : byte
 }
 
 /// <summary>
-/// 48-byte WAL record header written before each component change in the WAL. Sequential layout with Pack=1 for exact binary format.
+/// 32-byte WAL record header — the body of a <see cref="WalChunkType.Transaction"/> chunk.
+/// Written after the <see cref="WalChunkHeader"/> and before component payload data.
 /// </summary>
 /// <remarks>
 /// <para>
-/// This header is part of the on-disk WAL format (WAL-Design.md section 2.2). Each WAL record is: <c>[WalRecordHeader (48 bytes)] [payload (PayloadLength bytes)]</c>.
-/// </para>
-/// <para>
-/// CRC computation is not performed by this struct — that responsibility belongs to the WAL serialization layer (issue #55).
+/// CRC and PrevCRC are no longer part of this struct — they live in <see cref="WalChunkHeader"/> and <see cref="WalChunkFooter"/>, managed by the WAL
+/// writer thread.
 /// </para>
 /// </remarks>
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -63,9 +56,6 @@ public struct WalRecordHeader
 
     /// <summary>MVCC transaction timestamp for snapshot isolation.</summary>
     public long TransactionTSN;
-
-    /// <summary>Total record length in bytes (header + payload). Used for skip-ahead.</summary>
-    public uint TotalRecordLength;
 
     /// <summary>Unit of Work registry link — identifies the UoW this record belongs to.</summary>
     public ushort UowEpoch;
@@ -85,15 +75,6 @@ public struct WalRecordHeader
     /// <summary>Flags providing additional record metadata.</summary>
     public byte Flags;
 
-    /// <summary>CRC32C of the previous WAL record for chain validation.</summary>
-    public uint PrevCRC;
-
-    /// <summary>CRC32C of this header + payload (computed during serialization).</summary>
-    public uint CRC;
-
-    /// <summary>Reserved for future use and alignment padding.</summary>
-    public uint Reserved;
-
     /// <summary>Expected size of this struct in bytes.</summary>
-    public const int SizeInBytes = 48;
+    public const int SizeInBytes = 32;
 }

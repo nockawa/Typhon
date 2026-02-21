@@ -51,6 +51,11 @@ public unsafe class Transaction : IDisposable
 
             /// The ChunkId storing the component content corresponding to the revision of this CompRevInfo instance
             public int CurCompContentChunkId;
+
+            /// Monotonic commit counter captured at read time. Compared against header.CommitSequence during commit to detect any commits since our
+            /// read — immune to revision index ordering and cleanup compaction that can fool TSN/LCRI-based detection.
+            public int ReadCommitSequence;
+
         }
 
         public abstract bool IsMultiple { get; }
@@ -178,7 +183,7 @@ public unsafe class Transaction : IDisposable
 #endif
         _committedOperationCount = null;
         _deletedComponentCount = 0;
-        _changeSet = _dbe.MMF.CreateChangeSet();
+        _changeSet = uow?.ChangeSet ?? _dbe.MMF.CreateChangeSet();
         State = TransactionState.Created;
         TSN = tsn;
 
@@ -205,6 +210,8 @@ public unsafe class Transaction : IDisposable
         // Don't touch _isDisposed on purpose
 
         TSN = 0;
+        Next = null;
+        Previous = null;
         _committedOperationCount = null;
         _deletedComponentCount = 0;
         _changeSet = null;
@@ -236,15 +243,15 @@ public unsafe class Transaction : IDisposable
             Rollback();
         }
 
-        // Process deferred cleanups if this transaction was the tail blocking other entities.
-        // Must happen before Remove() so we can still detect ourselves as the tail.
+        // Process deferred cleanups if this transaction was blocking them. The queue holds entries from OTHER transactions whose cleanup was deferred because
+        // this transaction (as tail) was blocking.
         if (_dbe.DeferredCleanupManager.QueueSize > 0)
         {
-            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.TransactionChainLockTimeout);
-            if (_dbe.TransactionChain.Control.EnterSharedAccess(ref wc))
+            var wcDeferred = WaitContext.FromTimeout(TimeoutOptions.Current.TransactionChainLockTimeout);
+            if (_dbe.TransactionChain.Control.EnterSharedAccess(ref wcDeferred))
             {
                 var isTail = _dbe.TransactionChain.Tail == this;
-                var nextMinTSN = isTail ? _dbe.TransactionChain.Tail.Next?.TSN ?? _dbe.TransactionChain.NextFreeId : 0;
+                var nextMinTSN = isTail ? Previous?.TSN ?? (_dbe.TransactionChain.NextFreeId + 1) : 0;
                 _dbe.TransactionChain.Control.ExitSharedAccess();
 
                 if (isTail)
@@ -260,10 +267,18 @@ public unsafe class Transaction : IDisposable
             info.DisposeAccessors();
         }
 
-        // Exit epoch scope after accessors are disposed but before removing from the chain.
-        // This allows pages to be evicted once no transaction references them.
-        // Use unordered exit because transactions on the same thread can be disposed in any order
-        // (not necessarily LIFO), unlike EpochGuard which is stack-bound.
+        // WAL-less mode: GroupCommit writes dirty pages to OS cache (Layer 1→2) per transaction.
+        // Deferred skips this — UoW.Flush handles the full SaveChangesAsync → FlushToDisk pipeline.
+        // Immediate already saved in Commit.
+        if (State == TransactionState.Committed && _dbe.WalManager == null
+            && OwningUnitOfWork?.DurabilityMode == DurabilityMode.GroupCommit)
+        {
+            _changeSet.SaveChanges();
+        }
+
+        // Exit epoch scope after accessors are disposed but before removing from the chain. This allows pages to be evicted once no transaction
+        // references them. Use unordered exit because transactions on the same thread can be disposed in any order (not necessarily LIFO), unlike EpochGuard
+        // which is stack-bound.
         _epochManager.ExitScopeUnordered();
 
         // Capture UoW reference before Remove() — Remove() may call Reset() which clears these fields
@@ -438,7 +453,7 @@ public unsafe class Transaction : IDisposable
         activity?.SetTag(TyphonSpanAttributes.EntityId, pk);
         activity?.SetTag(TyphonSpanAttributes.ComponentType, typeof(T).Name);
 
-        return UpdateComponent(pk, ref Unsafe.NullRef<T>());
+        return DeleteComponent<T>(pk);
     }
 
     public bool DeleteEntity<TC1, TC2>(long pk) where TC1 : unmanaged where TC2 : unmanaged
@@ -449,8 +464,8 @@ public unsafe class Transaction : IDisposable
         }
         State = TransactionState.InProgress;
 
-        var res = UpdateComponent(pk, ref Unsafe.NullRef<TC1>());
-        res &= UpdateComponent(pk, ref Unsafe.NullRef<TC2>());
+        var res = DeleteComponent<TC1>(pk);
+        res &= DeleteComponent<TC2>(pk);
         return res;
     }
 
@@ -462,9 +477,9 @@ public unsafe class Transaction : IDisposable
         }
         State = TransactionState.InProgress;
 
-        var res = UpdateComponent(pk, ref Unsafe.NullRef<TC1>());
-        res &= UpdateComponent(pk, ref Unsafe.NullRef<TC2>());
-        res &= UpdateComponent(pk, ref Unsafe.NullRef<TC3>());
+        var res = DeleteComponent<TC1>(pk);
+        res &= DeleteComponent<TC2>(pk);
+        res &= DeleteComponent<TC3>(pk);
         return res;
     }
 
@@ -770,7 +785,9 @@ public unsafe class Transaction : IDisposable
             var result = GetCompRevInfoFromIndex(pk, info, TSN);
             if (result.IsFailure)
             {
-                // NotFound, SnapshotInvisible, or Deleted — all mean no readable component
+                // NotFound, SnapshotInvisible, or Deleted — all mean no readable component. Remove the default entry that GetValueRefOrAddDefault added to
+                // avoid leaving a zombie CompRevInfo (all zeros) that would corrupt subsequent operations on the same PK within this transaction.
+                info.CompRevInfoCache.Remove(pk);
                 t = default;
                 return false;
             }
@@ -785,7 +802,8 @@ public unsafe class Transaction : IDisposable
             return false;
         }
 
-        // If there is a valid component, copy its content to the destination
+        // If there is a valid component, copy its content to the destination.
+        // No shared lock needed: deferred chunk freeing guarantees content chunks remain valid for the transaction's lifetime.
         t = default;
         int size = info.ComponentTable.ComponentStorageSize;
         var src = info.CompContentAccessor.GetChunkAsReadOnlySpan(compRevInfo.CurCompContentChunkId);
@@ -852,6 +870,16 @@ public unsafe class Transaction : IDisposable
         return true;
     }
     
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool DeleteComponent<T>(long pk) where T : unmanaged
+    {
+        if (_dbe.GetComponentTable(typeof(T)).Definition.AllowMultiple)
+        {
+            return UpdateComponents(pk, ReadOnlySpan<T>.Empty);
+        }
+        return UpdateComponent(pk, ref Unsafe.NullRef<T>());
+    }
+
     private bool UpdateComponent<T>(long pk, ref T comp) where T : unmanaged
     {
         AssertThreadAffinity();
@@ -887,6 +915,10 @@ public unsafe class Transaction : IDisposable
             var result = GetCompRevInfoFromIndex(pk, info, TSN);
             if (result.Status == RevisionReadStatus.NotFound || result.Status == RevisionReadStatus.SnapshotInvisible)
             {
+                // Remove the default entry that GetValueRefOrAddDefault added to avoid leaving
+                // a zombie CompRevInfo (all zeros) that would corrupt subsequent operations on
+                // the same PK within this transaction.
+                info.CompRevInfoCache.Remove(pk);
                 return false;
             }
             compRevInfo = result.Value; // Works for both Success AND Deleted (3-arg constructor)
@@ -1053,8 +1085,7 @@ public unsafe class Transaction : IDisposable
         return result;
     }
 
-    private Result<ComponentInfoBase.CompRevInfo, RevisionReadStatus> GetCompRevInfoFromIndex(
-        long pk, ComponentInfoSingle info, long tick)
+    private Result<ComponentInfoBase.CompRevInfo, RevisionReadStatus> GetCompRevInfoFromIndex(long pk, ComponentInfoSingle info, long tick)
     {
         ref var compRevTableAccessor = ref info.CompRevTableAccessor;
 
@@ -1074,8 +1105,15 @@ public unsafe class Transaction : IDisposable
         short curCompRevisionIndex = -1;
         int prevCompChunkId = 0;
         int curCompChunkId = 0;
+
+        // CommitSequence must be captured INSIDE the shared lock (held by RevisionEnumerator) so that ReadCS and the chain walk observe the same consistent
+        // chain state. Capturing it outside the lock creates a race: cleanup or another commit can modify the chain between ReadCS capture and the lock
+        // acquisition, leaving ReadCS consistent with a state the chain walk never sees.
+        int readCommitSequence;
+
         {
             using var enumerator = new RevisionEnumerator(ref compRevTableAccessor, compRevFirstChunkId, false, true);
+            readCommitSequence = compRevTableAccessor.GetChunk<CompRevStorageHeader>(compRevFirstChunkId).CommitSequence;
             while (enumerator.MoveNext())
             {
                 ref var element = ref enumerator.Current;
@@ -1085,9 +1123,12 @@ public unsafe class Transaction : IDisposable
                     continue;
                 }
 
+                // Do NOT break on TSN > reader.TSN — entries in the chain are NOT guaranteed to be in monotonically increasing TSN order. A higher-TSN
+                // transaction can write (AddCompRev) before a lower-TSN transaction, placing its entry at a lower index. Breaking early would miss
+                // committed entries with lower TSN at higher indices.
                 if (element.TSN > TSN)
                 {
-                    break;
+                    continue;
                 }
 
                 // Update the current revision (and the previous) if a valid entry (tick == 0 means a rollbacked entry) and it's not an isolated one
@@ -1113,82 +1154,9 @@ public unsafe class Transaction : IDisposable
             CurCompContentChunkId = curCompChunkId,
             CurRevisionIndex = curCompRevisionIndex,
             PrevCompContentChunkId = prevCompChunkId,
-            PrevRevisionIndex = prevCompRevisionIndex
+            PrevRevisionIndex = prevCompRevisionIndex,
+            ReadCommitSequence = readCommitSequence
         };
-
-        // Lazy opportunistic cleanup: if the revision chain has accumulated many entries,
-        // try to clean up old revisions opportunistically during this read.
-        var lazyThreshold = _dbe.DeferredCleanupManager.LazyCleanupThreshold;
-        if (lazyThreshold > 0)
-        {
-            ref var header = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(compRevFirstChunkId);
-            if (header.ItemCount >= lazyThreshold)
-            {
-                // IsolationFlag moved to _packedUowId — TSN now has full 48-bit precision, no rounding needed.
-                var safeCutoff = _dbe.TransactionChain.MinTSN;
-                if (safeCutoff > 0)
-                {
-                    try
-                    {
-                        if (header.Control.TryEnterExclusiveAccess())
-                        {
-                            var lazyRevAccessor = info.CompRevTableSegment.CreateChunkAccessor(_changeSet);
-                            var lazyContentAccessor = info.CompContentSegment.CreateChunkAccessor(_changeSet);
-
-                            ComponentRevisionManager.CleanUpUnusedEntriesCore(info.ComponentTable, compRevFirstChunkId, safeCutoff,
-                                ref lazyRevAccessor, ref lazyContentAccessor);
-
-                            lazyRevAccessor.Dispose();
-                            lazyContentAccessor.Dispose();
-                            header.Control.ExitExclusiveAccess();
-
-                            // After defrag, the chain is compacted. Re-walk to find the correct revision index for our
-                            //  TSN (void/isolated entries may shift positions).
-                            prevCompRevisionIndex = -1;
-                            curCompRevisionIndex = -1;
-                            prevCompChunkId = 0;
-                            curCompChunkId = 0;
-                            {
-                                using var reEnum = new RevisionEnumerator(ref compRevTableAccessor, compRevFirstChunkId, false, true);
-                                while (reEnum.MoveNext())
-                                {
-                                    ref var el = ref reEnum.Current;
-                                    if (el.IsVoid)
-                                    {
-                                        continue;
-                                    }
-                                    if (el.TSN > TSN)
-                                    {
-                                        break;
-                                    }
-                                    if ((el.TSN > 0) && !el.IsolationFlag)
-                                    {
-                                        prevCompRevisionIndex = curCompRevisionIndex;
-                                        prevCompChunkId = curCompChunkId;
-                                        curCompRevisionIndex = (short)(reEnum.Header.FirstItemIndex + reEnum.RevisionIndex);
-                                        curCompChunkId = el.ComponentChunkId;
-                                    }
-                                }
-                            }
-                            compRevInfo.CurRevisionIndex = curCompRevisionIndex;
-                            compRevInfo.PrevRevisionIndex = prevCompRevisionIndex;
-                            compRevInfo.CurCompContentChunkId = curCompChunkId;
-                            compRevInfo.PrevCompContentChunkId = prevCompChunkId;
-
-                            _dbe.DeferredCleanupManager.RecordLazyCleanup();
-                        }
-                        else
-                        {
-                            _dbe.DeferredCleanupManager.RecordLazyCleanupSkipped();
-                        }
-                    }
-                    catch
-                    {
-                        // Never fail a read due to lazy cleanup
-                    }
-                }
-            }
-        }
 
         // Tombstoned entity: carry the value (callers like UpdateComponent need revision metadata) but signal Deleted
         if (curCompChunkId == 0)
@@ -1223,16 +1191,20 @@ public unsafe class Transaction : IDisposable
                 short curCompRevisionIndex = -1;
                 int prevCompChunkId = 0;
                 int curCompChunkId = 0;
+                // CommitSequence captured INSIDE the shared lock (same rationale as GetCompRevInfoFromIndex)
+                int readCommitSequence;
+
                 {
                     using var enumerator = new RevisionEnumerator(ref compRevTableAccessor, compRevFirstChunkId, false, true);
+                    readCommitSequence = compRevTableAccessor.GetChunk<CompRevStorageHeader>(compRevFirstChunkId).CommitSequence;
                     while (enumerator.MoveNext())
                     {
                         ref var element = ref enumerator.Current;
                         if (element.TSN > TSN)
                         {
-                            break;
+                            continue;
                         }
-            
+
                         // Update the current revision (and the previous) if a valid entry (tick == 0 means a rollbacked entry) and it's not an isolated one
                         if ((element.TSN > 0) && !element.IsolationFlag)
                         {
@@ -1243,7 +1215,7 @@ public unsafe class Transaction : IDisposable
                         }
                     }
                 }
-        
+
                 if (curCompRevisionIndex != -1)
                 {
                     compRevInfoList.Add(new ComponentInfoBase.CompRevInfo
@@ -1253,7 +1225,8 @@ public unsafe class Transaction : IDisposable
                         CurCompContentChunkId = curCompChunkId,
                         CurRevisionIndex = curCompRevisionIndex,
                         PrevCompContentChunkId = prevCompChunkId,
-                        PrevRevisionIndex = prevCompRevisionIndex
+                        PrevRevisionIndex = prevCompRevisionIndex,
+                        ReadCommitSequence = readCommitSequence
                     });
                 }
             }
@@ -1273,16 +1246,16 @@ public unsafe class Transaction : IDisposable
     /// <summary>
     /// <b>THE COMPONENT COMMIT METHOD (a big one, bold upper case were mandatory!)</b>
     /// </summary>
-    /// <param name="pk">The primary key of the entity the component belong to</param>
-    /// <param name="info">The component info object belonging to the component type</param>
-    /// <param name="compRevInfo">The cached RevInfo object, it's a ref struct of the cache's content, meaning if you mutate if, you must update the cache!</param>
-    /// <param name="isRollback"><c>False</c> to commit changes, <c>true</c> to rollback them.</param>
-    /// <param name="conflictSolver">If <c>null</c> we solve conflict automatically with "last wins"</param>
-    /// <returns>Return <c>true</c> if the whole component is deleted (all components versions were deleted/rollbacked)</returns>
+    /// <returns>Return <c>true</c> if the whole component is deleted (all component versions were deleted/rollbacked)</returns>
     /// <remarks>
     /// <para>
-    /// If <paramref name="conflictSolver"/> is given, this method can be called twice, first time to build the conflict list, second time to actually commit
-    /// the changes.
+    /// When a <see cref="ConcurrencyConflictHandler"/> is provided, the commit sequence for each entity is made atomic by holding the per-entity revision
+    /// chain lock during conflict detection, resolution, and commit.
+    /// This prevents TOCTOU races where another transaction could commit between our conflict check and our commit.
+    /// </para>
+    /// <para>
+    /// Conflict detection compares the <see cref="CompRevStorageElement.ComponentChunkId"/> at <c>LastCommitRevisionIndex</c> with the chunk we originally
+    /// read. This catches all write-write conflicts regardless of revision allocation order.
     /// </para>
     /// </remarks>
     private bool CommitComponent(ref CommitContext context)
@@ -1292,7 +1265,7 @@ public unsafe class Transaction : IDisposable
         ref var compRevInfo = ref context.CompRevInfo;
         var isRollback = context.IsRollback;
         var conflictSolver = context.Solver;
-        
+
         ref var compRevTableAccessor = ref info.CompRevTableAccessor;
         var componentSegment = info.CompContentSegment;
         var revTableSegment = info.CompRevTableSegment;
@@ -1306,6 +1279,18 @@ public unsafe class Transaction : IDisposable
         var lastCommitRevisionIndex = compRev.LastCommitRevisionIndex;
         var elementHandle = compRev.GetRevisionElement(compRevInfo.CurRevisionIndex);
 
+        // Validate CurRevisionIndex — chain compaction by another transaction's cleanup may have
+        // shifted entry positions since our read. Best-effort (no lock) for rollback and no-handler paths.
+        if (elementHandle.Element.ComponentChunkId != compRevInfo.CurCompContentChunkId)
+        {
+            var fixedIndex = ComponentRevisionManager.FindRevisionIndexByChunkId(ref compRevTableAccessor, firstChunkId, compRevInfo.CurCompContentChunkId, TSN);
+            if (fixedIndex >= 0)
+            {
+                compRevInfo.CurRevisionIndex = fixedIndex;
+                elementHandle = compRev.GetRevisionElement(fixedIndex);
+            }
+        }
+
         // Clear the entry of the transaction component revision if it's a rollback
         if (isRollback)
         {
@@ -1314,7 +1299,7 @@ public unsafe class Transaction : IDisposable
             {
                 componentSegment.FreeChunk(compRevInfo.CurCompContentChunkId);
             }
-            
+
             // If we roll back a created component, we must delete the revision table chunk
             if ((compRevInfo.Operations & ComponentInfoBase.OperationType.Created) == ComponentInfoBase.OperationType.Created)
             {
@@ -1324,121 +1309,183 @@ public unsafe class Transaction : IDisposable
                 //  code would be dangerous as we have pointers that would be bad.
                 return true;
             }
-            
+
             // In case of update or delete, mark void the revision entry we added
             if ((compRevInfo.Operations & (ComponentInfoBase.OperationType.Updated | ComponentInfoBase.OperationType.Deleted)) != 0)
             {
                 compRev.VoidElement(elementHandle);
             }
         }
-        
+
         // Commit the revision
         else
         {
-            // Get now the ChunkId of the component revision corresponding to unchanged data (the one before our transaction started), because
-            //  PrevCompContentChunkId could be replaced by the committing revision if there is a conflict
+            // Capture the ChunkId of the component content we originally read, because PrevCompContentChunkId// will be shifted by AddCompRev if we need to
+            // create a new revision for conflict resolution
             var readCompChunkId = compRevInfo.PrevCompContentChunkId;
 
-            // BuildPhase: do we have a conflict that requires us to create a new revision?
-            var hasConflict = (conflictSolver?.IsBuildPhase ?? true) && (lastCommitRevisionIndex >= compRevInfo.CurRevisionIndex);
-            if (hasConflict)
+            // When a conflict handler is provided, we hold the per-entity revision chain lock during the entire detect-resolve-commit sequence to prevent
+            // TOCTOU races (another transaction committing between our conflict check and our commit would make committedData stale).
+            // Without a handler, the "last wins" path uses the original index-based detection as a best-effort check.
+            var lockHeld = false;
+            if (conflictSolver != null)
             {
-                // Record conflict for observability
-                _dbe?.RecordConflict();
-                // Create a new revision
-                ComponentRevisionManager.AddCompRev(info, ref compRevInfo, TSN, UowId, false);
-                
-                // Copy the revision we are dealing with to the new one (the whole data, indices + content)
-                var dstChunk = info.CompContentAccessor.GetChunkAddress(compRevInfo.CurCompContentChunkId, true);
-                var srcChunk = info.CompContentAccessor.GetChunkAddress(compRevInfo.PrevCompContentChunkId);
-                var sizeToCopy = info.ComponentTable.ComponentTotalSize;
-                new Span<byte>(srcChunk, sizeToCopy).CopyTo(new Span<byte>(dstChunk, sizeToCopy));
+                ref var lockHeader = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(firstChunkId, true);
+                var wcCommit = ComposeWaitContext(ref context.Ctx, TimeoutOptions.Current.RevisionChainLockTimeout);
+                if (!lockHeader.Control.EnterExclusiveAccess(ref wcCommit))
+                {
+                    ThrowHelper.ThrowLockTimeout("RevisionChain/CommitConflict", TimeoutOptions.Current.RevisionChainLockTimeout);
+                }
+                lockHeld = true;
 
-                // Update the indexInChunk and curElements to point to the new revision
-                elementHandle = compRev.GetRevisionElement(compRevInfo.CurRevisionIndex);
+                // Re-read lastCommitRevisionIndex under lock (authoritative value)
+                lastCommitRevisionIndex = lockHeader.LastCommitRevisionIndex;
+
+                // Re-validate CurRevisionIndex under lock — chain compaction between our read and lock acquisition may have shifted entry positions. Under
+                // the exclusive lock, no concurrent compaction can happen, so this validation is race-free.
+                {
+                    var curElement = compRev.GetRevisionElement(compRevInfo.CurRevisionIndex);
+                    if (curElement.Element.ComponentChunkId != compRevInfo.CurCompContentChunkId)
+                    {
+                        var fixedIndex = ComponentRevisionManager.FindRevisionIndexByChunkId(
+                            ref compRevTableAccessor, firstChunkId, compRevInfo.CurCompContentChunkId, TSN);
+                        if (fixedIndex < 0)
+                        {
+                            ThrowHelper.ThrowInvalidOp("CommitComponent: revision entry lost after chain compaction");
+                        }
+                        compRevInfo.CurRevisionIndex = fixedIndex;
+                        elementHandle = compRev.GetRevisionElement(fixedIndex);
+                    }
+                }
+
+                // Relocate: if our entry is at or behind LCRI, a later-created transaction committed at a higher index (because it wrote after us). Without
+                // relocation, the chain walk (which returns the highest-index committed entry) would shadow our value with the older commit at the higher
+                // index. Move our entry to the chain end so the most recently committed value is always at the highest index.
+                if (lastCommitRevisionIndex >= 0 && compRevInfo.CurRevisionIndex <= lastCommitRevisionIndex)
+                {
+                    // Save the chunk that holds our modified data
+                    var oldContentChunkId = compRevInfo.CurCompContentChunkId;
+
+                    // Create new entry at end of chain (under existing lock)
+                    ComponentRevisionManager.AddCompRev(info, ref compRevInfo, TSN, UowId, false, lockAlreadyHeld: true);
+
+                    // Copy our data to the new content chunk
+                    var srcAddr = info.CompContentAccessor.GetChunkAddress(oldContentChunkId);
+                    var dstAddr = info.CompContentAccessor.GetChunkAddress(compRevInfo.CurCompContentChunkId, true);
+                    new Span<byte>(srcAddr, info.ComponentTable.ComponentTotalSize)
+                        .CopyTo(new Span<byte>(dstAddr, info.ComponentTable.ComponentTotalSize));
+
+                    // Free the old content chunk and void the orphaned entry. The old entry at// PrevRevisionIndex retains IsolationFlag=true which blocks
+                    // deferred cleanup compaction. Voiding it (without decrementing ItemCount) makes it a harmless placeholder that cleanup will skip over.
+                    info.CompContentSegment.FreeChunk(oldContentChunkId);
+                    compRev.GetRevisionElement(compRevInfo.PrevRevisionIndex).Element.Void();
+
+                    elementHandle = compRev.GetRevisionElement(compRevInfo.CurRevisionIndex);
+                }
+
             }
-            
-            // Do we have a conflict to record?
-            if (hasConflict && conflictSolver != null)
-            {
-                var lastCommitHandle = compRev.GetRevisionElement(lastCommitRevisionIndex);
 
-                var overhead = info.ComponentTable.ComponentOverhead;
-                var readChunk = info.CompContentAccessor.GetChunkAddress(readCompChunkId) + overhead;
-                var committingChunk = info.CompContentAccessor.GetChunkAddress(compRevInfo.PrevCompContentChunkId) + overhead;
-                var toCommitChunk = info.CompContentAccessor.GetChunkAddress(compRevInfo.CurCompContentChunkId) + overhead;
-                var committedChunk = info.CompContentAccessor.GetChunkAddress(lastCommitHandle.Element.ComponentChunkId) + overhead;
-                
-                conflictSolver.AddEntry(pk, info, readChunk, committedChunk, committingChunk, toCommitChunk);
-            }
-
-            // We are either in the build phase with no conflict (or latest wins) or in the commit phase
-            else
+            try
             {
-                // Update the indices (PK and secondary), the revision will be indexed, but as long as the CompRevTransactionIsolatedFlag flag is set,
-                //  it won't be visible to queries
-                // Skip index updates for deleted components (CurCompContentChunkId == 0)
+                // Detect write-write conflict (two complementary checks for the handler path):
+                //
+                // 1. CommitSequence: detects any commit since our read (monotonic counter, immune to revision index ordering and cleanup compaction).
+                //
+                // 2. Invisible-commit TSN check: detects committed entries by higher-TSN transactions that are invisible to our snapshot (TSN > our.TSN).
+                //    This happens when a transaction created after us commits before us — our chain walk filters it out (TSN-based snapshot visibility) but
+                //    the entity state has changed.
+                //
+                // Without handler: use the original index-based check as best-effort for "last wins".
+                var hasConflict = (conflictSolver != null) ? 
+                    compRev.CommitSequence != compRevInfo.ReadCommitSequence || 
+                        (lastCommitRevisionIndex >= 0 && compRev.GetRevisionElement(lastCommitRevisionIndex).Element.TSN > TSN) : 
+                    lastCommitRevisionIndex >= compRevInfo.CurRevisionIndex;
+
+                if (hasConflict)
+                {
+                    // Record conflict for observability
+                    _dbe?.RecordConflict();
+
+                    // Save the orphan index before AddCompRev changes CurRevisionIndex
+                    var conflictOrphanIndex = compRevInfo.CurRevisionIndex;
+
+                    // Create a new revision for the resolved data (under existing lock when handler is provided)
+                    ComponentRevisionManager.AddCompRev(info, ref compRevInfo, TSN, UowId, false, lockAlreadyHeld: lockHeld);
+
+                    // Copy the dirty-write data to the new revision as starting point
+                    var dstChunk = info.CompContentAccessor.GetChunkAddress(compRevInfo.CurCompContentChunkId, true);
+                    var srcChunk = info.CompContentAccessor.GetChunkAddress(compRevInfo.PrevCompContentChunkId);
+                    var sizeToCopy = info.ComponentTable.ComponentTotalSize;
+                    new Span<byte>(srcChunk, sizeToCopy).CopyTo(new Span<byte>(dstChunk, sizeToCopy));
+
+                    // Update elementHandle to point to the new revision
+                    elementHandle = compRev.GetRevisionElement(compRevInfo.CurRevisionIndex);
+
+                    // Invoke the handler to resolve the conflict (under lock, so committedData is guaranteed fresh)
+                    if (conflictSolver != null)
+                    {
+                        var lastCommitHandle = compRev.GetRevisionElement(lastCommitRevisionIndex);
+                        var overhead = info.ComponentTable.ComponentOverhead;
+                        var readChunk = info.CompContentAccessor.GetChunkAddress(readCompChunkId) + overhead;
+                        var committingChunk = info.CompContentAccessor.GetChunkAddress(compRevInfo.PrevCompContentChunkId) + overhead;
+                        var toCommitChunk = info.CompContentAccessor.GetChunkAddress(compRevInfo.CurCompContentChunkId) + overhead;
+                        var committedChunk = info.CompContentAccessor.GetChunkAddress(lastCommitHandle.Element.ComponentChunkId) + overhead;
+
+                        conflictSolver.Setup(pk, info, readChunk, committedChunk, committingChunk, toCommitChunk);
+                        context.Handler(ref conflictSolver);
+                    }
+
+                    // Void the orphaned entry at the old position and free its content chunk. The data was copied to the new entry; the handler has finished
+                    // using PrevCompContentChunkId as committingChunk. Without voiding, the IsolationFlag=true orphan blocks deferred cleanup compaction.
+                    var conflictOrphan = compRev.GetRevisionElement(conflictOrphanIndex);
+                    if (conflictOrphan.Element.ComponentChunkId > 0)
+                    {
+                        info.CompContentSegment.FreeChunk(conflictOrphan.Element.ComponentChunkId);
+                    }
+                    conflictOrphan.Element.Void();
+                }
+
+                // Commit the revision: update indices, clear IsolationFlag, update LastCommitRevisionIndex
                 if (compRevInfo.CurCompContentChunkId != 0)
                 {
                     UpdateIndices(pk, info, compRevInfo, readCompChunkId);
                 }
+                else if (readCompChunkId != 0)
+                {
+                    RemoveSecondaryIndices(info, readCompChunkId, compRevInfo.CompRevTableFirstChunkId);
+                }
 
-                // Set the TSN of the revision to the transaction's one, removing the Isolation flag
                 elementHandle.Commit(TSN);
-
-                // Update Last Commit Revision Index
                 compRev.SetLastCommitRevisionIndex(Math.Max(lastCommitRevisionIndex, compRevInfo.CurRevisionIndex));
+                compRev.IncrementCommitSequence();
+
             }
-        }
-
-        // If this transaction is the oldest (the tail), we can remove the previous revision (if any), it is also the right place and time to clean up void
-        //  revisions (the entry of a rolled back commit)
-        // If not the tail, collect for batched deferred cleanup (flushed after the commit loop with a single lock acquire).
-        if (context.IsTail)
-        {
-            var isDeleted = ComponentRevisionManager.CleanUpUnusedEntries(info, ref compRevInfo, ref compRevTableAccessor, context.NextMinTSN);
-            dirtyFirstChunk = true;
-
-            if (isDeleted)
+            finally
             {
-                // For AllowMultiple components, we can't easily remove individual entries from the PK index buffer
-                // without tracking elementId. Skip cleanup for AllowMultiple to avoid corrupting the index.
-                // TODO: Implement proper cleanup for AllowMultiple using elementId tracking
-                if (info is ComponentInfoMultiple)
+                if (lockHeld)
                 {
-                    // Don't free the revision chain - the buffer still references it
-                    // The entry will show as deleted when read (ComponentChunkId == 0)
-                }
-                else
-                {
-                    // Remove the index for single components
-                    var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
-                    info.PrimaryKeyIndex.Remove(pk, out _, ref accessor);
-                    accessor.Dispose();
-
-                    revTableSegment.FreeChunk(firstChunkId);
-                    return true;
+                    ref var lockHeader = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(firstChunkId);
+                    lockHeader.Control.ExitExclusiveAccess();
                 }
             }
         }
-        else if (context.TailTSN > 0)
-        {
-            // Not the tail — collect for batched enqueue (no lock here, flushed after the loop or at capacity)
-            _deferredEnqueueBatch ??= new List<DeferredCleanupManager.CleanupEntry>(16);
-            _deferredEnqueueBatch.Add(new DeferredCleanupManager.CleanupEntry { Table = info.ComponentTable, PrimaryKey = pk });
 
-            // Flush at capacity to bound memory — content is transient, safe to drain mid-loop
-            if (_deferredEnqueueBatch.Count >= DeferredEnqueueBatchCapacity)
-            {
-                _dbe.DeferredCleanupManager.EnqueueBatch(context.TailTSN, _deferredEnqueueBatch);
-                _deferredEnqueueBatch.Clear();
-            }
+        // Enqueue for deferred cleanup — all cleanup is processed AFTER the commit loop, never inline.
+        // This avoids chain compaction while other transactions hold cached revision indices.
+        _deferredEnqueueBatch ??= new List<DeferredCleanupManager.CleanupEntry>(16);
+        _deferredEnqueueBatch.Add(new DeferredCleanupManager.CleanupEntry { Table = info.ComponentTable, PrimaryKey = pk, FirstChunkId = firstChunkId });
+
+        // Flush at capacity to bound memory — content is transient, safe to drain mid-loop
+        if (_deferredEnqueueBatch.Count >= DeferredEnqueueBatchCapacity)
+        {
+            _dbe.DeferredCleanupManager.EnqueueBatch(context.TailTSN, _deferredEnqueueBatch);
+            _deferredEnqueueBatch.Clear();
         }
 
         // As we committed/rolled back the current revision, we don't need to keep track of the previous one anymore
         compRevInfo.PrevCompContentChunkId = -1;
         compRevInfo.PrevRevisionIndex = 0;
-        
+
         if (dirtyFirstChunk)
         {
             compRevTableAccessor.DirtyChunk(firstChunkId);
@@ -1479,6 +1526,12 @@ public unsafe class Transaction : IDisposable
                     }
                     accessor.Dispose();
                 }
+                else if (ifi.Index.AllowMultiple)
+                {
+                    // Carry forward the elementId for unchanged AllowMultiple fields so that
+                    // the new content chunk has valid buffer references for later removal (e.g., on delete).
+                    *(int*)&cur[ifi.OffsetToIndexElementId] = *(int*)&prev[ifi.OffsetToIndexElementId];
+                }
             }
         }
 
@@ -1511,6 +1564,26 @@ public unsafe class Transaction : IDisposable
                 }
                 accessor.Dispose();
             }
+        }
+    }
+
+    private void RemoveSecondaryIndices(ComponentInfoBase info, int prevCompChunkId, int startChunkId)
+    {
+        var prev = info.CompContentAccessor.GetChunkAddress(prevCompChunkId);
+        var indexedFieldInfos = info.ComponentTable.IndexedFieldInfos;
+        for (int i = 0; i < indexedFieldInfos.Length; i++)
+        {
+            ref var ifi = ref indexedFieldInfos[i];
+            var accessor = ifi.Index.Segment.CreateChunkAccessor(_changeSet);
+            if (ifi.Index.AllowMultiple)
+            {
+                ifi.Index.RemoveValue(&prev[ifi.OffsetToField], *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref accessor);
+            }
+            else
+            {
+                ifi.Index.Remove(&prev[ifi.OffsetToField], out _, ref accessor);
+            }
+            accessor.Dispose();
         }
     }
 
@@ -1549,8 +1622,8 @@ public unsafe class Transaction : IDisposable
             ThrowHelper.ThrowLockTimeout("TransactionChain/RollbackTailCheck", TimeoutOptions.Current.TransactionChainLockTimeout);
         }
         context.IsTail = _dbe.TransactionChain.Tail == this;
-        context.NextMinTSN = context.IsTail ? _dbe.TransactionChain.Tail.Next?.TSN ?? _dbe.TransactionChain.NextFreeId : 0;
-        context.TailTSN = context.IsTail ? 0 : _dbe.TransactionChain.MinTSN;
+        context.NextMinTSN = context.IsTail ? _dbe.TransactionChain.Tail.Previous?.TSN ?? (_dbe.TransactionChain.NextFreeId + 1) : 0;
+        context.TailTSN = _dbe.TransactionChain.MinTSN;
         _dbe.TransactionChain.Control.ExitSharedAccess();
 
         var deletedComponentSingles = new List<long>();
@@ -1642,84 +1715,95 @@ public unsafe class Transaction : IDisposable
     
     private static ConcurrencyConflictSolver GetConflictSolver()
     {
-        if (ThreadLocalConflictSolver == null)
-        {
-            ThreadLocalConflictSolver = new ConcurrencyConflictSolver();
-        }
-        else
-        {
-            ThreadLocalConflictSolver.Reset();
-        }
+        ThreadLocalConflictSolver ??= new ConcurrencyConflictSolver();
+        ThreadLocalConflictSolver.Reset();
         return ThreadLocalConflictSolver;
     }
     
+    /// <summary>
+    /// Provides conflict resolution context when a write-write conflict is detected during
+    /// <see cref="Transaction.Commit(ConcurrencyConflictHandler)"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// During commit, each entity is checked for conflicts (another transaction committed new data since our read).
+    /// When a conflict is detected and a <see cref="ConcurrencyConflictHandler"/> was provided, the solver is populated
+    /// with the conflicting entity's data, then the handler is invoked once per conflicting entity.
+    /// </para>
+    /// <para>The four data views are:</para>
+    /// <list type="bullet">
+    /// <item><description><see cref="ReadData{T}"/>: the component state at the time of <c>ReadEntity</c> (our transaction's snapshot baseline).</description></item>
+    /// <item><description><see cref="CommittedData{T}"/>: the latest committed state by another transaction (the value that caused the conflict).</description></item>
+    /// <item><description><see cref="CommittingData{T}"/>: the dirty-write state from our <c>UpdateEntity</c> call (what we intended to commit).</description></item>
+    /// <item><description><see cref="ToCommitData{T}"/>: the output buffer — initialized with <c>CommittingData</c> (last writer wins). The handler writes the resolved value here.</description></item>
+    /// </list>
+    /// <para>
+    /// The default resolution (before the handler runs) is "last writer wins": the committing data is copied into <c>ToCommitData</c>.
+    /// The handler can override this by writing a different value (e.g., rebasing a delta onto the latest committed state).
+    /// </para>
+    /// </remarks>
     [PublicAPI]
     public class ConcurrencyConflictSolver
     {
-        private const int MaxEntryCountToKeep = 1024;
-        
-        internal ConcurrencyConflictSolver()
+        private byte* _readData;
+        private byte* _committedData;
+        private byte* _committingData;
+        private byte* _toCommitData;
+        private ComponentInfoBase _info;
+
+        internal ConcurrencyConflictSolver() { }
+
+        /// <summary>Primary key of the conflicting entity.</summary>
+        public long PrimaryKey { get; private set; }
+
+        /// <summary>The .NET type of the component (e.g. <c>typeof(CompA)</c>).</summary>
+        public Type ComponentType => _info.ComponentTable.Definition.POCOType;
+
+        /// <summary>The component definition with field metadata.</summary>
+        public DBComponentDefinition ComponentDefinition => _info.ComponentTable.Definition;
+
+        /// <summary>Whether a conflict was detected for this solver instance.</summary>
+        public bool HasConflict { get; private set; }
+
+        /// <summary>Copies <see cref="ReadData{T}"/> into <see cref="ToCommitData{T}"/> (discard all changes, revert to read snapshot).</summary>
+        public void TakeRead<T>() where T : unmanaged => ToCommitData<T>() = ReadData<T>();
+
+        /// <summary>Copies <see cref="CommittedData{T}"/> into <see cref="ToCommitData{T}"/> (accept the other transaction's value).</summary>
+        public void TakeCommitted<T>() where T : unmanaged => ToCommitData<T>() = CommittedData<T>();
+
+        /// <summary>Copies <see cref="CommittingData{T}"/> into <see cref="ToCommitData{T}"/> (last writer wins — this is the default).</summary>
+        public void TakeCommitting<T>() where T : unmanaged => ToCommitData<T>() = CommittingData<T>();
+
+        /// <summary>Returns a ref to the component state as read by our transaction (snapshot baseline).</summary>
+        public ref T ReadData<T>() where T : unmanaged => ref Unsafe.AsRef<T>(_readData);
+
+        /// <summary>Returns a ref to the latest committed state by another transaction (the conflicting value).</summary>
+        public ref T CommittedData<T>() where T : unmanaged => ref Unsafe.AsRef<T>(_committedData);
+
+        /// <summary>Returns a ref to our dirty-write state from <c>UpdateEntity</c> (what we intended to commit).</summary>
+        public ref T CommittingData<T>() where T : unmanaged => ref Unsafe.AsRef<T>(_committingData);
+
+        /// <summary>Returns a ref to the output buffer. Write the resolved value here. Initialized with <see cref="CommittingData{T}"/>.</summary>
+        public ref T ToCommitData<T>() where T : unmanaged => ref Unsafe.AsRef<T>(_toCommitData);
+
+        internal void Setup(long pk, ComponentInfoBase info, byte* readData, byte* committedData, byte* committingData, byte* toCommitData)
         {
-            _entries = new List<Entry>(16);
-            IsBuildPhase = true;
+            PrimaryKey = pk;
+            _readData = readData;
+            _committedData = committedData;
+            _committingData = committingData;
+            _toCommitData = toCommitData;
+            _info = info;
+            HasConflict = true;
+
+            // Default is last revision wins, so we copy the committing data to the toCommit data
+            var componentSize = info.ComponentTable.ComponentStorageSize;
+            new Span<byte>(_committingData, componentSize).CopyTo(new Span<byte>(_toCommitData, componentSize));
         }
-        
+
         internal void Reset()
         {
-            if (_entries.Capacity > MaxEntryCountToKeep)
-            {
-                _entries = new List<Entry>(16);
-            }
-            else
-            {
-                _entries.Clear();
-            }
-            IsBuildPhase = true;
-        }
-        
-        internal bool IsBuildPhase { get; set; }
-
-        public int EntryCount => _entries.Count;
-        public ref Entry this[int index] => ref CollectionsMarshal.AsSpan(_entries)[index];
-        
-        internal void AddEntry(long pk, ComponentInfoBase info, byte* readData, byte* committedData, byte* committingData, byte* toCommitData) => 
-            _entries.Add(new Entry(pk, info, readData, committedData, committingData, toCommitData));
-
-        private List<Entry> _entries;
-        
-        [PublicAPI]
-        public struct Entry
-        {
-            private byte* _readData;
-            private byte* _committedData;
-            private byte* _committingData;
-            private byte* _toCommitData;
-            private ComponentInfoBase _info;
-            public long PrimaryKey { get; private set; }
-            public Type ComponentType => _info.ComponentTable.Definition.POCOType;
-            public DBComponentDefinition ComponentDefinition => _info.ComponentTable.Definition;
-
-            public void TakeRead<T>() where T : unmanaged => ToCommitData<T>() = ReadData<T>();
-            public void TakeCommitted<T>() where T : unmanaged => ToCommitData<T>() = CommittedData<T>();
-            public void TakeCommitting<T>() where T : unmanaged => ToCommitData<T>() = CommittingData<T>();
-
-            public ref T ReadData<T>() where T : unmanaged => ref Unsafe.AsRef<T>(_readData);
-            public ref T CommittedData<T>() where T : unmanaged => ref Unsafe.AsRef<T>(_committedData);
-            public ref T CommittingData<T>() where T : unmanaged => ref Unsafe.AsRef<T>(_committingData);
-            public ref T ToCommitData<T>() where T : unmanaged => ref Unsafe.AsRef<T>(_toCommitData);
-            internal Entry(long pk, ComponentInfoBase info, byte* readData, byte* committedData, byte* committingData, byte* toCommitData)
-            {
-                PrimaryKey = pk;
-                _readData = readData;
-                _committedData = committedData;
-                _committingData = committingData;
-                _toCommitData = toCommitData;
-                _info = info;
-
-                // Default is last revision wins, so we copy the committing data to the toCommit data
-                var componentSize = info.ComponentTable.ComponentStorageSize;
-                new Span<byte>(_committingData, componentSize).CopyTo(new Span<byte>(_toCommitData, componentSize));
-            }
+            HasConflict = false;
         }
     }
 
@@ -1729,6 +1813,7 @@ public unsafe class Transaction : IDisposable
         public ComponentInfoBase Info;
         public ref ComponentInfoBase.CompRevInfo CompRevInfo;
         public ConcurrencyConflictSolver Solver;
+        public ConcurrencyConflictHandler Handler;
         public bool IsRollback;
         public ref UnitOfWorkContext Ctx;
 
@@ -1752,9 +1837,7 @@ public unsafe class Transaction : IDisposable
                 if (_dbe.TransactionChain.Control.EnterSharedAccess(ref wcDeferred))
                 {
                     var isTailForDeferred = _dbe.TransactionChain.Tail == this;
-                    var nextMinTSNDeferred = isTailForDeferred
-                        ? _dbe.TransactionChain.Tail.Next?.TSN ?? _dbe.TransactionChain.NextFreeId
-                        : 0;
+                    var nextMinTSNDeferred = isTailForDeferred ? _dbe.TransactionChain.Tail.Previous?.TSN ?? (_dbe.TransactionChain.NextFreeId + 1) : 0;
                     _dbe.TransactionChain.Control.ExitSharedAccess();
 
                     if (isTailForDeferred)
@@ -1786,7 +1869,7 @@ public unsafe class Transaction : IDisposable
         using var holdoff = ctx.EnterHoldoff();
 
         var conflictSolver = handler != null ? GetConflictSolver() : null;
-        var context = new CommitContext { IsRollback = false, Solver = conflictSolver };
+        var context = new CommitContext { IsRollback = false, Solver = conflictSolver, Handler = handler };
 #pragma warning disable CS9093 // ref-assign is safe: CommitContext is a ref struct that never escapes this method
         context.Ctx = ref ctx;
 #pragma warning restore CS9093
@@ -1799,8 +1882,8 @@ public unsafe class Transaction : IDisposable
             ThrowHelper.ThrowLockTimeout("TransactionChain/CommitTailCheck", TimeoutOptions.Current.TransactionChainLockTimeout);
         }
         context.IsTail = _dbe.TransactionChain.Tail == this;
-        context.NextMinTSN = context.IsTail ? _dbe.TransactionChain.Tail.Next?.TSN ?? _dbe.TransactionChain.NextFreeId : 0;
-        context.TailTSN = context.IsTail ? 0 : _dbe.TransactionChain.MinTSN;
+        context.NextMinTSN = context.IsTail ? _dbe.TransactionChain.Tail.Previous?.TSN ?? (_dbe.TransactionChain.NextFreeId + 1) : 0;
+        context.TailTSN = _dbe.TransactionChain.MinTSN;
         _dbe.TransactionChain.Control.ExitSharedAccess();
 
         // Process every Component Type and their components
@@ -1855,22 +1938,16 @@ public unsafe class Transaction : IDisposable
             }
         }
 
-        // Flush batched deferred enqueue entries (non-tail path: single lock acquire for all entities)
+        // Enqueue current transaction's entities for deferred cleanup (single lock acquire for all entities).
+        // Processing happens in Dispose (after cached indices are no longer relevant) or via FlushDeferredCleanups.
         if (_deferredEnqueueBatch is { Count: > 0 })
         {
             _dbe.DeferredCleanupManager.EnqueueBatch(context.TailTSN, _deferredEnqueueBatch);
             _deferredEnqueueBatch.Clear();
         }
 
-        // Process deferred cleanups from other transactions that were blocked by this one (tail path)
-        if (context.IsTail && _dbe.DeferredCleanupManager.QueueSize > 0)
-        {
-            _dbe.DeferredCleanupManager.ProcessDeferredCleanups(TSN, context.NextMinTSN, _dbe, _changeSet);
-        }
-
-        // Check if any conflicts were detected (recorded via _dbe.RecordConflict() in CommitComponent)
-        // Note: We track conflicts at the engine level, not per-commit, so we rely on the conflict solver
-        if (conflictSolver != null && conflictSolver.EntryCount > 0)
+        // Check if any conflicts were detected during the commit loop
+        if (conflictSolver is { HasConflict: true })
         {
             hasConflict = true;
         }
@@ -1891,6 +1968,22 @@ public unsafe class Transaction : IDisposable
             _dbe.WalManager.RequestFlush();
             var wc = ComposeWaitContext(ref ctx, TimeoutOptions.Current.DefaultCommitTimeout);
             _dbe.WalManager.WaitForDurable(walHighLsn, ref wc);
+        }
+
+        // WAL-less Immediate: persist dirty data pages and fsync before returning from Commit.
+        // This is the WAL-less equivalent of the WAL FUA path above — data is on stable storage when Commit returns.
+        if (_dbe.WalManager == null && OwningUnitOfWork?.DurabilityMode == DurabilityMode.Immediate)
+        {
+            // Flush batched dirty flags from long-lived accessors to the ChangeSet (BTree accessors are already
+            // disposed inline during CommitComponent, so their pages are already tracked).
+            foreach (var kvp in _componentInfos)
+            {
+                kvp.Value.CompContentAccessor.CommitChanges();
+                kvp.Value.CompRevTableAccessor.CommitChanges();
+            }
+
+            _changeSet.SaveChanges();
+            _dbe.MMF.FlushToDisk();
         }
 
         // New state
@@ -1938,7 +2031,8 @@ public unsafe class Transaction : IDisposable
 
                         recordCount++;
                         var isDelete = (cri.Operations & ComponentInfoBase.OperationType.Deleted) != 0;
-                        totalPayload += WalRecordHeader.SizeInBytes + (isDelete ? 0 : storageSize);
+                        var bodyLen = WalRecordHeader.SizeInBytes + (isDelete ? 0 : storageSize);
+                        totalPayload += WalChunkHeader.SizeInBytes + bodyLen + WalChunkFooter.SizeInBytes;
                     }
                     break;
 
@@ -1955,7 +2049,8 @@ public unsafe class Transaction : IDisposable
 
                             recordCount++;
                             var isDelete = (cri.Operations & ComponentInfoBase.OperationType.Deleted) != 0;
-                            totalPayload += WalRecordHeader.SizeInBytes + (isDelete ? 0 : storageSize);
+                            var bodyLen = WalRecordHeader.SizeInBytes + (isDelete ? 0 : storageSize);
+                            totalPayload += WalChunkHeader.SizeInBytes + bodyLen + WalChunkFooter.SizeInBytes;
                         }
                     }
                     break;
@@ -1985,7 +2080,6 @@ public unsafe class Transaction : IDisposable
                 WriteOffset = 0,
                 RecordIndex = 0,
                 CurrentLsn = claim.FirstLSN,
-                PrevCrc = 0,
                 TotalRecordCount = recordCount
             };
 
@@ -2048,7 +2142,6 @@ public unsafe class Transaction : IDisposable
         public int WriteOffset;
         public int RecordIndex;
         public long CurrentLsn;
-        public uint PrevCrc;
         public int TotalRecordCount;
 
         /// <summary>
@@ -2058,7 +2151,8 @@ public unsafe class Transaction : IDisposable
     }
 
     /// <summary>
-    /// Writes a single WAL record (header + payload) into the claim data span.
+    /// Writes a single WAL chunk (chunk header + record header + payload + chunk footer) into the claim data span.
+    /// CRC and PrevCRC are left as 0 — the WAL writer thread patches them before disk write.
     /// </summary>
     private void WriteWalRecord(ref WalRecordWriter writer, long entityId, ushort componentTypeId, int storageSize,
         ref ComponentInfoBase.CompRevInfo cri, ComponentInfoBase info)
@@ -2094,43 +2188,47 @@ public unsafe class Transaction : IDisposable
             flags |= WalRecordFlags.UowCommit;
         }
 
-        // Build header
+        var bodyLen = WalRecordHeader.SizeInBytes + payloadLength;
+        var chunkSize = (ushort)(WalChunkHeader.SizeInBytes + bodyLen + WalChunkFooter.SizeInBytes);
+
+        // Write chunk header (PrevCRC=0 — patched by WAL writer)
+        var chunkHeader = new WalChunkHeader
+        {
+            ChunkType = (ushort)WalChunkType.Transaction,
+            ChunkSize = chunkSize,
+            PrevCRC = 0,
+        };
+        MemoryMarshal.Write(writer.DataSpan[writer.WriteOffset..], in chunkHeader);
+
+        // Write record header
+        var recordOffset = writer.WriteOffset + WalChunkHeader.SizeInBytes;
         var header = new WalRecordHeader
         {
             LSN = writer.CurrentLsn,
             TransactionTSN = TSN,
-            TotalRecordLength = (uint)(WalRecordHeader.SizeInBytes + payloadLength),
             UowEpoch = UowId,
             ComponentTypeId = componentTypeId,
             EntityId = entityId,
             PayloadLength = (ushort)payloadLength,
             OperationType = (byte)opType,
             Flags = (byte)flags,
-            PrevCRC = writer.RecordIndex == 0 ? 0 : writer.PrevCrc,
-            CRC = 0, // Computed below
         };
-
-        // Write header to span
-        MemoryMarshal.Write(writer.DataSpan[writer.WriteOffset..], in header);
+        MemoryMarshal.Write(writer.DataSpan[recordOffset..], in header);
 
         // Write payload (component data) for non-delete operations
         if (payloadLength > 0 && cri.CurCompContentChunkId > 0)
         {
             var srcSpan = info.CompContentAccessor.GetChunkAsReadOnlySpan(cri.CurCompContentChunkId);
-            var payloadDst = writer.DataSpan.Slice(writer.WriteOffset + WalRecordHeader.SizeInBytes, payloadLength);
+            var payloadDst = writer.DataSpan.Slice(recordOffset + WalRecordHeader.SizeInBytes, payloadLength);
             srcSpan[..payloadLength].CopyTo(payloadDst);
         }
 
-        // Compute CRC over header+payload with CRC field zeroed
-        var recordSpan = writer.DataSpan.Slice(writer.WriteOffset, WalRecordHeader.SizeInBytes + payloadLength);
-        var crcFieldOffset = (int)Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.CRC));
-        var crc = WalCrc.ComputeSkipping(recordSpan, crcFieldOffset, sizeof(uint));
+        // Write chunk footer (CRC=0 — patched by WAL writer)
+        var footerOffset = writer.WriteOffset + chunkSize - WalChunkFooter.SizeInBytes;
+        var footer = new WalChunkFooter { CRC = 0 };
+        MemoryMarshal.Write(writer.DataSpan[footerOffset..], in footer);
 
-        // Write CRC back into header
-        MemoryMarshal.Write(writer.DataSpan[(writer.WriteOffset + crcFieldOffset)..], in crc);
-
-        writer.PrevCrc = crc;
-        writer.WriteOffset += WalRecordHeader.SizeInBytes + payloadLength;
+        writer.WriteOffset += chunkSize;
         writer.CurrentLsn++;
         writer.RecordIndex++;
     }

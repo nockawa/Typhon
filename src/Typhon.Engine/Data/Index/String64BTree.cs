@@ -491,8 +491,8 @@ public abstract class String64BTree : BTree<String64>
                             rk.Slice(right.GetStart(ref accessor), srLen).CopyTo(lk.Slice(end, srLen));
                             rv.Slice(right.GetStart(ref accessor), srLen).CopyTo(lv.Slice(end, srLen));
 
-                            rk.Slice(0, secondCopySecondLength).CopyTo(lk.Slice(mergeEnd, secondCopyFirstLength));
-                            rv.Slice(0, secondCopySecondLength).CopyTo(lv.Slice(mergeEnd, secondCopyFirstLength));
+                            rk.Slice(0, secondCopyFirstLength).CopyTo(lk.Slice(mergeEnd, secondCopyFirstLength));
+                            rv.Slice(0, secondCopyFirstLength).CopyTo(lv.Slice(mergeEnd, secondCopyFirstLength));
                             rk.Slice(secondCopyFirstLength, secondCopySecondLength).CopyTo(lk.Slice(0, secondCopySecondLength));
                             rv.Slice(secondCopyFirstLength, secondCopySecondLength).CopyTo(lv.Slice(0, secondCopySecondLength));
                         }
@@ -714,14 +714,14 @@ public abstract class String64BTree : BTree<String64>
 
     protected override BaseNodeStorage GetStorage() => new String64NodeStorage();
     public override bool AllowMultiple => false;
-    protected String64BTree(ChunkBasedSegment segment, bool load = false) : base(segment, load)
+    protected String64BTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }
 
 public class String64MultipleBTree : String64BTree
 {
-    public String64MultipleBTree(ChunkBasedSegment segment, bool load = false) : base(segment, load)
+    public String64MultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 
@@ -752,7 +752,7 @@ public class String64MultipleBTree : String64BTree
 
 public class String64SingleBTree : String64BTree
 {
-    public String64SingleBTree(ChunkBasedSegment segment, bool load = false) : base(segment, load)
+    public String64SingleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }

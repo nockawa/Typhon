@@ -12,6 +12,30 @@ Create a GitHub issue and add it to the "Typhon dev" project (project #7).
 
 $ARGUMENTS
 
+## Help
+
+If `$ARGUMENTS` contains `--help` or `-h`, display the following and **stop** — do not execute the workflow.
+
+```
+/create-issue [title]
+
+  Create a GitHub issue and add it to the Typhon dev project.
+
+Arguments:
+  title           Issue title text — if provided, skips the title prompt
+  --help, -h      Show this help
+
+What it does:
+  1. Gathers required info (title, description, labels, area, priority, phase, estimate)
+  2. Creates the issue via GitHub API
+  3. Adds it to the Typhon dev project board
+  4. Sets project fields (priority, phase, area, estimate)
+
+Examples:
+  /create-issue
+  /create-issue "Add spatial indexing support"
+```
+
 ## Required information
 
 You need to gather the following information. If NOT provided in the arguments above, use the `AskUserQuestion` tool to ask the user:
@@ -109,27 +133,31 @@ Options:
 
 Once you have the required information:
 
-**IMPORTANT:** When writing the issue body, always use **absolute URLs** for any links to files in the repo. Relative paths like `[text](claude/foo.md)` break when viewed outside the repo context (e.g., on the project board). Use `https://github.com/nockawa/Typhon/blob/main/<path>` for files and `https://github.com/nockawa/Typhon/tree/main/<path>` for directories. See `.claude/skills/_helpers.md` rule #7.
+**IMPORTANT:** When writing the issue body, always use **absolute URLs** for any links to files in the repo. Relative paths like `[text](claude/foo.md)` break when viewed outside the repo context (e.g., on the project board). Use `https://github.com/nockawa/Typhon/blob/main/<path>` for files and `https://github.com/nockawa/Typhon/tree/main/<path>` for directories. See `.claude/skills/_helpers.md` rule #9.
 
 ### Step 1: Create the issue
 
-```bash
-gh issue create --repo nockawa/Typhon --title "TITLE" --body "DESCRIPTION" --label "LABELS" --assignee nockawa
-```
+Use `mcp__GitHub__create_issue` with:
+- owner: `"nockawa"`
+- repo: `"Typhon"`
+- title: `"<title>"`
+- body: `"<description>"`
+- labels: `["<label1>", "<label2>"]`
+- assignees: `["nockawa"]`
 
 Note: Issues are always assigned to `nockawa` by default.
 
-### Step 2: Get the issue URL from the output
+### Step 2: Get the issue number and URL from the returned object
 
 ### Step 3: Add to project
 
 ```bash
-gh project item-add 7 --owner nockawa --url ISSUE_URL
+gh project item-add 7 --owner nockawa --url <issue_url>
 ```
 
 ### Step 4: Get the project item ID
 
-**Project item lookup:** Read `.claude/skills/_helpers.md` for the robust patterns.
+**Project item lookup:** Read `.claude/skills/_helpers.md` Section 2 for the robust patterns.
 
 ```bash
 # Find the item ID by piping directly to Python (no temp files)
@@ -208,13 +236,13 @@ User: *Provides answers*
 Claude: *Creates issue, adds to project, sets fields, reports success*
 
 ```
-✅ Issue #15 created: "Add support for spatial indexing"
-   🔗 https://github.com/nockawa/Typhon/issues/15
-   📋 Added to "Typhon dev" project
-   👤 Assigned to: nockawa
-   🎯 Priority: P2-Medium
-   📦 Phase: Query
-   🗂️ Area: Indexes
-   📏 Estimate: L (large)
-   🏷️ Labels: enhancement, performance
+Issue #15 created: "Add support for spatial indexing"
+   Link: https://github.com/nockawa/Typhon/issues/15
+   Added to "Typhon dev" project
+   Assigned to: nockawa
+   Priority: P2-Medium
+   Phase: Query
+   Area: Indexes
+   Estimate: L (large)
+   Labels: enhancement, performance
 ```

@@ -78,11 +78,20 @@ public partial class ChunkBasedSegment : LogicalSegment
             var page = GetPageExclusive(i, epoch, out var memPageIdx);
             int longSize = (i == 0 ? (ChunkCountRootPage + 63) : (ChunkCountPerPage + 63)) >> 6;
             page.Metadata<long>(0, longSize).Clear();
+
+            // Clear chunk 0's raw data on the root page so the BTree directory starts clean.
+            // We do this inline because ReserveChunk(index, clearContent:true) needs a ChunkAccessor
+            // which requires an epoch scope — unavailable during segment creation.
+            if (i == 0)
+            {
+                page.RawData<byte>(RootHeaderIndexSectionLength, Stride).Clear();
+            }
+
             Manager.UnlatchPageExclusive(memPageIdx);
         }
 
         _map = new BitmapL3(this, false);
-        ReserveChunk(0);                    // It's always handy to consider ChunkId:0 as "null", so we reserve the chunk to prevent it is a valid id.
+        ReserveChunk(0);                    // Mark chunk 0 as allocated ("null" sentinel) — data already cleared above
         return true;
     }
 
@@ -184,6 +193,28 @@ public partial class ChunkBasedSegment : LogicalSegment
     private static readonly ThreadLocal<Memory<int>> SingleAlloc = new(() => new Memory<int>(new int[1]));
 
     public void ReserveChunk(int index) => _map.SetL0(index);
+
+    /// <summary>
+    /// Reserves a specific chunk by index. If the chunk was not previously reserved and <paramref name="clearContent"/> is true,
+    /// the chunk data is zeroed.
+    /// </summary>
+    /// <returns>True if the chunk was newly reserved; false if it was already reserved.</returns>
+    public void ReserveChunk(int index, bool clearContent, ChangeSet changeSet = null)
+    {
+        _map.SetL0(index);
+        if (clearContent)
+        {
+            var accessor = CreateChunkAccessor(changeSet);
+            try
+            {
+                accessor.ClearChunk(index);
+            }
+            finally
+            {
+                accessor.Dispose();
+            }
+        }
+    }
     
     /// <summary>
     /// Allocates a single chunk from the segment.
@@ -308,5 +339,10 @@ public partial class ChunkBasedSegment : LogicalSegment
     public int ChunkCapacity => _map.Capacity;
     public int AllocatedChunkCount => _map.Allocated;
     public int FreeChunkCount => ChunkCapacity - AllocatedChunkCount;
+
+    /// <summary>
+    /// Checks whether the given chunk index is marked as allocated in the occupancy bitmap.
+    /// </summary>
+    public bool IsChunkAllocated(int index) => _map.IsSet(index);
 
 }

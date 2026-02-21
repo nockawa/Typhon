@@ -5,9 +5,9 @@ using System.Runtime.InteropServices;
 namespace Typhon.Engine.Tests;
 
 /// <summary>
-/// Verifies binary layout, size, and alignment of <see cref="WalRecordHeader"/>
-/// and <see cref="WalFrameHeader"/> to catch any accidental struct changes
-/// that would break the on-disk WAL format.
+/// Verifies binary layout, size, and alignment of <see cref="WalRecordHeader"/>,
+/// <see cref="WalFrameHeader"/>, <see cref="WalChunkHeader"/>, and <see cref="WalChunkFooter"/>
+/// to catch any accidental struct changes that would break the on-disk WAL format.
 /// </summary>
 [TestFixture]
 public class WalRecordHeaderTests
@@ -15,9 +15,9 @@ public class WalRecordHeaderTests
     #region WalRecordHeader — Size
 
     [Test]
-    public void SizeOf_Is48Bytes()
+    public void SizeOf_Is32Bytes()
     {
-        Assert.That(Unsafe.SizeOf<WalRecordHeader>(), Is.EqualTo(48));
+        Assert.That(Unsafe.SizeOf<WalRecordHeader>(), Is.EqualTo(32));
         Assert.That(Unsafe.SizeOf<WalRecordHeader>(), Is.EqualTo(WalRecordHeader.SizeInBytes));
     }
 
@@ -34,44 +34,28 @@ public class WalRecordHeaderTests
         Assert.That(Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.TransactionTSN)).ToInt32(), Is.EqualTo(8));
 
     [Test]
-    public void FieldOffset_TotalRecordLength_Is16() =>
-        Assert.That(Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.TotalRecordLength)).ToInt32(), Is.EqualTo(16));
+    public void FieldOffset_UowEpoch_Is16() =>
+        Assert.That(Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.UowEpoch)).ToInt32(), Is.EqualTo(16));
 
     [Test]
-    public void FieldOffset_UowEpoch_Is20() =>
-        Assert.That(Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.UowEpoch)).ToInt32(), Is.EqualTo(20));
+    public void FieldOffset_ComponentTypeId_Is18() =>
+        Assert.That(Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.ComponentTypeId)).ToInt32(), Is.EqualTo(18));
 
     [Test]
-    public void FieldOffset_ComponentTypeId_Is22() =>
-        Assert.That(Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.ComponentTypeId)).ToInt32(), Is.EqualTo(22));
+    public void FieldOffset_EntityId_Is20() =>
+        Assert.That(Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.EntityId)).ToInt32(), Is.EqualTo(20));
 
     [Test]
-    public void FieldOffset_EntityId_Is24() =>
-        Assert.That(Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.EntityId)).ToInt32(), Is.EqualTo(24));
+    public void FieldOffset_PayloadLength_Is28() =>
+        Assert.That(Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.PayloadLength)).ToInt32(), Is.EqualTo(28));
 
     [Test]
-    public void FieldOffset_PayloadLength_Is32() =>
-        Assert.That(Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.PayloadLength)).ToInt32(), Is.EqualTo(32));
+    public void FieldOffset_OperationType_Is30() =>
+        Assert.That(Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.OperationType)).ToInt32(), Is.EqualTo(30));
 
     [Test]
-    public void FieldOffset_OperationType_Is34() =>
-        Assert.That(Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.OperationType)).ToInt32(), Is.EqualTo(34));
-
-    [Test]
-    public void FieldOffset_Flags_Is35() =>
-        Assert.That(Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.Flags)).ToInt32(), Is.EqualTo(35));
-
-    [Test]
-    public void FieldOffset_PrevCRC_Is36() =>
-        Assert.That(Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.PrevCRC)).ToInt32(), Is.EqualTo(36));
-
-    [Test]
-    public void FieldOffset_CRC_Is40() =>
-        Assert.That(Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.CRC)).ToInt32(), Is.EqualTo(40));
-
-    [Test]
-    public void FieldOffset_Reserved_Is44() =>
-        Assert.That(Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.Reserved)).ToInt32(), Is.EqualTo(44));
+    public void FieldOffset_Flags_Is31() =>
+        Assert.That(Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.Flags)).ToInt32(), Is.EqualTo(31));
 
     #endregion
 
@@ -91,11 +75,11 @@ public class WalRecordHeaderTests
     [Test]
     public void Flags_CombineCorrectly()
     {
-        var flags = WalRecordFlags.UowBegin | WalRecordFlags.Compressed;
+        var flags = WalRecordFlags.UowBegin | WalRecordFlags.UowCommit;
 
         Assert.That(flags.HasFlag(WalRecordFlags.UowBegin), Is.True);
-        Assert.That(flags.HasFlag(WalRecordFlags.Compressed), Is.True);
-        Assert.That(flags.HasFlag(WalRecordFlags.UowCommit), Is.False);
+        Assert.That(flags.HasFlag(WalRecordFlags.UowCommit), Is.True);
+        Assert.That(flags.HasFlag(WalRecordFlags.None), Is.True);
     }
 
     [Test]
@@ -112,6 +96,55 @@ public class WalRecordHeaderTests
         Assert.That((byte)WalOperationType.Create, Is.EqualTo(1));
         Assert.That((byte)WalOperationType.Update, Is.EqualTo(2));
         Assert.That((byte)WalOperationType.Delete, Is.EqualTo(3));
+    }
+
+    #endregion
+
+    #region WalChunkHeader — Size & Layout
+
+    [Test]
+    public void ChunkHeader_SizeOf_Is8Bytes()
+    {
+        Assert.That(Unsafe.SizeOf<WalChunkHeader>(), Is.EqualTo(8));
+        Assert.That(Unsafe.SizeOf<WalChunkHeader>(), Is.EqualTo(WalChunkHeader.SizeInBytes));
+    }
+
+    [Test]
+    public void ChunkHeader_FieldOffset_ChunkType_Is0() =>
+        Assert.That(Marshal.OffsetOf<WalChunkHeader>(nameof(WalChunkHeader.ChunkType)).ToInt32(), Is.EqualTo(0));
+
+    [Test]
+    public void ChunkHeader_FieldOffset_ChunkSize_Is2() =>
+        Assert.That(Marshal.OffsetOf<WalChunkHeader>(nameof(WalChunkHeader.ChunkSize)).ToInt32(), Is.EqualTo(2));
+
+    [Test]
+    public void ChunkHeader_FieldOffset_PrevCRC_Is4() =>
+        Assert.That(Marshal.OffsetOf<WalChunkHeader>(nameof(WalChunkHeader.PrevCRC)).ToInt32(), Is.EqualTo(4));
+
+    #endregion
+
+    #region WalChunkFooter — Size & Layout
+
+    [Test]
+    public void ChunkFooter_SizeOf_Is4Bytes()
+    {
+        Assert.That(Unsafe.SizeOf<WalChunkFooter>(), Is.EqualTo(4));
+        Assert.That(Unsafe.SizeOf<WalChunkFooter>(), Is.EqualTo(WalChunkFooter.SizeInBytes));
+    }
+
+    [Test]
+    public void ChunkFooter_FieldOffset_CRC_Is0() =>
+        Assert.That(Marshal.OffsetOf<WalChunkFooter>(nameof(WalChunkFooter.CRC)).ToInt32(), Is.EqualTo(0));
+
+    #endregion
+
+    #region WalChunkType
+
+    [Test]
+    public void ChunkType_Values_MatchSpec()
+    {
+        Assert.That((ushort)WalChunkType.Transaction, Is.EqualTo(1));
+        Assert.That((ushort)WalChunkType.FullPageImage, Is.EqualTo(2));
     }
 
     #endregion

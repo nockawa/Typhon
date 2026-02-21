@@ -80,10 +80,18 @@ def load_config(path):
     return cfg
 
 
-def resolve_threshold(config, benchmark_type, method, category, field):
-    """Resolve a threshold value using: benchmark > category > defaults."""
+def resolve_threshold(config, benchmark_type, method, category, field, parameters=""):
+    """Resolve a threshold value using: benchmark(params) > benchmark > category > defaults."""
+    benchmarks = config.get("benchmarks", {})
+    # Try parameter-specific key first: Type.Method(Param=Value)
+    if parameters:
+        param_key = f"{benchmark_type}.{method}({parameters})"
+        param_cfg = benchmarks.get(param_key, {})
+        if field in param_cfg:
+            return param_cfg[field]
+    # Fall back to method-level key: Type.Method
     key = f"{benchmark_type}.{method}"
-    bench_cfg = config.get("benchmarks", {}).get(key, {})
+    bench_cfg = benchmarks.get(key, {})
     if field in bench_cfg:
         return bench_cfg[field]
     cat_cfg = config.get("categories", {}).get(category, {})
@@ -92,10 +100,18 @@ def resolve_threshold(config, benchmark_type, method, category, field):
     return config["defaults"].get(field)
 
 
-def resolve_target_ns(config, benchmark_type, method):
+def resolve_target_ns(config, benchmark_type, method, parameters=""):
     """Return target_ns for a benchmark, or None if not configured."""
+    benchmarks = config.get("benchmarks", {})
+    # Try parameter-specific key first: Type.Method(Param=Value)
+    if parameters:
+        param_key = f"{benchmark_type}.{method}({parameters})"
+        param_cfg = benchmarks.get(param_key, {})
+        if "target_ns" in param_cfg:
+            return param_cfg["target_ns"]
+    # Fall back to method-level key: Type.Method
     key = f"{benchmark_type}.{method}"
-    bench_cfg = config.get("benchmarks", {}).get(key, {})
+    bench_cfg = benchmarks.get(key, {})
     return bench_cfg.get("target_ns")
 
 
@@ -312,12 +328,13 @@ def analyze_regressions(latest_run, all_history, config):
         bm_type = result.get("type", "")
         method = result.get("method", "")
         category = result.get("category", "")
+        parameters = result.get("parameters", "")
         current = result["mean_ns"]
 
-        min_runs = int(resolve_threshold(config, bm_type, method, category, "min_runs_for_trend"))
-        baseline_window = int(resolve_threshold(config, bm_type, method, category, "baseline_window"))
-        regression_pct = float(resolve_threshold(config, bm_type, method, category, "regression_pct"))
-        improvement_pct = float(resolve_threshold(config, bm_type, method, category, "improvement_pct"))
+        min_runs = int(resolve_threshold(config, bm_type, method, category, "min_runs_for_trend", parameters))
+        baseline_window = int(resolve_threshold(config, bm_type, method, category, "baseline_window", parameters))
+        regression_pct = float(resolve_threshold(config, bm_type, method, category, "regression_pct", parameters))
+        improvement_pct = float(resolve_threshold(config, bm_type, method, category, "improvement_pct", parameters))
 
         past_values = history_index.get(key, [])
 
@@ -537,7 +554,7 @@ def generate_charts(all_history, analysis, config, output_dir, last_n):
         last_status = a_entry["status"] if a_entry else "stable"
 
         # Target line
-        target_ns = resolve_target_ns(config, representative["type"], representative["method"])
+        target_ns = resolve_target_ns(config, representative["type"], representative["method"], representative.get("parameters", ""))
 
         # Baseline band
         baseline_ns = None
@@ -906,7 +923,12 @@ def generate_report(latest_run, analysis, config, output_dir):
         cat = entry.get("category", "") or "Uncategorized"
         categories.setdefault(cat, []).append(entry)
 
-    for cat_name in sorted(categories.keys()):
+    # Use configured category order, with any unconfigured categories appended alphabetically
+    category_order = config.get("category_order", [])
+    ordered_cats = [c for c in category_order if c in categories]
+    ordered_cats += sorted(c for c in categories if c not in category_order)
+
+    for cat_name in ordered_cats:
         entries = sorted(categories[cat_name], key=lambda e: _display_name(e))
         w(f"### Category: {cat_name}")
         for entry in entries:

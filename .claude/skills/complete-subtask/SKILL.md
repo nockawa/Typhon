@@ -10,15 +10,15 @@ Mark a sub-issue as done within an umbrella issue workflow. This is the lightwei
 
 **Typical workflow:**
 ```
-/start-task #36          ← umbrella issue, creates branch
+/start-task #36          <- umbrella issue, creates branch
 ... implement #37 ...
-/complete-subtask #37    ← this skill
+/complete-subtask #37    <- this skill
 ... implement #38 ...
-/complete-subtask #38    ← this skill
+/complete-subtask #38    <- this skill
 ... implement #39, #40 ...
 /complete-subtask #39
 /complete-subtask #40
-/complete-task #36       ← closes umbrella, merges PR, cleans up
+/complete-task #36       <- closes umbrella, merges PR, cleans up
 ```
 
 ## Input
@@ -27,30 +27,49 @@ $ARGUMENTS should contain the sub-issue number (e.g., `37` or `#37`).
 
 If no argument provided, use `AskUserQuestion` to ask which sub-issue to complete.
 
+## Help
+
+If `$ARGUMENTS` contains `--help` or `-h`, display the following and **stop** — do not execute the workflow.
+
+```
+/complete-subtask [#N]
+
+  Complete a sub-issue — close it, check parent checkbox, update project status.
+
+Arguments:
+  #N              Sub-issue number (e.g., 37 or #37)
+  --help, -h      Show this help
+
+What it does:
+  1. Fetches sub-issue and detects parent issue
+  2. Closes the sub-issue
+  3. Updates project status to Done
+  4. Checks the checkbox in the parent issue body
+  5. Updates design doc status (if exists)
+
+Examples:
+  /complete-subtask #37
+  /complete-subtask 38
+```
+
 ## Workflow
 
 ### 1. Fetch Sub-Issue Details
 
-```bash
-gh issue view <number> --json number,title,state,body
-```
+Use `mcp__GitHub__get_issue` with:
+- owner: `"nockawa"`
+- repo: `"Typhon"`
+- issue_number: `<number>`
 
-Confirm the issue is open. If already closed, report and exit.
+Confirm the issue is open (state = "open"). If already closed, report and exit.
 
 ### 2. Detect Parent (Umbrella) Issue
 
-Search the sub-issue body for a parent reference. Common patterns:
+From the sub-issue body (returned in step 1), search for a parent reference. Common patterns:
 - `**GitHub Issue:** #NN (umbrella)` or `Sub-issues: #37, #38, ...`
 - `Parent: #NN`
 - `Part of #NN`
 - Any `#NN` reference where NN is a different issue
-
-**Auto-detection strategy:**
-
-```bash
-# Check if the sub-issue body references a parent
-gh issue view <number> --json body --jq '.body'
-```
 
 Look for patterns like:
 - A line containing "umbrella" with an issue number
@@ -69,13 +88,15 @@ Options:
 
 ### 3. Close the Sub-Issue
 
-```bash
-gh issue close <number>
-```
+Use `mcp__GitHub__update_issue` with:
+- owner: `"nockawa"`
+- repo: `"Typhon"`
+- issue_number: `<number>`
+- state: `"closed"`
 
 ### 4. Update Project Status to Done
 
-**Project item lookup:** Read `.claude/skills/_helpers.md` for the robust patterns.
+**Project item lookup:** Read `.claude/skills/_helpers.md` Section 2 for the robust patterns.
 
 ```bash
 # Step 1: Find the item ID by piping directly to Python (no temp files)
@@ -101,14 +122,14 @@ gh project item-edit --project-id PVT_kwHOAud1ac4BNdCj --id <item_id> \
 
 ### 5. Check Checkbox in Parent Issue
 
-Fetch the parent issue body, find the checkbox line referencing this sub-issue, and check it.
+**Step 5a:** Fetch the parent issue to get its current body.
 
-```bash
-# Get parent issue body
-gh issue view <parent_number> --json body --jq '.body'
-```
+Use `mcp__GitHub__get_issue` with:
+- owner: `"nockawa"`
+- repo: `"Typhon"`
+- issue_number: `<parent_number>`
 
-Find a line matching the pattern `- [ ]` that contains `#<sub_number>` (the sub-issue number). Replace `- [ ]` with `- [x]` on that line.
+**Step 5b:** In the returned body, find a line matching the pattern `- [ ]` that contains `#<sub_number>` (the sub-issue number). Replace `- [ ]` with `- [x]` on that line.
 
 **Checkbox detection patterns** (match any):
 - `- [ ] ... #37 ...` (explicit issue reference)
@@ -118,23 +139,15 @@ Find a line matching the pattern `- [ ]` that contains `#<sub_number>` (the sub-
 
 If the checkbox line also contains a description, preserve it. Only change `[ ]` to `[x]`.
 
-**Update the parent issue body:**
+**Step 5c:** Update the parent issue body with the modified content.
 
-**Important:** Never reconstruct the body manually — Unicode characters will break on Windows. Always fetch, modify, and write back using the Pattern 5 from `_helpers.md`:
+Use `mcp__GitHub__update_issue` with:
+- owner: `"nockawa"`
+- repo: `"Typhon"`
+- issue_number: `<parent_number>`
+- body: `"<modified body with checkbox checked>"`
 
-```bash
-# Fetch body, check the checkbox, write to temp file, update issue
-gh issue view <parent_number> --repo nockawa/Typhon --json body --jq ".body" 2>&1 | PYTHONUTF8=1 python3 -c "
-import sys, tempfile
-body = sys.stdin.read()
-body = body.replace('- [ ] #<sub_number> ', '- [x] #<sub_number> ')
-with tempfile.NamedTemporaryFile(mode='w', suffix='.md', encoding='utf-8', delete=False) as f:
-    f.write(body)
-    print(f.name)
-" | while read tmpfile; do
-  gh issue edit <parent_number> --repo nockawa/Typhon --body-file \"\$tmpfile\"
-done
-```
+This replaces the old temp file + Python + `gh issue edit --body-file` pattern. The body is passed directly — no temp files, no encoding issues.
 
 If no matching checkbox is found, report it but don't fail — the parent may use a different format.
 
@@ -162,9 +175,9 @@ If no design doc is found or referenced, skip this step silently.
 Completed sub-issue #<number>: <title>
 
   Issue: #<number> closed
-  Project: Status → Done
+  Project: Status -> Done
   Parent: #<parent> checkbox checked
-  Design: claude/design/<path> → Status: Implemented (or "no design doc")
+  Design: claude/design/<path> -> Status: Implemented (or "no design doc")
 
 Parent #<parent> progress: X/Y sub-issues complete
 ```

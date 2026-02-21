@@ -11,18 +11,46 @@ Transition an issue into the Design phase by creating a design document, seeded 
 ## Input
 
 $ARGUMENTS may contain:
-- An **issue number** (e.g., `42` or `#42`) → proceed directly to the workflow
-- A **title/text** (non-numeric) → offer to create a new issue with that title
-- **Nothing** (empty) → show available issues to pick from, or offer to create one
-- The **`--deep`** flag (anywhere in arguments) → create a directory structure instead of a single file
+- An **issue number** (e.g., `42` or `#42`) -> proceed directly to the workflow
+- A **title/text** (non-numeric) -> offer to create a new issue with that title
+- **Nothing** (empty) -> show available issues to pick from, or offer to create one
+- The **`--deep`** flag (anywhere in arguments) -> create a directory structure instead of a single file
 
 Extract `--deep` from arguments first, then process the remainder as issue number or title.
+
+## Help
+
+If `$ARGUMENTS` contains `--help` or `-h`, display the following and **stop** — do not execute the workflow.
+
+```
+/start-design [#N | title] [--deep]
+
+  Start design for a GitHub issue — creates design doc from research/ideas, updates status to Ready.
+
+Arguments:
+  #N              Issue number (e.g., 42 or #42)
+  title           Text — offers to create or search
+  --deep          Create directory structure instead of single file
+  --help, -h      Show this help
+
+What it does:
+  1. Fetches issue (or creates one inline)
+  2. Checks for research/ideas documents to seed from
+  3. Creates design doc (single file or deep directory)
+  4. Handles source docs (conclude/archive/leave)
+  5. Updates project status to Ready
+
+Examples:
+  /start-design #42
+  /start-design "Error handling overhaul" --deep
+  /start-design
+```
 
 ## Handling No Issue Number
 
 ### Case 1: No arguments provided
 
-Fetch Research and Backlog items from the project. **Always pipe `gh project item-list` directly to Python** (see `.claude/skills/_helpers.md`):
+Fetch Research and Backlog items from the project. **Always pipe `gh project item-list` directly to Python** (see `.claude/skills/_helpers.md` Section 2):
 
 ```bash
 gh project item-list 7 --owner nockawa --limit 200 --format json 2>&1 | python3 -c "
@@ -39,12 +67,12 @@ for item in items:
 "
 ```
 
-Use the output to filter for items with Status = "Research" (prioritize these — they're the ones most likely ready for design) then "Backlog". Use `AskUserQuestion` to present a choice:
+Use the output to filter for items with Status = "Research" (prioritize these -- they're the ones most likely ready for design) then "Backlog". Use `AskUserQuestion` to present a choice:
 
 **Question:** "Which issue would you like to start designing?"
 **Header:** "Issue"
 **Options** (up to 4, prioritize Research items first, then Backlog by priority):
-- `#<number> - <title>` (description: "[Status] [Priority] [Area]") — for each candidate issue
+- `#<number> - <title>` (description: "[Status] [Priority] [Area]") -- for each candidate issue
 - `Create a new issue` (description: "I'll help you create one right now")
 
 If the user picks an existing issue, continue with the normal workflow below using that issue number.
@@ -63,7 +91,7 @@ If $ARGUMENTS (after removing `--deep`) is not empty and not a number (doesn't m
 
 If "Create a new issue": proceed to **Inline Issue Creation** with the title pre-filled.
 
-If "Search existing issues": run `gh issue list --repo nockawa/Typhon --search "$ARGUMENTS" --json number,title,state --limit 5` and present matching issues via `AskUserQuestion`.
+If "Search existing issues": use `mcp__GitHub__search_issues` with q: `"repo:nockawa/Typhon $ARGUMENTS"` and present matching issues via `AskUserQuestion`.
 
 ## Inline Issue Creation
 
@@ -71,27 +99,31 @@ When an issue needs to be created, do it inline rather than redirecting the user
 
 Follow the `/create-issue` skill workflow directly:
 
-1. **Gather info** — Use `AskUserQuestion` to collect:
+1. **Gather info** -- Use `AskUserQuestion` to collect:
    - Title (if not already provided from $ARGUMENTS)
    - Description (ask the user to describe what needs to be done)
    - Type labels, Area, Priority, Phase, Estimate (use the same questions as `/create-issue`)
 
-2. **Create the issue** — Execute the full `/create-issue` workflow:
-   ```bash
-   gh issue create --repo nockawa/Typhon --title "TITLE" --body "DESCRIPTION" --label "LABELS" --assignee nockawa
-   ```
+2. **Create the issue** -- Use `mcp__GitHub__create_issue` with:
+   - owner: `"nockawa"`
+   - repo: `"Typhon"`
+   - title: `"<title>"`
+   - body: `"<description>"`
+   - labels: `["<label1>", "<label2>"]`
+   - assignees: `["nockawa"]`
 
-3. **Add to project and set fields** — Follow `/create-issue` steps 3-5
+3. **Add to project and set fields** -- Follow `/create-issue` steps 3-5
 
-4. **Continue** — Once the issue is created, continue with the normal `/start-design` workflow below using the new issue number.
+4. **Continue** -- Once the issue is created, continue with the normal `/start-design` workflow below using the new issue number.
 
 ## Workflow
 
 ### 1. Fetch Issue Details
 
-```bash
-gh issue view <number> --json number,title,body,labels
-```
+Use `mcp__GitHub__get_issue` with:
+- owner: `"nockawa"`
+- repo: `"Typhon"`
+- issue_number: `<number>`
 
 ### 2. Status Guard
 
@@ -120,7 +152,7 @@ If any research documents exist, present them to the user via `AskUserQuestion`:
 **Question:** "I found these research documents. Which ones (if any) should feed into this design?"
 **Header:** "Research"
 **Options** (up to 4, pick the most likely related ones based on name/path similarity to the issue title):
-- `claude/research/<path>` (description: first line or title from the file) — for each candidate
+- `claude/research/<path>` (description: first line or title from the file) -- for each candidate
 - `None` (description: "Don't use any research docs")
 **MultiSelect:** true
 
@@ -139,8 +171,8 @@ If any ideas documents exist, present them the same way:
 **Question:** "No research docs selected. I found these ideas documents. Use any as input?"
 **Header:** "Ideas"
 **Options** (up to 4):
-- `claude/ideas/<path>` (description: first line or title from the file) — for each candidate
-- `None — start fresh` (description: "Create the design doc from scratch using only the issue context")
+- `claude/ideas/<path>` (description: first line or title from the file) -- for each candidate
+- `None -- start fresh` (description: "Create the design doc from scratch using only the issue context")
 **MultiSelect:** true
 
 If the user selects ideas docs, read their full content for use in step 5.
@@ -149,8 +181,8 @@ If the user selects ideas docs, read their full content for use in step 5.
 
 **First, try to infer the category** from the selected source document(s):
 - If one or more research/ideas docs were selected, use their parent directory path as the category.
-  - Example: research doc at `claude/research/database-engine/QuerySystem.md` → category = `database-engine/`
-  - Example: research doc at `claude/research/timeout/README.md` → category = root level, doc name derived from issue
+  - Example: research doc at `claude/research/database-engine/QuerySystem.md` -> category = `database-engine/`
+  - Example: research doc at `claude/research/timeout/README.md` -> category = root level, doc name derived from issue
   - If multiple source docs are from different categories, use the most specific common ancestor.
 
 **If no category can be inferred** (no source docs selected, or docs are at root level with no clear category), ask the user:
@@ -161,15 +193,15 @@ List existing directories under `claude/design/` and present:
 **Header:** "Location"
 **Options** (up to 4):
 - `design/ (root level)` (description: "No category, just a file at the top level")
-- `design/<existing-category>/` (description: "Existing category") — for each existing subdirectory
+- `design/<existing-category>/` (description: "Existing category") -- for each existing subdirectory
 - `Other` (description: "Specify a custom path / create new category")
 **MultiSelect:** false
 
 ### 5. Create Design Document
 
-Derive the **document name** from the issue title, using PascalCase (e.g., issue "Add spatial indexing support" → `SpatialIndexingSupport`).
+Derive the **document name** from the issue title, using PascalCase (e.g., issue "Add spatial indexing support" -> `SpatialIndexingSupport`).
 
-When source documents were selected, read their content to **seed** specific sections. The design doc is a scaffold — pre-fill what can be derived, leave the actual design work to the user.
+When source documents were selected, read their content to **seed** specific sections. The design doc is a scaffold -- pre-fill what can be derived, leave the actual design work to the user.
 
 #### Standard Mode (no `--deep`)
 
@@ -181,7 +213,7 @@ Create a single file: `claude/design/<category>/<Name>.md`
 **Date:** <today YYYY-MM-DD>
 **Status:** Draft
 **GitHub Issue:** #<number>
-**Branch:** —
+**Branch:** --
 
 ## Summary
 
@@ -195,7 +227,7 @@ Create a single file: `claude/design/<category>/<Name>.md`
 
 ## Non-Goals
 
-- [Explicitly out of scope — to be filled by user]
+- [Explicitly out of scope -- to be filled by user]
 
 ## Design
 
@@ -250,11 +282,11 @@ Create a directory: `claude/design/<category>/<Name>/`
 **Date:** <today YYYY-MM-DD>
 **Status:** Draft
 **GitHub Issue:** #<number>
-**Branch:** —
+**Branch:** --
 
 ## Summary
 
-<Same as standard mode — synthesized from source docs or issue body.>
+<Same as standard mode -- synthesized from source docs or issue body.>
 
 ## Goals
 
@@ -262,7 +294,7 @@ Create a directory: `claude/design/<category>/<Name>/`
 
 ## Non-Goals
 
-- [Explicitly out of scope — to be filled by user]
+- [Explicitly out of scope -- to be filled by user]
 
 ## Document Series
 
@@ -335,7 +367,7 @@ If one or more research documents were selected in step 3a, ask **for each one**
 
 **If "Archive it":**
 - Move the file (or directory) to `claude/archive/` preserving its name
-- Add a note at the top: `> **Archived:** Promoted to design — see claude/design/<path>`
+- Add a note at the top: `> **Archived:** Promoted to design -- see claude/design/<path>`
 
 **If "Leave as-is":**
 - Do nothing.
@@ -347,13 +379,13 @@ If one or more ideas documents were selected in step 3b, ask **for each one** (s
 **Question:** "The ideas doc `claude/ideas/<path>` was used. What should happen to it?"
 **Header:** "Ideas doc"
 **Options:**
-- `Archive it` (description: "Move to claude/archive/ — the content lives on in the design doc")
+- `Archive it` (description: "Move to claude/archive/ -- the content lives on in the design doc")
 - `Keep and cross-reference` (description: "Leave in ideas/ but add a link pointing to the new design doc")
 - `Leave as-is` (description: "Don't change the ideas doc at all")
 
 **If "Archive it":**
 - Move the file (or directory) to `claude/archive/` preserving its name
-- Add a note at the top: `> **Archived:** Promoted to design — see claude/design/<path>`
+- Add a note at the top: `> **Archived:** Promoted to design -- see claude/design/<path>`
 
 **If "Keep and cross-reference":**
 - Add to the ideas doc under `## Related`:
@@ -370,7 +402,7 @@ If one or more ideas documents were selected in step 3b, ask **for each one** (s
 
 Get the project item ID and update Status to "Ready".
 
-**Project item lookup:** Read `.claude/skills/_helpers.md` for the robust patterns.
+**Project item lookup:** Read `.claude/skills/_helpers.md` Section 2 for the robust patterns.
 
 ```bash
 # Step 1: Find the item ID by piping directly to Python (no temp files)
@@ -392,37 +424,41 @@ gh project item-edit --project-id PVT_kwHOAud1ac4BNdCj --id <item_id> \
 
 #### Link Design Doc in Issue Body
 
-Append a "Related Documents" section to the issue body (if not already present), or add to the existing one.
+Fetch the current issue body, append a "Related Documents" section (if not already present), or add to the existing one.
 
-**IMPORTANT:** Always use absolute URLs in issue bodies — relative paths break when viewed outside the repo (e.g., on the project board). See `.claude/skills/_helpers.md` rule #7.
+**Step 1:** The issue body was already fetched in step 1 via `mcp__GitHub__get_issue`.
 
-```bash
-# Get current body
-gh issue view <number> --json body -q .body
+**Step 2:** Modify the body to add the design doc link.
 
-# Append or update with design doc link (use absolute URL, not relative path)
-gh issue edit <number> --body "<updated body with design doc link>"
-```
+**IMPORTANT:** Always use absolute URLs in issue bodies -- relative paths break when viewed outside the repo (e.g., on the project board). See `.claude/skills/_helpers.md` rule #9.
 
-If the issue body already has a "Related Documents" section, append the design doc link to it instead of creating a new section. Preserve any existing links (e.g., a research doc link added by `/start-research`).
+**Step 3:** Update the issue body:
 
-Example addition:
+Use `mcp__GitHub__update_issue` with:
+- owner: `"nockawa"`
+- repo: `"Typhon"`
+- issue_number: `<number>`
+- body: `"<updated body with design doc link>"`
+
+Example addition to append:
 ```markdown
 - Design: [`claude/design/<path>`](https://github.com/nockawa/Typhon/blob/main/claude/design/<path>)
 ```
+
+If the issue body already has a "Related Documents" section, append the design doc link to it instead of creating a new section. Preserve any existing links (e.g., a research doc link added by `/start-research`).
 
 ### 8. Report Summary
 
 ```
 Starting design for #<number>: <title>
 
-📄 Design doc: claude/design/<path>
-   └─ Mode: Standard / Deep (directory with README.md + 01-overview.md)
-✅ Status updated: <old> → Ready
-📚 Research used: claude/research/<path> → Concluded / Archived / Left as-is
+  Design doc: claude/design/<path>
+   -> Mode: Standard / Deep (directory with README.md + 01-overview.md)
+  Status updated: <old> -> Ready
+  Research used: claude/research/<path> -> Concluded / Archived / Left as-is
    (or "None")
-📎 Ideas used: claude/ideas/<path> → Archived / Cross-referenced / Left as-is
-   (or "None — started fresh")
+  Ideas used: claude/ideas/<path> -> Archived / Cross-referenced / Left as-is
+   (or "None -- started fresh")
 
 Ready to refine the design!
 ```

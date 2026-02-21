@@ -38,9 +38,40 @@ public struct BTreeHeader
     unsafe public static readonly int Size = sizeof(BTreeHeader);
     public static readonly int TotalSize =  ChunkBasedSegmentHeader.TotalSize + Size;
     public static readonly int Offset = ChunkBasedSegmentHeader.TotalSize;
-    
+
     public int Count;
     public int RootChunkId;
+}
+
+/// <summary>
+/// Header of the BTree directory stored at the start of chunk 0.
+/// Tracks how many BTree entries are registered in this segment.
+/// Directory chunks are zeroed on first reservation (<see cref="ChunkBasedSegment.ReserveChunk(int,bool)"/>),
+/// so <see cref="EntryCount"/> == 0 reliably means "empty directory".
+/// </summary>
+[StructLayout(LayoutKind.Sequential, Pack = 2)]
+internal struct BTreeDirectoryHeader
+{
+    unsafe public static readonly int Size = sizeof(BTreeDirectoryHeader);
+
+    public ushort EntryCount;
+}
+
+/// <summary>
+/// One entry in the BTree directory (chunk 0). Each BTree on the segment gets a unique entry,
+/// keyed by <see cref="StableId"/> (FieldId for secondary indexes, -1 for PK, 0 for standalone).
+/// </summary>
+/// <remarks>12 bytes: short StableId + short Reserved + int RootChunkId + int Count.</remarks>
+[StructLayout(LayoutKind.Sequential, Pack = 2)]
+internal struct BTreeDirectoryEntry
+{
+    unsafe public static readonly int Size = sizeof(BTreeDirectoryEntry);
+
+    /// <summary>Stable key: -1 for PK, Field.FieldId for secondary indexes, 0 for standalone/test BTrees.</summary>
+    public short StableId;
+    public short Reserved;
+    public int RootChunkId;
+    public int Count;
 }
 
 #region Misc Helpers
@@ -91,7 +122,7 @@ public interface IBTree
 {
     ChunkBasedSegment Segment { get; }
     bool AllowMultiple { get; }
-    // int Count { get; }
+    int EntryCount { get; }
     unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor);
     unsafe bool Remove(void* keyAddr, out int value, ref ChunkAccessor accessor);
     unsafe Result<int, BTreeLookupStatus> TryGet(void* keyAddr, ref ChunkAccessor accessor);
@@ -332,39 +363,65 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     private readonly ChunkBasedSegment _segment;
     private readonly BaseNodeStorage _storage;
 
-    public bool IsEmpty(ref ChunkAccessor accessor)
+    // Per-instance count and root tracking used for ALL runtime operations.
+    // Multiple BTrees can share the same ChunkBasedSegment (e.g., PK index and secondary
+    // indexes share DefaultIndexSegment). Runtime code MUST use these per-instance fields
+    // instead of reading from a single shared offset, which would cause cross-BTree corruption.
+    // Each BTree has a unique entry in the chunk 0 directory, keyed by stableId.
+    private int _count;
+
+    // Cached location of this BTree's entry in the chunk 0 directory.
+    // Computed once at construction, used by SyncHeader for O(1) writes.
+    private int _dirChunkId;
+    private int _dirEntryOffset;
+
+    /// <summary>Number of preallocated directory chunks (0-3). Provides up to 20 index slots for 64-byte chunks.</summary>
+    internal const int DirectoryChunkCount = 4;
+
+    /// <summary>Hard cap on secondary indexes per segment (could be raised later).</summary>
+    internal const int MaxDirectoryEntries = 20;
+
+    public bool IsEmpty() => _count == 0;
+
+    public int EntryCount => _count;
+
+    /// <summary>
+    /// Returns the maximum key in the BTree. Single-threaded use only (engine init).
+    /// </summary>
+    public TKey GetMaxKey()
     {
-        ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false);
-        var res = header.Count == 0;
-        return res;
+        if (_count == 0)
+        {
+            return default;
+        }
+
+        using var guard = EpochGuard.Enter(_segment.Manager.EpochManager);
+        var accessor = _segment.CreateChunkAccessor();
+        try
+        {
+            return GetLast(ref accessor).Key;
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
     }
 
-    public int IncCount(ref ChunkAccessor accessor)
-    {
-        ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false);
-        var res = ++header.Count;
-        return res;
-    }
+    public int IncCount() => ++_count;
 
-    public int DecCount(ref ChunkAccessor accessor)
-    {
-        ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false);
-        var res = --header.Count;
-        return res;
-    }
+    public int DecCount() => --_count;
 
-    public void SetRootChunkId(ref ChunkAccessor accessor, int rootChunkId)
+    /// <summary>
+    /// Writes <c>_count</c> and <c>Root.ChunkId</c> to this BTree's directory entry in chunk 0 (or chained chunks 1-3).
+    /// Each BTree on a shared segment has a unique entry so they don't collide.
+    /// </summary>
+    private unsafe void SyncHeader(ref ChunkAccessor accessor)
     {
-        ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false);
-        header.RootChunkId = rootChunkId;
+        var addr = accessor.GetChunkAddress(_dirChunkId, true);
+        ref var entry = ref Unsafe.AsRef<BTreeDirectoryEntry>(addr + _dirEntryOffset);
+        entry.Count = _count;
+        entry.RootChunkId = Root.ChunkId;
     }
-
-    public int GetRootChunkId(ref ChunkAccessor accessor)
-    {
-        ref var header = ref accessor.GetChunkBasedSegmentHeader<BTreeHeader>(BTreeHeader.Offset, false);
-        var res = header.RootChunkId;
-        return res;
-    }    
 
     private NodeWrapper Root;
     private NodeWrapper LinkList;
@@ -380,26 +437,160 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     
     public ChunkBasedSegment Segment => _segment;
 
-    protected BTree(ChunkBasedSegment segment, bool load)
+    protected BTree(ChunkBasedSegment segment, bool load, short stableId = 0, ChangeSet changeSet = null)
     {
         Comparer = Comparer<TKey>.Default;
         _segment = segment;
+
         // ReSharper disable once VirtualMemberCallInConstructor
         _storage = GetStorage();
         _storage.Initialize(this, _segment);
 
+        // Both create and load paths need a ChunkAccessor, which requires an active epoch scope.
+        // The BTree constructor may be called during DatabaseEngine init (outside any epoch scope),
+        // so we enter one here. EpochGuard supports nesting, so this is a no-op if already in scope.
+        using var guard = EpochGuard.Enter(_segment.Manager.EpochManager);
+
         if (!load)
         {
-            // We make sure the chunk 0 is reserved so we can consider any ChunkId == 0 as a "null pointer".
-            // So any default constructed type declaring ChunkId fields can have this "null" by default.
-            _segment.ReserveChunk(0);
+            // Reserve chunks 0-3 for the BTree directory overflow entries.
+            // Only clear content for chunks not yet allocated — subsequent BTrees sharing this
+            // segment must NOT re-clear, as that would wipe existing directory entries.
+            for (int i = 0; i < DirectoryChunkCount; i++)
+            {
+                if (!_segment.IsChunkAllocated(i))
+                {
+                    _segment.ReserveChunk(i, true, changeSet);
+                }
+            }
+
+            // Register this BTree in the directory (append a new entry, cache its location)
+            var accessor = _segment.CreateChunkAccessor(changeSet);
+            try
+            {
+                RegisterInDirectory(stableId, ref accessor);
+            }
+            finally
+            {
+                accessor.Dispose();
+            }
         }
         else
         {
-            var ca = segment.CreateChunkAccessor();
-            Root = _storage.LoadNode(GetRootChunkId(ref ca));
-            ca.Dispose();
+            // Load path: find our entry in the directory by stableId, reconstruct per-instance state.
+            var accessor = _segment.CreateChunkAccessor();
+            try
+            {
+                FindInDirectory(stableId, ref accessor);
+
+                if (_count > 0)
+                {
+                    // Traverse the leftmost path to find Height and LinkList (leftmost leaf)
+                    Height = 1;
+                    var node = Root;
+                    while (!node.GetIsLeaf(ref accessor))
+                    {
+                        node = node.GetLeft(ref accessor);
+                        Height++;
+                    }
+                    LinkList = node;
+
+                    // Traverse the rightmost path to find ReverseLinkList (rightmost leaf)
+                    node = Root;
+                    while (!node.GetIsLeaf(ref accessor))
+                    {
+                        node = node.GetLastChild(ref accessor);
+                    }
+                    ReverseLinkList = node;
+                }
+            }
+            finally
+            {
+                accessor.Dispose();
+            }
         }
+    }
+
+    /// <summary>
+    /// Appends a new entry to the chunk 0 directory for this BTree.
+    /// Sets <c>_dirChunkId</c> and <c>_dirEntryOffset</c> for subsequent <see cref="SyncHeader"/> calls.
+    /// </summary>
+    private unsafe void RegisterInDirectory(short stableId, ref ChunkAccessor accessor)
+    {
+        var chunk0Addr = accessor.GetChunkAddress(0, true);
+        ref var header = ref Unsafe.AsRef<BTreeDirectoryHeader>(chunk0Addr);
+
+        // Directory chunks are zeroed on first reservation, so EntryCount is reliably 0 for a fresh segment.
+        int entryIndex = header.EntryCount;
+        if (entryIndex >= MaxDirectoryEntries)
+        {
+            throw new InvalidOperationException($"Maximum number of BTree indexes per segment exceeded ({MaxDirectoryEntries})");
+        }
+
+        (_dirChunkId, _dirEntryOffset) = ComputeEntryLocation(entryIndex, _segment.Stride);
+
+        var entryChunkAddr = accessor.GetChunkAddress(_dirChunkId, true);
+        ref var entry = ref Unsafe.AsRef<BTreeDirectoryEntry>(entryChunkAddr + _dirEntryOffset);
+        entry.StableId = stableId;
+        entry.Reserved = 0;
+        entry.RootChunkId = 0;
+        entry.Count = 0;
+
+        header.EntryCount = (ushort)(entryIndex + 1);
+    }
+
+    /// <summary>
+    /// Scans the chunk 0 directory for the entry matching <paramref name="stableId"/>.
+    /// Populates <c>_dirChunkId</c>, <c>_dirEntryOffset</c>, <c>_count</c>, and <c>Root</c>.
+    /// </summary>
+    private unsafe void FindInDirectory(short stableId, ref ChunkAccessor accessor)
+    {
+        var chunk0Addr = accessor.GetChunkAddress(0, false);
+        ref var header = ref Unsafe.AsRef<BTreeDirectoryHeader>(chunk0Addr);
+
+        int totalEntries = header.EntryCount;
+        int stride = _segment.Stride;
+
+        for (var i = 0; i < totalEntries; i++)
+        {
+            var (chunkId, offset) = ComputeEntryLocation(i, stride);
+            var entryChunkAddr = accessor.GetChunkAddress(chunkId, false);
+            ref var entry = ref Unsafe.AsRef<BTreeDirectoryEntry>(entryChunkAddr + offset);
+
+            if (entry.StableId == stableId)
+            {
+                _dirChunkId = chunkId;
+                _dirEntryOffset = offset;
+                _count = entry.Count;
+
+                var rootChunkId = entry.RootChunkId;
+                if (_count > 0 && rootChunkId > 0)
+                {
+                    Root = new NodeWrapper(_storage, rootChunkId);
+                }
+                return;
+            }
+        }
+
+        throw new InvalidOperationException($"BTree with stableId {stableId} not found in directory (entries: {totalEntries})");
+    }
+
+    /// <summary>
+    /// Computes which directory chunk and byte offset a given entry index maps to.
+    /// Chunk 0 has a 4-byte header; chunks 1-3 are pure entry storage.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static (int chunkId, int offsetInChunk) ComputeEntryLocation(int entryIndex, int stride)
+    {
+        int entriesInChunk0 = (stride - BTreeDirectoryHeader.Size) / BTreeDirectoryEntry.Size;
+        if (entryIndex < entriesInChunk0)
+        {
+            return (0, BTreeDirectoryHeader.Size + entryIndex * BTreeDirectoryEntry.Size);
+        }
+
+        int entriesPerChunk = stride / BTreeDirectoryEntry.Size;
+        int adjusted = entryIndex - entriesInChunk0;
+        return (1 + adjusted / entriesPerChunk, (adjusted % entriesPerChunk) * BTreeDirectoryEntry.Size);
     }
 
     public unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor) => Add(Unsafe.AsRef<TKey>(keyAddr), value, ref accessor);
@@ -427,6 +618,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         try
         {
             AddOrUpdateCore(ref args);
+            SyncHeader(ref accessor);
             activity?.SetTag(TyphonSpanAttributes.IndexOperation, "insert");
             return args.ElementId;
         }
@@ -455,6 +647,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         try
         {
             RemoveCore(ref args);
+            SyncHeader(ref accessor);
             value = args.Value;
             activity?.SetTag(TyphonSpanAttributes.IndexOperation, "delete");
             return args.Removed;
@@ -470,7 +663,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     public void CheckConsistency(ref ChunkAccessor accessor)
     {
         // Recursive check from Root to leaf
-        if (IsEmpty(ref accessor))
+        if (IsEmpty())
         {
             return;
         }
@@ -582,13 +775,6 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public bool RemoveValue(TKey key, int elementId, int value, ref ChunkAccessor accessor)
     {
-        var result = TryGet(key, ref accessor);
-        if (result.IsFailure)
-        {
-            return false;
-        }
-        var bufferId = result.Value;
-
         Activity activity = null;
         if (TelemetryConfig.BTreeActive)
         {
@@ -603,6 +789,15 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
         try
         {
+            // Lookup under exclusive lock to avoid race with concurrent Remove/RemoveValue
+            // that could delete the buffer between a shared-lock read and this exclusive section.
+            var leaf = FindLeaf(key, out var index, ref accessor);
+            if (index < 0)
+            {
+                return false;
+            }
+            var bufferId = leaf.GetItem(index, ref accessor).Value;
+
             var res = _storage.RemoveFromBuffer(bufferId, elementId, value, ref accessor);
             if (res == -1)
             {
@@ -619,6 +814,8 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
                 {
                     _storage.DeleteBuffer(args.Value, ref accessor);
                 }
+
+                SyncHeader(ref accessor);
             }
         }
         finally
@@ -633,12 +830,25 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public VariableSizedBufferAccessor<int> TryGetMultiple(TKey key, ref ChunkAccessor accessor)
     {
-        var result = TryGet(key, ref accessor);
-        if (result.IsFailure)
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
+        if (!_access.EnterSharedAccess(ref wc))
         {
-            return default;
+            ThrowHelper.ThrowLockTimeout("BTree/TryGetMultiple", TimeoutOptions.Current.BTreeLockTimeout);
         }
-        return _storage.GetBufferReadOnlyAccessor(result.Value, ref accessor);
+        try
+        {
+            var leaf = FindLeaf(key, out var index, ref accessor);
+            if (index < 0)
+            {
+                return default;
+            }
+            var bufferId = leaf.GetItem(index, ref accessor).Value;
+            return _storage.GetBufferReadOnlyAccessor(bufferId, ref accessor);
+        }
+        finally
+        {
+            _access.ExitSharedAccess();
+        }
     }
 
     #endregion
@@ -655,7 +865,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     private void RemoveCore(ref RemoveArguments args)
     {
         ref var accessor = ref args.Accessor;
-        if (IsEmpty(ref accessor))
+        if (IsEmpty())
         {
             return;
         }
@@ -671,11 +881,10 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         {
             args.SetRemovedValue(LinkList.PopFirstInternal(ref accessor).Value);
             Debug.Assert(Root == LinkList || LinkList.GetIsHalfFull(ref accessor));
-            DecCount(ref accessor);
-            if (IsEmpty(ref accessor))
+            DecCount();
+            if (IsEmpty())
             {
                 Root = LinkList = ReverseLinkList = default;
-                SetRootChunkId(ref args.Accessor, 0);
                 Height--;
             }
             return;
@@ -691,7 +900,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         {
             args.SetRemovedValue(ReverseLinkList.PopLastInternal(ref accessor).Value);
             Debug.Assert(Root == ReverseLinkList || ReverseLinkList.GetIsHalfFull(ref accessor));
-            DecCount(ref accessor); // here count never becomes zero.
+            DecCount(); // here count never becomes zero.
             return;
         }
 
@@ -700,7 +909,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
         if (args.Removed)
         {
-            DecCount(ref accessor);
+            DecCount();
         }
 
         if (merge && Root.GetLength(ref accessor) == 0)
@@ -711,7 +920,6 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
                 LinkList = default;
                 ReverseLinkList = default;
             }
-            SetRootChunkId(ref args.Accessor, Root.IsValid ? Root.ChunkId : 0);
             Height--;
         }
 
@@ -724,18 +932,17 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     private void AddOrUpdateCore(ref InsertArguments args)
     {
         ref var accessor = ref args.Accessor;
-        
-        if (IsEmpty(ref accessor))
+
+        if (IsEmpty())
         {
             Root = AllocNode(NodeStates.IsLeaf, ref accessor);
-            SetRootChunkId(ref accessor, Root.ChunkId);
             LinkList = Root;
             ReverseLinkList = LinkList;
             Height++;
         }
 
         // append optimization: if item key is in order, this may add item in O(1) operation.
-        int order = IsEmpty(ref accessor) ? 1 : args.Compare(args.Key, GetLast(ref accessor).Key);
+        int order = IsEmpty() ? 1 : args.Compare(args.Key, GetLast(ref accessor).Key);
         if (order > 0 && !ReverseLinkList.GetIsFull(ref accessor))
         {
             int value;
@@ -750,7 +957,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
                 value = args.GetValue();
             }
             ReverseLinkList.PushLast(new KeyValueItem(args.Key, value), ref accessor);
-            IncCount(ref accessor);
+            IncCount();
             return;
         }
 
@@ -759,6 +966,10 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             if (AllowMultiple)
             {
                 args.ElementId = _storage.Append(GetLast(ref accessor).Value, args.GetValue(), ref accessor);
+            }
+            else
+            {
+                ThrowHelper.ThrowUniqueConstraintViolation();
             }
             return;
         }
@@ -779,7 +990,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
                 value = args.GetValue();
             }
             LinkList.PushFirst(new KeyValueItem(args.Key, value), ref accessor);
-            IncCount(ref accessor);
+            IncCount();
             return;
         }
 
@@ -789,6 +1000,10 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             {
                 args.ElementId = _storage.Append(GetFirst(ref accessor).Value, args.GetValue(), ref accessor);
             }
+            else
+            {
+                ThrowHelper.ThrowUniqueConstraintViolation();
+            }
             return;
         }
 
@@ -797,7 +1012,11 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
         if (args.Added)
         {
-            IncCount(ref accessor);
+            IncCount();
+        }
+        else if (!AllowMultiple)
+        {
+            ThrowHelper.ThrowUniqueConstraintViolation();
         }
 
         // if split occurred at root, make a new root and increase height.
@@ -808,7 +1027,6 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
             newRoot.Insert(0, rightSplit.Value, ref accessor);
             Root = newRoot;
-            SetRootChunkId(ref accessor, Root.ChunkId);
             Height++;
         }
 
@@ -822,7 +1040,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     private NodeWrapper FindLeaf(TKey key, out int index, ref ChunkAccessor accessor)
     {
         index = -1;
-        if (IsEmpty(ref accessor))
+        if (IsEmpty())
         {
             return default;
         }

@@ -36,6 +36,11 @@ internal static class ThrowHelper
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static void ThrowTransactionTimeout(long transactionId, TimeSpan waitDuration) => throw new TransactionTimeoutException(transactionId, waitDuration);
 
+    // --- Index ---
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowUniqueConstraintViolation() => throw new UniqueConstraintViolationException();
+
     // --- Durability ---
 
     [MethodImpl(MethodImplOptions.NoInlining)]

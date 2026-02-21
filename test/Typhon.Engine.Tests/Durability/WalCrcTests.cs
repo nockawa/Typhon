@@ -162,6 +162,28 @@ public class WalCrcTests
         Assert.That(crcWithSkip, Is.EqualTo(crcReference));
     }
 
+    [Test]
+    public void ComputeSkipping_PageCrcUseCase_SkipsChecksumField()
+    {
+        // Simulate an 8192-byte page with random data, skipping PageChecksum at offset 8 (4 bytes)
+        var page = new byte[8192];
+        var rng = new Random(99);
+        rng.NextBytes(page);
+
+        var crcSkipping = WalCrc.ComputeSkipping(
+            page,
+            PageBaseHeader.PageChecksumOffset,
+            PageBaseHeader.PageChecksumSize);
+
+        // Reference: same page with the checksum field zeroed
+        var pageZeroed = (byte[])page.Clone();
+        Array.Clear(pageZeroed, PageBaseHeader.PageChecksumOffset, PageBaseHeader.PageChecksumSize);
+        var crcReference = WalCrc.Compute(pageZeroed);
+
+        Assert.That(crcSkipping, Is.EqualTo(crcReference));
+        Assert.That(crcSkipping, Is.Not.EqualTo(0u));
+    }
+
     #endregion
 
     #region Edge Cases

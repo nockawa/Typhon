@@ -1,5 +1,6 @@
 using JetBrains.Annotations;
 using System;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine;
@@ -81,65 +82,76 @@ internal ref struct ComponentRevisionManager
         return new ElementRevisionHandle(ref accessor, curChunkId, false, (short)indexInChunk);
     }
 
-    internal static unsafe void AddCompRev(Transaction.ComponentInfoBase info, ref Transaction.ComponentInfoBase.CompRevInfo compRevInfo, long tsn, ushort uowId, bool isDelete)
+    internal static unsafe void AddCompRev(Transaction.ComponentInfoBase info, ref Transaction.ComponentInfoBase.CompRevInfo compRevInfo, long tsn, 
+        ushort uowId, bool isDelete, bool lockAlreadyHeld = false)
     {
         ref var compRevTableAccessor = ref info.CompRevTableAccessor;
         var compContent = info.CompContentSegment;
 
         ref var firstHeader = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(compRevInfo.CompRevTableFirstChunkId, true);
 
-        // Enter exclusive access for the Revision Table
-        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.RevisionChainLockTimeout);
-        if (!firstHeader.Control.EnterExclusiveAccess(ref wc))
+        // Enter exclusive access for the Revision Table (skip if caller already holds the lock)
+        if (!lockAlreadyHeld)
         {
-            ThrowHelper.ThrowLockTimeout("RevisionChain/AddRevision", TimeoutOptions.Current.RevisionChainLockTimeout);
+            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.RevisionChainLockTimeout);
+            if (!firstHeader.Control.EnterExclusiveAccess(ref wc))
+            {
+                ThrowHelper.ThrowLockTimeout("RevisionChain/AddRevision", TimeoutOptions.Current.RevisionChainLockTimeout);
+            }
         }
 
-        // Check if we need to add one more chunk to the chain
-        if (ComputeRevElementCount(firstHeader.ChainLength) == firstHeader.ItemCount)
+        try
         {
-            GrowChain(info, compRevInfo.CompRevTableFirstChunkId, ref firstHeader);
+            // Check if we need to add one more chunk to the chain
+            if (ComputeRevElementCount(firstHeader.ChainLength) == firstHeader.ItemCount)
+            {
+                GrowChain(info, compRevInfo.CompRevTableFirstChunkId, ref firstHeader);
+            }
+
+            // Add our new entry
+            var newRevIndex = (short)(firstHeader.FirstItemIndex + firstHeader.ItemCount);
+            var indexInChunk = GetRevisionLocation(ref compRevTableAccessor, compRevInfo.CompRevTableFirstChunkId, newRevIndex, out var curChunkId);
+
+            Span<CompRevStorageElement> curChunkElements;
+
+            // Still in the first chunk? The elements are right after the header
+            if (compRevInfo.CompRevTableFirstChunkId == curChunkId)
+            {
+                curChunkElements = compRevTableAccessor.GetChunkAsSpan(compRevInfo.CompRevTableFirstChunkId, true)
+                    .Slice(sizeof(CompRevStorageHeader)).Cast<byte, CompRevStorageElement>();
+            }
+
+            // In another chunk, the subsequent ones have a one int header (the ID of the next chunk in the chain), then the elements
+            else
+            {
+                curChunkElements = compRevTableAccessor.GetChunkAsSpan(curChunkId, true).Slice(sizeof(int)).Cast<byte, CompRevStorageElement>();
+            }
+
+            // Allocate a new component
+            var componentChunkId = isDelete ? 0 : compContent.AllocateChunk(false);
+
+            // Add our new entry
+            curChunkElements[indexInChunk].TSN = tsn;
+            curChunkElements[indexInChunk].IsolationFlag = true;
+            curChunkElements[indexInChunk].UowId = uowId;
+            curChunkElements[indexInChunk].ComponentChunkId = componentChunkId;
+
+            // Update the compRevInfo
+            compRevInfo.PrevCompContentChunkId = compRevInfo.CurCompContentChunkId;
+            compRevInfo.PrevRevisionIndex = compRevInfo.CurRevisionIndex;
+            compRevInfo.CurCompContentChunkId = componentChunkId;
+            compRevInfo.CurRevisionIndex = newRevIndex;
+
+            // One more item, update the header
+            firstHeader.ItemCount++;
         }
-
-        // Add our new entry
-        var newRevIndex = (short)(firstHeader.FirstItemIndex + firstHeader.ItemCount);
-        var indexInChunk = GetRevisionLocation(ref compRevTableAccessor, compRevInfo.CompRevTableFirstChunkId, newRevIndex, out var curChunkId);
-
-        Span<CompRevStorageElement> curChunkElements;
-
-        // Still in the first chunk? The elements are right after the header
-        if (compRevInfo.CompRevTableFirstChunkId == curChunkId)
+        finally
         {
-            curChunkElements = compRevTableAccessor.GetChunkAsSpan(compRevInfo.CompRevTableFirstChunkId, true)
-                .Slice(sizeof(CompRevStorageHeader)).Cast<byte, CompRevStorageElement>();
+            if (!lockAlreadyHeld)
+            {
+                firstHeader.Control.ExitExclusiveAccess();
+            }
         }
-
-        // In another chunk, the subsequent ones have a one int header (the ID of the next chunk in the chain), then the elements
-        else
-        {
-            curChunkElements = compRevTableAccessor.GetChunkAsSpan(curChunkId, true).Slice(sizeof(int)).Cast<byte, CompRevStorageElement>();
-        }
-
-        // Allocate a new component
-        var componentChunkId = isDelete ? 0 : compContent.AllocateChunk(false);
-
-        // Add our new entry
-        curChunkElements[indexInChunk].TSN = tsn;
-        curChunkElements[indexInChunk].IsolationFlag = true;
-        curChunkElements[indexInChunk].UowId = uowId;
-        curChunkElements[indexInChunk].ComponentChunkId = componentChunkId;
-
-        // Update the compRevInfo
-        compRevInfo.PrevCompContentChunkId = compRevInfo.CurCompContentChunkId;
-        compRevInfo.PrevRevisionIndex = compRevInfo.CurRevisionIndex;
-        compRevInfo.CurCompContentChunkId = componentChunkId;
-        compRevInfo.CurRevisionIndex = newRevIndex;
-
-        // One more item, update the header
-        firstHeader.ItemCount++;
-
-        // Cleanups
-        firstHeader.Control.ExitExclusiveAccess();
     }
 
     internal static unsafe int AllocCompRevStorage(Transaction.ComponentInfoBase info, long tsn, ushort uowId, int firstChunkId)
@@ -157,6 +169,7 @@ internal ref struct ComponentRevisionManager
         header.ItemCount = 1;
         header.ChainLength = 1;
         header.LastCommitRevisionIndex = -1;
+        header.CommitSequence = 0;
 
         // Initialize the first element
         var elements = chunkSpan.Slice(sizeof(CompRevStorageHeader)).Cast<byte, CompRevStorageElement>();
@@ -166,30 +179,6 @@ internal ref struct ComponentRevisionManager
         elements[0].ComponentChunkId = firstChunkId;
 
         return chunkId;
-    }
-
-    /// <summary>
-    /// Clean up the revisions of a component, removing all the entries older than <paramref name="nextMinTSN"/>, releasing unused component chunks and
-    ///  defragmenting the revisions still being used.
-    /// </summary>
-    /// <param name="info">ComponentInfo object</param>
-    /// <param name="compRevInfo">Component Revision Info object</param>
-    /// <param name="compRevTableAccessor">The accessor</param>
-    /// <param name="nextMinTSN">The minimal TSN to keep revisions</param>
-    /// <remarks>
-    /// This method walks through the chain of revision chunks and builds a new one, only the first chunk is kept.
-    /// Thin wrapper around <see cref="CleanUpUnusedEntriesCore"/> that also updates the transaction-specific <paramref name="compRevInfo"/> cache.
-    /// </remarks>
-    internal static unsafe bool CleanUpUnusedEntries(Transaction.ComponentInfoBase info, ref Transaction.ComponentInfoBase.CompRevInfo compRevInfo,
-        ref ChunkAccessor compRevTableAccessor, long nextMinTSN)
-    {
-        var firstChunkId = compRevInfo.CompRevTableFirstChunkId;
-        var result = CleanUpUnusedEntriesCore(info.ComponentTable, firstChunkId, nextMinTSN, ref compRevTableAccessor, ref info.CompContentAccessor);
-
-        // As we defrag and move everything to the beginning of the chunk, the first revision is always at 0
-        compRevInfo.CurRevisionIndex = 0;
-
-        return result;
     }
 
     /// <summary>
@@ -203,10 +192,13 @@ internal ref struct ComponentRevisionManager
     /// <param name="compContentAccessor">Accessor for the component content segment</param>
     /// <returns><c>true</c> if the component is fully deleted (single tombstone remaining), <c>false</c> otherwise</returns>
     /// <remarks>
-    /// This method is transaction-agnostic and can be called from both the transaction commit path and the deferred cleanup path.
+    /// <para>This method is transaction-agnostic and can be called from both the transaction commit path and the lazy cleanup path.</para>
+    /// <para>A <b>sentinel</b> revision is preserved when the first kept entry has TSN &gt; nextMinTSN: this is the last committed
+    /// revision before the cutoff, needed because active transactions at MinTSN may have cached its content chunk ID.</para>
     /// </remarks>
     internal static unsafe bool CleanUpUnusedEntriesCore(ComponentTable ct, int firstChunkId, long nextMinTSN,
-        ref ChunkAccessor compRevTableAccessor, ref ChunkAccessor compContentAccessor)
+        ref ChunkAccessor compRevTableAccessor, ref ChunkAccessor compContentAccessor,
+        List<DeferredCleanupManager.DeferredChunkFreeEntry> deferredChunkFrees = null)
     {
         ref var firstChunkHeader = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(firstChunkId);
 
@@ -215,14 +207,13 @@ internal ref struct ComponentRevisionManager
         tempChunk.Clear();
         tempChunk.Split(out Span<CompRevStorageHeader> tempFirstHeader, out Span<CompRevStorageElement> tempElements);
         tempFirstHeader[0].ChainLength = 1;
+        tempFirstHeader[0].CommitSequence = firstChunkHeader.CommitSequence;
         var curNextChunkId = tempChunk.Slice(0, sizeof(int)).Cast<byte, int>();
         var curDestElements = tempElements;
         var curDestIndex = 0;
         var curDestIndexInChunk = 0;
         var skipCount = 0;
         var hasCollections = ct.HasCollections;
-
-        int newChunkId = 0;
 
         // Collect chunk IDs to free AFTER enumeration completes (avoid use-after-free in circular buffer)
         // Maximum chunks we might need to free is ChainLength - 1 (we keep the first chunk)
@@ -233,14 +224,20 @@ internal ref struct ComponentRevisionManager
             using var enumerator = new RevisionEnumerator(ref compRevTableAccessor, firstChunkId, false, true);
             var prevChunkId = enumerator.IndexInChunk == 0 ? enumerator.CurChunkId : 0;
             var maxSkipCount = firstChunkHeader.ItemCount;
-            var skipping = true;
+
+            // Sentinel: delayed-free pattern — each newer committed skip candidate frees the previous one's chunk.
+            // The final sentinel is either emitted to the compacted output or freed, depending on the first kept entry's TSN.
+            CompRevStorageElement sentinelEntry = default;
+            int sentinelCompChunkId = 0;
+            bool hasSentinel = false;
+            bool inSkipPhase = true;
+
             while (enumerator.MoveNext())
             {
                 bool changedChunk = (enumerator.CurChunkId != prevChunkId) && (prevChunkId != 0);
                 if (changedChunk)
                 {
                     // Mark the previous revision table chunk for freeing if it's not the first chunk (which we keep and reuse)
-                    // Note: prevChunkId is a revision table chunk ID, not a component content chunk ID
                     // IMPORTANT: We defer freeing until after enumeration to avoid use-after-free in circular buffers
                     if (prevChunkId != firstChunkId)
                     {
@@ -249,59 +246,90 @@ internal ref struct ComponentRevisionManager
                     prevChunkId = enumerator.CurChunkId;
                 }
 
-                if (skipping)
+                // Skip phase: remove entries older than the cutoff, track the last committed one as sentinel. Active uncommitted entries (IsolationFlag=true)
+                // must NOT enter the skip phase — they belong to transactions that will commit later. Freeing them would corrupt their data.
+                // IsolationFlag check is before maxSkipCount decrement to avoid wasting the guard count.
+                if (inSkipPhase && !enumerator.Current.IsolationFlag && (--maxSkipCount > 0) && (enumerator.Current.TSN < nextMinTSN))
                 {
-                    // If the entry is older than the minimum tick, or we reached the maximum number of entries we can skip,
-                    //  we can remove it and skip to the next one
-                    if ((--maxSkipCount > 0) && (enumerator.Current.TSN < nextMinTSN))
+                    var revChunkId = enumerator.Current.ComponentChunkId;
+                    bool isCommitted = (enumerator.Current.TSN > 0);
+
+                    if (isCommitted)
                     {
-                        // Check if there's a component chunk to free
-                        var revChunkId = enumerator.Current.ComponentChunkId;
-                        if (revChunkId != 0)
+                        // Supersede previous sentinel: free/defer its chunk, promote current entry
+                        if (hasSentinel)
                         {
-                            if (hasCollections)
-                            {
-                                foreach (var kvp in ct.ComponentCollectionVSBSByOffset)
-                                {
-                                    var bufferId = compContentAccessor.GetChunkAsReadOnlySpan(revChunkId).Slice(kvp.Key).Cast<byte, int>()[0];
-                                    var collAccessor = kvp.Value.Segment.CreateChunkAccessor();
-                                    kvp.Value.BufferRelease(bufferId, ref collAccessor);
-                                    collAccessor.Dispose();
-                                }
-                            }
-
-                            ct.ComponentSegment.FreeChunk(revChunkId);
+                            DeferOrFreeContentChunk(ct, ref compContentAccessor, sentinelCompChunkId, hasCollections, deferredChunkFrees);
                         }
-
-                        // Clear the entry
-                        enumerator.CurrentAsSpan.Clear();
-
-                        skipCount++;
-                        continue;
+                        sentinelEntry = enumerator.Current;
+                        sentinelCompChunkId = revChunkId;
+                        hasSentinel = true;
+                    }
+                    else
+                    {
+                        // Voided entry (all fields zeroed from rollback): ComponentChunkId is 0, effectively a no-op.
+                        DeferOrFreeContentChunk(ct, ref compContentAccessor, revChunkId, hasCollections, deferredChunkFrees);
                     }
 
-                    // We stop skipping at the first valid entry
-                    skipping = false;
+                    enumerator.CurrentAsSpan.Clear();
+                    skipCount++;
+                    continue;
                 }
 
-                curDestElements[curDestIndexInChunk++] = enumerator.Current;            // Copy the revision to the destination
-                tempFirstHeader[0].ItemCount++;                                         // Update the item count
-                if (!enumerator.Current.IsolationFlag)                                  // Update the last committed revision index if this is not an isolated entry
+                // Transition out of skip phase: resolve sentinel
+                int newChunkId;
+                if (inSkipPhase)
+                {
+                    inSkipPhase = false;
+                    if (hasSentinel)
+                    {
+                        if (enumerator.Current.TSN >= nextMinTSN || enumerator.Current.IsolationFlag)
+                        {
+                            // Keep sentinel: the first kept entry is at or beyond the cutoff, OR is an active uncommitted entry (IsolationFlag=true) invisible
+                            // to readers — the sentinel provides the read baseline for transactions at MinTSN.
+                            curDestElements[curDestIndexInChunk++] = sentinelEntry;
+                            tempFirstHeader[0].ItemCount++;
+                            tempFirstHeader[0].LastCommitRevisionIndex = (short)curDestIndex;
+                            curDestIndex++;
+                            skipCount--; // Sentinel was counted as skipped but is being kept
+
+                            if (curDestIndexInChunk == curDestElements.Length)
+                            {
+                                curDestIndexInChunk = 0;
+                                tempFirstHeader[0].ChainLength++;
+
+                                newChunkId = ct.CompRevTableSegment.AllocateChunk(false);
+                                curNextChunkId[0] = newChunkId;
+                                var newChunkSpan = compRevTableAccessor.GetChunkAsSpan(newChunkId, true);
+                                newChunkSpan.Split(out curNextChunkId, out curDestElements);
+                            }
+                        }
+                        else
+                        {
+                            // Sentinel not needed: the first kept entry is visible to all remaining transactions
+                            DeferOrFreeContentChunk(ct, ref compContentAccessor, sentinelCompChunkId, hasCollections, deferredChunkFrees);
+                        }
+                    }
+                }
+
+                // Copy entry to compacted output
+                curDestElements[curDestIndexInChunk++] = enumerator.Current;
+                tempFirstHeader[0].ItemCount++;
+                if (!enumerator.Current.IsolationFlag)
                 {
                     tempFirstHeader[0].LastCommitRevisionIndex = (short)curDestIndex;
                 }
-                curDestIndex++;                                                         // One more item in the destination
+                curDestIndex++;
 
-                // If the current chunk is full, allocate a new one
                 if (curDestIndexInChunk == curDestElements.Length)
                 {
-                    curDestIndexInChunk = 0;                                            // Reset the index in chunk
-                    tempFirstHeader[0].ChainLength++;                                   // One more chunk in the chain
+                    curDestIndexInChunk = 0;
+                    tempFirstHeader[0].ChainLength++;
 
-                    newChunkId = ct.CompRevTableSegment.AllocateChunk(false);            // Allocate a new chunk
-                    curNextChunkId[0] = newChunkId;                                     // Set the next chunk ID of the current chunk
+                    newChunkId = ct.CompRevTableSegment.AllocateChunk(false);
+                    curNextChunkId[0] = newChunkId;
                     var newChunkSpan = compRevTableAccessor.GetChunkAsSpan(newChunkId, true);
-                    newChunkSpan.Split(out curNextChunkId, out curDestElements);         // Update our "cur" variables
+                    newChunkSpan.Split(out curNextChunkId, out curDestElements);
                 }
             }
         }
@@ -325,13 +353,102 @@ internal ref struct ComponentRevisionManager
         }
 
         tempFirstHeader[0].FirstItemRevision = firstChunkHeader.FirstItemRevision + skipCount;
-        var tempControl = firstChunkHeader.Control;
-        tempChunk.CopyTo(compRevTableAccessor.GetChunkAsSpan(firstChunkId, true));
+
+        // When cleanup removes entries (skipCount > 0), increment CommitSequence so that any reader who captured ReadCommitSequence before cleanup will see
+        // a mismatch at commit time. Without this, a reader could: capture CS → cleanup compacts chain → reader walks stale chain → commit
+        // sees CS == ReadCS → no conflict detected, even though the chain was restructured.
+        if (skipCount > 0)
+        {
+            tempFirstHeader[0].CommitSequence++;
+        }
+
+        // Copy the compacted data to the first chunk, but SKIP the Control field (offset 4, size 4)
+        // to avoid zeroing it. The caller holds the exclusive lock and the Control must remain intact.
+        var destSpan = compRevTableAccessor.GetChunkAsSpan(firstChunkId, true);
+        var controlFieldEnd = sizeof(int) + sizeof(int); // NextChunkId (4) + Control (4) = 8
+        tempChunk.Slice(0, sizeof(int)).CopyTo(destSpan.Slice(0, sizeof(int)));
+        tempChunk.Slice(controlFieldEnd).CopyTo(destSpan.Slice(controlFieldEnd));
         firstChunkHeader = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(firstChunkId);
-        firstChunkHeader.Control = tempControl;
 
         // Is the component totally deleted? Return true, otherwise false
         return (tempFirstHeader[0].ItemCount == 1 && tempElements[0].ComponentChunkId == 0);
+    }
+
+    /// <summary>
+    /// Either defers content chunk freeing (when <paramref name="deferredChunkFrees"/> is non-null) or frees immediately.
+    /// The deferred path collects entries for later freeing when all referencing transactions have departed.
+    /// The immediate path is used during the transaction commit path where the caller is the tail.
+    /// </summary>
+    private static void DeferOrFreeContentChunk(ComponentTable ct, ref ChunkAccessor compContentAccessor, int chunkId, bool hasCollections,
+        List<DeferredCleanupManager.DeferredChunkFreeEntry> deferredChunkFrees)
+    {
+        if (chunkId == 0)
+        {
+            return;
+        }
+
+        if (deferredChunkFrees != null)
+        {
+            deferredChunkFrees.Add(new DeferredCleanupManager.DeferredChunkFreeEntry { Table = ct, ChunkId = chunkId });
+            return;
+        }
+
+        FreeCompContentChunk(ct, ref compContentAccessor, chunkId, hasCollections);
+    }
+
+    /// <summary>
+    /// Searches the revision chain for an entry matching the given identifiers and returns its absolute revision index. Used to recover from stale cached
+    /// indices after chain compaction.
+    /// </summary>
+    /// <param name="compRevTableAccessor">Accessor for revision table chunks</param>
+    /// <param name="firstChunkId">First chunk of the revision chain</param>
+    /// <param name="componentChunkId">Content chunk ID to match (unique for non-delete entries)</param>
+    /// <param name="tsn">Transaction TSN — used as discriminator for delete entries (ComponentChunkId = 0)</param>
+    /// <returns>The absolute revision index if found; -1 otherwise.</returns>
+    internal static short FindRevisionIndexByChunkId(ref ChunkAccessor compRevTableAccessor, int firstChunkId, int componentChunkId, long tsn = 0)
+    {
+        using var enumerator = new RevisionEnumerator(ref compRevTableAccessor, firstChunkId, false, true);
+        while (enumerator.MoveNext())
+        {
+            if (componentChunkId != 0)
+            {
+                // Non-delete: ComponentChunkId is unique per allocation — unambiguous match
+                if (enumerator.Current.ComponentChunkId == componentChunkId)
+                {
+                    return (short)(enumerator.Header.FirstItemIndex + enumerator.RevisionIndex);
+                }
+            }
+            else if (enumerator.Current.IsolationFlag && enumerator.Current.TSN == tsn)
+            {
+                // Delete entry: ComponentChunkId = 0, disambiguate by TSN + uncommitted flag
+                return (short)(enumerator.Header.FirstItemIndex + enumerator.RevisionIndex);
+            }
+        }
+        return -1;
+    }
+
+    /// <summary>
+    /// Releases a component content chunk and its associated collection buffers.
+    /// </summary>
+    private static void FreeCompContentChunk(ComponentTable ct, ref ChunkAccessor compContentAccessor, int chunkId, bool hasCollections)
+    {
+        if (chunkId == 0)
+        {
+            return;
+        }
+
+        if (hasCollections)
+        {
+            foreach (var kvp in ct.ComponentCollectionVSBSByOffset)
+            {
+                var bufferId = compContentAccessor.GetChunkAsReadOnlySpan(chunkId).Slice(kvp.Key).Cast<byte, int>()[0];
+                var collAccessor = kvp.Value.Segment.CreateChunkAccessor();
+                kvp.Value.BufferRelease(bufferId, ref collAccessor);
+                collAccessor.Dispose();
+            }
+        }
+
+        ct.ComponentSegment.FreeChunk(chunkId);
     }
 
     private static void GrowChain(Transaction.ComponentInfoBase info, int firstChunkId, ref CompRevStorageHeader firstHeader)

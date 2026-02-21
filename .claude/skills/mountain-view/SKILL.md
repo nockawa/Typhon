@@ -8,6 +8,29 @@ argument-hint: (no arguments needed)
 
 Get a comprehensive "helicopter view" of all work in the Typhon project - past, present, and future. Understand the full scope of what's been done and what remains.
 
+## Help
+
+If `$ARGUMENTS` contains `--help` or `-h`, display the following and **stop** — do not execute the workflow.
+
+```
+/mountain-view
+
+  Full backlog analysis — see the entire mountain of work ahead.
+
+Arguments:
+  --help, -h      Show this help
+
+What it does:
+  1. Gathers all open and closed issues
+  2. Calculates totals by status, priority, area, and phase
+  3. Estimates total remaining effort
+  4. Calculates velocity and completion projections
+  5. Highlights attention items (P0s, stale, unestimated)
+
+Examples:
+  /mountain-view
+```
+
 ## Purpose
 
 This skill answers the question: **"How big is the mountain to climb?"**
@@ -23,14 +46,25 @@ It provides:
 
 ### 1. Gather All Issues
 
+**Open issues:**
+
+Use `mcp__GitHub__list_issues` with:
+- owner: `"nockawa"`
+- repo: `"Typhon"`
+- state: `"open"`
+- per_page: `100`
+
+**Closed issues (for velocity calculation):**
+
+Use `mcp__GitHub__list_issues` with:
+- owner: `"nockawa"`
+- repo: `"Typhon"`
+- state: `"closed"`
+- per_page: `100`
+
+**All project items with full field data** -- pipe directly to Python (see `.claude/skills/_helpers.md` Section 2):
+
 ```bash
-# All open issues
-gh issue list --repo nockawa/Typhon --state open --json number,title,labels,createdAt --limit 200
-
-# All closed issues (for velocity calculation)
-gh issue list --repo nockawa/Typhon --state closed --json number,title,labels,closedAt --limit 200
-
-# All project items with full field data — pipe directly to Python (see _helpers.md)
 gh project item-list 7 --owner nockawa --limit 200 --format json 2>&1 | python3 -c "
 import json, sys
 items = json.load(sys.stdin)['items']
@@ -103,112 +137,106 @@ Based on velocity and remaining effort:
 ### 6. Generate Report
 
 ```
-🏔️ Typhon Mountain View
-══════════════════════════════════════════════════════
+Typhon Mountain View
+======================================================
 
-📊 OVERALL STATISTICS
-────────────────────────────────────────────────────────
+OVERALL STATISTICS
+------------------------------------------------------
 
 Total Issues: 85
-  ├── Open: 47
-  │   ├── Backlog: 22
-  │   ├── Research: 5
-  │   ├── Ready: 12
-  │   ├── In Progress: 6
-  │   └── Review: 2
-  └── Closed: 38
+  Open: 47
+    Backlog: 22
+    Research: 5
+    Ready: 12
+    In Progress: 6
+    Review: 2
+  Closed: 38
 
 Completion Rate: 45%
-████████████████████░░░░░░░░░░░░░░░░░░░░░░░░ 45%
 
-📈 VELOCITY (Last 30 Days)
-────────────────────────────────────────────────────────
+VELOCITY (Last 30 Days)
+------------------------------------------------------
 
 Issues Closed: 12
 Average: 3 issues/week
-Trend: ↑ Accelerating (+20% vs previous month)
+Trend: Accelerating (+20% vs previous month)
 
-📦 BY PHASE
-────────────────────────────────────────────────────────
+BY PHASE
+------------------------------------------------------
 
 Telemetry & Observability
-█████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░ 40%
-└── 8/20 issues complete | ~24 days remaining
+  40% -- 8/20 issues complete | ~24 days remaining
 
 Query Engine
-███░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 10%
-└── 2/18 issues complete | ~48 days remaining
+  10% -- 2/18 issues complete | ~48 days remaining
 
 Write-Ahead Logging (WAL)
-░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 0%
-└── 0/12 issues complete | ~36 days remaining
+  0% -- 0/12 issues complete | ~36 days remaining
 
 Reliability
-██████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 15%
-└── 3/20 issues complete | ~51 days remaining
+  15% -- 3/20 issues complete | ~51 days remaining
 
 Infrastructure
-██████████████████████████░░░░░░░░░░░░░░░░░ 60%
-└── 6/10 issues complete | ~12 days remaining
+  60% -- 6/10 issues complete | ~12 days remaining
 
-🎯 BY PRIORITY
-────────────────────────────────────────────────────────
+BY PRIORITY
+------------------------------------------------------
 
-P0-Critical:  2 open  ⚠️ (should be 0!)
+P0-Critical:  2 open (should be 0!)
 P1-High:     15 open
 P2-Medium:   22 open
 P3-Low:       8 open
 
-🗂️ BY AREA
-────────────────────────────────────────────────────────
+BY AREA
+------------------------------------------------------
 
-Storage:      12 issues (25%)  ████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-Transactions:  8 issues (17%)  ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-MVCC:          7 issues (15%)  ███████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-Indexes:       6 issues (13%)  ██████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-Database:      5 issues (10%)  █████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-Concurrency:   4 issues (8%)   ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-Memory:        3 issues (6%)   ███░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-Schema:        2 issues (4%)   ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+Storage:      12 issues (25%)
+Transactions:  8 issues (17%)
+MVCC:          7 issues (15%)
+Indexes:       6 issues (13%)
+Database:      5 issues (10%)
+Concurrency:   4 issues (8%)
+Memory:        3 issues (6%)
+Schema:        2 issues (4%)
 
-⏱️ EFFORT ESTIMATE
-────────────────────────────────────────────────────────
+EFFORT ESTIMATE
+------------------------------------------------------
 
 Total Remaining Effort: ~120 days
-  ├── XS items: 8 (4 days)
-  ├── S items: 15 (7.5 days)
-  ├── M items: 12 (18 days)
-  ├── L items: 8 (32 days)
-  ├── XL items: 4 (32 days)
-  └── Unestimated: 10 (~25 days assumed)
+  XS items: 8 (4 days)
+  S items: 15 (7.5 days)
+  M items: 12 (18 days)
+  L items: 8 (32 days)
+  XL items: 4 (32 days)
+  Unestimated: 10 (~25 days assumed)
 
-📅 PROJECTED COMPLETION
-────────────────────────────────────────────────────────
+PROJECTED COMPLETION
+------------------------------------------------------
 
 At current velocity (3 issues/week):
-├── Optimistic: ~16 weeks (April 2026)
-├── Realistic:  ~20 weeks (May 2026)
-└── Pessimistic: ~28 weeks (August 2026)
+  Optimistic: ~16 weeks
+  Realistic:  ~20 weeks
+  Pessimistic: ~28 weeks
 
-🚨 ATTENTION ITEMS
-────────────────────────────────────────────────────────
+ATTENTION ITEMS
+------------------------------------------------------
 
 Critical (P0) Issues:
-  • #23 "Memory leak in page cache" - 5 days old
-  • #31 "Transaction deadlock" - 2 days old
+  - #23 "Memory leak in page cache" - 5 days old
+  - #31 "Transaction deadlock" - 2 days old
 
 Oldest Open Issues (potential stale):
-  • #12 "String table defragmentation" - 45 days
-  • #8 "Query optimizer prototype" - 38 days
+  - #12 "String table defragmentation" - 45 days
+  - #8 "Query optimizer prototype" - 38 days
 
 Large Unestimated:
-  • #40 "WAL implementation" - likely XL
-  • #41 "Checkpoint mechanism" - likely L
+  - #40 "WAL implementation" - likely XL
+  - #41 "Checkpoint mechanism" - likely L
 
-══════════════════════════════════════════════════════
+======================================================
 
-💡 The mountain is tall but climbable. Focus on P0/P1 items
-   and complete the Telemetry phase before starting Query.
+The mountain is tall but climbable. Focus on P0/P1 items
+and complete the Telemetry phase before starting Query.
 ```
 
 ### 7. Offer Actions

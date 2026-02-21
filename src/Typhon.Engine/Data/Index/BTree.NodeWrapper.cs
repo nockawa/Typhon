@@ -218,10 +218,13 @@ public abstract partial class BTree<TKey>
             }
             else
             {
-                var curItem = GetItem(index, ref accessor);
-                args.ElementId = _storage.Append(curItem.Value, args.GetValue(), ref accessor);
-                //KeyValueItem.ChangeValue(ref item, args.GetUpdateValue(item.Value)); // update item value
-                //Items[index] = item; // set new item
+                if (_storage.Owner.AllowMultiple)
+                {
+                    var curItem = GetItem(index, ref accessor);
+                    args.ElementId = _storage.Append(curItem.Value, args.GetValue(), ref accessor);
+                }
+                // Unique index: GetValue() not called, so Added stays false.
+                // AddOrUpdateCore detects !Added && !AllowMultiple and throws UniqueConstraintViolationException.
             }
 
             return rightLeaf;
@@ -429,9 +432,9 @@ public abstract partial class BTree<TKey>
                     }
                     else // merge with either sibling.
                     {
-                        merge = true; // set merge
                         if (relatives.HasTrueLeftSibling) // current node will be removed from parent.
                         {
+                            merge = true;
                             GetPrevious(ref accessor).MergeLeft(this, ref accessor); // merge from left to keep items in order.
                             var p = GetPrevious(ref accessor);
                             p.SetNext(GetNext(ref accessor), ref accessor); // fix linked list
@@ -446,7 +449,8 @@ public abstract partial class BTree<TKey>
                         }
                         else if (relatives.HasTrueRightSibling) // right sibling will be removed from parent
                         {
-                            MergeLeft(GetNext(ref accessor), ref accessor); // merge from right to keep items in order. 
+                            merge = true;
+                            MergeLeft(GetNext(ref accessor), ref accessor); // merge from right to keep items in order.
                             SetNext(GetNext(ref accessor).GetNext(ref accessor), ref accessor); // fix linked list
                             if (GetNext(ref accessor).IsValid)
                             {
@@ -457,10 +461,8 @@ public abstract partial class BTree<TKey>
                             Validate(this, ref accessor);
                             Validate(GetNext(ref accessor), ref accessor);
                         }
-                        else
-                        {
-                            Debug.Fail("leaf must either have true left or true right sibling.");
-                        }
+                        // else: root leaf — no siblings to merge with.
+                        // The root is allowed to be below half-full per B-tree invariants.
                     }
                 }
 

@@ -8,6 +8,29 @@ argument-hint: (no arguments needed)
 
 Generate a comprehensive weekly review of Typhon development progress, identify stale items, and suggest priorities.
 
+## Help
+
+If `$ARGUMENTS` contains `--help` or `-h`, display the following and **stop** — do not execute the workflow.
+
+```
+/weekly-review
+
+  Weekly development review — progress summary, stale items, upcoming priorities.
+
+Arguments:
+  --help, -h      Show this help
+
+What it does:
+  1. Gathers recent activity (closed issues, new issues, commits)
+  2. Shows current work status by category
+  3. Identifies stale items needing attention
+  4. Reports phase progress and documentation health
+  5. Suggests priorities for next week
+
+Examples:
+  /weekly-review
+```
+
 ## Purpose
 
 This skill provides a "pulse check" on the project:
@@ -20,23 +43,40 @@ This skill provides a "pulse check" on the project:
 
 ### 1. Gather Recent Activity
 
-```bash
-# Issues closed in last 7 days
-gh issue list --repo nockawa/Typhon --state closed --json number,title,closedAt,labels --limit 50
+**Closed issues (last 7 days):**
 
-# Issues opened in last 7 days
-gh issue list --repo nockawa/Typhon --state open --json number,title,createdAt,labels --limit 50
+Use `mcp__GitHub__list_issues` with:
+- owner: `"nockawa"`
+- repo: `"Typhon"`
+- state: `"closed"`
+- per_page: `50`
 
-# Recent commits
-gh api repos/nockawa/Typhon/commits --jq '.[0:20] | .[] | {sha: .sha[0:7], message: .commit.message, date: .commit.author.date}'
-```
+Filter the returned results to those closed within the last 7 days based on the `closed_at` field.
+
+**Open issues (recently created):**
+
+Use `mcp__GitHub__list_issues` with:
+- owner: `"nockawa"`
+- repo: `"Typhon"`
+- state: `"open"`
+- per_page: `50`
+
+Filter to those created within the last 7 days based on the `created_at` field.
+
+**Recent commits:**
+
+Use `mcp__GitHub__list_commits` with:
+- owner: `"nockawa"`
+- repo: `"Typhon"`
+
+Returns an array of commit objects with sha, message, date, author.
 
 ### 2. Check Current Work Status
 
-**Always pipe `gh project item-list` directly to Python** (see `.claude/skills/_helpers.md`):
+**Always pipe `gh project item-list` directly to Python** (see `.claude/skills/_helpers.md` Section 2):
 
 ```bash
-# All project items with their status — pipe directly to Python
+# All project items with their status -- pipe directly to Python
 gh project item-list 7 --owner nockawa --limit 200 --format json 2>&1 | python3 -c "
 import json, sys
 items = json.load(sys.stdin)['items']
@@ -92,25 +132,25 @@ ls claude/design/
 ### 6. Generate Report
 
 ```
-📊 Typhon Weekly Review
-══════════════════════════════════════════════════════
+Typhon Weekly Review
+======================================================
 
-📅 Week of [DATE]
+Week of [DATE]
 
-## 🎉 Completed This Week
+## Completed This Week
 
 | # | Title | Area |
 |---|-------|------|
 | #42 | Add telemetry to PagedMMF | Storage |
 | #43 | Fix revision chain bug | MVCC |
 
-## 🚧 Currently In Progress
+## Currently In Progress
 
 | # | Title | Days | Priority |
 |---|-------|------|----------|
 | #47 | Transaction telemetry | 3 | P1 |
 
-## ⚠️ Needs Attention
+## Needs Attention
 
 ### Stale Items
 - #38 "Query optimizer" - In Progress for 12 days (!)
@@ -119,28 +159,28 @@ ls claude/design/
 ### Blocked
 - #44 waiting on #43 (now resolved)
 
-## 📈 Phase Progress
+## Phase Progress
 
 ### Telemetry & Observability
-████████░░░░░░░░░░░░ 40% (4/10 issues)
+40% (4/10 issues)
 
 ### Query Engine
-░░░░░░░░░░░░░░░░░░░░ 0% (0/5 issues) - not started
+0% (0/5 issues) - not started
 
-## 🎯 Suggested Priorities for Next Week
+## Suggested Priorities for Next Week
 
 Based on priority and phase goals:
 1. #48 Transaction telemetry (P1, Telemetry phase)
 2. #49 Query parser basics (P1, Query phase)
 3. #50 Error handling improvements (P2, Reliability)
 
-## 📚 Documentation Status
+## Documentation Status
 
 - Design docs: 5 active, 2 could move to reference/
 - Overview docs: Last updated 14 days ago
 - ADRs: 30 total, none added this week
 
-══════════════════════════════════════════════════════
+======================================================
 ```
 
 ### 7. Offer Actions

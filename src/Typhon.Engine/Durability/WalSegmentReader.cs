@@ -6,7 +6,7 @@ namespace Typhon.Engine;
 
 /// <summary>
 /// Sequential reader for WAL segment files during crash recovery. Opens a segment, validates the header,
-/// and iterates records with CRC chain validation. Stops at end-of-data or CRC break (truncation).
+/// and iterates chunks with CRC chain validation. Stops at end-of-data or CRC break (truncation).
 /// </summary>
 internal sealed class WalSegmentReader : IDisposable
 {
@@ -28,11 +28,11 @@ internal sealed class WalSegmentReader : IDisposable
     private int _recordsRemainingInFrame;
 
     // Record-level iteration within a frame
-    private int _recordOffset;        // Current record position within frame
+    private int _recordOffset;        // Current chunk position within frame
 
     // CRC chain state
-    private uint _lastRecordCrc;
-    private bool _isFirstRecord;
+    private uint _lastFooterCrc;
+    private bool _isFirstChunk;
     private bool _opened;
 
     private WalSegmentHeader _segmentHeader;
@@ -43,10 +43,10 @@ internal sealed class WalSegmentReader : IDisposable
     /// <summary>True if a CRC chain break was detected during iteration (indicates crash truncation).</summary>
     public bool WasTruncated { get; private set; }
 
-    /// <summary>The LSN of the last successfully validated record.</summary>
+    /// <summary>The LSN of the last successfully validated chunk.</summary>
     public long LastValidLSN { get; private set; }
 
-    /// <summary>Number of records successfully read.</summary>
+    /// <summary>Number of chunks successfully read.</summary>
     public int RecordsRead { get; private set; }
 
     public WalSegmentReader(IWalFileIO fileIO)
@@ -122,8 +122,8 @@ internal sealed class WalSegmentReader : IDisposable
         _frameEnd = 0;
         _recordOffset = 0;
         _recordsRemainingInFrame = 0;
-        _isFirstRecord = true;
-        _lastRecordCrc = 0;
+        _isFirstChunk = true;
+        _lastFooterCrc = 0;
         WasTruncated = false;
         LastValidLSN = 0;
         RecordsRead = 0;
@@ -132,22 +132,22 @@ internal sealed class WalSegmentReader : IDisposable
     }
 
     /// <summary>
-    /// Reads the next WAL record from the segment. Returns false at end-of-data or CRC break.
+    /// Reads the next WAL chunk from the segment. Returns false at end-of-data or CRC break.
     /// </summary>
-    /// <param name="header">The record header.</param>
-    /// <param name="payload">The record payload data.</param>
-    /// <returns>True if a valid record was read; false at end-of-segment or on CRC break.</returns>
-    public bool TryReadNext(out WalRecordHeader header, out ReadOnlySpan<byte> payload)
+    /// <param name="chunkHeader">The chunk header.</param>
+    /// <param name="body">The chunk body (between chunk header and footer).</param>
+    /// <returns>True if a valid chunk was read; false at end-of-segment or on CRC break.</returns>
+    public bool TryReadNext(out WalChunkHeader chunkHeader, out ReadOnlySpan<byte> body)
     {
-        header = default;
-        payload = default;
+        chunkHeader = default;
+        body = default;
 
         if (!_opened || _segmentData == null)
         {
             return false;
         }
 
-        // Advance to next frame if we've consumed all records in the current one
+        // Advance to next frame if we've consumed all chunks in the current one
         while (_recordsRemainingInFrame == 0)
         {
             if (!AdvanceToNextFrame())
@@ -156,70 +156,73 @@ internal sealed class WalSegmentReader : IDisposable
             }
         }
 
-        // Read the record at _recordOffset
-        if (_recordOffset + WalRecordHeader.SizeInBytes > _frameEnd)
+        // Read the chunk header at _recordOffset
+        if (_recordOffset + WalChunkHeader.SizeInBytes > _frameEnd)
         {
-            // Not enough room for a record header — frame is corrupt or exhausted
             _recordsRemainingInFrame = 0;
             return false;
         }
 
-        header = Unsafe.As<byte, WalRecordHeader>(ref _segmentData[_recordOffset]);
+        chunkHeader = Unsafe.As<byte, WalChunkHeader>(ref _segmentData[_recordOffset]);
 
-        // Validate total record length
-        if (header.TotalRecordLength < WalRecordHeader.SizeInBytes)
+        // Validate minimum chunk size: header (8) + footer (4) = 12
+        if (chunkHeader.ChunkSize < WalChunkHeader.SizeInBytes + WalChunkFooter.SizeInBytes)
         {
             WasTruncated = true;
             return false;
         }
 
-        if (_recordOffset + (int)header.TotalRecordLength > _frameEnd)
+        // Validate chunk fits within frame
+        if (_recordOffset + chunkHeader.ChunkSize > _frameEnd)
         {
             WasTruncated = true;
             return false;
         }
 
-        // Extract payload
-        var payloadStart = _recordOffset + WalRecordHeader.SizeInBytes;
-        var payloadLen = header.PayloadLength;
-        if (payloadStart + payloadLen > _frameEnd)
-        {
-            WasTruncated = true;
-            return false;
-        }
+        // Read footer CRC
+        var footerOffset = _recordOffset + chunkHeader.ChunkSize - WalChunkFooter.SizeInBytes;
+        var footerCrc = Unsafe.As<byte, uint>(ref _segmentData[footerOffset]);
 
-        payload = _segmentData.AsSpan(payloadStart, payloadLen);
+        // Compute CRC over [0, ChunkSize - 4) — header + body
+        var crcSpan = _segmentData.AsSpan(_recordOffset, chunkHeader.ChunkSize - WalChunkFooter.SizeInBytes);
+        var computedCrc = WalCrc.Compute(crcSpan);
 
-        // CRC validation: compute CRC over header+payload with CRC field zeroed
-        var recordSpan = _segmentData.AsSpan(_recordOffset, WalRecordHeader.SizeInBytes + payloadLen);
-        var crcFieldOffset = (int)Marshal.OffsetOf<WalRecordHeader>(nameof(WalRecordHeader.CRC));
-        var computedCrc = WalCrc.ComputeSkipping(recordSpan, crcFieldOffset, sizeof(uint));
-
-        if (computedCrc != header.CRC)
+        if (computedCrc != footerCrc)
         {
             WasTruncated = true;
             return false;
         }
 
         // PrevCRC chain validation
-        if (_isFirstRecord)
+        if (_isFirstChunk)
         {
-            _isFirstRecord = false;
+            _isFirstChunk = false;
         }
-        else if (header.PrevCRC != 0 && header.PrevCRC != _lastRecordCrc)
+        else if (chunkHeader.PrevCRC != _lastFooterCrc)
         {
-            // CRC chain break (PrevCRC=0 on first record of a new UoW is acceptable)
             WasTruncated = true;
             return false;
         }
 
-        _lastRecordCrc = header.CRC;
-        LastValidLSN = header.LSN;
+        // Update chain state
+        _lastFooterCrc = footerCrc;
+
+        // Extract body: bytes between chunk header and footer
+        var bodyStart = _recordOffset + WalChunkHeader.SizeInBytes;
+        var bodyLen = chunkHeader.ChunkSize - WalChunkHeader.SizeInBytes - WalChunkFooter.SizeInBytes;
+        body = _segmentData.AsSpan(bodyStart, bodyLen);
+
+        // Read LSN from body[0..8] (convention: LSN is always at body offset 0)
+        if (bodyLen >= sizeof(long))
+        {
+            LastValidLSN = Unsafe.As<byte, long>(ref _segmentData[bodyStart]);
+        }
+
         RecordsRead++;
         _recordsRemainingInFrame--;
 
-        // Advance record offset to next record
-        _recordOffset += (int)header.TotalRecordLength;
+        // Advance to next chunk
+        _recordOffset += chunkHeader.ChunkSize;
 
         return true;
     }

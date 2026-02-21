@@ -6,19 +6,19 @@ argument-hint: [sub-issue number]
 
 # Start Working on a Sub-Issue (Subtask)
 
-Begin work on a sub-issue within an umbrella issue workflow. This is the lightweight counterpart to `/start-task` — it handles subtask activation without branch creation or design doc creation (those already exist from the umbrella).
+Begin work on a sub-issue within an umbrella issue workflow. This is the lightweight counterpart to `/start-task` -- it handles subtask activation without branch creation or design doc creation (those already exist from the umbrella).
 
 **Typical workflow:**
 ```
-/start-task #36          ← umbrella issue, creates branch
-/start-subtask #37       ← this skill
+/start-task #36          <- umbrella issue, creates branch
+/start-subtask #37       <- this skill
 ... implement #37 ...
-/complete-subtask #37    ← marks #37 done
-/start-subtask #38       ← this skill
+/complete-subtask #37    <- marks #37 done
+/start-subtask #38       <- this skill
 ... implement #38 ...
 /complete-subtask #38
 ... etc ...
-/complete-task #36       ← closes umbrella, merges PR, cleans up
+/complete-task #36       <- closes umbrella, merges PR, cleans up
 ```
 
 ## Input
@@ -27,26 +27,49 @@ $ARGUMENTS should contain the sub-issue number (e.g., `37` or `#37`).
 
 If no argument provided, detect the current umbrella (from the branch name or recent `/start-task`) and list its uncompleted sub-issues via `AskUserQuestion`.
 
+## Help
+
+If `$ARGUMENTS` contains `--help` or `-h`, display the following and **stop** — do not execute the workflow.
+
+```
+/start-subtask [#N]
+
+  Start working on a sub-issue of an umbrella issue.
+
+Arguments:
+  #N              Sub-issue number (e.g., 37 or #37)
+  --help, -h      Show this help
+
+What it does:
+  1. Fetches sub-issue details
+  2. Detects and validates parent (umbrella) issue
+  3. Checks dependency ordering
+  4. Updates project status to In Progress
+  5. Updates design doc status (if exists)
+
+Examples:
+  /start-subtask #37
+  /start-subtask 38
+  /start-subtask
+```
+
 ## Workflow
 
 ### 1. Fetch Sub-Issue Details
 
-```bash
-gh issue view <number> --json number,title,state,body,labels
-```
+Use `mcp__GitHub__get_issue` with:
+- owner: `"nockawa"`
+- repo: `"Typhon"`
+- issue_number: `<number>`
 
-Confirm the issue is open. If already closed, report that it's already done and exit.
+Confirm the issue is open (state = "open"). If already closed, report that it's already done and exit.
 
 ### 2. Detect Parent (Umbrella) Issue
 
-Search the sub-issue body for a parent reference. Use the same detection logic as `/complete-subtask`:
+From the sub-issue body (returned in step 1), search for a parent reference. Use the same detection logic as `/complete-subtask`:
 - `Parent: #NN` or `Part of #NN`
 - `**GitHub Issue:** #NN (umbrella)`
 - Any `#NN` reference where NN is a different issue with sub-issue checkboxes
-
-```bash
-gh issue view <number> --json body --jq '.body'
-```
 
 If multiple candidates or none found, ask:
 
@@ -62,9 +85,10 @@ Options:
 
 Fetch the parent issue and verify it's "In Progress":
 
-```bash
-gh issue view <parent_number> --json number,title,state
-```
+Use `mcp__GitHub__get_issue` with:
+- owner: `"nockawa"`
+- repo: `"Typhon"`
+- issue_number: `<parent_number>`
 
 If the parent is **not** In Progress, warn:
 
@@ -73,18 +97,14 @@ Question: "Parent #<parent> is not In Progress. Are you sure you want to start t
 Header: "Status"
 Options:
   - Proceed anyway (description: "Start the sub-issue regardless of parent status")
-  - Cancel (description: "Don't start — run /start-task on the parent first")
+  - Cancel (description: "Don't start -- run /start-task on the parent first")
 ```
 
 If "Cancel", stop and suggest running `/start-task <parent>` first.
 
 ### 4. Check Dependencies
 
-Fetch the parent issue body and examine the sub-issue checklist for ordering clues:
-
-```bash
-gh issue view <parent_number> --json body --jq '.body'
-```
+From the parent issue body (already fetched in step 3), examine the sub-issue checklist for ordering clues.
 
 Look at the checkbox list in the parent. If the sub-issue being started has **unchecked sub-issues listed above it** in the checklist, warn about potential dependency:
 
@@ -92,7 +112,7 @@ Look at the checkbox list in the parent. If the sub-issue being started has **un
 Question: "Sub-issues listed before #<number> in the parent are not yet complete: #<earlier1>, #<earlier2>. These might be dependencies. Proceed?"
 Header: "Dependencies"
 Options:
-  - Proceed anyway (description: "I know the order — this one is fine to start now")
+  - Proceed anyway (description: "I know the order -- this one is fine to start now")
   - Cancel (description: "Let me complete those first")
 ```
 
@@ -100,7 +120,7 @@ If all prior sub-issues are checked (or there are none before this one), skip si
 
 ### 5. Update Project Status to In Progress
 
-**Project item lookup:** Read `.claude/skills/_helpers.md` for the robust patterns.
+**Project item lookup:** Read `.claude/skills/_helpers.md` Section 2 for the robust patterns.
 
 ```bash
 # Step 1: Find the item ID by piping directly to Python (no temp files)
@@ -147,10 +167,10 @@ If no design doc is found or referenced, skip this step silently.
 ```
 Starting sub-issue #<number>: <title>
 
-  Parent: #<parent> — <parent_title>
-  Project: Status → In Progress
+  Parent: #<parent> -- <parent_title>
+  Project: Status -> In Progress
   Dependencies: All prior sub-issues complete / Warnings acknowledged
-  Design: claude/design/<path> → Status: In progress (or "no design doc")
+  Design: claude/design/<path> -> Status: In progress (or "no design doc")
 
 Ready to implement!
 ```
@@ -175,9 +195,9 @@ If the design doc doesn't have a `**Status:**` line:
 - Skip the update
 - Report that the design doc format wasn't recognized
 
-### No argument — list sub-issues from parent
+### No argument -- list sub-issues from parent
 
-If no argument is provided, try to detect the current umbrella from the git branch name (e.g., `feature/36-error-foundation` → #36). Fetch the parent issue body and list unchecked sub-issues:
+If no argument is provided, try to detect the current umbrella from the git branch name (e.g., `feature/36-error-foundation` -> #36). Fetch the parent issue body and list unchecked sub-issues:
 
 ```
 Question: "Which sub-issue would you like to start?"

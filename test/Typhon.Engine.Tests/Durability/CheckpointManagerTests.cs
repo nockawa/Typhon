@@ -21,6 +21,7 @@ public class CheckpointManagerTests : AllocatorTestBase
     private UowRegistry _uowRegistry;
     private WalManager _walManager;
     private ResourceOptions _resourceOptions;
+    private StagingBufferPool _stagingPool;
 
     private static string CurrentDatabaseName => $"T_Chkpt_{TestContext.CurrentContext.Test.Name}_db";
 
@@ -40,6 +41,8 @@ public class CheckpointManagerTests : AllocatorTestBase
     {
         _walManager?.Dispose();
         _walManager = null;
+        _stagingPool?.Dispose();
+        _stagingPool = null;
         _uowRegistry?.Dispose();
         _uowRegistry = null;
         _mmf?.Dispose();
@@ -89,13 +92,15 @@ public class CheckpointManagerTests : AllocatorTestBase
         var latched = _mmf.TryLatchPageExclusive(rootMemPageIdx);
         var rootPage = _mmf.GetPage(rootMemPageIdx);
         cs.AddByMemPageIndex(rootMemPageIdx);
-        ref var header = ref rootPage.As<RootFileHeader>();
+        ref var header = ref rootPage.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
         header.UowRegistrySPI = segment.RootPageIndex;
         _mmf.UnlatchPageExclusive(rootMemPageIdx);
         cs.SaveChanges();
 
         _uowRegistry = new UowRegistry(segment, _mmf, _epochManager, MemoryAllocator, AllocationResource);
         _uowRegistry.Initialize();
+
+        _stagingPool = new StagingBufferPool(MemoryAllocator, AllocationResource);
     }
 
     /// <summary>
@@ -151,7 +156,7 @@ public class CheckpointManagerTests : AllocatorTestBase
         CreateTestInfrastructure();
         _walManager = CreateWalManager();
 
-        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, _stagingPool, AllocationResource);
         ckpt.Start();
 
         SpinWait.SpinUntil(() => ckpt.IsRunning, 2000);
@@ -165,7 +170,7 @@ public class CheckpointManagerTests : AllocatorTestBase
         CreateTestInfrastructure();
         _walManager = CreateWalManager();
 
-        var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+        var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, _stagingPool, AllocationResource);
         ckpt.Start();
         SpinWait.SpinUntil(() => ckpt.IsRunning, 2000);
 
@@ -180,7 +185,7 @@ public class CheckpointManagerTests : AllocatorTestBase
         CreateTestInfrastructure();
         _walManager = CreateWalManager();
 
-        var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+        var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, _stagingPool, AllocationResource);
         ckpt.Start();
 
         ckpt.Dispose();
@@ -193,7 +198,7 @@ public class CheckpointManagerTests : AllocatorTestBase
         CreateTestInfrastructure();
         _walManager = CreateWalManager();
 
-        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, _stagingPool, AllocationResource);
 
         Assert.That(ckpt.CheckpointLsn, Is.EqualTo(0));
         Assert.That(ckpt.IsRunning, Is.False);
@@ -207,7 +212,7 @@ public class CheckpointManagerTests : AllocatorTestBase
         CreateTestInfrastructure();
         _walManager = CreateWalManager();
 
-        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource, initialCheckpointLsn: 42);
+        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, _stagingPool, AllocationResource, initialCheckpointLsn: 42);
 
         Assert.That(ckpt.CheckpointLsn, Is.EqualTo(42));
     }
@@ -224,7 +229,7 @@ public class CheckpointManagerTests : AllocatorTestBase
         _walManager = CreateWalManager();
         ProduceWalRecords(_walManager);
 
-        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, _stagingPool, AllocationResource);
 
         var durableLsn = _walManager.DurableLsn;
         ckpt.RunCheckpointCycle(durableLsn);
@@ -253,7 +258,7 @@ public class CheckpointManagerTests : AllocatorTestBase
             // Don't call SaveChanges — leave page dirty
         }
 
-        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, _stagingPool, AllocationResource);
 
         var durableLsn = _walManager.DurableLsn;
         ckpt.RunCheckpointCycle(durableLsn);
@@ -278,7 +283,7 @@ public class CheckpointManagerTests : AllocatorTestBase
         // Use a long interval so only ForceCheckpoint triggers the cycle
         _resourceOptions.CheckpointIntervalMs = 60000;
 
-        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, _stagingPool, AllocationResource);
         ckpt.Start();
         SpinWait.SpinUntil(() => ckpt.IsRunning, 2000);
 
@@ -302,7 +307,7 @@ public class CheckpointManagerTests : AllocatorTestBase
         // Short interval to trigger quickly
         _resourceOptions.CheckpointIntervalMs = 50;
 
-        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, _stagingPool, AllocationResource);
         ckpt.Start();
 
         // Wait for at least one checkpoint via timer
@@ -335,7 +340,7 @@ public class CheckpointManagerTests : AllocatorTestBase
             Assert.That(entry.State, Is.EqualTo(UnitOfWorkState.WalDurable));
         }
 
-        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, _stagingPool, AllocationResource);
         ckpt.RunCheckpointCycle(_walManager.DurableLsn);
 
         // Verify it's Committed after checkpoint
@@ -390,7 +395,7 @@ public class CheckpointManagerTests : AllocatorTestBase
         _walManager = CreateWalManager();
         ProduceWalRecords(_walManager);
 
-        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+        using var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, _stagingPool, AllocationResource);
 
         var durableLsn = _walManager.DurableLsn;
         ckpt.RunCheckpointCycle(durableLsn);
@@ -400,7 +405,7 @@ public class CheckpointManagerTests : AllocatorTestBase
         {
             _mmf.RequestPageEpoch(0, guard.Epoch, out var memPageIdx);
             var page = _mmf.GetPage(memPageIdx);
-            ref var header = ref page.As<RootFileHeader>();
+            ref var header = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
             Assert.That(header.CheckpointLSN, Is.EqualTo(durableLsn));
         }
     }
@@ -424,7 +429,7 @@ public class CheckpointManagerTests : AllocatorTestBase
         // Use short interval so the first cycle runs before dispose
         _resourceOptions.CheckpointIntervalMs = 50;
 
-        var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, AllocationResource);
+        var ckpt = new CheckpointManager(_mmf, _uowRegistry, _walManager, _resourceOptions, _epochManager, _stagingPool, AllocationResource);
         ckpt.Start();
         SpinWait.SpinUntil(() => ckpt.IsRunning, 2000);
 

@@ -1,0 +1,36 @@
+{
+  "defaults": {
+    "min_coverage_pct": 0.0,
+    "regression_pct": 5.0,
+    "improvement_pct": 5.0,
+    "min_runs_for_trend": 2,
+    "baseline_window": 3
+  },
+  "source_dir": "src/Typhon.Engine",
+  "area_order": [
+    "Data",
+    "Execution",
+    "Transaction",
+    "Durability",
+    "Storage",
+    "Segments",
+    "Memory",
+    "Allocators",
+    "Concurrency",
+    "Index",
+    "Revision",
+    "Schema",
+    "Bridge",
+    "Collections",
+    "Resources",
+    "Observability",
+    "Timer",
+    "Errors",
+    "Primitives",
+    "Hosting",
+    "Utilities",
+    "Misc"
+  ],
+  "areas": {},
+  "class_overrides": {}
+}

@@ -22,6 +22,20 @@
     "WorkloadBenchmarks": "Workload",
     "IndexLookupBenchmarks": "Index"
   },
+  "category_order": [
+    "EndToEnd",
+    "Workload",
+    "Data",
+    "MVCC",
+    "Epoch",
+    "BTree",
+    "Index",
+    "Storage",
+    "ChunkAccessor",
+    "Collections",
+    "Primitives",
+    "Concurrency"
+  ],
   "categories": {
     "Epoch": { "regression_pct": 8.0 },
     "ChunkAccessor": { "regression_pct": 8.0 },
@@ -36,23 +50,50 @@
   "benchmarks": {
     "EpochGuardBenchmarks.EnterExit": {
       "regression_pct": 5.0,
-      "target_ns": 5.0
+      "target_ns": 4.0
     },
     "ChunkAccessorBenchmarks.MRU_Hit": {
       "regression_pct": 5.0,
-      "target_ns": 5.0
+      "target_ns": 2.0
     },
     "ChunkAccessorBenchmarks.SIMD_Hit_4Chunks": {
-      "target_ns": 8.0
+      "target_ns": 3.0
     },
     "ChunkAccessorBenchmarks.Eviction_17Chunks": {
-      "target_ns": 25.0
+      "target_ns": 10.0
     },
     "ChunkAccessorBenchmarks.CommitChanges_AllDirty": {
       "target_ns": 100.0
     },
     "ChunkAccessorBenchmarks.Dispose_16Slots": {
-      "target_ns": 150.0
+      "target_ns": 100.0
+    },
+    "ComponentTableBenchmarks.CreateEntity_SingleComponent": {
+      "target_ns": 3300.0
+    },
+    "ComponentTableBenchmarks.ReadComponent_ById": {
+      "target_ns": 670.0
+    },
+    "ComponentTableBenchmarks.UpdateComponent_SingleField": {
+      "target_ns": 1700.0
+    },
+    "TransactionBenchmarks.Transaction_CreateReadCommit(EntityCount=100)": {
+      "target_ns": 3600.0
+    },
+    "TransactionBenchmarks.Transaction_CreateReadCommit(EntityCount=1000)": {
+      "target_ns": 3500.0
+    },
+    "TransactionBenchmarks.Transaction_BulkRead(EntityCount=100)": {
+      "target_ns": 20000.0
+    },
+    "TransactionBenchmarks.Transaction_BulkRead(EntityCount=1000)": {
+      "target_ns": 260000.0
+    },
+    "TransactionBenchmarks.Transaction_BulkUpdate(EntityCount=100)": {
+      "target_ns": 80000.0
+    },
+    "TransactionBenchmarks.Transaction_BulkUpdate(EntityCount=1000)": {
+      "target_ns": 1020000.0
     }
   }
 }
