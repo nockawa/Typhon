@@ -14,7 +14,6 @@ internal ref struct CommitContext
     public ref ComponentInfoBase.CompRevInfo CompRevInfo;
     public ConcurrencyConflictSolver Solver;
     public ConcurrencyConflictHandler Handler;
-    public bool IsRollback;
     public ref UnitOfWorkContext Ctx;
 
     // Hoisted from per-entity to per-commit: determined once before the entity loop

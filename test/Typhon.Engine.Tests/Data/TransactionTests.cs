@@ -1015,6 +1015,361 @@ class TransactionTests : TestBase<TransactionTests>
         }
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // Phase 2 Safety Net — Rollback Path Tests (Issue #93, Step 2.1)
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Rollback of a created entity frees the revision table chunk. A subsequent create+commit
+    /// must succeed (fresh storage, no stale references from the rolled-back create).
+    /// </summary>
+    [Test]
+    public void Rollback_Created_FreesRevTableChunk()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        // Create and rollback
+        long e1;
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(100);
+            e1 = t.CreateEntity(ref a);
+            Assert.That(e1, Is.GreaterThan(0));
+            Assert.That(t.Rollback(), Is.True);
+        }
+
+        // Entity should not be readable
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA _), Is.False, "Rolled-back created entity should not be readable");
+        }
+
+        // A fresh create+commit should succeed (storage is clean)
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a2 = new CompA(200);
+            var e2 = t.CreateEntity(ref a2);
+            Assert.That(e2, Is.GreaterThan(0));
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        // Verify the new entity is readable
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA _), Is.False, "Original rolled-back entity should still not be readable");
+        }
+    }
+
+    /// <summary>
+    /// Rolling back an update voids the revision element — the original committed value remains readable.
+    /// </summary>
+    [Test]
+    public void Rollback_Updated_OriginalValuePreserved()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(10);
+            e1 = t.CreateEntity(ref a);
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        // Update and rollback
+        {
+            using var t = dbe.CreateQuickTransaction();
+            t.ReadEntity(e1, out CompA _);
+            var updated = new CompA(999);
+            Assert.That(t.UpdateEntity(e1, ref updated), Is.True);
+            Assert.That(t.Rollback(), Is.True);
+        }
+
+        // Original value should still be readable
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA result), Is.True);
+            Assert.That(result.A, Is.EqualTo(10), "Original value should be preserved after rollback of update");
+        }
+    }
+
+    /// <summary>
+    /// Rolling back a delete voids the revision element — the entity remains readable with its original value.
+    /// </summary>
+    [Test]
+    public void Rollback_Deleted_EntityStillReadable()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(42);
+            e1 = t.CreateEntity(ref a);
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        // Delete and rollback
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.DeleteEntity<CompA>(e1), Is.True);
+            Assert.That(t.Rollback(), Is.True);
+        }
+
+        // Entity should still be readable
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA result), Is.True, "Entity should still be readable after rollback of delete");
+            Assert.That(result.A, Is.EqualTo(42));
+        }
+    }
+
+    /// <summary>
+    /// Rollback with multiple component types processes all of them.
+    /// </summary>
+    [Test]
+    public void Rollback_MultipleComponents_AllProcessed()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(1);
+            var b = new CompB(2, 3.0f);
+            var c = new CompC("test");
+            e1 = t.CreateEntity(ref a, ref b, ref c);
+            Assert.That(e1, Is.GreaterThan(0));
+            Assert.That(t.Rollback(), Is.True);
+        }
+
+        // None of the components should be readable
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA _), Is.False, "CompA should not be readable after rollback");
+            Assert.That(t.ReadEntity(e1, out CompB _), Is.False, "CompB should not be readable after rollback");
+            Assert.That(t.ReadEntity(e1, out CompC _), Is.False, "CompC should not be readable after rollback");
+        }
+    }
+
+    /// <summary>
+    /// Rollback of an empty transaction (no operations) returns true.
+    /// State remains Created because the rollback short-circuits before the state transition.
+    /// </summary>
+    [Test]
+    public void Rollback_EmptyTransaction_Succeeds()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        using var t = dbe.CreateQuickTransaction();
+        Assert.That(t.State, Is.EqualTo(Transaction.TransactionState.Created));
+        Assert.That(t.Rollback(), Is.True, "Rollback of empty transaction should succeed");
+        Assert.That(t.State, Is.EqualTo(Transaction.TransactionState.Created),
+            "State remains Created — empty rollback short-circuits before state transition");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Phase 2 Safety Net — Commit Path Tests (Issue #93, Step 2.2)
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Simple create+commit then update+commit verifies the LCRI (LastCommitRevisionIndex) is properly
+    /// updated, allowing the second transaction to see and update the committed value.
+    /// </summary>
+    [Test]
+    public void Commit_CreateThenUpdate_LCRIUpdated()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(10);
+            e1 = t.CreateEntity(ref a);
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        // Update in a second transaction
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA existing), Is.True);
+            Assert.That(existing.A, Is.EqualTo(10));
+            var updated = new CompA(20);
+            Assert.That(t.UpdateEntity(e1, ref updated), Is.True);
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        // Verify the updated value
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA result), Is.True);
+            Assert.That(result.A, Is.EqualTo(20), "Value should reflect the second commit");
+        }
+    }
+
+    /// <summary>
+    /// Two concurrent transactions update the same entity. The first commits, then the second commits
+    /// with a conflict handler. Verifies the handler is invoked and its resolution is committed.
+    /// </summary>
+    [Test]
+    public void Commit_WithConflict_HandlerInvoked()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(10);
+            e1 = t.CreateEntity(ref a);
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        // T1 reads and updates
+        using var t1 = dbe.CreateQuickTransaction();
+        t1.ReadEntity(e1, out CompA _);
+        var u1 = new CompA(100);
+        t1.UpdateEntity(e1, ref u1);
+
+        // T2 reads, updates, and commits first
+        {
+            using var t2 = dbe.CreateQuickTransaction();
+            t2.ReadEntity(e1, out CompA _);
+            var u2 = new CompA(200);
+            t2.UpdateEntity(e1, ref u2);
+            Assert.That(t2.Commit(), Is.True);
+        }
+
+        // T1 commits with conflict handler — should resolve to sum of committed + committing
+        var handlerInvoked = false;
+        t1.Commit((ref ConcurrencyConflictSolver solver) =>
+        {
+            handlerInvoked = true;
+            // Resolve: take committed value (200 from T2)
+            solver.TakeCommitted<CompA>();
+        });
+
+        Assert.That(handlerInvoked, Is.True, "Conflict handler should have been invoked");
+
+        // Verify the resolved value
+        {
+            using var tRead = dbe.CreateQuickTransaction();
+            Assert.That(tRead.ReadEntity(e1, out CompA result), Is.True);
+            Assert.That(result.A, Is.EqualTo(200), "Should reflect the handler's TakeCommitted resolution");
+        }
+    }
+
+    /// <summary>
+    /// Two concurrent transactions update the same entity without a conflict handler.
+    /// The last-committed value wins.
+    /// </summary>
+    [Test]
+    public void Commit_WithConflict_NoHandler_LastWins()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(10);
+            e1 = t.CreateEntity(ref a);
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        // T1 reads and updates
+        using var t1 = dbe.CreateQuickTransaction();
+        t1.ReadEntity(e1, out CompA _);
+        var u1 = new CompA(100);
+        t1.UpdateEntity(e1, ref u1);
+
+        // T2 reads, updates, and commits first
+        {
+            using var t2 = dbe.CreateQuickTransaction();
+            t2.ReadEntity(e1, out CompA _);
+            var u2 = new CompA(200);
+            t2.UpdateEntity(e1, ref u2);
+            Assert.That(t2.Commit(), Is.True);
+        }
+
+        // T1 commits without handler — "last wins"
+        Assert.That(t1.Commit(), Is.True);
+
+        // Verify the last-committed value (T1's value)
+        {
+            using var tRead = dbe.CreateQuickTransaction();
+            Assert.That(tRead.ReadEntity(e1, out CompA result), Is.True);
+            Assert.That(result.A, Is.EqualTo(100), "Last-committed value (T1) should win");
+        }
+    }
+
+    /// <summary>
+    /// Deleting an entity with secondary indices removes the index entries on commit.
+    /// Uses CompD which has [Index] on fields A, B, and C.
+    /// </summary>
+    [Test]
+    public void Commit_Delete_RemovesSecondaryIndices()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        var d = new CompD(1.0f, 42, 3.14);
+        {
+            using var t = dbe.CreateQuickTransaction();
+            e1 = t.CreateEntity(ref d);
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        // Verify entity exists in primary key index before delete
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompD readD), Is.True);
+            Assert.That(readD.B, Is.EqualTo(42));
+        }
+
+        // Delete and commit
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.DeleteEntity<CompD>(e1), Is.True);
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        // Entity should not be readable
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompD _), Is.False, "Deleted entity should not be readable");
+        }
+    }
+
+    /// <summary>
+    /// Commit after rollback returns false.
+    /// </summary>
+    [Test]
+    public void Commit_AfterRollback_ReturnsFalse()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        using var t = dbe.CreateQuickTransaction();
+        var a = new CompA(1);
+        t.CreateEntity(ref a);
+
+        Assert.That(t.Rollback(), Is.True);
+        Assert.That(t.Commit(), Is.False, "Commit after rollback should return false");
+        Assert.That(t.State, Is.EqualTo(Transaction.TransactionState.Rollbacked), "State should remain Rollbacked");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Phase 0 Safety Net (continued)
+    // ═══════════════════════════════════════════════════════════════
+
     /// <summary>
     /// Test 0.5: Verifies that committing a transaction with zero entity operations still
     /// processes deferred cleanup when the transaction is the chain tail.

@@ -9,7 +9,7 @@ namespace Typhon.Engine;
 internal static class WalSerializer
 {
     /// <summary>
-    /// Serializes all committed component changes into the WAL commit buffer. Called after CommitComponent loop completes (all conflicts resolved,
+    /// Serializes all committed component changes into the WAL commit buffer. Called after CommitComponentCore loop completes (all conflicts resolved,
     /// revisions visible) but before State = Committed.
     /// </summary>
     /// <returns>The highest LSN assigned to the serialized records, or 0 if nothing was serialized.</returns>
