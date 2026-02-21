@@ -920,12 +920,11 @@ class TransactionTests : TestBase<TransactionTests>
     }
 
     /// <summary>
-    /// Test 0.3: Verifies that CRUD operations after commit/rollback return appropriate failure codes.
-    /// Documents that ReadEntity has no state guard (unlike Create/Update/Delete) — this
-    /// inconsistency will be addressed in Phase 4.
+    /// Test 0.3: Verifies that CRUD operations after commit/rollback throw InvalidOperationException.
+    /// ReadEntity has no state guard — reads remain allowed by design.
     /// </summary>
     [Test]
-    public void CrudAfterCommitOrRollback_ReturnsFailure()
+    public void CrudAfterCommitOrRollback_ThrowsInvalidOperation()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
@@ -938,15 +937,14 @@ class TransactionTests : TestBase<TransactionTests>
             Assert.That(t.Commit(), Is.True);
 
             var a2 = new CompA(99);
-            Assert.That(t.CreateEntity(ref a2), Is.EqualTo(-1), "CreateEntity after commit should return -1");
+            Assert.Throws<InvalidOperationException>(() => t.CreateEntity(ref a2), "CreateEntity after commit should throw");
 
             var a3 = new CompA(100);
-            Assert.That(t.UpdateEntity(e1, ref a3), Is.False, "UpdateEntity after commit should return false");
+            Assert.Throws<InvalidOperationException>(() => t.UpdateEntity(e1, ref a3), "UpdateEntity after commit should throw");
 
-            Assert.That(t.DeleteEntity<CompA>(e1), Is.False, "DeleteEntity after commit should return false");
+            Assert.Throws<InvalidOperationException>(() => t.DeleteEntity<CompA>(e1), "DeleteEntity after commit should throw");
 
-            // ReadEntity after commit: NO state guard — documents current inconsistency.
-            // The read proceeds because ReadEntity does not check State > InProgress.
+            // ReadEntity after commit: no state guard — reads remain allowed by design
             var readResult = t.ReadEntity(e1, out CompA _);
             Assert.That(readResult, Is.True, "ReadEntity has no state guard — reads succeed on committed data");
 
@@ -961,14 +959,14 @@ class TransactionTests : TestBase<TransactionTests>
             Assert.That(t.Rollback(), Is.True);
 
             var a2 = new CompA(99);
-            Assert.That(t.CreateEntity(ref a2), Is.EqualTo(-1), "CreateEntity after rollback should return -1");
+            Assert.Throws<InvalidOperationException>(() => t.CreateEntity(ref a2), "CreateEntity after rollback should throw");
 
             var a3 = new CompA(100);
-            Assert.That(t.UpdateEntity(e2, ref a3), Is.False, "UpdateEntity after rollback should return false");
+            Assert.Throws<InvalidOperationException>(() => t.UpdateEntity(e2, ref a3), "UpdateEntity after rollback should throw");
 
-            Assert.That(t.DeleteEntity<CompA>(e2), Is.False, "DeleteEntity after rollback should return false");
+            Assert.Throws<InvalidOperationException>(() => t.DeleteEntity<CompA>(e2), "DeleteEntity after rollback should throw");
 
-            // ReadEntity after rollback: NO state guard — entity was rolled back so read finds nothing
+            // ReadEntity after rollback: no state guard — entity was rolled back so read finds nothing
             var readResult = t.ReadEntity(e2, out CompA _);
             Assert.That(readResult, Is.False, "ReadEntity after rollback — rolled-back entity should not be found");
 

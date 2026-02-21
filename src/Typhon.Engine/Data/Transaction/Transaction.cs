@@ -141,6 +141,35 @@ public unsafe class Transaction : IDisposable
 #endif
     }
 
+    /// <summary>Throws if the transaction cannot accept new operations.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void EnsureMutable()
+    {
+        if (State > TransactionState.InProgress)
+        {
+            ThrowHelper.ThrowInvalidOp($"Cannot perform CRUD on a transaction in state {State}");
+        }
+    }
+
+    /// <summary>Validates and performs a state transition. Illegal transitions assert in Debug.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void TransitionTo(TransactionState newState)
+    {
+        Debug.Assert(IsLegalTransition(State, newState),
+            $"Illegal transaction state transition: {State} → {newState}");
+        State = newState;
+    }
+
+    private static bool IsLegalTransition(TransactionState from, TransactionState to) => (from, to) switch
+    {
+        (TransactionState.Created, TransactionState.InProgress) => true,
+        (TransactionState.Created, TransactionState.Committed) => true,
+        (TransactionState.Created, TransactionState.Rollbacked) => true,
+        (TransactionState.InProgress, TransactionState.Committed) => true,
+        (TransactionState.InProgress, TransactionState.Rollbacked) => true,
+        _ => false,
+    };
+
     public void Dispose()
     {
         if (_isDisposed)
@@ -206,10 +235,7 @@ public unsafe class Transaction : IDisposable
 
     public long CreateEntity<T>(ref T t) where T : unmanaged
     {
-        if (State > TransactionState.InProgress)
-        {
-            return -1;
-        }
+        EnsureMutable();
         State = TransactionState.InProgress;
 
         using var activity = TyphonActivitySource.StartActivity("Transaction.CreateEntity");
@@ -224,10 +250,7 @@ public unsafe class Transaction : IDisposable
 
     public long CreateEntity<TC1, TC2>(ref TC1 t, ref TC2 u) where TC1 : unmanaged where TC2 : unmanaged
     {
-        if (State > TransactionState.InProgress)
-        {
-            return -1;
-        }
+        EnsureMutable();
         State = TransactionState.InProgress;
         var pk = _dbe.GetNewPrimaryKey();
 
@@ -238,10 +261,7 @@ public unsafe class Transaction : IDisposable
 
     public long CreateEntity<TC1, TC2, TC3>(ref TC1 t, ref TC2 u, ref TC3 v) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
     {
-        if (State > TransactionState.InProgress)
-        {
-            return -1;
-        }
+        EnsureMutable();
         State = TransactionState.InProgress;
         var pk = _dbe.GetNewPrimaryKey();
 
@@ -253,10 +273,7 @@ public unsafe class Transaction : IDisposable
 
     public long CreateEntity<TC1, TC2>(ref TC1 t, Span<TC2> u) where TC1 : unmanaged where TC2 : unmanaged
     {
-        if (State > TransactionState.InProgress)
-        {
-            return -1;
-        }
+        EnsureMutable();
         State = TransactionState.InProgress;
         var pk = _dbe.GetNewPrimaryKey();
 
@@ -300,10 +317,7 @@ public unsafe class Transaction : IDisposable
 
     public bool UpdateEntity<T>(long pk, ref T t) where T : unmanaged
     {
-        if (State > TransactionState.InProgress)
-        {
-            return false;
-        }
+        EnsureMutable();
         State = TransactionState.InProgress;
 
         using var activity = TyphonActivitySource.StartActivity("Transaction.UpdateEntity");
@@ -315,10 +329,7 @@ public unsafe class Transaction : IDisposable
 
     public bool UpdateEntity<TC1, TC2>(long pk, ref TC1 t, ref TC2 u) where TC1 : unmanaged where TC2 : unmanaged
     {
-        if (State > TransactionState.InProgress)
-        {
-            return false;
-        }
+        EnsureMutable();
         State = TransactionState.InProgress;
 
         var res = UpdateComponent(pk, ref t);
@@ -328,10 +339,7 @@ public unsafe class Transaction : IDisposable
 
     public bool UpdateEntity<TC1, TC2, TC3>(long pk, ref TC1 t, ref TC2 u, ref TC3 v) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
     {
-        if (State > TransactionState.InProgress)
-        {
-            return false;
-        }
+        EnsureMutable();
         State = TransactionState.InProgress;
 
         var res = UpdateComponent(pk, ref t);
@@ -342,10 +350,7 @@ public unsafe class Transaction : IDisposable
 
     public bool UpdateEntity<TC1, TC2>(long pk, ref TC1 t, ReadOnlySpan<TC2> u) where TC1 : unmanaged where TC2 : unmanaged
     {
-        if (State > TransactionState.InProgress)
-        {
-            return false;
-        }
+        EnsureMutable();
         State = TransactionState.InProgress;
 
         var res = UpdateComponent(pk, ref t);
@@ -355,10 +360,7 @@ public unsafe class Transaction : IDisposable
 
     public bool DeleteEntity<T>(long pk) where T : unmanaged
     {
-        if (State > TransactionState.InProgress)
-        {
-            return false;
-        }
+        EnsureMutable();
         State = TransactionState.InProgress;
 
         using var activity = TyphonActivitySource.StartActivity("Transaction.DeleteEntity");
@@ -370,10 +372,7 @@ public unsafe class Transaction : IDisposable
 
     public bool DeleteEntity<TC1, TC2>(long pk) where TC1 : unmanaged where TC2 : unmanaged
     {
-        if (State > TransactionState.InProgress)
-        {
-            return false;
-        }
+        EnsureMutable();
         State = TransactionState.InProgress;
 
         var res = DeleteComponent<TC1>(pk);
@@ -383,10 +382,7 @@ public unsafe class Transaction : IDisposable
 
     public bool DeleteEntity<TC1, TC2, TC3>(long pk) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
     {
-        if (State > TransactionState.InProgress)
-        {
-            return false;
-        }
+        EnsureMutable();
         State = TransactionState.InProgress;
 
         var res = DeleteComponent<TC1>(pk);
@@ -397,10 +393,7 @@ public unsafe class Transaction : IDisposable
 
     public bool DeleteEntities<T>(long pk) where T : unmanaged
     {
-        if (State > TransactionState.InProgress)
-        {
-            return false;
-        }
+        EnsureMutable();
         State = TransactionState.InProgress;
 
         return UpdateComponents(pk, ReadOnlySpan<T>.Empty);
@@ -1330,7 +1323,7 @@ public unsafe class Transaction : IDisposable
         }
 
         // New state
-        State = TransactionState.Rollbacked;
+        TransitionTo(TransactionState.Rollbacked);
         activity?.SetTag(TyphonSpanAttributes.TransactionStatus, "rolledback");
         _dbe?.RecordRollback();
         return true;
@@ -1467,7 +1460,7 @@ public unsafe class Transaction : IDisposable
         }
 
         // New state
-        State = TransactionState.Committed;
+        TransitionTo(TransactionState.Committed);
 
         // Record commit duration for observability
         var elapsedUs = (Stopwatch.GetTimestamp() - startTicks) * 1_000_000 / Stopwatch.Frequency;
