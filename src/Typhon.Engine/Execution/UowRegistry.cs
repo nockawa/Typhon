@@ -83,15 +83,18 @@ internal unsafe class UowRegistry : IDisposable
     private int _currentCapacity;
 
     /// <summary>
-    /// Event signaled by <see cref="Release"/> when a slot becomes free.
-    /// Waiters in <see cref="AllocateUowId(ref WaitContext)"/> block on this event instead of spin-polling.
+    /// Semaphore signaled by <see cref="Release"/> when a slot becomes free.
+    /// Waiters in <see cref="AllocateUowId(ref WaitContext)"/> block on this semaphore instead of spin-polling.
     /// </summary>
     /// <remarks>
-    /// UoW slots are held for milliseconds to seconds (not nanoseconds like lock contention),
-    /// so an event-based wait is appropriate: zero CPU burn while waiting, near-instant wake latency.
-    /// Spurious wakes are harmless — the allocation loop re-scans the bitmap.
+    /// Uses <see cref="SemaphoreSlim"/> instead of <see cref="ManualResetEventSlim"/> to eliminate
+    /// a signal-loss race: with MRES, a <see cref="ManualResetEventSlim.Set"/> call between
+    /// <see cref="ManualResetEventSlim.Wait()"/> returning and <see cref="ManualResetEventSlim.Reset"/>
+    /// in <c>finally</c> would permanently lose the signal. SemaphoreSlim atomically decrements the
+    /// count on Wait — each Release() wakes exactly one waiter with no window for signal loss.
+    /// Initial count = 0: callers scan the bitmap first (fast path), only wait if no slot is found.
     /// </remarks>
-    private readonly ManualResetEventSlim _slotFreed = new(false);
+    private readonly SemaphoreSlim _slotFreed = new(0);
 
     // ═══════════════════════════════════════════════════════════════
     // Public Properties
@@ -225,7 +228,7 @@ internal unsafe class UowRegistry : IDisposable
     }
 
     /// <summary>
-    /// Waits for a registry slot to become free, using the <see cref="_slotFreed"/> event.
+    /// Waits for a registry slot to become free, using the <see cref="_slotFreed"/> semaphore.
     /// Returns <c>true</c> if signaled (a slot was freed), <c>false</c> on timeout or cancellation.
     /// </summary>
     private bool WaitForSlotFreed(ref WaitContext wc)
@@ -234,7 +237,6 @@ internal unsafe class UowRegistry : IDisposable
         {
             if (Unsafe.IsNullRef(ref wc))
             {
-                // Unbounded wait — block indefinitely
                 _slotFreed.Wait();
                 return true;
             }
@@ -242,7 +244,7 @@ internal unsafe class UowRegistry : IDisposable
             var ms = wc.Deadline.RemainingMilliseconds;
             if (ms == 0)
             {
-                return false; // Already expired
+                return false;
             }
 
             return _slotFreed.Wait(ms, wc.Token);
@@ -251,12 +253,7 @@ internal unsafe class UowRegistry : IDisposable
         {
             return false;
         }
-        finally
-        {
-            // Re-arm for next wait. Spurious wakes are harmless — the allocation loop
-            // re-scans the bitmap and re-enters wait if no slot is found.
-            _slotFreed.Reset();
-        }
+        // No finally { Reset() } — SemaphoreSlim auto-consumes the signal on Wait()
     }
 
     /// <summary>
@@ -299,7 +296,7 @@ internal unsafe class UowRegistry : IDisposable
         }
 
         // Wake any threads waiting in AllocateUowId() for a free slot
-        _slotFreed.Set();
+        _slotFreed.Release();
     }
 
     /// <summary>
