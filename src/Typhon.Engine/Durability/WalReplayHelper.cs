@@ -28,12 +28,6 @@ internal static class WalReplayHelper
     /// <param name="payload">The record payload (component data bytes).</param>
     public static void ReplayRecord(DatabaseEngine dbe, ref WalRecordHeader header, ReadOnlySpan<byte> payload)
     {
-        // Skip FPI records — handled separately by WalRecovery
-        if ((header.Flags & (byte)WalRecordFlags.FullPageImage) != 0)
-        {
-            return;
-        }
-
         var table = dbe.GetComponentTableByWalTypeId(header.ComponentTypeId);
         if (table == null)
         {

@@ -8,6 +8,28 @@ argument-hint: (no arguments)
 
 Display the current state of work from the GitHub Project, including active items, phase progress, and items needing attention.
 
+## Help
+
+If `$ARGUMENTS` contains `--help` or `-h`, display the following and **stop** — do not execute the workflow.
+
+```
+/dev-status
+
+  Show current development status from the GitHub Project board.
+
+Arguments:
+  --help, -h      Show this help
+
+What it does:
+  1. Shows current phase and In Progress items
+  2. Lists Ready items (next to pick up)
+  3. Flags items needing attention (stale, critical)
+  4. Provides mountain view summary (totals, effort, phases)
+
+Examples:
+  /dev-status
+```
+
 ## What to Display
 
 ### 1. Current Phase
@@ -16,7 +38,7 @@ Query the GitHub Project for items with Phase field set to identify the active p
 
 ### 2. In Progress Items
 
-Query items where Status = "In Progress". **Always pipe `gh project item-list` directly to Python** (see `.claude/skills/_helpers.md`):
+Query items where Status = "In Progress". **Always pipe `gh project item-list` directly to Python** (see `.claude/skills/_helpers.md` Section 2):
 ```bash
 gh project item-list 7 --owner nockawa --limit 200 --format json 2>&1 | python3 -c "
 import json, sys
@@ -50,6 +72,13 @@ Flag issues that:
 - Have Status = "Research" for more than 14 days
 - Are P0-Critical and not In Progress
 
+To check issue activity, use `mcp__GitHub__get_issue` with:
+- owner: `"nockawa"`
+- repo: `"Typhon"`
+- issue_number: `<number>`
+
+The returned object includes `updated_at` which can be used to determine staleness.
+
 ### 5. Mountain View Summary
 
 Calculate totals:
@@ -60,35 +89,35 @@ Calculate totals:
 ## Output Format
 
 ```
-☀️ Typhon Development Status
+Typhon Development Status
 
-📌 Current Phase: [Phase Name]
-   Parent: #XX — N/M sub-issues done
+Current Phase: [Phase Name]
+   Parent: #XX -- N/M sub-issues done
 
-🚧 In Progress (N):
+In Progress (N):
    #XX Title [Area, Priority, Estimate]
        Branch: feature/XX-name (if known)
        Design: path/to/design.md (if set)
 
-📋 Ready (N):
-   #XX Title [Area, Priority, Estimate] — has design / needs design
+Ready (N):
+   #XX Title [Area, Priority, Estimate] -- has design / needs design
 
-🔬 Research (N):
+Research (N):
    #XX Title [Priority, Estimate]
 
-⚠️ Needs Attention:
+Needs Attention:
    #XX reason (e.g., "no activity for N days", "P0 not started")
 
-📈 Mountain View:
+Mountain View:
    Backlog: N items | Research: N | Ready: N | In Progress: N
    Estimated effort: ~X points remaining
    By Phase: Telemetry N, Query N, ...
 
-💡 Suggested: [Pick up #XX or continue #YY]
+Suggested: [Pick up #XX or continue #YY]
 ```
 
 ## Implementation
 
-Use `gh project item-list 7 --owner nockawa --limit 200 --format json` to get all items, then filter and format the output.
+Use `gh project item-list 7 --owner nockawa --limit 200 --format json` piped to Python to get all project items, then filter and format the output.
 
-Check issue activity with `gh issue view <number> --json updatedAt`.
+For activity checks on individual issues, use `mcp__GitHub__get_issue` to get the `updated_at` field.

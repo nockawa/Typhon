@@ -27,6 +27,13 @@ public partial class PagedMMF
         /// </summary>
         public long AccessEpoch;
 
+        /// <summary>
+        /// Whether the page CRC has been verified since it was loaded from disk.
+        /// Reset to false during page allocation (Allocating state), set to true after verification.
+        /// No need for volatile — set during single-owner Allocating state and checked after I/O completion.
+        /// </summary>
+        public bool CrcVerified;
+
         private int _clockSweepCounter;
         private Lazy<Task<int>> _ioReadTask;
 

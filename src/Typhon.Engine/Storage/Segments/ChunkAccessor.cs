@@ -398,9 +398,14 @@ public unsafe struct ChunkAccessor : IDisposable
     /// </summary>
     private void LoadIntoSlot(int slot, int pageIndex)
     {
-        var filePageIndex = _segment.Pages[pageIndex];
+        var pages = _segment.Pages;
+        Debug.Assert((uint)pageIndex < (uint)pages.Length);
+
+        var filePageIndex = pages[pageIndex];
+        Debug.Assert(filePageIndex >= 0);
+
         var result = _pagedMMF.RequestPageEpoch(filePageIndex, _epochManager.GlobalEpoch, out var memPageIndex);
-        Debug.Assert(result, $"RequestPageEpoch failed for file page {filePageIndex}");
+        Debug.Assert(result);
 
         _pageIndices[slot] = pageIndex;
         _baseAddresses[slot] = (long)_pagedMMF.GetMemPageRawDataAddress(memPageIndex);

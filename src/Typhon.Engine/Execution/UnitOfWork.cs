@@ -1,5 +1,6 @@
 using JetBrains.Annotations;
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -16,8 +17,15 @@ namespace Typhon.Engine;
 /// Create via <see cref="DatabaseEngine.CreateUnitOfWork"/>.
 /// </para>
 /// <para>
-/// Currently only <see cref="DurabilityMode.Deferred"/> is functional (no WAL yet). The full durability
-/// model activates when Tier 5 (WAL) lands.
+/// In WAL-less mode, dirty page tracking and I/O behavior depends on <see cref="DurabilityMode"/>:
+/// <list type="bullet">
+/// <item><b>Deferred</b>: UoW owns a shared <see cref="ChangeSet"/>. No I/O until <see cref="FlushAsync"/>
+/// which chains <c>SaveChangesAsync</c> (Layer 1→2) then <c>FlushToDisk</c> (Layer 2→3).</item>
+/// <item><b>GroupCommit</b>: UoW owns a shared <see cref="ChangeSet"/>. Each transaction calls
+/// <c>SaveChanges</c> on dispose (Layer 1→2). <see cref="FlushAsync"/> issues a single fsync (Layer 2→3).</item>
+/// <item><b>Immediate</b>: Each transaction creates its own <see cref="ChangeSet"/> and performs
+/// <c>SaveChanges</c> + <c>FlushToDisk</c> synchronously in <c>Commit()</c>.</item>
+/// </list>
 /// </para>
 /// </remarks>
 [PublicAPI]
@@ -52,12 +60,23 @@ public sealed class UnitOfWork : IDisposable
     /// <summary>Whether this UoW has been disposed.</summary>
     public bool IsDisposed => _disposed;
 
-    internal UnitOfWork(DatabaseEngine dbe, DurabilityMode durabilityMode, ushort uowId, TimeSpan timeout)
+    /// <summary>
+    /// Shared ChangeSet for Deferred and GroupCommit modes. Null for Immediate mode (each transaction owns its own).
+    /// </summary>
+    internal ChangeSet ChangeSet { get; }
+
+    internal UnitOfWork(DatabaseEngine dbe, DurabilityMode durabilityMode, ushort uowId, TimeSpan timeout, ChangeSet changeSet = null)
     {
         _dbe = dbe;
         _durabilityMode = durabilityMode;
         _uowId = uowId;
         _state = UnitOfWorkState.Pending;
+
+        // Deferred/GroupCommit: UoW owns the ChangeSet, shared across all transactions.
+        // The ChangeSet is created early by DatabaseEngine.CreateUnitOfWork so that
+        // AllocateUowId can track registry page mutations in it (avoiding sync I/O).
+        // Immediate: each transaction creates its own ChangeSet for per-commit I/O.
+        ChangeSet = changeSet;
 
         _cts = new CancellationTokenSource();
         _deadline = timeout == TimeSpan.Zero
@@ -104,8 +123,9 @@ public sealed class UnitOfWork : IDisposable
     internal void RecordTransactionCommitted() => Interlocked.Increment(ref _committedTransactionCount);
 
     /// <summary>
-    /// Force WAL flush. When a <see cref="WalManager"/> is available, signals the WAL writer to flush
-    /// buffered data and waits for durability. Otherwise, transitions state directly.
+    /// Synchronous flush. Forces all pending data to stable storage.
+    /// For WAL mode: signals WAL writer and waits for durable LSN.
+    /// For WAL-less mode: behavior depends on <see cref="DurabilityMode"/>.
     /// </summary>
     public void Flush()
     {
@@ -126,17 +146,70 @@ public sealed class UnitOfWork : IDisposable
                 walManager.WaitForDurable(currentLsn, ref ctx);
             }
         }
+        else if (_durabilityMode == DurabilityMode.Deferred)
+        {
+            // Full pipeline: SaveChanges (Layer 1→2) then FlushToDisk (Layer 2→3)
+            ChangeSet.SaveChanges();
+            _dbe.MMF.FlushToDisk();
+        }
+        else if (_durabilityMode == DurabilityMode.GroupCommit)
+        {
+            // Transactions already called SaveChanges (Layer 1→2), just fsync (Layer 2→3)
+            _dbe.MMF.FlushToDisk();
+        }
+        // Immediate: no-op — SaveChanges + FlushToDisk already done in Tx.Commit
 
         _state = UnitOfWorkState.WalDurable;
     }
 
     /// <summary>
-    /// Async version of <see cref="Flush"/>. Currently synchronous — true async will be added
-    /// when the checkpoint pipeline is implemented.
+    /// Async flush. For WAL-less mode, offloads I/O to the thread pool.
+    /// <list type="bullet">
+    /// <item><b>Deferred</b>: <c>SaveChangesAsync</c> → <c>ContinueWith(FlushToDisk)</c> — full async pipeline.</item>
+    /// <item><b>GroupCommit</b>: <c>Task.Run(FlushToDisk)</c> — transactions already wrote to OS cache.</item>
+    /// <item><b>Immediate</b>: no-op — already done in <c>Tx.Commit()</c>.</item>
+    /// </list>
     /// </summary>
     public Task FlushAsync()
     {
-        Flush();
+        if (_state != UnitOfWorkState.Pending)
+        {
+            return Task.CompletedTask;
+        }
+
+        var walManager = _dbe.WalManager;
+        if (walManager != null)
+        {
+            // WAL mode: synchronous flush + wait for durable LSN
+            walManager.RequestFlush();
+            var currentLsn = walManager.CommitBuffer.NextLsn - 1;
+            if (currentLsn > 0)
+            {
+                var ctx = _deadline == Deadline.Infinite ? WaitContext.Null : WaitContext.FromDeadline(_deadline);
+                walManager.WaitForDurable(currentLsn, ref ctx);
+            }
+
+            _state = UnitOfWorkState.WalDurable;
+            return Task.CompletedTask;
+        }
+
+        _state = UnitOfWorkState.WalDurable;
+
+        if (_durabilityMode == DurabilityMode.Deferred)
+        {
+            // Async pipeline: SaveChangesAsync (Layer 1→2) → FlushToDisk (Layer 2→3)
+            var mmf = _dbe.MMF;
+            return ChangeSet.SaveChangesAsync().ContinueWith(_ => mmf.FlushToDisk());
+        }
+
+        if (_durabilityMode == DurabilityMode.GroupCommit)
+        {
+            // Transactions already wrote to OS cache, just async fsync
+            var mmf = _dbe.MMF;
+            return Task.Run(() => mmf.FlushToDisk());
+        }
+
+        // Immediate: no-op — already done in Tx.Commit
         return Task.CompletedTask;
     }
 
@@ -150,14 +223,39 @@ public sealed class UnitOfWork : IDisposable
 
         _disposed = true;
 
+        // Release the UoW registry slot. For Deferred/GroupCommit the mutation goes into the
+        // shared ChangeSet so it will be included in whatever flush path runs next.
+        if (_uowId != 0)
+        {
+            _dbe.UowRegistry.Release(_uowId, ChangeSet);
+        }
+
+        if (_dbe.WalManager != null)
+        {
+            // WAL mode: always flush to ensure WAL durability
+            _ = FlushAsync();
+        }
+        else if (_durabilityMode == DurabilityMode.Deferred)
+        {
+            // Deferred WAL-less: NO I/O on Dispose — caller must call Flush/FlushAsync explicitly.
+            // Dirty pages will be flushed by the engine shutdown safety net if needed.
+            if (_committedTransactionCount > 0 && _state == UnitOfWorkState.Pending)
+            {
+                Debug.Assert(false,
+                    $"Deferred UoW #{_uowId} disposed with {_committedTransactionCount} committed transaction(s) " +
+                    "but Flush/FlushAsync was never called. Data relies on engine shutdown safety net.");
+                _dbe.LogDeferredUowNotFlushed(_uowId, _committedTransactionCount);
+            }
+        }
+        else
+        {
+            // GroupCommit / Immediate: flush on dispose for convenience
+            _ = FlushAsync();
+        }
+
         // Cancel any outstanding operations
         _cts.Cancel();
         _cts.Dispose();
-
-        if (_uowId != 0)
-        {
-            _dbe.UowRegistry.Release(_uowId);
-        }
 
         _state = UnitOfWorkState.Free;
     }

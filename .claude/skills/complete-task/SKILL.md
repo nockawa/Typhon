@@ -14,13 +14,40 @@ $ARGUMENTS should contain the issue number (e.g., "42" or "#42").
 
 If no issue number provided, use `AskUserQuestion` to ask which issue to complete.
 
+## Help
+
+If `$ARGUMENTS` contains `--help` or `-h`, display the following and **stop** — do not execute the workflow.
+
+```
+/complete-task [#N]
+
+  Complete work on a GitHub issue — close issue, update project, prompt for doc updates.
+
+Arguments:
+  #N              Issue number (e.g., 42 or #42)
+  --help, -h      Show this help
+
+What it does:
+  1. Verifies issue state and checks PR/branch status
+  2. Closes the issue
+  3. Updates project status to Done
+  4. Handles design doc (move to reference/archive/keep)
+  5. Suggests overview doc updates and ADR creation
+  6. Offers branch cleanup
+
+Examples:
+  /complete-task #42
+  /complete-task 36
+```
+
 ## Workflow
 
 ### 1. Verify Issue State
 
-```bash
-gh issue view <number> --json number,title,state,labels,body
-```
+Use `mcp__GitHub__get_issue` with:
+- owner: `"nockawa"`
+- repo: `"Typhon"`
+- issue_number: `<number>`
 
 Confirm the issue is currently open and has been worked on.
 
@@ -28,9 +55,10 @@ Confirm the issue is currently open and has been worked on.
 
 **Step 2a: Check for existing PRs** (open or merged):
 
-```bash
-gh pr list --search "<number>" --state all --json number,title,state,url,headRefName
-```
+Use `mcp__GitHub__search_issues` with:
+- q: `"repo:nockawa/Typhon type:pr <number>"`
+
+This returns PRs that mention the issue number.
 
 **Step 2b: Detect unmerged feature branch** (if no merged PR found):
 
@@ -47,8 +75,8 @@ git rev-list --count main..<branch_name>
 | PR State | Branch State | Action |
 |----------|-------------|--------|
 | Merged PR exists | — | Proceed normally (happy path) |
-| Open PR exists | — | Warn: "PR should be merged first" → ask to proceed or wait |
-| No PR | Branch has commits ahead of main | Warn: "Branch has N unmerged commits" → offer to create PR |
+| Open PR exists | — | Warn: "PR should be merged first" -> ask to proceed or wait |
+| No PR | Branch has commits ahead of main | Warn: "Branch has N unmerged commits" -> offer to create PR |
 | No PR | No feature branch / branch is even with main | Proceed normally (work may have been committed directly to main) |
 
 **If no PR and branch has unmerged commits**, ask:
@@ -64,7 +92,16 @@ Options:
 
 **If "Create a PR now":**
 - Push the branch if not already pushed: `git push -u origin <branch_name>`
-- Create the PR using `gh pr create` with a summary derived from the issue title and body
+- Create the PR:
+
+Use `mcp__GitHub__create_pull_request` with:
+- owner: `"nockawa"`
+- repo: `"Typhon"`
+- title: `"<summary derived from issue title>"`
+- body: `"<summary derived from issue body>"`
+- head: `"<branch_name>"`
+- base: `"main"`
+
 - **Stop here** — report the PR URL and tell the user to merge it, then re-run `/complete-task`
 - Do NOT proceed to close the issue or update status yet
 
@@ -76,13 +113,15 @@ Options:
 
 ### 3. Close the Issue
 
-```bash
-gh issue close <number>
-```
+Use `mcp__GitHub__update_issue` with:
+- owner: `"nockawa"`
+- repo: `"Typhon"`
+- issue_number: `<number>`
+- state: `"closed"`
 
 ### 4. Update Project Status to Done
 
-**Project item lookup:** Read `.claude/skills/_helpers.md` for the robust patterns.
+**Project item lookup:** Read `.claude/skills/_helpers.md` Section 2 for the robust patterns.
 
 ```bash
 # Step 1: Find the item ID by piping directly to Python (no temp files)
@@ -122,26 +161,22 @@ Options:
 
 Check if this issue might affect overview documentation:
 
-```bash
-# Get issue labels/area to determine relevant docs
-```
-
 Suggest potentially affected overview docs based on Area field:
-- Database → `claude/overview/02-execution.md`, `claude/overview/04-data.md`
-- Transactions → `claude/overview/02-execution.md`
-- MVCC → `claude/overview/04-data.md`
-- Indexes → `claude/overview/04-data.md`
-- Schema → `claude/overview/04-data.md`
-- Storage → `claude/overview/03-storage.md`
-- Memory → `claude/overview/08-resources.md`
-- Concurrency → `claude/overview/01-concurrency.md`
-- Primitives → `claude/overview/11-utilities.md`
-- Telemetry → `claude/overview/09-observability.md`
+- Database -> `claude/overview/02-execution.md`, `claude/overview/04-data.md`
+- Transactions -> `claude/overview/02-execution.md`
+- MVCC -> `claude/overview/04-data.md`
+- Indexes -> `claude/overview/04-data.md`
+- Schema -> `claude/overview/04-data.md`
+- Storage -> `claude/overview/03-storage.md`
+- Memory -> `claude/overview/08-resources.md`
+- Concurrency -> `claude/overview/01-concurrency.md`
+- Primitives -> `claude/overview/11-utilities.md`
+- Telemetry -> `claude/overview/09-observability.md`
 
 Ask:
 ```
 Question: "These overview docs might need updates based on this work:"
-  • claude/overview/XX-topic.md
+  - claude/overview/XX-topic.md
 
 "Would you like to review any of them?"
 Options:
@@ -189,16 +224,16 @@ If no merged PR was found (user chose "Skip PR" in step 2), do **not** offer to 
 ```
 Completing #<number>: <title>
 
-✅ Issue closed
-✅ Status: In Progress → Done
-📄 Design doc: claude/design/<Name>.md
-   → Moved to reference/ (or kept/archived)
+  Issue closed
+  Status: In Progress -> Done
+  Design doc: claude/design/<Name>.md
+   -> Moved to reference/ (or kept/archived)
 
-📚 Overview docs reviewed: (list or "skipped")
-📝 ADR created: claude/adr/0XX-decision.md (or "none")
-🌿 Branch cleaned up: feature/<number>-name (or "kept")
+  Overview docs reviewed: (list or "skipped")
+  ADR created: claude/adr/0XX-decision.md (or "none")
+  Branch cleaned up: feature/<number>-name (or "kept")
 
-Work complete! 🎉
+Work complete!
 ```
 
 ## Status Field Option IDs

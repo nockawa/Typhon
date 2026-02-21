@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -135,8 +136,60 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     private SafeFileHandle _fileHandle;
     private long _fileSize;
 
+    /// <summary>
+    /// Atomically advances <see cref="_fileSize"/> to at least <paramref name="newSize"/>.
+    /// No-op if the tracked size is already &gt;= <paramref name="newSize"/>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void TrackFileGrowth(long newSize)
+    {
+        long oldSize;
+        do
+        {
+            oldSize = _fileSize;
+            if (newSize <= oldSize)
+            {
+                return;
+            }
+        } while (Interlocked.CompareExchange(ref _fileSize, newSize, oldSize) != oldSize);
+    }
+
     private readonly ConcurrentDictionary<int, int> _memPageIndexByFilePageIndex;
     public EpochManager EpochManager { get; private set; }
+
+    // FPI (Full-Page Image) support — null until EnableFpiCapture() is called (WAL disabled = no FPI)
+    private FpiBitmap _fpiBitmap;
+    private WalManager _walManager;
+    private bool _enableFpiCompression;
+
+    // CRC verification mode — defaults to RecoveryOnly to avoid on-load checks during recovery itself.
+    // Set to OnLoad after recovery completes via SetPageChecksumVerification().
+    private PageChecksumVerification _pageChecksumVerification = PageChecksumVerification.RecoveryOnly;
+
+    /// <summary>
+    /// Sets the page CRC verification mode. Called by <see cref="DatabaseEngine"/> after recovery completes
+    /// to enable on-load verification during normal operation.
+    /// </summary>
+    internal void SetPageChecksumVerification(PageChecksumVerification mode) => _pageChecksumVerification = mode;
+
+    /// <summary>
+    /// Enables FPI capture by creating an <see cref="FpiBitmap"/> sized to the page cache and linking to the WAL manager.
+    /// Called by <see cref="DatabaseEngine"/> after WAL initialization.
+    /// </summary>
+    /// <param name="walManager">The WAL manager to write FPI records to.</param>
+    /// <param name="enableFpiCompression">When true, FPI page payloads are LZ4-compressed before writing to the WAL.</param>
+    internal void EnableFpiCapture(WalManager walManager, bool enableFpiCompression = false)
+    {
+        _fpiBitmap = new FpiBitmap(MemPagesCount);
+        _walManager = walManager;
+        _enableFpiCompression = enableFpiCompression;
+    }
+
+    /// <summary>
+    /// The FPI tracking bitmap. Exposed for <see cref="CheckpointManager"/> to reset at checkpoint start.
+    /// Null when FPI capture is not enabled.
+    /// </summary>
+    internal FpiBitmap FpiBitmap => _fpiBitmap;
 
     unsafe public PagedMMF(IMemoryAllocator memoryAllocator, EpochManager epochManager, PagedMMFOptions options, IResource parent, string resourceName,
         ILogger<PagedMMF> logger) : base(resourceName, ResourceType.File, parent)
@@ -320,6 +373,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             }
 
             pi.IncrementClockSweepCounter();
+            EnsurePageVerified(memPageIndex);
             return true;
         }
     }
@@ -360,6 +414,9 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                 fetchActivity?.Dispose();
                 return false;
             }
+
+            // Reset CRC verification flag — page is freshly loaded, needs re-verification
+            _memPagesInfo[memPageIndex].CrcVerified = false;
 
             // Load the page from disk, if it's stored there already. (won't be the case for new pages)
             // The load is async and not part of the returned task but stored in the PageInfo
@@ -730,6 +787,31 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         // Acquire the latch (records thread ownership atomically)
         pi.PageExclusiveLatch.EnterExclusiveAccess(ref WaitContext.Null);
         pi.ExclusiveLatchDepth = 0;
+
+        // Seqlock: signal modification in progress (even -> odd)
+        unsafe
+        {
+            var headerAddr = (PageBaseHeader*)(_memPagesAddr + (memPageIndex * (long)PageSize));
+            ++headerAddr->ModificationCounter;
+
+            // FPI: capture full-page before-image on first dirty per checkpoint cycle.
+            // FPI is best-effort: if the WAL buffer is full or an error occurs, the page will still be dirty and the next checkpoint cycle will re-capture.
+            // Exceptions must NOT propagate here because ModificationCounter is already odd — an unhandled exception would leave the seqlock permanently
+            // stuck, causing CopyPageWithSeqlock to spin forever.
+            if (_walManager != null && !_fpiBitmap.TestAndSet(memPageIndex))
+            {
+                try
+                {
+                    WriteFpiRecord(memPageIndex, pi.FilePageIndex, headerAddr);
+                }
+                catch
+                {
+                    // Clear the FPI bitmap flag so the next checkpoint cycle will retry the capture.
+                    _fpiBitmap.Clear(memPageIndex);
+                }
+            }
+        }
+
         return true;
     }
 
@@ -747,6 +829,13 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             return;
         }
 
+        // Seqlock: signal modification complete (odd -> even)
+        unsafe
+        {
+            var headerAddr = (PageBaseHeader*)(_memPagesAddr + (memPageIndex * (long)PageSize));
+            ++headerAddr->ModificationCounter;
+        }
+
         pi.PageExclusiveLatch.ExitExclusiveAccess();
 
         pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
@@ -756,6 +845,238 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         // once unlatched, epoch protection is no longer needed.
         pi.AccessEpoch = 0;
         pi.StateSyncRoot.ExitExclusiveAccess();
+    }
+
+    /// <summary>
+    /// Serializes a Full-Page Image (FPI) WAL record capturing the before-image of a page. Called under exclusive latch — the page is stable during the copy.
+    /// When <see cref="_enableFpiCompression"/> is true, the page payload is LZ4-compressed to reduce WAL bandwidth.
+    /// Incompressible pages (e.g., random data) automatically fall back to uncompressed format.
+    /// </summary>
+    private unsafe void WriteFpiRecord(int memPageIndex, int filePageIndex, PageBaseHeader* headerAddr)
+    {
+        var pageAddr = _memPagesAddr + (memPageIndex * (long)PageSize);
+        var pageSpan = new ReadOnlySpan<byte>(pageAddr, PageSize);
+
+        byte[] rentedBuffer = null;
+        try
+        {
+            bool useCompression = false;
+            int compressedSize = 0;
+
+            // Try LZ4 compression if enabled
+            if (_enableFpiCompression)
+            {
+                rentedBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(FpiCompression.MaxCompressedSize(PageSize));
+                compressedSize = FpiCompression.Compress(pageSpan, rentedBuffer);
+                useCompression = compressedSize > 0;
+            }
+
+            int pagePayloadSize = useCompression ? compressedSize : PageSize;
+            // FPI body: LSN (8B) + FpiMetadata (16B) + page data
+            int fpiBodySize = sizeof(long) + FpiMetadata.SizeInBytes + pagePayloadSize;
+            int fpiChunkSize = WalChunkHeader.SizeInBytes + fpiBodySize + WalChunkFooter.SizeInBytes;
+
+            // Claim WAL buffer space for 1 FPI chunk
+            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.DefaultCommitTimeout);
+            var claim = _walManager.CommitBuffer.TryClaim(fpiChunkSize, 1, ref wc);
+
+            if (!claim.IsValid)
+            {
+                // WAL back-pressure — FPI is best-effort in this path.
+                // The page will still be dirty and the next checkpoint will re-capture if needed.
+                return;
+            }
+
+            try
+            {
+                int offset = 0;
+
+                // Write chunk header (PrevCRC=0, CRC=0 — patched by WAL writer)
+                var chunkHeader = new WalChunkHeader
+                {
+                    ChunkType = (ushort)WalChunkType.FullPageImage,
+                    ChunkSize = (ushort)fpiChunkSize,
+                    PrevCRC = 0,
+                };
+                MemoryMarshal.Write(claim.DataSpan[offset..], in chunkHeader);
+                offset += WalChunkHeader.SizeInBytes;
+
+                // Write LSN (always at body offset 0 for all chunk types)
+                var lsn = claim.FirstLSN;
+                MemoryMarshal.Write(claim.DataSpan[offset..], in lsn);
+                offset += sizeof(long);
+
+                // Write FPI metadata
+                var meta = new FpiMetadata
+                {
+                    FilePageIndex = filePageIndex,
+                    SegmentId = 0,
+                    ChangeRevision = headerAddr->ChangeRevision,
+                    UncompressedSize = (ushort)PageSize,
+                    CompressionAlgo = useCompression ? FpiCompression.AlgoLZ4 : FpiCompression.AlgoNone,
+                    Reserved = 0,
+                };
+                MemoryMarshal.Write(claim.DataSpan[offset..], in meta);
+                offset += FpiMetadata.SizeInBytes;
+
+                // Write page data — compressed from rented buffer, or uncompressed from page address
+                if (useCompression)
+                {
+                    new ReadOnlySpan<byte>(rentedBuffer, 0, compressedSize).CopyTo(claim.DataSpan[offset..]);
+                }
+                else
+                {
+                    pageSpan.CopyTo(claim.DataSpan[offset..]);
+                }
+                offset += pagePayloadSize;
+
+                // Write chunk footer (CRC=0 — patched by WAL writer)
+                var footer = new WalChunkFooter { CRC = 0 };
+                MemoryMarshal.Write(claim.DataSpan[offset..], in footer);
+
+                _walManager.CommitBuffer.Publish(ref claim);
+            }
+            catch
+            {
+                _walManager.CommitBuffer.AbandonClaim(ref claim);
+                throw;
+            }
+        }
+        finally
+        {
+            if (rentedBuffer != null)
+            {
+                System.Buffers.ArrayPool<byte>.Shared.Return(rentedBuffer);
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CRC Verification & FPI Repair
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Lazily verifies the CRC32C checksum of a cached page. Called from <see cref="RequestPageEpoch"/>
+    /// after the page data is ready. Skips verification for: already-verified pages, RecoveryOnly mode,
+    /// root page (file page 0), and never-checkpointed pages (CRC == 0).
+    /// On mismatch, attempts FPI repair via <see cref="TryRepairPageFromFpi"/>; throws
+    /// <see cref="PageCorruptionException"/> if repair fails.
+    /// </summary>
+    private unsafe void EnsurePageVerified(int memPageIndex)
+    {
+        var pi = _memPagesInfo[memPageIndex];
+
+        // Already verified this load cycle
+        if (pi.CrcVerified)
+        {
+            return;
+        }
+
+        // RecoveryOnly mode: skip on-load checks (recovery handles torn pages via WalRecovery Phase 4)
+        if (_pageChecksumVerification == PageChecksumVerification.RecoveryOnly)
+        {
+            pi.CrcVerified = true;
+            return;
+        }
+
+        // Root page (file page 0) uses a different header format — skip
+        if (pi.FilePageIndex <= 0)
+        {
+            pi.CrcVerified = true;
+            return;
+        }
+
+        // Read stored CRC from the page header
+        var pageAddr = (PageBaseHeader*)(_memPagesAddr + (memPageIndex * (long)PageSize));
+        var storedCrc = pageAddr->PageChecksum;
+
+        // CRC == 0 means the page has never been checkpointed (pre-FPI pages) — skip
+        if (storedCrc == 0)
+        {
+            pi.CrcVerified = true;
+            return;
+        }
+
+        // Compute CRC over the page, skipping the checksum field itself
+        var pageSpan = new ReadOnlySpan<byte>((byte*)pageAddr, PageSize);
+        var computedCrc = WalCrc.ComputeSkipping(pageSpan, PageBaseHeader.PageChecksumOffset, PageBaseHeader.PageChecksumSize);
+
+        if (computedCrc == storedCrc)
+        {
+            pi.CrcVerified = true;
+            return;
+        }
+
+        // CRC mismatch — attempt FPI repair
+        if (TryRepairPageFromFpi(memPageIndex, pi.FilePageIndex, storedCrc, computedCrc))
+        {
+            pi.CrcVerified = true;
+            return;
+        }
+
+        // Repair failed — unrecoverable corruption
+        throw new PageCorruptionException(pi.FilePageIndex, storedCrc, computedCrc);
+    }
+
+    /// <summary>
+    /// Attempts to repair a corrupted page by finding the most recent FPI in the WAL and restoring it.
+    /// Copies the FPI data into both the in-memory cache page and the on-disk data file.
+    /// </summary>
+    /// <returns>True if the page was successfully repaired; false if no FPI was available.</returns>
+    private unsafe bool TryRepairPageFromFpi(int memPageIndex, int filePageIndex, uint storedCrc, uint computedCrc)
+    {
+        if (_walManager == null)
+        {
+            return false;
+        }
+
+        var fpiData = _walManager.SearchFpiForPage(filePageIndex);
+        if (fpiData == null)
+        {
+            return false;
+        }
+
+        // Validate the FPI data CRC before applying it
+        var fpiSpan = new ReadOnlySpan<byte>(fpiData);
+        var fpiCrcStored = MemoryMarshal.Read<uint>(fpiSpan.Slice(PageBaseHeader.PageChecksumOffset));
+        if (fpiCrcStored != 0)
+        {
+            var fpiCrcComputed = WalCrc.ComputeSkipping(fpiSpan, PageBaseHeader.PageChecksumOffset, PageBaseHeader.PageChecksumSize);
+            if (fpiCrcComputed != fpiCrcStored)
+            {
+                return false; // FPI itself is corrupt — cannot use
+            }
+        }
+
+        // Copy FPI data into the cache page
+        var pageAddr = _memPagesAddr + (memPageIndex * (long)PageSize);
+        fpiData.AsSpan().CopyTo(new Span<byte>(pageAddr, PageSize));
+
+        // Write repaired page to disk
+        WritePageDirect(filePageIndex, fpiData);
+
+        Logger.LogWarning("Repaired torn page {FilePageIndex}: stored CRC=0x{StoredCrc:X8}, computed=0x{ComputedCrc:X8}, restored from FPI",
+            filePageIndex, storedCrc, computedCrc);
+
+        return true;
+    }
+
+    /// <summary>
+    /// Reads a full page directly from the data file into the destination buffer.
+    /// Used by <see cref="WalRecovery"/> for torn page detection during crash recovery.
+    /// </summary>
+    internal void ReadPageDirect(int filePageIndex, Span<byte> destination) => RandomAccess.Read(_fileHandle, destination, filePageIndex * (long)PageSize);
+
+    /// <summary>
+    /// Writes a full page directly to the data file from the source buffer.
+    /// Used by <see cref="WalRecovery"/> and <see cref="TryRepairPageFromFpi"/> for torn page repair.
+    /// Also updates the tracked file size if the write extends beyond the current end of file.
+    /// </summary>
+    internal void WritePageDirect(int filePageIndex, ReadOnlySpan<byte> source)
+    {
+        var pageOffset = filePageIndex * (long)PageSize;
+        RandomAccess.Write(_fileHandle, source, pageOffset);
+        TrackFileGrowth(pageOffset + PageSize);
     }
 
     internal void IncrementDirty(int memPageIndex)
@@ -810,78 +1131,89 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     }
 
     /// <summary>
-    /// Writes dirty pages to the data file WITHOUT decrementing their DirtyCounter. This is used by the Checkpoint Manager, which must fsync before
-    /// decrementing counters to ensure crash safety. Pages that are re-dirtied between collection and write will naturally keep DirtyCounter &gt; 0 after decrement.
+    /// Copies a live page into a destination buffer using a seqlock read protocol.
+    /// Spins while the page's <see cref="PageBaseHeader.ModificationCounter"/> is odd (writer in progress),
+    /// then memcpys the page and validates the counter hasn't changed. Retries on torn reads.
     /// </summary>
-    unsafe internal Task WritePagesForCheckpoint(int[] memPageIndices)
+    private unsafe void CopyPageWithSeqlock(byte* pageAddr, byte* destAddr)
+    {
+        var sw = new SpinWait();
+        while (true)
+        {
+            // Read the modification counter (must be even = quiescent)
+            var counter = ((PageBaseHeader*)pageAddr)->ModificationCounter;
+            if ((counter & 1) != 0)
+            {
+                // Writer in progress — spin and retry
+                sw.SpinOnce();
+                continue;
+            }
+
+            // Copy the full page
+            Buffer.MemoryCopy(pageAddr, destAddr, PageSize, PageSize);
+
+            // Validate counter hasn't changed (no torn read)
+            if (((PageBaseHeader*)pageAddr)->ModificationCounter == counter)
+            {
+                return; // Consistent snapshot obtained
+            }
+
+            // Counter changed — torn read, retry
+            sw.SpinOnce();
+        }
+    }
+
+    /// <summary>
+    /// Writes dirty pages to the data file via staging buffers WITHOUT decrementing their DirtyCounter.
+    /// Each page is snapshot-copied through the seqlock protocol, then CRC-stamped on the staging copy,
+    /// and written synchronously to the data file. Called on the checkpoint thread.
+    /// </summary>
+    /// <param name="memPageIndices">Memory page indices of dirty pages to write.</param>
+    /// <param name="stagingPool">Pool from which to rent page-sized staging buffers.</param>
+    unsafe internal void WritePagesForCheckpoint(int[] memPageIndices, StagingBufferPool stagingPool)
     {
         if (memPageIndices.Length == 0)
         {
-            return Task.CompletedTask;
+            return;
         }
 
-        // Sort for I/O coalescing (same as SavePages)
-        Array.Sort(memPageIndices, (x, y) => x - y);
-
-        var operations = new List<(int memPageIndex, int length)>();
-
-        var curPageInfo = _memPagesInfo[memPageIndices[0]];
-        var curOperation = (memPageIndex: memPageIndices[0], length: 1);
         var memPageBaseAddr = _memPagesAddr;
 
-        for (int i = 1; i < memPageIndices.Length; i++)
+        for (int i = 0; i < memPageIndices.Length; i++)
         {
-            // Increment ChangeRevision for non-root pages
-            if (curPageInfo.FilePageIndex > 0)
-            {
-                var ioTask = curPageInfo.IOReadTask;
-                if (ioTask != null && !ioTask.IsCompletedSuccessfully)
-                {
-                    ioTask.GetAwaiter().GetResult();
-                }
+            var memPageIndex = memPageIndices[i];
+            var pi = _memPagesInfo[memPageIndex];
 
-                var headerAddr = (PageBaseHeader*)(memPageBaseAddr + (curPageInfo.MemPageIndex * PageSize));
-                ++headerAddr->ChangeRevision;
-            }
-
-            var nextMemPageIndex = memPageIndices[i];
-            var nextPageInfo = _memPagesInfo[nextMemPageIndex];
-            if ((curPageInfo.MemPageIndex + 1) == nextPageInfo.MemPageIndex && (curPageInfo.FilePageIndex + 1) == nextPageInfo.FilePageIndex)
-            {
-                curOperation.length++;
-            }
-            else
-            {
-                operations.Add(curOperation);
-                curOperation = (nextMemPageIndex, 1);
-            }
-
-            curPageInfo = nextPageInfo;
-        }
-
-        // Increment ChangeRevision for the last page
-        if (curPageInfo.FilePageIndex > 0)
-        {
-            var ioTask = curPageInfo.IOReadTask;
+            // Wait for any pending I/O read to complete
+            var ioTask = pi.IOReadTask;
             if (ioTask != null && !ioTask.IsCompletedSuccessfully)
             {
                 ioTask.GetAwaiter().GetResult();
             }
 
-            var headerAddr = (PageBaseHeader*)(memPageBaseAddr + (curPageInfo.MemPageIndex * PageSize));
-            ++headerAddr->ChangeRevision;
+            var livePageAddr = memPageBaseAddr + (memPageIndex * (long)PageSize);
+
+            // Rent a staging buffer and snapshot the live page via seqlock
+            using var staging = stagingPool.Rent();
+            CopyPageWithSeqlock(livePageAddr, staging.Pointer);
+
+            // Increment ChangeRevision and compute CRC on the staging copy (not the live page)
+            if (pi.FilePageIndex > 0)
+            {
+                var stagingHeader = (PageBaseHeader*)staging.Pointer;
+                ++stagingHeader->ChangeRevision;
+                stagingHeader->PageChecksum = WalCrc.ComputeSkipping(staging.Span, PageBaseHeader.PageChecksumOffset, PageBaseHeader.PageChecksumSize);
+            }
+
+            // Write staging buffer to the data file (synchronous — checkpoint runs on dedicated thread)
+            var filePageIndex = pi.FilePageIndex;
+            var pageOffset = filePageIndex * (long)PageSize;
+            RandomAccess.Write(_fileHandle, staging.Span, pageOffset);
+            TrackFileGrowth(pageOffset + PageSize);
+
+            _metrics.PageWrittenToDiskCount++;
+            _metrics.WrittenOperationCount++;
         }
-
-        operations.Add(curOperation);
-
-        var tasks = new Task[operations.Count];
-        for (int i = 0; i < operations.Count; i++)
-        {
-            tasks[i] = SavePageInternal(operations[i].memPageIndex, operations[i].length).AsTask();
-        }
-
-        // No ContinueWith for dirty decrement — caller is responsible after fsync
-        return Task.WhenAll(tasks);
     }
 
     unsafe internal Task SavePages(int[] memPageIndices)
@@ -987,17 +1319,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         var lengthToWrite = PageSize * length;
         var pageData = MemPages.DataAsMemory.Slice(firstMemPageIndex * PageSize, lengthToWrite);
 
-        // Atomic max: concurrent SavePageInternal calls may race on _fileSize
-        var newSize = pageOffset + lengthToWrite;
-        long oldSize;
-        do
-        {
-            oldSize = _fileSize;
-            if (newSize <= oldSize)
-            {
-                break;
-            }
-        } while (Interlocked.CompareExchange(ref _fileSize, newSize, oldSize) != oldSize);
+        TrackFileGrowth(pageOffset + lengthToWrite);
 
         _metrics.PageWrittenToDiskCount += length;
         _metrics.WrittenOperationCount++;

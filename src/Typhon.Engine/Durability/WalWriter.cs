@@ -77,6 +77,12 @@ public sealed unsafe class WalWriter : ResourceNode, IMetricSource
     private readonly ManualResetEventSlim _durabilityEvent = new(false);
 
     // ═══════════════════════════════════════════════════════════════
+    // CRC chain state (single-threaded — writer thread only)
+    // ═══════════════════════════════════════════════════════════════
+
+    private uint _lastFooterCrc;
+
+    // ═══════════════════════════════════════════════════════════════
     // Error state
     // ═══════════════════════════════════════════════════════════════
 
@@ -324,6 +330,9 @@ public sealed unsafe class WalWriter : ResourceNode, IMetricSource
                         new Span<byte>(_stagingBuffer + padStart, padLength).Clear();
                     }
 
+                    // Patch chunk CRCs before writing to disk
+                    PatchChunkCrcs(new Span<byte>(_stagingBuffer, _stagingBufferSize), data.Length);
+
                     // 5. Write aligned to active segment
                     var segment = _segmentManager.ActiveSegment;
                     var writeSpan = new ReadOnlySpan<byte>(_stagingBuffer, bytesToWrite);
@@ -353,6 +362,7 @@ public sealed unsafe class WalWriter : ResourceNode, IMetricSource
                 {
                     var segment = _segmentManager.ActiveSegment;
                     _segmentManager.RotateSegment(firstLSN: batchHighLsn + 1, prevLastLSN: batchHighLsn);
+                    _lastFooterCrc = 0; // Reset CRC chain for new segment
                 }
 
                 // Handle explicit flush request
@@ -398,6 +408,9 @@ public sealed unsafe class WalWriter : ResourceNode, IMetricSource
                 new Span<byte>(_stagingBuffer + chunkDataLen, padLen).Clear();
             }
 
+            // Patch chunk CRCs before writing to disk
+            PatchChunkCrcs(new Span<byte>(_stagingBuffer, _stagingBufferSize), chunkDataLen);
+
             var writeSpan = new ReadOnlySpan<byte>(_stagingBuffer, chunkWriteLen);
 
             var flushStart = Stopwatch.GetTimestamp();
@@ -442,6 +455,9 @@ public sealed unsafe class WalWriter : ResourceNode, IMetricSource
                     new Span<byte>(_stagingBuffer + data.Length, padLen).Clear();
                 }
 
+                // Patch chunk CRCs before writing to disk
+                PatchChunkCrcs(new Span<byte>(_stagingBuffer, _stagingBufferSize), data.Length);
+
                 var segment = _segmentManager.ActiveSegment;
                 if (segment?.Handle != null)
                 {
@@ -462,6 +478,68 @@ public sealed unsafe class WalWriter : ResourceNode, IMetricSource
 
         // Final flush to ensure everything is on stable media
         PerformFlush();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CRC patching (single-threaded — writer thread only)
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Patches PrevCRC and footer CRC for all chunks within the staging data.
+    /// Called after data is copied to the staging buffer but before <see cref="IWalFileIO.WriteAligned"/>.
+    /// Walks frame-by-frame, chunk-by-chunk, maintaining the CRC chain in <see cref="_lastFooterCrc"/>.
+    /// </summary>
+    private void PatchChunkCrcs(Span<byte> stagingData, int dataLength)
+    {
+        int frameOffset = 0;
+        while (frameOffset + WalFrameHeader.SizeInBytes <= dataLength)
+        {
+            ref var frameHeader = ref Unsafe.As<byte, WalFrameHeader>(ref stagingData[frameOffset]);
+            if (frameHeader.FrameLength <= 0)
+            {
+                break;
+            }
+
+            var frameEnd = frameOffset + frameHeader.FrameLength;
+            if (frameEnd > dataLength)
+            {
+                break;
+            }
+
+            var chunkOffset = frameOffset + WalFrameHeader.SizeInBytes;
+            for (int i = 0; i < frameHeader.RecordCount; i++)
+            {
+                if (chunkOffset + WalChunkHeader.SizeInBytes > frameEnd)
+                {
+                    break;
+                }
+
+                ref var chunkHeader = ref Unsafe.As<byte, WalChunkHeader>(ref stagingData[chunkOffset]);
+
+                // Validate chunk fits within frame bounds
+                if (chunkHeader.ChunkSize < WalChunkHeader.SizeInBytes + WalChunkFooter.SizeInBytes ||
+                    chunkOffset + chunkHeader.ChunkSize > frameEnd)
+                {
+                    break;
+                }
+
+                // 1. Patch PrevCRC from writer's chain state
+                chunkHeader.PrevCRC = _lastFooterCrc;
+
+                // 2. Compute CRC over [0, ChunkSize - FooterSize) — header + body
+                var crcSpan = stagingData.Slice(chunkOffset, chunkHeader.ChunkSize - WalChunkFooter.SizeInBytes);
+                var crc = WalCrc.Compute(crcSpan);
+
+                // 3. Write footer CRC
+                Unsafe.As<byte, uint>(ref stagingData[chunkOffset + chunkHeader.ChunkSize - WalChunkFooter.SizeInBytes]) = crc;
+
+                // 4. Carry forward
+                _lastFooterCrc = crc;
+                chunkOffset += chunkHeader.ChunkSize;
+            }
+
+            frameOffset += frameHeader.FrameLength;
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════

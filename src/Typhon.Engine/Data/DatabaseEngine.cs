@@ -109,6 +109,8 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     private readonly IWalFileIO                 _walFileIO;
     private readonly IResource                  _durabilityNode;
     private WalRecoveryResult                   _lastRecoveryResult;
+    internal WalRecoveryResult                  LastRecoveryResult => _lastRecoveryResult;
+    private StagingBufferPool                   _stagingBufferPool;
 
     // Transaction counters for observability
     private long _transactionsCreated;
@@ -127,6 +129,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     private ConcurrentDictionary<Type, ComponentTable> _componentTableByType;
     private ConcurrentDictionary<ushort, ComponentTable> _componentTableByWalTypeId;
     private long _curPrimaryKey;
+    private Dictionary<string, ComponentR1> _persistedComponents;
     private ConcurrentDictionary<int, ChunkBasedSegment> _componentCollectionSegmentByStride;
     private ConcurrentDictionary<Type, VariableSizedBufferSegmentBase> _componentCollectionVSBSByType;
 
@@ -137,6 +140,26 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
     internal TransactionChain TransactionChain { get; }
     internal DeferredCleanupManager DeferredCleanupManager { get; }
+
+    /// <summary>
+    /// Process all pending deferred cleanups. Intended for test/diagnostic use.
+    /// Creates its own ChangeSet and processes ALL queued entries regardless of blockingTSN.
+    /// </summary>
+    /// <param name="nextMinTSN">Cutoff TSN for revision cleanup. 0 = use TransactionChain.NextFreeId + 1 (clean everything eligible).</param>
+    /// <returns>Number of entities cleaned up.</returns>
+    internal int FlushDeferredCleanups(long nextMinTSN = 0)
+    {
+        if (nextMinTSN == 0)
+        {
+            nextMinTSN = TransactionChain.NextFreeId + 1;
+        }
+
+        var changeSet = new ChangeSet(MMF);
+        var result = DeferredCleanupManager.ProcessDeferredCleanups(long.MaxValue, nextMinTSN, this, changeSet);
+        changeSet.SaveChanges();
+        return result;
+    }
+
     internal UowRegistry UowRegistry { get; private set; }
 
     /// <summary>
@@ -160,14 +183,18 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     [return: TransfersOwnership]
     public UnitOfWork CreateUnitOfWork(DurabilityMode durabilityMode = DurabilityMode.Deferred, TimeSpan timeout = default)
     {
-        var effectiveTimeout = timeout == default ? TimeoutOptions.Current.DefaultUowTimeout : timeout;
+        var effectiveTimeout = timeout == TimeSpan.Zero ? TimeoutOptions.Current.DefaultUowTimeout : timeout;
         var wc = WaitContext.FromTimeout(effectiveTimeout);
+
+        // For Deferred/GroupCommit: create the ChangeSet early so AllocateUowId can track
+        // the registry page mutation in it (avoiding a synchronous SaveChanges).
+        var changeSet = durabilityMode != DurabilityMode.Immediate ? MMF.CreateChangeSet() : null;
 
         // Back-pressure: if registry is full, wait for a slot to be freed.
         // The admission check is a fast-path optimization — AllocateUowId's CAS provides the real atomicity (TOCTOU by design).
-        var uowId = UowRegistry.AllocateUowId(ref wc);
+        var uowId = UowRegistry.AllocateUowId(ref wc, changeSet);
 
-        return new UnitOfWork(this, durabilityMode, uowId, effectiveTimeout);
+        return new UnitOfWork(this, durabilityMode, uowId, effectiveTimeout, changeSet);
     }
 
     /// <summary>Records that a transaction was created (for observability counters).</summary>
@@ -206,6 +233,10 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         {
             CreateSystemSchemaR1();
         }
+        else
+        {
+            LoadSystemSchemaR1();
+        }
 
         InitializeWalManager();
         InitializeCheckpointManager();
@@ -225,6 +256,15 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             // Checkpoint must dispose first: runs final cycle, writes pages + advances LSN before WAL shuts down
             CheckpointManager?.Dispose();
             CheckpointManager = null;
+
+            // Dispose staging pool after checkpoint manager (checkpoint may use it during final cycle)
+            _stagingBufferPool?.Dispose();
+            _stagingBufferPool = null;
+
+            // Persist final TSN counter and flush all dirty pages to disk. This ensures:
+            // 1. TSN counter survives restart (MVCC visibility)
+            // 2. All committed transaction data is on disk even without WAL/checkpoint
+            PersistEngineState();
 
             WalManager?.Dispose();
             WalManager = null;
@@ -262,16 +302,25 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         }
 
         // Read initial CheckpointLSN from file header
-        long initialCheckpointLsn = 0;
+        long initialCheckpointLsn;
         using (var guard = EpochGuard.Enter(EpochManager))
         {
             MMF.RequestPageEpoch(0, guard.Epoch, out var memPageIdx);
             var page = MMF.GetPage(memPageIdx);
-            ref var header = ref page.As<RootFileHeader>();
+            ref var header = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
             initialCheckpointLsn = header.CheckpointLSN;
         }
 
-        CheckpointManager = new CheckpointManager(MMF, UowRegistry, WalManager, _options.Resources, EpochManager, _durabilityNode, initialCheckpointLsn);
+        _stagingBufferPool = new StagingBufferPool(_memoryAllocator, _durabilityNode);
+
+        // Enable FPI capture — creates FpiBitmap internally using cache page count
+        MMF.EnableFpiCapture(WalManager, _options.Wal?.EnableFpiCompression ?? false);
+
+        // Activate CRC verification mode — recovery is complete, so OnLoad checks are now safe
+        MMF.SetPageChecksumVerification(_options.Resources.PageChecksumVerification);
+
+        CheckpointManager = new CheckpointManager(MMF, UowRegistry, WalManager, _options.Resources, EpochManager, _stagingBufferPool, _durabilityNode,
+            initialCheckpointLsn);
         CheckpointManager.Start();
     }
 
@@ -306,7 +355,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             Debug.Assert(rootLatched, "TryLatchPageExclusive failed on root page during registry init");
             var rootPage = MMF.GetPage(rootMemPageIdx);
             cs.AddByMemPageIndex(rootMemPageIdx);
-            ref var header = ref rootPage.As<RootFileHeader>();
+            ref var header = ref rootPage.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
             header.UowRegistrySPI = segment.RootPageIndex;
             MMF.UnlatchPageExclusive(rootMemPageIdx);
 
@@ -320,7 +369,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             // Loading path: read SPI from root header
             MMF.RequestPageEpoch(0, epoch, out var rootMemPageIdx);
             var rootPage = MMF.GetPage(rootMemPageIdx);
-            ref var header = ref rootPage.As<RootFileHeader>();
+            ref var header = ref rootPage.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
             var spi = header.UowRegistrySPI;
             var checkpointLSN = header.CheckpointLSN;
             var segment = MMF.GetSegment(spi);
@@ -331,7 +380,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             {
                 // Two-phase WAL recovery: LoadFromDiskRaw preserves Pending entries for WAL cross-referencing
                 UowRegistry.LoadFromDiskRaw();
-                using var recovery = new WalRecovery(_walFileIO, walDir);
+                using var recovery = new WalRecovery(_walFileIO, walDir, MMF);
                 // Pass null for dbe: replay is deferred until component tables are registered (system schema auto-loading, #57)
                 _lastRecoveryResult = recovery.Recover(UowRegistry, checkpointLSN, null);
             }
@@ -359,14 +408,14 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         (VariableSizedBufferSegment<T>)_componentCollectionVSBSByType.GetOrAdd(typeof(T),
             _ => new VariableSizedBufferSegment<T>(GetComponentCollectionSegment<T>()));
 
-    internal VariableSizedBufferSegmentBase GetComponentCollectionVSBS(Type itemType) =>
+    internal VariableSizedBufferSegmentBase GetComponentCollectionVSBS(Type itemType, ChangeSet changeSet = null) =>
         _componentCollectionVSBSByType.GetOrAdd(itemType,
             type =>
             {
                 // Create the type for ComponentCollection<T>
                 var ctType = typeof(VariableSizedBufferSegment<>).MakeGenericType(type);
                 var fieldSize = DatabaseSchemaExtensions.FromType(type).field.SizeInComp();
-                var segment = GetComponentCollectionSegment(fieldSize);
+                var segment = GetComponentCollectionSegment(fieldSize, changeSet);
                 return (VariableSizedBufferSegmentBase)Activator.CreateInstance(ctType, segment);
             });
 
@@ -374,18 +423,22 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         _componentCollectionSegmentByStride.GetOrAdd(RoundToStandardStride(sizeof(T) * 8),
             stride => MMF.AllocateChunkBasedSegment(PageBlockType.None, ComponentCollectionSegmentStartingSize, stride));
 
-    internal ChunkBasedSegment GetComponentCollectionSegment(int itemSize) =>
+    internal ChunkBasedSegment GetComponentCollectionSegment(int itemSize, ChangeSet changeSet = null) =>
         _componentCollectionSegmentByStride.GetOrAdd(RoundToStandardStride(itemSize * 8),
-            stride => MMF.AllocateChunkBasedSegment(PageBlockType.None, ComponentCollectionSegmentStartingSize, stride));
+            stride => MMF.AllocateChunkBasedSegment(PageBlockType.None, ComponentCollectionSegmentStartingSize, stride, changeSet));
 
     internal long GetNewPrimaryKey() => Interlocked.Increment(ref _curPrimaryKey);
 
     // Create the first revision of the system schema
     private void CreateSystemSchemaR1()
     {
-        // Register the system components
-        RegisterComponentFromAccessor<FieldR1>();
-        RegisterComponentFromAccessor<ComponentR1>();
+        // Single ChangeSet tracks all structural pages (segments, BTree directories, occupancy bitmaps)
+        // allocated during component registration. This replaces the old FlushAllCachedPages() nuclear approach.
+        var cs = MMF.CreateChangeSet();
+
+        // Register the system components, passing the ChangeSet so all structural mutations are tracked
+        RegisterComponentFromAccessor<FieldR1>(cs);
+        RegisterComponentFromAccessor<ComponentR1>(cs);
 
         // Get their table
         _fieldsTable = GetComponentTable<FieldR1>();
@@ -400,26 +453,36 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         var page = MMF.GetPage(memPageIdx);
 
         // Save the entry points in the file header
-        var cs = MMF.CreateChangeSet();
         cs.AddByMemPageIndex(memPageIdx);
-        ref var rootFileHeader = ref page.As<RootFileHeader>();
+        ref var rootFileHeader = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
 
         rootFileHeader.SystemSchemaRevision = 1;
         rootFileHeader.FieldTableSPI = _fieldsTable.ComponentSegment.RootPageIndex;
         rootFileHeader.ComponentTableSPI = _componentsTable.ComponentSegment.RootPageIndex;
 
+        rootFileHeader.FieldTableVersionSPI            = _fieldsTable.CompRevTableSegment.RootPageIndex;
+        rootFileHeader.FieldTableDefaultIndexSPI       = _fieldsTable.DefaultIndexSegment.RootPageIndex;
+        rootFileHeader.FieldTableString64IndexSPI      = _fieldsTable.String64IndexSegment.RootPageIndex;
+        rootFileHeader.ComponentTableVersionSPI        = _componentsTable.CompRevTableSegment.RootPageIndex;
+        rootFileHeader.ComponentTableDefaultIndexSPI   = _componentsTable.DefaultIndexSegment.RootPageIndex;
+        rootFileHeader.ComponentTableString64IndexSPI  = _componentsTable.String64IndexSegment.RootPageIndex;
+        rootFileHeader.NextFreeTSN = TransactionChain.NextFreeId;
+
         MMF.UnlatchPageExclusive(memPageIdx);
-        cs.SaveChanges();
-        
+
         // Now save the system components schema in the database (to load them next time we open the database)
+        // These use transactions internally which have their own ChangeSets
         SaveInSystemSchema(_fieldsTable);
         SaveInSystemSchema(_componentsTable);
+
+        cs.SaveChanges();
+        MMF.FlushToDisk();
     }
 
     private void SaveInSystemSchema(ComponentTable table)
     {
         var definition = table.Definition;
-        using var t = this.CreateQuickTransaction();
+        using var t = this.CreateQuickTransaction(DurabilityMode.Immediate);
 
         var comp = new ComponentR1
         {
@@ -450,11 +513,152 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
                 a.Add(f);
             }
         }
-        
+
+        t.CreateEntity(ref comp);
         t.Commit();
     }
 
-    public bool RegisterComponentFromAccessor<T>() where T : unmanaged
+    /// <summary>
+    /// Restores the system schema (FieldR1 and ComponentR1 tables) from persisted SPIs on database reopen.
+    /// Populates <see cref="_persistedComponents"/> so that subsequent <see cref="RegisterComponentFromAccessor{T}"/> calls load existing segments instead
+    /// of allocating fresh ones.
+    /// </summary>
+    private void LoadSystemSchemaR1()
+    {
+        using var guard = EpochGuard.Enter(EpochManager);
+        var epoch = guard.Epoch;
+
+        MMF.RequestPageEpoch(0, epoch, out var memPageIdx);
+        var page = MMF.GetPage(memPageIdx);
+        ref var h = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
+
+        // Restore the TSN counter so MVCC visibility works for entities from previous sessions
+        if (h.NextFreeTSN > 0)
+        {
+            TransactionChain.SetNextFreeId(h.NextFreeTSN);
+        }
+
+        if (h.SystemSchemaRevision == 0)
+        {
+            return;
+        }
+
+        // Register system type definitions in DBD
+        DBD.CreateFromAccessor<FieldR1>();
+        DBD.CreateFromAccessor<ComponentR1>();
+
+        var fieldDef = DBD.GetComponent(FieldR1.SchemaName, 1);
+        var compDef  = DBD.GetComponent(ComponentR1.SchemaName, 1);
+
+        // Load system tables using the persisted SPIs
+        _fieldsTable = new ComponentTable(this, fieldDef, this, h.FieldTableSPI, h.FieldTableVersionSPI, h.FieldTableDefaultIndexSPI, h.FieldTableString64IndexSPI);
+        _componentsTable = new ComponentTable(this, compDef, this, h.ComponentTableSPI, h.ComponentTableVersionSPI, h.ComponentTableDefaultIndexSPI, h.ComponentTableString64IndexSPI);
+
+        _componentTableByType.TryAdd(typeof(FieldR1), _fieldsTable);
+        _componentTableByType.TryAdd(typeof(ComponentR1), _componentsTable);
+
+        var fieldsWalTypeId = (ushort)_fieldsTable.ComponentSegment.RootPageIndex;
+        _fieldsTable.WalTypeId = fieldsWalTypeId;
+        _componentTableByWalTypeId.TryAdd(fieldsWalTypeId, _fieldsTable);
+
+        var compsWalTypeId = (ushort)_componentsTable.ComponentSegment.RootPageIndex;
+        _componentsTable.WalTypeId = compsWalTypeId;
+        _componentTableByWalTypeId.TryAdd(compsWalTypeId, _componentsTable);
+
+        // Read all ComponentR1 entries to build the persisted components dictionary
+        _persistedComponents = new Dictionary<string, ComponentR1>();
+        var entryCount = _componentsTable.PrimaryKeyIndex.EntryCount;
+        if (entryCount > 0)
+        {
+            long maxPk = 0;
+            int found = 0;
+
+            using var tx = this.CreateQuickTransaction();
+            for (long pk = 1; found < entryCount; pk++)
+            {
+                if (pk > entryCount * 10)
+                {
+                    break;
+                }
+
+                if (!tx.ReadEntity<ComponentR1>(pk, out var comp))
+                {
+                    continue;
+                }
+
+                found++;
+                if (pk > maxPk)
+                {
+                    maxPk = pk;
+                }
+
+                var pocoType = comp.POCOType.AsString;
+                _persistedComponents[pocoType] = comp;
+            }
+
+            // Update _curPrimaryKey from both system tables
+            UpdateCurPrimaryKey(maxPk);
+
+            if (_fieldsTable.PrimaryKeyIndex.EntryCount > 0)
+            {
+                var fieldsMaxPk = _fieldsTable.PrimaryKeyIndex.GetMaxKey();
+                UpdateCurPrimaryKey(fieldsMaxPk);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Persists critical engine state to disk during Dispose:
+    /// 1. Flushes any dirty pages left by unflushed Deferred UoWs (safety net)
+    /// 2. Writes the current TSN counter to the root file header (MVCC visibility on reopen)
+    /// 3. Flushes ALL changes to stable storage via SaveChanges + FlushToDisk
+    /// </summary>
+    private void PersistEngineState()
+    {
+        using var guard = EpochGuard.Enter(EpochManager);
+        var epoch = guard.Epoch;
+
+        var cs = MMF.CreateChangeSet();
+
+        // Safety net: collect dirty pages left by unflushed Deferred UoWs and include
+        // them in this ChangeSet so they are persisted during the final SaveChanges.
+        var dirtyPages = MMF.CollectDirtyMemPageIndices();
+        if (dirtyPages.Length > 0)
+        {
+            _log?.LogWarning("Engine shutdown: flushing {Count} dirty page(s) to disk", dirtyPages.Length);
+            foreach (var idx in dirtyPages)
+            {
+                cs.AddByMemPageIndex(idx);
+            }
+        }
+
+        // Write TSN counter to root file header
+        MMF.RequestPageEpoch(0, epoch, out var memPageIdx);
+        var latched = MMF.TryLatchPageExclusive(memPageIdx);
+        Debug.Assert(latched, "TryLatchPageExclusive failed on root page during engine state save");
+        var page = MMF.GetPage(memPageIdx);
+
+        cs.AddByMemPageIndex(memPageIdx);
+        ref var header = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
+        header.NextFreeTSN = TransactionChain.NextFreeId;
+
+        MMF.UnlatchPageExclusive(memPageIdx);
+
+        cs.SaveChanges();
+        MMF.FlushToDisk();
+    }
+
+    private void UpdateCurPrimaryKey(long pk)
+    {
+        long current;
+        do
+        {
+            current = _curPrimaryKey;
+        }
+        while (pk > current && Interlocked.CompareExchange(ref _curPrimaryKey, pk, current) != current);
+    }
+
+    public bool RegisterComponentFromAccessor<T>(ChangeSet changeSet = null) where T : unmanaged
     {
         var definition = DBD.CreateFromAccessor<T>();
         if (definition == null)
@@ -462,7 +666,37 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             return false;
         }
 
-        var componentTable = new ComponentTable(this, definition, this);
+        ComponentTable componentTable;
+        var typeName = typeof(T).FullName;
+
+        if (_persistedComponents != null && _persistedComponents.TryGetValue(typeName, out var persisted))
+        {
+            // Load path: restore from saved SPIs
+            componentTable = new ComponentTable(this, definition, this, persisted.ComponentSPI, persisted.VersionSPI,
+                persisted.DefaultIndexSPI, persisted.String64IndexSPI);
+
+            // Update _curPrimaryKey from loaded PK index
+            if (componentTable.PrimaryKeyIndex.EntryCount > 0)
+            {
+                var maxPk = componentTable.PrimaryKeyIndex.GetMaxKey();
+                UpdateCurPrimaryKey(maxPk);
+            }
+        }
+        else
+        {
+            // Create path: use the provided ChangeSet, or create a new one for standalone registration
+            var cs = changeSet ?? MMF.CreateChangeSet();
+            componentTable = new ComponentTable(this, definition, this, changeSet: cs);
+
+            // Save metadata for future reload (skip during initial CreateSystemSchemaR1)
+            if (_componentsTable != null)
+            {
+                SaveInSystemSchema(componentTable);
+                cs.SaveChanges();
+                MMF.FlushToDisk();
+            }
+        }
+
         _componentTableByType.TryAdd(typeof(T), componentTable);
 
         // Assign a stable WAL type ID derived from the component segment's persistent root page index
@@ -503,6 +737,10 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
     internal void RecordConflict() => Interlocked.Increment(ref _transactionConflicts);
 
+    internal void LogDeferredUowNotFlushed(ushort uowId, int committedCount) =>
+        _log?.LogWarning("Deferred UoW #{UowId} disposed with {Count} committed transaction(s) without Flush/FlushAsync. " +
+                         "Data relies on engine shutdown safety net.", uowId, committedCount);
+
     #endregion
 
     #region IMetricSource Implementation
@@ -528,7 +766,6 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         // Deferred cleanup throughput
         writer.WriteThroughput("Cleanup.Enqueued", DeferredCleanupManager.EnqueuedTotal);
         writer.WriteThroughput("Cleanup.Processed", DeferredCleanupManager.ProcessedTotal);
-        writer.WriteThroughput("Cleanup.LazyTriggered", DeferredCleanupManager.LazyCleanupTotal);
     }
 
     /// <inheritdoc />

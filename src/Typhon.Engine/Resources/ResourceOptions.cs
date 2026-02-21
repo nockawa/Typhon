@@ -4,6 +4,19 @@ using System;
 namespace Typhon.Engine;
 
 /// <summary>
+/// Controls when page CRC verification occurs.
+/// </summary>
+[PublicAPI]
+public enum PageChecksumVerification
+{
+    /// <summary>Verify page CRC on every load from disk. Detects corruption on first access and triggers FPI repair.</summary>
+    OnLoad,
+
+    /// <summary>Only verify page CRC during crash recovery. Normal operation skips CRC checks for lower overhead.</summary>
+    RecoveryOnly,
+}
+
+/// <summary>
 /// Configuration options for resource budgets and limits.
 /// Set at startup, immutable thereafter.
 /// </summary>
@@ -102,6 +115,13 @@ public class ResourceOptions
     /// Maximum dirty pages before forcing a checkpoint.
     /// </summary>
     public int CheckpointMaxDirtyPages { get; set; } = 10000;
+
+    /// <summary>
+    /// Controls when page CRC verification occurs.
+    /// <see cref="PageChecksumVerification.OnLoad"/> verifies on every page load (higher safety, slight overhead).
+    /// <see cref="PageChecksumVerification.RecoveryOnly"/> only during crash recovery (lower overhead).
+    /// </summary>
+    public PageChecksumVerification PageChecksumVerification { get; set; } = PageChecksumVerification.OnLoad;
 
     /// <summary>
     /// Checkpoint interval when idle (milliseconds).

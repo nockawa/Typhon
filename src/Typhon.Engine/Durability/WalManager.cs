@@ -1,5 +1,6 @@
 using JetBrains.Annotations;
 using System;
+using System.Runtime.InteropServices;
 
 namespace Typhon.Engine;
 
@@ -116,6 +117,103 @@ public sealed class WalManager : ResourceNode
     /// Used by <see cref="DurabilityMode.Deferred"/> callers.
     /// </summary>
     public void RequestFlush() => _writer?.RequestFlush();
+
+    // ═══════════════════════════════════════════════════════════════
+    // FPI Search (on-the-fly repair)
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Scans all WAL segments for the most recent Full-Page Image (FPI) matching the given file page index. Returns the page data (8192 bytes) if found,
+    /// or null if no FPI exists. Handles both compressed (LZ4) and uncompressed FPI payloads.
+    /// Used by <see cref="PagedMMF.TryRepairPageFromFpi"/> for on-the-fly repair during normal operation.
+    /// </summary>
+    internal byte[] SearchFpiForPage(int filePageIndex)
+    {
+        if (SegmentManager == null)
+        {
+            return null;
+        }
+
+        var segmentPaths = SegmentManager.GetAllSegmentPaths();
+        if (segmentPaths.Count == 0)
+        {
+            return null;
+        }
+
+        byte[] bestPageData = null;
+        long bestLSN = -1;
+
+        using var reader = new WalSegmentReader(_fileIO);
+
+        foreach (var path in segmentPaths)
+        {
+            if (!reader.OpenSegment(path))
+            {
+                continue;
+            }
+
+            while (reader.TryReadNext(out var chunkHeader, out var body))
+            {
+                if ((WalChunkType)chunkHeader.ChunkType != WalChunkType.FullPageImage)
+                {
+                    continue;
+                }
+
+                // FPI body: [LSN (8B)] [FpiMetadata (16B)] [page data]
+                if (body.Length < sizeof(long) + FpiMetadata.SizeInBytes)
+                {
+                    continue;
+                }
+
+                var lsn = MemoryMarshal.Read<long>(body);
+                var meta = MemoryMarshal.Read<FpiMetadata>(body.Slice(sizeof(long)));
+
+                if (meta.FilePageIndex != filePageIndex)
+                {
+                    continue;
+                }
+
+                if (lsn <= bestLSN)
+                {
+                    continue;
+                }
+
+                var pagePayload = body.Slice(sizeof(long) + FpiMetadata.SizeInBytes);
+
+                if (meta.CompressionAlgo != FpiCompression.AlgoNone)
+                {
+                    // Compressed FPI — decompress the page payload
+                    if (meta.CompressionAlgo != FpiCompression.AlgoLZ4)
+                    {
+                        continue; // Unknown algorithm — try older FPI
+                    }
+
+                    var decompressed = new byte[meta.UncompressedSize];
+                    var decompressedSize = FpiCompression.Decompress(pagePayload, decompressed);
+                    if (decompressedSize != meta.UncompressedSize)
+                    {
+                        continue; // Decompression failure — try older FPI
+                    }
+
+                    bestLSN = lsn;
+                    bestPageData = decompressed;
+                }
+                else
+                {
+                    // Uncompressed FPI — validate and extract
+                    if (pagePayload.Length < PagedMMF.PageSize)
+                    {
+                        continue;
+                    }
+
+                    bestLSN = lsn;
+                    bestPageData = pagePayload.Slice(0, PagedMMF.PageSize).ToArray();
+                }
+            }
+        }
+
+        return bestPageData;
+    }
 
     // ═══════════════════════════════════════════════════════════════
     // Dispose
