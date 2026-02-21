@@ -1473,7 +1473,7 @@ public unsafe class Transaction : IDisposable
         // Enqueue for deferred cleanup — all cleanup is processed AFTER the commit loop, never inline.
         // This avoids chain compaction while other transactions hold cached revision indices.
         _deferredEnqueueBatch ??= new List<DeferredCleanupManager.CleanupEntry>(16);
-        _deferredEnqueueBatch.Add(new DeferredCleanupManager.CleanupEntry { Table = info.ComponentTable, PrimaryKey = pk });
+        _deferredEnqueueBatch.Add(new DeferredCleanupManager.CleanupEntry { Table = info.ComponentTable, PrimaryKey = pk, FirstChunkId = firstChunkId });
 
         // Flush at capacity to bound memory — content is transient, safe to drain mid-loop
         if (_deferredEnqueueBatch.Count >= DeferredEnqueueBatchCapacity)

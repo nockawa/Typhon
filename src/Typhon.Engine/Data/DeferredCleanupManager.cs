@@ -1,6 +1,9 @@
-using Microsoft.Extensions.Logging;
+using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
 
 namespace Typhon.Engine;
 
@@ -25,6 +28,7 @@ internal class DeferredCleanupManager
     {
         public ComponentTable Table;
         public long PrimaryKey;
+        public int FirstChunkId;
     }
 
     internal struct DeferredChunkFreeEntry
@@ -206,7 +210,9 @@ internal class DeferredCleanupManager
 
         // ── Collect mature entity cleanup entries ──
         List<CleanupEntry> toCleanup = null;
-        var tsnsToRemove = new List<long>();
+        var maxTsnCount = Math.Max(_pendingCleanups.Count, _pendingChunkFrees.Count);
+        Span<long> tsnsToRemove = maxTsnCount <= 32 ? stackalloc long[32] : new long[maxTsnCount];
+        var tsnsToRemoveCount = 0;
 
         foreach (var kvp in _pendingCleanups)
         {
@@ -217,7 +223,7 @@ internal class DeferredCleanupManager
 
             toCleanup ??= new List<CleanupEntry>();
             toCleanup.AddRange(kvp.Value);
-            tsnsToRemove.Add(kvp.Key);
+            tsnsToRemove[tsnsToRemoveCount++] = kvp.Key;
 
             // Remove from reverse lookup, then return the list to the pool
             foreach (var entry in kvp.Value)
@@ -227,16 +233,16 @@ internal class DeferredCleanupManager
             ReturnList(kvp.Value);
         }
 
-        foreach (var tsn in tsnsToRemove)
+        for (var i = 0; i < tsnsToRemoveCount; i++)
         {
-            _pendingCleanups.Remove(tsn);
+            _pendingCleanups.Remove(tsnsToRemove[i]);
         }
 
         QueueSize = _entityToBlockingTSN.Count;
 
         // ── Collect mature chunk free entries (keyed by safeAfterTSN, mature when nextMinTSN >= key) ──
         List<DeferredChunkFreeEntry> chunksToFree = null;
-        tsnsToRemove.Clear();
+        tsnsToRemoveCount = 0;
 
         foreach (var kvp in _pendingChunkFrees)
         {
@@ -247,13 +253,13 @@ internal class DeferredCleanupManager
 
             chunksToFree ??= new List<DeferredChunkFreeEntry>();
             chunksToFree.AddRange(kvp.Value);
-            tsnsToRemove.Add(kvp.Key);
+            tsnsToRemove[tsnsToRemoveCount++] = kvp.Key;
             ReturnChunkFreeList(kvp.Value);
         }
 
-        foreach (var tsn in tsnsToRemove)
+        for (var i = 0; i < tsnsToRemoveCount; i++)
         {
-            _pendingChunkFrees.Remove(tsn);
+            _pendingChunkFrees.Remove(tsnsToRemove[i]);
         }
 
         if (chunksToFree != null)
@@ -280,12 +286,41 @@ internal class DeferredCleanupManager
 
         if (toCleanup != null)
         {
-            collectedChunkFrees = new List<DeferredChunkFreeEntry>();
-            foreach (var entry in toCleanup)
+            collectedChunkFrees = new List<DeferredChunkFreeEntry>(toCleanup.Count);
+            using var entityGuard = EpochGuard.Enter(dbe.EpochManager);
+            var cleanupSpan = CollectionsMarshal.AsSpan(toCleanup);
+
+            // Fast path: if all entries share the same table (common: BulkUpdate uses one component type), single batch
+            var allSameTable = true;
+            for (var i = 1; i < cleanupSpan.Length; i++)
             {
-                if (CleanupEntityRevisions(entry.Table, entry.PrimaryKey, nextMinTSN, dbe, changeSet, collectedChunkFrees))
+                if (!ReferenceEquals(cleanupSpan[i].Table, cleanupSpan[0].Table))
                 {
-                    cleanedCount++;
+                    allSameTable = false;
+                    break;
+                }
+            }
+
+            if (allSameTable)
+            {
+                CleanupEntityRevisionsBatched(cleanupSpan, nextMinTSN, dbe, changeSet, collectedChunkFrees, ref cleanedCount);
+            }
+            else
+            {
+                // Multi-table path: sort by table identity hash to group, then process contiguous groups
+                cleanupSpan.Sort((a, b) => RuntimeHelpers.GetHashCode(a.Table).CompareTo(RuntimeHelpers.GetHashCode(b.Table)));
+                var groupStart = 0;
+                while (groupStart < cleanupSpan.Length)
+                {
+                    var groupTable = cleanupSpan[groupStart].Table;
+                    var groupEnd = groupStart + 1;
+                    while (groupEnd < cleanupSpan.Length && ReferenceEquals(cleanupSpan[groupEnd].Table, groupTable))
+                    {
+                        groupEnd++;
+                    }
+                    CleanupEntityRevisionsBatched(cleanupSpan.Slice(groupStart, groupEnd - groupStart), nextMinTSN, dbe, changeSet,
+                        collectedChunkFrees, ref cleanedCount);
+                    groupStart = groupEnd;
                 }
             }
         }
@@ -365,76 +400,71 @@ internal class DeferredCleanupManager
     }
 
     /// <summary>
-    /// Clean up old revisions for a single entity. Creates its own accessors within an epoch scope.
+    /// Clean up old revisions for a batch of entities sharing the same <see cref="ComponentTable"/>.
+    /// Shares CompRevTable and CompContent accessors across the batch to avoid per-entity creation overhead.
+    /// Caller must be inside an epoch scope.
     /// </summary>
-    private static bool CleanupEntityRevisions(ComponentTable table, long pk, long nextMinTSN, DatabaseEngine dbe, ChangeSet changeSet,
-        List<DeferredChunkFreeEntry> collectedChunkFrees)
+    private static void CleanupEntityRevisionsBatched(Span<CleanupEntry> entries, long nextMinTSN, DatabaseEngine dbe, ChangeSet changeSet,
+        List<DeferredChunkFreeEntry> collectedChunkFrees, ref int cleanedCount)
     {
-        using var guard = EpochGuard.Enter(dbe.EpochManager);
+        Debug.Assert(entries.Length > 0);
+        Debug.Assert(dbe.EpochManager.IsCurrentThreadInScope);
 
-        // Look up the entity's revision chain from the PK index
-        var pkIndexAccessor = table.PrimaryKeyIndex.Segment.CreateChunkAccessor(changeSet);
-        var lookupResult = table.PrimaryKeyIndex.TryGet(pk, ref pkIndexAccessor);
-        pkIndexAccessor.Dispose();
+        var table = entries[0].Table;
 
-        if (lookupResult.IsFailure)
-        {
-            return false; // Entity no longer exists — already cleaned up by deletion
-        }
-
-        var firstChunkId = lookupResult.Value;
-
-        // Create accessors for the cleanup operation
+        // Shared accessors — created once for the entire batch
         var compRevTableAccessor = table.CompRevTableSegment.CreateChunkAccessor(changeSet);
         var compContentAccessor = table.ComponentSegment.CreateChunkAccessor(changeSet);
 
-        // Acquire exclusive lock — cleanup restructures the chain, must be serialized with AddCompRev.
-        // Use TryEnter: if contended, skip this entry — it will be retried on the next cleanup pass.
-        ref var header = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(firstChunkId, true);
-        if (!header.Control.TryEnterExclusiveAccess())
+        for (var i = 0; i < entries.Length; i++)
         {
-            compRevTableAccessor.Dispose();
-            compContentAccessor.Dispose();
-            return false;
-        }
+            ref var entry = ref entries[i];
+            Debug.Assert(ReferenceEquals(entry.Table, table));
 
-        bool isDeleted;
-        try
-        {
-            isDeleted = ComponentRevisionManager.CleanUpUnusedEntriesCore(
-                table, firstChunkId, nextMinTSN, ref compRevTableAccessor, ref compContentAccessor, collectedChunkFrees);
-        }
-        finally
-        {
-            header = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(firstChunkId);
-            header.Control.ExitExclusiveAccess();
-        }
-        if (isDeleted)
-        {
-            if (table.Definition.AllowMultiple)
+            var firstChunkId = entry.FirstChunkId;
+
+            // Acquire exclusive lock — cleanup restructures the chain, must be serialized with AddCompRev.
+            // Use TryEnter: if contended, skip this entry — it will be retried on the next cleanup pass.
+            ref var header = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(firstChunkId, true);
+            if (!header.Control.TryEnterExclusiveAccess())
             {
-                // Don't free the revision chain — the PK buffer still references it.
-                // The entry will show as deleted when read (ComponentChunkId == 0).
+                continue;
+            }
+
+            bool isDeleted;
+            try
+            {
+                isDeleted = ComponentRevisionManager.CleanUpUnusedEntriesCore(
+                    table, firstChunkId, nextMinTSN, ref compRevTableAccessor, ref compContentAccessor, collectedChunkFrees);
+            }
+            finally
+            {
+                header = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(firstChunkId);
+                header.Control.ExitExclusiveAccess();
+            }
+
+            if (isDeleted)
+            {
+                if (!table.Definition.AllowMultiple)
+                {
+                    // Entity is fully deleted — remove from PK index and free revision chain
+                    var pkAccessor = table.PrimaryKeyIndex.Segment.CreateChunkAccessor(changeSet);
+                    table.PrimaryKeyIndex.Remove(entry.PrimaryKey, out _, ref pkAccessor);
+                    pkAccessor.Dispose();
+
+                    table.CompRevTableSegment.FreeChunk(firstChunkId);
+                }
             }
             else
             {
-                // Entity is fully deleted — remove from PK index and free revision chain
-                var accessor = table.PrimaryKeyIndex.Segment.CreateChunkAccessor(changeSet);
-                table.PrimaryKeyIndex.Remove(pk, out _, ref accessor);
-                accessor.Dispose();
-
-                table.CompRevTableSegment.FreeChunk(firstChunkId);
+                compRevTableAccessor.DirtyChunk(firstChunkId);
             }
-        }
-        else
-        {
-            compRevTableAccessor.DirtyChunk(firstChunkId);
+
+            cleanedCount++;
         }
 
         compRevTableAccessor.Dispose();
         compContentAccessor.Dispose();
-
-        return true;
     }
 
     /// <summary>Rent a list from the pool or create a new one. Must be called under lock.</summary>
