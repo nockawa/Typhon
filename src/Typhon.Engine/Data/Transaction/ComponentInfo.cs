@@ -2,11 +2,25 @@
 
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using Typhon.Engine.BPTree;
 
 namespace Typhon.Engine;
 
-internal abstract class ComponentInfoBase
+/// <summary>
+/// Action callback for <see cref="ComponentInfo.ForEachMutableEntry{TAction}"/>.
+/// Implemented as a struct for zero-overhead JIT specialization (same mechanism as <c>Span&lt;T&gt;.Sort</c>).
+/// </summary>
+internal interface IEntryAction
+{
+    void Process(ref CommitContext context);
+}
+
+/// <summary>
+/// Unified component info class that replaces the former ComponentInfoBase/ComponentInfoSingle/ComponentInfoMultiple hierarchy.
+/// Uses a boolean flag (<see cref="IsMultiple"/>) and dual caches to handle both single and multiple components.
+/// </summary>
+internal sealed class ComponentInfo
 {
     [Flags]
     public enum OperationType
@@ -42,18 +56,45 @@ internal abstract class ComponentInfoBase
         /// Monotonic commit counter captured at read time. Compared against header.CommitSequence during commit to detect any commits since our
         /// read — immune to revision index ordering and cleanup compaction that can fool TSN/LCRI-based detection.
         public int ReadCommitSequence;
-
     }
 
-    public abstract bool IsMultiple { get; }
-    public abstract int EntryCount { get; }
+    // Identity
+    public readonly bool IsMultiple;
+    public int EntryCount => IsMultiple ? MultipleCache.Count : SingleCache.Count;
+
+    // Common fields
     public ComponentTable ComponentTable;
     public ChunkBasedSegment CompContentSegment;
     public ChunkBasedSegment CompRevTableSegment;
     public BTree<long> PrimaryKeyIndex;
     public ChunkAccessor CompContentAccessor;
     public ChunkAccessor CompRevTableAccessor;
-    public abstract void AddNew(long pk, CompRevInfo entry);
+
+    // Dual caches (one is always null)
+    internal Dictionary<long, CompRevInfo> SingleCache;
+    internal Dictionary<long, List<CompRevInfo>> MultipleCache;
+
+    public ComponentInfo(bool isMultiple)
+    {
+        IsMultiple = isMultiple;
+    }
+
+    public void AddNew(long pk, CompRevInfo entry)
+    {
+        if (IsMultiple)
+        {
+            if (!MultipleCache.TryGetValue(pk, out var list))
+            {
+                list = [];
+                MultipleCache.Add(pk, list);
+            }
+            list.Add(entry);
+        }
+        else
+        {
+            SingleCache.Add(pk, entry);
+        }
+    }
 
     /// <summary>
     /// Disposes the ChunkAccessor fields to flush dirty pages.
@@ -63,33 +104,45 @@ internal abstract class ComponentInfoBase
         CompContentAccessor.Dispose();
         CompRevTableAccessor.Dispose();
     }
-}
 
-internal class ComponentInfoSingle : ComponentInfoBase
-{
-    public override bool IsMultiple => false;
-    public override int EntryCount => CompRevInfoCache.Count;
-
-    public override void AddNew(long pk, CompRevInfo entry) => CompRevInfoCache.Add(pk, entry);
-
-    public Dictionary<long, CompRevInfo> CompRevInfoCache;
-}
-
-internal class ComponentInfoMultiple : ComponentInfoBase
-{
-    public override bool IsMultiple => true;
-    public override int EntryCount => CompRevInfoCache.Count;
-
-    public override void AddNew(long pk, CompRevInfo entry)
+    /// <summary>
+    /// Zero-overhead polymorphic iteration via constrained-generic struct callback.
+    /// JIT specializes per <typeparamref name="TAction"/>, inlining <see cref="IEntryAction.Process"/>.
+    /// Sets <see cref="CommitContext.PrimaryKey"/> and <see cref="CommitContext.CompRevInfo"/> before calling action.Process.
+    /// Skips entries where Operations == Read.
+    /// </summary>
+    public void ForEachMutableEntry<TAction>(ref CommitContext context, ref TAction action) where TAction : struct, IEntryAction
     {
-        // We might want to access this component again in the Transaction to let's cache the PK/CompRev
-        if (!CompRevInfoCache.TryGetValue(pk, out var list))
+        if (IsMultiple)
         {
-            list = [];
-            CompRevInfoCache.Add(pk, list);
+            foreach (var key in MultipleCache.Keys)
+            {
+                context.PrimaryKey = key;
+                var list = CollectionsMarshal.AsSpan(CollectionsMarshal.GetValueRefOrNullRef(MultipleCache, key));
+                foreach (ref var cri in list)
+                {
+                    if (cri.Operations == OperationType.Read)
+                    {
+                        continue;
+                    }
+                    context.CompRevInfo = ref cri;
+                    action.Process(ref context);
+                }
+            }
         }
-        list.Add(entry);
+        else
+        {
+            foreach (var key in SingleCache.Keys)
+            {
+                context.PrimaryKey = key;
+                ref var cri = ref CollectionsMarshal.GetValueRefOrNullRef(SingleCache, key);
+                if (cri.Operations == OperationType.Read)
+                {
+                    continue;
+                }
+                context.CompRevInfo = ref cri;
+                action.Process(ref context);
+            }
+        }
     }
-
-    public Dictionary<long, List<CompRevInfo>> CompRevInfoCache;
 }

@@ -6,7 +6,7 @@ namespace Typhon.Engine;
 
 internal static unsafe class IndexMaintainer
 {
-    internal static void UpdateIndices(long pk, ComponentInfoBase info, ComponentInfoBase.CompRevInfo compRevInfo, int prevCompChunkId, ChangeSet changeSet)
+    internal static void UpdateIndices(long pk, ComponentInfo info, ComponentInfo.CompRevInfo compRevInfo, int prevCompChunkId, ChangeSet changeSet)
     {
         // If there's a previous revision, we need to update the indices if some indexed fields changed
         var startChunkId = compRevInfo.CompRevTableFirstChunkId;
@@ -49,7 +49,7 @@ internal static unsafe class IndexMaintainer
 
         // No previous revision, it means we're adding the first component revision, add the indices
         // But only if this is truly a new component (Created operation), not a resurrection (Updated operation with prevCompChunkId == 0)
-        else if ((compRevInfo.Operations & ComponentInfoBase.OperationType.Created) == ComponentInfoBase.OperationType.Created)
+        else if ((compRevInfo.Operations & ComponentInfo.OperationType.Created) == ComponentInfo.OperationType.Created)
         {
             var cur = info.CompContentAccessor.GetChunkAddress(compRevInfo.CurCompContentChunkId);
 
@@ -79,7 +79,7 @@ internal static unsafe class IndexMaintainer
         }
     }
 
-    internal static void RemoveSecondaryIndices(ComponentInfoBase info, int prevCompChunkId, int startChunkId, ChangeSet changeSet)
+    internal static void RemoveSecondaryIndices(ComponentInfo info, int prevCompChunkId, int startChunkId, ChangeSet changeSet)
     {
         var prev = info.CompContentAccessor.GetChunkAddress(prevCompChunkId);
         var indexedFieldInfos = info.ComponentTable.IndexedFieldInfos;

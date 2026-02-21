@@ -8,60 +8,42 @@ namespace Typhon.Engine;
 
 internal static class WalSerializer
 {
+    /// <summary>Action struct for WAL size calculation pass.</summary>
+    private struct WalSizeAction : IEntryAction
+    {
+        public int RecordCount;
+        public int TotalPayload;
+        public int StorageSize;
+
+        public void Process(ref CommitContext ctx)
+        {
+            RecordCount++;
+            var isDelete = (ctx.CompRevInfo.Operations & ComponentInfo.OperationType.Deleted) != 0;
+            var bodyLen = WalRecordHeader.SizeInBytes + (isDelete ? 0 : StorageSize);
+            TotalPayload += WalChunkHeader.SizeInBytes + bodyLen + WalChunkFooter.SizeInBytes;
+        }
+    }
+
     /// <summary>
     /// Serializes all committed component changes into the WAL commit buffer. Called after CommitComponentCore loop completes (all conflicts resolved,
     /// revisions visible) but before State = Committed.
     /// </summary>
     /// <returns>The highest LSN assigned to the serialized records, or 0 if nothing was serialized.</returns>
-    internal static long SerializeToWal(Dictionary<Type, ComponentInfoBase> componentInfos, WalManager walManager, long tsn, ushort uowId, 
-        ref UnitOfWorkContext ctx)
+    internal static long SerializeToWal(Dictionary<Type, ComponentInfo> componentInfos, WalManager walManager, long tsn, ushort uowId, ref UnitOfWorkContext ctx)
     {
-        // Count non-Read operations and total payload size
+        // Pass 1: Count non-Read operations and total payload size via ForEachMutableEntry
+        var context = new CommitContext();
         int recordCount = 0;
         int totalPayload = 0;
 
         foreach (var kvp in componentInfos)
         {
             var info = kvp.Value;
-            var storageSize = info.ComponentTable.ComponentStorageSize;
-
-            switch (info)
-            {
-                case ComponentInfoSingle single:
-                    foreach (var pk in single.CompRevInfoCache.Keys)
-                    {
-                        ref var cri = ref CollectionsMarshal.GetValueRefOrNullRef(single.CompRevInfoCache, pk);
-                        if (cri.Operations == ComponentInfoBase.OperationType.Read)
-                        {
-                            continue;
-                        }
-
-                        recordCount++;
-                        var isDelete = (cri.Operations & ComponentInfoBase.OperationType.Deleted) != 0;
-                        var bodyLen = WalRecordHeader.SizeInBytes + (isDelete ? 0 : storageSize);
-                        totalPayload += WalChunkHeader.SizeInBytes + bodyLen + WalChunkFooter.SizeInBytes;
-                    }
-                    break;
-
-                case ComponentInfoMultiple multiple:
-                    foreach (var pk in multiple.CompRevInfoCache.Keys)
-                    {
-                        var list = CollectionsMarshal.AsSpan(CollectionsMarshal.GetValueRefOrNullRef(multiple.CompRevInfoCache, pk));
-                        foreach (ref var cri in list)
-                        {
-                            if (cri.Operations == ComponentInfoBase.OperationType.Read)
-                            {
-                                continue;
-                            }
-
-                            recordCount++;
-                            var isDelete = (cri.Operations & ComponentInfoBase.OperationType.Deleted) != 0;
-                            var bodyLen = WalRecordHeader.SizeInBytes + (isDelete ? 0 : storageSize);
-                            totalPayload += WalChunkHeader.SizeInBytes + bodyLen + WalChunkFooter.SizeInBytes;
-                        }
-                    }
-                    break;
-            }
+            context.Info = info;
+            var sizeAction = new WalSizeAction { StorageSize = info.ComponentTable.ComponentStorageSize };
+            info.ForEachMutableEntry(ref context, ref sizeAction);
+            recordCount += sizeAction.RecordCount;
+            totalPayload += sizeAction.TotalPayload;
         }
 
         if (recordCount == 0)
@@ -80,7 +62,9 @@ internal static class WalSerializer
 
         try
         {
-            // Initialize writer state for the claimed region
+            // Pass 2: Write WAL records into the claimed region
+            // WalRecordWriter is a ref struct (contains Span<byte>) and cannot be captured in a struct implementing IEntryAction,
+            // so this pass uses inline iteration via ForEachMutableEntry with a local lambda-like pattern.
             var writer = new WalRecordWriter
             {
                 DataSpan = claim.DataSpan,
@@ -96,36 +80,34 @@ internal static class WalSerializer
                 var componentTypeId = info.ComponentTable.WalTypeId;
                 var storageSize = info.ComponentTable.ComponentStorageSize;
 
-                switch (info)
+                if (info.IsMultiple)
                 {
-                    case ComponentInfoSingle single:
-                        foreach (var pk in single.CompRevInfoCache.Keys)
+                    foreach (var pk in info.MultipleCache.Keys)
+                    {
+                        var list = CollectionsMarshal.AsSpan(CollectionsMarshal.GetValueRefOrNullRef(info.MultipleCache, pk));
+                        foreach (ref var cri in list)
                         {
-                            ref var cri = ref CollectionsMarshal.GetValueRefOrNullRef(single.CompRevInfoCache, pk);
-                            if (cri.Operations == ComponentInfoBase.OperationType.Read)
+                            if (cri.Operations == ComponentInfo.OperationType.Read)
                             {
                                 continue;
                             }
 
                             WriteWalRecord(ref writer, pk, componentTypeId, storageSize, ref cri, info, tsn, uowId);
                         }
-                        break;
-
-                    case ComponentInfoMultiple multiple:
-                        foreach (var pk in multiple.CompRevInfoCache.Keys)
+                    }
+                }
+                else
+                {
+                    foreach (var pk in info.SingleCache.Keys)
+                    {
+                        ref var cri = ref CollectionsMarshal.GetValueRefOrNullRef(info.SingleCache, pk);
+                        if (cri.Operations == ComponentInfo.OperationType.Read)
                         {
-                            var list = CollectionsMarshal.AsSpan(CollectionsMarshal.GetValueRefOrNullRef(multiple.CompRevInfoCache, pk));
-                            foreach (ref var cri in list)
-                            {
-                                if (cri.Operations == ComponentInfoBase.OperationType.Read)
-                                {
-                                    continue;
-                                }
-
-                                WriteWalRecord(ref writer, pk, componentTypeId, storageSize, ref cri, info, tsn, uowId);
-                            }
+                            continue;
                         }
-                        break;
+
+                        WriteWalRecord(ref writer, pk, componentTypeId, storageSize, ref cri, info, tsn, uowId);
+                    }
                 }
             }
 
@@ -144,10 +126,10 @@ internal static class WalSerializer
     /// CRC and PrevCRC are left as 0 — the WAL writer thread patches them before disk write.
     /// </summary>
     internal static void WriteWalRecord(ref WalRecordWriter writer, long entityId, ushort componentTypeId, int storageSize,
-        ref ComponentInfoBase.CompRevInfo cri, ComponentInfoBase info, long tsn, ushort uowId)
+        ref ComponentInfo.CompRevInfo cri, ComponentInfo info, long tsn, ushort uowId)
     {
-        var isDelete = (cri.Operations & ComponentInfoBase.OperationType.Deleted) != 0;
-        var isCreate = (cri.Operations & ComponentInfoBase.OperationType.Created) != 0;
+        var isDelete = (cri.Operations & ComponentInfo.OperationType.Deleted) != 0;
+        var isCreate = (cri.Operations & ComponentInfo.OperationType.Created) != 0;
         var payloadLength = isDelete ? 0 : storageSize;
 
         // Determine WAL operation type

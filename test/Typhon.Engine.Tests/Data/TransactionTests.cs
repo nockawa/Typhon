@@ -1419,4 +1419,528 @@ class TransactionTests : TestBase<TransactionTests>
         Assert.That(dbe.DeferredCleanupManager.QueueSize, Is.EqualTo(0),
             "Deferred cleanup queue should be empty after empty transaction commit + dispose");
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Phase 3 — ComponentInfo Unification Tests (Issue #94)
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Unified GetComponentInfo returns a ComponentInfo with SingleCache for non-multiple components.
+    /// Verified by creating a single component and committing — exercises the Single path.
+    /// </summary>
+    [Test]
+    public void UnifiedComponentInfo_SingleComponent_CommitSucceeds()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(42);
+            e1 = t.CreateEntity(ref a);
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA result), Is.True);
+            Assert.That(result.A, Is.EqualTo(42));
+        }
+    }
+
+    /// <summary>
+    /// Unified GetComponentInfo returns a ComponentInfo with MultipleCache for AllowMultiple components.
+    /// Verified by creating multiple components and committing — exercises the Multiple path.
+    /// </summary>
+    [Test]
+    public void UnifiedComponentInfo_MultipleComponent_CommitSucceeds()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        var items = new CompE[] { new(1.0f, 10, 0.1), new(2.0f, 20, 0.2), new(3.0f, 30, 0.3) };
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(1);
+            e1 = t.CreateEntity(ref a, items.AsSpan());
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA _, out CompE[] readItems), Is.True);
+            Assert.That(readItems.Length, Is.EqualTo(3));
+            Assert.That(readItems[0].B, Is.EqualTo(10));
+            Assert.That(readItems[1].B, Is.EqualTo(20));
+            Assert.That(readItems[2].B, Is.EqualTo(30));
+        }
+    }
+
+    /// <summary>
+    /// ForEachMutableEntry skips Read-only entries — a read followed by a commit should produce
+    /// zero committed operations for the read component.
+    /// </summary>
+    [Test]
+    public void ForEachMutableEntry_SkipsReadEntries()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(10);
+            e1 = t.CreateEntity(ref a);
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        // Read-only transaction: read but don't modify — commit succeeds, no changes persisted
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA readA), Is.True);
+            Assert.That(readA.A, Is.EqualTo(10), "Read should return the committed value");
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        // Verify original value is unchanged (ForEachMutableEntry skipped the Read entry)
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA verify), Is.True);
+            Assert.That(verify.A, Is.EqualTo(10), "Value should be unchanged after read-only commit");
+        }
+    }
+
+    /// <summary>
+    /// ForEachMutableEntry processes Created, Updated, and Deleted entries for Single components.
+    /// </summary>
+    [Test]
+    public void ForEachMutableEntry_Single_ProcessesAllMutations()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1, e2, e3;
+
+        // Create three entities
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a1 = new CompA(1);
+            var a2 = new CompA(2);
+            var a3 = new CompA(3);
+            e1 = t.CreateEntity(ref a1);
+            e2 = t.CreateEntity(ref a2);
+            e3 = t.CreateEntity(ref a3);
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        // In one transaction: read e1, update e2, delete e3
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA _), Is.True);
+
+            var updated = new CompA(200);
+            Assert.That(t.UpdateEntity(e2, ref updated), Is.True);
+
+            Assert.That(t.DeleteEntity<CompA>(e3), Is.True);
+
+            Assert.That(t.Commit(), Is.True);
+            // 2 mutations (update + delete); read is skipped by ForEachMutableEntry
+            Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(2));
+        }
+
+        // Verify results
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA r1), Is.True);
+            Assert.That(r1.A, Is.EqualTo(1), "e1 was only read, should be unchanged");
+
+            Assert.That(t.ReadEntity(e2, out CompA r2), Is.True);
+            Assert.That(r2.A, Is.EqualTo(200), "e2 should be updated");
+
+            Assert.That(t.ReadEntity(e3, out CompA _), Is.False, "e3 should be deleted");
+        }
+    }
+
+    /// <summary>
+    /// ForEachMutableEntry processes all entries for Multiple components per PK.
+    /// </summary>
+    [Test]
+    public void ForEachMutableEntry_Multiple_ProcessesAllEntriesPerPK()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        var items = new CompE[] { new(1.0f, 10, 0.1), new(2.0f, 20, 0.2) };
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(1);
+            e1 = t.CreateEntity(ref a, items.AsSpan());
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        // Update both items in a single transaction (TC1=CompA, TC2=CompE)
+        var updatedItems = new CompE[] { new(10.0f, 100, 1.0), new(20.0f, 200, 2.0) };
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA readA), Is.True);
+            Assert.That(t.UpdateEntity(e1, ref readA, updatedItems.AsSpan()), Is.True);
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        // Verify both items were updated (ForEachMutableEntry visited both)
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA _, out CompE[] readItems), Is.True);
+            Assert.That(readItems.Length, Is.EqualTo(2));
+            Assert.That(readItems[0].B, Is.EqualTo(100));
+            Assert.That(readItems[1].B, Is.EqualTo(200));
+        }
+    }
+
+    /// <summary>
+    /// Rollback of a Created entity removes it from the Single cache correctly.
+    /// After rollback, a subsequent create+commit in a fresh transaction succeeds.
+    /// </summary>
+    [Test]
+    public void Rollback_Created_Single_RemovesFromCache()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(99);
+            e1 = t.CreateEntity(ref a);
+            Assert.That(t.Rollback(), Is.True);
+        }
+
+        // Entity should not be readable
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA _), Is.False);
+        }
+
+        // Fresh create should succeed (no stale cache)
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a2 = new CompA(200);
+            var e2 = t.CreateEntity(ref a2);
+            Assert.That(t.Commit(), Is.True);
+            Assert.That(e2, Is.GreaterThan(0));
+        }
+    }
+
+    /// <summary>
+    /// Rollback of a Created entity in the Multiple path voids the revision entry.
+    /// The entity should not be readable afterward.
+    /// </summary>
+    [Test]
+    public void Rollback_Created_Multiple_EntityNotReadable()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        var items = new CompE[] { new(1.0f, 10, 0.1) };
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(1);
+            e1 = t.CreateEntity(ref a, items.AsSpan());
+            Assert.That(t.Rollback(), Is.True);
+        }
+
+        // Multiple component should not be readable after rollback
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA _), Is.False, "CompA should not be readable after rollback");
+        }
+    }
+
+    /// <summary>
+    /// Rollback of an Updated entity preserves the original value when using the unified iteration path.
+    /// </summary>
+    [Test]
+    public void Rollback_Updated_ForEachMutableEntry_OriginalPreserved()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(50);
+            e1 = t.CreateEntity(ref a);
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        // Update and rollback — exercises ForEachMutableEntry's rollback path
+        {
+            using var t = dbe.CreateQuickTransaction();
+            t.ReadEntity(e1, out CompA _);
+            var updated = new CompA(777);
+            Assert.That(t.UpdateEntity(e1, ref updated), Is.True);
+            Assert.That(t.Rollback(), Is.True);
+        }
+
+        // Original value preserved
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA result), Is.True);
+            Assert.That(result.A, Is.EqualTo(50), "Original value should be preserved after rollback");
+        }
+    }
+
+    /// <summary>
+    /// Commit with Single and Multiple component types in the same transaction — exercises
+    /// ForEachMutableEntry on both cache types within a single commit loop.
+    /// </summary>
+    [Test]
+    public void Commit_MixedSingleAndMultiple_BothCommitted()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        var items = new CompE[] { new(1.0f, 10, 0.1), new(2.0f, 20, 0.2) };
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(100);
+            e1 = t.CreateEntity(ref a, items.AsSpan());
+            Assert.That(t.Commit(), Is.True);
+            // EntryCount counts unique PKs per cache: 1 PK in CompA SingleCache + 1 PK in CompE MultipleCache = 2
+            Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(2),
+                "Should have at least 2 entries (1 CompA PK + 1 CompE PK)");
+        }
+
+        // Verify both types committed
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA a, out CompE[] readItems), Is.True);
+            Assert.That(a.A, Is.EqualTo(100));
+            Assert.That(readItems.Length, Is.EqualTo(2));
+            Assert.That(readItems[0].B, Is.EqualTo(10));
+            Assert.That(readItems[1].B, Is.EqualTo(20));
+        }
+    }
+
+    /// <summary>
+    /// Rollback with both Single and Multiple components — all components are properly rolled back.
+    /// </summary>
+    [Test]
+    public void Rollback_MixedSingleAndMultiple_AllRolledBack()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        var items = new CompE[] { new(1.0f, 10, 0.1), new(2.0f, 20, 0.2) };
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(100);
+            e1 = t.CreateEntity(ref a, items.AsSpan());
+            Assert.That(t.Rollback(), Is.True);
+        }
+
+        // Both component types should not be readable
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA _), Is.False, "CompA should not be readable after rollback");
+        }
+    }
+
+    /// <summary>
+    /// ComponentInfo.AddNew correctly routes to SingleCache for non-multiple components.
+    /// Verified indirectly: creating multiple entities of the same type accumulates entries.
+    /// </summary>
+    [Test]
+    public void ComponentInfo_AddNew_Single_AccumulatesEntries()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1, e2, e3;
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a1 = new CompA(1);
+            var a2 = new CompA(2);
+            var a3 = new CompA(3);
+            e1 = t.CreateEntity(ref a1);
+            e2 = t.CreateEntity(ref a2);
+            e3 = t.CreateEntity(ref a3);
+            Assert.That(t.CommittedOperationCount, Is.EqualTo(3),
+                "Three created entities should produce three entries");
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        // All three should be readable
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA r1), Is.True);
+            Assert.That(r1.A, Is.EqualTo(1));
+            Assert.That(t.ReadEntity(e2, out CompA r2), Is.True);
+            Assert.That(r2.A, Is.EqualTo(2));
+            Assert.That(t.ReadEntity(e3, out CompA r3), Is.True);
+            Assert.That(r3.A, Is.EqualTo(3));
+        }
+    }
+
+    /// <summary>
+    /// ComponentInfo.AddNew correctly routes to MultipleCache for AllowMultiple components.
+    /// Verified indirectly: creating multiple AllowMultiple entries for the same PK accumulates in list.
+    /// </summary>
+    [Test]
+    public void ComponentInfo_AddNew_Multiple_AccumulatesEntries()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        var items = new CompE[] { new(1.0f, 10, 0.1), new(2.0f, 20, 0.2), new(3.0f, 30, 0.3), new(4.0f, 40, 0.4) };
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(1);
+            e1 = t.CreateEntity(ref a, items.AsSpan());
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA _, out CompE[] readItems), Is.True);
+            Assert.That(readItems.Length, Is.EqualTo(4), "All four entries should be committed via AddNew");
+        }
+    }
+
+    /// <summary>
+    /// EntryCount returns correct count for both Single and Multiple modes.
+    /// Verified indirectly through CommittedOperationCount.
+    /// </summary>
+    [Test]
+    public void ComponentInfo_EntryCount_CorrectForBothModes()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        var items = new CompE[] { new(1.0f, 10, 0.1), new(2.0f, 20, 0.2) };
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(1);
+            var b = new CompB(2, 3.0f);
+            t.CreateEntity(ref a, items.AsSpan());
+            // Also create a standalone CompB entity
+            t.CreateEntity(ref b);
+            Assert.That(t.Commit(), Is.True);
+            // EntryCount counts unique PKs per cache: CompA=1 PK (Single), CompE=1 PK (Multiple), CompB=1 PK (Single) = 3
+            Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(3),
+                "Should have at least 3 entries: 1 CompA PK + 1 CompE PK + 1 CompB PK");
+        }
+    }
+
+    /// <summary>
+    /// GetComponentRevision works correctly through the unified GetComponentInfo for both
+    /// Single and Multiple component types.
+    /// </summary>
+    [Test]
+    public void GetComponentRevision_UnifiedPath_CorrectForBothModes()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        var items = new CompE[] { new(1.0f, 10, 0.1), new(2.0f, 20, 0.2) };
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(1);
+            e1 = t.CreateEntity(ref a, items.AsSpan());
+            Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1), "Single component revision should be 1 at creation");
+            Assert.That(t.GetComponentRevision<CompE>(e1), Is.EqualTo(1), "Multiple component revision should be 1 at creation");
+            Assert.That(t.Commit(), Is.True);
+        }
+    }
+
+    /// <summary>
+    /// DeleteEntities (bulk delete for AllowMultiple) through the unified path marks all entries as deleted.
+    /// </summary>
+    [Test]
+    public void DeleteEntities_Multiple_AllDeleted()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        var items = new CompE[] { new(1.0f, 10, 0.1), new(2.0f, 20, 0.2), new(3.0f, 30, 0.3) };
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(1);
+            e1 = t.CreateEntity(ref a, items.AsSpan());
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        // Delete all CompE entries
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.DeleteEntities<CompE>(e1), Is.True);
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        // Verify deletion
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.ReadEntity(e1, out CompA _, out CompE[] readItems), Is.False,
+                "All CompE entries should be deleted");
+        }
+    }
+
+    /// <summary>
+    /// Commit with conflict handler on the unified iteration path — handler is invoked
+    /// and resolution is committed correctly.
+    /// </summary>
+    [Test]
+    public void Commit_UnifiedPath_ConflictHandler_Invoked()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long e1;
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var a = new CompA(10);
+            e1 = t.CreateEntity(ref a);
+            Assert.That(t.Commit(), Is.True);
+        }
+
+        // T1 reads and updates
+        using var t1 = dbe.CreateQuickTransaction();
+        t1.ReadEntity(e1, out CompA _);
+        var u1 = new CompA(100);
+        t1.UpdateEntity(e1, ref u1);
+
+        // T2 reads, updates, and commits first — creates a conflict
+        {
+            using var t2 = dbe.CreateQuickTransaction();
+            t2.ReadEntity(e1, out CompA _);
+            var u2 = new CompA(200);
+            t2.UpdateEntity(e1, ref u2);
+            Assert.That(t2.Commit(), Is.True);
+        }
+
+        // T1 commits with handler — take committing (our value = 100)
+        var handlerCalled = false;
+        t1.Commit((ref ConcurrencyConflictSolver solver) =>
+        {
+            handlerCalled = true;
+            solver.TakeCommitting<CompA>();
+        });
+
+        Assert.That(handlerCalled, Is.True, "Handler should be invoked through unified iteration");
+
+        {
+            using var tRead = dbe.CreateQuickTransaction();
+            Assert.That(tRead.ReadEntity(e1, out CompA result), Is.True);
+            Assert.That(result.A, Is.EqualTo(100), "TakeCommitting should use our value");
+        }
+    }
 }

@@ -36,7 +36,7 @@ public unsafe class ConcurrencyConflictSolver
     private byte* _committedData;
     private byte* _committingData;
     private byte* _toCommitData;
-    private ComponentInfoBase _info;
+    private ComponentInfo _info;
 
     [ThreadStatic]
     private static ConcurrencyConflictSolver ThreadLocalConflictSolver;
@@ -83,7 +83,7 @@ public unsafe class ConcurrencyConflictSolver
     /// <summary>Returns a ref to the output buffer. Write the resolved value here. Initialized with <see cref="CommittingData{T}"/>.</summary>
     public ref T ToCommitData<T>() where T : unmanaged => ref Unsafe.AsRef<T>(_toCommitData);
 
-    internal void Setup(long pk, ComponentInfoBase info, byte* readData, byte* committedData, byte* committingData, byte* toCommitData)
+    internal void Setup(long pk, ComponentInfo info, byte* readData, byte* committedData, byte* committingData, byte* toCommitData)
     {
         PrimaryKey = pk;
         _readData = readData;

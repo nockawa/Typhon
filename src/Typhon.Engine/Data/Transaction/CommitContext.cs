@@ -10,8 +10,8 @@ public delegate void ConcurrencyConflictHandler(ref ConcurrencyConflictSolver so
 internal ref struct CommitContext
 {
     public long PrimaryKey;
-    public ComponentInfoBase Info;
-    public ref ComponentInfoBase.CompRevInfo CompRevInfo;
+    public ComponentInfo Info;
+    public ref ComponentInfo.CompRevInfo CompRevInfo;
     public ConcurrencyConflictSolver Solver;
     public ConcurrencyConflictHandler Handler;
     public ref UnitOfWorkContext Ctx;
