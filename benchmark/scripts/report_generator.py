@@ -63,8 +63,10 @@ def load_config(path):
         "defaults": {
             "regression_pct": 15.0,
             "improvement_pct": 15.0,
-            "min_runs_for_trend": 3,
-            "baseline_window": 5,
+            "min_runs_for_trend": 1,
+            "min_measurable_ns": 1.0,
+            "max_cov_pct": 30.0,
+            "min_delta_ns": 0.5,
         },
         "categories": {},
         "benchmarks": {},
@@ -311,16 +313,24 @@ def _benchmark_key(result):
 
 
 def analyze_regressions(latest_run, all_history, config):
-    """Analyze each benchmark in the latest run for regressions/improvements."""
+    """Analyze each benchmark in the latest run against the immediately previous run.
+
+    Noise filtering suppresses false positives from:
+    - Sub-nanosecond measurements (below BDN's resolution)
+    - High coefficient-of-variation benchmarks (inherently noisy)
+    """
     # Build per-benchmark history (excluding the latest run itself)
     prior_runs = all_history[:-1] if len(all_history) > 1 else []
 
-    # Index: key -> list of mean_ns values in chronological order
+    # Index: key -> list of {mean_ns, stddev_ns} in chronological order
     history_index = {}
     for run in prior_runs:
         for result in run.get("results", []):
             key = _benchmark_key(result)
-            history_index.setdefault(key, []).append(result["mean_ns"])
+            history_index.setdefault(key, []).append({
+                "mean_ns": result["mean_ns"],
+                "stddev_ns": result.get("stddev_ns", 0.0),
+            })
 
     analysis = []
     for result in latest_run.get("results", []):
@@ -330,13 +340,16 @@ def analyze_regressions(latest_run, all_history, config):
         category = result.get("category", "")
         parameters = result.get("parameters", "")
         current = result["mean_ns"]
+        current_stddev = result.get("stddev_ns", 0.0)
 
         min_runs = int(resolve_threshold(config, bm_type, method, category, "min_runs_for_trend", parameters))
-        baseline_window = int(resolve_threshold(config, bm_type, method, category, "baseline_window", parameters))
         regression_pct = float(resolve_threshold(config, bm_type, method, category, "regression_pct", parameters))
         improvement_pct = float(resolve_threshold(config, bm_type, method, category, "improvement_pct", parameters))
+        min_measurable = float(resolve_threshold(config, bm_type, method, category, "min_measurable_ns", parameters))
+        max_cov = float(resolve_threshold(config, bm_type, method, category, "max_cov_pct", parameters))
+        min_delta = float(resolve_threshold(config, bm_type, method, category, "min_delta_ns", parameters))
 
-        past_values = history_index.get(key, [])
+        past_entries = history_index.get(key, [])
 
         entry = {
             "fullName": result["fullName"],
@@ -346,49 +359,57 @@ def analyze_regressions(latest_run, all_history, config):
             "parameters": result.get("parameters", ""),
             "current_ns": current,
             "error_ns": result.get("error_ns", 0.0),
-            "stddev_ns": result.get("stddev_ns", 0.0),
+            "stddev_ns": current_stddev,
             "allocated_bytes": result.get("allocated_bytes", 0),
         }
 
-        if len(past_values) < min_runs:
+        if len(past_entries) < min_runs:
             entry.update({
                 "status": "insufficient_data",
-                "baseline_ns": None,
+                "previous_ns": None,
                 "change_pct": None,
                 "threshold_pct": regression_pct,
             })
         else:
-            window = past_values[-baseline_window:]
-            baseline = sum(window) / len(window)
-            change_pct = ((current - baseline) / baseline * 100) if baseline != 0 else 0.0
+            # Compare against the immediately previous run (trend, not averaged baseline)
+            previous = past_entries[-1]["mean_ns"]
+            change_pct = ((current - previous) / previous * 100) if previous != 0 else 0.0
 
-            if change_pct > regression_pct:
+            # Noise detection: CoV of current measurement, below resolution, or sub-ns absolute change
+            cov_pct = (current_stddev / current * 100) if current > 0 else 0.0
+            abs_delta = abs(current - previous)
+            is_noisy = current < min_measurable or cov_pct > max_cov or abs_delta < min_delta
+
+            if is_noisy:
+                if current < min_measurable:
+                    noise_reason = "below measurement resolution"
+                elif cov_pct > max_cov:
+                    noise_reason = f"high variance (CoV {cov_pct:.0f}%)"
+                else:
+                    noise_reason = f"abs delta {abs_delta:.2f}ns < {min_delta:.1f}ns threshold"
+                status = "noisy"
+            elif change_pct > regression_pct:
                 status = "regression"
+                noise_reason = None
             elif change_pct < -improvement_pct:
                 status = "improvement"
+                noise_reason = None
             else:
                 status = "stable"
+                noise_reason = None
 
             entry.update({
                 "status": status,
-                "baseline_ns": baseline,
-                "baseline_stddev": _stddev(window),
+                "previous_ns": previous,
                 "change_pct": change_pct,
                 "threshold_pct": regression_pct,
+                "cov_pct": cov_pct,
+                "noise_reason": noise_reason,
             })
 
         analysis.append(entry)
 
     return analysis
-
-
-def _stddev(values):
-    """Compute population standard deviation of a list of values."""
-    if len(values) < 2:
-        return 0.0
-    mean = sum(values) / len(values)
-    variance = sum((v - mean) ** 2 for v in values) / len(values)
-    return math.sqrt(variance)
 
 
 # ---------------------------------------------------------------------------
@@ -556,39 +577,29 @@ def generate_charts(all_history, analysis, config, output_dir, last_n):
         # Target line
         target_ns = resolve_target_ns(config, representative["type"], representative["method"], representative.get("parameters", ""))
 
-        # Baseline band
-        baseline_ns = None
-        baseline_std = None
-        if a_entry and a_entry.get("baseline_ns") is not None:
-            baseline_ns = a_entry["baseline_ns"]
-            baseline_std = a_entry.get("baseline_stddev", 0.0)
-
         title = _display_name(representative)
         filename = _chart_filename(representative)
         svg_path = os.path.join(charts_dir, filename)
 
-        _render_svg(series, title, svg_path, last_status, target_ns, baseline_ns, baseline_std)
+        _render_svg(series, title, svg_path, last_status, target_ns)
 
     print(f"Generated {len(benchmark_keys)} chart(s) in {charts_dir}")
 
 
-def _render_svg(series, title, svg_path, last_status, target_ns, baseline_ns, baseline_std):
+def _render_svg(series, title, svg_path, last_status, target_ns):
     """Render a single SVG trend chart."""
     n = len(series)
     means = [s["mean_ns"] for s in series]
     stddevs = [s["stddev_ns"] for s in series]
     commits = [s["commit"] for s in series]
 
-    # Determine Y range including error bars, target, and baseline band
+    # Determine Y range including error bars and target
     y_vals = []
     for m, sd in zip(means, stddevs):
         y_vals.append(m + sd)
         y_vals.append(m - sd)
     if target_ns is not None:
         y_vals.append(target_ns)
-    if baseline_ns is not None and baseline_std is not None:
-        y_vals.append(baseline_ns + baseline_std)
-        y_vals.append(baseline_ns - baseline_std)
 
     y_min_data = max(0, min(y_vals)) if y_vals else 0
     y_max_data = max(y_vals) if y_vals else 1
@@ -600,8 +611,6 @@ def _render_svg(series, title, svg_path, last_status, target_ns, baseline_ns, ba
     means_d = [m / divisor for m in means]
     stddevs_d = [s / divisor for s in stddevs]
     target_d = target_ns / divisor if target_ns is not None else None
-    baseline_d = baseline_ns / divisor if baseline_ns is not None else None
-    baseline_std_d = baseline_std / divisor if baseline_std is not None else None
 
     y_min_d = y_min_data / divisor
     y_max_d = y_max_data / divisor
@@ -676,23 +685,6 @@ def _render_svg(series, title, svg_path, last_status, target_ns, baseline_ns, ba
         "fill": "#999999",
     })
     unit_el.text = f"({unit_label})"
-
-    # Baseline band (light green shaded region)
-    if baseline_d is not None and baseline_std_d is not None:
-        band_top = y_pos(baseline_d + baseline_std_d)
-        band_bottom = y_pos(baseline_d - baseline_std_d)
-        # Clamp to plot area
-        band_top = max(MARGIN_TOP, band_top)
-        band_bottom = min(MARGIN_TOP + PLOT_H, band_bottom)
-        if band_bottom > band_top:
-            ET.SubElement(svg, "rect", {
-                "x": str(MARGIN_LEFT),
-                "y": f"{band_top:.1f}",
-                "width": str(PLOT_W),
-                "height": f"{band_bottom - band_top:.1f}",
-                "fill": "#4AD94A",
-                "fill-opacity": "0.12",
-            })
 
     # Target line (dashed orange)
     if target_d is not None:
@@ -811,6 +803,7 @@ def generate_report(latest_run, analysis, config, output_dir):
     regressions = [a for a in analysis if a["status"] == "regression"]
     improvements = [a for a in analysis if a["status"] == "improvement"]
     stable = [a for a in analysis if a["status"] == "stable"]
+    noisy = [a for a in analysis if a["status"] == "noisy"]
     insufficient = [a for a in analysis if a["status"] == "insufficient_data"]
 
     lines = []
@@ -831,6 +824,7 @@ def generate_report(latest_run, analysis, config, output_dir):
     w(f"| Regression | {len(regressions)} |")
     w(f"| Improvement | {len(improvements)} |")
     w(f"| Stable | {len(stable)} |")
+    w(f"| Noisy (filtered) | {len(noisy)} |")
     w(f"| Insufficient Data | {len(insufficient)} |")
     w("")
 
@@ -841,15 +835,15 @@ def generate_report(latest_run, analysis, config, output_dir):
         w("> [!WARNING]")
         w(f"> {len(regressions)} benchmark(s) show performance regression")
         w("")
-        w("| Benchmark | Current | Baseline | Change | Threshold |")
+        w("| Benchmark | Current | Previous | Change | Threshold |")
         w("|-----------|---------|----------|--------|-----------|")
         for entry in _sorted_by_change(regressions, reverse=True):
             name = _display_name(entry)
             current = format_time(entry["current_ns"])
-            baseline = format_time(entry.get("baseline_ns"))
+            previous = format_time(entry.get("previous_ns"))
             change = _format_change(entry.get("change_pct"))
             threshold = f"{entry.get('threshold_pct', 0):.0f}%"
-            w(f"| {name} | {current} | {baseline} | {change} | {threshold} |")
+            w(f"| {name} | {current} | {previous} | {change} | {threshold} |")
         w("")
         # Inline charts for regressions
         for entry in _sorted_by_change(regressions, reverse=True):
@@ -864,14 +858,14 @@ def generate_report(latest_run, analysis, config, output_dir):
     w("## Improvements")
     w("")
     if improvements:
-        w("| Benchmark | Current | Baseline | Change |")
+        w("| Benchmark | Current | Previous | Change |")
         w("|-----------|---------|----------|--------|")
         for entry in _sorted_by_change(improvements, reverse=False):
             name = _display_name(entry)
             current = format_time(entry["current_ns"])
-            baseline = format_time(entry.get("baseline_ns"))
+            previous = format_time(entry.get("previous_ns"))
             change = _format_change(entry.get("change_pct"))
-            w(f"| {name} | {current} | {baseline} | {change} |")
+            w(f"| {name} | {current} | {previous} | {change} |")
         w("")
     else:
         w("No improvements detected.")
@@ -882,17 +876,38 @@ def generate_report(latest_run, analysis, config, output_dir):
     w(f"<summary>Stable Benchmarks ({len(stable)})</summary>")
     w("")
     if stable:
-        w("| Benchmark | Current | Baseline | Change |")
+        w("| Benchmark | Current | Previous | Change |")
         w("|-----------|---------|----------|--------|")
         for entry in sorted(stable, key=lambda e: _display_name(e)):
             name = _display_name(entry)
             current = format_time(entry["current_ns"])
-            baseline = format_time(entry.get("baseline_ns"))
+            previous = format_time(entry.get("previous_ns"))
             change = _format_change(entry.get("change_pct"))
-            w(f"| {name} | {current} | {baseline} | {change} |")
+            w(f"| {name} | {current} | {previous} | {change} |")
         w("")
     else:
         w("No stable benchmarks.")
+        w("")
+    w("</details>")
+    w("")
+
+    # Noisy (collapsed)
+    w("<details>")
+    w(f"<summary>Noisy Benchmarks ({len(noisy)}) — filtered from regression detection</summary>")
+    w("")
+    if noisy:
+        w("| Benchmark | Current | Previous | Change | Reason |")
+        w("|-----------|---------|----------|--------|--------|")
+        for entry in sorted(noisy, key=lambda e: abs(e.get("change_pct", 0) or 0), reverse=True):
+            name = _display_name(entry)
+            current = format_time(entry["current_ns"])
+            previous = format_time(entry.get("previous_ns"))
+            change = _format_change(entry.get("change_pct"))
+            reason = entry.get("noise_reason", "")
+            w(f"| {name} | {current} | {previous} | {change} | {reason} |")
+        w("")
+    else:
+        w("No noisy benchmarks.")
         w("")
     w("</details>")
     w("")
@@ -965,6 +980,7 @@ def print_summary(analysis):
     regressions = [a for a in analysis if a["status"] == "regression"]
     improvements = [a for a in analysis if a["status"] == "improvement"]
     stable = [a for a in analysis if a["status"] == "stable"]
+    noisy = [a for a in analysis if a["status"] == "noisy"]
     insufficient = [a for a in analysis if a["status"] == "insufficient_data"]
 
     print("")
@@ -974,6 +990,7 @@ def print_summary(analysis):
     print(f"  Regressions:       {len(regressions)}")
     print(f"  Improvements:      {len(improvements)}")
     print(f"  Stable:            {len(stable)}")
+    print(f"  Noisy (filtered):  {len(noisy)}")
     print(f"  Insufficient Data: {len(insufficient)}")
     print("=" * 60)
 
@@ -983,9 +1000,9 @@ def print_summary(analysis):
         for entry in _sorted_by_change(regressions, reverse=True):
             name = _display_name(entry)
             current = format_time(entry["current_ns"])
-            baseline = format_time(entry.get("baseline_ns"))
+            previous = format_time(entry.get("previous_ns"))
             change = _format_change(entry.get("change_pct"))
-            print(f"    {name}: {current} (was {baseline}, {change})")
+            print(f"    {name}: {current} (was {previous}, {change})")
 
     if improvements:
         print("")
@@ -993,9 +1010,17 @@ def print_summary(analysis):
         for entry in _sorted_by_change(improvements, reverse=True):
             name = _display_name(entry)
             current = format_time(entry["current_ns"])
-            baseline = format_time(entry.get("baseline_ns"))
+            previous = format_time(entry.get("previous_ns"))
             change = _format_change(entry.get("change_pct"))
-            print(f"    {name}: {current} (was {baseline}, {change})")
+            print(f"    {name}: {current} (was {previous}, {change})")
+
+    if noisy:
+        print("")
+        print(f"  NOISY ({len(noisy)} filtered):")
+        for entry in sorted(noisy, key=lambda e: abs(e.get("change_pct", 0) or 0), reverse=True):
+            name = _display_name(entry)
+            reason = entry.get("noise_reason", "")
+            print(f"    {name}: {reason}")
 
     print("")
 

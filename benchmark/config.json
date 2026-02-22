@@ -2,8 +2,10 @@
   "defaults": {
     "regression_pct": 15.0,
     "improvement_pct": 15.0,
-    "min_runs_for_trend": 3,
-    "baseline_window": 5
+    "min_runs_for_trend": 1,
+    "min_measurable_ns": 1.0,
+    "max_cov_pct": 30.0,
+    "min_delta_ns": 0.5
   },
   "type_categories": {
     "EpochGuardBenchmarks": "Epoch",

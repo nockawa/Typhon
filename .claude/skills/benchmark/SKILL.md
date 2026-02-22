@@ -8,6 +8,13 @@ argument-hint: [--quick] [--report-only] [--list]
 
 Run Typhon regression benchmarks, record results to history, and generate trend reports with regression detection.
 
+**Comparison mode:** Each run is compared against the **immediately previous run** (not an averaged baseline). This gives a clear trend view.
+
+**Noise filtering:** Benchmarks are automatically classified as "noisy" (filtered from regressions) when:
+- Mean is below `min_measurable_ns` (default: 1.0ns) — below BDN's measurement resolution
+- Coefficient of Variation exceeds `max_cov_pct` (default: 30%) — inherently high-variance benchmarks
+- Absolute delta is below `min_delta_ns` (default: 0.5ns) — sub-ns shifts on fast micro-benchmarks
+
 ## Input
 
 $ARGUMENTS may contain:
@@ -42,7 +49,7 @@ Read `benchmark/reports/latest.md` and display a condensed summary.
 
 Same as default workflow below, but append quick-mode flags to BDN.
 
-**Clean stale artifacts first** (same as Step 2 of default workflow), then run:
+**Clean stale artifacts first** (same as Step 2 of default workflow), then run **in the background** (`run_in_background: true`) and poll with `TaskOutput` (`block: true, timeout: 600000`):
 
 ```bash
 cd test/Typhon.Benchmark && dotnet run -c Release -- --allCategories Regression --exporters json --warmupCount 1 --iterationCount 2
@@ -79,7 +86,7 @@ rm -rf test/Typhon.Benchmark/BenchmarkDotNet.Artifacts/results
 cd test/Typhon.Benchmark && dotnet run -c Release --no-build -- --allCategories Regression --exporters json
 ```
 
-**IMPORTANT:** This step can take several minutes. Let the user know benchmarks are running and show progress as BDN outputs it.
+**IMPORTANT:** This step can take up to ~12 minutes, which exceeds the Bash tool's 10-minute max timeout. Run this command **in the background** (`run_in_background: true`) and poll with `TaskOutput` (use `block: true, timeout: 600000`). Let the user know benchmarks are running before starting the background task.
 
 #### Step 4: Generate Report
 
