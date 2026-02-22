@@ -8,10 +8,12 @@ When the user asks for your opinion on a design choice, code approach, or any to
 
 ## Key Documentation Resources
 
-Typhon maintains comprehensive documentation in the `claude/` directory. 
+Typhon maintains comprehensive documentation in the `claude/` directory.
 Use these resources to understand architecture, design rationale, and development workflow.
 When working on a new idea, always start by reading relevant documents in `claude/overview`, you can also read files in `claude/reference` to get more context of existing features and APIs.
 Architecture Design Records are located in `claude/adr`, use it when designing new code.
+
+> **Separate git repo:** The `claude/` directory is its own nested git repository. To commit or perform any git operations on documentation files, you must `cd claude/` first. Running `git status` from the Typhon root will not show changes to `claude/` files.
 
 ## Project Overview
 Typhon is a real-time, low-latency ACID database engine with microsecond-level performance targets, using an ECS architecture with MVCC snapshot isolation.
