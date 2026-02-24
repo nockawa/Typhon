@@ -168,7 +168,9 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     public ChunkBasedSegment CompRevTableSegment { get; private set; }
     public ChunkBasedSegment DefaultIndexSegment { get; private set; }
     public ChunkBasedSegment String64IndexSegment { get; private set; }
+    public ChunkBasedSegment TailIndexSegment { get; private set; }
     public BTree<long> PrimaryKeyIndex { get; private set; }
+    internal VariableSizedBufferSegment<VersionedIndexEntry> TailVSBS { get; private set; }
     public int ComponentStorageSize => Definition.ComponentStorageSize;
     public DBComponentDefinition Definition { get; private set; }
 
@@ -232,13 +234,15 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
             ComponentSegment.AllocatedChunkCount +
             CompRevTableSegment.AllocatedChunkCount +
             DefaultIndexSegment.AllocatedChunkCount +
-            (String64IndexSegment?.AllocatedChunkCount ?? 0);
+            (String64IndexSegment?.AllocatedChunkCount ?? 0) +
+            (TailIndexSegment?.AllocatedChunkCount ?? 0);
 
         long totalCapacityChunks =
             ComponentSegment.ChunkCapacity +
             CompRevTableSegment.ChunkCapacity +
             DefaultIndexSegment.ChunkCapacity +
-            (String64IndexSegment?.ChunkCapacity ?? 0);
+            (String64IndexSegment?.ChunkCapacity ?? 0) +
+            (TailIndexSegment?.ChunkCapacity ?? 0);
 
         writer.WriteCapacity(totalAllocatedChunks, totalCapacityChunks);
 
@@ -288,6 +292,13 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
             props["String64IndexSegment.Capacity"] = String64IndexSegment.ChunkCapacity;
         }
 
+        // TailIndexSegment (may be null if no AllowMultiple secondary indexes)
+        if (TailIndexSegment != null)
+        {
+            props["TailIndexSegment.AllocatedChunks"] = TailIndexSegment.AllocatedChunkCount;
+            props["TailIndexSegment.Capacity"] = TailIndexSegment.ChunkCapacity;
+        }
+
         return props;
     }
 
@@ -317,6 +328,13 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
             PrimaryKeyIndex = new LongSingleBTree(DefaultIndexSegment, stableId: -1, changeSet: changeSet);
         }
 
+        // Allocate TAIL version-history segment for AllowMultiple secondary indexes
+        if (Definition.MultipleIndicesCount > 0)
+        {
+            TailIndexSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, 512, changeSet);
+            TailVSBS = new VariableSizedBufferSegment<VersionedIndexEntry>(TailIndexSegment);
+        }
+
         BuildIndexedFieldInfo(false, changeSet);
         BuildComponentCollectionInfo(changeSet);
     }
@@ -325,8 +343,8 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     /// Load constructor: restores a ComponentTable from previously persisted segment root page indices.
     /// Used during database reopen to reconnect to existing on-disk data instead of allocating fresh segments.
     /// </summary>
-    internal ComponentTable(DatabaseEngine dbe, DBComponentDefinition definition, IResource parent, int componentSPI, int versionSPI, int defaultIndexSPI, 
-        int string64IndexSPI, ExhaustionPolicy exhaustionPolicy = ExhaustionPolicy.None) : 
+    internal ComponentTable(DatabaseEngine dbe, DBComponentDefinition definition, IResource parent, int componentSPI, int versionSPI, int defaultIndexSPI,
+        int string64IndexSPI, int tailIndexSPI = 0, ExhaustionPolicy exhaustionPolicy = ExhaustionPolicy.None) :
         base($"ComponentTable_{definition.Name}", ResourceType.ComponentTable, parent, exhaustionPolicy)
     {
         DBE = dbe;
@@ -338,9 +356,16 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         DefaultIndexSegment  = mmf.LoadChunkBasedSegment(defaultIndexSPI, sizeof(Index64Chunk));
         String64IndexSegment = mmf.LoadChunkBasedSegment(string64IndexSPI, sizeof(IndexString64Chunk));
 
-        PrimaryKeyIndex = definition.AllowMultiple ? 
-            new LongMultipleBTree(DefaultIndexSegment, load: true, stableId: -1) : 
+        PrimaryKeyIndex = definition.AllowMultiple ?
+            new LongMultipleBTree(DefaultIndexSegment, load: true, stableId: -1) :
             new LongSingleBTree(DefaultIndexSegment, load: true, stableId: -1);
+
+        // Restore TAIL version-history segment for AllowMultiple secondary indexes
+        if (Definition.MultipleIndicesCount > 0)
+        {
+            TailIndexSegment = mmf.LoadChunkBasedSegment(tailIndexSPI, 512);
+            TailVSBS = new VariableSizedBufferSegment<VersionedIndexEntry>(TailIndexSegment);
+        }
 
         BuildIndexedFieldInfo(true);
 
@@ -423,6 +448,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
 
         if (disposing)
         {
+            TailIndexSegment?.Dispose();
             String64IndexSegment?.Dispose();
             DefaultIndexSegment.Dispose();
             CompRevTableSegment.Dispose();

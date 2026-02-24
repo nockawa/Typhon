@@ -1,12 +1,13 @@
 // unset
 
 using System;
+using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine;
 
 internal static unsafe class IndexMaintainer
 {
-    internal static void UpdateIndices(long pk, ComponentInfo info, ComponentInfo.CompRevInfo compRevInfo, int prevCompChunkId, ChangeSet changeSet)
+    internal static void UpdateIndices(long pk, ComponentInfo info, ComponentInfo.CompRevInfo compRevInfo, int prevCompChunkId, ChangeSet changeSet, long tsn)
     {
         // If there's a previous revision, we need to update the indices if some indexed fields changed
         var startChunkId = compRevInfo.CompRevTableFirstChunkId;
@@ -28,8 +29,39 @@ internal static unsafe class IndexMaintainer
                     var accessor = ifi.Index.Segment.CreateChunkAccessor(changeSet);
                     if (ifi.Index.AllowMultiple)
                     {
-                        ifi.Index.RemoveValue(&prev[ifi.OffsetToField], *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref accessor);
+                        var tailVSBS = info.ComponentTable.TailVSBS;
+
+                        // When TAIL tracking is active, preserve the BTree key even if the HEAD buffer empties.
+                        // This keeps the TAIL version-history buffer reachable for temporal queries.
+                        ifi.Index.RemoveValue(&prev[ifi.OffsetToField], *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref accessor,
+                            preserveEmptyBuffer: tailVSBS != null);
                         *(int*)&cur[ifi.OffsetToIndexElementId] = ifi.Index.Add(&cur[ifi.OffsetToField], startChunkId, ref accessor);
+
+                        // TAIL: append Tombstone to old key, Active to new key.
+                        // Since preserveEmptyBuffer keeps the old key alive, we can TryGet after RemoveValue
+                        // and use GetOrCreateTailBuffer which properly links the TAIL to the HEAD root header.
+                        if (tailVSBS != null)
+                        {
+                            var tailAccessor = tailVSBS.Segment.CreateChunkAccessor(changeSet);
+
+                            // Tombstone on old key's TAIL buffer
+                            var oldHeadResult = ifi.Index.TryGet(&prev[ifi.OffsetToField], ref accessor);
+                            if (oldHeadResult.IsSuccess)
+                            {
+                                var oldTailBufferId = GetOrCreateTailBuffer(oldHeadResult.Value, tailVSBS, ref accessor, ref tailAccessor);
+                                tailVSBS.AddElement(oldTailBufferId, VersionedIndexEntry.Tombstone(startChunkId, tsn), ref tailAccessor);
+                            }
+
+                            // Active on new key's TAIL buffer
+                            var newHeadResult = ifi.Index.TryGet(&cur[ifi.OffsetToField], ref accessor);
+                            if (newHeadResult.IsSuccess)
+                            {
+                                var newTailBufferId = GetOrCreateTailBuffer(newHeadResult.Value, tailVSBS, ref accessor, ref tailAccessor);
+                                tailVSBS.AddElement(newTailBufferId, VersionedIndexEntry.Active(startChunkId, tsn), ref tailAccessor);
+                            }
+
+                            tailAccessor.Dispose();
+                        }
                     }
                     else
                     {
@@ -68,7 +100,17 @@ internal static unsafe class IndexMaintainer
                 var accessor = ifi.Index.Segment.CreateChunkAccessor(changeSet);
                 if (ifi.Index.AllowMultiple)
                 {
-                    *(int*)&cur[ifi.OffsetToIndexElementId] = ifi.Index.Add(&cur[ifi.OffsetToField], startChunkId, ref accessor);
+                    *(int*)&cur[ifi.OffsetToIndexElementId] = ifi.Index.Add(&cur[ifi.OffsetToField], startChunkId, ref accessor, out var headBufferId);
+
+                    // TAIL: append Active entry for newly created entity
+                    var tailVSBS = info.ComponentTable.TailVSBS;
+                    if (tailVSBS != null)
+                    {
+                        var tailAccessor = tailVSBS.Segment.CreateChunkAccessor(changeSet);
+                        var tailBufferId = GetOrCreateTailBuffer(headBufferId, tailVSBS, ref accessor, ref tailAccessor);
+                        tailVSBS.AddElement(tailBufferId, VersionedIndexEntry.Active(startChunkId, tsn), ref tailAccessor);
+                        tailAccessor.Dispose();
+                    }
                 }
                 else
                 {
@@ -79,7 +121,7 @@ internal static unsafe class IndexMaintainer
         }
     }
 
-    internal static void RemoveSecondaryIndices(ComponentInfo info, int prevCompChunkId, int startChunkId, ChangeSet changeSet)
+    internal static void RemoveSecondaryIndices(ComponentInfo info, int prevCompChunkId, int startChunkId, ChangeSet changeSet, long tsn)
     {
         var prev = info.CompContentAccessor.GetChunkAddress(prevCompChunkId);
         var indexedFieldInfos = info.ComponentTable.IndexedFieldInfos;
@@ -89,7 +131,27 @@ internal static unsafe class IndexMaintainer
             var accessor = ifi.Index.Segment.CreateChunkAccessor(changeSet);
             if (ifi.Index.AllowMultiple)
             {
-                ifi.Index.RemoveValue(&prev[ifi.OffsetToField], *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref accessor);
+                var tailVSBS = info.ComponentTable.TailVSBS;
+
+                // When TAIL tracking is active, preserve the BTree key even if the HEAD buffer empties.
+                // This keeps the TAIL version-history buffer reachable for temporal queries.
+                ifi.Index.RemoveValue(&prev[ifi.OffsetToField], *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref accessor,
+                    preserveEmptyBuffer: tailVSBS != null);
+
+                // TAIL: append Tombstone for the deleted entity.
+                // Since preserveEmptyBuffer keeps the key alive, we can TryGet after RemoveValue
+                // and use GetOrCreateTailBuffer which properly links the TAIL to the HEAD root header.
+                if (tailVSBS != null)
+                {
+                    var tailAccessor = tailVSBS.Segment.CreateChunkAccessor(changeSet);
+                    var headResult = ifi.Index.TryGet(&prev[ifi.OffsetToField], ref accessor);
+                    if (headResult.IsSuccess)
+                    {
+                        var tailBufId = GetOrCreateTailBuffer(headResult.Value, tailVSBS, ref accessor, ref tailAccessor);
+                        tailVSBS.AddElement(tailBufId, VersionedIndexEntry.Tombstone(startChunkId, tsn), ref tailAccessor);
+                    }
+                    tailAccessor.Dispose();
+                }
             }
             else
             {
@@ -97,5 +159,29 @@ internal static unsafe class IndexMaintainer
             }
             accessor.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Gets the existing TAIL buffer ID or lazily allocates a new one, storing the link in the HEAD root header's extra header.
+    /// </summary>
+    /// <param name="headBufferId">Root chunk ID of the HEAD buffer.</param>
+    /// <param name="tailVSBS">The TAIL VSBS for VersionedIndexEntry storage.</param>
+    /// <param name="headAccessor">ChunkAccessor for the BTree's segment (to read/write HEAD root header).</param>
+    /// <param name="tailAccessor">ChunkAccessor for the TailIndexSegment.</param>
+    /// <returns>The TAIL buffer ID (existing or newly allocated).</returns>
+    private static int GetOrCreateTailBuffer(int headBufferId, VariableSizedBufferSegment<VersionedIndexEntry> tailVSBS,
+        ref ChunkAccessor headAccessor, ref ChunkAccessor tailAccessor)
+    {
+        var chunkAddr = headAccessor.GetChunkAddress(headBufferId, true);
+        ref var extra = ref IndexBufferExtraHeader.FromChunkAddress(chunkAddr);
+        if (extra.TailBufferId != 0)
+        {
+            return extra.TailBufferId;
+        }
+
+        // Allocate a new TAIL buffer and link it in the extra header
+        var tailBufferId = tailVSBS.AllocateBuffer(ref tailAccessor);
+        extra.TailBufferId = tailBufferId;
+        return tailBufferId;
     }
 }

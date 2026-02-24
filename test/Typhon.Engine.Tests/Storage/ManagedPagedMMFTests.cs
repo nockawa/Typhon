@@ -488,13 +488,13 @@ public class ManagedPagedMMFTests
             var id0 = vsb.AllocateBuffer(ref accessor);
             var elIdList = new int[15];
 
-            // 15 is spread into 3 chunks: 4, 7, 4
+            // 15 is spread into 3 chunks: 4, 7, 4 (root chunk has fewer due to header overhead)
             for (int i = 0; i < 15; i++)
             {
                 elIdList[i] = vsb.AddElement(id0, i, ref accessor);
             }
 
-            // Delete all the elements of the second chunk
+            // Delete all the elements of the second chunk (values 4-10)
             for (int i = 4; i < 11; i++)
             {
                 Assert.That(vsb.DeleteElement(id0, elIdList[i], i, ref accessor), Is.Not.EqualTo(-1));

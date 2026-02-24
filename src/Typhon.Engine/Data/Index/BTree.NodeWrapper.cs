@@ -137,6 +137,7 @@ public abstract partial class BTree<TKey>
                 {
                     var bufferId = _storage.CreateBuffer(ref accessor);
                     args.ElementId = _storage.Append(bufferId, value, ref accessor);
+                    args.BufferRootId = bufferId;
                     value = bufferId;
                 }
                 var item = new KeyValueItem(args.Key, value); // item to add
@@ -222,6 +223,7 @@ public abstract partial class BTree<TKey>
                 {
                     var curItem = GetItem(index, ref accessor);
                     args.ElementId = _storage.Append(curItem.Value, args.GetValue(), ref accessor);
+                    args.BufferRootId = curItem.Value;
                 }
                 // Unique index: GetValue() not called, so Added stays false.
                 // AddOrUpdateCore detects !Added && !AllowMultiple and throws UniqueConstraintViolationException.

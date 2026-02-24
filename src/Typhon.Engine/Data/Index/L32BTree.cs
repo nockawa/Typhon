@@ -716,7 +716,7 @@ public class L32MultipleBTree<TKey> : L32BTree<TKey> where TKey : unmanaged
         internal override void Initialize(BTree<TKey> owner, ChunkBasedSegment segment)
         {
             base.Initialize(owner, segment);
-            _valueStore = new VariableSizedBufferSegment<int>(segment);
+            _valueStore = new VariableSizedBufferSegment<int, IndexBufferExtraHeader>(segment);
 
         }
 

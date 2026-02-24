@@ -5,7 +5,6 @@ using Serilog;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
 using Typhon.Engine.BPTree;
 
 namespace Typhon.Engine.Tests;
