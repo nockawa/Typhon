@@ -1221,11 +1221,11 @@ public unsafe class Transaction : IDisposable
             // Commit the revision: update indices, clear IsolationFlag, update LastCommitRevisionIndex
             if (compRevInfo.CurCompContentChunkId != 0)
             {
-                IndexMaintainer.UpdateIndices(pk, info, compRevInfo, readCompChunkId, _changeSet);
+                IndexMaintainer.UpdateIndices(pk, info, compRevInfo, readCompChunkId, _changeSet, TSN);
             }
             else if (readCompChunkId != 0)
             {
-                IndexMaintainer.RemoveSecondaryIndices(info, readCompChunkId, compRevInfo.CompRevTableFirstChunkId, _changeSet);
+                IndexMaintainer.RemoveSecondaryIndices(info, readCompChunkId, compRevInfo.CompRevTableFirstChunkId, _changeSet, TSN);
             }
 
             elementHandle.Commit(TSN);

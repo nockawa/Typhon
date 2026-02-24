@@ -51,6 +51,7 @@ public struct ComponentR1
     public int VersionSPI;
     public int DefaultIndexSPI;
     public int String64IndexSPI;
+    public int TailIndexSPI;
 
     public ComponentCollection<FieldR1> Fields;
 }
@@ -420,11 +421,13 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             });
 
     unsafe internal ChunkBasedSegment GetComponentCollectionSegment<T>() where T : unmanaged =>
-        _componentCollectionSegmentByStride.GetOrAdd(RoundToStandardStride(sizeof(T) * 8),
+        _componentCollectionSegmentByStride.GetOrAdd(
+            RoundToStandardStride(Math.Max(sizeof(T) * ComponentCollectionItemCountPerChunk, sizeof(VariableSizedBufferRootHeader))),
             stride => MMF.AllocateChunkBasedSegment(PageBlockType.None, ComponentCollectionSegmentStartingSize, stride));
 
-    internal ChunkBasedSegment GetComponentCollectionSegment(int itemSize, ChangeSet changeSet = null) =>
-        _componentCollectionSegmentByStride.GetOrAdd(RoundToStandardStride(itemSize * 8),
+    unsafe internal ChunkBasedSegment GetComponentCollectionSegment(int itemSize, ChangeSet changeSet = null) =>
+        _componentCollectionSegmentByStride.GetOrAdd(
+            RoundToStandardStride(Math.Max(itemSize * ComponentCollectionItemCountPerChunk, sizeof(VariableSizedBufferRootHeader))),
             stride => MMF.AllocateChunkBasedSegment(PageBlockType.None, ComponentCollectionSegmentStartingSize, stride, changeSet));
 
     internal long GetNewPrimaryKey() => Interlocked.Increment(ref _curPrimaryKey);
@@ -494,6 +497,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             VersionSPI          = table.CompRevTableSegment.RootPageIndex,
             DefaultIndexSPI     = table.DefaultIndexSegment.RootPageIndex,
             String64IndexSPI    = table.String64IndexSegment.RootPageIndex,
+            TailIndexSPI        = table.TailIndexSegment?.RootPageIndex ?? 0,
         };
 
         {
@@ -673,7 +677,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         {
             // Load path: restore from saved SPIs
             componentTable = new ComponentTable(this, definition, this, persisted.ComponentSPI, persisted.VersionSPI,
-                persisted.DefaultIndexSPI, persisted.String64IndexSPI);
+                persisted.DefaultIndexSPI, persisted.String64IndexSPI, persisted.TailIndexSPI);
 
             // Update _curPrimaryKey from loaded PK index
             if (componentTable.PrimaryKeyIndex.EntryCount > 0)

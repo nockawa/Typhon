@@ -735,7 +735,7 @@ public class String64MultipleBTree : String64BTree
         internal override void Initialize(BTree<String64> owner, ChunkBasedSegment segment)
         {
             base.Initialize(owner, segment);
-            _valueStore = new VariableSizedBufferSegment<int>(segment);
+            _valueStore = new VariableSizedBufferSegment<int, IndexBufferExtraHeader>(segment);
 
         }
 

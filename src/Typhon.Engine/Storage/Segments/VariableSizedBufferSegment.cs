@@ -37,16 +37,21 @@ public unsafe class VariableSizedBufferSegmentBase
     private readonly int _elementSize;
     protected internal readonly int ElementCountRootChunk;
     protected readonly int ElementCountPerChunk;
+    protected internal readonly int RootHeaderTotalSize;
     public readonly ChunkBasedSegment Segment;
 
-    protected VariableSizedBufferSegmentBase(ChunkBasedSegment segment, int elementSize)
+    protected VariableSizedBufferSegmentBase(ChunkBasedSegment segment, int elementSize) : this(segment, elementSize, sizeof(VariableSizedBufferRootHeader))
+    {
+    }
+
+    protected VariableSizedBufferSegmentBase(ChunkBasedSegment segment, int elementSize, int rootHeaderTotalSize)
     {
         _elementSize = elementSize;
+        RootHeaderTotalSize = rootHeaderTotalSize;
         var stride = segment.Stride;
-        var headerSize = sizeof(VariableSizedBufferRootHeader);
-        Debug.Assert(headerSize <= stride, $"Error, stride is too small, should be at least, {headerSize} bytes.");
-        
-        ElementCountRootChunk = (stride - headerSize) / _elementSize;
+        Debug.Assert(rootHeaderTotalSize <= stride, $"Error, stride is too small, should be at least, {rootHeaderTotalSize} bytes.");
+
+        ElementCountRootChunk = (stride - rootHeaderTotalSize) / _elementSize;
         ElementCountPerChunk = (stride - sizeof(VariableSizedBufferChunkHeader)) / _elementSize;
         Segment = segment;
     }
@@ -56,7 +61,8 @@ public unsafe class VariableSizedBufferSegmentBase
         // Allocate and initialize the first chunk of the Buffer
         var segment = accessor.Segment;
         var chunkId = segment.AllocateChunk(false);
-        ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(accessor.GetChunkAddress(chunkId, true));
+        var addr = accessor.GetChunkAddress(chunkId, true);
+        ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(addr);
         rh.Lock.Reset();
         rh.FirstFreeChunkId = 0;
         rh.FirstStoredChunkId = chunkId;
@@ -65,6 +71,14 @@ public unsafe class VariableSizedBufferSegmentBase
         rh.RefCounter = 1;
         rh.Header.NextChunkId = 0;
         rh.Header.ElementCount = 0;
+
+        // Zero-initialize any extra header bytes beyond the standard root header
+        var extraSize = RootHeaderTotalSize - sizeof(VariableSizedBufferRootHeader);
+        if (extraSize > 0)
+        {
+            Unsafe.InitBlockUnaligned(addr + sizeof(VariableSizedBufferRootHeader), 0, (uint)extraSize);
+        }
+
         return chunkId;
     }
 
@@ -187,6 +201,10 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
     {
     }
 
+    unsafe protected VariableSizedBufferSegment(ChunkBasedSegment segment, int rootHeaderTotalSize) : base(segment, sizeof(T), rootHeaderTotalSize)
+    {
+    }
+
     unsafe public int AddElement(int bufferId, T value, ref ChunkAccessor accessor)
     {
         // Fetch the root chunk — epoch protects page lifetime
@@ -240,7 +258,7 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
             }
 
             // Add our element to the chunk
-            var baseElementAddr = (T*)(curChunkAddr + (isRoot ? sizeof(VariableSizedBufferRootHeader) : sizeof(VariableSizedBufferChunkHeader)));
+            var baseElementAddr = (T*)(curChunkAddr + (isRoot ? RootHeaderTotalSize : sizeof(VariableSizedBufferChunkHeader)));
             baseElementAddr[curChunkHeader.ElementCount++] = value;
                 
             ++rh.TotalCount;
@@ -309,7 +327,7 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
                 }
 
                 var copyLength = Math.Min(chunkCapacity - curChunkHeader.ElementCount, itemsLeftToCopy);
-                var dstSpan = new Span<T>((curChunkAddr + (isRoot ? sizeof(VariableSizedBufferRootHeader) : sizeof(VariableSizedBufferChunkHeader))),
+                var dstSpan = new Span<T>((curChunkAddr + (isRoot ? RootHeaderTotalSize : sizeof(VariableSizedBufferChunkHeader))),
                     chunkCapacity);
                 items.Slice(curSourceIndex, copyLength).CopyTo(dstSpan.Slice(curChunkHeader.ElementCount));
                 
@@ -337,7 +355,7 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
             var elementChunk = accessor.GetChunkAddress(elementId, true);
             ref var elementChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(elementChunk);
             var isRoot = bufferId == elementId;
-            var baseElementAddr = (T*)(elementChunk + (isRoot ? sizeof(VariableSizedBufferRootHeader) : sizeof(VariableSizedBufferChunkHeader)));
+            var baseElementAddr = (T*)(elementChunk + (isRoot ? RootHeaderTotalSize : sizeof(VariableSizedBufferChunkHeader)));
 
             // Look for our element
             var count = elementChunkHeader.ElementCount;
@@ -388,6 +406,20 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
         } while (source.NextChunk());
 
         return destBufferId;
+    }
+}
+
+/// <summary>
+/// Extended VSBS that appends a typed extra header after the standard <see cref="VariableSizedBufferRootHeader"/>.
+/// The extra header is automatically zeroed on buffer allocation.
+/// </summary>
+/// <typeparam name="T">The unmanaged element type stored in the buffer.</typeparam>
+/// <typeparam name="TExtraHeader">The unmanaged struct appended after the root header in the root chunk.</typeparam>
+[PublicAPI]
+public class VariableSizedBufferSegment<T, TExtraHeader> : VariableSizedBufferSegment<T> where T : unmanaged where TExtraHeader : unmanaged
+{
+    public unsafe VariableSizedBufferSegment(ChunkBasedSegment segment) : base(segment, sizeof(VariableSizedBufferRootHeader) + sizeof(TExtraHeader))
+    {
     }
 }
 
@@ -466,6 +498,7 @@ public ref struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanag
 {
     private readonly VariableSizedBufferSegment<T> _owner;
     private readonly ChunkBasedSegment _segment;
+    private readonly int _rootHeaderTotalSize;
 
     private int _rootChunkId;
     private unsafe byte* _rootChunkAddr;
@@ -504,6 +537,7 @@ public ref struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanag
     {
         _owner = owner;
         _segment = owner.Segment;
+        _rootHeaderTotalSize = owner.RootHeaderTotalSize;
         _rootChunkId = rootChunkId;
 
         _accessor = _segment.CreateChunkAccessor(changeSet);
@@ -523,7 +557,7 @@ public ref struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanag
         _curChunkId = _rootChunkId;
         _curChunkAddr = _accessor.GetChunkAddress(_curChunkId);
 
-        _elementAddr = _curChunkAddr + (_curChunkId==rootChunkId ? sizeof(VariableSizedBufferRootHeader) : sizeof(VariableSizedBufferChunkHeader));
+        _elementAddr = _curChunkAddr + (_curChunkId==rootChunkId ? _rootHeaderTotalSize : sizeof(VariableSizedBufferChunkHeader));
         _elementCount = ((VariableSizedBufferChunkHeader*)_curChunkAddr)->ElementCount;
 
         if (_elementCount == 0) NextChunk();
@@ -630,7 +664,7 @@ public ref struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanag
 
         _curChunkId = nextChunkId;
         _curChunkAddr = _accessor.GetChunkAddress(_curChunkId);
-        _elementAddr = _curChunkAddr + (_curChunkId == _rootChunkId ? sizeof(VariableSizedBufferRootHeader) : sizeof(VariableSizedBufferChunkHeader));
+        _elementAddr = _curChunkAddr + (_curChunkId == _rootChunkId ? _rootHeaderTotalSize : sizeof(VariableSizedBufferChunkHeader));
         _elementCount = ((VariableSizedBufferChunkHeader*)_curChunkAddr)->ElementCount;
 
         return true;

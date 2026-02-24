@@ -124,17 +124,16 @@ public interface IBTree
     bool AllowMultiple { get; }
     int EntryCount { get; }
     unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor);
+    unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor, out int bufferRootId);
     unsafe bool Remove(void* keyAddr, out int value, ref ChunkAccessor accessor);
     unsafe Result<int, BTreeLookupStatus> TryGet(void* keyAddr, ref ChunkAccessor accessor);
-    unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref ChunkAccessor accessor);
+    unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref ChunkAccessor accessor, bool preserveEmptyBuffer = false);
     unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ref ChunkAccessor accessor);
     void CheckConsistency(ref ChunkAccessor accessor);
 }
 
 public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged 
 {
-    const int ChunkRandomAccessorPagedCount = 8;
-
     [DebuggerDisplay("Key: {Key}, Value: {Value}")]
     [StructLayout(LayoutKind.Sequential)]
     public struct KeyValueItem
@@ -175,6 +174,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         public bool Added { get; private set; }
 
         public int ElementId;
+        public int BufferRootId;
 
         public ref ChunkAccessor Accessor;
 
@@ -593,15 +593,19 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         return (1 + adjusted / entriesPerChunk, (adjusted % entriesPerChunk) * BTreeDirectoryEntry.Size);
     }
 
-    public unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor) => Add(Unsafe.AsRef<TKey>(keyAddr), value, ref accessor);
+    public unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor) => Add(Unsafe.AsRef<TKey>(keyAddr), value, ref accessor, out _);
+    public unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor, out int bufferRootId)
+        => Add(Unsafe.AsRef<TKey>(keyAddr), value, ref accessor, out bufferRootId);
     public unsafe bool Remove(void* keyAddr, out int value, ref ChunkAccessor accessor) => Remove(Unsafe.AsRef<TKey>(keyAddr), out value, ref accessor);
     public unsafe Result<int, BTreeLookupStatus> TryGet(void* keyAddr, ref ChunkAccessor accessor) => TryGet(Unsafe.AsRef<TKey>(keyAddr), ref accessor);
-    public unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref ChunkAccessor accessor) 
-        => RemoveValue(Unsafe.AsRef<TKey>(keyAddr), elementId, value, ref accessor);
+    public unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref ChunkAccessor accessor, bool preserveEmptyBuffer = false)
+        => RemoveValue(Unsafe.AsRef<TKey>(keyAddr), elementId, value, ref accessor, preserveEmptyBuffer);
     public unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ref ChunkAccessor accessor)
         => TryGetMultiple(Unsafe.AsRef<TKey>(keyAddr), ref accessor);
 
-    public int Add(TKey key, int value, ref ChunkAccessor accessor)
+    public int Add(TKey key, int value, ref ChunkAccessor accessor) => Add(key, value, ref accessor, out _);
+
+    public int Add(TKey key, int value, ref ChunkAccessor accessor, out int bufferRootId)
     {
         Activity activity = null;
         if (TelemetryConfig.BTreeActive)
@@ -620,6 +624,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             AddOrUpdateCore(ref args);
             SyncHeader(ref accessor);
             activity?.SetTag(TyphonSpanAttributes.IndexOperation, "insert");
+            bufferRootId = args.BufferRootId;
             return args.ElementId;
         }
         finally
@@ -773,7 +778,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
     }
 
-    public bool RemoveValue(TKey key, int elementId, int value, ref ChunkAccessor accessor)
+    public bool RemoveValue(TKey key, int elementId, int value, ref ChunkAccessor accessor, bool preserveEmptyBuffer = false)
     {
         Activity activity = null;
         if (TelemetryConfig.BTreeActive)
@@ -804,8 +809,10 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
                 return false;
             }
 
-            // Remove the key if we no longer have values stored there
-            if (res == 0)
+            // Remove the key if we no longer have values stored there.
+            // When preserveEmptyBuffer is true, keep the BTree key and empty HEAD buffer alive so that linked TAIL version-history buffers remain reachable
+            // for temporal queries.
+            if (res == 0 && !preserveEmptyBuffer)
             {
                 var args = new RemoveArguments(key, Comparer, ref accessor);
                 RemoveCore(ref args);
@@ -950,6 +957,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             {
                 var bufferId = _storage.CreateBuffer(ref accessor);
                 args.ElementId = _storage.Append(bufferId, args.GetValue(), ref accessor);
+                args.BufferRootId = bufferId;
                 value = bufferId;
             }
             else
@@ -965,7 +973,9 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         {
             if (AllowMultiple)
             {
-                args.ElementId = _storage.Append(GetLast(ref accessor).Value, args.GetValue(), ref accessor);
+                var bufferRootId = GetLast(ref accessor).Value;
+                args.ElementId = _storage.Append(bufferRootId, args.GetValue(), ref accessor);
+                args.BufferRootId = bufferRootId;
             }
             else
             {
@@ -983,6 +993,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             {
                 var bufferId = _storage.CreateBuffer(ref accessor);
                 args.ElementId = _storage.Append(bufferId, args.GetValue(), ref accessor);
+                args.BufferRootId = bufferId;
                 value = bufferId;
             }
             else
@@ -998,7 +1009,9 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         {
             if (AllowMultiple)
             {
-                args.ElementId = _storage.Append(GetFirst(ref accessor).Value, args.GetValue(), ref accessor);
+                var bufferRootId = GetFirst(ref accessor).Value;
+                args.ElementId = _storage.Append(bufferRootId, args.GetValue(), ref accessor);
+                args.BufferRootId = bufferRootId;
             }
             else
             {

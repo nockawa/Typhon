@@ -716,7 +716,7 @@ public class L16MultipleBTree<TKey> : L16BTree<TKey> where TKey : unmanaged
         internal override void Initialize(BTree<TKey> owner, ChunkBasedSegment segment)
         {
             base.Initialize(owner, segment);
-            _valueStore = new VariableSizedBufferSegment<int>(segment);
+            _valueStore = new VariableSizedBufferSegment<int, IndexBufferExtraHeader>(segment);
         }
 
         public override int Append(int bufferId, int value, ref ChunkAccessor accessor) => _valueStore.AddElement(bufferId, value, ref accessor);
