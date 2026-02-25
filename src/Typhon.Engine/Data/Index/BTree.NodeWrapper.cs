@@ -15,17 +15,34 @@ public abstract partial class BTree<TKey>
     {
         private readonly BaseNodeStorage _storage;
         public readonly int ChunkId;
+        private readonly byte _flags; // bit 0: isLeaf, bit 1: valid (flag was set at construction)
 
         public NodeWrapper(BaseNodeStorage storage, int chunkId)
         {
             _storage = storage;
             ChunkId = chunkId;
+            _flags = 0;
+        }
+
+        internal NodeWrapper(BaseNodeStorage storage, int chunkId, bool isLeaf)
+        {
+            _storage = storage;
+            ChunkId = chunkId;
+            _flags = (byte)(0x02 | (isLeaf ? 0x01 : 0));
         }
 
         #region Node Properties
 
         public bool IsValid => _storage != null && ChunkId != 0;
-        public bool GetIsLeaf(ref ChunkAccessor accessor) => (_storage.GetNodeStates(this, ref accessor) & NodeStates.IsLeaf) != 0;
+
+        public bool GetIsLeaf(ref ChunkAccessor accessor)
+        {
+            if ((_flags & 0x02) != 0)
+            {
+                return (_flags & 0x01) != 0;
+            }
+            return (_storage.GetNodeStates(this, ref accessor) & NodeStates.IsLeaf) != 0;
+        }
         public int GetCapacity() => _storage.GetNodeCapacity();
         public bool GetIsFull(ref ChunkAccessor accessor) => GetCount(ref accessor) == GetCapacity();
         public bool GetIsHalfFull(ref ChunkAccessor accessor) => GetCount(ref accessor) >= (GetCapacity() / 2);
@@ -265,7 +282,7 @@ public abstract partial class BTree<TKey>
                 else
                 {
                     // if left sibling has space, spill left child of this item to left sibling.
-                    if (CanSpillTo(relatives.LeftSibling, ref accessor, out var leftSibling))
+                    if (CanSpillTo(relatives.GetLeftSibling(ref accessor), ref accessor, out var leftSibling))
                     {
                         #region Fix Pointers after share
                         // give first item to left sibling.
@@ -294,7 +311,7 @@ public abstract partial class BTree<TKey>
                         Validate(this, ref accessor);
                         Validate(leftSibling, ref accessor);
                     }
-                    else if (CanSpillTo(relatives.RightSibling, ref accessor, out var rightSibling)) // if right sibling has space
+                    else if (CanSpillTo(relatives.GetRightSibling(ref accessor), ref accessor, out var rightSibling)) // if right sibling has space
                     {
                         #region Fix Pointers after share
                         // give last item to right sibling.
@@ -503,7 +520,7 @@ public abstract partial class BTree<TKey>
 
                 if (!GetIsHalfFull(ref accessor)) // borrow or merge
                 {
-                    if (CanBorrowFrom(relatives.LeftSibling, ref accessor, out NodeWrapper leftSibling))
+                    if (CanBorrowFrom(relatives.GetLeftSibling(ref accessor), ref accessor, out NodeWrapper leftSibling))
                     {
                         var last = leftSibling.PopLastInternal(ref accessor);
 
@@ -521,7 +538,7 @@ public abstract partial class BTree<TKey>
                         Validate(this, ref accessor);
                         Validate(leftSibling, ref accessor);
                     }
-                    else if (CanBorrowFrom(relatives.RightSibling, ref accessor, out NodeWrapper rightSibling))
+                    else if (CanBorrowFrom(relatives.GetRightSibling(ref accessor), ref accessor, out NodeWrapper rightSibling))
                     {
                         var first = rightSibling.PopFirstInternal(ref accessor);
 

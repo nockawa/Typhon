@@ -228,8 +228,10 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     /// <summary>
     /// contains information about relatives of each node, such as ancestors and siblings.
     /// this information is used for borrow and spill operations.
+    /// Siblings are lazily resolved to avoid loading chunks that are only needed during
+    /// split/merge/spill/borrow operations (~5% of inserts).
     /// </summary>
-    public readonly struct NodeRelatives
+    public struct NodeRelatives
     {
         /*  Note: "/" is left pointer. "\" is right pointer.
          *
@@ -250,9 +252,6 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
          *         /              \    /
          *   [LeftSibling]     [Node][RightSibling]
          */
-
-        public readonly NodeWrapper LeftSibling;
-        public readonly NodeWrapper RightSibling;
 
         /// <summary>
         /// nearest ancestor of node and its left sibling.
@@ -284,22 +283,71 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         /// </summary>
         public readonly bool HasTrueRightSibling;
 
-        private NodeRelatives(NodeWrapper leftAncestor, int leftAncestorIndex, NodeWrapper leftSibling, bool hasTrueLeftSibling,
-            NodeWrapper rightAncestor, int rightAncestorIndex, NodeWrapper rightSibling, bool hasTrueRightSibling)
+        // Context for lazy cousin edge resolution (only set for edge children)
+        private readonly NodeWrapper _cousinLeftSource;
+        private readonly NodeWrapper _cousinRightSource;
+
+        // Lazy-cached siblings
+        private NodeWrapper _leftSibling;
+        private NodeWrapper _rightSibling;
+        private bool _leftLoaded;
+        private bool _rightLoaded;
+
+        private NodeRelatives(NodeWrapper leftAncestor, int leftAncestorIndex, bool hasTrueLeftSibling, NodeWrapper rightAncestor, int rightAncestorIndex, 
+            bool hasTrueRightSibling, NodeWrapper cousinLeftSource, NodeWrapper cousinRightSource)
         {
             LeftAncestor = leftAncestor;
             LeftAncestorIndex = leftAncestorIndex;
-            LeftSibling = leftSibling;
             HasTrueLeftSibling = hasTrueLeftSibling;
 
             RightAncestor = rightAncestor;
             RightAncestorIndex = rightAncestorIndex;
-            RightSibling = rightSibling;
             HasTrueRightSibling = hasTrueRightSibling;
+
+            _cousinLeftSource = cousinLeftSource;
+            _cousinRightSource = cousinRightSource;
+            _leftSibling = default;
+            _rightSibling = default;
+            _leftLoaded = false;
+            _rightLoaded = false;
+        }
+
+        /// <summary>
+        /// Lazily resolves and returns the left sibling. Caches result on first access.
+        /// For true siblings, reads from the ancestor node. For cousin edges, traverses
+        /// the parent's left sibling to find the rightmost child.
+        /// </summary>
+        public NodeWrapper GetLeftSibling(ref ChunkAccessor accessor)
+        {
+            if (!_leftLoaded)
+            {
+                _leftLoaded = true;
+                _leftSibling = HasTrueLeftSibling ? 
+                    LeftAncestor.GetChild(LeftAncestorIndex - 1, ref accessor) : _cousinLeftSource.IsValid ? _cousinLeftSource.GetLastChild(ref accessor) : default;
+            }
+            return _leftSibling;
+        }
+
+        /// <summary>
+        /// Lazily resolves and returns the right sibling. Caches result on first access.
+        /// For true siblings, reads from the ancestor node. For cousin edges, traverses
+        /// the parent's right sibling to find the leftmost child.
+        /// </summary>
+        public NodeWrapper GetRightSibling(ref ChunkAccessor accessor)
+        {
+            if (!_rightLoaded)
+            {
+                _rightLoaded = true;
+                _rightSibling = HasTrueRightSibling ?
+                    RightAncestor.GetChild(RightAncestorIndex, ref accessor) : _cousinRightSource.IsValid ? _cousinRightSource.GetFirstChild(ref accessor) : default;
+            }
+            return _rightSibling;
         }
 
         /// <summary>
         /// creates new relatives for child node.
+        /// Ancestor fields are set eagerly (no chunk reads — just copies).
+        /// Sibling fields are lazily resolved on first access via GetLeftSibling/GetRightSibling.
         /// </summary>
         public static void Create(NodeWrapper child, int index, NodeWrapper parent, ref NodeRelatives parentRelatives, out NodeRelatives res, ref ChunkAccessor accessor)
         {
@@ -308,48 +356,44 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             // assign nearest ancestors between child and siblings.
             NodeWrapper leftAncestor, rightAncestor;
             int leftAncestorIndex, rightAncestorIndex;
-            NodeWrapper leftSibling, rightSibling;
             bool hasTrueLeftSibling, hasTrueRightSibling;
+            NodeWrapper cousinLeftSource = default, cousinRightSource = default;
 
             if (index == -1) // if child is left most, use left cousin as left sibling.
             {
                 leftAncestor = parentRelatives.LeftAncestor;
                 leftAncestorIndex = parentRelatives.LeftAncestorIndex;
-                leftSibling = parentRelatives.LeftSibling.IsValid ? parentRelatives.LeftSibling.GetLastChild(ref accessor) : default;
                 hasTrueLeftSibling = false;
+                cousinLeftSource = parentRelatives.GetLeftSibling(ref accessor);
 
                 rightAncestor = parent;
                 rightAncestorIndex = index + 1;
-                rightSibling = parent.GetChild(rightAncestorIndex, ref accessor);
                 hasTrueRightSibling = true;
             }
             else if (index == parent.GetLength(ref accessor) - 1) // if child is right most, use right cousin as right sibling.
             {
                 leftAncestor = parent;
                 leftAncestorIndex = index;
-                leftSibling = parent.GetChild(leftAncestorIndex - 1, ref accessor);
                 hasTrueLeftSibling = true;
 
                 rightAncestor = parentRelatives.RightAncestor;
                 rightAncestorIndex = parentRelatives.RightAncestorIndex;
-                rightSibling = parentRelatives.RightSibling.IsValid ? parentRelatives.RightSibling.GetFirstChild(ref accessor) : default;
                 hasTrueRightSibling = false;
+                cousinRightSource = parentRelatives.GetRightSibling(ref accessor);
             }
             else // child is not right most nor left most.
             {
                 leftAncestor = parent;
                 leftAncestorIndex = index;
-                leftSibling = parent.GetChild(leftAncestorIndex - 1, ref accessor);
                 hasTrueLeftSibling = true;
 
                 rightAncestor = parent;
                 rightAncestorIndex = index + 1;
-                rightSibling = parent.GetChild(rightAncestorIndex, ref accessor);
                 hasTrueRightSibling = true;
             }
 
-            res = new NodeRelatives(leftAncestor, leftAncestorIndex, leftSibling, hasTrueLeftSibling,
-                rightAncestor, rightAncestorIndex, rightSibling, hasTrueRightSibling);
+            res = new NodeRelatives(leftAncestor, leftAncestorIndex, hasTrueLeftSibling, rightAncestor, rightAncestorIndex, hasTrueRightSibling, 
+                cousinLeftSource, cousinRightSource);
         }
     }
 
@@ -369,6 +413,11 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     // instead of reading from a single shared offset, which would cause cross-BTree corruption.
     // Each BTree has a unique entry in the chunk 0 directory, keyed by stableId.
     private int _count;
+
+    // Cached last key for append fast-path: avoids reading ReverseLinkList chunk on sequential inserts.
+    // TKey is unmanaged (value type), so no heap allocation.
+    private TKey _cachedLastKey;
+    private bool _hasCachedLastKey;
 
     // Cached location of this BTree's entry in the chunk 0 directory.
     // Computed once at construction, used by SyncHeader for O(1) writes.
@@ -864,13 +913,14 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     protected internal NodeWrapper AllocNode(NodeStates states, ref ChunkAccessor accessor)
     {
-        var node = new NodeWrapper(_storage, _segment.AllocateChunk(true));
+        var node = new NodeWrapper(_storage, _segment.AllocateChunk(false), (states & NodeStates.IsLeaf) != 0);
         _storage.InitializeNode(node, states, ref accessor);
         return node;
     }
 
     private void RemoveCore(ref RemoveArguments args)
     {
+        _hasCachedLastKey = false;
         ref var accessor = ref args.Accessor;
         if (IsEmpty())
         {
@@ -949,7 +999,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
 
         // append optimization: if item key is in order, this may add item in O(1) operation.
-        int order = IsEmpty() ? 1 : args.Compare(args.Key, GetLast(ref accessor).Key);
+        int order = IsEmpty() ? 1 : args.Compare(args.Key, _hasCachedLastKey ? _cachedLastKey : GetLast(ref accessor).Key);
         if (order > 0 && !ReverseLinkList.GetIsFull(ref accessor))
         {
             int value;
@@ -966,6 +1016,8 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             }
             ReverseLinkList.PushLast(new KeyValueItem(args.Key, value), ref accessor);
             IncCount();
+            _cachedLastKey = args.Key;
+            _hasCachedLastKey = true;
             return;
         }
 
@@ -1048,6 +1100,8 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         {
             ReverseLinkList = next;
         }
+        _cachedLastKey = GetLast(ref accessor).Key;
+        _hasCachedLastKey = true;
     }
 
     private NodeWrapper FindLeaf(TKey key, out int index, ref ChunkAccessor accessor)

@@ -173,7 +173,10 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
         public override void InitializeNode(NodeWrapper node, NodeStates states, ref ChunkAccessor accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index64Chunk>(node.ChunkId, true);
-            chunk.StateFlags = states;
+            chunk.Control = (int)states;  // Atomically sets StateFlags + Start=0 + Count=0
+            chunk.PrevChunk = 0;
+            chunk.NextChunk = 0;
+            chunk.LeftValue = 0;
         }
 
         public override int GetNodeCapacity() => Index64Chunk.Capacity;

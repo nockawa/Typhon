@@ -54,17 +54,19 @@ public abstract partial class BTree<TKey>
         public abstract void DeleteBuffer(int bufferId, ref ChunkAccessor accessor);
         public abstract NodeWrapper GetLastChild(NodeWrapper node, ref ChunkAccessor accessor);
         public abstract NodeWrapper GetFirstChild(NodeWrapper node, ref ChunkAccessor accessor);
-        public virtual NodeWrapper GetChild(NodeWrapper node, int index, ref ChunkAccessor accessor)
+        public NodeWrapper GetChild(NodeWrapper node, int index, ref ChunkAccessor accessor)
         {
             if (node.GetIsLeaf(ref accessor))
             {
                 return default;
             }
-            if (index < 0)
-            {
-                return GetLeftNode(node, ref accessor);
-            }
-            return new NodeWrapper(this, GetItem(node, index, true, ref accessor).Value);
+
+            var child = index < 0 ? GetLeftNode(node, ref accessor) : new NodeWrapper(this, GetItem(node, index, true, ref accessor).Value);
+            
+            // Read child's StateFlags to cache IsLeaf — the child chunk will be accessed
+            // immediately after (by BinarySearch/Find), so this read is essentially free.
+            bool isLeaf = (GetNodeStates(child, ref accessor) & NodeStates.IsLeaf) != 0;
+            return new NodeWrapper(this, child.ChunkId, isLeaf);
         }
         public abstract void IncrementStart(NodeWrapper node, ref ChunkAccessor accessor);
         public abstract void DecrementStart(NodeWrapper node, ref ChunkAccessor accessor);
