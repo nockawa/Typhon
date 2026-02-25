@@ -4,8 +4,10 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
 using System.Threading;
 
 namespace Typhon.Engine.BPTree;
@@ -15,17 +17,18 @@ namespace Typhon.Engine.BPTree;
 [StructLayout(LayoutKind.Sequential)]
 unsafe public struct Index64Chunk
 {
-    // What we want here, is to keep this struct 64 bytes to align it with a cache line
+    // 128 bytes to span two cache lines (ALP prefetch: the Adjacent Line Prefetcher on Zen 4+/recent Intel automatically prefetches the paired 64-byte line
+    //  within a naturally aligned 128-byte region)
 
-    public const int Capacity = 4;
+    public const int Capacity = 9;
 
     // Special beast... Ownership control (LSB, 1 bit), state flags (LSW 15bits), Position of the first Item, aka Start (8bits), stored Item Count (8bits)
     public int Control;
     public int PrevChunk;
     public int NextChunk;
     public int LeftValue;
-    public fixed int Values[Capacity];
-    public fixed long Keys[Capacity];
+    public fixed int Values[Capacity];              // 9 × 4 = 36 bytes (+ 4 bytes implicit padding for long alignment)
+    public fixed long Keys[Capacity];               // 9 × 8 = 72 bytes
 
     public Span<long> KeysAsSpan
     {
@@ -165,6 +168,7 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
         internal override void Initialize(BTree<TKey> owner, ChunkBasedSegment segment)
         {
             base.Initialize(owner, segment);
+            Debug.Assert(sizeof(Index64Chunk) == 128);
             Debug.Assert(segment.Stride == sizeof(Index64Chunk));
         }
 
@@ -337,15 +341,23 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
             fixed (long* keys = chunk.Keys)
             {
-                if (IsRotated(node, ref accessor))
+                // SIMD fast path for long keys (covers long, ulong-stored-as-long)
+                if (typeof(TKey) == typeof(long))
+                {
+                    return SimdSearch(keys, chunk.Start, chunk.Count, *(long*)&key);
+                }
+
+                // Fallback to comparer-based binary search for other types (double)
+                bool rotated = (chunk.Start + chunk.Count) > Index64Chunk.Capacity;
+                if (rotated)
                 {
                     long chunkKey = chunk.Keys[Index64Chunk.Capacity - 1];
-                    if (comparer.Compare(key, *(TKey*)&chunkKey) <= 0) // search right side if item is smaller than last item in array.
+                    if (comparer.Compare(key, *(TKey*)&chunkKey) <= 0)
                     {
                         var find = BTreeExtensions.BinarySearch((TKey*)keys, chunk.Start, Index64Chunk.Capacity - chunk.Start, key, comparer, sizeof(long));
                         return find - chunk.Start * find.Sign();
                     }
-                    else // search left side
+                    else
                     {
                         var find = BTreeExtensions.BinarySearch((TKey*)keys, 0, chunk.End, key, comparer, sizeof(long));
                         return find + (Index64Chunk.Capacity - chunk.Start) * find.Sign();
@@ -357,6 +369,69 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
                     return find - chunk.Start * find.Sign();
                 }
             }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int SimdSearch(long* keys, int start, int count, long searchKey)
+        {
+            int pos;
+            if ((start + count) <= Index64Chunk.Capacity)
+            {
+                pos = CountLessThan(keys + start, count, searchKey);
+                if (pos < count && keys[start + pos] == searchKey)
+                {
+                    return pos;
+                }
+            }
+            else
+            {
+                int rightCount = Index64Chunk.Capacity - start;
+                pos = CountLessThan(keys + start, rightCount, searchKey)
+                    + CountLessThan(keys, count - rightCount, searchKey);
+                if (pos < count)
+                {
+                    int physIdx = start + pos;
+                    if (physIdx >= Index64Chunk.Capacity)
+                    {
+                        physIdx -= Index64Chunk.Capacity;
+                    }
+                    if (keys[physIdx] == searchKey)
+                    {
+                        return pos;
+                    }
+                }
+            }
+            return ~pos;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int CountLessThan(long* keys, int count, long searchKey)
+        {
+            int pos = 0;
+            int i = 0;
+            if (Vector256.IsHardwareAccelerated)
+            {
+                var needle = Vector256.Create(searchKey);
+                for (; i + 4 <= count; i += 4)
+                {
+                    var cmp = Vector256.LessThan(Vector256.Load(keys + i), needle);
+                    pos += BitOperations.PopCount(cmp.ExtractMostSignificantBits());
+                }
+            }
+            if (Vector128.IsHardwareAccelerated)
+            {
+                var needle128 = Vector128.Create(searchKey);
+                for (; i + 2 <= count; i += 2)
+                {
+                    var cmp = Vector128.LessThan(Vector128.Load(keys + i), needle128);
+                    pos += BitOperations.PopCount(cmp.ExtractMostSignificantBits());
+                }
+            }
+            for (; i < count; i++)
+            {
+                pos += keys[i] < searchKey ? 1 : 0;
+            }
+            return pos;
         }
 
         public override NodeWrapper SplitRight(NodeWrapper node, NodeStates states, ref ChunkAccessor accessor)

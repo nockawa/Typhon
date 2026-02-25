@@ -4,8 +4,10 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
 using System.Threading;
 
 namespace Typhon.Engine.BPTree;
@@ -15,17 +17,18 @@ namespace Typhon.Engine.BPTree;
 [StructLayout(LayoutKind.Sequential)]
 unsafe public struct Index32Chunk
 {
-    // What we want here, is to keep this struct 64 bytes to align it with a cache line
+    // 128 bytes to span two cache lines (ALP prefetch: the Adjacent Line Prefetcher on Zen 4+/recent Intel automatically prefetches the paired 64-byte line
+    //  within a naturally aligned 128-byte region)
 
-    public const int Capacity = 6;
+    public const int Capacity = 14;
 
     // Special beast... Ownership control (LSB, 1 bit), state flags (LSW 15bits), Position of the first Item, aka Start (8bits), stored Item Count (8bits)
     public int Control;
     public int PrevChunk;
     public int NextChunk;
     public int LeftValue;
-    public fixed int Values[Capacity];
-    public fixed int Keys[Capacity];
+    public fixed int Values[Capacity];              // 14 × 4 = 56 bytes
+    public fixed int Keys[Capacity];                // 14 × 4 = 56 bytes
 
     public Span<int> KeysAsSpan
     {
@@ -165,6 +168,7 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
         internal override void Initialize(BTree<TKey> owner, ChunkBasedSegment segment)
         {
             base.Initialize(owner, segment);
+            Debug.Assert(sizeof(Index32Chunk) == 128);
             Debug.Assert(segment.Stride == sizeof(Index32Chunk));
         }
 
@@ -337,15 +341,29 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
             fixed (int* keys = chunk.Keys)
             {
-                if (IsRotated(node, ref accessor))
+                // SIMD fast path for int keys
+                if (typeof(TKey) == typeof(int))
+                {
+                    return SimdSearch(keys, chunk.Start, chunk.Count, *(int*)&key);
+                }
+
+                // SIMD fast path for uint keys (unsigned comparison)
+                if (typeof(TKey) == typeof(uint))
+                {
+                    return SimdSearchUnsigned((uint*)keys, chunk.Start, chunk.Count, *(uint*)&key);
+                }
+
+                // Fallback to comparer-based binary search for other types (float)
+                bool rotated = (chunk.Start + chunk.Count) > Index32Chunk.Capacity;
+                if (rotated)
                 {
                     int chunkKey = chunk.Keys[Index32Chunk.Capacity - 1];
-                    if (comparer.Compare(key, *(TKey*)&chunkKey) <= 0) // search right side if item is smaller than last item in array.
+                    if (comparer.Compare(key, *(TKey*)&chunkKey) <= 0)
                     {
                         var find = BTreeExtensions.BinarySearch((TKey*)keys, chunk.Start, Index32Chunk.Capacity - chunk.Start, key, comparer, sizeof(int));
                         return find - chunk.Start * find.Sign();
                     }
-                    else // search left side
+                    else
                     {
                         var find = BTreeExtensions.BinarySearch((TKey*)keys, 0, chunk.End, key, comparer, sizeof(int));
                         return find + (Index32Chunk.Capacity - chunk.Start) * find.Sign();
@@ -357,6 +375,132 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
                     return find - chunk.Start * find.Sign();
                 }
             }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int SimdSearch(int* keys, int start, int count, int searchKey)
+        {
+            int pos;
+            if ((start + count) <= Index32Chunk.Capacity)
+            {
+                pos = CountLessThan(keys + start, count, searchKey);
+                if (pos < count && keys[start + pos] == searchKey)
+                {
+                    return pos;
+                }
+            }
+            else
+            {
+                int rightCount = Index32Chunk.Capacity - start;
+                pos = CountLessThan(keys + start, rightCount, searchKey)
+                    + CountLessThan(keys, count - rightCount, searchKey);
+                if (pos < count)
+                {
+                    int physIdx = start + pos;
+                    if (physIdx >= Index32Chunk.Capacity)
+                    {
+                        physIdx -= Index32Chunk.Capacity;
+                    }
+                    if (keys[physIdx] == searchKey)
+                    {
+                        return pos;
+                    }
+                }
+            }
+            return ~pos;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int SimdSearchUnsigned(uint* keys, int start, int count, uint searchKey)
+        {
+            int pos;
+            if ((start + count) <= Index32Chunk.Capacity)
+            {
+                pos = CountLessThanUnsigned(keys + start, count, searchKey);
+                if (pos < count && keys[start + pos] == searchKey)
+                {
+                    return pos;
+                }
+            }
+            else
+            {
+                int rightCount = Index32Chunk.Capacity - start;
+                pos = CountLessThanUnsigned(keys + start, rightCount, searchKey)
+                    + CountLessThanUnsigned(keys, count - rightCount, searchKey);
+                if (pos < count)
+                {
+                    int physIdx = start + pos;
+                    if (physIdx >= Index32Chunk.Capacity)
+                    {
+                        physIdx -= Index32Chunk.Capacity;
+                    }
+                    if (keys[physIdx] == searchKey)
+                    {
+                        return pos;
+                    }
+                }
+            }
+            return ~pos;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int CountLessThan(int* keys, int count, int searchKey)
+        {
+            int pos = 0;
+            int i = 0;
+            if (Vector256.IsHardwareAccelerated)
+            {
+                var needle = Vector256.Create(searchKey);
+                for (; i + 8 <= count; i += 8)
+                {
+                    var cmp = Vector256.LessThan(Vector256.Load(keys + i), needle);
+                    pos += BitOperations.PopCount(cmp.ExtractMostSignificantBits());
+                }
+            }
+            if (Vector128.IsHardwareAccelerated)
+            {
+                var needle128 = Vector128.Create(searchKey);
+                for (; i + 4 <= count; i += 4)
+                {
+                    var cmp = Vector128.LessThan(Vector128.Load(keys + i), needle128);
+                    pos += BitOperations.PopCount(cmp.ExtractMostSignificantBits());
+                }
+            }
+            for (; i < count; i++)
+            {
+                pos += keys[i] < searchKey ? 1 : 0;
+            }
+            return pos;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int CountLessThanUnsigned(uint* keys, int count, uint searchKey)
+        {
+            int pos = 0;
+            int i = 0;
+            if (Vector256.IsHardwareAccelerated)
+            {
+                var needle = Vector256.Create(searchKey);
+                for (; i + 8 <= count; i += 8)
+                {
+                    var cmp = Vector256.LessThan(Vector256.Load(keys + i), needle);
+                    pos += BitOperations.PopCount(cmp.ExtractMostSignificantBits());
+                }
+            }
+            if (Vector128.IsHardwareAccelerated)
+            {
+                var needle128 = Vector128.Create(searchKey);
+                for (; i + 4 <= count; i += 4)
+                {
+                    var cmp = Vector128.LessThan(Vector128.Load(keys + i), needle128);
+                    pos += BitOperations.PopCount(cmp.ExtractMostSignificantBits());
+                }
+            }
+            for (; i < count; i++)
+            {
+                pos += keys[i] < searchKey ? 1 : 0;
+            }
+            return pos;
         }
 
         public override NodeWrapper SplitRight(NodeWrapper node, NodeStates states, ref ChunkAccessor accessor)
