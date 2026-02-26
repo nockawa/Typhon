@@ -341,7 +341,7 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
             fixed (long* keys = chunk.Keys)
             {
-                // SIMD fast path for long keys (covers long, ulong-stored-as-long)
+                // SIMD fast path for long keys (signed comparison — ulong is stored as long with signed ordering)
                 if (typeof(TKey) == typeof(long))
                 {
                     return SimdSearch(keys, chunk.Start, chunk.Count, *(long*)&key);
@@ -371,7 +371,7 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
             }
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         private static int SimdSearch(long* keys, int start, int count, long searchKey)
         {
             int pos;
@@ -404,7 +404,7 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
             return ~pos;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         private static int CountLessThan(long* keys, int count, long searchKey)
         {
             int pos = 0;

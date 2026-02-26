@@ -377,7 +377,7 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
             }
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         private static int SimdSearch(int* keys, int start, int count, int searchKey)
         {
             int pos;
@@ -410,7 +410,7 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
             return ~pos;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         private static int SimdSearchUnsigned(uint* keys, int start, int count, uint searchKey)
         {
             int pos;
@@ -443,7 +443,7 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
             return ~pos;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         private static int CountLessThan(int* keys, int count, int searchKey)
         {
             int pos = 0;
@@ -473,7 +473,7 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
             return pos;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         private static int CountLessThanUnsigned(uint* keys, int count, uint searchKey)
         {
             int pos = 0;
@@ -842,7 +842,7 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
     protected override BaseNodeStorage GetStorage() => new L32NodeStorage();
     public override bool AllowMultiple => false;
-    protected L32BTree(ChunkBasedSegment segment, bool load, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
+    protected L32BTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }

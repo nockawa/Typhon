@@ -378,7 +378,7 @@ public abstract class L16BTree<TKey> : BTree<TKey> where TKey : unmanaged
             }
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         private static int SimdSearch(short* keys, int start, int count, short searchKey)
         {
             int pos;
@@ -411,7 +411,7 @@ public abstract class L16BTree<TKey> : BTree<TKey> where TKey : unmanaged
             return ~pos;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         private static int SimdSearchUnsigned(ushort* keys, int start, int count, ushort searchKey)
         {
             int pos;
@@ -444,7 +444,7 @@ public abstract class L16BTree<TKey> : BTree<TKey> where TKey : unmanaged
             return ~pos;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         private static int CountLessThan(short* keys, int count, short searchKey)
         {
             int pos = 0;
@@ -474,7 +474,7 @@ public abstract class L16BTree<TKey> : BTree<TKey> where TKey : unmanaged
             return pos;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         private static int CountLessThanUnsigned(ushort* keys, int count, ushort searchKey)
         {
             int pos = 0;
