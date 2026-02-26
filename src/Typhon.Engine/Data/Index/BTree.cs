@@ -419,6 +419,15 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     private TKey _cachedLastKey;
     private bool _hasCachedLastKey;
 
+    // Path storage for iterative tree traversal (InsertIterative/RemoveIterative).
+    // Pre-allocated once per BTree instance. Max depth 32 handles trees with >10^38 entries (capacity 9).
+    // Thread safety: these arrays are only accessed from InsertIterative/RemoveIterative, which are
+    // exclusively called from AddOrUpdateCore/RemoveCore — both always run under _access exclusive lock.
+    private const int MaxTreeDepth = 32;
+    private readonly NodeRelatives[] _pathRelatives = new NodeRelatives[MaxTreeDepth];
+    private readonly NodeWrapper[] _pathNodes = new NodeWrapper[MaxTreeDepth];
+    private readonly int[] _pathChildIndices = new int[MaxTreeDepth];
+
     // Cached location of this BTree's entry in the chunk 0 directory.
     // Computed once at construction, used by SyncHeader for O(1) writes.
     private int _dirChunkId;
@@ -961,8 +970,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             return;
         }
 
-        var nodeRelatives = new NodeRelatives();
-        var merge = Root.Remove(ref args, ref nodeRelatives, ref accessor);
+        var merge = RemoveIterative(ref args, ref accessor);
 
         if (args.Removed)
         {
@@ -1072,8 +1080,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             return;
         }
 
-        var nodeRelatives = new NodeRelatives();
-        var rightSplit = Root.Insert(ref args, ref nodeRelatives, default, ref accessor);
+        var rightSplit = InsertIterative(ref args, ref accessor);
 
         if (args.Added)
         {
@@ -1102,6 +1109,108 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
         _cachedLastKey = GetLast(ref accessor).Key;
         _hasCachedLastKey = true;
+    }
+
+    /// <summary>
+    /// Iterative insert: descends from root to leaf recording the path, inserts at the leaf,
+    /// then propagates any splits upward through the recorded internal nodes.
+    /// Replaces the former recursive InsertInternal approach to eliminate per-level call overhead.
+    /// </summary>
+    private KeyValueItem? InsertIterative(ref InsertArguments args, ref ChunkAccessor accessor)
+    {
+        var node = Root;
+        var relatives = new NodeRelatives();
+        int depth = 0;
+
+        // Phase 1: Descend from root to leaf, recording path for upward propagation
+        while (!node.GetIsLeaf(ref accessor))
+        {
+            var index = node.Find(args.Key, args.KeyComparer, ref accessor);
+            if (index < 0)
+            {
+                index = ~index - 1;
+            }
+
+            Debug.Assert(index >= -1 && index < node.GetCount(ref accessor));
+
+            _pathNodes[depth] = node;
+            _pathChildIndices[depth] = index;
+
+            var child = node.GetChild(index, ref accessor);
+            NodeRelatives.Create(child, index, node, ref relatives, out var childRelatives, ref accessor);
+
+            // Store after Create so lazy-resolved siblings are cached in the stored copy
+            _pathRelatives[depth] = relatives;
+
+            node = child;
+            relatives = childRelatives;
+            depth++;
+        }
+
+        // Phase 2: Insert at leaf
+        var promoted = node.InsertLeaf(ref args, ref relatives, ref accessor);
+
+        // Phase 3: Propagate splits upward through internal nodes
+        while (depth > 0 && promoted != null)
+        {
+            depth--;
+            node = _pathNodes[depth];
+            relatives = _pathRelatives[depth];
+            promoted = node.HandlePromotedInsert(_pathChildIndices[depth], promoted.Value, ref relatives, ref accessor);
+        }
+
+        return promoted;
+    }
+
+    /// <summary>
+    /// Iterative remove: descends from root to leaf recording the path, removes at the leaf,
+    /// then propagates any merges upward through the recorded internal nodes.
+    /// Replaces the former recursive RemoveInternal approach to eliminate per-level call overhead.
+    /// </summary>
+    private bool RemoveIterative(ref RemoveArguments args, ref ChunkAccessor accessor)
+    {
+        var node = Root;
+        var relatives = new NodeRelatives();
+        int depth = 0;
+
+        // Phase 1: Descend from root to leaf, recording path for upward propagation
+        while (!node.GetIsLeaf(ref accessor))
+        {
+            var index = node.Find(args.Key, args.Comparer, ref accessor);
+            if (index < 0)
+            {
+                index = ~index - 1;
+            }
+
+            Debug.Assert(index >= -1 && index < node.GetCount(ref accessor));
+
+            _pathNodes[depth] = node;
+            _pathChildIndices[depth] = index;
+
+            var child = node.GetChild(index, ref accessor);
+            NodeRelatives.Create(child, index, node, ref relatives, out var childRelatives, ref accessor);
+
+            // Store after Create so lazy-resolved siblings are cached in the stored copy
+            _pathRelatives[depth] = relatives;
+
+            node = child;
+            relatives = childRelatives;
+            depth++;
+        }
+
+        // Phase 2: Remove at leaf
+        var merged = node.RemoveLeaf(ref args, ref relatives, ref accessor);
+
+        // Phase 3: Propagate merges upward through internal nodes
+        while (depth > 0 && merged)
+        {
+            depth--;
+            node = _pathNodes[depth];
+            relatives = _pathRelatives[depth];
+            merged = node.HandleChildMerge(_pathChildIndices[depth], ref relatives, ref accessor);
+        }
+
+        return merged;
     }
 
     private NodeWrapper FindLeaf(TKey key, out int index, ref ChunkAccessor accessor)
