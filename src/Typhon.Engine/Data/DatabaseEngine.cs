@@ -28,11 +28,14 @@ public struct FieldR1
 
     public int FieldId;
     public FieldType Type;
+    public FieldType UnderlyingType;
     public uint IndexSPI;
     public bool IsStatic;
     public bool HasIndex;
     public bool IndexAllowMultiple;
     public int ArrayLength;
+    public int OffsetInComponentStorage;
+    public int SizeInComponentStorage;
     public bool IsArray => ArrayLength > 0;
 }
 
@@ -55,6 +58,9 @@ public struct ComponentR1
     public int TailIndexSPI;
 
     public ComponentCollection<FieldR1> Fields;
+
+    public int SchemaRevision;
+    public int FieldCount;
 }
 
 /// <summary>
@@ -509,9 +515,18 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         var definition = table.Definition;
         using var t = this.CreateQuickTransaction(DurabilityMode.Immediate);
 
+        var nonStaticCount = 0;
+        foreach (var kvp in definition.FieldsByName)
+        {
+            if (!kvp.Value.IsStatic)
+            {
+                nonStaticCount++;
+            }
+        }
+
         var comp = new ComponentR1
         {
-            Name                = (String64)definition.Name, 
+            Name                = (String64)definition.Name,
             POCOType            = (String64)definition.POCOType.FullName,
             CompSize             = definition.ComponentStorageSize,
             CompOverhead         = definition.ComponentStorageOverhead,
@@ -520,6 +535,8 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             DefaultIndexSPI     = table.DefaultIndexSegment.RootPageIndex,
             String64IndexSPI    = table.String64IndexSegment.RootPageIndex,
             TailIndexSPI        = table.TailIndexSegment?.RootPageIndex ?? 0,
+            SchemaRevision      = 0,
+            FieldCount          = nonStaticCount,
         };
 
         {
@@ -533,9 +550,15 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
                     Name = (String64)field.Name,
                     FieldId = field.FieldId,
                     Type = field.Type,
-                    ArrayLength = field.ArrayLength
+                    UnderlyingType = field.UnderlyingType,
+                    ArrayLength = field.ArrayLength,
+                    IsStatic = field.IsStatic,
+                    HasIndex = field.HasIndex,
+                    IndexAllowMultiple = field.IndexAllowMultiple,
+                    OffsetInComponentStorage = field.OffsetInComponentStorage,
+                    SizeInComponentStorage = field.SizeInComponentStorage,
                 };
-            
+
                 a.Add(f);
             }
         }
@@ -560,6 +583,18 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         // The old buffer's chunks become orphaned (acceptable for schema-change frequency).
         comp.Fields = default;
 
+        var nonStaticCount = 0;
+        foreach (var kvp in definition.FieldsByName)
+        {
+            if (!kvp.Value.IsStatic)
+            {
+                nonStaticCount++;
+            }
+        }
+
+        comp.SchemaRevision = comp.SchemaRevision + 1;
+        comp.FieldCount = nonStaticCount;
+
         {
             using var a = t.CreateComponentCollectionAccessor(ref comp.Fields);
 
@@ -571,7 +606,13 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
                     Name = (String64)field.Name,
                     FieldId = field.FieldId,
                     Type = field.Type,
-                    ArrayLength = field.ArrayLength
+                    UnderlyingType = field.UnderlyingType,
+                    ArrayLength = field.ArrayLength,
+                    IsStatic = field.IsStatic,
+                    HasIndex = field.HasIndex,
+                    IndexAllowMultiple = field.IndexAllowMultiple,
+                    OffsetInComponentStorage = field.OffsetInComponentStorage,
+                    SizeInComponentStorage = field.SizeInComponentStorage,
                 };
 
                 a.Add(f);
@@ -746,6 +787,29 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         MMF.FlushToDisk();
     }
 
+    /// <summary>
+    /// Increments the <see cref="RootFileHeader.UserSchemaVersion"/> counter on page 0.
+    /// Called after any user component schema change is persisted.
+    /// </summary>
+    private void IncrementUserSchemaVersion()
+    {
+        using var guard = EpochGuard.Enter(EpochManager);
+        var epoch = guard.Epoch;
+
+        var cs = MMF.CreateChangeSet();
+        MMF.RequestPageEpoch(0, epoch, out var memPageIdx);
+        var latched = MMF.TryLatchPageExclusive(memPageIdx);
+        Debug.Assert(latched, "TryLatchPageExclusive failed on root page during UserSchemaVersion increment");
+        var page = MMF.GetPage(memPageIdx);
+
+        cs.AddByMemPageIndex(memPageIdx);
+        ref var header = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
+        header.UserSchemaVersion++;
+
+        MMF.UnlatchPageExclusive(memPageIdx);
+        cs.SaveChanges();
+    }
+
     private void UpdateCurPrimaryKey(long pk)
     {
         long current;
@@ -756,14 +820,16 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         while (pk > current && Interlocked.CompareExchange(ref _curPrimaryKey, pk, current) != current);
     }
 
-    public bool RegisterComponentFromAccessor<T>(ChangeSet changeSet = null) where T : unmanaged
+    public bool RegisterComponentFromAccessor<T>(ChangeSet changeSet = null, SchemaValidationMode schemaValidation = SchemaValidationMode.Enforce)
+        where T : unmanaged
     {
         // Look up persisted fields for the resolver (keyed by component schema name)
         FieldIdResolver resolver = null;
         var componentAttr = typeof(T).GetCustomAttribute<ComponentAttribute>();
         var schemaName = componentAttr?.Name ?? typeof(T).Name;
 
-        if (_persistedFieldsByComponent != null && _persistedFieldsByComponent.TryGetValue(schemaName, out FieldR1[] persistedFields))
+        FieldR1[] persistedFields = null;
+        if (_persistedFieldsByComponent != null && _persistedFieldsByComponent.TryGetValue(schemaName, out persistedFields))
         {
             resolver = new FieldIdResolver(persistedFields);
         }
@@ -778,8 +844,36 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
         if (_persistedComponents != null && _persistedComponents.TryGetValue(schemaName, out var persisted))
         {
+            // Schema validation: compare persisted vs runtime before loading data
+            if (persistedFields != null)
+            {
+                var diff = SchemaValidator.ComputeDiff(schemaName, persistedFields, persisted.Comp, definition, 
+                    resolver?.Renames ?? (IReadOnlyList<(string, string, int)>)[]);
+
+                if (diff.HasBreakingChanges && schemaValidation != SchemaValidationMode.Skip)
+                {
+                    throw new SchemaValidationException(diff);
+                }
+
+                if (!diff.IsIdentical)
+                {
+                    switch (diff.Level)
+                    {
+                        case CompatibilityLevel.CompatibleWidening:
+                            _log?.LogWarning("Schema widening for '{Name}': {Summary}", schemaName, diff.Summary);
+                            break;
+                        case >= CompatibilityLevel.Compatible:
+                            _log?.LogInformation("Schema evolution for '{Name}': {Summary}", schemaName, diff.Summary);
+                            break;
+                        case CompatibilityLevel.InformationOnly:
+                            _log?.LogInformation("Schema renames for '{Name}': {Summary}", schemaName, diff.Summary);
+                            break;
+                    }
+                }
+            }
+
             // Load path: restore from saved SPIs
-            componentTable = new ComponentTable(this, definition, this, persisted.Comp.ComponentSPI, persisted.Comp.VersionSPI, persisted.Comp.DefaultIndexSPI, 
+            componentTable = new ComponentTable(this, definition, this, persisted.Comp.ComponentSPI, persisted.Comp.VersionSPI, persisted.Comp.DefaultIndexSPI,
                 persisted.Comp.String64IndexSPI, persisted.Comp.TailIndexSPI);
 
             // Update _curPrimaryKey from loaded PK index
@@ -793,6 +887,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             if (resolver != null && resolver.HasChanges)
             {
                 PersistSchemaChanges(persisted.PK, definition);
+                IncrementUserSchemaVersion();
             }
         }
         else

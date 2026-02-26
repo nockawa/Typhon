@@ -86,6 +86,9 @@ unsafe internal struct RootFileHeader
     /// <summary>Root page index of the <see cref="ChunkBasedSegment"/> backing <see cref="ComponentCollection{T}"/> storage for FieldR1 entries.</summary>
     public int FieldCollectionSegmentSPI;
 
+    /// <summary>Monotonic counter bumped on any user component schema change. Used for quick mismatch pre-check.</summary>
+    public int UserSchemaVersion;
+
     /// <summary>Returns <see cref="HeaderSignature"/> decoded as a managed string.</summary>
     public string HeaderSignatureString
     {
