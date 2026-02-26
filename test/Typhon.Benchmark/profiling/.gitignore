@@ -1,0 +1,8 @@
+# dotTrace snapshots (large binary files)
+*.dtp
+*.dtp.*
+*.dtt
+*.dtt.*
+
+# Generated XML reports (regenerate from snapshots)
+*-report.xml

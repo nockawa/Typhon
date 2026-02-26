@@ -193,7 +193,10 @@ public abstract class String64BTree : BTree<String64>
         public override void InitializeNode(NodeWrapper node, NodeStates states, ref ChunkAccessor accessor)
         {
             ref var chunk = ref accessor.GetChunk<IndexString64Chunk>(node.ChunkId, true);
-            chunk.StateFlags = states;
+            chunk.Control = (int)states;  // Atomically sets StateFlags + Start=0 + Count=0
+            chunk.PrevChunk = 0;
+            chunk.NextChunk = 0;
+            chunk.LeftValue = 0;
         }
 
         public override int GetNodeCapacity() => IndexString64Chunk.Capacity;
@@ -728,7 +731,7 @@ public class String64MultipleBTree : String64BTree
     public override bool AllowMultiple => true;
     protected override BaseNodeStorage GetStorage() => new String64MultipleNodeStorage();
 
-    public class String64MultipleNodeStorage : String64NodeStorage
+    public sealed class String64MultipleNodeStorage : String64NodeStorage
     {
         private VariableSizedBufferSegment<int> _valueStore;
 

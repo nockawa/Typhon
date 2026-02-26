@@ -4,8 +4,10 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
 using System.Threading;
 
 namespace Typhon.Engine.BPTree;
@@ -15,17 +17,19 @@ namespace Typhon.Engine.BPTree;
 [StructLayout(LayoutKind.Sequential)]
 unsafe public struct Index16Chunk
 {
-    // What we want here, is to keep this struct 64 bytes to align it with a cache line
+    // 128 bytes to span two cache lines (ALP prefetch: the Adjacent Line Prefetcher on Zen 4+/recent Intel automatically prefetches the paired 64-byte line
+    //  within a naturally aligned 128-byte region)
 
-    public const int Capacity = 8;
+    public const int Capacity = 18;
 
     // Special beast... Ownership control (LSB, 1 bit), state flags (LSW 15bits), Position of the first Item, aka Start (8bits), stored Item Count (8bits)
     public int Control;
     public int PrevChunk;
     public int NextChunk;
     public int LeftValue;
-    public fixed int Values[Capacity];
-    public fixed short Keys[Capacity];
+    public fixed int Values[Capacity];              // 18 × 4 = 72 bytes
+    public fixed short Keys[Capacity];              // 18 × 2 = 36 bytes
+    private int _padding;                           // explicit padding to reach 128 bytes
 
     public Span<short> KeysAsSpan
     {
@@ -165,6 +169,7 @@ public abstract class L16BTree<TKey> : BTree<TKey> where TKey : unmanaged
         internal override void Initialize(BTree<TKey> owner, ChunkBasedSegment segment)
         {
             base.Initialize(owner, segment);
+            Debug.Assert(sizeof(Index16Chunk) == 128);
             Debug.Assert(segment.Stride == sizeof(Index16Chunk));
         }
 
@@ -173,7 +178,10 @@ public abstract class L16BTree<TKey> : BTree<TKey> where TKey : unmanaged
         public override void InitializeNode(NodeWrapper node, NodeStates states, ref ChunkAccessor accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index16Chunk>(node.ChunkId, true);
-            chunk.StateFlags = states;
+            chunk.Control = (int)states;  // Atomically sets StateFlags + Start=0 + Count=0
+            chunk.PrevChunk = 0;
+            chunk.NextChunk = 0;
+            chunk.LeftValue = 0;
         }
 
         public override int GetNodeCapacity() => Index16Chunk.Capacity;
@@ -334,15 +342,29 @@ public abstract class L16BTree<TKey> : BTree<TKey> where TKey : unmanaged
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index16Chunk>(node.ChunkId);
             fixed (short* keys = chunk.Keys)
             {
-                if (IsRotated(node, ref accessor))
+                // SIMD fast path for short keys
+                if (typeof(TKey) == typeof(short))
                 {
-                    int chunkKey = chunk.Keys[Index16Chunk.Capacity - 1];
-                    if (comparer.Compare(key, *(TKey*)&chunkKey) <= 0) // search right side if item is smaller than last item in array.
+                    return SimdSearch(keys, chunk.Start, chunk.Count, *(short*)&key);
+                }
+
+                // SIMD fast path for ushort/char keys (unsigned comparison)
+                if (typeof(TKey) == typeof(ushort) || typeof(TKey) == typeof(char))
+                {
+                    return SimdSearchUnsigned((ushort*)keys, chunk.Start, chunk.Count, *(ushort*)&key);
+                }
+
+                // Fallback to comparer-based binary search for other types (sbyte, byte)
+                bool rotated = (chunk.Start + chunk.Count) > Index16Chunk.Capacity;
+                if (rotated)
+                {
+                    short chunkKey = chunk.Keys[Index16Chunk.Capacity - 1];
+                    if (comparer.Compare(key, *(TKey*)&chunkKey) <= 0)
                     {
                         var find = BTreeExtensions.BinarySearch((TKey*)keys, chunk.Start, Index16Chunk.Capacity - chunk.Start, key, comparer, sizeof(short));
                         return find - chunk.Start * find.Sign();
                     }
-                    else // search left side
+                    else
                     {
                         var find = BTreeExtensions.BinarySearch((TKey*)keys, 0, chunk.End, key, comparer, sizeof(short));
                         return find + (Index16Chunk.Capacity - chunk.Start) * find.Sign();
@@ -354,6 +376,132 @@ public abstract class L16BTree<TKey> : BTree<TKey> where TKey : unmanaged
                     return find - chunk.Start * find.Sign();
                 }
             }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        private static int SimdSearch(short* keys, int start, int count, short searchKey)
+        {
+            int pos;
+            if ((start + count) <= Index16Chunk.Capacity)
+            {
+                pos = CountLessThan(keys + start, count, searchKey);
+                if (pos < count && keys[start + pos] == searchKey)
+                {
+                    return pos;
+                }
+            }
+            else
+            {
+                int rightCount = Index16Chunk.Capacity - start;
+                pos = CountLessThan(keys + start, rightCount, searchKey)
+                    + CountLessThan(keys, count - rightCount, searchKey);
+                if (pos < count)
+                {
+                    int physIdx = start + pos;
+                    if (physIdx >= Index16Chunk.Capacity)
+                    {
+                        physIdx -= Index16Chunk.Capacity;
+                    }
+                    if (keys[physIdx] == searchKey)
+                    {
+                        return pos;
+                    }
+                }
+            }
+            return ~pos;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        private static int SimdSearchUnsigned(ushort* keys, int start, int count, ushort searchKey)
+        {
+            int pos;
+            if ((start + count) <= Index16Chunk.Capacity)
+            {
+                pos = CountLessThanUnsigned(keys + start, count, searchKey);
+                if (pos < count && keys[start + pos] == searchKey)
+                {
+                    return pos;
+                }
+            }
+            else
+            {
+                int rightCount = Index16Chunk.Capacity - start;
+                pos = CountLessThanUnsigned(keys + start, rightCount, searchKey)
+                    + CountLessThanUnsigned(keys, count - rightCount, searchKey);
+                if (pos < count)
+                {
+                    int physIdx = start + pos;
+                    if (physIdx >= Index16Chunk.Capacity)
+                    {
+                        physIdx -= Index16Chunk.Capacity;
+                    }
+                    if (keys[physIdx] == searchKey)
+                    {
+                        return pos;
+                    }
+                }
+            }
+            return ~pos;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        private static int CountLessThan(short* keys, int count, short searchKey)
+        {
+            int pos = 0;
+            int i = 0;
+            if (Vector256.IsHardwareAccelerated)
+            {
+                var needle = Vector256.Create(searchKey);
+                for (; i + 16 <= count; i += 16)
+                {
+                    var cmp = Vector256.LessThan(Vector256.Load(keys + i), needle);
+                    pos += BitOperations.PopCount(cmp.ExtractMostSignificantBits());
+                }
+            }
+            if (Vector128.IsHardwareAccelerated)
+            {
+                var needle128 = Vector128.Create(searchKey);
+                for (; i + 8 <= count; i += 8)
+                {
+                    var cmp = Vector128.LessThan(Vector128.Load(keys + i), needle128);
+                    pos += BitOperations.PopCount(cmp.ExtractMostSignificantBits());
+                }
+            }
+            for (; i < count; i++)
+            {
+                pos += keys[i] < searchKey ? 1 : 0;
+            }
+            return pos;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        private static int CountLessThanUnsigned(ushort* keys, int count, ushort searchKey)
+        {
+            int pos = 0;
+            int i = 0;
+            if (Vector256.IsHardwareAccelerated)
+            {
+                var needle = Vector256.Create(searchKey);
+                for (; i + 16 <= count; i += 16)
+                {
+                    var cmp = Vector256.LessThan(Vector256.Load(keys + i), needle);
+                    pos += BitOperations.PopCount(cmp.ExtractMostSignificantBits());
+                }
+            }
+            if (Vector128.IsHardwareAccelerated)
+            {
+                var needle128 = Vector128.Create(searchKey);
+                for (; i + 8 <= count; i += 8)
+                {
+                    var cmp = Vector128.LessThan(Vector128.Load(keys + i), needle128);
+                    pos += BitOperations.PopCount(cmp.ExtractMostSignificantBits());
+                }
+            }
+            for (; i < count; i++)
+            {
+                pos += keys[i] < searchKey ? 1 : 0;
+            }
+            return pos;
         }
 
         public override NodeWrapper SplitRight(NodeWrapper node, NodeStates states, ref ChunkAccessor accessor)
@@ -709,7 +857,7 @@ public class L16MultipleBTree<TKey> : L16BTree<TKey> where TKey : unmanaged
     public override bool AllowMultiple => true;
     protected override BaseNodeStorage GetStorage() => new L16MultipleNodeStorage();
 
-    public class L16MultipleNodeStorage : L16NodeStorage
+    public sealed class L16MultipleNodeStorage : L16NodeStorage
     {
         private VariableSizedBufferSegment<int> _valueStore;
 

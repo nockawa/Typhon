@@ -242,6 +242,51 @@ public partial struct AccessControl
     }
 
     /// <summary>
+    /// Tries to enter shared (reader) access without waiting.
+    /// </summary>
+    /// <param name="target">Optional telemetry target for contention tracking.</param>
+    /// <returns>True if access was acquired; false if lock is not available.</returns>
+    public bool TryEnterSharedAccess(IContentionTarget target = null)
+    {
+        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
+        var ld = new LockData(ref _data);
+
+        switch (ld.State)
+        {
+            case IdleState:
+                if (ld.CanShareStart)
+                {
+                    ld.State = SharedState;
+                    ld.SharedCounter = 1;
+                }
+                else
+                {
+                    return false;
+                }
+                break;
+
+            case SharedState:
+                ld.SharedCounter++;
+                break;
+
+            default:
+                return false;
+        }
+
+        if (!ld.TryUpdate())
+        {
+            return false;
+        }
+
+        if (level >= TelemetryLevel.Deep)
+        {
+            target?.LogLockOperation(LockOperation.SharedAcquired, 0);
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Enters exclusive (writer) access. Only one thread can hold exclusive access.
     /// </summary>
     /// <param name="ctx">Reference to WaitContext for timeout/cancellation. Use <c>ref WaitContext.Null</c> for infinite wait.</param>

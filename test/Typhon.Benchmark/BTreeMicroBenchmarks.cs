@@ -28,6 +28,8 @@ public class BTreeMicroBenchmarks
     private const int PreFillCount = 10_000;
     private long _nextInsertKey = PreFillCount + 1;
     private long _deleteKeyToggle;
+    private long[] _randomInsertKeys;
+    private int _randomInsertIndex;
 
     [GlobalSetup]
     public unsafe void GlobalSetup()
@@ -66,6 +68,17 @@ public class BTreeMicroBenchmarks
             _tree.Add(i, i * 10, ref accessor);
         }
         accessor.Dispose();
+
+        // Pre-generate random keys for Insert_Random benchmark.
+        // Keys are within the existing range [1..PreFillCount] for remove-then-reinsert at random positions.
+        const int randomKeyCount = 100_000;
+        _randomInsertKeys = new long[randomKeyCount];
+        var rng = new Random(42); // fixed seed for reproducibility
+        for (int i = 0; i < randomKeyCount; i++)
+        {
+            _randomInsertKeys[i] = rng.NextInt64(1, PreFillCount + 1);
+        }
+        _randomInsertIndex = 0;
     }
 
     [GlobalCleanup]
@@ -102,10 +115,10 @@ public class BTreeMicroBenchmarks
     }
 
     /// <summary>
-    /// Insert a new key into the tree. Keys increment to avoid duplicates.
+    /// Insert a new sequential key (append fast-path). Measures best-case O(1) insert.
     /// </summary>
     [Benchmark]
-    public void Insert()
+    public void Insert_Sequential()
     {
         var accessor = _segment.CreateChunkAccessor();
         _tree.Add(_nextInsertKey++, 42, ref accessor);
@@ -113,11 +126,26 @@ public class BTreeMicroBenchmarks
     }
 
     /// <summary>
+    /// Remove a random key then reinsert it. The reinsert lands at a random tree position,
+    /// exercising full tree traversal + leaf insert (not the O(1) append fast-path).
+    /// OperationsPerInvoke=2 reports per-operation cost (one remove + one insert).
+    /// </summary>
+    [Benchmark(OperationsPerInvoke = 2)]
+    public void Insert_Random()
+    {
+        var accessor = _segment.CreateChunkAccessor();
+        var key = _randomInsertKeys[_randomInsertIndex++ % _randomInsertKeys.Length];
+        _tree.Remove(key, out var val, ref accessor);
+        _tree.Add(key, val, ref accessor);
+        accessor.Dispose();
+    }
+
+    /// <summary>
     /// Delete a key then immediately re-insert it to maintain tree state.
-    /// Measures the remove + rebalance path.
+    /// Reports the combined remove+reinsert cost as a single operation.
     /// </summary>
     [Benchmark]
-    public void Delete()
+    public void Delete_Reinsert()
     {
         var accessor = _segment.CreateChunkAccessor();
         var key = (_deleteKeyToggle++ & 1) == 0 ? 3000L : 7000L;
@@ -127,6 +155,7 @@ public class BTreeMicroBenchmarks
         }
         accessor.Dispose();
     }
+
 
     /// <summary>
     /// Read 100 consecutive keys. Measures sequential access locality in the B+Tree.

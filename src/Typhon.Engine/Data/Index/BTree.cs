@@ -187,7 +187,31 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             return _value;
         }
 
-        public int Compare(TKey left, TKey right) => _keyComparer.Compare(left, right);
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public int Compare(TKey left, TKey right)
+        {
+            // typeof(TKey) is a JIT intrinsic for value types — dead branches are eliminated at JIT time,
+            // turning this into a direct comparison instead of an IComparer interface dispatch.
+            if (typeof(TKey) == typeof(long))
+            {
+                var l = (long)(object)left;
+                var r = (long)(object)right;
+                return l.CompareTo(r);
+            }
+            if (typeof(TKey) == typeof(int))
+            {
+                var l = (int)(object)left;
+                var r = (int)(object)right;
+                return l.CompareTo(r);
+            }
+            if (typeof(TKey) == typeof(short))
+            {
+                var l = (short)(object)left;
+                var r = (short)(object)right;
+                return l.CompareTo(r);
+            }
+            return _keyComparer.Compare(left, right);
+        }
 
         public IComparer<TKey> KeyComparer => _keyComparer;
     }
@@ -218,6 +242,30 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             Accessor = ref accessor;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public int Compare(TKey left, TKey right)
+        {
+            if (typeof(TKey) == typeof(long))
+            {
+                var l = (long)(object)left;
+                var r = (long)(object)right;
+                return l.CompareTo(r);
+            }
+            if (typeof(TKey) == typeof(int))
+            {
+                var l = (int)(object)left;
+                var r = (int)(object)right;
+                return l.CompareTo(r);
+            }
+            if (typeof(TKey) == typeof(short))
+            {
+                var l = (short)(object)left;
+                var r = (short)(object)right;
+                return l.CompareTo(r);
+            }
+            return Comparer.Compare(left, right);
+        }
+
         public void SetRemovedValue(int value)
         {
             Value = value;
@@ -228,8 +276,10 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     /// <summary>
     /// contains information about relatives of each node, such as ancestors and siblings.
     /// this information is used for borrow and spill operations.
+    /// Siblings are lazily resolved to avoid loading chunks that are only needed during
+    /// split/merge/spill/borrow operations (~5% of inserts).
     /// </summary>
-    public readonly struct NodeRelatives
+    public struct NodeRelatives
     {
         /*  Note: "/" is left pointer. "\" is right pointer.
          *
@@ -250,9 +300,6 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
          *         /              \    /
          *   [LeftSibling]     [Node][RightSibling]
          */
-
-        public readonly NodeWrapper LeftSibling;
-        public readonly NodeWrapper RightSibling;
 
         /// <summary>
         /// nearest ancestor of node and its left sibling.
@@ -284,22 +331,71 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         /// </summary>
         public readonly bool HasTrueRightSibling;
 
-        private NodeRelatives(NodeWrapper leftAncestor, int leftAncestorIndex, NodeWrapper leftSibling, bool hasTrueLeftSibling,
-            NodeWrapper rightAncestor, int rightAncestorIndex, NodeWrapper rightSibling, bool hasTrueRightSibling)
+        // Context for lazy cousin edge resolution (only set for edge children)
+        private readonly NodeWrapper _cousinLeftSource;
+        private readonly NodeWrapper _cousinRightSource;
+
+        // Lazy-cached siblings
+        private NodeWrapper _leftSibling;
+        private NodeWrapper _rightSibling;
+        private bool _leftLoaded;
+        private bool _rightLoaded;
+
+        private NodeRelatives(NodeWrapper leftAncestor, int leftAncestorIndex, bool hasTrueLeftSibling, NodeWrapper rightAncestor, int rightAncestorIndex, 
+            bool hasTrueRightSibling, NodeWrapper cousinLeftSource, NodeWrapper cousinRightSource)
         {
             LeftAncestor = leftAncestor;
             LeftAncestorIndex = leftAncestorIndex;
-            LeftSibling = leftSibling;
             HasTrueLeftSibling = hasTrueLeftSibling;
 
             RightAncestor = rightAncestor;
             RightAncestorIndex = rightAncestorIndex;
-            RightSibling = rightSibling;
             HasTrueRightSibling = hasTrueRightSibling;
+
+            _cousinLeftSource = cousinLeftSource;
+            _cousinRightSource = cousinRightSource;
+            _leftSibling = default;
+            _rightSibling = default;
+            _leftLoaded = false;
+            _rightLoaded = false;
+        }
+
+        /// <summary>
+        /// Lazily resolves and returns the left sibling. Caches result on first access.
+        /// For true siblings, reads from the ancestor node. For cousin edges, traverses
+        /// the parent's left sibling to find the rightmost child.
+        /// </summary>
+        public NodeWrapper GetLeftSibling(ref ChunkAccessor accessor)
+        {
+            if (!_leftLoaded)
+            {
+                _leftLoaded = true;
+                _leftSibling = HasTrueLeftSibling ? 
+                    LeftAncestor.GetChild(LeftAncestorIndex - 1, ref accessor) : _cousinLeftSource.IsValid ? _cousinLeftSource.GetLastChild(ref accessor) : default;
+            }
+            return _leftSibling;
+        }
+
+        /// <summary>
+        /// Lazily resolves and returns the right sibling. Caches result on first access.
+        /// For true siblings, reads from the ancestor node. For cousin edges, traverses
+        /// the parent's right sibling to find the leftmost child.
+        /// </summary>
+        public NodeWrapper GetRightSibling(ref ChunkAccessor accessor)
+        {
+            if (!_rightLoaded)
+            {
+                _rightLoaded = true;
+                _rightSibling = HasTrueRightSibling ?
+                    RightAncestor.GetChild(RightAncestorIndex, ref accessor) : _cousinRightSource.IsValid ? _cousinRightSource.GetFirstChild(ref accessor) : default;
+            }
+            return _rightSibling;
         }
 
         /// <summary>
         /// creates new relatives for child node.
+        /// Ancestor fields are set eagerly (no chunk reads — just copies).
+        /// Sibling fields are lazily resolved on first access via GetLeftSibling/GetRightSibling.
         /// </summary>
         public static void Create(NodeWrapper child, int index, NodeWrapper parent, ref NodeRelatives parentRelatives, out NodeRelatives res, ref ChunkAccessor accessor)
         {
@@ -308,48 +404,44 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             // assign nearest ancestors between child and siblings.
             NodeWrapper leftAncestor, rightAncestor;
             int leftAncestorIndex, rightAncestorIndex;
-            NodeWrapper leftSibling, rightSibling;
             bool hasTrueLeftSibling, hasTrueRightSibling;
+            NodeWrapper cousinLeftSource = default, cousinRightSource = default;
 
             if (index == -1) // if child is left most, use left cousin as left sibling.
             {
                 leftAncestor = parentRelatives.LeftAncestor;
                 leftAncestorIndex = parentRelatives.LeftAncestorIndex;
-                leftSibling = parentRelatives.LeftSibling.IsValid ? parentRelatives.LeftSibling.GetLastChild(ref accessor) : default;
                 hasTrueLeftSibling = false;
+                cousinLeftSource = parentRelatives.GetLeftSibling(ref accessor);
 
                 rightAncestor = parent;
                 rightAncestorIndex = index + 1;
-                rightSibling = parent.GetChild(rightAncestorIndex, ref accessor);
                 hasTrueRightSibling = true;
             }
             else if (index == parent.GetLength(ref accessor) - 1) // if child is right most, use right cousin as right sibling.
             {
                 leftAncestor = parent;
                 leftAncestorIndex = index;
-                leftSibling = parent.GetChild(leftAncestorIndex - 1, ref accessor);
                 hasTrueLeftSibling = true;
 
                 rightAncestor = parentRelatives.RightAncestor;
                 rightAncestorIndex = parentRelatives.RightAncestorIndex;
-                rightSibling = parentRelatives.RightSibling.IsValid ? parentRelatives.RightSibling.GetFirstChild(ref accessor) : default;
                 hasTrueRightSibling = false;
+                cousinRightSource = parentRelatives.GetRightSibling(ref accessor);
             }
             else // child is not right most nor left most.
             {
                 leftAncestor = parent;
                 leftAncestorIndex = index;
-                leftSibling = parent.GetChild(leftAncestorIndex - 1, ref accessor);
                 hasTrueLeftSibling = true;
 
                 rightAncestor = parent;
                 rightAncestorIndex = index + 1;
-                rightSibling = parent.GetChild(rightAncestorIndex, ref accessor);
                 hasTrueRightSibling = true;
             }
 
-            res = new NodeRelatives(leftAncestor, leftAncestorIndex, leftSibling, hasTrueLeftSibling,
-                rightAncestor, rightAncestorIndex, rightSibling, hasTrueRightSibling);
+            res = new NodeRelatives(leftAncestor, leftAncestorIndex, hasTrueLeftSibling, rightAncestor, rightAncestorIndex, hasTrueRightSibling, 
+                cousinLeftSource, cousinRightSource);
         }
     }
 
@@ -369,6 +461,33 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     // instead of reading from a single shared offset, which would cause cross-BTree corruption.
     // Each BTree has a unique entry in the chunk 0 directory, keyed by stableId.
     private int _count;
+
+    // Cached last key for append fast-path: avoids reading ReverseLinkList chunk on sequential inserts.
+    // TKey is unmanaged (value type), so no heap allocation.
+    private TKey _cachedLastKey;
+    private bool _hasCachedLastKey;
+
+    // Path storage for iterative tree traversal (InsertIterative/RemoveIterative).
+    // Pre-allocated once per BTree instance. Max depth 32 handles trees with >10^38 entries (capacity 9).
+    // Thread safety: these arrays are only accessed from InsertIterative/RemoveIterative, which are
+    // exclusively called from AddOrUpdateCore/RemoveCore — both always run under _access exclusive lock.
+    private const int MaxTreeDepth = 32;
+    private readonly NodeRelatives[] _pathRelatives = new NodeRelatives[MaxTreeDepth];
+    private readonly NodeWrapper[] _pathNodes = new NodeWrapper[MaxTreeDepth];
+    private readonly int[] _pathChildIndices = new int[MaxTreeDepth];
+
+    // Optimization: warm ChunkAccessor for exclusive operations. Reused across exclusive-lock calls to avoid per-operation creation (~15ns) and keep the
+    // MRU page cache warm (saves SIMD search misses on repeated tree traversals).
+    // Thread safety: only accessed under _access exclusive lock.
+    // Epoch safety: cached page addresses are only valid within the same global epoch. If the epoch advances (any thread exits its outermost scope), pages
+    // could be evicted and remapped, so the accessor is recreated.
+    // TYPHON005 suppressed: dirty pages are always flushed via CommitChanges() in each operation's finally block — the accessor never holds pending dirty
+    // state between operations.
+#pragma warning disable TYPHON005
+    private ChunkAccessor _warmAccessor;
+#pragma warning restore TYPHON005
+    private long _warmAccessorEpoch;
+    private bool _warmAccessorValid;
 
     // Cached location of this BTree's entry in the chunk 0 directory.
     // Computed once at construction, used by SyncHeader for O(1) writes.
@@ -613,23 +732,23 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             activity = TyphonActivitySource.StartActivity("BTree.Insert");
         }
 
-        var args = new InsertArguments(key, value, Comparer, ref accessor);
-        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
-        if (!_access.EnterExclusiveAccess(ref wc))
-        {
-            ThrowHelper.ThrowLockTimeout("BTree/Insert", TimeoutOptions.Current.BTreeLockTimeout);
-        }
+        AcquireExclusive("BTree/Insert");
         try
         {
+            ref var wa = ref GetWarmAccessor(ref accessor);
+            var args = new InsertArguments(key, value, Comparer, ref wa);
             AddOrUpdateCore(ref args);
-            SyncHeader(ref accessor);
+            SyncHeader(ref wa);
             activity?.SetTag(TyphonSpanAttributes.IndexOperation, "insert");
             bufferRootId = args.BufferRootId;
             return args.ElementId;
         }
         finally
         {
-            _storage.CommitChanges(ref accessor);
+            if (_warmAccessorValid)
+            {
+                _warmAccessor.CommitChanges();
+            }
             _access.ExitExclusiveAccess();
             activity?.Dispose();
         }
@@ -643,23 +762,23 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             activity = TyphonActivitySource.StartActivity("BTree.Delete");
         }
 
-        var args = new RemoveArguments(key, Comparer, ref accessor);
-        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
-        if (!_access.EnterExclusiveAccess(ref wc))
-        {
-            ThrowHelper.ThrowLockTimeout("BTree/Delete", TimeoutOptions.Current.BTreeLockTimeout);
-        }
+        AcquireExclusive("BTree/Delete");
         try
         {
+            ref var wa = ref GetWarmAccessor(ref accessor);
+            var args = new RemoveArguments(key, Comparer, ref wa);
             RemoveCore(ref args);
-            SyncHeader(ref accessor);
+            SyncHeader(ref wa);
             value = args.Value;
             activity?.SetTag(TyphonSpanAttributes.IndexOperation, "delete");
             return args.Removed;
         }
         finally
         {
-            _storage.CommitChanges(ref accessor);
+            if (_warmAccessorValid)
+            {
+                _warmAccessor.CommitChanges();
+            }
             _access.ExitExclusiveAccess();
             activity?.Dispose();
         }
@@ -673,11 +792,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             return;
         }
 
-        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
-        if (!_access.EnterSharedAccess(ref wc))
-        {
-            ThrowHelper.ThrowLockTimeout("BTree/CheckConsistency", TimeoutOptions.Current.BTreeLockTimeout);
-        }
+        AcquireShared("BTree/CheckConsistency");
         try
         {
             Root.CheckConsistency(default, NodeWrapper.CheckConsistencyParent.Root, Comparer, Height, ref accessor);
@@ -757,11 +872,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public Result<int, BTreeLookupStatus> TryGet(TKey key, ref ChunkAccessor accessor)
     {
-        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
-        if (!_access.EnterSharedAccess(ref wc))
-        {
-            ThrowHelper.ThrowLockTimeout("BTree/TryGet", TimeoutOptions.Current.BTreeLockTimeout);
-        }
+        AcquireShared("BTree/TryGet");
         try
         {
             var leaf = FindLeaf(key, out var index, ref accessor);
@@ -787,23 +898,21 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             activity?.SetTag(TyphonSpanAttributes.IndexOperation, "delete");
         }
 
-        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
-        if (!_access.EnterExclusiveAccess(ref wc))
-        {
-            ThrowHelper.ThrowLockTimeout("BTree/DeleteValue", TimeoutOptions.Current.BTreeLockTimeout);
-        }
+        AcquireExclusive("BTree/DeleteValue");
         try
         {
+            ref var wa = ref GetWarmAccessor(ref accessor);
+
             // Lookup under exclusive lock to avoid race with concurrent Remove/RemoveValue
             // that could delete the buffer between a shared-lock read and this exclusive section.
-            var leaf = FindLeaf(key, out var index, ref accessor);
+            var leaf = FindLeaf(key, out var index, ref wa);
             if (index < 0)
             {
                 return false;
             }
-            var bufferId = leaf.GetItem(index, ref accessor).Value;
+            var bufferId = leaf.GetItem(index, ref wa).Value;
 
-            var res = _storage.RemoveFromBuffer(bufferId, elementId, value, ref accessor);
+            var res = _storage.RemoveFromBuffer(bufferId, elementId, value, ref wa);
             if (res == -1)
             {
                 return false;
@@ -814,20 +923,23 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             // for temporal queries.
             if (res == 0 && !preserveEmptyBuffer)
             {
-                var args = new RemoveArguments(key, Comparer, ref accessor);
+                var args = new RemoveArguments(key, Comparer, ref wa);
                 RemoveCore(ref args);
 
                 if (args.Removed)
                 {
-                    _storage.DeleteBuffer(args.Value, ref accessor);
+                    _storage.DeleteBuffer(args.Value, ref wa);
                 }
 
-                SyncHeader(ref accessor);
+                SyncHeader(ref wa);
             }
         }
         finally
         {
-            _storage.CommitChanges(ref accessor);
+            if (_warmAccessorValid)
+            {
+                _warmAccessor.CommitChanges();
+            }
             _access.ExitExclusiveAccess();
             activity?.Dispose();
         }
@@ -837,11 +949,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public VariableSizedBufferAccessor<int> TryGetMultiple(TKey key, ref ChunkAccessor accessor)
     {
-        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
-        if (!_access.EnterSharedAccess(ref wc))
-        {
-            ThrowHelper.ThrowLockTimeout("BTree/TryGetMultiple", TimeoutOptions.Current.BTreeLockTimeout);
-        }
+        AcquireShared("BTree/TryGetMultiple");
         try
         {
             var leaf = FindLeaf(key, out var index, ref accessor);
@@ -862,9 +970,71 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     #region Private API
 
+    /// <summary>
+    /// Acquires shared access, trying an immediate CAS first to avoid the QPC syscall in
+    /// <see cref="WaitContext.FromTimeout"/> on the uncontended fast path.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void AcquireShared(string operationName)
+    {
+        if (!_access.TryEnterSharedAccess())
+        {
+            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
+            if (!_access.EnterSharedAccess(ref wc))
+            {
+                ThrowHelper.ThrowLockTimeout(operationName, TimeoutOptions.Current.BTreeLockTimeout);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Acquires exclusive access, trying an immediate CAS first to avoid the QPC syscall in
+    /// <see cref="WaitContext.FromTimeout"/> on the uncontended fast path.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void AcquireExclusive(string operationName)
+    {
+        if (!_access.TryEnterExclusiveAccess())
+        {
+            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
+            if (!_access.EnterExclusiveAccess(ref wc))
+            {
+                ThrowHelper.ThrowLockTimeout(operationName, TimeoutOptions.Current.BTreeLockTimeout);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets a warm ChunkAccessor for exclusive operations. Reuses the cached accessor if the global epoch hasn't changed (meaning no page eviction could have
+    /// occurred). Otherwise, creates a new accessor. The caller's ChangeSet is always propagated. Must only be called under exclusive lock.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private ref ChunkAccessor GetWarmAccessor(ref ChunkAccessor callerAccessor)
+    {
+        var currentEpoch = _segment.Manager.EpochManager.GlobalEpoch;
+        if (_warmAccessorValid && _warmAccessorEpoch == currentEpoch)
+        {
+            // Same epoch — MRU cache is valid, just update ChangeSet for this operation
+            _warmAccessor.ChangeSet = callerAccessor.ChangeSet;
+        }
+        else
+        {
+            // Epoch changed or first use — recreate (cached addresses may be stale)
+            if (_warmAccessorValid)
+            {
+                _warmAccessor.Dispose();
+                _warmAccessorValid = false;
+            }
+            _warmAccessor = _segment.CreateChunkAccessor(callerAccessor.ChangeSet);
+            _warmAccessorEpoch = currentEpoch;
+            _warmAccessorValid = true;
+        }
+        return ref _warmAccessor;
+    }
+
     protected internal NodeWrapper AllocNode(NodeStates states, ref ChunkAccessor accessor)
     {
-        var node = new NodeWrapper(_storage, _segment.AllocateChunk(true));
+        var node = new NodeWrapper(_storage, _segment.AllocateChunk(false), (states & NodeStates.IsLeaf) != 0);
         _storage.InitializeNode(node, states, ref accessor);
         return node;
     }
@@ -878,7 +1048,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
 
         // optimize for removing items from beginning
-        int order = args.Comparer.Compare(args.Key, GetFirst(ref accessor).Key);
+        int order = args.Compare(args.Key, GetFirst(ref accessor).Key);
         if (order < 0)
         {
             return;
@@ -888,6 +1058,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         {
             args.SetRemovedValue(LinkList.PopFirstInternal(ref accessor).Value);
             Debug.Assert(Root == LinkList || LinkList.GetIsHalfFull(ref accessor));
+            _hasCachedLastKey = false;
             DecCount();
             if (IsEmpty())
             {
@@ -896,8 +1067,8 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             }
             return;
         }
-        // optimize for removing items from end
-        order = args.Comparer.Compare(args.Key, GetLast(ref accessor).Key);
+        // optimize for removing items from end — use cached last key to avoid chunk read
+        order = args.Compare(args.Key, _hasCachedLastKey ? _cachedLastKey : GetLast(ref accessor).Key);
         if (order > 0)
         {
             return;
@@ -907,12 +1078,14 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         {
             args.SetRemovedValue(ReverseLinkList.PopLastInternal(ref accessor).Value);
             Debug.Assert(Root == ReverseLinkList || ReverseLinkList.GetIsHalfFull(ref accessor));
+            _hasCachedLastKey = false;
             DecCount(); // here count never becomes zero.
             return;
         }
 
-        var nodeRelatives = new NodeRelatives();
-        var merge = Root.Remove(ref args, ref nodeRelatives, ref accessor);
+        // Invalidate cached last key before tree mutation
+        _hasCachedLastKey = false;
+        var merge = RemoveIterative(ref args, ref accessor);
 
         if (args.Removed)
         {
@@ -930,7 +1103,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             Height--;
         }
 
-        if (ReverseLinkList.IsValid && ReverseLinkList.GetPrevious(ref accessor).IsValid && ReverseLinkList.GetPrevious(ref accessor).GetNext(ref accessor).IsValid==false) // true if last leaf is merged.
+        if (ReverseLinkList.IsValid && ReverseLinkList.GetPrevious(ref accessor).IsValid && ReverseLinkList.GetPrevious(ref accessor).GetNext(ref accessor).IsValid == false)
         {
             ReverseLinkList = ReverseLinkList.GetPrevious(ref accessor);
         }
@@ -949,7 +1122,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
 
         // append optimization: if item key is in order, this may add item in O(1) operation.
-        int order = IsEmpty() ? 1 : args.Compare(args.Key, GetLast(ref accessor).Key);
+        int order = IsEmpty() ? 1 : args.Compare(args.Key, _hasCachedLastKey ? _cachedLastKey : GetLast(ref accessor).Key);
         if (order > 0 && !ReverseLinkList.GetIsFull(ref accessor))
         {
             int value;
@@ -966,6 +1139,8 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             }
             ReverseLinkList.PushLast(new KeyValueItem(args.Key, value), ref accessor);
             IncCount();
+            _cachedLastKey = args.Key;
+            _hasCachedLastKey = true;
             return;
         }
 
@@ -1020,8 +1195,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             return;
         }
 
-        var nodeRelatives = new NodeRelatives();
-        var rightSplit = Root.Insert(ref args, ref nodeRelatives, default, ref accessor);
+        var rightSplit = InsertIterative(ref args, ref accessor);
 
         if (args.Added)
         {
@@ -1048,6 +1222,110 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         {
             ReverseLinkList = next;
         }
+        _cachedLastKey = GetLast(ref accessor).Key;
+        _hasCachedLastKey = true;
+    }
+
+    /// <summary>
+    /// Iterative insert: descends from root to leaf recording the path, inserts at the leaf,
+    /// then propagates any splits upward through the recorded internal nodes.
+    /// Replaces the former recursive InsertInternal approach to eliminate per-level call overhead.
+    /// </summary>
+    private KeyValueItem? InsertIterative(ref InsertArguments args, ref ChunkAccessor accessor)
+    {
+        var node = Root;
+        var relatives = new NodeRelatives();
+        int depth = 0;
+
+        // Phase 1: Descend from root to leaf, recording path for upward propagation
+        while (!node.GetIsLeaf(ref accessor))
+        {
+            var index = node.Find(args.Key, args.KeyComparer, ref accessor);
+            if (index < 0)
+            {
+                index = ~index - 1;
+            }
+
+            Debug.Assert(index >= -1 && index < node.GetCount(ref accessor));
+
+            _pathNodes[depth] = node;
+            _pathChildIndices[depth] = index;
+
+            var child = node.GetChild(index, ref accessor);
+            NodeRelatives.Create(child, index, node, ref relatives, out var childRelatives, ref accessor);
+
+            // Store after Create so lazy-resolved siblings are cached in the stored copy
+            _pathRelatives[depth] = relatives;
+
+            node = child;
+            relatives = childRelatives;
+            depth++;
+        }
+
+        // Phase 2: Insert at leaf
+        var promoted = node.InsertLeaf(ref args, ref relatives, ref accessor);
+
+        // Phase 3: Propagate splits upward through internal nodes
+        while (depth > 0 && promoted != null)
+        {
+            depth--;
+            node = _pathNodes[depth];
+            relatives = _pathRelatives[depth];
+            promoted = node.HandlePromotedInsert(_pathChildIndices[depth], promoted.Value, ref relatives, ref accessor);
+        }
+
+        return promoted;
+    }
+
+    /// <summary>
+    /// Iterative remove: descends from root to leaf recording the path, removes at the leaf,
+    /// then propagates any merges upward through the recorded internal nodes.
+    /// Replaces the former recursive RemoveInternal approach to eliminate per-level call overhead.
+    /// </summary>
+    private bool RemoveIterative(ref RemoveArguments args, ref ChunkAccessor accessor)
+    {
+        var node = Root;
+        var relatives = new NodeRelatives();
+        int depth = 0;
+
+        // Phase 1: Descend from root to leaf, recording path for upward propagation
+        while (!node.GetIsLeaf(ref accessor))
+        {
+            var index = node.Find(args.Key, args.Comparer, ref accessor);
+            if (index < 0)
+            {
+                index = ~index - 1;
+            }
+
+            Debug.Assert(index >= -1 && index < node.GetCount(ref accessor));
+
+            _pathNodes[depth] = node;
+            _pathChildIndices[depth] = index;
+
+            var child = node.GetChild(index, ref accessor);
+            NodeRelatives.Create(child, index, node, ref relatives, out var childRelatives, ref accessor);
+
+            // Store after Create so lazy-resolved siblings are cached in the stored copy
+            _pathRelatives[depth] = relatives;
+
+            node = child;
+            relatives = childRelatives;
+            depth++;
+        }
+
+        // Phase 2: Remove at leaf
+        var merged = node.RemoveLeaf(ref args, ref relatives, ref accessor);
+
+        // Phase 3: Propagate merges upward through internal nodes
+        while (depth > 0 && merged)
+        {
+            depth--;
+            node = _pathNodes[depth];
+            relatives = _pathRelatives[depth];
+            merged = node.HandleChildMerge(_pathChildIndices[depth], ref relatives, ref accessor);
+        }
+
+        return merged;
     }
 
     private NodeWrapper FindLeaf(TKey key, out int index, ref ChunkAccessor accessor)

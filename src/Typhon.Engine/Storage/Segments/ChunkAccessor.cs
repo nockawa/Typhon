@@ -59,6 +59,18 @@ public unsafe struct ChunkAccessor : IDisposable
     public ChunkBasedSegment Segment => _segment;
 
     /// <summary>
+    /// The ChangeSet used for dirty page tracking. Internal setter allows BTree's warm accessor to switch ChangeSets between operations without full
+    /// re-initialization.
+    /// </summary>
+    internal ChangeSet ChangeSet
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _changeSet;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        set => _changeSet = value;
+    }
+
+    /// <summary>
     /// Compute memPageIndex from a slot's base address.
     /// This saves 64 bytes by not storing _memPageIndices[16].
     /// Cost: one subtraction + one shift (2-3 cycles) — only used in slow paths.

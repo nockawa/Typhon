@@ -15,17 +15,34 @@ public abstract partial class BTree<TKey>
     {
         private readonly BaseNodeStorage _storage;
         public readonly int ChunkId;
+        private readonly byte _flags; // bit 0: isLeaf, bit 1: valid (flag was set at construction)
 
         public NodeWrapper(BaseNodeStorage storage, int chunkId)
         {
             _storage = storage;
             ChunkId = chunkId;
+            _flags = 0;
+        }
+
+        internal NodeWrapper(BaseNodeStorage storage, int chunkId, bool isLeaf)
+        {
+            _storage = storage;
+            ChunkId = chunkId;
+            _flags = (byte)(0x02 | (isLeaf ? 0x01 : 0));
         }
 
         #region Node Properties
 
         public bool IsValid => _storage != null && ChunkId != 0;
-        public bool GetIsLeaf(ref ChunkAccessor accessor) => (_storage.GetNodeStates(this, ref accessor) & NodeStates.IsLeaf) != 0;
+
+        public bool GetIsLeaf(ref ChunkAccessor accessor)
+        {
+            if ((_flags & 0x02) != 0)
+            {
+                return (_flags & 0x01) != 0;
+            }
+            return (_storage.GetNodeStates(this, ref accessor) & NodeStates.IsLeaf) != 0;
+        }
         public int GetCapacity() => _storage.GetNodeCapacity();
         public bool GetIsFull(ref ChunkAccessor accessor) => GetCount(ref accessor) == GetCapacity();
         public bool GetIsHalfFull(ref ChunkAccessor accessor) => GetCount(ref accessor) >= (GetCapacity() / 2);
@@ -96,31 +113,10 @@ public abstract partial class BTree<TKey>
 
         public NodeWrapper GetFirstChild(ref ChunkAccessor accessor) => _storage.GetFirstChild(this, ref accessor);
 
-        public KeyValueItem? Insert(ref InsertArguments args, ref NodeRelatives relatives, NodeWrapper parent, ref ChunkAccessor accessor)
-        {
-            if (GetIsLeaf(ref accessor))
-            {
-                return InsertLeaf(ref args, ref relatives, ref accessor);
-            }
-            else
-            {
-                return InsertInternal(ref args, ref relatives, ref accessor);
-            }
-        }
+        // Insert/Remove dispatch removed — BTree.InsertIterative/RemoveIterative handle
+        // the full root-to-leaf descent and upward propagation iteratively.
 
-        public bool Remove(ref RemoveArguments args, ref NodeRelatives relatives, ref ChunkAccessor accessor)
-        {
-            if (GetIsLeaf(ref accessor))
-            {
-                return RemoveLeaf(ref args, ref relatives, ref accessor);
-            }
-            else
-            {
-                return RemoveInternal(ref args, ref relatives, ref accessor);
-            }
-        }
-
-        private KeyValueItem? InsertLeaf(ref InsertArguments args, ref NodeRelatives relatives, ref ChunkAccessor accessor)
+        internal KeyValueItem? InsertLeaf(ref InsertArguments args, ref NodeRelatives relatives, ref ChunkAccessor accessor)
         {
             KeyValueItem? rightLeaf = null;
 
@@ -232,167 +228,149 @@ public abstract partial class BTree<TKey>
             return rightLeaf;
         }
 
-        private KeyValueItem? InsertInternal(ref InsertArguments args, ref NodeRelatives relatives, ref ChunkAccessor accessor)
+        /// <summary>
+        /// Handles a promoted key from a child split during insert. Either inserts the promoted key at this internal node, spills to a sibling, or splits
+        /// this node (returning a new promoted key). Called iteratively during upward propagation from <see cref="BTree{TKey}.InsertIterative"/>.
+        /// </summary>
+        internal KeyValueItem? HandlePromotedInsert(int childIndex, KeyValueItem middle, ref NodeRelatives relatives, ref ChunkAccessor accessor)
         {
-            var index = Find(args.Key, args.KeyComparer, ref accessor);
+            // +1 because middle is always right side which is fresh node.
+            // items at index already point to left node after split. so middle must go after index.
+            int index = childIndex + 1;
 
-            // -1 because items smaller than key have to go inside left child. 
-            // since items at each index point to right child, index is decremented to get left child.
-            if (index < 0)
+            KeyValueItem? rightChild = null;
+            if (!GetIsFull(ref accessor))
             {
-                index = ~index - 1;
+                Insert(index, middle, ref accessor);
             }
-
-            Debug.Assert(index >= -1 && index < GetCount(ref accessor));
-
-            // get child to traverse through.
-            var child = GetChild(index, ref accessor);
-            NodeRelatives.Create(child, index, this, ref relatives, out var childRelatives, ref accessor);
-
-            var rightChild = child.Insert(ref args, ref childRelatives, this, ref accessor);
-
-            if (rightChild is KeyValueItem middle) // if split, add middle key to this node.
+            else
             {
-                // +1 because middle is always right side which is fresh node. 
-                // items at index already point to left node after split. so middle must go after index.
-                index++;
-
-                rightChild = null;
-                if (!GetIsFull(ref accessor))
+                // if left sibling has space, spill left child of this item to left sibling.
+                if (CanSpillTo(relatives.GetLeftSibling(ref accessor), ref accessor, out var leftSibling))
                 {
-                    Insert(index, middle, ref accessor);
+                    #region Fix Pointers after share
+                    // give first item to left sibling.
+                    //
+                    //        [x][x]       [F][x]
+                    //       /   \  \     // \\\ \
+                    //
+                    //        [x][x][F]       [x]
+                    //       /   \  \ \\     /// \
+                    #endregion
+
+                    var first = InsertPopFirst(index, middle, ref accessor);
+
+                    // swap left and right nodes
+                    var temp = GetLeft(ref accessor).ChunkId;
+                    SetLeft(new NodeWrapper(_storage, first.Value), ref accessor);
+                    first = new KeyValueItem(first.Key, temp);
+
+                    var pl = relatives.LeftAncestor.GetItem(relatives.LeftAncestorIndex, ref accessor);
+                    KeyValueItem.SwapKeys(ref pl, ref first); // swap ancestor key with item.
+                    relatives.LeftAncestor.SetItem(relatives.LeftAncestorIndex, pl, ref accessor);
+
+                    leftSibling.PushLast(first, ref accessor);
+
+                    Validate(this, ref accessor);
+                    Validate(leftSibling, ref accessor);
                 }
-                else
+                else if (CanSpillTo(relatives.GetRightSibling(ref accessor), ref accessor, out var rightSibling)) // if right sibling has space
                 {
-                    // if left sibling has space, spill left child of this item to left sibling.
-                    if (CanSpillTo(relatives.LeftSibling, ref accessor, out var leftSibling))
-                    {
-                        #region Fix Pointers after share
-                        // give first item to left sibling.
-                        //
-                        //        [x][x]       [F][x]
-                        //       /   \  \     // \\\ \ 
-                        //
-                        //        [x][x][F]       [x]
-                        //       /   \  \ \\     /// \    
-                        #endregion
+                    #region Fix Pointers after share
+                    // give last item to right sibling.
+                    //
+                    //        [x][L]       [x][x]
+                    //       /   \ \\     /// \  \
+                    //
+                    //        [x]        [L][x][x]
+                    //       /   \      // \\\ \  \
+                    #endregion
 
-                        var first = InsertPopFirst(index, middle, ref accessor);
+                    var last = InsertPopLast(index, middle, ref accessor);
 
-                        //KeyValueItem.SwapRightWith(ref first, ref Left);
-                        // swap left and right nodes
-                        var temp = GetLeft(ref accessor).ChunkId;
-                        SetLeft(new NodeWrapper(_storage, first.Value), ref accessor);
-                        first = new KeyValueItem(first.Key, temp);
+                    // swap left and right node
+                    var temp = rightSibling.GetLeft(ref accessor).ChunkId;
+                    rightSibling.SetLeft(new NodeWrapper(_storage, last.Value), ref accessor);
+                    last = new KeyValueItem(last.Key, temp);
 
-                        var pl = relatives.LeftAncestor.GetItem(relatives.LeftAncestorIndex, ref accessor);
-                        KeyValueItem.SwapKeys(ref pl, ref first); // swap ancestor key with item.
-                        relatives.LeftAncestor.SetItem(relatives.LeftAncestorIndex, pl, ref accessor);
+                    var pr = relatives.RightAncestor.GetItem(relatives.RightAncestorIndex, ref accessor);
+                    KeyValueItem.SwapKeys(ref pr, ref last); // swap ancestor key with item.
+                    relatives.RightAncestor.SetItem(relatives.RightAncestorIndex, pr, ref accessor);
 
-                        leftSibling.PushLast(first, ref accessor);
+                    rightSibling.PushFirst(last, ref accessor);
 
-                        Validate(this, ref accessor);
-                        Validate(leftSibling, ref accessor);
-                    }
-                    else if (CanSpillTo(relatives.RightSibling, ref accessor, out var rightSibling)) // if right sibling has space
-                    {
-                        #region Fix Pointers after share
-                        // give last item to right sibling.
-                        //
-                        //        [x][L]       [x][x]
-                        //       /   \ \\     /// \  \
-                        //
-                        //        [x]        [L][x][x]
-                        //       /   \      // \\\ \  \
-                        #endregion
-
-                        var last = InsertPopLast(index, middle, ref accessor);
-
-                        //KeyValueItem.SwapRightWith(ref last, ref rightSibling.Left);
-                        // swap left and right node
-                        var temp = rightSibling.GetLeft(ref accessor).ChunkId;
-                        rightSibling.SetLeft(new NodeWrapper(_storage, last.Value), ref accessor);
-                        last = new KeyValueItem(last.Key, temp);
-
-                        var pr = relatives.RightAncestor.GetItem(relatives.RightAncestorIndex, ref accessor);
-                        KeyValueItem.SwapKeys(ref pr, ref last); // swap ancestor key with item.
-                        relatives.RightAncestor.SetItem(relatives.RightAncestorIndex, pr, ref accessor);
-
-                        rightSibling.PushFirst(last, ref accessor);
-
-                        Validate(this, ref accessor);
-                        Validate(rightSibling, ref accessor);
-                    }
-                    else // split, then promote middle item
-                    {
-                        #region Fix Pointers after split
-                        // ==============================================================
-                        //
-                        // if [left] and [right] were leafs
-                        //
-                        //     [][]...[N]...[][]
-                        //               \   <= if we were here,
-                        //             [left][mid][right]
-                        //
-                        // for insertion, make new key-node item with [mid] as key and [right] as node.
-                        // simply add this item next to [N].
-                        //
-                        //     [][]...[N][mid]..[][]
-                        //               \    \
-                        //            [left][right]
-                        //
-                        // ==============================================================
-                        //
-                        // if [left] and [right] were internal nodes.
-                        //
-                        //     [middle]        [rightNode]       
-                        //            \\       *         \     <= left pointer of [rightNode] is null 
-                        //
-                        //  Becomes
-                        //
-                        //    [middle]
-                        //           \
-                        //         [rightNode]
-                        //        //          \
-                        //
-                        // ==============================================================
-                        #endregion
-
-                        var rightNode = SplitRight(NodeStates.None, ref accessor);
-
-                        // find middle key to promote
-                        if (index < GetCount(ref accessor))
-                        {
-                            middle = InsertPopLast(index, middle, ref accessor);
-                        }
-                        else if (index > GetCount(ref accessor))
-                        {
-                            middle = rightNode.InsertPopFirst(index - GetCount(ref accessor), middle, ref accessor);
-                        }
-
-                        rightNode.SetLeft(new NodeWrapper(_storage, middle.Value), ref accessor);
-                        middle = new KeyValueItem(middle.Key, rightNode.ChunkId);
-                        rightChild = middle;
-
-                        Validate(this, ref accessor);
-                        Validate(rightNode, ref accessor);
-                    }
+                    Validate(this, ref accessor);
+                    Validate(rightSibling, ref accessor);
                 }
-
-                bool CanSpillTo(NodeWrapper node, ref ChunkAccessor ca, out NodeWrapper iNode)
+                else // split, then promote middle item
                 {
-                    if (node.IsValid && !node.GetIsLeaf(ref ca))
+                    #region Fix Pointers after split
+                    // ==============================================================
+                    //
+                    // if [left] and [right] were leafs
+                    //
+                    //     [][]...[N]...[][]
+                    //               \   <= if we were here,
+                    //             [left][mid][right]
+                    //
+                    // for insertion, make new key-node item with [mid] as key and [right] as node.
+                    // simply add this item next to [N].
+                    //
+                    //     [][]...[N][mid]..[][]
+                    //               \    \
+                    //            [left][right]
+                    //
+                    // ==============================================================
+                    //
+                    // if [left] and [right] were internal nodes.
+                    //
+                    //     [middle]        [rightNode]
+                    //            \\       *         \     <= left pointer of [rightNode] is null
+                    //
+                    //  Becomes
+                    //
+                    //    [middle]
+                    //           \
+                    //         [rightNode]
+                    //        //          \
+                    //
+                    // ==============================================================
+                    #endregion
+
+                    var rightNode = SplitRight(NodeStates.None, ref accessor);
+
+                    // find middle key to promote
+                    if (index < GetCount(ref accessor))
                     {
-                        iNode = node;
-                        return !iNode.GetIsFull(ref ca);
+                        middle = InsertPopLast(index, middle, ref accessor);
+                    }
+                    else if (index > GetCount(ref accessor))
+                    {
+                        middle = rightNode.InsertPopFirst(index - GetCount(ref accessor), middle, ref accessor);
                     }
 
-                    iNode = default;
-                    return false;
+                    rightNode.SetLeft(new NodeWrapper(_storage, middle.Value), ref accessor);
+                    middle = new KeyValueItem(middle.Key, rightNode.ChunkId);
+                    rightChild = middle;
+
+                    Validate(this, ref accessor);
+                    Validate(rightNode, ref accessor);
                 }
             }
 
             return rightChild;
+
+            bool CanSpillTo(NodeWrapper node, ref ChunkAccessor ca, out NodeWrapper iNode)
+            {
+                if (node.IsValid && !node.GetIsLeaf(ref ca))
+                {
+                    iNode = node;
+                    return !iNode.GetIsFull(ref ca);
+                }
+
+                iNode = default;
+                return false;
+            }
         }
 
         public bool RemoveLeaf(ref RemoveArguments args, ref NodeRelatives relatives, ref ChunkAccessor accessor)
@@ -482,101 +460,91 @@ public abstract partial class BTree<TKey>
             return merge; // true if merge happened.
         }
         
-        public bool RemoveInternal(ref RemoveArguments args, ref NodeRelatives relatives, ref ChunkAccessor accessor)
+        /// <summary>
+        /// Handles a child merge during remove. Removes the separator key from this internal node, then borrows from a sibling or merges with a sibling if
+        /// below half-full. Called iteratively during upward propagation from <see cref="BTree{TKey}.RemoveIterative"/>.
+        /// </summary>
+        internal bool HandleChildMerge(int childIndex, ref NodeRelatives relatives, ref ChunkAccessor accessor)
         {
-            var merge = false;
-            var index = Find(args.Key, args.Comparer, ref accessor);
-            if (index < 0)
+            bool merge = false;
+
+            RemoveAtInternal(Math.Max(0, childIndex), ref accessor); // removes right sibling of child if left most child is merged, otherwise merged child is removed.
+
+            if (!GetIsHalfFull(ref accessor)) // borrow or merge
             {
-                index = ~index - 1;
-            }
-
-            Debug.Assert(index >= -1 && index < GetCount(ref accessor));
-
-            var child = GetChild(index, ref accessor);
-            NodeRelatives.Create(child, index, this, ref relatives, out var childRelatives, ref accessor);
-            var childMerged = child.Remove(ref args, ref childRelatives, ref accessor);
-
-            if (childMerged)
-            {
-                RemoveAtInternal(Math.Max(0, index), ref accessor); // removes right sibling of child if left most child is merged, otherwise merged child is removed.
-
-                if (!GetIsHalfFull(ref accessor)) // borrow or merge
+                if (CanBorrowFrom(relatives.GetLeftSibling(ref accessor), ref accessor, out NodeWrapper leftSibling))
                 {
-                    if (CanBorrowFrom(relatives.LeftSibling, ref accessor, out NodeWrapper leftSibling))
+                    var last = leftSibling.PopLastInternal(ref accessor);
+
+                    // swap left and right pointers.
+                    var temp = GetLeft(ref accessor).ChunkId;
+                    SetLeft(new NodeWrapper(_storage, last.Value), ref accessor);
+                    last.Value = temp;
+
+                    var pr = relatives.LeftAncestor.GetItem(relatives.LeftAncestorIndex, ref accessor);
+                    KeyValueItem.SwapKeys(ref pr, ref last); // swap ancestor key with item.
+                    relatives.LeftAncestor.SetItem(relatives.LeftAncestorIndex, pr, ref accessor);
+
+                    PushFirst(last, ref accessor);
+
+                    Validate(this, ref accessor);
+                    Validate(leftSibling, ref accessor);
+                }
+                else if (CanBorrowFrom(relatives.GetRightSibling(ref accessor), ref accessor, out NodeWrapper rightSibling))
+                {
+                    var first = rightSibling.PopFirstInternal(ref accessor);
+
+                    // swap left and right pointers.
+                    var temp = rightSibling.GetLeft(ref accessor).ChunkId;
+                    rightSibling.SetLeft(new NodeWrapper(_storage, first.Value), ref accessor);
+                    first.Value = temp;
+
+                    var pl = relatives.RightAncestor.GetItem(relatives.RightAncestorIndex, ref accessor);
+                    KeyValueItem.SwapKeys(ref pl, ref first); // swap ancestor key with item.
+                    relatives.RightAncestor.SetItem(relatives.RightAncestorIndex, pl, ref accessor);
+
+                    PushLast(first, ref accessor);
+
+                    Validate(this, ref accessor);
+                    Validate(rightSibling, ref accessor);
+                }
+                else // merge
+                {
+                    merge = true;
+                    if (relatives.HasTrueLeftSibling) // current node will be removed from parent
                     {
-                        var last = leftSibling.PopLastInternal(ref accessor);
+                        var pkey = relatives.LeftAncestor.GetItem(relatives.LeftAncestorIndex, ref accessor).Key; // demote key
+                        var mid = new KeyValueItem(pkey, GetLeft(ref accessor).ChunkId);
+                        leftSibling.PushLast(mid, ref accessor);
+                        leftSibling.MergeLeft(this, ref accessor); // merge from left to keep items in order.
 
-                        //KeyValueItem.SwapRightWith(ref last, ref Left); // swap left and right pointers.
-                        var temp = GetLeft(ref accessor).ChunkId;
-                        SetLeft(new NodeWrapper(_storage, last.Value), ref accessor);
-                        last.Value = temp;
-
-                        var pr = relatives.LeftAncestor.GetItem(relatives.LeftAncestorIndex, ref accessor);
-                        KeyValueItem.SwapKeys(ref pr, ref last); // swap ancestor key with item.
-                        relatives.LeftAncestor.SetItem(relatives.LeftAncestorIndex, pr, ref accessor);
-
-                        PushFirst(last, ref accessor);
-
-                        Validate(this, ref accessor);
                         Validate(leftSibling, ref accessor);
                     }
-                    else if (CanBorrowFrom(relatives.RightSibling, ref accessor, out NodeWrapper rightSibling))
+                    else if (relatives.HasTrueRightSibling) // right sibling will be removed from parent
                     {
-                        var first = rightSibling.PopFirstInternal(ref accessor);
-
-                        //KeyValueItem.SwapRightWith(ref first, ref rightSibling.Left); // swap left and right pointers.
-                        var temp = rightSibling.GetLeft(ref accessor).ChunkId;
-                        rightSibling.SetLeft(new NodeWrapper(_storage, first.Value), ref accessor);
-                        first.Value = temp;
-
-                        var pl = relatives.RightAncestor.GetItem(relatives.RightAncestorIndex, ref accessor);
-                        KeyValueItem.SwapKeys(ref pl, ref first); // swap ancestor key with item.
-                        relatives.RightAncestor.SetItem(relatives.RightAncestorIndex, pl, ref accessor);
-
-                        PushLast(first, ref accessor);
+                        var pkey = relatives.RightAncestor.GetItem(relatives.RightAncestorIndex, ref accessor).Key; // demote key
+                        var mid = new KeyValueItem(pkey, rightSibling.GetLeft(ref accessor).ChunkId);
+                        PushLast(mid, ref accessor);
+                        MergeLeft(rightSibling, ref accessor); // merge from right to keep items in order.
 
                         Validate(this, ref accessor);
-                        Validate(rightSibling, ref accessor);
                     }
-                    else // merge
-                    {
-                        merge = true;
-                        if (relatives.HasTrueLeftSibling) // current node will be removed from parent
-                        {
-                            var pkey = relatives.LeftAncestor.GetItem(relatives.LeftAncestorIndex, ref accessor).Key; // demote key
-                            var mid = new KeyValueItem(pkey, GetLeft(ref accessor).ChunkId);
-                            leftSibling.PushLast(mid, ref accessor);
-                            leftSibling.MergeLeft(this, ref accessor); // merge from left to keep items in order.
-
-                            Validate(leftSibling, ref accessor);
-                        }
-                        else if (relatives.HasTrueRightSibling) // right sibling will be removed from parent
-                        {
-                            var pkey = relatives.RightAncestor.GetItem(relatives.RightAncestorIndex, ref accessor).Key; // demote key
-                            var mid = new KeyValueItem(pkey, rightSibling.GetLeft(ref accessor).ChunkId);
-                            PushLast(mid, ref accessor);
-                            MergeLeft(rightSibling, ref accessor); // merge from right to keep items in order.
-
-                            Validate(this, ref accessor);
-                        }
-                    }
-                }
-
-                bool CanBorrowFrom(NodeWrapper node, ref ChunkAccessor ca, out NodeWrapper iNode)
-                {
-                    if (!node.IsValid || node.GetIsLeaf(ref ca))
-                    {
-                        iNode = default;
-                        return false;
-                    }
-
-                    iNode = node;
-                    return iNode.GetCount(ref ca) > iNode.GetCapacity() / 2;
                 }
             }
 
             return merge; // true if merge happened.
+
+            bool CanBorrowFrom(NodeWrapper node, ref ChunkAccessor ca, out NodeWrapper iNode)
+            {
+                if (!node.IsValid || node.GetIsLeaf(ref ca))
+                {
+                    iNode = default;
+                    return false;
+                }
+
+                iNode = node;
+                return iNode.GetCount(ref ca) > iNode.GetCapacity() / 2;
+            }
         }
 
         private KeyValueItem RemoveAtInternal(int index, ref ChunkAccessor accessor) => _storage.RemoveAt(this, index, ref accessor);
