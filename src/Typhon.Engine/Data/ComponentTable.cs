@@ -343,9 +343,11 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     /// Load constructor: restores a ComponentTable from previously persisted segment root page indices.
     /// Used during database reopen to reconnect to existing on-disk data instead of allocating fresh segments.
     /// </summary>
+    /// <param name="newIndexFieldIds">Optional set of FieldIds for newly added indexes that need creating instead of loading.
+    /// When non-null, indexes for these fields are created fresh; all other indexes are loaded from disk.</param>
     internal ComponentTable(DatabaseEngine dbe, DBComponentDefinition definition, IResource parent, int componentSPI, int versionSPI, int defaultIndexSPI,
-        int string64IndexSPI, int tailIndexSPI = 0, ExhaustionPolicy exhaustionPolicy = ExhaustionPolicy.None) :
-        base($"ComponentTable_{definition.Name}", ResourceType.ComponentTable, parent, exhaustionPolicy)
+        int string64IndexSPI, int tailIndexSPI = 0, ExhaustionPolicy exhaustionPolicy = ExhaustionPolicy.None, HashSet<int> newIndexFieldIds = null, 
+        ChangeSet changeSet = null) : base($"ComponentTable_{definition.Name}", ResourceType.ComponentTable, parent, exhaustionPolicy)
     {
         DBE = dbe;
         Definition = definition;
@@ -367,12 +369,44 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
             TailVSBS = new VariableSizedBufferSegment<VersionedIndexEntry>(TailIndexSegment);
         }
 
-        BuildIndexedFieldInfo(true);
+        BuildIndexedFieldInfo(true, changeSet, newIndexFieldIds);
 
         ComponentCollectionVSBSByOffset = new Dictionary<int, VariableSizedBufferSegmentBase>();
     }
 
-    private void BuildIndexedFieldInfo(bool load, ChangeSet changeSet = null)
+    /// <summary>
+    /// Migration constructor: uses pre-created component and revision segments from schema migration,
+    /// while loading index segments from their persisted SPIs.
+    /// </summary>
+    internal ComponentTable(DatabaseEngine dbe, DBComponentDefinition definition, IResource parent, ChunkBasedSegment componentSegment, 
+        ChunkBasedSegment revisionSegment, int defaultIndexSPI, int string64IndexSPI, int tailIndexSPI = 0,
+        ExhaustionPolicy exhaustionPolicy = ExhaustionPolicy.None, HashSet<int> newIndexFieldIds = null, ChangeSet changeSet = null) :
+        base($"ComponentTable_{definition.Name}", ResourceType.ComponentTable, parent, exhaustionPolicy)
+    {
+        DBE = dbe;
+        Definition = definition;
+        var mmf = DBE.MMF;
+
+        ComponentSegment = componentSegment;
+        CompRevTableSegment = revisionSegment;
+        DefaultIndexSegment = mmf.LoadChunkBasedSegment(defaultIndexSPI, sizeof(Index64Chunk));
+        String64IndexSegment = mmf.LoadChunkBasedSegment(string64IndexSPI, sizeof(IndexString64Chunk));
+
+        PrimaryKeyIndex = definition.AllowMultiple ? new LongMultipleBTree(DefaultIndexSegment, load: true, stableId: -1) : 
+            new LongSingleBTree(DefaultIndexSegment, load: true, stableId: -1);
+
+        if (Definition.MultipleIndicesCount > 0)
+        {
+            TailIndexSegment = mmf.LoadChunkBasedSegment(tailIndexSPI, 512);
+            TailVSBS = new VariableSizedBufferSegment<VersionedIndexEntry>(TailIndexSegment);
+        }
+
+        BuildIndexedFieldInfo(true, changeSet, newIndexFieldIds);
+
+        ComponentCollectionVSBSByOffset = new Dictionary<int, VariableSizedBufferSegmentBase>();
+    }
+
+    private void BuildIndexedFieldInfo(bool load, ChangeSet changeSet = null, HashSet<int> newIndexFieldIds = null)
     {
         var l = new List<IndexedFieldInfo>();
 
@@ -388,17 +422,80 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
                 continue;
             }
 
+            // During schema evolution: newly added indexes use create mode; existing indexes use load mode
+            var useLoad = load && (newIndexFieldIds == null || !newIndexFieldIds.Contains(f.FieldId));
+
             var fi = new IndexedFieldInfo
             {
                 OffsetToField = ro + f.OffsetInComponentStorage,
                 Size          = f.SizeInComponentStorage,
-                Index         = CreateIndexForField(f, (short)f.FieldId, load, changeSet),
+                Index         = CreateIndexForField(f, (short)f.FieldId, useLoad, changeSet),
             };
             fi.OffsetToIndexElementId = fi.Index.AllowMultiple ? (j++ * sizeof(int)) : 0;
             l.Add(fi);
         }
 
         IndexedFieldInfos = l.ToArray();
+    }
+
+    /// <summary>
+    /// Populates newly created secondary indexes by scanning all occupied entities.
+    /// Called after schema migration creates empty indexes that need backfilling.
+    /// </summary>
+    internal unsafe void PopulateNewIndexes(HashSet<int> newIndexFieldIds, ChangeSet changeSet)
+    {
+        if (newIndexFieldIds == null || newIndexFieldIds.Count == 0)
+        {
+            return;
+        }
+
+        using var guard = EpochGuard.Enter(DBE.EpochManager);
+        var accessor = ComponentSegment.CreateChunkAccessor(changeSet);
+        try
+        {
+            var capacity = ComponentSegment.ChunkCapacity;
+            for (int chunkId = 1; chunkId < capacity; chunkId++)
+            {
+                if (!ComponentSegment.IsChunkAllocated(chunkId))
+                {
+                    continue;
+                }
+
+                // Insert into each new index
+                foreach (var ifi in IndexedFieldInfos)
+                {
+                    if (!newIndexFieldIds.Contains(GetFieldIdForIndex(ifi)))
+                    {
+                        continue;
+                    }
+
+                    var chunkAddr = accessor.GetChunkAddress(chunkId);
+                    var keyAddr = chunkAddr + ifi.OffsetToField;
+                    ifi.Index.Add(keyAddr, chunkId, ref accessor);
+                }
+            }
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Returns the FieldId associated with an IndexedFieldInfo by reverse lookup.
+    /// </summary>
+    private int GetFieldIdForIndex(IndexedFieldInfo ifi)
+    {
+        var ro = ComponentOverhead;
+        for (int i = 0; i < Definition.MaxFieldId; i++)
+        {
+            var f = Definition[i];
+            if (f != null && f.HasIndex && ro + f.OffsetInComponentStorage == ifi.OffsetToField)
+            {
+                return f.FieldId;
+            }
+        }
+        return -1;
     }
 
     private void BuildComponentCollectionInfo(ChangeSet changeSet = null)
@@ -417,9 +514,21 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         }
     }
 
+    /// <summary>
+    /// Creates a B+Tree index for a field on the given segment. Used by schema evolution to pre-create indexes
+    /// on existing segments before the ComponentTable is fully loaded.
+    /// </summary>
+    internal static IBTree CreateIndexForFieldStatic(DBComponentDefinition.Field field, short stableId, bool load, ChunkBasedSegment segment, 
+        ChangeSet changeSet = null) => CreateIndexForFieldCore(field, stableId, load, segment, changeSet);
+
     private IBTree CreateIndexForField(DBComponentDefinition.Field field, short stableId, bool load = false, ChangeSet changeSet = null)
     {
         var s = field.Type == FieldType.String64 ? String64IndexSegment : DefaultIndexSegment;
+        return CreateIndexForFieldCore(field, stableId, load, s, changeSet);
+    }
+
+    private static IBTree CreateIndexForFieldCore(DBComponentDefinition.Field field, short stableId, bool load, ChunkBasedSegment s, ChangeSet changeSet = null)
+    {
         IBTree index = field.Type switch
         {
             FieldType.Byte     => field.IndexAllowMultiple ? new ByteMultipleBTree      (s, load, stableId, changeSet) : new ByteSingleBTree    (s, load, stableId, changeSet),

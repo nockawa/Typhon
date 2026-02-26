@@ -569,11 +569,12 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
     /// <summary>
     /// Persists schema changes (renames, new fields, removed fields) for a component after the resolver detects that the runtime field layout differs from
-    /// Rthe persisted FieldR1 entries.
+    /// the persisted FieldR1 entries. When a migration has occurred, also updates the segment SPIs and component sizes.
     /// </summary>
     /// <param name="pk">Primary key of the existing ComponentR1 entity.</param>
     /// <param name="definition">The resolved component definition with updated field IDs and names.</param>
-    private void PersistSchemaChanges(long pk, DBComponentDefinition definition)
+    /// <param name="migrationResult">Optional migration result containing new segment SPIs.</param>
+    private void PersistSchemaChanges(long pk, DBComponentDefinition definition, MigrationResult? migrationResult = null)
     {
         using var t = this.CreateQuickTransaction(DurabilityMode.Immediate);
 
@@ -594,6 +595,15 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
         comp.SchemaRevision = comp.SchemaRevision + 1;
         comp.FieldCount = nonStaticCount;
+
+        // Update SPIs and sizes if migration ran
+        if (migrationResult.HasValue)
+        {
+            comp.ComponentSPI = migrationResult.Value.NewComponentSPI;
+            comp.VersionSPI = migrationResult.Value.NewVersionSPI;
+            comp.CompSize = definition.ComponentStorageSize;
+            comp.CompOverhead = definition.ComponentStorageOverhead;
+        }
 
         {
             using var a = t.CreateComponentCollectionAccessor(ref comp.Fields);
@@ -845,9 +855,13 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         if (_persistedComponents != null && _persistedComponents.TryGetValue(schemaName, out var persisted))
         {
             // Schema validation: compare persisted vs runtime before loading data
+            SchemaDiff diff = null;
+            MigrationResult? migrationResult = null;
+            HashSet<int> newIndexFieldIds = null;
+
             if (persistedFields != null)
             {
-                var diff = SchemaValidator.ComputeDiff(schemaName, persistedFields, persisted.Comp, definition, 
+                diff = SchemaValidator.ComputeDiff(schemaName, persistedFields, persisted.Comp, definition, 
                     resolver?.Renames ?? (IReadOnlyList<(string, string, int)>)[]);
 
                 if (diff.HasBreakingChanges && schemaValidation != SchemaValidationMode.Skip)
@@ -869,12 +883,42 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
                             _log?.LogInformation("Schema renames for '{Name}': {Summary}", schemaName, diff.Summary);
                             break;
                     }
+
+                    // Determine if migration is needed (layout change or offset change)
+                    var oldStride = persisted.Comp.CompSize + persisted.Comp.CompOverhead;
+                    var newStride = definition.ComponentStorageTotalSize;
+
+                    if (SchemaEvolutionEngine.NeedsMigration(diff, oldStride, newStride))
+                    {
+                        migrationResult = SchemaEvolutionEngine.Migrate(MMF, EpochManager, diff, persistedFields, persisted.Comp, definition, _log);
+                    }
+
+                    newIndexFieldIds = SchemaEvolutionEngine.GetNewIndexFieldIds(diff);
                 }
             }
 
-            // Load path: restore from saved SPIs
-            componentTable = new ComponentTable(this, definition, this, persisted.Comp.ComponentSPI, persisted.Comp.VersionSPI, persisted.Comp.DefaultIndexSPI,
-                persisted.Comp.String64IndexSPI, persisted.Comp.TailIndexSPI);
+            // Load path: use migration constructor if migration ran (segments already in MMF registry), otherwise standard load constructor from persisted SPIs
+            var migrationChangeSet = (migrationResult.HasValue || newIndexFieldIds != null) ? MMF.CreateChangeSet() : null;
+
+            if (migrationResult.HasValue)
+            {
+                componentTable = new ComponentTable(this, definition, this, migrationResult.Value.NewComponentSegment, migrationResult.Value.NewRevisionSegment,
+                    persisted.Comp.DefaultIndexSPI, persisted.Comp.String64IndexSPI, persisted.Comp.TailIndexSPI, newIndexFieldIds: newIndexFieldIds, 
+                    changeSet: migrationChangeSet);
+            }
+            else
+            {
+                componentTable = new ComponentTable(this, definition, this, persisted.Comp.ComponentSPI, persisted.Comp.VersionSPI, persisted.Comp.DefaultIndexSPI,
+                    persisted.Comp.String64IndexSPI, persisted.Comp.TailIndexSPI, newIndexFieldIds: newIndexFieldIds, changeSet: migrationChangeSet);
+            }
+
+            // Populate newly created indexes by scanning entities
+            if (newIndexFieldIds != null)
+            {
+                componentTable.PopulateNewIndexes(newIndexFieldIds, migrationChangeSet);
+                migrationChangeSet?.SaveChanges();
+                MMF.FlushToDisk();
+            }
 
             // Update _curPrimaryKey from loaded PK index
             if (componentTable.PrimaryKeyIndex.EntryCount > 0)
@@ -883,10 +927,10 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
                 UpdateCurPrimaryKey(maxPk);
             }
 
-            // Persist schema changes if the resolver detected renames, additions, or removals
-            if (resolver != null && resolver.HasChanges)
+            // Persist schema changes if the resolver detected changes or migration ran
+            if ((resolver != null && resolver.HasChanges) || migrationResult.HasValue)
             {
-                PersistSchemaChanges(persisted.PK, definition);
+                PersistSchemaChanges(persisted.PK, definition, migrationResult);
                 IncrementUserSchemaVersion();
             }
         }
