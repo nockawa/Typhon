@@ -857,7 +857,7 @@ public class L16MultipleBTree<TKey> : L16BTree<TKey> where TKey : unmanaged
     public override bool AllowMultiple => true;
     protected override BaseNodeStorage GetStorage() => new L16MultipleNodeStorage();
 
-    public class L16MultipleNodeStorage : L16NodeStorage
+    public sealed class L16MultipleNodeStorage : L16NodeStorage
     {
         private VariableSizedBufferSegment<int> _valueStore;
 

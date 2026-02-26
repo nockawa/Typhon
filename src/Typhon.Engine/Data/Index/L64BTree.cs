@@ -787,7 +787,7 @@ public class L64MultipleBTree<TKey> : L64BTree<TKey> where TKey : unmanaged
     public override bool AllowMultiple => true;
     protected override BaseNodeStorage GetStorage() => new L64MultipleNodeStorage();
 
-    public class L64MultipleNodeStorage : L64NodeStorage
+    public sealed class L64MultipleNodeStorage : L64NodeStorage
     {
         private VariableSizedBufferSegment<int> _valueStore;
 

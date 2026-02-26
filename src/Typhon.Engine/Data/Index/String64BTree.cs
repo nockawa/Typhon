@@ -731,7 +731,7 @@ public class String64MultipleBTree : String64BTree
     public override bool AllowMultiple => true;
     protected override BaseNodeStorage GetStorage() => new String64MultipleNodeStorage();
 
-    public class String64MultipleNodeStorage : String64NodeStorage
+    public sealed class String64MultipleNodeStorage : String64NodeStorage
     {
         private VariableSizedBufferSegment<int> _valueStore;
 

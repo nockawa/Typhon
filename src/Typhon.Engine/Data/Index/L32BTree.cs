@@ -856,7 +856,7 @@ public class L32MultipleBTree<TKey> : L32BTree<TKey> where TKey : unmanaged
     public override bool AllowMultiple => true;
     protected override BaseNodeStorage GetStorage() => new L32MultipleNodeStorage();
 
-    public class L32MultipleNodeStorage : L32NodeStorage
+    public sealed class L32MultipleNodeStorage : L32NodeStorage
     {
         private VariableSizedBufferSegment<int> _valueStore;
 

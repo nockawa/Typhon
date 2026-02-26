@@ -187,7 +187,31 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             return _value;
         }
 
-        public int Compare(TKey left, TKey right) => _keyComparer.Compare(left, right);
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public int Compare(TKey left, TKey right)
+        {
+            // typeof(TKey) is a JIT intrinsic for value types — dead branches are eliminated at JIT time,
+            // turning this into a direct comparison instead of an IComparer interface dispatch.
+            if (typeof(TKey) == typeof(long))
+            {
+                var l = (long)(object)left;
+                var r = (long)(object)right;
+                return l.CompareTo(r);
+            }
+            if (typeof(TKey) == typeof(int))
+            {
+                var l = (int)(object)left;
+                var r = (int)(object)right;
+                return l.CompareTo(r);
+            }
+            if (typeof(TKey) == typeof(short))
+            {
+                var l = (short)(object)left;
+                var r = (short)(object)right;
+                return l.CompareTo(r);
+            }
+            return _keyComparer.Compare(left, right);
+        }
 
         public IComparer<TKey> KeyComparer => _keyComparer;
     }
@@ -216,6 +240,30 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             Value = default;
             Removed = false;
             Accessor = ref accessor;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public int Compare(TKey left, TKey right)
+        {
+            if (typeof(TKey) == typeof(long))
+            {
+                var l = (long)(object)left;
+                var r = (long)(object)right;
+                return l.CompareTo(r);
+            }
+            if (typeof(TKey) == typeof(int))
+            {
+                var l = (int)(object)left;
+                var r = (int)(object)right;
+                return l.CompareTo(r);
+            }
+            if (typeof(TKey) == typeof(short))
+            {
+                var l = (short)(object)left;
+                var r = (short)(object)right;
+                return l.CompareTo(r);
+            }
+            return Comparer.Compare(left, right);
         }
 
         public void SetRemovedValue(int value)
@@ -672,11 +720,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
 
         var args = new InsertArguments(key, value, Comparer, ref accessor);
-        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
-        if (!_access.EnterExclusiveAccess(ref wc))
-        {
-            ThrowHelper.ThrowLockTimeout("BTree/Insert", TimeoutOptions.Current.BTreeLockTimeout);
-        }
+        AcquireExclusive("BTree/Insert");
         try
         {
             AddOrUpdateCore(ref args);
@@ -702,11 +746,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
 
         var args = new RemoveArguments(key, Comparer, ref accessor);
-        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
-        if (!_access.EnterExclusiveAccess(ref wc))
-        {
-            ThrowHelper.ThrowLockTimeout("BTree/Delete", TimeoutOptions.Current.BTreeLockTimeout);
-        }
+        AcquireExclusive("BTree/Delete");
         try
         {
             RemoveCore(ref args);
@@ -731,11 +771,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             return;
         }
 
-        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
-        if (!_access.EnterSharedAccess(ref wc))
-        {
-            ThrowHelper.ThrowLockTimeout("BTree/CheckConsistency", TimeoutOptions.Current.BTreeLockTimeout);
-        }
+        AcquireShared("BTree/CheckConsistency");
         try
         {
             Root.CheckConsistency(default, NodeWrapper.CheckConsistencyParent.Root, Comparer, Height, ref accessor);
@@ -815,11 +851,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public Result<int, BTreeLookupStatus> TryGet(TKey key, ref ChunkAccessor accessor)
     {
-        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
-        if (!_access.EnterSharedAccess(ref wc))
-        {
-            ThrowHelper.ThrowLockTimeout("BTree/TryGet", TimeoutOptions.Current.BTreeLockTimeout);
-        }
+        AcquireShared("BTree/TryGet");
         try
         {
             var leaf = FindLeaf(key, out var index, ref accessor);
@@ -845,11 +877,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             activity?.SetTag(TyphonSpanAttributes.IndexOperation, "delete");
         }
 
-        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
-        if (!_access.EnterExclusiveAccess(ref wc))
-        {
-            ThrowHelper.ThrowLockTimeout("BTree/DeleteValue", TimeoutOptions.Current.BTreeLockTimeout);
-        }
+        AcquireExclusive("BTree/DeleteValue");
         try
         {
             // Lookup under exclusive lock to avoid race with concurrent Remove/RemoveValue
@@ -895,11 +923,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public VariableSizedBufferAccessor<int> TryGetMultiple(TKey key, ref ChunkAccessor accessor)
     {
-        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
-        if (!_access.EnterSharedAccess(ref wc))
-        {
-            ThrowHelper.ThrowLockTimeout("BTree/TryGetMultiple", TimeoutOptions.Current.BTreeLockTimeout);
-        }
+        AcquireShared("BTree/TryGetMultiple");
         try
         {
             var leaf = FindLeaf(key, out var index, ref accessor);
@@ -920,6 +944,40 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     #region Private API
 
+    /// <summary>
+    /// Acquires shared access, trying an immediate CAS first to avoid the QPC syscall in
+    /// <see cref="WaitContext.FromTimeout"/> on the uncontended fast path.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void AcquireShared(string operationName)
+    {
+        if (!_access.TryEnterSharedAccess())
+        {
+            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
+            if (!_access.EnterSharedAccess(ref wc))
+            {
+                ThrowHelper.ThrowLockTimeout(operationName, TimeoutOptions.Current.BTreeLockTimeout);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Acquires exclusive access, trying an immediate CAS first to avoid the QPC syscall in
+    /// <see cref="WaitContext.FromTimeout"/> on the uncontended fast path.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void AcquireExclusive(string operationName)
+    {
+        if (!_access.TryEnterExclusiveAccess())
+        {
+            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
+            if (!_access.EnterExclusiveAccess(ref wc))
+            {
+                ThrowHelper.ThrowLockTimeout(operationName, TimeoutOptions.Current.BTreeLockTimeout);
+            }
+        }
+    }
+
     protected internal NodeWrapper AllocNode(NodeStates states, ref ChunkAccessor accessor)
     {
         var node = new NodeWrapper(_storage, _segment.AllocateChunk(false), (states & NodeStates.IsLeaf) != 0);
@@ -929,7 +987,6 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     private void RemoveCore(ref RemoveArguments args)
     {
-        _hasCachedLastKey = false;
         ref var accessor = ref args.Accessor;
         if (IsEmpty())
         {
@@ -937,7 +994,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
 
         // optimize for removing items from beginning
-        int order = args.Comparer.Compare(args.Key, GetFirst(ref accessor).Key);
+        int order = args.Compare(args.Key, GetFirst(ref accessor).Key);
         if (order < 0)
         {
             return;
@@ -947,6 +1004,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         {
             args.SetRemovedValue(LinkList.PopFirstInternal(ref accessor).Value);
             Debug.Assert(Root == LinkList || LinkList.GetIsHalfFull(ref accessor));
+            _hasCachedLastKey = false;
             DecCount();
             if (IsEmpty())
             {
@@ -955,8 +1013,8 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             }
             return;
         }
-        // optimize for removing items from end
-        order = args.Comparer.Compare(args.Key, GetLast(ref accessor).Key);
+        // optimize for removing items from end — use cached last key to avoid chunk read
+        order = args.Compare(args.Key, _hasCachedLastKey ? _cachedLastKey : GetLast(ref accessor).Key);
         if (order > 0)
         {
             return;
@@ -966,10 +1024,13 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         {
             args.SetRemovedValue(ReverseLinkList.PopLastInternal(ref accessor).Value);
             Debug.Assert(Root == ReverseLinkList || ReverseLinkList.GetIsHalfFull(ref accessor));
+            _hasCachedLastKey = false;
             DecCount(); // here count never becomes zero.
             return;
         }
 
+        // Invalidate cached last key before tree mutation
+        _hasCachedLastKey = false;
         var merge = RemoveIterative(ref args, ref accessor);
 
         if (args.Removed)
@@ -988,7 +1049,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             Height--;
         }
 
-        if (ReverseLinkList.IsValid && ReverseLinkList.GetPrevious(ref accessor).IsValid && ReverseLinkList.GetPrevious(ref accessor).GetNext(ref accessor).IsValid==false) // true if last leaf is merged.
+        if (ReverseLinkList.IsValid && ReverseLinkList.GetPrevious(ref accessor).IsValid && ReverseLinkList.GetPrevious(ref accessor).GetNext(ref accessor).IsValid == false)
         {
             ReverseLinkList = ReverseLinkList.GetPrevious(ref accessor);
         }

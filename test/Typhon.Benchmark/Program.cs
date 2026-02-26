@@ -73,6 +73,12 @@ class Program
                 return;
             }
 
+            if (args.Contains("--profile-delete"))
+            {
+                BTreeDeleteProfile.Run();
+                return;
+            }
+
             // Pass through to BenchmarkDotNet for standard args like --filter
             BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
             return;
