@@ -186,4 +186,42 @@ class OperationalToolingTests : TestBase<OperationalToolingTests>
             Assert.That(phases[i], Is.GreaterThanOrEqualTo(phases[i - 1]));
         }
     }
+
+    // ── Sparse PK / EnumerateLeaves Tests ──
+
+    [Test]
+    public void SchemaHistory_SparseKeys_ReturnsAll()
+    {
+        // Phase 1: Create database with V1, create many entities to advance the global PK counter
+        using (var scope = ServiceProvider.CreateScope())
+        {
+            using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
+            dbe.RegisterComponentFromAccessor<OpsCompV1>();
+
+            // Create multiple entities so the global PK counter is well above 1
+            using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
+            for (int i = 0; i < 20; i++)
+            {
+                var comp = new OpsCompV1(i, i * 0.5f);
+                t.CreateEntity(ref comp);
+            }
+            t.Commit();
+        }
+
+        // Phase 2: Reopen with V2 — this triggers a schema history entry at a high PK value
+        using (var scope = ServiceProvider.CreateScope())
+        {
+            using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
+            dbe.RegisterComponentFromAccessor<OpsCompV2>();
+
+            var history = dbe.GetSchemaHistory();
+
+            // The schema history should contain at least the V1→V2 migration entry
+            Assert.That(history.Count, Is.GreaterThanOrEqualTo(1));
+
+            var entry = history.FirstOrDefault(h => h.ComponentName.AsString == "Typhon.Schema.UnitTest.OpsComp");
+            Assert.That(entry.ComponentName.AsString, Is.EqualTo("Typhon.Schema.UnitTest.OpsComp"));
+            Assert.That(entry.FieldsAdded, Is.GreaterThanOrEqualTo(1));
+        }
+    }
 }

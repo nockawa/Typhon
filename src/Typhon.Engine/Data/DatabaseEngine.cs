@@ -764,34 +764,18 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         // Read all ComponentR1 entries to build the persisted components dictionary
         _persistedComponents = new Dictionary<string, (long, ComponentR1)>();
         _persistedFieldsByComponent = new Dictionary<string, FieldR1[]>();
-        var entryCount = _componentsTable.PrimaryKeyIndex.EntryCount;
-        if (entryCount > 0)
+        var pkIndex = _componentsTable.PrimaryKeyIndex;
+        if (pkIndex.EntryCount > 0)
         {
-            long maxPk = 0;
-            int found = 0;
-
             using var tx = this.CreateQuickTransaction();
-            for (long pk = 1; found < entryCount; pk++)
+
+            foreach (var kv in pkIndex.EnumerateLeaves())
             {
-                if (pk > entryCount * 10)
+                if (tx.ReadEntity<ComponentR1>(kv.Key, out var comp))
                 {
-                    break;
+                    var schemaName = comp.Name.AsString;
+                    _persistedComponents[schemaName] = (kv.Key, comp);
                 }
-
-                if (!tx.ReadEntity<ComponentR1>(pk, out var comp))
-                {
-                    continue;
-                }
-
-                found++;
-                if (pk > maxPk)
-                {
-                    maxPk = pk;
-                }
-
-                // Key by schema name (logical identity) for matching during registration
-                var schemaName = comp.Name.AsString;
-                _persistedComponents[schemaName] = (pk, comp);
             }
 
             // Read FieldR1 entries from each persisted component's Fields collection
@@ -814,7 +798,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             }
 
             // Update _curPrimaryKey from both system tables
-            UpdateCurPrimaryKey(maxPk);
+            UpdateCurPrimaryKey(pkIndex.GetMaxKey());
 
             if (_fieldsTable.PrimaryKeyIndex.EntryCount > 0)
             {
@@ -955,23 +939,20 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             return [];
         }
 
-        var result = new List<SchemaHistoryR1>();
-        var entryCount = _schemaHistoryTable.PrimaryKeyIndex.EntryCount;
-
-        if (entryCount > 0)
+        var pkIndex = _schemaHistoryTable.PrimaryKeyIndex;
+        if (pkIndex.EntryCount == 0)
         {
-            using var tx = this.CreateQuickTransaction();
-            for (long pk = 1; result.Count < entryCount; pk++)
-            {
-                if (pk > entryCount * 10)
-                {
-                    break;
-                }
+            return [];
+        }
 
-                if (tx.ReadEntity<SchemaHistoryR1>(pk, out var entry))
-                {
-                    result.Add(entry);
-                }
+        var result = new List<SchemaHistoryR1>(pkIndex.EntryCount);
+        using var tx = this.CreateQuickTransaction();
+
+        foreach (var kv in pkIndex.EnumerateLeaves())
+        {
+            if (tx.ReadEntity<SchemaHistoryR1>(kv.Key, out var entry))
+            {
+                result.Add(entry);
             }
         }
 

@@ -5,6 +5,7 @@ using Serilog;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using Typhon.Engine.BPTree;
 
 namespace Typhon.Engine.Tests;
@@ -944,4 +945,163 @@ class BtreeTests
 
         _logger.LogError("Remove all key/values, chunk allocated {cc}", segment.AllocatedChunkCount);
     }
+
+    #region EnumerateLeaves tests
+
+    [Test]
+    unsafe public void EnumerateLeaves_EmptyTree_YieldsNothing()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
+        var depth = epochManager.EnterScope();
+        try
+        {
+            var tree = new IntSingleBTree(segment);
+
+            int count = 0;
+            foreach (var kv in tree.EnumerateLeaves())
+            {
+                count++;
+            }
+
+            Assert.That(count, Is.EqualTo(0));
+        }
+        finally
+        {
+            epochManager.ExitScope(depth);
+        }
+    }
+
+    [Test]
+    unsafe public void EnumerateLeaves_SingleLeaf_YieldsAllItems()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
+        var depth = epochManager.EnterScope();
+        try
+        {
+            var accessor = segment.CreateChunkAccessor();
+            var tree = new IntSingleBTree(segment);
+
+            // Insert few items (stays within a single leaf)
+            tree.Add(30, 300, ref accessor);
+            tree.Add(10, 100, ref accessor);
+            tree.Add(20, 200, ref accessor);
+
+            var keys = new List<int>();
+            var values = new List<int>();
+            foreach (var kv in tree.EnumerateLeaves())
+            {
+                keys.Add(kv.Key);
+                values.Add(kv.Value);
+            }
+
+            Assert.That(keys, Is.EqualTo(new[] { 10, 20, 30 }));
+            Assert.That(values, Is.EqualTo(new[] { 100, 200, 300 }));
+
+            accessor.Dispose();
+        }
+        finally
+        {
+            epochManager.ExitScope(depth);
+        }
+    }
+
+    [Test]
+    [Property("MemPageCount", 1024)]
+    unsafe public void EnumerateLeaves_MultipleLeaves_YieldsAllInOrder()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 300, sizeof(Index32Chunk));
+        var depth = epochManager.EnterScope();
+        try
+        {
+            var accessor = segment.CreateChunkAccessor();
+            var tree = new IntSingleBTree(segment);
+
+            // Insert enough items to force multiple leaf splits
+            const int itemCount = 500;
+            for (int i = itemCount; i >= 1; i--)
+            {
+                tree.Add(i, i * 10, ref accessor);
+            }
+
+            Assert.That(tree.EntryCount, Is.EqualTo(itemCount));
+
+            var keys = new List<int>();
+            foreach (var kv in tree.EnumerateLeaves())
+            {
+                keys.Add(kv.Key);
+            }
+
+            Assert.That(keys.Count, Is.EqualTo(itemCount));
+
+            // Verify ascending order
+            for (int i = 1; i < keys.Count; i++)
+            {
+                Assert.That(keys[i], Is.GreaterThan(keys[i - 1]), $"Key at index {i} not in ascending order");
+            }
+
+            // Verify all expected keys present
+            for (int i = 1; i <= itemCount; i++)
+            {
+                Assert.That(keys.Contains(i), Is.True, $"Missing key {i}");
+            }
+
+            accessor.Dispose();
+        }
+        finally
+        {
+            epochManager.ExitScope(depth);
+        }
+    }
+
+    [Test]
+    unsafe public void EnumerateLeaves_AfterDeletions_YieldsRemaining()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
+        var depth = epochManager.EnterScope();
+        try
+        {
+            var accessor = segment.CreateChunkAccessor();
+            var tree = new IntSingleBTree(segment);
+
+            var allKeys = new[] { 1, 2, 3, 10, 20, 33, 5, 50, 70, 35, 9, 99, 101 };
+            foreach (var k in allKeys)
+            {
+                tree.Add(k, k + 1, ref accessor);
+            }
+
+            // Delete some keys
+            var toDelete = new[] { 2, 10, 50, 99 };
+            foreach (var k in toDelete)
+            {
+                tree.Remove(k, out _, ref accessor);
+            }
+
+            var expected = allKeys.Except(toDelete).Order().ToArray();
+
+            var enumerated = new List<int>();
+            foreach (var kv in tree.EnumerateLeaves())
+            {
+                enumerated.Add(kv.Key);
+            }
+
+            Assert.That(enumerated.Count, Is.EqualTo(expected.Length));
+            Assert.That(enumerated, Is.EqualTo(expected));
+
+            accessor.Dispose();
+        }
+        finally
+        {
+            epochManager.ExitScope(depth);
+        }
+    }
+
+    #endregion
 }
