@@ -109,16 +109,22 @@ public class DatabaseDefinitions
 
     public DBComponentDefinition GetComponent(string componentName, int revision) => _components.GetValueOrDefault(DBComponentDefinition.FormatFullName(componentName, revision));
 
-    public DBComponentDefinition CreateFromAccessor<T>() where T : unmanaged
+    public DBComponentDefinition CreateFromAccessor<T>() where T : unmanaged => CreateFromAccessor<T>(null);
+
+    internal DBComponentDefinition CreateFromAccessor<T>(FieldIdResolver resolver) where T : unmanaged => CreateFromAccessor(typeof(T), resolver);
+
+    /// <summary>
+    /// Non-generic overload for dry-run validation where the component type is known only at runtime.
+    /// </summary>
+    internal DBComponentDefinition CreateFromAccessor(Type t, FieldIdResolver resolver = null)
     {
-        var t = typeof(T);
 
         var ca = t.GetCustomAttribute<ComponentAttribute>();
         if (ca == null)
         {
             throw new InvalidOperationException($"Missing the ComponentAttribute on the type {t} declaration");
         }
-        
+
         var compDef = new DBComponentDefinition(ca.Name ?? t.Name, ca.Revision, ca.AllowMultiple) { POCOType = t };
 
         if (_components.TryGetValue(compDef.FullName, out _))
@@ -127,6 +133,26 @@ public class DatabaseDefinitions
         }
 
         var members = t.GetFields();
+
+        // Validate PreviousName uniqueness: no two runtime fields may claim the same PreviousName
+        if (resolver != null)
+        {
+            var previousNames = new HashSet<string>();
+            foreach (var fi in members)
+            {
+                if (fi.IsStatic)
+                {
+                    continue;
+                }
+
+                var fattr = fi.GetCustomAttribute<FieldAttribute>();
+                if (fattr?.PreviousName != null && !previousNames.Add(fattr.PreviousName))
+                {
+                    throw new InvalidOperationException($"Duplicate PreviousName '{fattr.PreviousName}' declared on multiple fields in component '{ca.Name}'.");
+                }
+            }
+        }
+
         var fieldId = 0;
         foreach (var fieldInfo in members)
         {
@@ -147,8 +173,9 @@ public class DatabaseDefinitions
             // Name of the field is by default the C# member name, or the one specified by the FieldAttribute
             var fieldName = fa?.Name ?? fieldInfo.Name;
             var fieldOffset = Marshal.OffsetOf(t, fieldInfo.Name).ToInt32();
+            var resolvedId = resolver?.ResolveFieldId(fieldName, fa?.PreviousName, fa?.FieldId) ?? (fa?.FieldId ?? fieldId++);
 
-            var field = compDef.CreateField(fa?.FieldId ?? fieldId++, fieldName, fieldType, fieldUnderlyingType, fieldOffset, fieldInfo.FieldType);
+            var field = compDef.CreateField(resolvedId, fieldName, fieldType, fieldUnderlyingType, fieldOffset, fieldInfo.FieldType);
 
             // Index related data
             if (ia == null)
@@ -160,6 +187,8 @@ public class DatabaseDefinitions
             field.IndexAllowMultiple = ia.AllowMultiple;
             field.IsIndexAuto = false;
         }
+
+        resolver?.Complete();
 
         compDef.Build();
 

@@ -23,6 +23,7 @@ internal sealed class CommandExecutor
 {
     private readonly ShellSession _session;
     private readonly DiagnosticCommandExecutor _diagnostics;
+    private readonly SchemaCommandExecutor _schema;
     private readonly Dictionary<string, IOutputFormatter> _formatters;
     private readonly List<string> _history = [];
 
@@ -47,6 +48,7 @@ internal sealed class CommandExecutor
     {
         _session = session;
         _diagnostics = new DiagnosticCommandExecutor(session);
+        _schema = new SchemaCommandExecutor(session);
         _formatters = new Dictionary<string, IOutputFormatter>(StringComparer.OrdinalIgnoreCase)
         {
             ["table"] = new TableFormatter(),
@@ -123,6 +125,13 @@ internal sealed class CommandExecutor
             return diagResult.Value;
         }
 
+        // Delegate to schema command executor (Phase 5)
+        var schemaResult = _schema.Dispatch(cmd.Value.ToLowerInvariant(), tokens);
+        if (schemaResult.HasValue)
+        {
+            return schemaResult.Value;
+        }
+
         return cmd.Value.ToLowerInvariant() switch
         {
             "open"          => ExecuteOpen(tokens, 1),
@@ -130,7 +139,7 @@ internal sealed class CommandExecutor
             "info"          => ExecuteInfo(),
             "load-schema"   => ExecuteLoadSchema(tokens, 1),
             "reload-schema" => ExecuteReloadSchema(),
-            "schema"        => ExecuteSchema(),
+            "schema-list"   => ExecuteSchema(),
             "describe"      => ExecuteDescribe(tokens, 1),
             "begin"         => ExecuteBegin(),
             "commit"        => ExecuteCommit(),
@@ -801,7 +810,7 @@ internal sealed class CommandExecutor
         sb.AppendLine("  [yellow]Schema:[/]");
         sb.AppendLine("    [cyan]load-schema[/] <path>               Load component types from assembly");
         sb.AppendLine("    [cyan]reload-schema[/]                    Close, reload assemblies, reopen");
-        sb.AppendLine("    [cyan]schema[/]                           List loaded components");
+        sb.AppendLine("    [cyan]schema-list[/]                      List loaded components");
         sb.AppendLine("    [cyan]describe[/] <component>             Show component field layout");
         sb.AppendLine();
         sb.AppendLine("  [yellow]Transaction:[/]");
@@ -814,6 +823,13 @@ internal sealed class CommandExecutor
         sb.AppendLine("    [cyan]read[/] <id> <comp>                 Read entity component data");
         sb.AppendLine("    [cyan]update[/] <id> <comp> { f=v, ... }  Update entity component data");
         sb.AppendLine("    [cyan]delete[/] <id> <comp>               Delete entity component");
+        sb.AppendLine();
+        sb.AppendLine("  [yellow]Schema Inspection:[/]");
+        sb.AppendLine("    [cyan]schema-fields[/] <component>        Show persisted FieldId assignments");
+        sb.AppendLine("    [cyan]schema-diff[/] <component>          Compare persisted vs runtime schema");
+        sb.AppendLine("    [cyan]schema-validate[/]                  Dry-run validation for all components");
+        sb.AppendLine("    [cyan]schema-history[/]                   Show schema change audit trail");
+        sb.AppendLine("    [cyan]schema-export[/] [component]        Export persisted schema (respects format)");
         sb.AppendLine();
         sb.AppendLine("  [yellow]Diagnostics:[/]");
         sb.AppendLine("    [cyan]cache-stats[/]                        Page cache hit rate & state breakdown");
@@ -847,7 +863,7 @@ internal sealed class CommandExecutor
             "info"          => "  info\n    Shows database summary: path, component count, transaction state.",
             "load-schema"   => "  load-schema <path>\n    Loads component types from a compiled .NET assembly (.dll).\n    Can be called before or after opening a database.\n    Multiple assemblies can be loaded (additive).",
             "reload-schema" => "  reload-schema\n    Closes the database, reloads all assemblies from disk,\n    and reopens. Use after recompiling your schema assembly.",
-            "schema"        => "  schema\n    Lists all loaded component types with their sizes and field counts.",
+            "schema-list"   => "  schema-list\n    Lists all loaded component types with their sizes and field counts.",
             "describe"      => "  describe <component>\n    Shows the field layout: name, type, offset, size, and index info.",
             "begin"         => "  begin\n    Starts a new transaction. Error if one is already active.",
             "commit"        => "  commit\n    Commits the current transaction.\n    Reports conflict if another transaction modified the same entities.",
@@ -873,6 +889,11 @@ internal sealed class CommandExecutor
             "transactions"   => "  transactions\n    Lists active transactions with TSN and state.\n    Shows MinTSN and NextTSN from the transaction chain.",
             "memory"         => "  memory\n    Shows memory usage grouped by engine subsystem\n    (Storage, DataEngine, Durability, Allocation).",
             "resources"      => "  resources [--flat]\n    Without --flat: launches interactive Terminal.Gui resource explorer.\n    With --flat: prints all resource nodes as a table.",
+            "schema-fields"  => "  schema-fields <component>\n    Shows persisted FieldId assignments, types, offsets, and sizes.\n    Accepts short name (e.g. 'Player') or full schema name.",
+            "schema-diff"    => "  schema-diff <component>\n    Compares persisted vs runtime schema and shows field-level changes.\n    Requires a loaded assembly (load-schema). Color-coded output:\n    green=added, red=removed/breaking, yellow=widened.",
+            "schema-validate" => "  schema-validate\n    Dry-run validation of all loaded component types against persisted schema.\n    Reports OK/FAIL per component with change summaries.",
+            "schema-history"  => "  schema-history\n    Shows the schema change audit trail: timestamp, component, revision changes,\n    entity count, and migration elapsed time.",
+            "schema-export"   => "  schema-export [component]\n    Exports persisted schema data. Optional component name filter.\n    Respects 'set format' (table/json/csv).",
             _               => null,
         };
 

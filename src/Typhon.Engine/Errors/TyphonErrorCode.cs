@@ -19,7 +19,10 @@ public enum TyphonErrorCode : int
     StorageCapacityExceeded     = 2004,
     PageChecksumMismatch        = 2005,
 
-    // 3xxx — Component (reserved)
+    // 3xxx — Component
+    SchemaValidation            = 3001,
+    SchemaMigration             = 3002,
+
     // 4xxx — Index
     UniqueConstraintViolation   = 4001,
     // 5xxx — Query (reserved)

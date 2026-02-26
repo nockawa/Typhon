@@ -97,7 +97,7 @@ public static class DatabaseSchemaExtensions
         return (FieldType.None, FieldType.None);
     }
 
-    public static int SizeInComp(this FieldType field)
+    public static int FieldSizeInComp(this FieldType field)
     {
         switch (field)
         {

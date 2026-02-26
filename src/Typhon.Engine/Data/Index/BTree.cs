@@ -505,6 +505,16 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     public int EntryCount => _count;
 
     /// <summary>
+    /// Returns an enumerator that walks the leaf-level linked list, yielding all entries in ascending key order.
+    /// The caller must be inside an epoch scope. The returned enumerator holds a shared lock (released on Dispose).
+    /// </summary>
+    public LeafEnumerator EnumerateLeaves()
+    {
+        AcquireShared("BTree/EnumerateLeaves");
+        return new LeafEnumerator(this);
+    }
+
+    /// <summary>
     /// Returns the maximum key in the BTree. Single-threaded use only (engine init).
     /// </summary>
     public TKey GetMaxKey()

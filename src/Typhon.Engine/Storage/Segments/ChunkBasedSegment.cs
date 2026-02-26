@@ -177,6 +177,22 @@ public partial class ChunkBasedSegment : LogicalSegment
     }
     
     /// <summary>
+    /// Ensures the segment can hold at least <paramref name="minChunkCount"/> chunks by growing if necessary.
+    /// Used during schema migration to pre-size new segments before mirroring occupancy bitmaps.
+    /// </summary>
+    internal void EnsureCapacity(int minChunkCount, ChangeSet changeSet = null)
+    {
+        while (ChunkCapacity < minChunkCount)
+        {
+            var pagesNeeded = 1 + ((minChunkCount - ChunkCountRootPage + ChunkCountPerPage - 1) / ChunkCountPerPage);
+            if (!Grow(pagesNeeded, changeSet))
+            {
+                break;
+            }
+        }
+    }
+
+    /// <summary>
     /// Attempts to grow the segment if capacity is exhausted.
     /// </summary>
     /// <returns>True if growth occurred or capacity was already available, false if at maximum capacity.</returns>

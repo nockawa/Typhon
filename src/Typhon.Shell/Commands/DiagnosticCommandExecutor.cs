@@ -885,8 +885,8 @@ internal sealed class DiagnosticCommandExecutor
 
     private ChunkBasedSegment ResolveSegment(string name)
     {
-        // Format: ComponentName.SegmentSuffix (e.g., CompA.Data, CompA.RevTable, CompA.PK_Index)
-        var dotPos = name.IndexOf('.');
+        // Format: ComponentName.SegmentSuffix (e.g., ARPG.Position.Data, ARPG.Position.PK_Index)
+        var dotPos = name.LastIndexOf('.');
         if (dotPos < 0)
         {
             return null;
@@ -918,8 +918,8 @@ internal sealed class DiagnosticCommandExecutor
 
     private (IBTree Tree, string Error) ResolveIndex(string name)
     {
-        // Format: ComponentName.FieldName (e.g., CompA.PK or CompA.PlayerId)
-        var dotPos = name.IndexOf('.');
+        // Format: ComponentName.FieldName (e.g., ARPG.Position.PK or ARPG.Position.PlayerId)
+        var dotPos = name.LastIndexOf('.');
         if (dotPos < 0)
         {
             return (null, $"Error: Index name must be Component.Field (e.g., CompA.PK). Got '{name}'.");

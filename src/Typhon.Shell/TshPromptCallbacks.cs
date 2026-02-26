@@ -22,7 +22,7 @@ internal sealed class TshPromptCallbacks : PromptCallbacks
     private static readonly string[] Commands =
     [
         "open", "close", "info",
-        "load-schema", "reload-schema", "schema", "describe",
+        "load-schema", "reload-schema", "schema-list", "describe",
         "begin", "commit", "rollback",
         "create", "read", "update", "delete",
         "set", "help", "history", "exit", "quit",
@@ -31,7 +31,9 @@ internal sealed class TshPromptCallbacks : PromptCallbacks
         "segments", "segment-detail",
         "btree", "btree-dump", "btree-validate",
         "revisions", "mvcc-stats",
-        "transactions", "memory", "resources"
+        "transactions", "memory", "resources",
+        // Phase 5: Schema Inspection
+        "schema-fields", "schema-diff", "schema-validate", "schema-history", "schema-export"
     ];
 
     // Commands that take a component name as next argument
@@ -65,13 +67,15 @@ internal sealed class TshPromptCallbacks : PromptCallbacks
     // Keywords for syntax highlighting
     private static readonly HashSet<string> Keywords = new(StringComparer.OrdinalIgnoreCase)
     {
-        "open", "close", "info", "load-schema", "reload-schema", "schema", "describe",
+        "open", "close", "info", "load-schema", "reload-schema", "schema-list", "describe",
         "begin", "commit", "rollback", "create", "read", "update", "delete",
         "set", "help", "history", "exit", "quit", "true", "false",
         // Phase 2
         "cache-stats", "cache-pages", "page-dump", "segments", "segment-detail",
         "btree", "btree-dump", "btree-validate", "revisions", "mvcc-stats",
-        "transactions", "memory", "resources", "where"
+        "transactions", "memory", "resources", "where",
+        // Phase 5
+        "schema-fields", "schema-diff", "schema-validate", "schema-history", "schema-export"
     };
 
     public TshPromptCallbacks(ShellSession session)
@@ -291,7 +295,7 @@ internal sealed class TshPromptCallbacks : PromptCallbacks
             "info"          => "Show database summary",
             "load-schema"   => "Load component types from assembly",
             "reload-schema" => "Reload all schema assemblies",
-            "schema"        => "List loaded components",
+            "schema-list"   => "List loaded components",
             "describe"      => "Show component field layout",
             "begin"         => "Start a new transaction",
             "commit"        => "Commit current transaction",
@@ -319,6 +323,12 @@ internal sealed class TshPromptCallbacks : PromptCallbacks
             "transactions"   => "Active transaction list",
             "memory"         => "Memory usage by subsystem",
             "resources"      => "Resource graph explorer",
+            // Phase 5: Schema Inspection
+            "schema-fields"   => "Show persisted FieldId assignments",
+            "schema-diff"     => "Compare persisted vs runtime schema",
+            "schema-validate" => "Dry-run validation for all components",
+            "schema-history"  => "Show schema change audit trail",
+            "schema-export"   => "Export persisted schema data",
             _               => ""
         };
 }

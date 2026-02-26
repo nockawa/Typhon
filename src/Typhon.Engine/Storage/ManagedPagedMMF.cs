@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
 
@@ -81,6 +82,26 @@ unsafe internal struct RootFileHeader
 
     /// <summary>Next free Transaction Sequence Number. Restored on reopen so MVCC visibility works across engine restarts.</summary>
     public long NextFreeTSN;
+
+    /// <summary>Root page index of the <see cref="ChunkBasedSegment"/> backing <see cref="ComponentCollection{T}"/> storage for FieldR1 entries.</summary>
+    public int FieldCollectionSegmentSPI;
+
+    /// <summary>Monotonic counter bumped on any user component schema change. Used for quick mismatch pre-check.</summary>
+    public int UserSchemaVersion;
+
+    // ── Schema History system table SPIs (Phase 5, appended to preserve existing offsets) ──
+
+    /// <summary>Root page index of the SchemaHistoryR1 component segment.</summary>
+    public int SchemaHistoryTableSPI;
+
+    /// <summary>Root page index of the CompRevTable segment for SchemaHistoryR1.</summary>
+    public int SchemaHistoryVersionSPI;
+
+    /// <summary>Root page index of the DefaultIndex segment for SchemaHistoryR1.</summary>
+    public int SchemaHistoryDefaultIndexSPI;
+
+    /// <summary>Root page index of the String64Index segment for SchemaHistoryR1.</summary>
+    public int SchemaHistoryString64IndexSPI;
 
     /// <summary>Returns <see cref="HeaderSignature"/> decoded as a managed string.</summary>
     public string HeaderSignatureString
@@ -498,6 +519,26 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
 
         Logger.LogDebug("Load Chunk Based Logical Segment at {StartPageId} using pages {Pages}", segment.Pages[0], segment.Pages.ToArray());
         return segment;
+    }
+
+    /// <summary>
+    /// Returns a previously loaded segment for the given page index, or loads it if not yet present.
+    /// Safe to call when the segment may already be in the registry (e.g., system component segments loaded by the engine constructor).
+    /// </summary>
+    public ChunkBasedSegment GetOrLoadChunkBasedSegment(int filePageIndex, int stride)
+    {
+        var dic = _segments;
+        if (dic == null)
+        {
+            return null;
+        }
+
+        if (dic.TryGetValue(filePageIndex, out var existing))
+        {
+            return existing as ChunkBasedSegment;
+        }
+
+        return LoadChunkBasedSegment(filePageIndex, stride);
     }
 
     public bool DeleteSegment(int filePageIndex, ChangeSet changeSet = null)
