@@ -21,6 +21,7 @@ public enum TyphonErrorCode : int
 
     // 3xxx — Component
     SchemaValidation            = 3001,
+    SchemaMigration             = 3002,
 
     // 4xxx — Index
     UniqueConstraintViolation   = 4001,

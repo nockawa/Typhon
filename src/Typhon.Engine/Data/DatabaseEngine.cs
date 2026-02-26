@@ -141,6 +141,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     private Dictionary<string, FieldR1[]> _persistedFieldsByComponent;
     private ConcurrentDictionary<int, ChunkBasedSegment> _componentCollectionSegmentByStride;
     private ConcurrentDictionary<Type, VariableSizedBufferSegmentBase> _componentCollectionVSBSByType;
+    private MigrationRegistry _migrationRegistry;
 
     public DatabaseDefinitions DBD { get; }
     public ManagedPagedMMF MMF { get; }
@@ -535,7 +536,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             DefaultIndexSPI     = table.DefaultIndexSegment.RootPageIndex,
             String64IndexSPI    = table.String64IndexSegment.RootPageIndex,
             TailIndexSPI        = table.TailIndexSegment?.RootPageIndex ?? 0,
-            SchemaRevision      = 0,
+            SchemaRevision      = definition.Revision,
             FieldCount          = nonStaticCount,
         };
 
@@ -593,7 +594,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             }
         }
 
-        comp.SchemaRevision = comp.SchemaRevision + 1;
+        comp.SchemaRevision = definition.Revision;
         comp.FieldCount = nonStaticCount;
 
         // Update SPIs and sizes if migration ran
@@ -866,7 +867,31 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
                 if (diff.HasBreakingChanges && schemaValidation != SchemaValidationMode.Skip)
                 {
-                    throw new SchemaValidationException(diff);
+                    // Breaking changes detected — check migration registry for a user-provided migration path
+                    var targetRevision = componentAttr?.Revision ?? 1;
+                    var persistedRevision = persisted.Comp.SchemaRevision;
+
+                    // Backward compat: databases created before Phase 4 have SchemaRevision=0.
+                    // Try the persisted value first, then fall back to searching the registry.
+                    var chain = _migrationRegistry?.GetChain(schemaName, persistedRevision, targetRevision);
+                    if (chain == null && persistedRevision == 0 && _migrationRegistry != null)
+                    {
+                        // Legacy database: SchemaRevision was auto-incremented, not attribute-based.
+                        // Scan for a viable chain by trying common starting revisions.
+                        chain = _migrationRegistry.GetChain(schemaName, 1, targetRevision);
+                    }
+
+                    if (chain == null)
+                    {
+                        throw new SchemaValidationException(diff);
+                    }
+
+                    _log?.LogInformation(
+                        "Breaking schema change for '{Name}': {Summary}. Migration chain registered ({StepCount} step(s))",
+                        schemaName, diff.Summary, chain.Value.StepCount);
+
+                    migrationResult = SchemaEvolutionEngine.MigrateWithFunction(
+                        MMF, EpochManager, diff, persistedFields, persisted.Comp, definition, chain.Value, _log);
                 }
 
                 if (!diff.IsIdentical)
@@ -876,6 +901,9 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
                         case CompatibilityLevel.CompatibleWidening:
                             _log?.LogWarning("Schema widening for '{Name}': {Summary}", schemaName, diff.Summary);
                             break;
+                        case CompatibilityLevel.Breaking:
+                            // Already handled above via migration function
+                            break;
                         case >= CompatibilityLevel.Compatible:
                             _log?.LogInformation("Schema evolution for '{Name}': {Summary}", schemaName, diff.Summary);
                             break;
@@ -884,13 +912,16 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
                             break;
                     }
 
-                    // Determine if migration is needed (layout change or offset change)
-                    var oldStride = persisted.Comp.CompSize + persisted.Comp.CompOverhead;
-                    var newStride = definition.ComponentStorageTotalSize;
-
-                    if (SchemaEvolutionEngine.NeedsMigration(diff, oldStride, newStride))
+                    // For compatible changes (non-breaking), use the field-map migration path
+                    if (!diff.HasBreakingChanges)
                     {
-                        migrationResult = SchemaEvolutionEngine.Migrate(MMF, EpochManager, diff, persistedFields, persisted.Comp, definition, _log);
+                        var oldStride = persisted.Comp.CompSize + persisted.Comp.CompOverhead;
+                        var newStride = definition.ComponentStorageTotalSize;
+
+                        if (SchemaEvolutionEngine.NeedsMigration(diff, oldStride, newStride))
+                        {
+                            migrationResult = SchemaEvolutionEngine.Migrate(MMF, EpochManager, diff, persistedFields, persisted.Comp, definition, _log);
+                        }
                     }
 
                     newIndexFieldIds = SchemaEvolutionEngine.GetNewIndexFieldIds(diff);
@@ -957,6 +988,27 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         _componentTableByWalTypeId.TryAdd(walTypeId, componentTable);
 
         return true;
+    }
+
+    /// <summary>
+    /// Registers a strongly-typed migration function that transforms component data from <typeparamref name="TOld"/> to <typeparamref name="TNew"/>.
+    /// Both types must have [Component] attributes with the same Name but different Revisions.
+    /// Must be called before <see cref="RegisterComponentFromAccessor{T}"/> for the target component.
+    /// </summary>
+    public void RegisterMigration<TOld, TNew>(MigrationFunc<TOld, TNew> func) where TOld : unmanaged where TNew : unmanaged
+    {
+        _migrationRegistry ??= new MigrationRegistry();
+        _migrationRegistry.Register(func);
+    }
+
+    /// <summary>
+    /// Registers a byte-level migration function for scenarios where the old struct type is no longer available in code.
+    /// Must be called before <see cref="RegisterComponentFromAccessor{T}"/> for the target component.
+    /// </summary>
+    public void RegisterByteMigration(string componentName, int fromRevision, int toRevision, int oldSize, int newSize, ByteMigrationFunc func)
+    {
+        _migrationRegistry ??= new MigrationRegistry();
+        _migrationRegistry.RegisterByte(componentName, fromRevision, toRevision, oldSize, newSize, func);
     }
 
     public ComponentTable GetComponentTable<T>() where T : unmanaged => GetComponentTable(typeof(T));

@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -389,6 +390,286 @@ internal static class SchemaEvolutionEngine
             ElapsedMs = sw.ElapsedMilliseconds,
         };
     }
+
+    /// <summary>
+    /// Orchestrates a full user-function-driven schema migration for breaking changes.
+    /// Follows the same segment lifecycle as <see cref="Migrate"/> but delegates per-entity transformation
+    /// to the migration chain instead of the field-map approach.
+    /// </summary>
+    internal static MigrationResult MigrateWithFunction(ManagedPagedMMF mmf, EpochManager epochManager, SchemaDiff diff, FieldR1[] persistedFields,
+        ComponentR1 persistedComp, DBComponentDefinition newDefinition, MigrationChain chain, ILogger log)
+    {
+        var sw = Stopwatch.StartNew();
+
+        var oldOverhead = persistedComp.CompOverhead;
+        var newOverhead = newDefinition.ComponentStorageOverhead;
+        var oldCompSize = persistedComp.CompSize;
+        var newCompSize = newDefinition.ComponentStorageSize;
+        var oldStride = oldCompSize + oldOverhead;
+        var newStride = newDefinition.ComponentStorageTotalSize;
+
+        log?.LogInformation(
+            "Schema migration (user function) for '{Name}': old stride={OldStride}, new stride={NewStride}, {StepCount} migration step(s)",
+            diff.ComponentName, oldStride, newStride, chain.StepCount);
+
+        var changeSet = mmf.CreateChangeSet();
+
+        using var guard = EpochGuard.Enter(epochManager);
+
+        // Load old component segment with OLD stride
+        var oldCompSeg = mmf.LoadChunkBasedSegment(persistedComp.ComponentSPI, oldStride);
+
+        // Allocate new component segment with NEW stride
+        var initialPages = Math.Max(4, oldCompSeg.Length);
+        var newCompSeg = mmf.AllocateChunkBasedSegment(PageBlockType.None, initialPages, newStride, changeSet);
+
+        // Migrate entity data using user-provided migration function(s)
+        var (entitiesMigrated, failures) = MigrateEntitiesWithFunction(
+            oldCompSeg, newCompSeg, chain, oldOverhead, newOverhead, oldCompSize, newCompSize, changeSet);
+
+        // If any entities failed, throw before updating SPIs — old segments remain untouched
+        if (failures != null && failures.Count > 0)
+        {
+            // Clean up allocated segments since migration failed
+            mmf.DeleteSegment(newCompSeg);
+            throw new SchemaMigrationException(diff.ComponentName, failures);
+        }
+
+        // Load old revision segment and allocate new one
+        var oldRevSeg = mmf.LoadChunkBasedSegment(persistedComp.VersionSPI, ComponentRevisionManager.CompRevChunkSize);
+        var revInitialPages = Math.Max(4, oldRevSeg.Length);
+        var newRevSeg = mmf.AllocateChunkBasedSegment(PageBlockType.None, revInitialPages, ComponentRevisionManager.CompRevChunkSize, changeSet);
+
+        // Migrate revision chains (HEAD only) — reuse existing logic
+        MigrateRevisionChain(oldRevSeg, newRevSeg, oldCompSeg, changeSet);
+
+        // Flush all changes to disk before updating SPIs
+        changeSet.SaveChanges();
+        mmf.FlushToDisk();
+
+        // Delete old segments (best-effort cleanup)
+        mmf.DeleteSegment(oldCompSeg);
+        mmf.DeleteSegment(oldRevSeg);
+
+        sw.Stop();
+
+        log?.LogInformation("Schema migration (user function) for '{Name}' complete: {Count} entities migrated in {ElapsedMs}ms",
+            diff.ComponentName, entitiesMigrated, sw.ElapsedMilliseconds);
+
+        return new MigrationResult
+        {
+            NewComponentSPI = newCompSeg.RootPageIndex,
+            NewVersionSPI = newRevSeg.RootPageIndex,
+            NewComponentSegment = newCompSeg,
+            NewRevisionSegment = newRevSeg,
+            EntitiesMigrated = entitiesMigrated,
+            ElapsedMs = sw.ElapsedMilliseconds,
+        };
+    }
+
+    /// <summary>
+    /// Migrates all occupied entities using the migration chain (single-step or multi-step with double-buffer).
+    /// Handles per-entity exceptions gracefully: logs the failure and continues with remaining entities.
+    /// </summary>
+    internal static unsafe (int EntitiesMigrated, List<MigrationFailure> Failures) MigrateEntitiesWithFunction(
+        ChunkBasedSegment oldSeg, ChunkBasedSegment newSeg, MigrationChain chain,
+        int oldOverhead, int newOverhead, int oldCompSize, int newCompSize, ChangeSet changeSet)
+    {
+        var capacity = oldSeg.ChunkCapacity;
+        var entitiesMigrated = 0;
+        List<MigrationFailure> failures = null;
+
+        newSeg.EnsureCapacity(capacity, changeSet);
+
+        var oldAccessor = oldSeg.CreateChunkAccessor();
+        var newAccessor = newSeg.CreateChunkAccessor(changeSet);
+
+        // Determine buffer strategy: stackalloc for small buffers, ArrayPool for large ones
+        var maxBufSize = chain.MaxIntermediateSize;
+        var usePool = maxBufSize > 1024;
+        byte[] pooledBufA = null;
+        byte[] pooledBufB = null;
+
+        if (usePool)
+        {
+            pooledBufA = ArrayPool<byte>.Shared.Rent(maxBufSize);
+            pooledBufB = ArrayPool<byte>.Shared.Rent(maxBufSize);
+        }
+
+        try
+        {
+            for (int chunkId = 1; chunkId < capacity; chunkId++)
+            {
+                if (!oldSeg.IsChunkAllocated(chunkId))
+                {
+                    continue;
+                }
+
+                var oldPtr = oldAccessor.GetChunkAddress(chunkId);
+
+                try
+                {
+                    // Reserve the same ChunkId in the new segment to preserve index references
+                    newSeg.ReserveChunk(chunkId);
+
+                    var newPtr = newAccessor.GetChunkAddress(chunkId, dirty: true);
+
+                    // Copy overhead section (AllowMultiple element IDs) — separate from user migration
+                    if (oldOverhead > 0 && newOverhead > 0)
+                    {
+                        var overheadCopySize = Math.Min(oldOverhead, newOverhead);
+                        Buffer.MemoryCopy(oldPtr, newPtr, overheadCopySize, overheadCopySize);
+                    }
+
+                    // Execute migration chain on component data (after overhead)
+                    var oldCompData = new ReadOnlySpan<byte>(oldPtr + oldOverhead, oldCompSize);
+
+                    if (usePool)
+                    {
+                        ExecuteChainPooled(chain, oldCompData, newPtr + newOverhead, newCompSize, pooledBufA, pooledBufB);
+                    }
+                    else
+                    {
+                        ExecuteChainStackalloc(chain, oldCompData, newPtr + newOverhead, newCompSize, maxBufSize);
+                    }
+
+                    entitiesMigrated++;
+                }
+                catch (Exception ex)
+                {
+                    failures ??= new List<MigrationFailure>();
+                    var hexDump = FormatHexDump(oldPtr + oldOverhead, oldCompSize);
+                    failures.Add(new MigrationFailure
+                    {
+                        ChunkId = chunkId,
+                        OldDataHex = hexDump,
+                        Exception = ex,
+                    });
+                }
+            }
+        }
+        finally
+        {
+            newAccessor.Dispose();
+            oldAccessor.Dispose();
+
+            if (pooledBufA != null)
+            {
+                ArrayPool<byte>.Shared.Return(pooledBufA);
+            }
+
+            if (pooledBufB != null)
+            {
+                ArrayPool<byte>.Shared.Return(pooledBufB);
+            }
+        }
+
+        return (entitiesMigrated, failures);
+    }
+
+    /// <summary>
+    /// Executes a migration chain using stackalloc double-buffers (for small components ≤1024 bytes).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)] // NoInlining to contain the stackalloc frame
+    private static unsafe void ExecuteChainStackalloc(MigrationChain chain, ReadOnlySpan<byte> oldData, byte* destPtr, int destSize, int maxBufSize)
+    {
+        if (chain.StepCount == 1)
+        {
+            // Single-step: transform directly into destination
+            var destSpan = new Span<byte>(destPtr, destSize);
+            chain.Steps[0].Execute(oldData, destSpan);
+            return;
+        }
+
+        // Multi-step: ping-pong between two buffers.
+        // Step 0: read from oldData → write to bufA
+        // Step 1: read from bufA → write to bufB
+        // Step N (last): read from current buffer → write to destination
+        Span<byte> bufA = stackalloc byte[maxBufSize];
+        Span<byte> bufB = stackalloc byte[maxBufSize];
+
+        var steps = chain.Steps;
+
+        // First intermediate step: old data → bufA
+        bufA.Slice(0, steps[0].NewSize).Clear();
+        steps[0].Execute(oldData, bufA.Slice(0, steps[0].NewSize));
+
+        // Remaining steps: ping-pong between bufA and bufB
+        for (int i = 1; i < steps.Length; i++)
+        {
+            var step = steps[i];
+            var src = (i % 2 != 0) ? bufA : bufB;
+            var isLast = (i == steps.Length - 1);
+
+            if (isLast)
+            {
+                var destSpan = new Span<byte>(destPtr, destSize);
+                step.Execute(src.Slice(0, steps[i - 1].NewSize), destSpan);
+            }
+            else
+            {
+                var dst = (i % 2 != 0) ? bufB : bufA;
+                dst.Slice(0, step.NewSize).Clear();
+                step.Execute(src.Slice(0, steps[i - 1].NewSize), dst.Slice(0, step.NewSize));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Executes a migration chain using ArrayPool-rented buffers (for large components &gt;1024 bytes).
+    /// </summary>
+    private static unsafe void ExecuteChainPooled(MigrationChain chain, ReadOnlySpan<byte> oldData, byte* destPtr, int destSize, byte[] bufA, byte[] bufB)
+    {
+        if (chain.StepCount == 1)
+        {
+            var destSpan = new Span<byte>(destPtr, destSize);
+            chain.Steps[0].Execute(oldData, destSpan);
+            return;
+        }
+
+        var steps = chain.Steps;
+        ReadOnlySpan<byte> currentSrc = oldData;
+
+        for (int i = 0; i < steps.Length; i++)
+        {
+            var step = steps[i];
+            var isLast = (i == steps.Length - 1);
+
+            if (isLast)
+            {
+                var destSpan = new Span<byte>(destPtr, destSize);
+                step.Execute(currentSrc, destSpan);
+            }
+            else
+            {
+                var dst = (i % 2 == 0) ? bufA.AsSpan() : bufB.AsSpan();
+                dst.Slice(0, step.NewSize).Clear();
+                step.Execute(currentSrc, dst.Slice(0, step.NewSize));
+                currentSrc = dst.Slice(0, step.NewSize);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Formats a hex dump of raw bytes for diagnostic output in migration failure logs.
+    /// </summary>
+    private static unsafe string FormatHexDump(byte* ptr, int size)
+    {
+        var displaySize = Math.Min(size, 64); // Cap at 64 bytes for readability
+        var chars = new char[displaySize * 2];
+        for (int i = 0; i < displaySize; i++)
+        {
+            var b = ptr[i];
+            chars[i * 2] = GetHexChar(b >> 4);
+            chars[i * 2 + 1] = GetHexChar(b & 0xF);
+        }
+
+        var hex = new string(chars);
+        return displaySize < size ? hex + "..." : hex;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static char GetHexChar(int nibble) => (char)(nibble < 10 ? '0' + nibble : 'A' + nibble - 10);
 
     /// <summary>
     /// Determines whether a migration is needed based on the schema diff.
