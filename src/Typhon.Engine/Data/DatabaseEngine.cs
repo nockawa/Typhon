@@ -8,6 +8,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Reflection;
 using Typhon.Schema.Definition;
 
 [assembly: InternalsVisibleTo("Typhon.Engine.Tests")]
@@ -130,7 +131,8 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     private ConcurrentDictionary<Type, ComponentTable> _componentTableByType;
     private ConcurrentDictionary<ushort, ComponentTable> _componentTableByWalTypeId;
     private long _curPrimaryKey;
-    private Dictionary<string, ComponentR1> _persistedComponents;
+    private Dictionary<string, (long PK, ComponentR1 Comp)> _persistedComponents;
+    private Dictionary<string, FieldR1[]> _persistedFieldsByComponent;
     private ConcurrentDictionary<int, ChunkBasedSegment> _componentCollectionSegmentByStride;
     private ConcurrentDictionary<Type, VariableSizedBufferSegmentBase> _componentCollectionVSBSByType;
 
@@ -415,7 +417,10 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             {
                 // Create the type for ComponentCollection<T>
                 var ctType = typeof(VariableSizedBufferSegment<>).MakeGenericType(type);
-                var fieldSize = DatabaseSchemaExtensions.FromType(type).field.SizeInComp();
+                // Use the actual struct size (Marshal.SizeOf) to match sizeof(T) in the generic overload.
+                // DatabaseSchemaExtensions.FromType() maps [Component]-attributed types to FieldType.Component (8 bytes),// which is the storage size of a
+                // component *reference*, not the struct itself.
+                var fieldSize = Marshal.SizeOf(type);
                 var segment = GetComponentCollectionSegment(fieldSize, changeSet);
                 return (VariableSizedBufferSegmentBase)Activator.CreateInstance(ctType, segment);
             });
@@ -433,7 +438,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     internal long GetNewPrimaryKey() => Interlocked.Increment(ref _curPrimaryKey);
 
     // Create the first revision of the system schema
-    private void CreateSystemSchemaR1()
+    private unsafe void CreateSystemSchemaR1()
     {
         // Single ChangeSet tracks all structural pages (segments, BTree directories, occupancy bitmaps)
         // allocated during component registration. This replaces the old FlushAllCachedPages() nuclear approach.
@@ -473,10 +478,27 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
         MMF.UnlatchPageExclusive(memPageIdx);
 
+        // Pre-allocate the FieldR1 ComponentCollection segment with the structural ChangeSet so its pages// are tracked and flushed to disk. Without this,
+        // the segment would be lazily allocated in SaveInSystemSchema without change tracking, leaving its root page dirty-but-untracked in the page cache.
+        GetComponentCollectionSegment(sizeof(FieldR1), cs);
+
         // Now save the system components schema in the database (to load them next time we open the database)
         // These use transactions internally which have their own ChangeSets
         SaveInSystemSchema(_fieldsTable);
         SaveInSystemSchema(_componentsTable);
+
+        // Persist the ComponentCollection segment SPI for FieldR1 so we can reload it on reopen.
+        // The segment was lazily allocated during SaveInSystemSchema when FieldR1 entries were written.
+        {
+            MMF.RequestPageEpoch(0, epoch, out var rootMemPageIdx2);
+            var latched2 = MMF.TryLatchPageExclusive(rootMemPageIdx2);
+            Debug.Assert(latched2, "TryLatchPageExclusive failed on root page during FieldCollection SPI save");
+            var page2 = MMF.GetPage(rootMemPageIdx2);
+            cs.AddByMemPageIndex(rootMemPageIdx2);
+            ref var h2 = ref page2.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
+            h2.FieldCollectionSegmentSPI = GetComponentCollectionSegment<FieldR1>().RootPageIndex;
+            MMF.UnlatchPageExclusive(rootMemPageIdx2);
+        }
 
         cs.SaveChanges();
         MMF.FlushToDisk();
@@ -519,6 +541,44 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         }
 
         t.CreateEntity(ref comp);
+        t.Commit();
+    }
+
+    /// <summary>
+    /// Persists schema changes (renames, new fields, removed fields) for a component after the resolver detects that the runtime field layout differs from
+    /// Rthe persisted FieldR1 entries.
+    /// </summary>
+    /// <param name="pk">Primary key of the existing ComponentR1 entity.</param>
+    /// <param name="definition">The resolved component definition with updated field IDs and names.</param>
+    private void PersistSchemaChanges(long pk, DBComponentDefinition definition)
+    {
+        using var t = this.CreateQuickTransaction(DurabilityMode.Immediate);
+
+        t.ReadEntity<ComponentR1>(pk, out var comp);
+
+        // Reset the Fields collection — we rebuild it entirely with the resolved definitions.
+        // The old buffer's chunks become orphaned (acceptable for schema-change frequency).
+        comp.Fields = default;
+
+        {
+            using var a = t.CreateComponentCollectionAccessor(ref comp.Fields);
+
+            foreach (var kvp in definition.FieldsByName)
+            {
+                var field = kvp.Value;
+                var f = new FieldR1
+                {
+                    Name = (String64)field.Name,
+                    FieldId = field.FieldId,
+                    Type = field.Type,
+                    ArrayLength = field.ArrayLength
+                };
+
+                a.Add(f);
+            }
+        }
+
+        t.UpdateEntity(pk, ref comp);
         t.Commit();
     }
 
@@ -569,8 +629,22 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         _componentsTable.WalTypeId = compsWalTypeId;
         _componentTableByWalTypeId.TryAdd(compsWalTypeId, _componentsTable);
 
+        // Load the ComponentCollection segment for FieldR1 so we can read persisted field definitions.
+        // This segment was persisted as FieldCollectionSegmentSPI in the root header during creation.
+        if (h.FieldCollectionSegmentSPI != 0)
+        {
+            unsafe
+            {
+                var stride = RoundToStandardStride(
+                    Math.Max(sizeof(FieldR1) * ComponentCollectionItemCountPerChunk, sizeof(VariableSizedBufferRootHeader)));
+                var segment = MMF.LoadChunkBasedSegment(h.FieldCollectionSegmentSPI, stride);
+                _componentCollectionSegmentByStride.TryAdd(stride, segment);
+            }
+        }
+
         // Read all ComponentR1 entries to build the persisted components dictionary
-        _persistedComponents = new Dictionary<string, ComponentR1>();
+        _persistedComponents = new Dictionary<string, (long, ComponentR1)>();
+        _persistedFieldsByComponent = new Dictionary<string, FieldR1[]>();
         var entryCount = _componentsTable.PrimaryKeyIndex.EntryCount;
         if (entryCount > 0)
         {
@@ -596,8 +670,28 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
                     maxPk = pk;
                 }
 
-                var pocoType = comp.POCOType.AsString;
-                _persistedComponents[pocoType] = comp;
+                // Key by schema name (logical identity) for matching during registration
+                var schemaName = comp.Name.AsString;
+                _persistedComponents[schemaName] = (pk, comp);
+            }
+
+            // Read FieldR1 entries from each persisted component's Fields collection
+            if (h.FieldCollectionSegmentSPI != 0)
+            {
+                var vsbs = GetComponentCollectionVSBS<FieldR1>();
+                foreach (var kvp in _persistedComponents)
+                {
+                    var comp = kvp.Value.Comp;
+                    if (comp.Fields._bufferId != 0)
+                    {
+                        var fields = new List<FieldR1>();
+                        foreach (var f in vsbs.EnumerateBuffer(comp.Fields._bufferId))
+                        {
+                            fields.Add(f);
+                        }
+                        _persistedFieldsByComponent[kvp.Key] = fields.ToArray();
+                    }
+                }
             }
 
             // Update _curPrimaryKey from both system tables
@@ -664,26 +758,41 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
     public bool RegisterComponentFromAccessor<T>(ChangeSet changeSet = null) where T : unmanaged
     {
-        var definition = DBD.CreateFromAccessor<T>();
+        // Look up persisted fields for the resolver (keyed by component schema name)
+        FieldIdResolver resolver = null;
+        var componentAttr = typeof(T).GetCustomAttribute<ComponentAttribute>();
+        var schemaName = componentAttr?.Name ?? typeof(T).Name;
+
+        if (_persistedFieldsByComponent != null && _persistedFieldsByComponent.TryGetValue(schemaName, out FieldR1[] persistedFields))
+        {
+            resolver = new FieldIdResolver(persistedFields);
+        }
+
+        var definition = DBD.CreateFromAccessor<T>(resolver);
         if (definition == null)
         {
             return false;
         }
 
         ComponentTable componentTable;
-        var typeName = typeof(T).FullName;
 
-        if (_persistedComponents != null && _persistedComponents.TryGetValue(typeName, out var persisted))
+        if (_persistedComponents != null && _persistedComponents.TryGetValue(schemaName, out var persisted))
         {
             // Load path: restore from saved SPIs
-            componentTable = new ComponentTable(this, definition, this, persisted.ComponentSPI, persisted.VersionSPI,
-                persisted.DefaultIndexSPI, persisted.String64IndexSPI, persisted.TailIndexSPI);
+            componentTable = new ComponentTable(this, definition, this, persisted.Comp.ComponentSPI, persisted.Comp.VersionSPI, persisted.Comp.DefaultIndexSPI, 
+                persisted.Comp.String64IndexSPI, persisted.Comp.TailIndexSPI);
 
             // Update _curPrimaryKey from loaded PK index
             if (componentTable.PrimaryKeyIndex.EntryCount > 0)
             {
                 var maxPk = componentTable.PrimaryKeyIndex.GetMaxKey();
                 UpdateCurPrimaryKey(maxPk);
+            }
+
+            // Persist schema changes if the resolver detected renames, additions, or removals
+            if (resolver != null && resolver.HasChanges)
+            {
+                PersistSchemaChanges(persisted.PK, definition);
             }
         }
         else

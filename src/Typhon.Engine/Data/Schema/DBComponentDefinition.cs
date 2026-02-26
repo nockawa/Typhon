@@ -61,7 +61,7 @@ public class DBComponentDefinition
             {
                 DotNetUnderlyingType = dotNetType.GenericTypeArguments[0];
             }
-            FieldSize = Type.SizeInComp();
+            FieldSize = Type.FieldSizeInComp();
             UnderlyingType = underlyingType;
             OffsetInComponentStorage = offsetInComponentStorage;
         }
@@ -110,7 +110,7 @@ public class DBComponentDefinition
             }
         }
 
-        public int SizeInComponentStorage => Type.SizeInComp() * (IsArray ? ArrayLength : 1);
+        public int SizeInComponentStorage => Type.FieldSizeInComp() * (IsArray ? ArrayLength : 1);
         public bool DoesFieldTypeSupportIndex() => (Type >= FieldType.Byte) && ((FieldType)((int)Type&0xFF) <= FieldType.String64);
     }
 

@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
 
@@ -81,6 +82,9 @@ unsafe internal struct RootFileHeader
 
     /// <summary>Next free Transaction Sequence Number. Restored on reopen so MVCC visibility works across engine restarts.</summary>
     public long NextFreeTSN;
+
+    /// <summary>Root page index of the <see cref="ChunkBasedSegment"/> backing <see cref="ComponentCollection{T}"/> storage for FieldR1 entries.</summary>
+    public int FieldCollectionSegmentSPI;
 
     /// <summary>Returns <see cref="HeaderSignature"/> decoded as a managed string.</summary>
     public string HeaderSignatureString

@@ -16,6 +16,8 @@ public sealed class ComponentAttribute : Attribute
     public int Revision { get; }
     public bool AllowMultiple { get; }
 
+    public string PreviousName { get; set; }
+
     public ComponentAttribute(string name, int revision, bool allowMultiple = false)
     {
         Name = name;
@@ -30,6 +32,7 @@ public sealed class FieldAttribute : Attribute
 {
     public int? FieldId { get; set; }
     public string Name { get; set; }
+    public string PreviousName { get; set; }
 }
 
 [AttributeUsage(AttributeTargets.Field)]
