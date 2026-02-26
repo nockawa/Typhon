@@ -39,7 +39,11 @@ public partial class ChunkBasedSegment : LogicalSegment
     // Magic multiplier for fast division: quotient = (n * _divMagic) >> 32
     // This replaces expensive division (~20-80 cycles) with multiply+shift (~3-4 cycles)
     private readonly ulong _divMagic;
-    
+
+    // Alignment padding: ensures chunks start at stride-aligned absolute page offsets (for ACLP).
+    private readonly int _rootAlignmentPadding;
+    private readonly int _otherAlignmentPadding;
+
     internal ChunkBasedSegment(EpochManager epochManager, ManagedPagedMMF manager, int stride) : base(manager)
     {
         if (stride < sizeof(long))
@@ -48,10 +52,18 @@ public partial class ChunkBasedSegment : LogicalSegment
         }
 
         _epochManager = epochManager;
-        
+
         Stride = stride;
-        ChunkCountRootPage = (PagedMMF.PageRawDataSize - RootHeaderIndexSectionLength) / stride;
-        ChunkCountPerPage = PagedMMF.PageRawDataSize / stride;
+
+        // Alignment padding: ensures chunks start at stride-aligned absolute page offsets.
+        // For stride=64: PageHeaderSize (192) % 64 == 0 → zero padding (backward compat).
+        // For stride=128: 192 % 128 == 64 → 64-byte non-root padding, 112-byte root padding.
+        bool needsAlignment = (PagedMMF.PageHeaderSize % stride) != 0;
+        _otherAlignmentPadding = needsAlignment ? stride - (PagedMMF.PageHeaderSize % stride) : 0;
+        _rootAlignmentPadding = needsAlignment ? (stride - ((PagedMMF.PageHeaderSize + RootHeaderIndexSectionLength) % stride)) % stride : 0;
+
+        ChunkCountRootPage = (PagedMMF.PageRawDataSize - RootHeaderIndexSectionLength - _rootAlignmentPadding) / stride;
+        ChunkCountPerPage = (PagedMMF.PageRawDataSize - _otherAlignmentPadding) / stride;
 
         // Cache for fast access in GetChunkLocation
         _rootChunkCount = ChunkCountRootPage;
@@ -84,7 +96,7 @@ public partial class ChunkBasedSegment : LogicalSegment
             // which requires an epoch scope — unavailable during segment creation.
             if (i == 0)
             {
-                page.RawData<byte>(RootHeaderIndexSectionLength, Stride).Clear();
+                page.RawData<byte>(RootChunkDataOffset, Stride).Clear();
             }
 
             Manager.UnlatchPageExclusive(memPageIdx);
@@ -335,6 +347,12 @@ public partial class ChunkBasedSegment : LogicalSegment
     public int Stride { get; }
     public int ChunkCountRootPage { get; }
     public int ChunkCountPerPage { get; }
+
+    /// <summary>Byte offset from start of raw data to first chunk on the root page (includes index section + alignment padding).</summary>
+    internal int RootChunkDataOffset => RootHeaderIndexSectionLength + _rootAlignmentPadding;
+
+    /// <summary>Byte offset from start of raw data to first chunk on non-root pages (alignment padding only).</summary>
+    internal int OtherChunkDataOffset => _otherAlignmentPadding;
 
     public int ChunkCapacity => _map.Capacity;
     public int AllocatedChunkCount => _map.Allocated;

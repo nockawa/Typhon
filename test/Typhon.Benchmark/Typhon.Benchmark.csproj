@@ -38,4 +38,8 @@
                       OutputItemType="Analyzer" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="profiling\" />
+  </ItemGroup>
+
 </Project>

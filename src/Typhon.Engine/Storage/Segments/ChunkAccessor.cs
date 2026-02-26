@@ -10,7 +10,7 @@ namespace Typhon.Engine;
 /// <summary>
 /// Epoch-protected chunk accessor with pure SOA layout and SIMD-optimized search.
 /// Replaces ref-counted page access with epoch-based protection for page lifetime.
-/// ~248 bytes (4 cache lines). Always pass by ref to avoid copies.
+/// ~252 bytes (4 cache lines). Always pass by ref to avoid copies.
 /// </summary>
 /// <remarks>
 /// <para><b>Three-tier hot path:</b></para>
@@ -23,7 +23,7 @@ namespace Typhon.Engine;
 /// Dirty tracking uses a bitmask flushed to <see cref="ChangeSet"/> via
 /// <see cref="ChangeSet.AddByMemPageIndex"/>.</para>
 /// </remarks>
-[NoCopy(Reason = "~248 byte struct with mutable SIMD cache and epoch-pinned pages")]
+[NoCopy(Reason = "~252 byte struct with mutable SIMD cache and epoch-pinned pages")]
 [StructLayout(LayoutKind.Sequential)]
 public unsafe struct ChunkAccessor : IDisposable
 {
@@ -41,7 +41,8 @@ public unsafe struct ChunkAccessor : IDisposable
 
     // === Cached hot-path values ===
     private int _stride;                       // 4 bytes — chunk size in bytes
-    private int _rootHeaderOffset;             // 4 bytes — LogicalSegment.RootHeaderIndexSectionLength
+    private int _rootHeaderOffset;             // 4 bytes — root page: index section + alignment padding
+    private int _otherHeaderOffset;            // 4 bytes — non-root pages: alignment padding
 
     // === References ===
     private ChunkBasedSegment _segment;
@@ -97,7 +98,8 @@ public unsafe struct ChunkAccessor : IDisposable
         _clockHand = 0;
         _dirtyFlags = 0;
         _stride = segment.Stride;
-        _rootHeaderOffset = LogicalSegment.RootHeaderIndexSectionLength;
+        _rootHeaderOffset = segment.RootChunkDataOffset;
+        _otherHeaderOffset = segment.OtherChunkDataOffset;
         _memPagesBaseAddr = pagedMMF.MemPagesBaseAddress;
 
         // Initialize page indices to invalid (-1). Other arrays are zero-initialized by struct init.
@@ -297,7 +299,7 @@ public unsafe struct ChunkAccessor : IDisposable
                 _dirtyFlags |= (ushort)(1 << mru);
             }
 
-            var headerOffset = pageIndex == 0 ? _rootHeaderOffset : 0;
+            var headerOffset = pageIndex == 0 ? _rootHeaderOffset : _otherHeaderOffset;
             return (byte*)_baseAddresses[mru] + headerOffset + offset * _stride;
         }
 
@@ -342,7 +344,7 @@ public unsafe struct ChunkAccessor : IDisposable
             _dirtyFlags |= (ushort)(1 << slotIndex);
         }
 
-        var headerOffset = pageIndex == 0 ? _rootHeaderOffset : 0;
+        var headerOffset = pageIndex == 0 ? _rootHeaderOffset : _otherHeaderOffset;
         return (byte*)_baseAddresses[slotIndex] + headerOffset + offset * _stride;
     }
 
