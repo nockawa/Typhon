@@ -476,6 +476,19 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     private readonly NodeWrapper[] _pathNodes = new NodeWrapper[MaxTreeDepth];
     private readonly int[] _pathChildIndices = new int[MaxTreeDepth];
 
+    // Optimization: warm ChunkAccessor for exclusive operations. Reused across exclusive-lock calls to avoid per-operation creation (~15ns) and keep the
+    // MRU page cache warm (saves SIMD search misses on repeated tree traversals).
+    // Thread safety: only accessed under _access exclusive lock.
+    // Epoch safety: cached page addresses are only valid within the same global epoch. If the epoch advances (any thread exits its outermost scope), pages
+    // could be evicted and remapped, so the accessor is recreated.
+    // TYPHON005 suppressed: dirty pages are always flushed via CommitChanges() in each operation's finally block — the accessor never holds pending dirty
+    // state between operations.
+#pragma warning disable TYPHON005
+    private ChunkAccessor _warmAccessor;
+#pragma warning restore TYPHON005
+    private long _warmAccessorEpoch;
+    private bool _warmAccessorValid;
+
     // Cached location of this BTree's entry in the chunk 0 directory.
     // Computed once at construction, used by SyncHeader for O(1) writes.
     private int _dirChunkId;
@@ -719,19 +732,23 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             activity = TyphonActivitySource.StartActivity("BTree.Insert");
         }
 
-        var args = new InsertArguments(key, value, Comparer, ref accessor);
         AcquireExclusive("BTree/Insert");
         try
         {
+            ref var wa = ref GetWarmAccessor(ref accessor);
+            var args = new InsertArguments(key, value, Comparer, ref wa);
             AddOrUpdateCore(ref args);
-            SyncHeader(ref accessor);
+            SyncHeader(ref wa);
             activity?.SetTag(TyphonSpanAttributes.IndexOperation, "insert");
             bufferRootId = args.BufferRootId;
             return args.ElementId;
         }
         finally
         {
-            _storage.CommitChanges(ref accessor);
+            if (_warmAccessorValid)
+            {
+                _warmAccessor.CommitChanges();
+            }
             _access.ExitExclusiveAccess();
             activity?.Dispose();
         }
@@ -745,19 +762,23 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             activity = TyphonActivitySource.StartActivity("BTree.Delete");
         }
 
-        var args = new RemoveArguments(key, Comparer, ref accessor);
         AcquireExclusive("BTree/Delete");
         try
         {
+            ref var wa = ref GetWarmAccessor(ref accessor);
+            var args = new RemoveArguments(key, Comparer, ref wa);
             RemoveCore(ref args);
-            SyncHeader(ref accessor);
+            SyncHeader(ref wa);
             value = args.Value;
             activity?.SetTag(TyphonSpanAttributes.IndexOperation, "delete");
             return args.Removed;
         }
         finally
         {
-            _storage.CommitChanges(ref accessor);
+            if (_warmAccessorValid)
+            {
+                _warmAccessor.CommitChanges();
+            }
             _access.ExitExclusiveAccess();
             activity?.Dispose();
         }
@@ -880,16 +901,18 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         AcquireExclusive("BTree/DeleteValue");
         try
         {
+            ref var wa = ref GetWarmAccessor(ref accessor);
+
             // Lookup under exclusive lock to avoid race with concurrent Remove/RemoveValue
             // that could delete the buffer between a shared-lock read and this exclusive section.
-            var leaf = FindLeaf(key, out var index, ref accessor);
+            var leaf = FindLeaf(key, out var index, ref wa);
             if (index < 0)
             {
                 return false;
             }
-            var bufferId = leaf.GetItem(index, ref accessor).Value;
+            var bufferId = leaf.GetItem(index, ref wa).Value;
 
-            var res = _storage.RemoveFromBuffer(bufferId, elementId, value, ref accessor);
+            var res = _storage.RemoveFromBuffer(bufferId, elementId, value, ref wa);
             if (res == -1)
             {
                 return false;
@@ -900,20 +923,23 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             // for temporal queries.
             if (res == 0 && !preserveEmptyBuffer)
             {
-                var args = new RemoveArguments(key, Comparer, ref accessor);
+                var args = new RemoveArguments(key, Comparer, ref wa);
                 RemoveCore(ref args);
 
                 if (args.Removed)
                 {
-                    _storage.DeleteBuffer(args.Value, ref accessor);
+                    _storage.DeleteBuffer(args.Value, ref wa);
                 }
 
-                SyncHeader(ref accessor);
+                SyncHeader(ref wa);
             }
         }
         finally
         {
-            _storage.CommitChanges(ref accessor);
+            if (_warmAccessorValid)
+            {
+                _warmAccessor.CommitChanges();
+            }
             _access.ExitExclusiveAccess();
             activity?.Dispose();
         }
@@ -976,6 +1002,34 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
                 ThrowHelper.ThrowLockTimeout(operationName, TimeoutOptions.Current.BTreeLockTimeout);
             }
         }
+    }
+
+    /// <summary>
+    /// Gets a warm ChunkAccessor for exclusive operations. Reuses the cached accessor if the global epoch hasn't changed (meaning no page eviction could have
+    /// occurred). Otherwise, creates a new accessor. The caller's ChangeSet is always propagated. Must only be called under exclusive lock.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private ref ChunkAccessor GetWarmAccessor(ref ChunkAccessor callerAccessor)
+    {
+        var currentEpoch = _segment.Manager.EpochManager.GlobalEpoch;
+        if (_warmAccessorValid && _warmAccessorEpoch == currentEpoch)
+        {
+            // Same epoch — MRU cache is valid, just update ChangeSet for this operation
+            _warmAccessor.ChangeSet = callerAccessor.ChangeSet;
+        }
+        else
+        {
+            // Epoch changed or first use — recreate (cached addresses may be stale)
+            if (_warmAccessorValid)
+            {
+                _warmAccessor.Dispose();
+                _warmAccessorValid = false;
+            }
+            _warmAccessor = _segment.CreateChunkAccessor(callerAccessor.ChangeSet);
+            _warmAccessorEpoch = currentEpoch;
+            _warmAccessorValid = true;
+        }
+        return ref _warmAccessor;
     }
 
     protected internal NodeWrapper AllocNode(NodeStates states, ref ChunkAccessor accessor)
