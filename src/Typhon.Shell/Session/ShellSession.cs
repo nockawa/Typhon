@@ -267,7 +267,7 @@ internal sealed class ShellSession : IDisposable
         }
 
         var generic = method.MakeGenericMethod(componentType);
-        generic.Invoke(_engine, null);
+        generic.Invoke(_engine, [null, SchemaValidationMode.Enforce]);
     }
 
     public void Dispose() => CloseDatabase();

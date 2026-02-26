@@ -111,9 +111,13 @@ public class DatabaseDefinitions
 
     public DBComponentDefinition CreateFromAccessor<T>() where T : unmanaged => CreateFromAccessor<T>(null);
 
-    internal DBComponentDefinition CreateFromAccessor<T>(FieldIdResolver resolver) where T : unmanaged
+    internal DBComponentDefinition CreateFromAccessor<T>(FieldIdResolver resolver) where T : unmanaged => CreateFromAccessor(typeof(T), resolver);
+
+    /// <summary>
+    /// Non-generic overload for dry-run validation where the component type is known only at runtime.
+    /// </summary>
+    internal DBComponentDefinition CreateFromAccessor(Type t, FieldIdResolver resolver = null)
     {
-        var t = typeof(T);
 
         var ca = t.GetCustomAttribute<ComponentAttribute>();
         if (ca == null)

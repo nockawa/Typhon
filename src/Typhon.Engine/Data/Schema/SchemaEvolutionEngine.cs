@@ -331,9 +331,14 @@ internal static class SchemaEvolutionEngine
     /// Orchestrates a full compatible schema migration.
     /// </summary>
     internal static MigrationResult Migrate(ManagedPagedMMF mmf, EpochManager epochManager, SchemaDiff diff, FieldR1[] persistedFields,
-        ComponentR1 persistedComp, DBComponentDefinition newDefinition, ILogger log)
+        ComponentR1 persistedComp, DBComponentDefinition newDefinition, ILogger log, Action<MigrationProgressEventArgs> progressCallback = null)
     {
         var sw = Stopwatch.StartNew();
+
+        progressCallback?.Invoke(new MigrationProgressEventArgs
+        {
+            ComponentName = diff.ComponentName, Phase = MigrationPhase.Analyzing, PercentComplete = 0, Elapsed = sw.Elapsed,
+        });
 
         var fieldMap = BuildFieldMap(persistedFields, newDefinition);
 
@@ -349,6 +354,11 @@ internal static class SchemaEvolutionEngine
 
         using var guard = EpochGuard.Enter(epochManager);
 
+        progressCallback?.Invoke(new MigrationProgressEventArgs
+        {
+            ComponentName = diff.ComponentName, Phase = MigrationPhase.AllocatingSegments, PercentComplete = 5, Elapsed = sw.Elapsed,
+        });
+
         // Load old component segment with OLD stride
         var oldCompSeg = mmf.LoadChunkBasedSegment(persistedComp.ComponentSPI, oldStride);
 
@@ -356,8 +366,20 @@ internal static class SchemaEvolutionEngine
         var initialPages = Math.Max(4, oldCompSeg.Length);
         var newCompSeg = mmf.AllocateChunkBasedSegment(PageBlockType.None, initialPages, newStride, changeSet);
 
+        progressCallback?.Invoke(new MigrationProgressEventArgs
+        {
+            ComponentName = diff.ComponentName, Phase = MigrationPhase.MigratingEntities, TotalEntities = oldCompSeg.AllocatedChunkCount,
+            PercentComplete = 10, Elapsed = sw.Elapsed,
+        });
+
         // Migrate entity data
         var entitiesMigrated = MigrateEntities(oldCompSeg, newCompSeg, fieldMap, oldOverhead, newOverhead, changeSet);
+
+        progressCallback?.Invoke(new MigrationProgressEventArgs
+        {
+            ComponentName = diff.ComponentName, Phase = MigrationPhase.RecreatingRevisionChain,
+            EntitiesMigrated = entitiesMigrated, TotalEntities = entitiesMigrated, PercentComplete = 70, Elapsed = sw.Elapsed,
+        });
 
         // Load old revision segment and allocate new one
         var oldRevSeg = mmf.LoadChunkBasedSegment(persistedComp.VersionSPI, ComponentRevisionManager.CompRevChunkSize);
@@ -366,6 +388,12 @@ internal static class SchemaEvolutionEngine
 
         // Migrate revision chains (HEAD only)
         MigrateRevisionChain(oldRevSeg, newRevSeg, oldCompSeg, changeSet);
+
+        progressCallback?.Invoke(new MigrationProgressEventArgs
+        {
+            ComponentName = diff.ComponentName, Phase = MigrationPhase.Flushing,
+            EntitiesMigrated = entitiesMigrated, TotalEntities = entitiesMigrated, PercentComplete = 90, Elapsed = sw.Elapsed,
+        });
 
         // Flush all changes to disk before updating SPIs
         changeSet.SaveChanges();
@@ -379,6 +407,12 @@ internal static class SchemaEvolutionEngine
 
         log?.LogInformation("Schema migration for '{Name}' complete: {Count} entities migrated in {ElapsedMs}ms",
             diff.ComponentName, entitiesMigrated, sw.ElapsedMilliseconds);
+
+        progressCallback?.Invoke(new MigrationProgressEventArgs
+        {
+            ComponentName = diff.ComponentName, Phase = MigrationPhase.Complete,
+            EntitiesMigrated = entitiesMigrated, TotalEntities = entitiesMigrated, PercentComplete = 100, Elapsed = sw.Elapsed,
+        });
 
         return new MigrationResult
         {
@@ -397,9 +431,15 @@ internal static class SchemaEvolutionEngine
     /// to the migration chain instead of the field-map approach.
     /// </summary>
     internal static MigrationResult MigrateWithFunction(ManagedPagedMMF mmf, EpochManager epochManager, SchemaDiff diff, FieldR1[] persistedFields,
-        ComponentR1 persistedComp, DBComponentDefinition newDefinition, MigrationChain chain, ILogger log)
+        ComponentR1 persistedComp, DBComponentDefinition newDefinition, MigrationChain chain, ILogger log,
+        Action<MigrationProgressEventArgs> progressCallback = null)
     {
         var sw = Stopwatch.StartNew();
+
+        progressCallback?.Invoke(new MigrationProgressEventArgs
+        {
+            ComponentName = diff.ComponentName, Phase = MigrationPhase.Analyzing, PercentComplete = 0, Elapsed = sw.Elapsed,
+        });
 
         var oldOverhead = persistedComp.CompOverhead;
         var newOverhead = newDefinition.ComponentStorageOverhead;
@@ -416,12 +456,23 @@ internal static class SchemaEvolutionEngine
 
         using var guard = EpochGuard.Enter(epochManager);
 
+        progressCallback?.Invoke(new MigrationProgressEventArgs
+        {
+            ComponentName = diff.ComponentName, Phase = MigrationPhase.AllocatingSegments, PercentComplete = 5, Elapsed = sw.Elapsed,
+        });
+
         // Load old component segment with OLD stride
         var oldCompSeg = mmf.LoadChunkBasedSegment(persistedComp.ComponentSPI, oldStride);
 
         // Allocate new component segment with NEW stride
         var initialPages = Math.Max(4, oldCompSeg.Length);
         var newCompSeg = mmf.AllocateChunkBasedSegment(PageBlockType.None, initialPages, newStride, changeSet);
+
+        progressCallback?.Invoke(new MigrationProgressEventArgs
+        {
+            ComponentName = diff.ComponentName, Phase = MigrationPhase.MigratingEntities, TotalEntities = oldCompSeg.AllocatedChunkCount,
+            PercentComplete = 10, Elapsed = sw.Elapsed,
+        });
 
         // Migrate entity data using user-provided migration function(s)
         var (entitiesMigrated, failures) = MigrateEntitiesWithFunction(
@@ -435,6 +486,12 @@ internal static class SchemaEvolutionEngine
             throw new SchemaMigrationException(diff.ComponentName, failures);
         }
 
+        progressCallback?.Invoke(new MigrationProgressEventArgs
+        {
+            ComponentName = diff.ComponentName, Phase = MigrationPhase.RecreatingRevisionChain,
+            EntitiesMigrated = entitiesMigrated, TotalEntities = entitiesMigrated, PercentComplete = 70, Elapsed = sw.Elapsed,
+        });
+
         // Load old revision segment and allocate new one
         var oldRevSeg = mmf.LoadChunkBasedSegment(persistedComp.VersionSPI, ComponentRevisionManager.CompRevChunkSize);
         var revInitialPages = Math.Max(4, oldRevSeg.Length);
@@ -442,6 +499,12 @@ internal static class SchemaEvolutionEngine
 
         // Migrate revision chains (HEAD only) — reuse existing logic
         MigrateRevisionChain(oldRevSeg, newRevSeg, oldCompSeg, changeSet);
+
+        progressCallback?.Invoke(new MigrationProgressEventArgs
+        {
+            ComponentName = diff.ComponentName, Phase = MigrationPhase.Flushing,
+            EntitiesMigrated = entitiesMigrated, TotalEntities = entitiesMigrated, PercentComplete = 90, Elapsed = sw.Elapsed,
+        });
 
         // Flush all changes to disk before updating SPIs
         changeSet.SaveChanges();
@@ -455,6 +518,12 @@ internal static class SchemaEvolutionEngine
 
         log?.LogInformation("Schema migration (user function) for '{Name}' complete: {Count} entities migrated in {ElapsedMs}ms",
             diff.ComponentName, entitiesMigrated, sw.ElapsedMilliseconds);
+
+        progressCallback?.Invoke(new MigrationProgressEventArgs
+        {
+            ComponentName = diff.ComponentName, Phase = MigrationPhase.Complete,
+            EntitiesMigrated = entitiesMigrated, TotalEntities = entitiesMigrated, PercentComplete = 100, Elapsed = sw.Elapsed,
+        });
 
         return new MigrationResult
         {

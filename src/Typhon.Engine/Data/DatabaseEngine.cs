@@ -64,6 +64,39 @@ public struct ComponentR1
 }
 
 /// <summary>
+/// Describes the kind of schema change recorded in the audit trail.
+/// </summary>
+[PublicAPI]
+public enum SchemaChangeKind
+{
+    Compatible,
+    Migration,
+    SystemUpgrade,
+}
+
+/// <summary>
+/// Audit trail entry for schema changes. One entity is created for each component schema change (add/remove/widen fields, migration function execution, etc.).
+/// </summary>
+[Component(SchemaName, 1)]
+[StructLayout(LayoutKind.Sequential)]
+[PublicAPI]
+public struct SchemaHistoryR1
+{
+    public const string SchemaName = "Typhon.Schema.History";
+
+    public long Timestamp;
+    public String64 ComponentName;
+    public int FromRevision;
+    public int ToRevision;
+    public int FieldsAdded;
+    public int FieldsRemoved;
+    public int FieldsTypeChanged;
+    public int EntitiesMigrated;
+    public int ElapsedMilliseconds;
+    public SchemaChangeKind Kind;
+}
+
+/// <summary>
 /// Configuration options for <see cref="DatabaseEngine"/>.
 /// </summary>
 [PublicAPI]
@@ -134,6 +167,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
     private ComponentTable _fieldsTable;
     private ComponentTable _componentsTable;
+    private ComponentTable _schemaHistoryTable;
     private ConcurrentDictionary<Type, ComponentTable> _componentTableByType;
     private ConcurrentDictionary<ushort, ComponentTable> _componentTableByWalTypeId;
     private long _curPrimaryKey;
@@ -142,6 +176,21 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     private ConcurrentDictionary<int, ChunkBasedSegment> _componentCollectionSegmentByStride;
     private ConcurrentDictionary<Type, VariableSizedBufferSegmentBase> _componentCollectionVSBSByType;
     private MigrationRegistry _migrationRegistry;
+
+    /// <summary>Raised during schema migration to report progress to subscribers.</summary>
+    [PublicAPI]
+    public event EventHandler<MigrationProgressEventArgs> OnMigrationProgress;
+
+    internal void RaiseMigrationProgress(MigrationProgressEventArgs args) => OnMigrationProgress?.Invoke(this, args);
+
+    /// <summary>Exposes persisted component metadata for operational tooling (Inspect, tsh commands).</summary>
+    internal IReadOnlyDictionary<string, (long PK, ComponentR1 Comp)> PersistedComponents => _persistedComponents;
+
+    /// <summary>Exposes persisted field definitions per component for operational tooling.</summary>
+    internal IReadOnlyDictionary<string, FieldR1[]> PersistedFieldsByComponent => _persistedFieldsByComponent;
+
+    /// <summary>Exposes the migration registry for dry-run validation.</summary>
+    internal MigrationRegistry MigrationRegistry => _migrationRegistry;
 
     public DatabaseDefinitions DBD { get; }
     public ManagedPagedMMF MMF { get; }
@@ -454,10 +503,12 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         // Register the system components, passing the ChangeSet so all structural mutations are tracked
         RegisterComponentFromAccessor<FieldR1>(cs);
         RegisterComponentFromAccessor<ComponentR1>(cs);
+        RegisterComponentFromAccessor<SchemaHistoryR1>(cs);
 
-        // Get their table
+        // Get their tables
         _fieldsTable = GetComponentTable<FieldR1>();
         _componentsTable = GetComponentTable<ComponentR1>();
+        _schemaHistoryTable = GetComponentTable<SchemaHistoryR1>();
 
         using var guard = EpochGuard.Enter(EpochManager);
         var epoch = guard.Epoch;
@@ -481,6 +532,10 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         rootFileHeader.ComponentTableVersionSPI        = _componentsTable.CompRevTableSegment.RootPageIndex;
         rootFileHeader.ComponentTableDefaultIndexSPI   = _componentsTable.DefaultIndexSegment.RootPageIndex;
         rootFileHeader.ComponentTableString64IndexSPI  = _componentsTable.String64IndexSegment.RootPageIndex;
+        rootFileHeader.SchemaHistoryTableSPI           = _schemaHistoryTable.ComponentSegment.RootPageIndex;
+        rootFileHeader.SchemaHistoryVersionSPI         = _schemaHistoryTable.CompRevTableSegment.RootPageIndex;
+        rootFileHeader.SchemaHistoryDefaultIndexSPI    = _schemaHistoryTable.DefaultIndexSegment.RootPageIndex;
+        rootFileHeader.SchemaHistoryString64IndexSPI   = _schemaHistoryTable.String64IndexSegment.RootPageIndex;
         rootFileHeader.NextFreeTSN = TransactionChain.NextFreeId;
 
         MMF.UnlatchPageExclusive(memPageIdx);
@@ -493,6 +548,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         // These use transactions internally which have their own ChangeSets
         SaveInSystemSchema(_fieldsTable);
         SaveInSystemSchema(_componentsTable);
+        SaveInSystemSchema(_schemaHistoryTable);
 
         // Persist the ComponentCollection segment SPI for FieldR1 so we can reload it on reopen.
         // The segment was lazily allocated during SaveInSystemSchema when FieldR1 entries were written.
@@ -511,7 +567,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         MMF.FlushToDisk();
     }
 
-    private void SaveInSystemSchema(ComponentTable table)
+    private (long PK, ComponentR1 Comp, FieldR1[] Fields) SaveInSystemSchema(ComponentTable table)
     {
         var definition = table.Definition;
         using var t = this.CreateQuickTransaction(DurabilityMode.Immediate);
@@ -540,6 +596,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             FieldCount          = nonStaticCount,
         };
 
+        var fieldList = new List<FieldR1>();
         {
             using var a = t.CreateComponentCollectionAccessor(ref comp.Fields);
 
@@ -561,11 +618,13 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
                 };
 
                 a.Add(f);
+                fieldList.Add(f);
             }
         }
 
-        t.CreateEntity(ref comp);
+        var pk = t.CreateEntity(ref comp);
         t.Commit();
+        return (pk, comp, fieldList.ToArray());
     }
 
     /// <summary>
@@ -662,16 +721,20 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         // Register system type definitions in DBD
         DBD.CreateFromAccessor<FieldR1>();
         DBD.CreateFromAccessor<ComponentR1>();
+        DBD.CreateFromAccessor<SchemaHistoryR1>();
 
-        var fieldDef = DBD.GetComponent(FieldR1.SchemaName, 1);
-        var compDef  = DBD.GetComponent(ComponentR1.SchemaName, 1);
+        var fieldDef   = DBD.GetComponent(FieldR1.SchemaName, 1);
+        var compDef    = DBD.GetComponent(ComponentR1.SchemaName, 1);
+        var historyDef = DBD.GetComponent(SchemaHistoryR1.SchemaName, 1);
 
         // Load system tables using the persisted SPIs
         _fieldsTable = new ComponentTable(this, fieldDef, this, h.FieldTableSPI, h.FieldTableVersionSPI, h.FieldTableDefaultIndexSPI, h.FieldTableString64IndexSPI);
         _componentsTable = new ComponentTable(this, compDef, this, h.ComponentTableSPI, h.ComponentTableVersionSPI, h.ComponentTableDefaultIndexSPI, h.ComponentTableString64IndexSPI);
+        _schemaHistoryTable = new ComponentTable(this, historyDef, this, h.SchemaHistoryTableSPI, h.SchemaHistoryVersionSPI, h.SchemaHistoryDefaultIndexSPI, h.SchemaHistoryString64IndexSPI);
 
         _componentTableByType.TryAdd(typeof(FieldR1), _fieldsTable);
         _componentTableByType.TryAdd(typeof(ComponentR1), _componentsTable);
+        _componentTableByType.TryAdd(typeof(SchemaHistoryR1), _schemaHistoryTable);
 
         var fieldsWalTypeId = (ushort)_fieldsTable.ComponentSegment.RootPageIndex;
         _fieldsTable.WalTypeId = fieldsWalTypeId;
@@ -680,6 +743,10 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         var compsWalTypeId = (ushort)_componentsTable.ComponentSegment.RootPageIndex;
         _componentsTable.WalTypeId = compsWalTypeId;
         _componentTableByWalTypeId.TryAdd(compsWalTypeId, _componentsTable);
+
+        var historyWalTypeId = (ushort)_schemaHistoryTable.ComponentSegment.RootPageIndex;
+        _schemaHistoryTable.WalTypeId = historyWalTypeId;
+        _componentTableByWalTypeId.TryAdd(historyWalTypeId, _schemaHistoryTable);
 
         // Load the ComponentCollection segment for FieldR1 so we can read persisted field definitions.
         // This segment was persisted as FieldCollectionSegmentSPI in the root header during creation.
@@ -821,6 +888,96 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         cs.SaveChanges();
     }
 
+    /// <summary>
+    /// Records a schema change in the <see cref="SchemaHistoryR1"/> audit trail.
+    /// Called during <see cref="RegisterComponentFromAccessor{T}"/> after schema persistence.
+    /// </summary>
+    private void RecordSchemaHistory(string componentName, SchemaDiff diff, MigrationResult? migrationResult, int fromRevision, int toRevision)
+    {
+        if (_schemaHistoryTable == null)
+        {
+            return;
+        }
+
+        var added = 0;
+        var removed = 0;
+        var typeChanged = 0;
+
+        if (diff != null)
+        {
+            foreach (var fc in diff.FieldChanges)
+            {
+                switch (fc.Kind)
+                {
+                    case FieldChangeKind.Added:
+                        added++;
+                        break;
+                    case FieldChangeKind.Removed:
+                        removed++;
+                        break;
+                    case FieldChangeKind.TypeChanged:
+                    case FieldChangeKind.TypeWidened:
+                        typeChanged++;
+                        break;
+                }
+            }
+        }
+
+        var kind = diff != null && diff.HasBreakingChanges ? SchemaChangeKind.Migration : SchemaChangeKind.Compatible;
+
+        var entry = new SchemaHistoryR1
+        {
+            Timestamp = DateTime.UtcNow.Ticks,
+            ComponentName = (String64)componentName,
+            FromRevision = fromRevision,
+            ToRevision = toRevision,
+            FieldsAdded = added,
+            FieldsRemoved = removed,
+            FieldsTypeChanged = typeChanged,
+            EntitiesMigrated = migrationResult?.EntitiesMigrated ?? 0,
+            ElapsedMilliseconds = (int)(migrationResult?.ElapsedMs ?? 0),
+            Kind = kind,
+        };
+
+        using var t = this.CreateQuickTransaction(DurabilityMode.Immediate);
+        t.CreateEntity(ref entry);
+        t.Commit();
+    }
+
+    /// <summary>
+    /// Returns all schema history entries from the audit trail, ordered by primary key (chronological).
+    /// </summary>
+    [PublicAPI]
+    public IReadOnlyList<SchemaHistoryR1> GetSchemaHistory()
+    {
+        if (_schemaHistoryTable == null)
+        {
+            return [];
+        }
+
+        var result = new List<SchemaHistoryR1>();
+        var entryCount = _schemaHistoryTable.PrimaryKeyIndex.EntryCount;
+
+        if (entryCount > 0)
+        {
+            using var tx = this.CreateQuickTransaction();
+            for (long pk = 1; result.Count < entryCount; pk++)
+            {
+                if (pk > entryCount * 10)
+                {
+                    break;
+                }
+
+                if (tx.ReadEntity<SchemaHistoryR1>(pk, out var entry))
+                {
+                    result.Add(entry);
+                }
+            }
+        }
+
+        return result;
+    }
+
     private void UpdateCurPrimaryKey(long pk)
     {
         long current;
@@ -891,7 +1048,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
                         schemaName, diff.Summary, chain.Value.StepCount);
 
                     migrationResult = SchemaEvolutionEngine.MigrateWithFunction(
-                        MMF, EpochManager, diff, persistedFields, persisted.Comp, definition, chain.Value, _log);
+                        MMF, EpochManager, diff, persistedFields, persisted.Comp, definition, chain.Value, _log, RaiseMigrationProgress);
                 }
 
                 if (!diff.IsIdentical)
@@ -920,7 +1077,8 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
                         if (SchemaEvolutionEngine.NeedsMigration(diff, oldStride, newStride))
                         {
-                            migrationResult = SchemaEvolutionEngine.Migrate(MMF, EpochManager, diff, persistedFields, persisted.Comp, definition, _log);
+                            migrationResult = SchemaEvolutionEngine.Migrate(MMF, EpochManager, diff, persistedFields, persisted.Comp, definition, _log,
+                                RaiseMigrationProgress);
                         }
                     }
 
@@ -963,6 +1121,9 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             {
                 PersistSchemaChanges(persisted.PK, definition, migrationResult);
                 IncrementUserSchemaVersion();
+
+                // Record in schema history audit trail
+                RecordSchemaHistory(schemaName, diff, migrationResult, persisted.Comp.SchemaRevision, definition.Revision);
             }
         }
         else
@@ -974,9 +1135,15 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             // Save metadata for future reload (skip during initial CreateSystemSchemaR1)
             if (_componentsTable != null)
             {
-                SaveInSystemSchema(componentTable);
+                var saved = SaveInSystemSchema(componentTable);
                 cs.SaveChanges();
                 MMF.FlushToDisk();
+
+                // Populate persisted dictionaries so schema commands work on first-run databases
+                _persistedComponents ??= new Dictionary<string, (long, ComponentR1)>();
+                _persistedFieldsByComponent ??= new Dictionary<string, FieldR1[]>();
+                _persistedComponents[schemaName] = (saved.PK, saved.Comp);
+                _persistedFieldsByComponent[schemaName] = saved.Fields;
             }
         }
 
