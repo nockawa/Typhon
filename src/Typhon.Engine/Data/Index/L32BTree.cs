@@ -20,15 +20,17 @@ unsafe public struct Index32Chunk
     // 128 bytes to span two cache lines (ALP prefetch: the Adjacent Line Prefetcher on Zen 4+/recent Intel automatically prefetches the paired 64-byte line
     //  within a naturally aligned 128-byte region)
 
-    public const int Capacity = 14;
+    public const int Capacity = 13;
 
-    // Special beast... Ownership control (LSB, 1 bit), state flags (LSW 15bits), Position of the first Item, aka Start (8bits), stored Item Count (8bits)
+    // State flags (LSW 16bits), Position of the first Item, aka Start (8bits), stored Item Count (8bits)
     public int Control;
+    public int OlcVersion;    // OLC latch: bit 0 = locked, bit 1 = obsolete, bits 2-31 = version (30 bits)
     public int PrevChunk;
     public int NextChunk;
     public int LeftValue;
-    public fixed int Values[Capacity];              // 14 × 4 = 56 bytes
-    public fixed int Keys[Capacity];                // 14 × 4 = 56 bytes
+    public fixed int Values[Capacity];              // 13 × 4 = 52 bytes
+    public fixed int Keys[Capacity];                // 13 × 4 = 52 bytes
+    private int _padding;                           // explicit padding to reach 128 bytes
 
     public Span<int> KeysAsSpan
     {
@@ -114,10 +116,10 @@ unsafe public struct Index32Chunk
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    public bool TryLock() => (Interlocked.Or(ref Control, (int)NodeStates.Ownership) & (int)NodeStates.Ownership) == 0;
+    public bool TryLock() => (Interlocked.Or(ref OlcVersion, 1) & 1) == 0;
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    public void FreeLock() => Interlocked.And(ref Control, ~(int)NodeStates.Ownership);
-    public bool IsLocked => (Control & (int)NodeStates.Ownership) != 0;
+    public void FreeLock() => Interlocked.And(ref OlcVersion, ~1);
+    public bool IsLocked => (OlcVersion & 1) != 0;
     public bool IsRotated => (Start + Count) > Capacity;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
@@ -178,12 +180,19 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
         {
             ref var chunk = ref accessor.GetChunk<Index32Chunk>(node.ChunkId, true);
             chunk.Control = (int)states;  // Atomically sets StateFlags + Start=0 + Count=0
+            chunk.OlcVersion = 4;         // version=1 (bits 2-31), locked=false, obsolete=false — must be non-zero so OLC readers don't see it as locked
             chunk.PrevChunk = 0;
             chunk.NextChunk = 0;
             chunk.LeftValue = 0;
         }
         
         public override int GetNodeCapacity() => Index32Chunk.Capacity;
+
+        public override ref int GetOlcVersionRef(int chunkId, ref ChunkAccessor accessor)
+        {
+            ref var chunk = ref accessor.GetChunk<Index32Chunk>(chunkId, false);
+            return ref chunk.OlcVersion;
+        }
 
         public override NodeWrapper GetLeftNode(NodeWrapper node, ref ChunkAccessor accessor)
         {

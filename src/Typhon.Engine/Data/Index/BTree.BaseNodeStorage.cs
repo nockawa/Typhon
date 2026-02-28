@@ -40,6 +40,12 @@ public abstract partial class BTree<TKey>
         public abstract int GetEnd(NodeWrapper node, ref ChunkAccessor accessor);
         public abstract NodeStates GetNodeStates(NodeWrapper node, ref ChunkAccessor accessor);
 
+        /// <summary>
+        /// Returns a ref to the node's OlcVersion field for optimistic lock coupling.
+        /// Uses dirty=false because optimistic readers never dirty pages; writers must separately call GetChunk(id, true) before mutating data.
+        /// </summary>
+        public abstract ref int GetOlcVersionRef(int chunkId, ref ChunkAccessor accessor);
+
         #endregion
 
         #region Chunk Operations

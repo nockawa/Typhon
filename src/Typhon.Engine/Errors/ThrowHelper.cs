@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine;
@@ -38,6 +39,7 @@ internal static class ThrowHelper
 
     // --- Index ---
 
+    [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static void ThrowUniqueConstraintViolation() => throw new UniqueConstraintViolationException();
 

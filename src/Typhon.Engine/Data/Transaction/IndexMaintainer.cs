@@ -1,7 +1,6 @@
 // unset
 
 using System;
-using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine;
 
@@ -31,32 +30,27 @@ internal static unsafe class IndexMaintainer
                     {
                         var tailVSBS = info.ComponentTable.TailVSBS;
 
-                        // When TAIL tracking is active, preserve the BTree key even if the HEAD buffer empties.
-                        // This keeps the TAIL version-history buffer reachable for temporal queries.
-                        ifi.Index.RemoveValue(&prev[ifi.OffsetToField], *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref accessor,
-                            preserveEmptyBuffer: tailVSBS != null);
-                        *(int*)&cur[ifi.OffsetToIndexElementId] = ifi.Index.Add(&cur[ifi.OffsetToField], startChunkId, ref accessor);
+                        // Compound MoveValue: atomic remove-from-old + insert-under-new in a single traversal.
+                        // With TAIL tracking, preserveEmptyBuffer keeps the old HEAD buffer alive for tombstone writes.
+                        *(int*)&cur[ifi.OffsetToIndexElementId] = ifi.Index.MoveValue(&prev[ifi.OffsetToField], &cur[ifi.OffsetToField],
+                            *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref accessor,
+                            out var oldHeadBufferId, out var newHeadBufferId, preserveEmptyBuffer: tailVSBS != null);
 
-                        // TAIL: append Tombstone to old key, Active to new key.
-                        // Since preserveEmptyBuffer keeps the old key alive, we can TryGet after RemoveValue
-                        // and use GetOrCreateTailBuffer which properly links the TAIL to the HEAD root header.
                         if (tailVSBS != null)
                         {
                             var tailAccessor = tailVSBS.Segment.CreateChunkAccessor(changeSet);
 
                             // Tombstone on old key's TAIL buffer
-                            var oldHeadResult = ifi.Index.TryGet(&prev[ifi.OffsetToField], ref accessor);
-                            if (oldHeadResult.IsSuccess)
+                            if (oldHeadBufferId >= 0)
                             {
-                                var oldTailBufferId = GetOrCreateTailBuffer(oldHeadResult.Value, tailVSBS, ref accessor, ref tailAccessor);
+                                var oldTailBufferId = GetOrCreateTailBuffer(oldHeadBufferId, tailVSBS, ref accessor, ref tailAccessor);
                                 tailVSBS.AddElement(oldTailBufferId, VersionedIndexEntry.Tombstone(startChunkId, tsn), ref tailAccessor);
                             }
 
                             // Active on new key's TAIL buffer
-                            var newHeadResult = ifi.Index.TryGet(&cur[ifi.OffsetToField], ref accessor);
-                            if (newHeadResult.IsSuccess)
+                            if (newHeadBufferId >= 0)
                             {
-                                var newTailBufferId = GetOrCreateTailBuffer(newHeadResult.Value, tailVSBS, ref accessor, ref tailAccessor);
+                                var newTailBufferId = GetOrCreateTailBuffer(newHeadBufferId, tailVSBS, ref accessor, ref tailAccessor);
                                 tailVSBS.AddElement(newTailBufferId, VersionedIndexEntry.Active(startChunkId, tsn), ref tailAccessor);
                             }
 
@@ -65,8 +59,8 @@ internal static unsafe class IndexMaintainer
                     }
                     else
                     {
-                        ifi.Index.Remove(&prev[ifi.OffsetToField], out var val, ref accessor);
-                        ifi.Index.Add(&cur[ifi.OffsetToField], val, ref accessor);
+                        // Unique index — compound Move for atomic single-traversal move
+                        ifi.Index.Move(&prev[ifi.OffsetToField], &cur[ifi.OffsetToField], startChunkId, ref accessor);
                     }
                     accessor.Dispose();
                 }

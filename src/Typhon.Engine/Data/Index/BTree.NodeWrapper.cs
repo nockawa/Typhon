@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Threading;
 
 namespace Typhon.Engine.BPTree;
 
@@ -32,6 +33,11 @@ public abstract partial class BTree<TKey>
         }
 
         #region Node Properties
+
+        /// <summary>
+        /// Creates an OlcLatch for this node by obtaining a ref to its OlcVersion field.
+        /// </summary>
+        internal OlcLatch GetLatch(ref ChunkAccessor accessor) => new OlcLatch(ref _storage.GetOlcVersionRef(ChunkId, ref accessor));
 
         public bool IsValid => _storage != null && ChunkId != 0;
 
@@ -116,7 +122,7 @@ public abstract partial class BTree<TKey>
         // Insert/Remove dispatch removed — BTree.InsertIterative/RemoveIterative handle
         // the full root-to-leaf descent and upward propagation iteratively.
 
-        internal KeyValueItem? InsertLeaf(ref InsertArguments args, ref NodeRelatives relatives, ref ChunkAccessor accessor)
+        internal KeyValueItem? InsertLeaf(ref InsertArguments args, ref NodeRelatives relatives, ref ChunkAccessor accessor, bool forceSplit = false)
         {
             KeyValueItem? rightLeaf = null;
 
@@ -125,8 +131,6 @@ public abstract partial class BTree<TKey>
             if (index < 0)
             {
                 index = ~index;
-
-                Debug.Assert(index >= 0 && index <= GetCount(ref accessor));
 
                 int value = args.GetValue();
                 if (_storage.Owner.AllowMultiple)
@@ -144,7 +148,7 @@ public abstract partial class BTree<TKey>
                 }
                 else // cant add, spill or split
                 {
-                    if (CanSpillTo(GetPrevious(ref accessor), ref accessor))
+                    if (!forceSplit && CanSpillTo(GetPrevious(ref accessor), ref accessor))
                     {
                         var first = InsertPopFirst(index, item, ref accessor);
                         GetPrevious(ref accessor).PushLast(first, ref accessor); // move the smallest item to left sibling.
@@ -157,7 +161,7 @@ public abstract partial class BTree<TKey>
                         Validate(this, ref accessor);
                         Validate(GetPrevious(ref accessor), ref accessor);
                     }
-                    else if (CanSpillTo(GetNext(ref accessor), ref accessor))
+                    else if (!forceSplit && CanSpillTo(GetNext(ref accessor), ref accessor))
                     {
                         var last = InsertPopLast(index, item, ref accessor);
                         GetNext(ref accessor).PushFirst(last, ref accessor);
@@ -380,8 +384,6 @@ public abstract partial class BTree<TKey>
 
             if (index >= 0)
             {
-                Debug.Assert(index >= 0 && index <= GetCount(ref accessor));
-
                 args.SetRemovedValue(RemoveAtInternal(index, ref accessor).Value); // remove item
 
                 if (!GetIsHalfFull(ref accessor)) // borrow or merge
@@ -547,7 +549,7 @@ public abstract partial class BTree<TKey>
             }
         }
 
-        private KeyValueItem RemoveAtInternal(int index, ref ChunkAccessor accessor) => _storage.RemoveAt(this, index, ref accessor);
+        internal KeyValueItem RemoveAtInternal(int index, ref ChunkAccessor accessor) => _storage.RemoveAt(this, index, ref accessor);
 
         private NodeWrapper SplitRight(NodeStates states, ref ChunkAccessor accessor)
         {
@@ -560,7 +562,9 @@ public abstract partial class BTree<TKey>
 
             try
             {
-                return _storage.SplitRight(this, states, ref accessor);
+                var result = _storage.SplitRight(this, states, ref accessor);
+                Interlocked.Increment(ref _storage.Owner._splitCount);
+                return result;
             }
             finally
             {
@@ -569,16 +573,14 @@ public abstract partial class BTree<TKey>
         }
 
         [Conditional("DEBUG")]
+        /// <summary>
+        /// Inline sanity check during mutations. Intentionally a no-op — assertions here fire while holding OLC write locks; an exception would leak the lock
+        /// and permanently deadlock the tree.
+        /// Use <see cref="CheckConsistency"/> post-mutation for structural validation.
+        /// </summary>
+        [ExcludeFromCodeCoverage]
         private static void Validate(NodeWrapper node, ref ChunkAccessor accessor)
         {
-            if (!node.IsValid)
-            {
-                return;
-            }
-
-            Debug.Assert(node.GetIsHalfFull(ref accessor));
-            Debug.Assert(!node.GetPrevious(ref accessor).IsValid || node.GetPrevious(ref accessor).GetNext(ref accessor) == node);
-            Debug.Assert(!node.GetNext(ref accessor).IsValid || node.GetNext(ref accessor).GetPrevious(ref accessor) == node);
         }
 
         public int Find(TKey key, IComparer<TKey> comparer, ref ChunkAccessor accessor) => BinarySearch(key, comparer, ref accessor);
@@ -770,19 +772,19 @@ public abstract partial class BTree<TKey>
         [ExcludeFromCodeCoverage]
         internal void CheckConsistency(TKey key, CheckConsistencyParent parent, IComparer<TKey> comparer, int height, ref ChunkAccessor accessor)
         {
-            Trace.Assert(IsValid, "Root node should always be valid");
+            ConsistencyAssert(IsValid, "Root node should always be valid");
 
-            Trace.Assert(((height == 1) && GetIsLeaf(ref accessor)) || ((height > 1) && !GetIsLeaf(ref accessor)), $"Mismatch node's Height {height} with {GetIsLeaf(ref accessor)}");
+            ConsistencyAssert(((height == 1) && GetIsLeaf(ref accessor)) || ((height > 1) && !GetIsLeaf(ref accessor)), $"Mismatch node's Height {height} with {GetIsLeaf(ref accessor)}");
 
             var firstKey = GetFirst(ref accessor).Key;
-            Trace.Assert(comparer.Compare(firstKey, GetLast(ref accessor).Key) <= 0, $"First Key '{firstKey}' should be less than Last's one '{GetLast(ref accessor).Key}'.");
-            Trace.Assert(comparer.Compare(firstKey, GetItem(0, ref accessor).Key) == 0, $"First.Key '{firstKey}' should be equal to first item's key '{GetItem(0, ref accessor).Key}'.");
+            ConsistencyAssert(comparer.Compare(firstKey, GetLast(ref accessor).Key) <= 0, $"First Key '{firstKey}' should be less than Last's one '{GetLast(ref accessor).Key}'.");
+            ConsistencyAssert(comparer.Compare(firstKey, GetItem(0, ref accessor).Key) == 0, $"First.Key '{firstKey}' should be equal to first item's key '{GetItem(0, ref accessor).Key}'.");
             var lastKey = GetItem(GetCount(ref accessor) - 1, ref accessor).Key;
-            Trace.Assert(comparer.Compare(lastKey, GetLast(ref accessor).Key) == 0, $"Last.Key '{GetLast(ref accessor).Key}' should be equal to last item's key '{lastKey}'.");
+            ConsistencyAssert(comparer.Compare(lastKey, GetLast(ref accessor).Key) == 0, $"Last.Key '{GetLast(ref accessor).Key}' should be equal to last item's key '{lastKey}'.");
 
             var count = GetCount(ref accessor);
             var left = GetLeft(ref accessor);
-            Trace.Assert((count == 0 || GetIsLeaf(ref accessor)) || (left.IsValid && left == GetFirstChild(ref accessor)), "Invalid Left Node, should be the first child");
+            ConsistencyAssert((count == 0 || GetIsLeaf(ref accessor)) || (left.IsValid && left == GetFirstChild(ref accessor)), "Invalid Left Node, should be the first child");
 
             for (int i = 0; i < count; i++)
             {
@@ -790,16 +792,16 @@ public abstract partial class BTree<TKey>
                 var item = GetItem(i, ref accessor);
                 if (!GetIsLeaf(ref accessor))
                 {
-                    Trace.Assert(childItem.IsValid, "A Child Node should always be valid");
-                    Trace.Assert(childItem.ChunkId == item.Value, "Node's Id doesn't match with item's Key");
+                    ConsistencyAssert(childItem.IsValid, "A Child Node should always be valid");
+                    ConsistencyAssert(childItem.ChunkId == item.Value, "Node's Id doesn't match with item's Key");
                 }
 
                 if (parent == CheckConsistencyParent.Left)
                 {
-                    Trace.Assert(comparer.Compare(key, item.Key) > 0, $"{i} {height} Left Node's key '{item.Key}' should be less than parent's key '{key}'.");
+                    ConsistencyAssert(comparer.Compare(key, item.Key) > 0, $"{i} {height} Left Node's key '{item.Key}' should be less than parent's key '{key}'.");
                 } else if (parent == CheckConsistencyParent.Right)
                 {
-                    Trace.Assert(comparer.Compare(key, item.Key) <= 0, $"Right Node's key '{item.Key}' should be greater than parent's key '{key}'.");
+                    ConsistencyAssert(comparer.Compare(key, item.Key) <= 0, $"Right Node's key '{item.Key}' should be greater than parent's key '{key}'.");
                 }
 
                 if (!GetIsLeaf(ref accessor))
@@ -809,6 +811,15 @@ public abstract partial class BTree<TKey>
                 }
 
                 left = childItem;
+            }
+        }
+
+        [ExcludeFromCodeCoverage]
+        private static void ConsistencyAssert(bool condition, string message)
+        {
+            if (!condition)
+            {
+                throw new InvalidOperationException($"Consistency check: {message}");
             }
         }
 

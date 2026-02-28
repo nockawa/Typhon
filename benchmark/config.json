@@ -13,6 +13,14 @@
     "TransactionBenchmarks": "EndToEnd",
     "BTreeBenchmark": "BTree",
     "BTreeMicroBenchmarks": "BTree",
+    "BTreeKeyTypeBenchmarks": "BTree",
+    "BTreeScaleBenchmarks": "BTree",
+    "BTreeSecondaryIndexBenchmarks": "BTreeSecondaryIndex",
+    "BTreeConcurrentReadBenchmarks": "BTreeConcurrency",
+    "BTreeConcurrentWriteBenchmarks": "BTreeConcurrency",
+    "BTreeConcurrentMixedBenchmarks": "BTreeConcurrency",
+    "BTreeConcurrentSecondaryBenchmarks": "BTreeConcurrency",
+    "BTreeEnumerationBenchmarks": "BTreeConcurrency",
     "AccessControlBenchmarks": "Concurrency",
     "AccessControlSmallBenchmarks": "Concurrency",
     "PagedMMFBenchmarks": "Storage",
@@ -31,6 +39,8 @@
     "MVCC",
     "Epoch",
     "BTree",
+    "BTreeSecondaryIndex",
+    "BTreeConcurrency",
     "Index",
     "Storage",
     "ChunkAccessor",
@@ -47,7 +57,9 @@
     "Primitives": { "regression_pct": 8.0 },
     "Collections": { "regression_pct": 10.0 },
     "Workload": { "regression_pct": 20.0 },
-    "Index": { "regression_pct": 20.0 }
+    "Index": { "regression_pct": 20.0 },
+    "BTreeSecondaryIndex": { "regression_pct": 15.0 },
+    "BTreeConcurrency": { "regression_pct": 25.0, "max_cov_pct": 40.0 }
   },
   "benchmarks": {
     "EpochGuardBenchmarks.EnterExit": {
