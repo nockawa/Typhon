@@ -110,6 +110,26 @@ unsafe public struct IndexString64Chunk
         }
     }
 
+    public int ContentionHint
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        get
+        {
+            fixed (int* c = &Control)
+            {
+                return ((byte*)c)[1];
+            }
+        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        set
+        {
+            fixed (int* c = &Control)
+            {
+                ((byte*)c)[1] = (byte)value;
+            }
+        }
+    }
+
     public int End => Adjust(Start + Count);
     public NodeStates StateFlags
     {
@@ -293,6 +313,18 @@ public abstract class String64BTree : BTree<String64>
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<IndexString64Chunk>(node.ChunkId);
             return chunk.StateFlags;
+        }
+
+        public override int GetContentionHint(NodeWrapper node, ref ChunkAccessor accessor)
+        {
+            ref readonly var chunk = ref accessor.GetChunkReadOnly<IndexString64Chunk>(node.ChunkId);
+            return chunk.ContentionHint;
+        }
+
+        public override void SetContentionHint(NodeWrapper node, int value, ref ChunkAccessor accessor)
+        {
+            ref var chunk = ref accessor.GetChunk<IndexString64Chunk>(node.ChunkId, true);
+            chunk.ContentionHint = value;
         }
 
         #endregion

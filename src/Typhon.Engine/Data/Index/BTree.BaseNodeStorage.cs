@@ -40,6 +40,9 @@ public abstract partial class BTree<TKey>
         public abstract int GetEnd(NodeWrapper node, ref ChunkAccessor accessor);
         public abstract NodeStates GetNodeStates(NodeWrapper node, ref ChunkAccessor accessor);
 
+        public abstract int GetContentionHint(NodeWrapper node, ref ChunkAccessor accessor);
+        public abstract void SetContentionHint(NodeWrapper node, int value, ref ChunkAccessor accessor);
+
         /// <summary>
         /// Returns a ref to the node's OlcVersion field for optimistic lock coupling.
         /// Uses dirty=false because optimistic readers never dirty pages; writers must separately call GetChunk(id, true) before mutating data.
@@ -84,5 +87,16 @@ public abstract partial class BTree<TKey>
         public abstract NodeWrapper SplitRight(NodeWrapper node, NodeStates nodeStates, ref ChunkAccessor accessor);
         public abstract KeyValueItem RemoveAt(NodeWrapper node, int index, ref ChunkAccessor accessor);
         public abstract void MergeLeft(NodeWrapper left, NodeWrapper right, ref ChunkAccessor accessor);
+
+        /// <summary>
+        /// Returns the high key (upper bound) for B-link tree range checks.
+        /// Default returns the last key in the node. Overridden by L16/L32/L64 to read the explicit HighKey field.
+        /// </summary>
+        public virtual TKey GetHighKey(NodeWrapper node, ref ChunkAccessor accessor) => GetItem(node, GetCount(node, ref accessor) - 1, true, ref accessor).Key;
+
+        /// <summary>
+        /// Sets the high key for the node. Default is a no-op (for types without explicit HighKey like String64).
+        /// </summary>
+        public virtual void SetHighKey(NodeWrapper node, TKey key, ref ChunkAccessor accessor) { }
     }
 }

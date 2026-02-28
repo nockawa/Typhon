@@ -996,30 +996,32 @@ public class OlcBTreeTests
         IntSingleBTree tree;
         int allocatedBefore;
 
-        // Phase 1: Build tree with 200 keys (multi-leaf, depth >= 2) in its own epoch scope
+        // Phase 1: Build tree with 600 keys (multi-leaf, depth >= 2) in its own epoch scope.
+        // With capacity 29, 600 keys create ~40 leaves — ensures enough structure for merge testing.
         {
             var depth = epochManager.EnterScope();
             var accessor = segment.CreateChunkAccessor();
             tree = new IntSingleBTree(segment);
-            for (int i = 0; i < 200; i++)
+            for (int i = 0; i < 600; i++)
             {
                 tree.Add(i, i * 10, ref accessor);
             }
-            Assert.That(tree.EntryCount, Is.EqualTo(200));
+            Assert.That(tree.EntryCount, Is.EqualTo(600));
             allocatedBefore = segment.AllocatedChunkCount;
             accessor.Dispose();
             epochManager.ExitScope(depth); // Advances global epoch
         }
 
-        // Phase 2: Remove keys to trigger merges, building up deferred nodes
+        // Phase 2: Remove keys to trigger merges, building up deferred nodes.
+        // Keep 100 keys (0-49, 550-599) so the tree retains multiple non-root leaves.
         {
             var depth = epochManager.EnterScope();
             var accessor = segment.CreateChunkAccessor();
-            for (int i = 10; i < 190; i++)
+            for (int i = 50; i < 550; i++)
             {
                 tree.Remove(i, out _, ref accessor);
             }
-            Assert.That(tree.EntryCount, Is.EqualTo(20));
+            Assert.That(tree.EntryCount, Is.EqualTo(100));
 
             // Within the same epoch scope, deferred nodes can't be reclaimed yet.
             var deferredAfterRemoves = tree.DeferredNodeCount;
@@ -1032,14 +1034,14 @@ public class OlcBTreeTests
 
         // Phase 3: Enter a new epoch. Remove keys from non-root leaves to trigger pessimistic
         // fallback, which runs Reclaim and frees deferred nodes from Phase 2.
-        // With 20 remaining keys (0-9, 190-199), removes from a non-root leaf trigger
-        // pessimistic once count drops below capacity/2.
+        // With 100 remaining keys in multiple leaves, removes trigger pessimistic once
+        // count drops below capacity/2.
         {
             var depth = epochManager.EnterScope();
             var accessor = segment.CreateChunkAccessor();
             var deferredBefore = tree.DeferredNodeCount;
             // Remove enough keys to force pessimistic on non-root leaves
-            for (int i = 190; i < 200; i++)
+            for (int i = 550; i < 600; i++)
             {
                 tree.Remove(i, out _, ref accessor);
             }
@@ -1070,12 +1072,13 @@ public class OlcBTreeTests
         IntSingleBTree tree;
         int allocatedBefore;
 
-        // Phase 1: Build tree in its own epoch scope (exiting advances global epoch)
+        // Phase 1: Build tree in its own epoch scope (exiting advances global epoch).
+        // With capacity 29, 500 keys create ~34 leaves — enough structure for merge testing.
         {
             var setupDepth = epochManager.EnterScope();
             var accessor = segment.CreateChunkAccessor();
             tree = new IntSingleBTree(segment);
-            for (int i = 0; i < 100; i++)
+            for (int i = 0; i < 500; i++)
             {
                 tree.Add(i, i * 10, ref accessor);
             }
@@ -1102,11 +1105,11 @@ public class OlcBTreeTests
         {
             var removeDepth = epochManager.EnterScope();
             var accessor = segment.CreateChunkAccessor();
-            for (int i = 20; i < 80; i++)
+            for (int i = 100; i < 400; i++)
             {
                 tree.Remove(i, out _, ref accessor);
             }
-            Assert.That(tree.EntryCount, Is.EqualTo(40));
+            Assert.That(tree.EntryCount, Is.EqualTo(200));
             tree.CheckConsistency(ref accessor);
             accessor.Dispose();
             epochManager.ExitScope(removeDepth); // Advances global epoch again
@@ -1121,11 +1124,11 @@ public class OlcBTreeTests
             var accessor = segment.CreateChunkAccessor();
             // Remove enough keys to force pessimistic fallback (which triggers Reclaim)
             var remaining = tree.EntryCount;
-            for (int i = 0; i < 10; i++)
+            for (int i = 0; i < 50; i++)
             {
                 tree.Remove(i, out _, ref accessor);
             }
-            Assert.That(tree.EntryCount, Is.EqualTo(remaining - 10));
+            Assert.That(tree.EntryCount, Is.EqualTo(remaining - 50));
 
             var allocatedAfter = segment.AllocatedChunkCount;
             Assert.That(allocatedAfter, Is.LessThan(allocatedBefore), "Deferred nodes should be reclaimed after reader exits epoch");

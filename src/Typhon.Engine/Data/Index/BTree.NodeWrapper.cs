@@ -70,6 +70,12 @@ public abstract partial class BTree<TKey>
 
         public KeyValueItem GetLast(ref ChunkAccessor accessor) => _storage.GetItem(this, _storage.GetCount(this, ref accessor) - 1, true, ref accessor);
 
+        public TKey GetHighKey(ref ChunkAccessor accessor) => _storage.GetHighKey(this, ref accessor);
+        public void SetHighKey(TKey key, ref ChunkAccessor accessor) => _storage.SetHighKey(this, key, ref accessor);
+
+        public int GetContentionHint(ref ChunkAccessor accessor) => _storage.GetContentionHint(this, ref accessor);
+        internal void SetContentionHint(int value, ref ChunkAccessor accessor) => _storage.SetContentionHint(this, value, ref accessor);
+
         public void SetLast(KeyValueItem value, ref ChunkAccessor accessor) 
             => _storage.SetItem(this, _storage.GetCount(this, ref accessor) - 1, value, true, ref accessor);
 
@@ -122,6 +128,24 @@ public abstract partial class BTree<TKey>
         // Insert/Remove dispatch removed — BTree.InsertIterative/RemoveIterative handle
         // the full root-to-leaf descent and upward propagation iteratively.
 
+        /// <summary>
+        /// Splits a leaf right and updates the doubly-linked list pointers.
+        /// Used by both regular full-leaf splits and contention splits.
+        /// </summary>
+        internal NodeWrapper SplitLeafRight(ref ChunkAccessor accessor)
+        {
+            var right = SplitRight(NodeStates.IsLeaf, ref accessor);
+            var next = GetNext(ref accessor);
+            if (next.IsValid)
+            {
+                next.SetPrevious(right, ref accessor);
+                right.SetNext(next, ref accessor);
+            }
+            right.SetPrevious(this, ref accessor);
+            SetNext(right, ref accessor);
+            return right;
+        }
+
         internal KeyValueItem? InsertLeaf(ref InsertArguments args, ref NodeRelatives relatives, ref ChunkAccessor accessor, bool forceSplit = false)
         {
             KeyValueItem? rightLeaf = null;
@@ -154,9 +178,13 @@ public abstract partial class BTree<TKey>
                         GetPrevious(ref accessor).PushLast(first, ref accessor); // move the smallest item to left sibling.
 
                         // update ancestors key.
+                        var newSeparator = GetFirst(ref accessor).Key;
                         var pl = relatives.LeftAncestor.GetItem(relatives.LeftAncestorIndex, ref accessor);
-                        KeyValueItem.ChangeKey(ref pl, GetFirst(ref accessor).Key);
+                        KeyValueItem.ChangeKey(ref pl, newSeparator);
                         relatives.LeftAncestor.SetItem(relatives.LeftAncestorIndex, pl, ref accessor);
+
+                        // Left's HighKey must match the new separator (spill moved the boundary).
+                        GetPrevious(ref accessor).SetHighKey(newSeparator, ref accessor);
 
                         Validate(this, ref accessor);
                         Validate(GetPrevious(ref accessor), ref accessor);
@@ -170,6 +198,9 @@ public abstract partial class BTree<TKey>
                         var pr = relatives.RightAncestor.GetItem(relatives.RightAncestorIndex, ref accessor);
                         KeyValueItem.ChangeKey(ref pr, last.Key);
                         relatives.RightAncestor.SetItem(relatives.RightAncestorIndex, pr, ref accessor);
+
+                        // Current's HighKey must match the new separator (spill moved the boundary).
+                        SetHighKey(last.Key, ref accessor);
 
                         Validate(this, ref accessor);
                         Validate(GetNext(ref accessor), ref accessor);
@@ -198,19 +229,7 @@ public abstract partial class BTree<TKey>
                 }
 
                 // splits right side to new node and keeps left side for current node.
-                NodeWrapper SplitNodeRight(NodeWrapper left, ref ChunkAccessor ca)
-                {
-                    var right = left.SplitRight(NodeStates.IsLeaf, ref ca);
-                    var next = left.GetNext(ref ca);
-                    if (next.IsValid)
-                    {
-                        next.SetPrevious(right, ref ca);
-                        right.SetNext(left.GetNext(ref ca), ref ca); // to make linked list.
-                    }
-                    right.SetPrevious(left, ref ca);
-                    left.SetNext(right, ref ca);
-                    return right;
-                }
+                NodeWrapper SplitNodeRight(NodeWrapper left, ref ChunkAccessor ca) => left.SplitLeafRight(ref ca);
 
                 bool CanSpillTo(NodeWrapper leaf, ref ChunkAccessor ca)
                 {
@@ -397,6 +416,9 @@ public abstract partial class BTree<TKey>
                         KeyValueItem.ChangeKey(ref p, last.Key);
                         relatives.LeftAncestor.SetItem(relatives.LeftAncestorIndex, p, ref accessor);
 
+                        // Left's HighKey must match the new separator (borrow moved the boundary).
+                        GetPrevious(ref accessor).SetHighKey(last.Key, ref accessor);
+
                         Validate(this, ref accessor);
                         Validate(GetPrevious(ref accessor), ref accessor);
                     }
@@ -405,9 +427,13 @@ public abstract partial class BTree<TKey>
                         var first = GetNext(ref accessor).PopFirstInternal(ref accessor);
                         PushLast(first, ref accessor);
 
+                        var newSeparator = GetNext(ref accessor).GetFirst(ref accessor).Key;
                         var p = relatives.RightAncestor.GetItem(relatives.RightAncestorIndex, ref accessor);
-                        KeyValueItem.ChangeKey(ref p, GetNext(ref accessor).GetFirst(ref accessor).Key);
+                        KeyValueItem.ChangeKey(ref p, newSeparator);
                         relatives.RightAncestor.SetItem(relatives.RightAncestorIndex, p, ref accessor);
+
+                        // Current's HighKey must match the new separator (borrow moved the boundary).
+                        SetHighKey(newSeparator, ref accessor);
 
                         Validate(this, ref accessor);
                         Validate(GetNext(ref accessor), ref accessor);

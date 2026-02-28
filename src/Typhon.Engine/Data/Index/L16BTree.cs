@@ -14,13 +14,13 @@ namespace Typhon.Engine.BPTree;
 
 [DebuggerTypeProxy(typeof(Index16Chunk.DebugView))]
 [DebuggerDisplay("Count: {Count}, Start: {Start}, Flags: {StateFlags}")]
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Pack = 4)]
 unsafe public struct Index16Chunk
 {
-    // 128 bytes to span two cache lines (ALP prefetch: the Adjacent Line Prefetcher on Zen 4+/recent Intel automatically prefetches the paired 64-byte line
-    //  within a naturally aligned 128-byte region)
+    // 256 bytes — fills four cache lines. Adjacent Line Prefetcher (ALP) on Zen 4+/recent Intel automatically
+    // fetches paired 64-byte lines within 128-byte regions, so two ALP triggers cover the full node.
 
-    public const int Capacity = 18;
+    public const int Capacity = 38;
 
     // State flags (LSW 16bits), Position of the first Item, aka Start (8bits), stored Item Count (8bits)
     public int Control;
@@ -28,8 +28,11 @@ unsafe public struct Index16Chunk
     public int PrevChunk;
     public int NextChunk;
     public int LeftValue;
-    public fixed int Values[Capacity];              // 18 × 4 = 72 bytes
-    public fixed short Keys[Capacity];              // 18 × 2 = 36 bytes
+    public short HighKey;                           // B-link upper bound — co-located with OlcVersion in first 128B region
+    private short _highKeyPad;                      // explicit pad for Values alignment to 4-byte boundary
+    public fixed int Values[Capacity];              // 38 × 4 = 152 bytes
+    public fixed short Keys[Capacity];              // 38 × 2 = 76 bytes
+    private fixed byte _padding[4];                 // pad to 256 bytes
 
     public Span<short> KeysAsSpan
     {
@@ -89,6 +92,26 @@ unsafe public struct Index16Chunk
             fixed (int* c = &Control)
             {
                 ((byte*)c)[2] = (byte)value;
+            }
+        }
+    }
+
+    public int ContentionHint
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        get
+        {
+            fixed (int* c = &Control)
+            {
+                return ((byte*)c)[1];
+            }
+        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        set
+        {
+            fixed (int* c = &Control)
+            {
+                ((byte*)c)[1] = (byte)value;
             }
         }
     }
@@ -169,7 +192,7 @@ public abstract class L16BTree<TKey> : BTree<TKey> where TKey : unmanaged
         internal override void Initialize(BTree<TKey> owner, ChunkBasedSegment segment)
         {
             base.Initialize(owner, segment);
-            Debug.Assert(sizeof(Index16Chunk) == 128);
+            Debug.Assert(sizeof(Index16Chunk) == 256);
             Debug.Assert(segment.Stride == sizeof(Index16Chunk));
         }
 
@@ -183,6 +206,7 @@ public abstract class L16BTree<TKey> : BTree<TKey> where TKey : unmanaged
             chunk.PrevChunk = 0;
             chunk.NextChunk = 0;
             chunk.LeftValue = 0;
+            chunk.HighKey = short.MaxValue; // B-link upper bound: sentinel for newly allocated nodes
         }
 
         public override int GetNodeCapacity() => Index16Chunk.Capacity;
@@ -277,6 +301,31 @@ public abstract class L16BTree<TKey> : BTree<TKey> where TKey : unmanaged
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index16Chunk>(node.ChunkId);
             return chunk.StateFlags;
+        }
+
+        public override int GetContentionHint(NodeWrapper node, ref ChunkAccessor accessor)
+        {
+            ref readonly var chunk = ref accessor.GetChunkReadOnly<Index16Chunk>(node.ChunkId);
+            return chunk.ContentionHint;
+        }
+
+        public override void SetContentionHint(NodeWrapper node, int value, ref ChunkAccessor accessor)
+        {
+            ref var chunk = ref accessor.GetChunk<Index16Chunk>(node.ChunkId, true);
+            chunk.ContentionHint = value;
+        }
+
+        public override TKey GetHighKey(NodeWrapper node, ref ChunkAccessor accessor)
+        {
+            ref readonly var chunk = ref accessor.GetChunkReadOnly<Index16Chunk>(node.ChunkId);
+            short hk = chunk.HighKey;
+            return *(TKey*)&hk;
+        }
+
+        public override void SetHighKey(NodeWrapper node, TKey key, ref ChunkAccessor accessor)
+        {
+            ref var chunk = ref accessor.GetChunk<Index16Chunk>(node.ChunkId, true);
+            chunk.HighKey = *(short*)&key;
         }
 
         #endregion
@@ -651,6 +700,7 @@ public abstract class L16BTree<TKey> : BTree<TKey> where TKey : unmanaged
             }
 
             leftChunk.Count += right.GetCount(ref accessor); // correct array length.
+            leftChunk.HighKey = rightChunk.HighKey; // merged node inherits right's upper bound
         }
 
         public override NodeWrapper GetLastChild(NodeWrapper node, ref ChunkAccessor accessor)
@@ -802,6 +852,8 @@ public abstract class L16BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
         public NodeWrapper SplitRight(ref Index16Chunk left, NodeStates states, ref ChunkAccessor accessor)
         {
+            var oldHighKey = left.HighKey; // save before split — right inherits original upper bound
+
             var rightNode = Owner.AllocNode(states, ref accessor);
             ref var right = ref accessor.GetChunk<Index16Chunk>(rightNode.ChunkId, true);
 
@@ -841,6 +893,10 @@ public abstract class L16BTree<TKey> : BTree<TKey> where TKey : unmanaged
                 lv.Slice(0, remaining).CopyTo(rv.Slice(length, remaining));
                 lv.Slice(0, remaining).Clear();
             }
+
+            // Update high keys: right inherits old upper bound, left gets separator (right's first key)
+            right.HighKey = oldHighKey;
+            left.HighKey = right.Keys[0]; // right.Start is 0 after AllocNode
 
             return rightNode;
         }

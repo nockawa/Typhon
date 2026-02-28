@@ -42,7 +42,7 @@ public class OlcBTreeStressTests
         TestContext.Out.WriteLine(
             $"Restarts={tree.OptimisticRestarts} Fallbacks={tree.PessimisticFallbacks} " +
             $"WriteLockFails={tree.WriteLockFailures} Splits={tree.SplitCount} Merges={tree.MergeCount} " +
-            $"Deferred={tree.DeferredNodeCount}");
+            $"ContentionSplits={tree.ContentionSplitCount} Deferred={tree.DeferredNodeCount}");
     }
 
     /// <summary>
@@ -470,10 +470,220 @@ public class OlcBTreeStressTests
             }
 
             Task.WaitAll(tasks);
-
             Assert.That(tree.EntryCount, Is.EqualTo(threadCount * keysPerThread));
             Assert.That(tree.PessimisticFallbacks, Is.GreaterThan(0), "Monotonic pattern should force pessimistic fallbacks");
             Assert.That(tree.SplitCount, Is.GreaterThan(0), "Monotonic inserts cause right-edge splits");
+            // Contention splits are a probabilistic optimization — whether the hint reaches the threshold
+            // depends on thread scheduling and backoff behavior. With SpinWait yielding, contention
+            // resolves faster and the hint may not accumulate. Log for diagnostics, don't assert.
+            TestContext.Out.WriteLine($"ContentionSplitCount={tree.ContentionSplitCount} (not asserted — scheduling-dependent)");
+
+            TryCheckConsistency(tree, segment);
+            LogDiagnostics(tree);
+        }
+        finally
+        {
+            epochManager.ExitScope(setupDepth);
+        }
+    }
+
+    // ========================================
+    // B5.1 — Contention Split Tree Consistency
+    // ========================================
+
+    [Test]
+    [CancelAfter(5000)]
+    public unsafe void Stress_ContentionSplit_TreeConsistency()
+    {
+        using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
+        var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 200, sizeof(Index32Chunk));
+
+        const int threadCount = 32;
+        const int keysPerThread = 150;
+        int sharedCounter = 0;
+
+        var setupDepth = epochManager.EnterScope();
+        try
+        {
+            var accessor = segment.CreateChunkAccessor();
+            var tree = new IntSingleBTree(segment);
+            accessor.Dispose();
+
+            using var barrier = new Barrier(threadCount);
+            var tasks = new Task[threadCount];
+
+            for (int t = 0; t < threadCount; t++)
+            {
+                tasks[t] = Task.Factory.StartNew(() =>
+                {
+                    var depth = epochManager.EnterScope();
+                    try
+                    {
+                        var wa = segment.CreateChunkAccessor();
+                        barrier.SignalAndWait();
+
+                        for (int i = 0; i < keysPerThread; i++)
+                        {
+                            int key = Interlocked.Increment(ref sharedCounter);
+                            tree.Add(key, key * 10, ref wa);
+                        }
+                        wa.Dispose();
+                    }
+                    finally
+                    {
+                        epochManager.ExitScope(depth);
+                    }
+                }, TaskCreationOptions.LongRunning);
+            }
+
+            Task.WaitAll(tasks);
+
+            int totalKeys = threadCount * keysPerThread;
+            Assert.That(tree.EntryCount, Is.EqualTo(totalKeys));
+            // Contention splits are a probabilistic optimization — whether the hint reaches the threshold
+            // depends on thread scheduling and backoff behavior. With SpinWait yielding, contention
+            // resolves faster and the hint may not accumulate. Log for diagnostics, don't assert.
+            TestContext.Out.WriteLine($"ContentionSplitCount={tree.ContentionSplitCount} (not asserted — scheduling-dependent)");
+
+            // Verify tree structural consistency
+            TryCheckConsistency(tree, segment);
+
+            // Verify every key is present by enumerating all leaves
+            var verifyAccessor = segment.CreateChunkAccessor();
+            var found = new bool[totalKeys + 1];
+            foreach (var kv in tree.EnumerateLeaves())
+            {
+                Assert.That(kv.Key, Is.GreaterThan(0).And.LessThanOrEqualTo(totalKeys), "Key out of expected range");
+                found[kv.Key] = true;
+            }
+            for (int k = 1; k <= totalKeys; k++)
+            {
+                Assert.That(found[k], Is.True, $"Key {k} missing after contention split");
+            }
+            verifyAccessor.Dispose();
+
+            LogDiagnostics(tree);
+        }
+        finally
+        {
+            epochManager.ExitScope(setupDepth);
+        }
+    }
+
+    // ========================================
+    // B5.2 — Contention Split Mixed Read-Write
+    // ========================================
+
+    [Test]
+    [CancelAfter(5000)]
+    public unsafe void Stress_ContentionSplit_MixedReadWrite()
+    {
+        using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
+        var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 200, sizeof(Index32Chunk));
+
+        const int writerCount = 16;
+        const int readerCount = 16;
+        const int keysPerWriter = 200;
+        int sharedCounter = 0;
+
+        var setupDepth = epochManager.EnterScope();
+        try
+        {
+            var accessor = segment.CreateChunkAccessor();
+            var tree = new IntSingleBTree(segment);
+            accessor.Dispose();
+
+            using var startSignal = new ManualResetEventSlim(false);
+            using var writersDone = new CountdownEvent(writerCount);
+            int readErrors = 0;
+            int readSuccesses = 0;
+            var tasks = new Task[writerCount + readerCount];
+            int taskIndex = 0;
+
+            // 16 writers: monotonic inserts to trigger contention splits
+            for (int t = 0; t < writerCount; t++)
+            {
+                tasks[taskIndex++] = Task.Factory.StartNew(() =>
+                {
+                    var depth = epochManager.EnterScope();
+                    try
+                    {
+                        var wa = segment.CreateChunkAccessor();
+                        startSignal.Wait();
+
+                        for (int i = 0; i < keysPerWriter; i++)
+                        {
+                            int key = Interlocked.Increment(ref sharedCounter);
+                            tree.Add(key, key * 10, ref wa);
+                        }
+                        wa.Dispose();
+                    }
+                    finally
+                    {
+                        writersDone.Signal();
+                        epochManager.ExitScope(depth);
+                    }
+                }, TaskCreationOptions.LongRunning);
+            }
+
+            // 16 readers: random lookups while writers are active
+            for (int t = 0; t < readerCount; t++)
+            {
+                var seed = t * 13;
+                tasks[taskIndex++] = Task.Factory.StartNew(() =>
+                {
+                    var depth = epochManager.EnterScope();
+                    try
+                    {
+                        var ra = segment.CreateChunkAccessor();
+                        var rng = new Random(seed);
+                        startSignal.Wait();
+
+                        while (!writersDone.IsSet)
+                        {
+                            int currentMax = sharedCounter;
+                            if (currentMax < 1)
+                            {
+                                Thread.SpinWait(10);
+                                continue;
+                            }
+                            int key = rng.Next(1, currentMax + 1);
+                            var result = tree.TryGet(key, ref ra);
+                            if (result.IsSuccess)
+                            {
+                                if (result.Value != key * 10)
+                                {
+                                    Interlocked.Increment(ref readErrors);
+                                }
+                                else
+                                {
+                                    Interlocked.Increment(ref readSuccesses);
+                                }
+                            }
+                            // Key not found is OK — writer may not have committed yet
+                        }
+                        ra.Dispose();
+                    }
+                    finally
+                    {
+                        epochManager.ExitScope(depth);
+                    }
+                }, TaskCreationOptions.LongRunning);
+            }
+
+            startSignal.Set();
+            Task.WaitAll(tasks);
+
+            int totalKeys = writerCount * keysPerWriter;
+            Assert.That(tree.EntryCount, Is.EqualTo(totalKeys));
+            Assert.That(readErrors, Is.EqualTo(0), "All successful reads should return correct values");
+            Assert.That(readSuccesses, Is.GreaterThan(0), "At least some reads should succeed");
+            // Contention splits are a probabilistic optimization — whether the hint reaches the threshold
+            // depends on thread scheduling and backoff behavior. With SpinWait yielding, contention
+            // resolves faster and the hint may not accumulate. Log for diagnostics, don't assert.
+            TestContext.Out.WriteLine($"ContentionSplitCount={tree.ContentionSplitCount} (not asserted — scheduling-dependent)");
 
             TryCheckConsistency(tree, segment);
             LogDiagnostics(tree);
@@ -501,7 +711,7 @@ public class OlcBTreeStressTests
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 200, sizeof(Index32Chunk));
 
         const int threadCount = 16;
-        const int slotsPerThread = 400;   // exclusive range size per thread
+        const int slotsPerThread = 800;   // exclusive range size per thread (wide gap avoids shared boundary leaves)
         const int keysPerThread = 200;    // only even slots populated
         const int movesPerThread = 200;   // move all keys: even→odd
 

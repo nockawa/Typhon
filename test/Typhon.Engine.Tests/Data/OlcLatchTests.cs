@@ -270,30 +270,30 @@ public class OlcLatchTests
 
     [Test]
     [CancelAfter(1000)]
-    public unsafe void Index32Chunk_Size_Is128Bytes()
+    public unsafe void Index32Chunk_Size_Is256Bytes()
     {
-        Assert.That(sizeof(Index32Chunk), Is.EqualTo(128));
+        Assert.That(sizeof(Index32Chunk), Is.EqualTo(256));
     }
 
     [Test]
     [CancelAfter(1000)]
-    public unsafe void Index16Chunk_Size_Is128Bytes()
+    public unsafe void Index16Chunk_Size_Is256Bytes()
     {
-        Assert.That(sizeof(Index16Chunk), Is.EqualTo(128));
+        Assert.That(sizeof(Index16Chunk), Is.EqualTo(256));
     }
 
     [Test]
     [CancelAfter(1000)]
-    public unsafe void Index64Chunk_Size_Is128Bytes()
+    public unsafe void Index64Chunk_Size_Is256Bytes()
     {
-        Assert.That(sizeof(Index64Chunk), Is.EqualTo(128));
+        Assert.That(sizeof(Index64Chunk), Is.EqualTo(256));
     }
 
     [Test]
     [CancelAfter(1000)]
-    public void Index32Chunk_Capacity_Is13()
+    public void Index32Chunk_Capacity_Is29()
     {
-        Assert.That(Index32Chunk.Capacity, Is.EqualTo(13));
+        Assert.That(Index32Chunk.Capacity, Is.EqualTo(29));
     }
 
     [Test]

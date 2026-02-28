@@ -46,8 +46,8 @@ public struct BTreeHeader
 /// <summary>
 /// Header of the BTree directory stored at the start of chunk 0.
 /// Tracks how many BTree entries are registered in this segment.
-/// Directory chunks are zeroed on first reservation (<see cref="ChunkBasedSegment.ReserveChunk(int,bool)"/>),
-/// so <see cref="EntryCount"/> == 0 reliably means "empty directory".
+/// Directory chunks are zeroed on first reservation (<see cref="ChunkBasedSegment.ReserveChunk(int,bool)"/>), so <see cref="EntryCount"/> == 0 reliably
+/// means "empty directory".
 /// </summary>
 [StructLayout(LayoutKind.Sequential, Pack = 2)]
 internal struct BTreeDirectoryHeader
@@ -58,8 +58,8 @@ internal struct BTreeDirectoryHeader
 }
 
 /// <summary>
-/// One entry in the BTree directory (chunk 0). Each BTree on the segment gets a unique entry,
-/// keyed by <see cref="StableId"/> (FieldId for secondary indexes, -1 for PK, 0 for standalone).
+/// One entry in the BTree directory (chunk 0). Each BTree on the segment gets a unique entry, keyed by <see cref="StableId"/> (FieldId for secondary
+/// indexes, -1 for PK, 0 for standalone).
 /// </summary>
 /// <remarks>12 bytes: short StableId + short Reserved + int RootChunkId + int Count.</remarks>
 [StructLayout(LayoutKind.Sequential, Pack = 2)]
@@ -472,9 +472,8 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     private SpinLock _deferredLock = new(enableThreadOwnerTracking: false);
 
     // Per-instance count and root tracking used for ALL runtime operations.
-    // Multiple BTrees can share the same ChunkBasedSegment (e.g., PK index and secondary
-    // indexes share DefaultIndexSegment). Runtime code MUST use these per-instance fields
-    // instead of reading from a single shared offset, which would cause cross-BTree corruption.
+    // Multiple BTrees can share the same ChunkBasedSegment (e.g., PK index and secondary indexes share DefaultIndexSegment). Runtime code MUST use these
+    // per-instance fields instead of reading from a single shared offset, which would cause cross-BTree corruption.
     // Each BTree has a unique entry in the chunk 0 directory, keyed by stableId.
     private int _count;
 
@@ -494,9 +493,11 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     internal long _splitCount;
     internal long _mergeCount;
     internal long _moveRightCount;
+    internal long _contentionSplitCount;
 
     internal const int MaxTreeDepth = 32;
     internal const int MaxOptimisticRestarts = 3;
+    internal const int ContentionSplitThreshold = 3;
 
     #region OLC Path Buffers
 
@@ -578,8 +579,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
 
         /// <summary>
-        /// Free nodes whose retire epoch is strictly less than safeEpoch (meaning all threads
-        /// that could have observed the node have since exited their epoch scope).
+        /// Free nodes whose retire epoch is strictly less than safeEpoch (meaning all threads that could have observed the node have since exited their epoch scope).
         /// </summary>
         public void Reclaim(ChunkBasedSegment segment, long safeEpoch)
         {
@@ -659,6 +659,9 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     /// <summary>Number of move-right operations during insert (B-link following).</summary>
     public long MoveRightCount => Interlocked.Read(ref _moveRightCount);
 
+    /// <summary>Number of contention splits (proactive splits of hot leaves).</summary>
+    public long ContentionSplitCount => Interlocked.Read(ref _contentionSplitCount);
+
     internal void ResetDiagnostics()
     {
         Interlocked.Exchange(ref _optimisticRestarts, 0);
@@ -667,6 +670,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         Interlocked.Exchange(ref _splitCount, 0);
         Interlocked.Exchange(ref _mergeCount, 0);
         Interlocked.Exchange(ref _moveRightCount, 0);
+        Interlocked.Exchange(ref _contentionSplitCount, 0);
     }
 
     /// <summary>
@@ -931,8 +935,8 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             activity = TyphonActivitySource.StartActivity("BTree.Insert");
         }
 
-        // Per-operation accessor for thread safety under OLC
-        var opAccessor = _segment.CreateChunkAccessor(accessor.ChangeSet);
+        // Per-operation accessor for thread safety under OLC (thread-local warm cache)
+        ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
         try
         {
             var args = new InsertArguments(key, value, Comparer, ref opAccessor);
@@ -944,8 +948,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
         finally
         {
-            opAccessor.CommitChanges();
-            opAccessor.Dispose();
+            _segment.ReturnWarmAccessor();
             activity?.Dispose();
         }
     }
@@ -958,8 +961,8 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             activity = TyphonActivitySource.StartActivity("BTree.Delete");
         }
 
-        // Per-operation accessor for thread safety under OLC
-        var opAccessor = _segment.CreateChunkAccessor(accessor.ChangeSet);
+        // Per-operation accessor for thread safety under OLC (thread-local warm cache)
+        ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
         try
         {
             var args = new RemoveArguments(key, Comparer, ref opAccessor);
@@ -971,8 +974,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
         finally
         {
-            opAccessor.CommitChanges();
-            opAccessor.Dispose();
+            _segment.ReturnWarmAccessor();
             activity?.Dispose();
         }
     }
@@ -1045,8 +1047,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     {
         get
         {
-            // TODO use a thread-local ChunkRandomAccessor to avoid creating a new one every time.
-            var ca = this._segment.CreateChunkAccessor();
+            ref var ca = ref _segment.RentWarmAccessor();
             try
             {
                 var result = TryGet(key, ref ca);
@@ -1059,7 +1060,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             }
             finally
             {
-                ca.Dispose();
+                _segment.ReturnWarmAccessor();
             }
         }
     }
@@ -1113,6 +1114,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     private Result<int, BTreeLookupStatus> TryGetPessimistic(TKey key, ref ChunkAccessor accessor)
     {
         // Unlimited OLC retries — guaranteed to complete as long as writers make progress
+        SpinWait spin = default;
         while (true)
         {
             var (leafChunkId, leafVersion, keyIndex) = OptimisticDescendToLeaf(key, ref accessor);
@@ -1122,7 +1124,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
                 {
                     return new Result<int, BTreeLookupStatus>(BTreeLookupStatus.NotFound);
                 }
-                Thread.SpinWait(1);
+                spin.SpinOnce();
                 continue;
             }
 
@@ -1154,8 +1156,8 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             activity?.SetTag(TyphonSpanAttributes.IndexOperation, "delete");
         }
 
-        // Per-operation accessor for thread safety under OLC
-        var opAccessor = _segment.CreateChunkAccessor(accessor.ChangeSet);
+        // Per-operation accessor for thread safety under OLC (thread-local warm cache)
+        ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
         try
         {
             // FindLeaf traversal is safe under OLC: internal nodes are stable.
@@ -1205,8 +1207,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
         finally
         {
-            opAccessor.CommitChanges();
-            opAccessor.Dispose();
+            _segment.ReturnWarmAccessor();
             activity?.Dispose();
         }
 
@@ -1261,6 +1262,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     private VariableSizedBufferAccessor<int> TryGetMultiplePessimistic(TKey key, ref ChunkAccessor accessor)
     {
         // Unlimited OLC retries — guaranteed to complete as long as writers make progress
+        SpinWait spin = default;
         while (true)
         {
             var (leafChunkId, leafVersion, keyIndex) = OptimisticDescendToLeaf(key, ref accessor);
@@ -1270,7 +1272,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
                 {
                     return default;
                 }
-                Thread.SpinWait(1);
+                spin.SpinOnce();
                 continue;
             }
 
@@ -1328,15 +1330,26 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         NeedsPessimistic,
     }
 
-    /// <summary>Spin-waits until the write lock is acquired. Counts contention spins for diagnostics.</summary>
+    /// <summary>
+    /// Spin-waits until the write lock is acquired. Counts contention spins for diagnostics.
+    /// Returns true if lock was acquired immediately (no contention), false if spinning was needed.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void SpinWriteLock(OlcLatch latch)
+    private bool SpinWriteLock(OlcLatch latch)
     {
-        while (!latch.TryWriteLock())
+        if (latch.TryWriteLock())
+        {
+            return true; // no contention
+        }
+
+        SpinWait spin = default;
+        do
         {
             Interlocked.Increment(ref _writeLockFailures);
-            Thread.SpinWait(1);
+            spin.SpinOnce();
         }
+        while (!latch.TryWriteLock());
+        return false; // contention detected
     }
 
     /// <summary>Thread-safe addition to the epoch-deferred node list (protected by _deferredLock).</summary>
@@ -1698,7 +1711,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             // General remove path with latch-coupled SMO — retry on lock contention
             _hasCachedLastKey = false;
             bool merge;
-            int retries = 0;
+            SpinWait spin = default;
             while (true)
             {
                 merge = RemoveIterative(ref args, ref accessor, out bool removeCompleted);
@@ -1707,10 +1720,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
                     break;
                 }
                 Interlocked.Increment(ref _optimisticRestarts);
-                if (++retries > 64)
-                {
-                    Thread.SpinWait(retries); // exponential back-off on high contention
-                }
+                spin.SpinOnce();
             }
 
             if (args.Removed)
@@ -1955,8 +1965,8 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             return OlcInsertResult.Restart;
         }
         // Range check: stale separator may route to wrong leaf after a concurrent split.
-        if (leaf.GetCount(ref accessor) > 0 && leaf.GetNext(ref accessor).IsValid &&
-            args.Compare(args.Key, leaf.GetLast(ref accessor).Key) > 0)
+        // High key is an exclusive upper bound, so key >= highKey means we're out of range.
+        if (leaf.GetCount(ref accessor) > 0 && leaf.GetNext(ref accessor).IsValid && args.Compare(args.Key, leaf.GetHighKey(ref accessor)) >= 0)
         {
             leafLatch.WriteUnlock();
             return OlcInsertResult.Restart;
@@ -2012,11 +2022,14 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             }
 
             // Append fast path: lock the last leaf and insert if key > lastKey and leaf not full.
+            // Bypass when leaf is contended and sufficiently populated — fall through to InsertIterative
+            // which has the path recording needed for contention split propagation.
             // Capture local refs to avoid races from concurrent ReverseLinkList/LinkList updates.
             {
                 var rl = ReverseLinkList;
-                int order = IsEmpty() ? 1 : args.Compare(args.Key, _hasCachedLastKey ? _cachedLastKey : rl.GetLast(ref accessor).Key);
-                if (order > 0 && !rl.GetIsFull(ref accessor))
+                var bypassAppendFastPath = rl.IsValid && rl.GetContentionHint(ref accessor) >= ContentionSplitThreshold && rl.GetCount(ref accessor) > rl.GetCapacity() / 2;
+                var order = IsEmpty() ? 1 : args.Compare(args.Key, _hasCachedLastKey ? _cachedLastKey : rl.GetLast(ref accessor).Key);
+                if (!bypassAppendFastPath && order > 0 && !rl.GetIsFull(ref accessor))
                 {
                     var rlLatch = rl.GetLatch(ref accessor);
                     SpinWriteLock(rlLatch);
@@ -2099,7 +2112,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
             // General path with latch-coupled SMO — retry on lock contention
             // InsertIterative handles root splits internally under the root's write lock.
-            int retries = 0;
+            SpinWait spin = default;
             while (true)
             {
                 InsertIterative(ref args, ref accessor, out bool insertCompleted);
@@ -2108,10 +2121,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
                     break;
                 }
                 Interlocked.Increment(ref _optimisticRestarts);
-                if (++retries > 64)
-                {
-                    Thread.SpinWait(retries); // exponential back-off on high contention
-                }
+                spin.SpinOnce();
             }
 
             if (args.Added)
@@ -2204,19 +2214,32 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             leafLatch.AbortWriteLock(); // release without version bump (we didn't modify anything)
             return null;
         }
-        SpinWriteLock(leafLatch);
+        bool leafAcquiredClean = SpinWriteLock(leafLatch);
         if (!leafLatch.ValidateVersionLocked(leafVersion))
         {
             leafLatch.AbortWriteLock(); // release without version bump — leaf was modified, not by us
             return null; // restart — leaf was modified between descent and lock
         }
 
+        // Update contention hint: saturating counter for detecting hot leaves
+        {
+            int hint = node.GetContentionHint(ref accessor);
+            if (!leafAcquiredClean)
+            {
+                node.SetContentionHint(Math.Min(hint + 1, 255), ref accessor);
+            }
+            else if (hint > 0)
+            {
+                node.SetContentionHint(hint - 1, ref accessor);
+            }
+        }
+
         // B-link move_right (Lehman & Yao): if the key is beyond this leaf's range, a concurrent split moved some keys to a right sibling. Chain right using
         // lock coupling (lock next before releasing current) until we find the correct leaf. Forward progress is guaranteed:
         // all movement is strictly rightward with no cycle, and SpinWriteLock waits for busy siblings.
         bool movedRight = false;
-        while (node.GetCount(ref accessor) > 0 && node.GetNext(ref accessor).IsValid &&
-               args.Compare(args.Key, node.GetLast(ref accessor).Key) > 0)
+        // High key is an exclusive upper bound, so key >= highKey means we're out of range.
+        while (node.GetCount(ref accessor) > 0 && node.GetNext(ref accessor).IsValid && args.Compare(args.Key, node.GetHighKey(ref accessor)) >= 0)
         {
             Interlocked.Increment(ref _moveRightCount);
             var nextNode = node.GetNext(ref accessor);
@@ -2238,15 +2261,31 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
 
         // Fast path: leaf not full → InsertLeaf only modifies this leaf (insert or duplicate append)
+        // If contention is high and leaf is sufficiently populated, fall through to contention split.
+        bool itemAlreadyInserted = false;
         if (!node.GetIsFull(ref accessor))
         {
             node.InsertLeaf(ref args, ref relatives, ref accessor);
-            node.GetLatch(ref accessor).WriteUnlock();
-            completed = true;
-            return null; // no split when leaf has space
+            itemAlreadyInserted = true;
+
+            bool shouldContentionSplit = !movedRight && node.GetContentionHint(ref accessor) >= ContentionSplitThreshold
+                                                     && node.GetCount(ref accessor) > node.GetCapacity() / 2;
+
+            if (!shouldContentionSplit)
+            {
+                node.GetLatch(ref accessor).WriteUnlock();
+                completed = true;
+                return null; // no split needed
+            }
+
+            // Contention split: reset hint and fall through to split path
+            node.SetContentionHint(0, ref accessor);
+            Interlocked.Increment(ref _contentionSplitCount);
+            // Fall through to split path below
         }
 
         // Check if key already exists in full leaf (buffer append, no structural change)
+        if (!itemAlreadyInserted)
         {
             var idx = node.Find(args.Key, args.KeyComparer, ref accessor);
             if (idx >= 0)
@@ -2282,10 +2321,10 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             return null; // promoted key not propagated — B-link covers the gap
         }
 
-        // Slow path: leaf full, new key → structural modification (spill or split) needed.
-        // Lock leaf neighbors for potential spill.
-        // AbortWriteLock on failure: no nodes modified yet — avoid spurious version bumps.
-        var leafPrev = node.GetPrevious(ref accessor);
+        // Slow path: leaf full or contention split — structural modification needed.
+        // For contention split, skip leafPrev lock (no spill needed — item already in, only need right neighbor for linked list).
+        // On lock failure: contention split uses WriteUnlock + completed=true (item is in); regular uses AbortWriteLock + restart.
+        var leafPrev = itemAlreadyInserted ? default : node.GetPrevious(ref accessor);
         var leafNext = node.GetNext(ref accessor);
         if (leafPrev.IsValid && !leafPrev.GetLatch(ref accessor).TryWriteLock())
         {
@@ -2298,13 +2337,19 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             {
                 leafPrev.GetLatch(ref accessor).AbortWriteLock();
             }
+            if (itemAlreadyInserted)
+            {
+                // Contention split abort: item is already inserted, just skip the proactive split
+                node.GetLatch(ref accessor).WriteUnlock();
+                completed = true;
+                return null;
+            }
             node.GetLatch(ref accessor).AbortWriteLock();
             return null; // restart
         }
 
         // Lock path nodes bottom-up with version validation.
         // Required for ancestor key updates during spill and split propagation.
-        // AbortWriteLock on failure: no nodes modified yet — avoid spurious version bumps.
         for (int i = ctx.Depth - 1; i >= 0; i--)
         {
             var pathLatch = ctx.PathNodes[i].GetLatch(ref accessor);
@@ -2322,6 +2367,12 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
                 if (leafPrev.IsValid)
                 {
                     leafPrev.GetLatch(ref accessor).AbortWriteLock();
+                }
+                if (itemAlreadyInserted)
+                {
+                    node.GetLatch(ref accessor).WriteUnlock();
+                    completed = true;
+                    return null;
                 }
                 node.GetLatch(ref accessor).AbortWriteLock();
                 return null; // restart
@@ -2341,13 +2392,29 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
                 {
                     leafPrev.GetLatch(ref accessor).AbortWriteLock();
                 }
+                if (itemAlreadyInserted)
+                {
+                    node.GetLatch(ref accessor).WriteUnlock();
+                    completed = true;
+                    return null;
+                }
                 node.GetLatch(ref accessor).AbortWriteLock();
                 return null; // restart
             }
         }
 
-        // All needed nodes locked — Phase 2: Insert at leaf (may spill or split)
-        var promoted = node.InsertLeaf(ref args, ref relatives, ref accessor);
+        // All needed nodes locked — Phase 2: Insert at leaf (may spill or split) or contention split
+        KeyValueItem? promoted;
+        if (itemAlreadyInserted)
+        {
+            // Contention split: item is already in the leaf, just redistribute via SplitLeafRight
+            var rightNode = node.SplitLeafRight(ref accessor);
+            promoted = new KeyValueItem(rightNode.GetFirst(ref accessor).Key, rightNode.ChunkId);
+        }
+        else
+        {
+            promoted = node.InsertLeaf(ref args, ref relatives, ref accessor);
+        }
 
         // Phase 2.5: Unlock leaf neighbors (version bumped by WriteUnlock)
         if (leafNext.IsValid)
@@ -2693,11 +2760,16 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
         // B-link: follow right links if key is beyond this leaf's range (stale parent separator).
         // Multiple hops may be needed when consecutive forceSplit operations left unpropagated separators.
+        // The HighKey read is OLC-validated: during a concurrent split, HighKey is updated after the key array,
+        // so a lock-free reader could see a stale HighKey and incorrectly break. If the node is write-locked or
+        // the version changed between read and validate, we conservatively follow the right link.
         for (int hop = 0; hop < 16 && index < 0 && node.GetCount(ref accessor) > 0; hop++)
         {
-            if (Comparer.Compare(key, node.GetLast(ref accessor).Key) <= 0)
+            var latch = node.GetLatch(ref accessor);
+            var version = latch.ReadVersion();
+            if (version != 0 && Comparer.Compare(key, node.GetHighKey(ref accessor)) < 0 && latch.ValidateVersion(version))
             {
-                break; // key is within this leaf's range
+                break; // key is confirmed within this leaf's range (high key is stable)
             }
 
             var next = node.GetNext(ref accessor);
@@ -2777,9 +2849,9 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             const int maxHops = 16;
             for (int hop = 0; hop < maxHops && node.GetCount(ref accessor) > 0; hop++)
             {
-                if (Comparer.Compare(key, node.GetLast(ref accessor).Key) <= 0)
+                if (Comparer.Compare(key, node.GetHighKey(ref accessor)) < 0)
                 {
-                    break; // key is within this leaf's range (just not present)
+                    break; // key is within this leaf's range (high key is exclusive upper bound)
                 }
 
                 if (!latch.ValidateVersion(version))
@@ -2829,8 +2901,8 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     /// <returns>True if the old key was found and moved; false if old key not found.</returns>
     public bool Move(TKey oldKey, TKey newKey, int value, ref ChunkAccessor accessor)
     {
-        // Per-operation accessor for thread safety under OLC
-        var opAccessor = _segment.CreateChunkAccessor(accessor.ChangeSet);
+        // Per-operation accessor for thread safety under OLC (thread-local warm cache)
+        ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
         try
         {
             for (int attempt = 0; attempt < MaxOptimisticRestarts; attempt++)
@@ -2995,8 +3067,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
         finally
         {
-            opAccessor.CommitChanges();
-            opAccessor.Dispose();
+            _segment.ReturnWarmAccessor();
         }
     }
 
@@ -3049,8 +3120,8 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     public int MoveValue(TKey oldKey, TKey newKey, int elementId, int value,
         ref ChunkAccessor accessor, out int oldHeadBufferId, out int newHeadBufferId, bool preserveEmptyBuffer = false)
     {
-        // Per-operation accessor for thread safety under OLC
-        var opAccessor = _segment.CreateChunkAccessor(accessor.ChangeSet);
+        // Per-operation accessor for thread safety under OLC (thread-local warm cache)
+        ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
         try
         {
             for (int attempt = 0; attempt < MaxOptimisticRestarts; attempt++)
@@ -3302,8 +3373,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
         finally
         {
-            opAccessor.CommitChanges();
-            opAccessor.Dispose();
+            _segment.ReturnWarmAccessor();
         }
     }
 
