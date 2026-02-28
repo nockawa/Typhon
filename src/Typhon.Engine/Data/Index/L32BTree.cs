@@ -10,25 +10,27 @@ using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using System.Threading;
 
-namespace Typhon.Engine.BPTree;
+namespace Typhon.Engine;
 
 [DebuggerTypeProxy(typeof(Index32Chunk.DebugView))]
 [DebuggerDisplay("Count: {Count}, Start: {Start}, Flags: {StateFlags}")]
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Pack = 4)]
 unsafe public struct Index32Chunk
 {
-    // 128 bytes to span two cache lines (ALP prefetch: the Adjacent Line Prefetcher on Zen 4+/recent Intel automatically prefetches the paired 64-byte line
-    //  within a naturally aligned 128-byte region)
+    // 256 bytes — fills four cache lines. Adjacent Line Prefetcher (ALP) on Zen 4+/recent Intel automatically
+    // fetches paired 64-byte lines within 128-byte regions, so two ALP triggers cover the full node.
 
-    public const int Capacity = 14;
+    public const int Capacity = 29;
 
-    // Special beast... Ownership control (LSB, 1 bit), state flags (LSW 15bits), Position of the first Item, aka Start (8bits), stored Item Count (8bits)
+    // State flags (LSW 16bits), Position of the first Item, aka Start (8bits), stored Item Count (8bits)
     public int Control;
+    public int OlcVersion;    // OLC latch: bit 0 = locked, bit 1 = obsolete, bits 2-31 = version (30 bits)
     public int PrevChunk;
     public int NextChunk;
     public int LeftValue;
-    public fixed int Values[Capacity];              // 14 × 4 = 56 bytes
-    public fixed int Keys[Capacity];                // 14 × 4 = 56 bytes
+    public int HighKey;                             // B-link upper bound — co-located with OlcVersion in first 128B region
+    public fixed int Values[Capacity];              // 29 × 4 = 116 bytes
+    public fixed int Keys[Capacity];                // 29 × 4 = 116 bytes
 
     public Span<int> KeysAsSpan
     {
@@ -92,6 +94,26 @@ unsafe public struct Index32Chunk
         }
     }
 
+    public int ContentionHint
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        get
+        {
+            fixed (int* c = &Control)
+            {
+                return ((byte*)c)[1];
+            }
+        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        set
+        {
+            fixed (int* c = &Control)
+            {
+                ((byte*)c)[1] = (byte)value;
+            }
+        }
+    }
+
     public int End => Adjust(Start + Count);
     public NodeStates StateFlags
     {
@@ -114,10 +136,10 @@ unsafe public struct Index32Chunk
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    public bool TryLock() => (Interlocked.Or(ref Control, (int)NodeStates.Ownership) & (int)NodeStates.Ownership) == 0;
+    public bool TryLock() => (Interlocked.Or(ref OlcVersion, 1) & 1) == 0;
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    public void FreeLock() => Interlocked.And(ref Control, ~(int)NodeStates.Ownership);
-    public bool IsLocked => (Control & (int)NodeStates.Ownership) != 0;
+    public void FreeLock() => Interlocked.And(ref OlcVersion, ~1);
+    public bool IsLocked => (OlcVersion & 1) != 0;
     public bool IsRotated => (Start + Count) > Capacity;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
@@ -168,7 +190,7 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
         internal override void Initialize(BTree<TKey> owner, ChunkBasedSegment segment)
         {
             base.Initialize(owner, segment);
-            Debug.Assert(sizeof(Index32Chunk) == 128);
+            Debug.Assert(sizeof(Index32Chunk) == 256);
             Debug.Assert(segment.Stride == sizeof(Index32Chunk));
         }
 
@@ -178,12 +200,20 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
         {
             ref var chunk = ref accessor.GetChunk<Index32Chunk>(node.ChunkId, true);
             chunk.Control = (int)states;  // Atomically sets StateFlags + Start=0 + Count=0
+            chunk.OlcVersion = 4;         // version=1 (bits 2-31), locked=false, obsolete=false — must be non-zero so OLC readers don't see it as locked
             chunk.PrevChunk = 0;
             chunk.NextChunk = 0;
             chunk.LeftValue = 0;
+            chunk.HighKey = int.MaxValue;  // B-link upper bound: sentinel for newly allocated nodes
         }
         
         public override int GetNodeCapacity() => Index32Chunk.Capacity;
+
+        public override ref int GetOlcVersionRef(int chunkId, ref ChunkAccessor accessor)
+        {
+            ref var chunk = ref accessor.GetChunk<Index32Chunk>(chunkId, false);
+            return ref chunk.OlcVersion;
+        }
 
         public override NodeWrapper GetLeftNode(NodeWrapper node, ref ChunkAccessor accessor)
         {
@@ -269,6 +299,31 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
             return chunk.StateFlags;
+        }
+
+        public override int GetContentionHint(NodeWrapper node, ref ChunkAccessor accessor)
+        {
+            ref readonly var chunk = ref accessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
+            return chunk.ContentionHint;
+        }
+
+        public override void SetContentionHint(NodeWrapper node, int value, ref ChunkAccessor accessor)
+        {
+            ref var chunk = ref accessor.GetChunk<Index32Chunk>(node.ChunkId, true);
+            chunk.ContentionHint = value;
+        }
+
+        public override TKey GetHighKey(NodeWrapper node, ref ChunkAccessor accessor)
+        {
+            ref readonly var chunk = ref accessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
+            int hk = chunk.HighKey;
+            return *(TKey*)&hk;
+        }
+
+        public override void SetHighKey(NodeWrapper node, TKey key, ref ChunkAccessor accessor)
+        {
+            ref var chunk = ref accessor.GetChunk<Index32Chunk>(node.ChunkId, true);
+            chunk.HighKey = *(int*)&key;
         }
 
         #endregion
@@ -643,6 +698,7 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
             }
 
             leftChunk.Count += right.GetCount(ref accessor); // correct array length.
+            leftChunk.HighKey = rightChunk.HighKey; // merged node inherits right's upper bound
         }
 
         public override NodeWrapper GetLastChild(NodeWrapper node, ref ChunkAccessor accessor)
@@ -794,6 +850,8 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
         public NodeWrapper SplitRight(ref Index32Chunk left, NodeStates states, ref ChunkAccessor accessor)
         {
+            var oldHighKey = left.HighKey; // save before split — right inherits original upper bound
+
             var rightNode = Owner.AllocNode(states, ref accessor);
             ref var right = ref accessor.GetChunk<Index32Chunk>(rightNode.ChunkId, true);
 
@@ -833,6 +891,10 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
                 lv.Slice(0, remaining).CopyTo(rv.Slice(length, remaining));
                 lv.Slice(0, remaining).Clear();
             }
+
+            // Update high keys: right inherits old upper bound, left gets separator (right's first key)
+            right.HighKey = oldHighKey;
+            left.HighKey = right.Keys[0]; // right.Start is 0 after AllocNode
 
             return rightNode;
         }

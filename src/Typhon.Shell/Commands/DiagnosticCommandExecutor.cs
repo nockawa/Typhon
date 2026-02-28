@@ -6,7 +6,6 @@ using System.Runtime.InteropServices;
 using System.Text;
 using Spectre.Console;
 using Typhon.Engine;
-using Typhon.Engine.BPTree;
 using Typhon.Shell.Parsing;
 using Typhon.Shell.Session;
 

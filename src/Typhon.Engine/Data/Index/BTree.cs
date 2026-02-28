@@ -4,8 +4,10 @@ using JetBrains.Annotations;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -17,16 +19,15 @@ using System.Runtime.InteropServices;
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-namespace Typhon.Engine.BPTree;
+namespace Typhon.Engine;
 
 #region Chunk definitions
 
 [Flags]
 public enum NodeStates
 {
-    None       = 0x00,
-    Ownership  = 0x01,
-    IsLeaf     = 0x02
+    None     = 0x00,
+    IsLeaf   = 0x02
 }
 
 #endregion
@@ -46,8 +47,8 @@ public struct BTreeHeader
 /// <summary>
 /// Header of the BTree directory stored at the start of chunk 0.
 /// Tracks how many BTree entries are registered in this segment.
-/// Directory chunks are zeroed on first reservation (<see cref="ChunkBasedSegment.ReserveChunk(int,bool)"/>),
-/// so <see cref="EntryCount"/> == 0 reliably means "empty directory".
+/// Directory chunks are zeroed on first reservation (<see cref="ChunkBasedSegment.ReserveChunk(int,bool)"/>), so <see cref="EntryCount"/> == 0 reliably
+/// means "empty directory".
 /// </summary>
 [StructLayout(LayoutKind.Sequential, Pack = 2)]
 internal struct BTreeDirectoryHeader
@@ -58,8 +59,8 @@ internal struct BTreeDirectoryHeader
 }
 
 /// <summary>
-/// One entry in the BTree directory (chunk 0). Each BTree on the segment gets a unique entry,
-/// keyed by <see cref="StableId"/> (FieldId for secondary indexes, -1 for PK, 0 for standalone).
+/// One entry in the BTree directory (chunk 0). Each BTree on the segment gets a unique entry, keyed by <see cref="StableId"/> (FieldId for secondary
+/// indexes, -1 for PK, 0 for standalone).
 /// </summary>
 /// <remarks>12 bytes: short StableId + short Reserved + int RootChunkId + int Count.</remarks>
 [StructLayout(LayoutKind.Sequential, Pack = 2)]
@@ -129,6 +130,22 @@ public interface IBTree
     unsafe Result<int, BTreeLookupStatus> TryGet(void* keyAddr, ref ChunkAccessor accessor);
     unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref ChunkAccessor accessor, bool preserveEmptyBuffer = false);
     unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ref ChunkAccessor accessor);
+
+    /// <summary>
+    /// Compound move: atomically removes <paramref name="value"/> from <paramref name="oldKeyAddr"/>
+    /// and inserts it under <paramref name="newKeyAddr"/>. For unique indexes (!AllowMultiple).
+    /// </summary>
+    /// <returns>True if the old key was found and moved; false if old key not found.</returns>
+    unsafe bool Move(void* oldKeyAddr, void* newKeyAddr, int value, ref ChunkAccessor accessor);
+
+    /// <summary>
+    /// Compound move for multi-value indexes (AllowMultiple): removes <paramref name="elementId"/>/<paramref name="value"/>
+    /// from <paramref name="oldKeyAddr"/>'s buffer and appends <paramref name="value"/> under <paramref name="newKeyAddr"/>.
+    /// Returns the new element ID and both HEAD buffer IDs for inline TAIL tracking.
+    /// </summary>
+    unsafe int MoveValue(void* oldKeyAddr, void* newKeyAddr, int elementId, int value, ref ChunkAccessor accessor, out int oldHeadBufferId, 
+        out int newHeadBufferId, bool preserveEmptyBuffer = false);
+
     void CheckConsistency(ref ChunkAccessor accessor);
 }
 
@@ -146,10 +163,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         public TKey Key;
         public int Value;
 
-        public static void ChangeKey(ref KeyValueItem item, TKey newKey)
-        {
-            item = new KeyValueItem(newKey, item.Value);
-        }
+        public static void ChangeKey(ref KeyValueItem item, TKey newKey) => item = new KeyValueItem(newKey, item.Value);
 
         public static void SwapKeys(ref KeyValueItem x, ref KeyValueItem y)
         {
@@ -167,7 +181,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             _keyComparer = comparer ?? Comparer<TKey>.Default;
             Key = key;
             Added = false;
-            ElementId = default;
+            ElementId = 0;
             Accessor = ref accessor;
         }
         public readonly TKey Key;
@@ -237,7 +251,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             Key = key;
             Comparer = comparer;
 
-            Value = default;
+            Value = 0;
             Removed = false;
             Accessor = ref accessor;
         }
@@ -397,9 +411,8 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         /// Ancestor fields are set eagerly (no chunk reads — just copies).
         /// Sibling fields are lazily resolved on first access via GetLeftSibling/GetRightSibling.
         /// </summary>
-        public static void Create(NodeWrapper child, int index, NodeWrapper parent, ref NodeRelatives parentRelatives, out NodeRelatives res, ref ChunkAccessor accessor)
+        public static void Create(NodeWrapper child, int index, NodeWrapper parent, int parentCount, ref NodeRelatives parentRelatives, out NodeRelatives res, ref ChunkAccessor accessor)
         {
-            Debug.Assert(index >= -1 && index < parent.GetLength(ref accessor));
 
             // assign nearest ancestors between child and siblings.
             NodeWrapper leftAncestor, rightAncestor;
@@ -418,7 +431,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
                 rightAncestorIndex = index + 1;
                 hasTrueRightSibling = true;
             }
-            else if (index == parent.GetLength(ref accessor) - 1) // if child is right most, use right cousin as right sibling.
+            else if (index == parentCount - 1) // if child is right most, use right cousin as right sibling.
             {
                 leftAncestor = parent;
                 leftAncestorIndex = index;
@@ -451,14 +464,14 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     protected abstract BaseNodeStorage GetStorage();
     protected IComparer<TKey> Comparer;
 
-    private AccessControl _access;
     private readonly ChunkBasedSegment _segment;
     private readonly BaseNodeStorage _storage;
+    // Lightweight mutex protecting DeferredNodeList, which is accessed by concurrent merge operations.
+    private SpinLock _deferredLock = new(enableThreadOwnerTracking: false);
 
     // Per-instance count and root tracking used for ALL runtime operations.
-    // Multiple BTrees can share the same ChunkBasedSegment (e.g., PK index and secondary
-    // indexes share DefaultIndexSegment). Runtime code MUST use these per-instance fields
-    // instead of reading from a single shared offset, which would cause cross-BTree corruption.
+    // Multiple BTrees can share the same ChunkBasedSegment (e.g., PK index and secondary indexes share DefaultIndexSegment). Runtime code MUST use these
+    // per-instance fields instead of reading from a single shared offset, which would cause cross-BTree corruption.
     // Each BTree has a unique entry in the chunk 0 directory, keyed by stableId.
     private int _count;
 
@@ -467,28 +480,147 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     private TKey _cachedLastKey;
     private bool _hasCachedLastKey;
 
-    // Path storage for iterative tree traversal (InsertIterative/RemoveIterative).
-    // Pre-allocated once per BTree instance. Max depth 32 handles trees with >10^38 entries (capacity 9).
-    // Thread safety: these arrays are only accessed from InsertIterative/RemoveIterative, which are
-    // exclusively called from AddOrUpdateCore/RemoveCore — both always run under _access exclusive lock.
-    private const int MaxTreeDepth = 32;
-    private readonly NodeRelatives[] _pathRelatives = new NodeRelatives[MaxTreeDepth];
-    private readonly NodeWrapper[] _pathNodes = new NodeWrapper[MaxTreeDepth];
-    private readonly int[] _pathChildIndices = new int[MaxTreeDepth];
+    // Epoch-deferred deallocation: nodes marked obsolete during merges are freed once all readers have exited.
+    // Protected by _deferredLock for thread safety under concurrent merge operations.
+    private DeferredNodeList _deferredNodes;
+
+    // OLC diagnostics counters (always-on, only incremented on slow paths)
+    internal long _optimisticRestarts;
+    internal long _pessimisticFallbacks;
+    internal long _writeLockFailures;
+    internal long _splitCount;
+    internal long _mergeCount;
+    internal long _moveRightCount;
+    internal long _contentionSplitCount;
+
+    internal const int MaxTreeDepth = 32;
+    internal const int MaxOptimisticRestarts = 3;
+    internal const int ContentionSplitThreshold = 3;
+
+    #region OLC Path Buffers
+
+    /// <summary>Stack-allocated int buffer for tree traversal path (max 32 levels).</summary>
+    [InlineArray(MaxTreeDepth)]
+    internal struct PathIntBuffer
+    {
+        private int _element0;
+    }
+
+    /// <summary>Stack-allocated NodeWrapper buffer for tree traversal path.</summary>
+    [InlineArray(MaxTreeDepth)]
+    internal struct PathNodesBuffer
+    {
+        private NodeWrapper _element0;
+    }
+
+    /// <summary>Stack-allocated NodeRelatives buffer for tree traversal path.</summary>
+    [InlineArray(MaxTreeDepth)]
+    internal struct PathRelativesBuffer
+    {
+        private NodeRelatives _element0;
+    }
+
+    /// <summary>
+    /// Stack-allocated traversal context for a single BTree operation.
+    /// Replaces instance-level path arrays that were protected by the whole-tree lock.
+    /// ~4KB on the stack per mutation. PathVersions adds 128 bytes (32 x 4) for OLC validation.
+    /// </summary>
+    internal ref struct MutationContext
+    {
+        public PathRelativesBuffer PathRelatives;
+        public PathNodesBuffer PathNodes;
+        public PathIntBuffer PathChildIndices;
+        public PathIntBuffer PathVersions;     // OLC version snapshots for validation
+        public int Depth;
+    }
+
+    #endregion
+
+    #region Epoch-Deferred Deallocation
+
+    /// <summary>
+    /// Tracks nodes marked obsolete during merges for epoch-deferred deallocation.
+    /// Inline buffer of 8 entries covers typical case; overflows to List for cascading merges.
+    /// All access must be under _deferredLock (via DeferredAdd / DeferredReclaim).
+    /// </summary>
+    internal struct DeferredNodeList
+    {
+        private struct Entry
+        {
+            public int ChunkId;
+            public long RetireEpoch;
+        }
+
+        [InlineArray(8)]
+        private struct EntryBuffer
+        {
+            private Entry _element0;
+        }
+
+        private EntryBuffer _entries;
+        private int _inlineCount;
+        private List<Entry> _overflow;
+
+        /// <summary>Record a chunk for deferred deallocation at the given epoch.</summary>
+        public void Add(int chunkId, long retireEpoch)
+        {
+            if (_inlineCount < 8)
+            {
+                _entries[_inlineCount] = new Entry { ChunkId = chunkId, RetireEpoch = retireEpoch };
+                _inlineCount++;
+            }
+            else
+            {
+                _overflow ??= new List<Entry>();
+                _overflow.Add(new Entry { ChunkId = chunkId, RetireEpoch = retireEpoch });
+            }
+        }
+
+        /// <summary>
+        /// Free nodes whose retire epoch is strictly less than safeEpoch (meaning all threads that could have observed the node have since exited their epoch scope).
+        /// </summary>
+        public void Reclaim(ChunkBasedSegment segment, long safeEpoch)
+        {
+            // Reclaim from inline buffer (compact in-place)
+            int write = 0;
+            for (int read = 0; read < _inlineCount; read++)
+            {
+                if (_entries[read].RetireEpoch < safeEpoch)
+                {
+                    segment.FreeChunk(_entries[read].ChunkId);
+                }
+                else
+                {
+                    if (write != read)
+                    {
+                        _entries[write] = _entries[read];
+                    }
+                    write++;
+                }
+            }
+            _inlineCount = write;
+
+            // Reclaim from overflow list
+            if (_overflow is { Count: > 0 })
+            {
+                for (int i = _overflow.Count - 1; i >= 0; i--)
+                {
+                    if (_overflow[i].RetireEpoch < safeEpoch)
+                    {
+                        segment.FreeChunk(_overflow[i].ChunkId);
+                        _overflow.RemoveAt(i);
+                    }
+                }
+            }
+        }
+
+        /// <summary>Number of deferred entries pending reclamation.</summary>
+        public readonly int Count => _inlineCount + (_overflow?.Count ?? 0);
+    }
+
+    #endregion
 
     // Optimization: warm ChunkAccessor for exclusive operations. Reused across exclusive-lock calls to avoid per-operation creation (~15ns) and keep the
-    // MRU page cache warm (saves SIMD search misses on repeated tree traversals).
-    // Thread safety: only accessed under _access exclusive lock.
-    // Epoch safety: cached page addresses are only valid within the same global epoch. If the epoch advances (any thread exits its outermost scope), pages
-    // could be evicted and remapped, so the accessor is recreated.
-    // TYPHON005 suppressed: dirty pages are always flushed via CommitChanges() in each operation's finally block — the accessor never holds pending dirty
-    // state between operations.
-#pragma warning disable TYPHON005
-    private ChunkAccessor _warmAccessor;
-#pragma warning restore TYPHON005
-    private long _warmAccessorEpoch;
-    private bool _warmAccessorValid;
-
     // Cached location of this BTree's entry in the chunk 0 directory.
     // Computed once at construction, used by SyncHeader for O(1) writes.
     private int _dirChunkId;
@@ -504,15 +636,46 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public int EntryCount => _count;
 
+    /// <summary>Number of deferred nodes pending reclamation (test visibility).</summary>
+    internal int DeferredNodeCount => _deferredNodes.Count;
+
+    /// <summary>Number of OLC optimistic read restarts (version validation failures).</summary>
+    public long OptimisticRestarts => Interlocked.Read(ref _optimisticRestarts);
+
+    /// <summary>Number of fallbacks from optimistic to pessimistic path.</summary>
+    public long PessimisticFallbacks => Interlocked.Read(ref _pessimisticFallbacks);
+
+    /// <summary>Number of SpinWriteLock spin iterations (contention on write locks).</summary>
+    public long WriteLockFailures => Interlocked.Read(ref _writeLockFailures);
+
+    /// <summary>Number of node splits (leaf + internal).</summary>
+    public long SplitCount => Interlocked.Read(ref _splitCount);
+
+    /// <summary>Number of node merges (leaf + internal).</summary>
+    public long MergeCount => Interlocked.Read(ref _mergeCount);
+
+    /// <summary>Number of move-right operations during insert (B-link following).</summary>
+    public long MoveRightCount => Interlocked.Read(ref _moveRightCount);
+
+    /// <summary>Number of contention splits (proactive splits of hot leaves).</summary>
+    public long ContentionSplitCount => Interlocked.Read(ref _contentionSplitCount);
+
+    internal void ResetDiagnostics()
+    {
+        Interlocked.Exchange(ref _optimisticRestarts, 0);
+        Interlocked.Exchange(ref _pessimisticFallbacks, 0);
+        Interlocked.Exchange(ref _writeLockFailures, 0);
+        Interlocked.Exchange(ref _splitCount, 0);
+        Interlocked.Exchange(ref _mergeCount, 0);
+        Interlocked.Exchange(ref _moveRightCount, 0);
+        Interlocked.Exchange(ref _contentionSplitCount, 0);
+    }
+
     /// <summary>
     /// Returns an enumerator that walks the leaf-level linked list, yielding all entries in ascending key order.
-    /// The caller must be inside an epoch scope. The returned enumerator holds a shared lock (released on Dispose).
+    /// The caller must be inside an epoch scope. Uses per-leaf OLC validation (lock-free for readers).
     /// </summary>
-    public LeafEnumerator EnumerateLeaves()
-    {
-        AcquireShared("BTree/EnumerateLeaves");
-        return new LeafEnumerator(this);
-    }
+    public LeafEnumerator EnumerateLeaves() => new LeafEnumerator(this);
 
     /// <summary>
     /// Returns the maximum key in the BTree. Single-threaded use only (engine init).
@@ -536,9 +699,9 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
     }
 
-    public int IncCount() => ++_count;
+    public int IncCount() => Interlocked.Increment(ref _count);
 
-    public int DecCount() => --_count;
+    public int DecCount() => Interlocked.Decrement(ref _count);
 
     /// <summary>
     /// Writes <c>_count</c> and <c>Root.ChunkId</c> to this BTree's directory entry in chunk 0 (or chained chunks 1-3).
@@ -549,16 +712,38 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         var addr = accessor.GetChunkAddress(_dirChunkId, true);
         ref var entry = ref Unsafe.AsRef<BTreeDirectoryEntry>(addr + _dirEntryOffset);
         entry.Count = _count;
-        entry.RootChunkId = Root.ChunkId;
+        entry.RootChunkId = _rootChunkId;
     }
 
-    private NodeWrapper Root;
-    private NodeWrapper LinkList;
-    private NodeWrapper ReverseLinkList;
-    public int Height;
+    // Volatile root chunk ID: atomically readable by concurrent readers under OLC.
+    // NodeWrapper is reconstructed on demand from _storage + _rootChunkId.
+    private volatile int _rootChunkId;
 
-    protected KeyValueItem GetFirst(ref ChunkAccessor accessor) => LinkList.GetFirst(ref accessor);
-    protected KeyValueItem GetLast(ref ChunkAccessor accessor) => ReverseLinkList.GetLast(ref accessor);
+    private NodeWrapper Root
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _rootChunkId == 0 ? default : new NodeWrapper(_storage, _rootChunkId, _height == 1);
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        set => _rootChunkId = value.IsValid ? value.ChunkId : 0;
+    }
+
+    private NodeWrapper _linkList;
+    private NodeWrapper _reverseLinkList;
+
+    // Volatile height: atomically readable by concurrent readers under OLC.
+    // Only modified under exclusive lock; volatile prevents compiler reordering for readers.
+    private volatile int _height;
+
+    public int Height
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _height;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        set => _height = value;
+    }
+
+    protected KeyValueItem GetFirst(ref ChunkAccessor accessor) => _linkList.GetFirst(ref accessor);
+    protected KeyValueItem GetLast(ref ChunkAccessor accessor) => _reverseLinkList.GetLast(ref accessor);
 
     #endregion
 
@@ -622,7 +807,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
                         node = node.GetLeft(ref accessor);
                         Height++;
                     }
-                    LinkList = node;
+                    _linkList = node;
 
                     // Traverse the rightmost path to find ReverseLinkList (rightmost leaf)
                     node = Root;
@@ -630,7 +815,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
                     {
                         node = node.GetLastChild(ref accessor);
                     }
-                    ReverseLinkList = node;
+                    _reverseLinkList = node;
                 }
             }
             finally
@@ -674,7 +859,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     /// </summary>
     private unsafe void FindInDirectory(short stableId, ref ChunkAccessor accessor)
     {
-        var chunk0Addr = accessor.GetChunkAddress(0, false);
+        var chunk0Addr = accessor.GetChunkAddress(0);
         ref var header = ref Unsafe.AsRef<BTreeDirectoryHeader>(chunk0Addr);
 
         int totalEntries = header.EntryCount;
@@ -683,7 +868,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         for (var i = 0; i < totalEntries; i++)
         {
             var (chunkId, offset) = ComputeEntryLocation(i, stride);
-            var entryChunkAddr = accessor.GetChunkAddress(chunkId, false);
+            var entryChunkAddr = accessor.GetChunkAddress(chunkId);
             ref var entry = ref Unsafe.AsRef<BTreeDirectoryEntry>(entryChunkAddr + offset);
 
             if (entry.StableId == stableId)
@@ -731,6 +916,12 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         => RemoveValue(Unsafe.AsRef<TKey>(keyAddr), elementId, value, ref accessor, preserveEmptyBuffer);
     public unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ref ChunkAccessor accessor)
         => TryGetMultiple(Unsafe.AsRef<TKey>(keyAddr), ref accessor);
+    public unsafe bool Move(void* oldKeyAddr, void* newKeyAddr, int value, ref ChunkAccessor accessor)
+        => Move(Unsafe.AsRef<TKey>(oldKeyAddr), Unsafe.AsRef<TKey>(newKeyAddr), value, ref accessor);
+    public unsafe int MoveValue(void* oldKeyAddr, void* newKeyAddr, int elementId, int value,
+        ref ChunkAccessor accessor, out int oldHeadBufferId, out int newHeadBufferId, bool preserveEmptyBuffer = false)
+        => MoveValue(Unsafe.AsRef<TKey>(oldKeyAddr), Unsafe.AsRef<TKey>(newKeyAddr), elementId, value,
+            ref accessor, out oldHeadBufferId, out newHeadBufferId, preserveEmptyBuffer);
 
     public int Add(TKey key, int value, ref ChunkAccessor accessor) => Add(key, value, ref accessor, out _);
 
@@ -742,24 +933,20 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             activity = TyphonActivitySource.StartActivity("BTree.Insert");
         }
 
-        AcquireExclusive("BTree/Insert");
+        // Per-operation accessor for thread safety under OLC (thread-local warm cache)
+        ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
         try
         {
-            ref var wa = ref GetWarmAccessor(ref accessor);
-            var args = new InsertArguments(key, value, Comparer, ref wa);
+            var args = new InsertArguments(key, value, Comparer, ref opAccessor);
             AddOrUpdateCore(ref args);
-            SyncHeader(ref wa);
+            SyncHeader(ref opAccessor);
             activity?.SetTag(TyphonSpanAttributes.IndexOperation, "insert");
             bufferRootId = args.BufferRootId;
             return args.ElementId;
         }
         finally
         {
-            if (_warmAccessorValid)
-            {
-                _warmAccessor.CommitChanges();
-            }
-            _access.ExitExclusiveAccess();
+            _segment.ReturnWarmAccessor();
             activity?.Dispose();
         }
     }
@@ -772,24 +959,20 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             activity = TyphonActivitySource.StartActivity("BTree.Delete");
         }
 
-        AcquireExclusive("BTree/Delete");
+        // Per-operation accessor for thread safety under OLC (thread-local warm cache)
+        ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
         try
         {
-            ref var wa = ref GetWarmAccessor(ref accessor);
-            var args = new RemoveArguments(key, Comparer, ref wa);
+            var args = new RemoveArguments(key, Comparer, ref opAccessor);
             RemoveCore(ref args);
-            SyncHeader(ref wa);
+            SyncHeader(ref opAccessor);
             value = args.Value;
             activity?.SetTag(TyphonSpanAttributes.IndexOperation, "delete");
             return args.Removed;
         }
         finally
         {
-            if (_warmAccessorValid)
-            {
-                _warmAccessor.CommitChanges();
-            }
-            _access.ExitExclusiveAccess();
+            _segment.ReturnWarmAccessor();
             activity?.Dispose();
         }
     }
@@ -802,58 +985,60 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             return;
         }
 
-        AcquireShared("BTree/CheckConsistency");
-        try
+        // Debug/test-only: runs without locks (caller must ensure no concurrent modification)
+        Root.CheckConsistency(default, NodeWrapper.CheckConsistencyParent.Root, Comparer, Height, ref accessor);
+
+        // Check the linked link of leaves in forward
+        NodeWrapper prev = default;
+        var cur = _linkList;
+        TKey prevValue = default;
+
+        while (cur.IsValid)
         {
-            Root.CheckConsistency(default, NodeWrapper.CheckConsistencyParent.Root, Comparer, Height, ref accessor);
-
-            // Check the linked link of leaves in forward
-            NodeWrapper prev = default;
-            var cur = LinkList;
-            TKey prevValue = default;
-
-            while (cur.IsValid)
+            if (cur != _linkList)
             {
-                if (cur != LinkList)
-                {
-                    Trace.Assert(prev.GetNext(ref accessor) == cur, " Prev.Next doesn't link to current");
-                    Trace.Assert(cur.GetPrevious(ref accessor) == prev, "Cur.Previous doesn't link to previous");
+                ConsistencyAssert(prev.GetNext(ref accessor) == cur, "Prev.Next doesn't link to current");
+                ConsistencyAssert(cur.GetPrevious(ref accessor) == prev, "Cur.Previous doesn't link to previous");
 
-                    Trace.Assert(Comparer.Compare(prevValue, cur.GetFirst(ref accessor).Key) < 0, 
-                        $"Previous Node's first key '{prevValue}' should be less than current node's first key'{cur.GetFirst(ref accessor).Key}'.");
-                }
-
-                prevValue = cur.GetLast(ref accessor).Key;
-                prev = cur;
-                cur = cur.GetNext(ref accessor);
+                ConsistencyAssert(Comparer.Compare(prevValue, cur.GetFirst(ref accessor).Key) < 0,
+                    $"Previous Node's first key '{prevValue}' should be less than current node's first key '{cur.GetFirst(ref accessor).Key}'.");
             }
-            Trace.Assert(prev == ReverseLinkList, "Last Node of the forward chain doesn't match ReverseLinkList");
 
-            // Check the linked link of leaves in reverse
-            NodeWrapper next = default;
-            cur = ReverseLinkList;
-            TKey nextValue = default;
-
-            while (cur.IsValid)
-            {
-                if (cur != ReverseLinkList)
-                {
-                    Trace.Assert(next.GetPrevious(ref accessor) == cur, " Next.Previous doesn't link to current");
-                    Trace.Assert(cur.GetNext(ref accessor) == next, "Cur.Next doesn't link to next");
-
-                    Trace.Assert(Comparer.Compare(nextValue, cur.GetLast(ref accessor).Key) > 0, 
-                        $"Next Node's last key '{nextValue}' should be greater than current node's last key'{cur.GetLast(ref accessor).Key}'.");
-                }
-
-                nextValue = cur.GetFirst(ref accessor).Key;
-                next = cur;
-                cur = cur.GetPrevious(ref accessor);
-            }
-            Trace.Assert(next == LinkList, "Last Node of the reverse chain doesn't match LinkedList");
+            prevValue = cur.GetLast(ref accessor).Key;
+            prev = cur;
+            cur = cur.GetNext(ref accessor);
         }
-        finally
+        ConsistencyAssert(prev == _reverseLinkList, "Last Node of the forward chain doesn't match ReverseLinkList");
+
+        // Check the linked link of leaves in reverse
+        NodeWrapper next = default;
+        cur = _reverseLinkList;
+        TKey nextValue = default;
+
+        while (cur.IsValid)
         {
-            _access.ExitSharedAccess();
+            if (cur != _reverseLinkList)
+            {
+                ConsistencyAssert(next.GetPrevious(ref accessor) == cur, "Next.Previous doesn't link to current");
+                ConsistencyAssert(cur.GetNext(ref accessor) == next, "Cur.Next doesn't link to next");
+
+                ConsistencyAssert(Comparer.Compare(nextValue, cur.GetLast(ref accessor).Key) > 0,
+                    $"Next Node's last key '{nextValue}' should be greater than current node's last key '{cur.GetLast(ref accessor).Key}'.");
+            }
+
+            nextValue = cur.GetFirst(ref accessor).Key;
+            next = cur;
+            cur = cur.GetPrevious(ref accessor);
+        }
+        ConsistencyAssert(next == _linkList, "Last Node of the reverse chain doesn't match LinkedList");
+    }
+
+    [ExcludeFromCodeCoverage]
+    private static void ConsistencyAssert(bool condition, string message)
+    {
+        if (!condition)
+        {
+            throw new InvalidOperationException($"Consistency check: {message}");
         }
     }
 
@@ -861,8 +1046,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     {
         get
         {
-            // TODO use a thread-local ChunkRandomAccessor to avoid creating a new one every time.
-            var ca = this._segment.CreateChunkAccessor();
+            ref var ca = ref _segment.RentWarmAccessor();
             try
             {
                 var result = TryGet(key, ref ca);
@@ -875,27 +1059,90 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             }
             finally
             {
-                ca.Dispose();
+                _segment.ReturnWarmAccessor();
             }
         }
     }
 
     public Result<int, BTreeLookupStatus> TryGet(TKey key, ref ChunkAccessor accessor)
     {
-        AcquireShared("BTree/TryGet");
-        try
+        // OLC optimistic path: zero locks, zero writes to shared state
+        for (int attempt = 0; attempt < MaxOptimisticRestarts; attempt++)
         {
-            var leaf = FindLeaf(key, out var index, ref accessor);
-            if (index >= 0)
+            var (leafChunkId, leafVersion, keyIndex) = OptimisticDescendToLeaf(key, ref accessor);
+            if (leafChunkId == 0)
             {
-                return new Result<int, BTreeLookupStatus>(leaf.GetItem(index, ref accessor).Value);
+                if (IsEmpty())
+                {
+                    return new Result<int, BTreeLookupStatus>(BTreeLookupStatus.NotFound);
+                }
+                Interlocked.Increment(ref _optimisticRestarts);
+                continue; // restart
             }
 
-            return new Result<int, BTreeLookupStatus>(BTreeLookupStatus.NotFound);
+            if (keyIndex < 0)
+            {
+                // Key not found — validate leaf version one more time
+                var leaf = _storage.LoadNode(leafChunkId);
+                var latch = leaf.GetLatch(ref accessor);
+                if (latch.ValidateVersion(leafVersion))
+                {
+                    return new Result<int, BTreeLookupStatus>(BTreeLookupStatus.NotFound);
+                }
+                Interlocked.Increment(ref _optimisticRestarts);
+                continue; // leaf was modified — restart
+            }
+
+            // Key found — read value and validate
+            var leafNode = _storage.LoadNode(leafChunkId);
+            int value = leafNode.GetItem(keyIndex, ref accessor).Value;
+            var leafLatch = leafNode.GetLatch(ref accessor);
+            if (leafLatch.ValidateVersion(leafVersion))
+            {
+                return new Result<int, BTreeLookupStatus>(value);
+            }
+            // Value read may be stale — restart
+            Interlocked.Increment(ref _optimisticRestarts);
         }
-        finally
+
+        // Pessimistic fallback after MaxOptimisticRestarts
+        Interlocked.Increment(ref _pessimisticFallbacks);
+        return TryGetPessimistic(key, ref accessor);
+    }
+
+    private Result<int, BTreeLookupStatus> TryGetPessimistic(TKey key, ref ChunkAccessor accessor)
+    {
+        // Unlimited OLC retries — guaranteed to complete as long as writers make progress
+        SpinWait spin = default;
+        while (true)
         {
-            _access.ExitSharedAccess();
+            var (leafChunkId, leafVersion, keyIndex) = OptimisticDescendToLeaf(key, ref accessor);
+            if (leafChunkId == 0)
+            {
+                if (IsEmpty())
+                {
+                    return new Result<int, BTreeLookupStatus>(BTreeLookupStatus.NotFound);
+                }
+                spin.SpinOnce();
+                continue;
+            }
+
+            if (keyIndex < 0)
+            {
+                var leaf = _storage.LoadNode(leafChunkId);
+                if (leaf.GetLatch(ref accessor).ValidateVersion(leafVersion))
+                {
+                    return new Result<int, BTreeLookupStatus>(BTreeLookupStatus.NotFound);
+                }
+                continue;
+            }
+
+            var leafNode = _storage.LoadNode(leafChunkId);
+            int value = leafNode.GetItem(keyIndex, ref accessor).Value;
+            if (leafNode.GetLatch(ref accessor).ValidateVersion(leafVersion))
+            {
+                return new Result<int, BTreeLookupStatus>(value);
+            }
         }
     }
 
@@ -908,21 +1155,34 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             activity?.SetTag(TyphonSpanAttributes.IndexOperation, "delete");
         }
 
-        AcquireExclusive("BTree/DeleteValue");
+        // Per-operation accessor for thread safety under OLC (thread-local warm cache)
+        ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
         try
         {
-            ref var wa = ref GetWarmAccessor(ref accessor);
-
-            // Lookup under exclusive lock to avoid race with concurrent Remove/RemoveValue
-            // that could delete the buffer between a shared-lock read and this exclusive section.
-            var leaf = FindLeaf(key, out var index, ref wa);
-            if (index < 0)
+            // FindLeaf traversal is safe under OLC: internal nodes are stable.
+            var leaf = FindLeaf(key, out _, ref opAccessor);
+            if (!leaf.IsValid)
             {
                 return false;
             }
-            var bufferId = leaf.GetItem(index, ref wa).Value;
 
-            var res = _storage.RemoveFromBuffer(bufferId, elementId, value, ref wa);
+            // WriteLock leaf for consistent index and to prevent concurrent OLC modification
+            SpinWriteLock(leaf.GetLatch(ref opAccessor));
+
+            // Re-find under lock (index might have shifted due to concurrent OLC fast path remove)
+            var index = leaf.Find(key, Comparer, ref opAccessor);
+            if (index < 0)
+            {
+                leaf.GetLatch(ref opAccessor).WriteUnlock();
+                return false;
+            }
+
+            var bufferId = leaf.GetItem(index, ref opAccessor).Value;
+            var res = _storage.RemoveFromBuffer(bufferId, elementId, value, ref opAccessor);
+
+            // WriteUnlock leaf — buffer manipulation is done, version bumped for OLC readers
+            leaf.GetLatch(ref opAccessor).WriteUnlock();
+
             if (res == -1)
             {
                 return false;
@@ -933,24 +1193,20 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             // for temporal queries.
             if (res == 0 && !preserveEmptyBuffer)
             {
-                var args = new RemoveArguments(key, Comparer, ref wa);
-                RemoveCore(ref args);
+                var args = new RemoveArguments(key, Comparer, ref opAccessor);
+                RemoveCorePessimistic(ref args);
 
                 if (args.Removed)
                 {
-                    _storage.DeleteBuffer(args.Value, ref wa);
+                    _storage.DeleteBuffer(args.Value, ref opAccessor);
                 }
 
-                SyncHeader(ref wa);
+                SyncHeader(ref opAccessor);
             }
         }
         finally
         {
-            if (_warmAccessorValid)
-            {
-                _warmAccessor.CommitChanges();
-            }
-            _access.ExitExclusiveAccess();
+            _segment.ReturnWarmAccessor();
             activity?.Dispose();
         }
 
@@ -959,88 +1215,88 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public VariableSizedBufferAccessor<int> TryGetMultiple(TKey key, ref ChunkAccessor accessor)
     {
-        AcquireShared("BTree/TryGetMultiple");
-        try
+        // OLC optimistic path: zero locks, zero writes to shared state
+        for (int attempt = 0; attempt < MaxOptimisticRestarts; attempt++)
         {
-            var leaf = FindLeaf(key, out var index, ref accessor);
-            if (index < 0)
+            var (leafChunkId, leafVersion, keyIndex) = OptimisticDescendToLeaf(key, ref accessor);
+            if (leafChunkId == 0)
             {
-                return default;
+                if (IsEmpty())
+                {
+                    return default;
+                }
+                Interlocked.Increment(ref _optimisticRestarts);
+                continue; // restart
             }
-            var bufferId = leaf.GetItem(index, ref accessor).Value;
-            return _storage.GetBufferReadOnlyAccessor(bufferId, ref accessor);
+
+            if (keyIndex < 0)
+            {
+                var leaf = _storage.LoadNode(leafChunkId);
+                var latch = leaf.GetLatch(ref accessor);
+                if (latch.ValidateVersion(leafVersion))
+                {
+                    return default;
+                }
+                Interlocked.Increment(ref _optimisticRestarts);
+                continue; // leaf was modified — restart
+            }
+
+            // Key found — read buffer ID and validate
+            var leafNode = _storage.LoadNode(leafChunkId);
+            int bufferId = leafNode.GetItem(keyIndex, ref accessor).Value;
+            var leafLatch = leafNode.GetLatch(ref accessor);
+            if (leafLatch.ValidateVersion(leafVersion))
+            {
+                return _storage.GetBufferReadOnlyAccessor(bufferId, ref accessor);
+            }
+            // Buffer ID read may be stale — restart
+            Interlocked.Increment(ref _optimisticRestarts);
         }
-        finally
+
+        // Pessimistic fallback
+        Interlocked.Increment(ref _pessimisticFallbacks);
+        return TryGetMultiplePessimistic(key, ref accessor);
+    }
+
+    private VariableSizedBufferAccessor<int> TryGetMultiplePessimistic(TKey key, ref ChunkAccessor accessor)
+    {
+        // Unlimited OLC retries — guaranteed to complete as long as writers make progress
+        SpinWait spin = default;
+        while (true)
         {
-            _access.ExitSharedAccess();
+            var (leafChunkId, leafVersion, keyIndex) = OptimisticDescendToLeaf(key, ref accessor);
+            if (leafChunkId == 0)
+            {
+                if (IsEmpty())
+                {
+                    return default;
+                }
+                spin.SpinOnce();
+                continue;
+            }
+
+            if (keyIndex < 0)
+            {
+                var leaf = _storage.LoadNode(leafChunkId);
+                if (leaf.GetLatch(ref accessor).ValidateVersion(leafVersion))
+                {
+                    return default;
+                }
+                continue;
+            }
+
+            var leafNode = _storage.LoadNode(leafChunkId);
+            var bufferId = leafNode.GetItem(keyIndex, ref accessor).Value;
+            if (leafNode.GetLatch(ref accessor).ValidateVersion(leafVersion))
+            {
+                return _storage.GetBufferReadOnlyAccessor(bufferId, ref accessor);
+            }
         }
     }
 
     #endregion
 
     #region Private API
-
-    /// <summary>
-    /// Acquires shared access, trying an immediate CAS first to avoid the QPC syscall in
-    /// <see cref="WaitContext.FromTimeout"/> on the uncontended fast path.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void AcquireShared(string operationName)
-    {
-        if (!_access.TryEnterSharedAccess())
-        {
-            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
-            if (!_access.EnterSharedAccess(ref wc))
-            {
-                ThrowHelper.ThrowLockTimeout(operationName, TimeoutOptions.Current.BTreeLockTimeout);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Acquires exclusive access, trying an immediate CAS first to avoid the QPC syscall in
-    /// <see cref="WaitContext.FromTimeout"/> on the uncontended fast path.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void AcquireExclusive(string operationName)
-    {
-        if (!_access.TryEnterExclusiveAccess())
-        {
-            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.BTreeLockTimeout);
-            if (!_access.EnterExclusiveAccess(ref wc))
-            {
-                ThrowHelper.ThrowLockTimeout(operationName, TimeoutOptions.Current.BTreeLockTimeout);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Gets a warm ChunkAccessor for exclusive operations. Reuses the cached accessor if the global epoch hasn't changed (meaning no page eviction could have
-    /// occurred). Otherwise, creates a new accessor. The caller's ChangeSet is always propagated. Must only be called under exclusive lock.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private ref ChunkAccessor GetWarmAccessor(ref ChunkAccessor callerAccessor)
-    {
-        var currentEpoch = _segment.Manager.EpochManager.GlobalEpoch;
-        if (_warmAccessorValid && _warmAccessorEpoch == currentEpoch)
-        {
-            // Same epoch — MRU cache is valid, just update ChangeSet for this operation
-            _warmAccessor.ChangeSet = callerAccessor.ChangeSet;
-        }
-        else
-        {
-            // Epoch changed or first use — recreate (cached addresses may be stale)
-            if (_warmAccessorValid)
-            {
-                _warmAccessor.Dispose();
-                _warmAccessorValid = false;
-            }
-            _warmAccessor = _segment.CreateChunkAccessor(callerAccessor.ChangeSet);
-            _warmAccessorEpoch = currentEpoch;
-            _warmAccessorValid = true;
-        }
-        return ref _warmAccessor;
-    }
 
     protected internal NodeWrapper AllocNode(NodeStates states, ref ChunkAccessor accessor)
     {
@@ -1049,293 +1305,78 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         return node;
     }
 
-    private void RemoveCore(ref RemoveArguments args)
-    {
-        ref var accessor = ref args.Accessor;
-        if (IsEmpty())
-        {
-            return;
-        }
-
-        // optimize for removing items from beginning
-        int order = args.Compare(args.Key, GetFirst(ref accessor).Key);
-        if (order < 0)
-        {
-            return;
-        }
-
-        if (order == 0 && (Root == LinkList || LinkList.GetCount(ref accessor) > LinkList.GetCapacity() / 2))
-        {
-            args.SetRemovedValue(LinkList.PopFirstInternal(ref accessor).Value);
-            Debug.Assert(Root == LinkList || LinkList.GetIsHalfFull(ref accessor));
-            _hasCachedLastKey = false;
-            DecCount();
-            if (IsEmpty())
-            {
-                Root = LinkList = ReverseLinkList = default;
-                Height--;
-            }
-            return;
-        }
-        // optimize for removing items from end — use cached last key to avoid chunk read
-        order = args.Compare(args.Key, _hasCachedLastKey ? _cachedLastKey : GetLast(ref accessor).Key);
-        if (order > 0)
-        {
-            return;
-        }
-
-        if (order == 0 && (Root == ReverseLinkList || ReverseLinkList.GetCount(ref accessor) > ReverseLinkList.GetCapacity() / 2))
-        {
-            args.SetRemovedValue(ReverseLinkList.PopLastInternal(ref accessor).Value);
-            Debug.Assert(Root == ReverseLinkList || ReverseLinkList.GetIsHalfFull(ref accessor));
-            _hasCachedLastKey = false;
-            DecCount(); // here count never becomes zero.
-            return;
-        }
-
-        // Invalidate cached last key before tree mutation
-        _hasCachedLastKey = false;
-        var merge = RemoveIterative(ref args, ref accessor);
-
-        if (args.Removed)
-        {
-            DecCount();
-        }
-
-        if (merge && Root.GetLength(ref accessor) == 0)
-        {
-            Root = Root.GetChild(-1, ref accessor); // left most child becomes root. (returns null for leafs)
-            if (Root.IsValid == false)
-            {
-                LinkList = default;
-                ReverseLinkList = default;
-            }
-            Height--;
-        }
-
-        if (ReverseLinkList.IsValid && ReverseLinkList.GetPrevious(ref accessor).IsValid && ReverseLinkList.GetPrevious(ref accessor).GetNext(ref accessor).IsValid == false)
-        {
-            ReverseLinkList = ReverseLinkList.GetPrevious(ref accessor);
-        }
-    }
-
-    private void AddOrUpdateCore(ref InsertArguments args)
-    {
-        ref var accessor = ref args.Accessor;
-
-        if (IsEmpty())
-        {
-            Root = AllocNode(NodeStates.IsLeaf, ref accessor);
-            LinkList = Root;
-            ReverseLinkList = LinkList;
-            Height++;
-        }
-
-        // append optimization: if item key is in order, this may add item in O(1) operation.
-        int order = IsEmpty() ? 1 : args.Compare(args.Key, _hasCachedLastKey ? _cachedLastKey : GetLast(ref accessor).Key);
-        if (order > 0 && !ReverseLinkList.GetIsFull(ref accessor))
-        {
-            int value;
-            if (AllowMultiple)
-            {
-                var bufferId = _storage.CreateBuffer(ref accessor);
-                args.ElementId = _storage.Append(bufferId, args.GetValue(), ref accessor);
-                args.BufferRootId = bufferId;
-                value = bufferId;
-            }
-            else
-            {
-                value = args.GetValue();
-            }
-            ReverseLinkList.PushLast(new KeyValueItem(args.Key, value), ref accessor);
-            IncCount();
-            _cachedLastKey = args.Key;
-            _hasCachedLastKey = true;
-            return;
-        }
-
-        if (order == 0)
-        {
-            if (AllowMultiple)
-            {
-                var bufferRootId = GetLast(ref accessor).Value;
-                args.ElementId = _storage.Append(bufferRootId, args.GetValue(), ref accessor);
-                args.BufferRootId = bufferRootId;
-            }
-            else
-            {
-                ThrowHelper.ThrowUniqueConstraintViolation();
-            }
-            return;
-        }
-
-        // pre-append optimization: if item key is in order, this may add item in O(1) operation.
-        order = args.Compare(args.Key, GetFirst(ref accessor).Key);
-        if (order < 0 && !LinkList.GetIsFull(ref accessor))
-        {
-            int value;
-            if (AllowMultiple)
-            {
-                var bufferId = _storage.CreateBuffer(ref accessor);
-                args.ElementId = _storage.Append(bufferId, args.GetValue(), ref accessor);
-                args.BufferRootId = bufferId;
-                value = bufferId;
-            }
-            else
-            {
-                value = args.GetValue();
-            }
-            LinkList.PushFirst(new KeyValueItem(args.Key, value), ref accessor);
-            IncCount();
-            return;
-        }
-
-        if (order == 0)
-        {
-            if (AllowMultiple)
-            {
-                var bufferRootId = GetFirst(ref accessor).Value;
-                args.ElementId = _storage.Append(bufferRootId, args.GetValue(), ref accessor);
-                args.BufferRootId = bufferRootId;
-            }
-            else
-            {
-                ThrowHelper.ThrowUniqueConstraintViolation();
-            }
-            return;
-        }
-
-        var rightSplit = InsertIterative(ref args, ref accessor);
-
-        if (args.Added)
-        {
-            IncCount();
-        }
-        else if (!AllowMultiple)
-        {
-            ThrowHelper.ThrowUniqueConstraintViolation();
-        }
-
-        // if split occurred at root, make a new root and increase height.
-        if (rightSplit != null)
-        {
-            var newRoot = AllocNode(NodeStates.None, ref accessor);
-            newRoot.SetLeft(Root, ref accessor);
-
-            newRoot.Insert(0, rightSplit.Value, ref accessor);
-            Root = newRoot;
-            Height++;
-        }
-
-        var next = ReverseLinkList.GetNext(ref accessor);
-        if (next.IsValid)
-        {
-            ReverseLinkList = next;
-        }
-        _cachedLastKey = GetLast(ref accessor).Key;
-        _hasCachedLastKey = true;
-    }
-
     /// <summary>
-    /// Iterative insert: descends from root to leaf recording the path, inserts at the leaf,
-    /// then propagates any splits upward through the recorded internal nodes.
-    /// Replaces the former recursive InsertInternal approach to eliminate per-level call overhead.
+    /// Spin-waits until the write lock is acquired. Counts contention spins for diagnostics.
+    /// Returns true if lock was acquired immediately (no contention), false if spinning was needed.
     /// </summary>
-    private KeyValueItem? InsertIterative(ref InsertArguments args, ref ChunkAccessor accessor)
+    /// <remarks>
+    /// Two-phase spin policy tuned for OLC latch hold times (~100-500 ns):
+    /// Phase 1: Tight PAUSE loop (64 iterations, ~100 ns on Zen / ~2 μs on Skylake+) — covers
+    ///          the common case of a leaf insert/remove completing on another core.
+    /// Phase 2: SpinWait with Sleep(1) disabled — escalates to Yield/Sleep(0) for rare splits/merges
+    ///          or SMT core-sharing, but never pays the 15 ms Windows timer-tick penalty.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool SpinWriteLock(OlcLatch latch)
     {
-        var node = Root;
-        var relatives = new NodeRelatives();
-        int depth = 0;
-
-        // Phase 1: Descend from root to leaf, recording path for upward propagation
-        while (!node.GetIsLeaf(ref accessor))
+        if (latch.TryWriteLock())
         {
-            var index = node.Find(args.Key, args.KeyComparer, ref accessor);
-            if (index < 0)
+            return true; // no contention
+        }
+
+        // Phase 1: tight PAUSE spin — stays on-core, covers typical latch hold time + cross-core coherence
+        for (int i = 0; i < 64; i++)
+        {
+            Interlocked.Increment(ref _writeLockFailures);
+            Thread.SpinWait(1);
+            if (latch.TryWriteLock())
             {
-                index = ~index - 1;
+                return false; // contention detected
             }
-
-            Debug.Assert(index >= -1 && index < node.GetCount(ref accessor));
-
-            _pathNodes[depth] = node;
-            _pathChildIndices[depth] = index;
-
-            var child = node.GetChild(index, ref accessor);
-            NodeRelatives.Create(child, index, node, ref relatives, out var childRelatives, ref accessor);
-
-            // Store after Create so lazy-resolved siblings are cached in the stored copy
-            _pathRelatives[depth] = relatives;
-
-            node = child;
-            relatives = childRelatives;
-            depth++;
         }
 
-        // Phase 2: Insert at leaf
-        var promoted = node.InsertLeaf(ref args, ref relatives, ref accessor);
-
-        // Phase 3: Propagate splits upward through internal nodes
-        while (depth > 0 && promoted != null)
+        // Phase 2: yield-capped SpinWait — holder is likely doing a split/merge or sharing our core.
+        // sleep1Threshold: -1 disables Sleep(1) which would stall for ~15 ms (Windows timer tick).
+        SpinWait spin = default;
+        do
         {
-            depth--;
-            node = _pathNodes[depth];
-            relatives = _pathRelatives[depth];
-            promoted = node.HandlePromotedInsert(_pathChildIndices[depth], promoted.Value, ref relatives, ref accessor);
+            Interlocked.Increment(ref _writeLockFailures);
+            spin.SpinOnce(sleep1Threshold: -1);
         }
-
-        return promoted;
+        while (!latch.TryWriteLock());
+        return false; // contention detected
     }
 
-    /// <summary>
-    /// Iterative remove: descends from root to leaf recording the path, removes at the leaf,
-    /// then propagates any merges upward through the recorded internal nodes.
-    /// Replaces the former recursive RemoveInternal approach to eliminate per-level call overhead.
-    /// </summary>
-    private bool RemoveIterative(ref RemoveArguments args, ref ChunkAccessor accessor)
+    /// <summary>Thread-safe addition to the epoch-deferred node list (protected by _deferredLock).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void DeferredAdd(int chunkId, long retireEpoch)
     {
-        var node = Root;
-        var relatives = new NodeRelatives();
-        int depth = 0;
-
-        // Phase 1: Descend from root to leaf, recording path for upward propagation
-        while (!node.GetIsLeaf(ref accessor))
+        bool lockTaken = false;
+        _deferredLock.Enter(ref lockTaken);
+        try
         {
-            var index = node.Find(args.Key, args.Comparer, ref accessor);
-            if (index < 0)
-            {
-                index = ~index - 1;
-            }
-
-            Debug.Assert(index >= -1 && index < node.GetCount(ref accessor));
-
-            _pathNodes[depth] = node;
-            _pathChildIndices[depth] = index;
-
-            var child = node.GetChild(index, ref accessor);
-            NodeRelatives.Create(child, index, node, ref relatives, out var childRelatives, ref accessor);
-
-            // Store after Create so lazy-resolved siblings are cached in the stored copy
-            _pathRelatives[depth] = relatives;
-
-            node = child;
-            relatives = childRelatives;
-            depth++;
+            _deferredNodes.Add(chunkId, retireEpoch);
         }
-
-        // Phase 2: Remove at leaf
-        var merged = node.RemoveLeaf(ref args, ref relatives, ref accessor);
-
-        // Phase 3: Propagate merges upward through internal nodes
-        while (depth > 0 && merged)
+        finally
         {
-            depth--;
-            node = _pathNodes[depth];
-            relatives = _pathRelatives[depth];
-            merged = node.HandleChildMerge(_pathChildIndices[depth], ref relatives, ref accessor);
+            _deferredLock.Exit(useMemoryBarrier: false);
         }
+    }
 
-        return merged;
+    /// <summary>Thread-safe reclamation of epoch-deferred nodes (protected by _deferredLock).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void DeferredReclaim()
+    {
+        bool lockTaken = false;
+        _deferredLock.Enter(ref lockTaken);
+        try
+        {
+            _deferredNodes.Reclaim(_segment, _segment.Manager.EpochManager.MinActiveEpoch);
+        }
+        finally
+        {
+            _deferredLock.Exit(useMemoryBarrier: false);
+        }
     }
 
     private NodeWrapper FindLeaf(TKey key, out int index, ref ChunkAccessor accessor)
@@ -1352,7 +1393,140 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             node = node.GetNearestChild(key, Comparer, ref accessor);
         }
         index = node.Find(key, Comparer, ref accessor);
+
+        // B-link: follow right links if key is beyond this leaf's range (stale parent separator).
+        // Multiple hops may be needed when consecutive forceSplit operations left unpropagated separators.
+        // The HighKey read is OLC-validated: during a concurrent split, HighKey is updated after the key array,
+        // so a lock-free reader could see a stale HighKey and incorrectly break. If the node is write-locked or
+        // the version changed between read and validate, we conservatively follow the right link.
+        for (int hop = 0; hop < 16 && index < 0 && node.GetCount(ref accessor) > 0; hop++)
+        {
+            var latch = node.GetLatch(ref accessor);
+            var version = latch.ReadVersion();
+            if (version != 0 && Comparer.Compare(key, node.GetHighKey(ref accessor)) < 0 && latch.ValidateVersion(version))
+            {
+                break; // key is confirmed within this leaf's range (high key is stable)
+            }
+
+            var next = node.GetNext(ref accessor);
+            if (!next.IsValid)
+            {
+                break;
+            }
+
+            node = next;
+            index = node.Find(key, Comparer, ref accessor);
+        }
+
         return node;
+    }
+
+    /// <summary>
+    /// Optimistic descent from root to leaf using OLC version validation.
+    /// Returns (leafChunkId, leafVersion, keyIndex). leafChunkId=0 signals restart needed.
+    /// Zero writes to shared state — readers never acquire any lock.
+    /// </summary>
+    private (int leafChunkId, int leafVersion, int keyIndex) OptimisticDescendToLeaf(TKey key, ref ChunkAccessor accessor, bool followRightLink = true)
+    {
+        var node = Root;
+        if (!node.IsValid)
+        {
+            return (0, 0, -1);
+        }
+
+        var latch = node.GetLatch(ref accessor);
+        int version = latch.ReadVersion();
+        if (version == 0)
+        {
+            return (0, 0, -1); // locked or obsolete — restart
+        }
+
+        // Descend through internal nodes
+        while (!node.GetIsLeaf(ref accessor))
+        {
+            var index = node.Find(key, Comparer, ref accessor);
+            if (index < 0)
+            {
+                index = ~index - 1;
+            }
+
+            // Read child pointer
+            var child = node.GetChild(index, ref accessor);
+
+            // Validate parent version after reading child pointer
+            if (!latch.ValidateVersion(version))
+            {
+                return (0, 0, -1); // parent was modified — restart
+            }
+
+            // Move to child
+            node = child;
+            if (!node.IsValid)
+            {
+                return (0, 0, -1); // invalid child — restart
+            }
+            latch = node.GetLatch(ref accessor);
+            version = latch.ReadVersion();
+            if (version == 0)
+            {
+                return (0, 0, -1); // locked or obsolete — restart
+            }
+        }
+
+        // At leaf: search for key
+        var keyIndex = node.Find(key, Comparer, ref accessor);
+
+        // B-link right-link following: if key not found and beyond this leaf's range, the leaf may have split and the parent separator is stale. Follow
+        // right links until we find the leaf containing the key or exhaust the chain.
+        // Multiple hops may be needed when consecutive forceSplit operations left several unpropagated separators in a row.
+        // Disabled for inserts (followRightLink=false): version validation handles restarts.
+        if (followRightLink && keyIndex < 0)
+        {
+            const int maxHops = 16;
+            for (int hop = 0; hop < maxHops && node.GetCount(ref accessor) > 0; hop++)
+            {
+                if (Comparer.Compare(key, node.GetHighKey(ref accessor)) < 0)
+                {
+                    break; // key is within this leaf's range (high key is exclusive upper bound)
+                }
+
+                if (!latch.ValidateVersion(version))
+                {
+                    return (0, 0, -1); // leaf modified — restart from root
+                }
+
+                var nextNode = node.GetNext(ref accessor);
+                if (!nextNode.IsValid)
+                {
+                    break; // no right sibling — key doesn't exist
+                }
+
+                var nextLatch = nextNode.GetLatch(ref accessor);
+                int nextVersion = nextLatch.ReadVersion();
+                if (nextVersion == 0)
+                {
+                    return (0, 0, -1); // right sibling locked/obsolete — restart
+                }
+
+                node = nextNode;
+                latch = nextLatch;
+                version = nextVersion;
+                keyIndex = node.Find(key, Comparer, ref accessor);
+
+                if (keyIndex >= 0)
+                {
+                    break; // found the key
+                }
+            }
+        }
+
+        // Validate final leaf version after reading
+        if (!latch.ValidateVersion(version))
+        {
+            return (0, 0, -1); // leaf was modified during search — restart
+        }
+
+        return (node.ChunkId, version, keyIndex);
     }
 
     #endregion

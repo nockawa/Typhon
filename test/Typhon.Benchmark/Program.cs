@@ -67,7 +67,7 @@ class Program
                 return;
             }
 
-            if (args.Contains("--list") || args.Contains("-l"))
+            if ((args.Contains("--list") || args.Contains("-l")) && !args.Contains("--allCategories") && !args.Contains("--anyCategories"))
             {
                 ListBenchmarks();
                 return;
@@ -76,6 +76,29 @@ class Program
             if (args.Contains("--profile-delete"))
             {
                 BTreeDeleteProfile.Run();
+                return;
+            }
+
+            // BTree profile shortcuts: --btree-fast, --btree-medium, --btree-full
+            // These run curated subsets of BTree benchmarks for quick/medium/full analysis.
+            if (args.Contains("--btree-fast"))
+            {
+                BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly)
+                    .Run(["--allCategories", "BTreeFast", "--exporters", "json"]);
+                return;
+            }
+
+            if (args.Contains("--btree-medium"))
+            {
+                BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly)
+                    .Run(["--allCategories", "BTreeMedium", "--exporters", "json"]);
+                return;
+            }
+
+            if (args.Contains("--btree-full"))
+            {
+                BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly)
+                    .Run(["--anyCategories", "BTreeFast", "BTreeMedium", "BTreeFull", "--exporters", "json"]);
                 return;
             }
 
@@ -110,6 +133,9 @@ class Program
         table.AddRow("[cyan](no args)[/]", "Launch interactive mode with menu selection");
         table.AddRow("[cyan]--list, -l[/]", "List all available benchmarks");
         table.AddRow("[cyan]--filter <pattern>[/]", "Run benchmarks matching the pattern (e.g., --filter *BTree*)");
+        table.AddRow("[cyan]--btree-fast[/]", "BTree quick profile: core ops + 2 concurrent (~3 min)");
+        table.AddRow("[cyan]--btree-medium[/]", "BTree medium profile: all key types + concurrent scaling (~15 min)");
+        table.AddRow("[cyan]--btree-full[/]", "BTree full profile: everything including tree sizes + enumeration (~50 min)");
         table.AddRow("[cyan]--help, -h, -?[/]", "Show this help message");
         table.AddRow("[cyan]--exporters <list>[/]", "Export formats: json,markdown,html,rplot");
 
@@ -119,6 +145,7 @@ class Program
         AnsiConsole.MarkupLine("[grey]Examples:[/]");
         AnsiConsole.MarkupLine("  [white]dotnet run[/]                           [grey]# Interactive mode[/]");
         AnsiConsole.MarkupLine("  [white]dotnet run -- --filter *BTree*[/]       [grey]# Run BTree benchmarks[/]");
+        AnsiConsole.MarkupLine("  [white]dotnet run -- --btree-fast[/]           [grey]# Quick BTree baseline (~3 min)[/]");
         AnsiConsole.MarkupLine("  [white]dotnet run -- --list[/]                 [grey]# List all benchmarks[/]");
         AnsiConsole.WriteLine();
     }

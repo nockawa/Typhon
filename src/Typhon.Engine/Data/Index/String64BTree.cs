@@ -9,7 +9,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using Typhon.Schema.Definition;
 
-namespace Typhon.Engine.BPTree;
+namespace Typhon.Engine;
 
 [DebuggerTypeProxy(typeof(IndexString64Chunk.DebugView))]
 [DebuggerDisplay("Count: {Count}, Start: {Start}, Flags: {StateFlags}")]
@@ -20,8 +20,9 @@ unsafe public struct IndexString64Chunk
 
     public const int Capacity = 4;
 
-    // Special beast... Ownership control (LSB, 1 bit), state flags (LSW 15bits), Position of the first Item, aka Start (8bits), stored Item Count (8bits)
+    // State flags (LSW 16bits), Position of the first Item, aka Start (8bits), stored Item Count (8bits)
     public int Control;
+    public int OlcVersion;    // OLC latch: bit 0 = locked, bit 1 = obsolete, bits 2-31 = version (30 bits)
     public int PrevChunk;
     public int NextChunk;
     public int LeftValue;
@@ -109,6 +110,26 @@ unsafe public struct IndexString64Chunk
         }
     }
 
+    public int ContentionHint
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        get
+        {
+            fixed (int* c = &Control)
+            {
+                return ((byte*)c)[1];
+            }
+        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+        set
+        {
+            fixed (int* c = &Control)
+            {
+                ((byte*)c)[1] = (byte)value;
+            }
+        }
+    }
+
     public int End => Adjust(Start + Count);
     public NodeStates StateFlags
     {
@@ -131,10 +152,10 @@ unsafe public struct IndexString64Chunk
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    public bool TryLock() => (Interlocked.Or(ref Control, (int)NodeStates.Ownership) & (int)NodeStates.Ownership) == 0;
+    public bool TryLock() => (Interlocked.Or(ref OlcVersion, 1) & 1) == 0;
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    public void FreeLock() => Interlocked.And(ref Control, ~(int)NodeStates.Ownership);
-    public bool IsLocked => (Control & (int)NodeStates.Ownership) != 0;
+    public void FreeLock() => Interlocked.And(ref OlcVersion, ~1);
+    public bool IsLocked => (OlcVersion & 1) != 0;
     public bool IsRotated => (Start + Count) > Capacity;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
@@ -194,12 +215,19 @@ public abstract class String64BTree : BTree<String64>
         {
             ref var chunk = ref accessor.GetChunk<IndexString64Chunk>(node.ChunkId, true);
             chunk.Control = (int)states;  // Atomically sets StateFlags + Start=0 + Count=0
+            chunk.OlcVersion = 4;         // version=1 (bits 2-31), locked=false, obsolete=false — must be non-zero so OLC readers don't see it as locked
             chunk.PrevChunk = 0;
             chunk.NextChunk = 0;
             chunk.LeftValue = 0;
         }
 
         public override int GetNodeCapacity() => IndexString64Chunk.Capacity;
+
+        public override ref int GetOlcVersionRef(int chunkId, ref ChunkAccessor accessor)
+        {
+            ref var chunk = ref accessor.GetChunk<IndexString64Chunk>(chunkId, false);
+            return ref chunk.OlcVersion;
+        }
 
         public override NodeWrapper GetLeftNode(NodeWrapper node, ref ChunkAccessor accessor)
         {
@@ -285,6 +313,18 @@ public abstract class String64BTree : BTree<String64>
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<IndexString64Chunk>(node.ChunkId);
             return chunk.StateFlags;
+        }
+
+        public override int GetContentionHint(NodeWrapper node, ref ChunkAccessor accessor)
+        {
+            ref readonly var chunk = ref accessor.GetChunkReadOnly<IndexString64Chunk>(node.ChunkId);
+            return chunk.ContentionHint;
+        }
+
+        public override void SetContentionHint(NodeWrapper node, int value, ref ChunkAccessor accessor)
+        {
+            ref var chunk = ref accessor.GetChunk<IndexString64Chunk>(node.ChunkId, true);
+            chunk.ContentionHint = value;
         }
 
         #endregion

@@ -5,7 +5,6 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using Typhon.Engine;
-using Typhon.Engine.BPTree;
 using Typhon.Schema.Definition;
 
 namespace Typhon.Benchmark;

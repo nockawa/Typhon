@@ -1,6 +1,8 @@
 // unset
 
-namespace Typhon.Engine.BPTree;
+using System.Threading;
+
+namespace Typhon.Engine;
 
 public abstract partial class BTree<TKey>
 {
@@ -9,28 +11,61 @@ public abstract partial class BTree<TKey>
     /// from left to right. Items are yielded in ascending key order.
     /// </summary>
     /// <remarks>
-    /// <para>The enumerator holds a shared lock on the BTree (preventing structural modifications)
-    /// and owns a <see cref="ChunkAccessor"/>. Both are released on <see cref="Dispose"/>.</para>
+    /// <para>Uses per-leaf OLC validation: reads a leaf's version before reading its entries, then validates after. If the leaf was concurrently modified,
+    /// the enumerator re-reads that leaf from the beginning (not the whole tree).</para>
     /// <para>The caller must be inside an epoch scope (e.g., via a Transaction).</para>
     /// <para>Supports <c>foreach</c> via duck-typing (GetEnumerator/MoveNext/Current/Dispose).</para>
     /// </remarks>
     public ref struct LeafEnumerator
     {
-        private readonly BTree<TKey> _tree;
         private ChunkAccessor _accessor;
         private NodeWrapper _currentNode;
         private int _currentIndex;
         private int _nodeItemCount;
+        private int _leafVersion;
         private bool _disposed;
 
         internal LeafEnumerator(BTree<TKey> tree)
         {
-            _tree = tree;
             _accessor = tree._segment.CreateChunkAccessor();
-            _currentNode = tree.LinkList;
+            _currentNode = tree._linkList;
             _currentIndex = -1;
-            _nodeItemCount = _currentNode.IsValid ? _currentNode.GetCount(ref _accessor) : 0;
             _disposed = false;
+
+            if (_currentNode.IsValid)
+            {
+                ReadLeafState();
+            }
+            else
+            {
+                _nodeItemCount = 0;
+                _leafVersion = 0;
+            }
+        }
+
+        /// <summary>Reads the current leaf's version and item count under OLC.</summary>
+        private void ReadLeafState()
+        {
+            while (true)
+            {
+                var latch = _currentNode.GetLatch(ref _accessor);
+                var version = latch.ReadVersion();
+                if (version == 0)
+                {
+                    // Locked or obsolete — spin-wait and retry
+                    Thread.SpinWait(1);
+                    continue;
+                }
+
+                _nodeItemCount = _currentNode.GetCount(ref _accessor);
+
+                if (latch.ValidateVersion(version))
+                {
+                    _leafVersion = version;
+                    return;
+                }
+                // Version changed — retry this leaf
+            }
         }
 
         /// <summary>Returns this enumerator (required for foreach pattern).</summary>
@@ -54,6 +89,17 @@ public abstract partial class BTree<TKey>
                 return true;
             }
 
+            // Before following the Next pointer, validate the leaf version.
+            // If the leaf was modified during our scan, re-read from the beginning of this leaf.
+            var latch = _currentNode.GetLatch(ref _accessor);
+            if (!latch.ValidateVersion(_leafVersion))
+            {
+                // Leaf was modified — re-read from beginning
+                _currentIndex = -1;
+                ReadLeafState();
+                return MoveNext();
+            }
+
             // Move to next leaf node in the linked list
             _currentNode = _currentNode.GetNext(ref _accessor);
             if (!_currentNode.IsValid)
@@ -62,18 +108,17 @@ public abstract partial class BTree<TKey>
             }
 
             _currentIndex = 0;
-            _nodeItemCount = _currentNode.GetCount(ref _accessor);
+            ReadLeafState();
             return _nodeItemCount > 0;
         }
 
-        /// <summary>Releases the chunk accessor and shared lock.</summary>
+        /// <summary>Releases the chunk accessor.</summary>
         public void Dispose()
         {
             if (!_disposed)
             {
                 _disposed = true;
                 _accessor.Dispose();
-                _tree._access.ExitSharedAccess();
             }
         }
     }

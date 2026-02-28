@@ -3,6 +3,7 @@
 using JetBrains.Annotations;
 using System;
 using System.Buffers;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -323,6 +324,72 @@ public partial class ChunkBasedSegment : LogicalSegment
     [AllowCopy]
     [return: TransfersOwnership]
     internal ChunkAccessor CreateChunkAccessor(ChangeSet changeSet = null) => new(this, Manager, _epochManager, changeSet);
+
+    /// <summary>
+    /// Single-entry thread-local cache for warm <see cref="ChunkAccessor"/> reuse.
+    /// Keeps the 16-entry SIMD page cache warm across repeated BTree operations on the same segment.
+    /// </summary>
+    private sealed class WarmAccessorCache
+    {
+        internal ChunkAccessor Accessor;       // 252 bytes — the warm accessor
+        internal ChunkBasedSegment Segment;    // which segment this accessor belongs to
+        internal long Epoch;                   // GlobalEpoch at creation time
+        internal bool IsRented;                // debug guard against double-rent
+
+        [ThreadStatic]
+        // ReSharper disable once InconsistentNaming
+        private static WarmAccessorCache _instance;
+        internal static WarmAccessorCache Instance => _instance ??= new();
+    }
+
+    /// <summary>
+    /// Rents a warm <see cref="ChunkAccessor"/> from the thread-local cache.
+    /// On cache hit (same segment + same epoch): swaps ChangeSet only (~1ns).
+    /// On cache miss: disposes old, creates new.
+    /// Must be paired with <see cref="ReturnWarmAccessor"/> in a finally block.
+    /// </summary>
+    [AllowCopy]
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal ref ChunkAccessor RentWarmAccessor(ChangeSet changeSet = null)
+    {
+        var cache = WarmAccessorCache.Instance;
+        Debug.Assert(!cache.IsRented, "double-rent (missing ReturnWarmAccessor?)");
+
+        var currentEpoch = _epochManager.GlobalEpoch;
+        if (cache.Segment == this && cache.Epoch == currentEpoch)
+        {
+            // Hot path: swap ChangeSet only, page cache stays warm
+            cache.Accessor.ChangeSet = changeSet;
+            cache.IsRented = true;
+            return ref cache.Accessor;
+        }
+
+        // Cold path: different segment or epoch changed
+        if (cache.Segment != null)
+        {
+            cache.Accessor.Dispose();
+        }
+        cache.Accessor = new ChunkAccessor(this, Manager, _epochManager, changeSet);
+        cache.Segment = this;
+        cache.Epoch = currentEpoch;
+        cache.IsRented = true;
+        return ref cache.Accessor;
+    }
+
+    /// <summary>
+    /// Returns a warm <see cref="ChunkAccessor"/> to the thread-local cache.
+    /// Flushes dirty pages via <see cref="ChunkAccessor.CommitChanges"/> but does NOT dispose —
+    /// keeps the 16-entry SIMD page cache warm for the next operation.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void ReturnWarmAccessor()
+    {
+        var cache = WarmAccessorCache.Instance;
+        Debug.Assert(cache.IsRented, "return without rent");
+        cache.Accessor.CommitChanges();  // flush dirty pages, preserve page cache
+        cache.IsRented = false;
+        // Do NOT Dispose — keep the page cache warm
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public (int segmentIndex, int offset) GetChunkLocation(int index)
