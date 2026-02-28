@@ -57,6 +57,27 @@
         <Compile Update="Storage\PagedMMF.Metrics.cs">
             <DependentUpon>PagedMMF.cs</DependentUpon>
         </Compile>
+        <Compile Update="Data\Index\BTree.BaseNodeStorage.cs">
+          <DependentUpon>BTree.cs</DependentUpon>
+        </Compile>
+        <Compile Update="Data\Index\BTree.Insert.cs">
+          <DependentUpon>BTree.cs</DependentUpon>
+        </Compile>
+        <Compile Update="Data\Index\BTree.LeafEnumerator.cs">
+          <DependentUpon>BTree.cs</DependentUpon>
+        </Compile>
+        <Compile Update="Data\Index\BTree.LookupStatus.cs">
+          <DependentUpon>BTree.cs</DependentUpon>
+        </Compile>
+        <Compile Update="Data\Index\BTree.Move.cs">
+          <DependentUpon>BTree.cs</DependentUpon>
+        </Compile>
+        <Compile Update="Data\Index\BTree.NodeWrapper.cs">
+          <DependentUpon>BTree.cs</DependentUpon>
+        </Compile>
+        <Compile Update="Data\Index\BTree.Remove.cs">
+          <DependentUpon>BTree.cs</DependentUpon>
+        </Compile>
     </ItemGroup>
 
 </Project>

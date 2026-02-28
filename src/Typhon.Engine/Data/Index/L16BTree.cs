@@ -10,7 +10,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using System.Threading;
 
-namespace Typhon.Engine.BPTree;
+namespace Typhon.Engine;
 
 [DebuggerTypeProxy(typeof(Index16Chunk.DebugView))]
 [DebuggerDisplay("Count: {Count}, Start: {Start}, Flags: {StateFlags}")]

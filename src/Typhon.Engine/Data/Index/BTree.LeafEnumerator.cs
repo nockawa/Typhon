@@ -2,7 +2,7 @@
 
 using System.Threading;
 
-namespace Typhon.Engine.BPTree;
+namespace Typhon.Engine;
 
 public abstract partial class BTree<TKey>
 {
@@ -18,7 +18,6 @@ public abstract partial class BTree<TKey>
     /// </remarks>
     public ref struct LeafEnumerator
     {
-        private readonly BTree<TKey> _tree;
         private ChunkAccessor _accessor;
         private NodeWrapper _currentNode;
         private int _currentIndex;
@@ -28,9 +27,8 @@ public abstract partial class BTree<TKey>
 
         internal LeafEnumerator(BTree<TKey> tree)
         {
-            _tree = tree;
             _accessor = tree._segment.CreateChunkAccessor();
-            _currentNode = tree.LinkList;
+            _currentNode = tree._linkList;
             _currentIndex = -1;
             _disposed = false;
 

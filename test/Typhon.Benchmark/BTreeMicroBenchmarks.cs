@@ -4,7 +4,6 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.IO;
 using Typhon.Engine;
-using Typhon.Engine.BPTree;
 
 namespace Typhon.Benchmark;
 

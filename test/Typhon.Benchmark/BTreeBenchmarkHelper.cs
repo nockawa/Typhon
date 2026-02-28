@@ -5,7 +5,6 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Typhon.Engine;
-using Typhon.Engine.BPTree;
 
 namespace Typhon.Benchmark;
 

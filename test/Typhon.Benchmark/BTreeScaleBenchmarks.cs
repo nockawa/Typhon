@@ -1,6 +1,5 @@
 using BenchmarkDotNet.Attributes;
 using Typhon.Engine;
-using Typhon.Engine.BPTree;
 
 namespace Typhon.Benchmark;
 

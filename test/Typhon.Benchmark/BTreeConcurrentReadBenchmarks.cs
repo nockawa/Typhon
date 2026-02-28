@@ -1,7 +1,6 @@
 using BenchmarkDotNet.Attributes;
 using System.Threading;
 using Typhon.Engine;
-using Typhon.Engine.BPTree;
 
 namespace Typhon.Benchmark;
 

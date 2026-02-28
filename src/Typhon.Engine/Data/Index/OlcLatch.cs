@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Threading;
 
-namespace Typhon.Engine.BPTree;
+namespace Typhon.Engine;
 
 /// <summary>
 /// Optimistic Lock Coupling latch operating on a B+Tree node's OlcVersion field.

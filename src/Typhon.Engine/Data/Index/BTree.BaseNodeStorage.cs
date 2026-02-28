@@ -2,7 +2,7 @@
 
 using System.Collections.Generic;
 
-namespace Typhon.Engine.BPTree;
+namespace Typhon.Engine;
 
 public abstract partial class BTree<TKey>
 {

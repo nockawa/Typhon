@@ -6,7 +6,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 
-namespace Typhon.Engine.BPTree;
+namespace Typhon.Engine;
 
 public abstract partial class BTree<TKey>
 {
@@ -56,13 +56,11 @@ public abstract partial class BTree<TKey>
 
         public int GetCount(ref ChunkAccessor accessor) => _storage.GetCount(this, ref accessor);
 
-        internal void SetCount(int value, ref ChunkAccessor accessor) => _storage.SetCount(this, value, ref accessor);
+        private void SetCount(int value, ref ChunkAccessor accessor) => _storage.SetCount(this, value, ref accessor);
 
         public int GetStart(ref ChunkAccessor accessor) => _storage.GetStart(this, ref accessor);
 
-        private void SetStart(int value, ref ChunkAccessor accessor) => _storage.SetStart(this, value, ref accessor);
-
-        public int GetEnd(ref ChunkAccessor accessor) => _storage.GetEnd(this, ref accessor);
+        private int GetEnd(ref ChunkAccessor accessor) => _storage.GetEnd(this, ref accessor);
 
         public KeyValueItem GetFirst(ref ChunkAccessor accessor) => _storage.GetItem(this, 0, true, ref accessor);
 
@@ -71,7 +69,7 @@ public abstract partial class BTree<TKey>
         public KeyValueItem GetLast(ref ChunkAccessor accessor) => _storage.GetItem(this, _storage.GetCount(this, ref accessor) - 1, true, ref accessor);
 
         public TKey GetHighKey(ref ChunkAccessor accessor) => _storage.GetHighKey(this, ref accessor);
-        public void SetHighKey(TKey key, ref ChunkAccessor accessor) => _storage.SetHighKey(this, key, ref accessor);
+        private void SetHighKey(TKey key, ref ChunkAccessor accessor) => _storage.SetHighKey(this, key, ref accessor);
 
         public int GetContentionHint(ref ChunkAccessor accessor) => _storage.GetContentionHint(this, ref accessor);
         internal void SetContentionHint(int value, ref ChunkAccessor accessor) => _storage.SetContentionHint(this, value, ref accessor);
@@ -81,18 +79,18 @@ public abstract partial class BTree<TKey>
 
         public NodeWrapper GetPrevious(ref ChunkAccessor accessor) => _storage.GetPreviousNode(this, ref accessor);
 
-        public void SetPrevious(NodeWrapper value, ref ChunkAccessor accessor) => _storage.SetPreviousNode(this, value.ChunkId, ref accessor);
+        private void SetPrevious(NodeWrapper value, ref ChunkAccessor accessor) => _storage.SetPreviousNode(this, value.ChunkId, ref accessor);
 
         public NodeWrapper GetNext(ref ChunkAccessor accessor) => _storage.GetNextNode(this, ref accessor);
 
-        public void SetNext(NodeWrapper value, ref ChunkAccessor accessor) => _storage.SetNextNode(this, value.ChunkId, ref accessor);
+        private void SetNext(NodeWrapper value, ref ChunkAccessor accessor) => _storage.SetNextNode(this, value.ChunkId, ref accessor);
 
         public NodeWrapper GetLeft(ref ChunkAccessor accessor) => _storage.GetLeftNode(this, ref accessor);
 
         public void SetLeft(NodeWrapper value, ref ChunkAccessor accessor) => _storage.SetLeftNode(this, value.ChunkId, ref accessor);
 
         public KeyValueItem GetItem(int index, ref ChunkAccessor accessor) => _storage.GetItem(this, index, true, ref accessor);
-        public void SetItem(int index, KeyValueItem value, ref ChunkAccessor accessor) => _storage.SetItem(this, index, value, true, ref accessor);
+        private void SetItem(int index, KeyValueItem value, ref ChunkAccessor accessor) => _storage.SetItem(this, index, value, true, ref accessor);
 
         #endregion
 
@@ -100,7 +98,8 @@ public abstract partial class BTree<TKey>
 
         public void PushFirst(KeyValueItem item, ref ChunkAccessor accessor) => _storage.PushFirst(this, item, ref accessor);
         public void PushLast(KeyValueItem item, ref ChunkAccessor accessor) => _storage.PushLast(this, item, ref accessor);
-        public void MergeLeft(NodeWrapper right, ref ChunkAccessor accessor)
+
+        private void MergeLeft(NodeWrapper right, ref ChunkAccessor accessor)
         {
             Activity activity = null;
             if (TelemetryConfig.BTreeActive)
@@ -186,8 +185,8 @@ public abstract partial class BTree<TKey>
                         // Left's HighKey must match the new separator (spill moved the boundary).
                         GetPrevious(ref accessor).SetHighKey(newSeparator, ref accessor);
 
-                        Validate(this, ref accessor);
-                        Validate(GetPrevious(ref accessor), ref accessor);
+                        Validate();
+                        Validate();
                     }
                     else if (!forceSplit && CanSpillTo(GetNext(ref accessor), ref accessor))
                     {
@@ -202,8 +201,8 @@ public abstract partial class BTree<TKey>
                         // Current's HighKey must match the new separator (spill moved the boundary).
                         SetHighKey(last.Key, ref accessor);
 
-                        Validate(this, ref accessor);
-                        Validate(GetNext(ref accessor), ref accessor);
+                        Validate();
+                        Validate();
                     }
                     else // split, then promote middle item
                     {
@@ -223,8 +222,8 @@ public abstract partial class BTree<TKey>
 
                         rightLeaf = new KeyValueItem(rightNode.GetFirst(ref accessor).Key, rightNode.ChunkId);
 
-                        Validate(this, ref accessor);
-                        Validate(rightNode, ref accessor);
+                        Validate();
+                        Validate();
                     }
                 }
 
@@ -294,8 +293,8 @@ public abstract partial class BTree<TKey>
 
                     leftSibling.PushLast(first, ref accessor);
 
-                    Validate(this, ref accessor);
-                    Validate(leftSibling, ref accessor);
+                    Validate();
+                    Validate();
                 }
                 else if (CanSpillTo(relatives.GetRightSibling(ref accessor), ref accessor, out var rightSibling)) // if right sibling has space
                 {
@@ -322,8 +321,8 @@ public abstract partial class BTree<TKey>
 
                     rightSibling.PushFirst(last, ref accessor);
 
-                    Validate(this, ref accessor);
-                    Validate(rightSibling, ref accessor);
+                    Validate();
+                    Validate();
                 }
                 else // split, then promote middle item
                 {
@@ -376,8 +375,8 @@ public abstract partial class BTree<TKey>
                     middle = new KeyValueItem(middle.Key, rightNode.ChunkId);
                     rightChild = middle;
 
-                    Validate(this, ref accessor);
-                    Validate(rightNode, ref accessor);
+                    Validate();
+                    Validate();
                 }
             }
 
@@ -419,8 +418,8 @@ public abstract partial class BTree<TKey>
                         // Left's HighKey must match the new separator (borrow moved the boundary).
                         GetPrevious(ref accessor).SetHighKey(last.Key, ref accessor);
 
-                        Validate(this, ref accessor);
-                        Validate(GetPrevious(ref accessor), ref accessor);
+                        Validate();
+                        Validate();
                     }
                     else if (CanBorrowFrom(GetNext(ref accessor), ref accessor)) // right sibling
                     {
@@ -435,8 +434,8 @@ public abstract partial class BTree<TKey>
                         // Current's HighKey must match the new separator (borrow moved the boundary).
                         SetHighKey(newSeparator, ref accessor);
 
-                        Validate(this, ref accessor);
-                        Validate(GetNext(ref accessor), ref accessor);
+                        Validate();
+                        Validate();
                     }
                     else // merge with either sibling.
                     {
@@ -452,8 +451,8 @@ public abstract partial class BTree<TKey>
                                 n.SetPrevious(GetPrevious(ref accessor), ref accessor);
                             }
 
-                            Validate(GetPrevious(ref accessor), ref accessor);
-                            Validate(GetNext(ref accessor), ref accessor);
+                            Validate();
+                            Validate();
                         }
                         else if (relatives.HasTrueRightSibling) // right sibling will be removed from parent
                         {
@@ -466,8 +465,8 @@ public abstract partial class BTree<TKey>
                                 n.SetPrevious(this, ref accessor);
                             }
 
-                            Validate(this, ref accessor);
-                            Validate(GetNext(ref accessor), ref accessor);
+                            Validate();
+                            Validate();
                         }
                         // else: root leaf — no siblings to merge with.
                         // The root is allowed to be below half-full per B-tree invariants.
@@ -515,8 +514,8 @@ public abstract partial class BTree<TKey>
 
                     PushFirst(last, ref accessor);
 
-                    Validate(this, ref accessor);
-                    Validate(leftSibling, ref accessor);
+                    Validate();
+                    Validate();
                 }
                 else if (CanBorrowFrom(relatives.GetRightSibling(ref accessor), ref accessor, out NodeWrapper rightSibling))
                 {
@@ -533,8 +532,8 @@ public abstract partial class BTree<TKey>
 
                     PushLast(first, ref accessor);
 
-                    Validate(this, ref accessor);
-                    Validate(rightSibling, ref accessor);
+                    Validate();
+                    Validate();
                 }
                 else // merge
                 {
@@ -546,7 +545,7 @@ public abstract partial class BTree<TKey>
                         leftSibling.PushLast(mid, ref accessor);
                         leftSibling.MergeLeft(this, ref accessor); // merge from left to keep items in order.
 
-                        Validate(leftSibling, ref accessor);
+                        Validate();
                     }
                     else if (relatives.HasTrueRightSibling) // right sibling will be removed from parent
                     {
@@ -555,7 +554,7 @@ public abstract partial class BTree<TKey>
                         PushLast(mid, ref accessor);
                         MergeLeft(rightSibling, ref accessor); // merge from right to keep items in order.
 
-                        Validate(this, ref accessor);
+                        Validate();
                     }
                 }
             }
@@ -598,14 +597,14 @@ public abstract partial class BTree<TKey>
             }
         }
 
-        [Conditional("DEBUG")]
         /// <summary>
         /// Inline sanity check during mutations. Intentionally a no-op — assertions here fire while holding OLC write locks; an exception would leak the lock
         /// and permanently deadlock the tree.
         /// Use <see cref="CheckConsistency"/> post-mutation for structural validation.
         /// </summary>
+        [Conditional("DEBUG")]
         [ExcludeFromCodeCoverage]
-        private static void Validate(NodeWrapper node, ref ChunkAccessor accessor)
+        private static void Validate()
         {
         }
 
@@ -626,7 +625,7 @@ public abstract partial class BTree<TKey>
             return value;
         }
 
-        public KeyValueItem InsertPopLast(int index, KeyValueItem item, ref ChunkAccessor accessor)
+        private KeyValueItem InsertPopLast(int index, KeyValueItem item, ref ChunkAccessor accessor)
         {
             if (index == GetCount(ref accessor))
             {
@@ -837,15 +836,6 @@ public abstract partial class BTree<TKey>
                 }
 
                 left = childItem;
-            }
-        }
-
-        [ExcludeFromCodeCoverage]
-        private static void ConsistencyAssert(bool condition, string message)
-        {
-            if (!condition)
-            {
-                throw new InvalidOperationException($"Consistency check: {message}");
             }
         }
 
