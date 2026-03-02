@@ -3,6 +3,7 @@ using NUnit.Framework;
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Threading;
 
 namespace Typhon.Engine.Tests;
 
@@ -31,17 +32,17 @@ class ViewTests : TestBase<ViewTests>
     private static long DoubleThreshold(double v) => Unsafe.As<double, long>(ref v);
 
     /// <summary>Creates a single-field view on B: B > 40.</summary>
-    private static View<CompD> CreateSingleFieldView(ViewRegistry registry,
+    private static View<CompD> CreateSingleFieldView(ComponentTable ct,
         int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity)
     {
         var evaluators = new[] { MakeEvaluator(1, 4, 4, KeyType.Int, CompareOp.GreaterThan, 40) };
-        var view = new View<CompD>(evaluators, registry, bufferCapacity);
-        registry.RegisterView(view);
+        var view = new View<CompD>(evaluators, ct.ViewRegistry, ct, bufferCapacity);
+        ct.ViewRegistry.RegisterView(view);
         return view;
     }
 
     /// <summary>Creates a multi-field view on A > 3.0f AND B > 40.</summary>
-    private static View<CompD> CreateMultiFieldView(ViewRegistry registry,
+    private static View<CompD> CreateMultiFieldView(ComponentTable ct,
         int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity)
     {
         var evaluators = new[]
@@ -49,8 +50,8 @@ class ViewTests : TestBase<ViewTests>
             MakeEvaluator(0, 0, 4, KeyType.Float, CompareOp.GreaterThan, FloatThreshold(3.0f)),
             MakeEvaluator(1, 4, 4, KeyType.Int, CompareOp.GreaterThan, 40)
         };
-        var view = new View<CompD>(evaluators, registry, bufferCapacity);
-        registry.RegisterView(view);
+        var view = new View<CompD>(evaluators, ct.ViewRegistry, ct, bufferCapacity);
+        ct.ViewRegistry.RegisterView(view);
         return view;
     }
 
@@ -92,7 +93,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateSingleFieldView(ct.ViewRegistry);
+        using var view = CreateSingleFieldView(ct);
 
         // Create entity outside view (B=30), refresh to drain creation
         var pk = CreateAndCommit(dbe, 1.0f, 30, 2.0);
@@ -116,7 +117,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateSingleFieldView(ct.ViewRegistry);
+        using var view = CreateSingleFieldView(ct);
 
         // Create entity in view (B=50), refresh
         var pk = CreateAndCommit(dbe, 1.0f, 50, 2.0);
@@ -140,7 +141,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateSingleFieldView(ct.ViewRegistry);
+        using var view = CreateSingleFieldView(ct);
 
         // Create entity in view (B=50), refresh
         var pk = CreateAndCommit(dbe, 1.0f, 50, 2.0);
@@ -165,7 +166,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateSingleFieldView(ct.ViewRegistry);
+        using var view = CreateSingleFieldView(ct);
 
         // Create entity outside view (B=30), refresh
         var pk = CreateAndCommit(dbe, 1.0f, 30, 2.0);
@@ -187,7 +188,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateSingleFieldView(ct.ViewRegistry);
+        using var view = CreateSingleFieldView(ct);
 
         var pk = CreateAndCommit(dbe, 1.0f, 50, 2.0);
         RefreshView(dbe, view);
@@ -204,7 +205,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateSingleFieldView(ct.ViewRegistry);
+        using var view = CreateSingleFieldView(ct);
 
         CreateAndCommit(dbe, 1.0f, 30, 2.0);
         RefreshView(dbe, view);
@@ -220,7 +221,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateSingleFieldView(ct.ViewRegistry);
+        using var view = CreateSingleFieldView(ct);
 
         var pk = CreateAndCommit(dbe, 1.0f, 50, 2.0);
         RefreshView(dbe, view);
@@ -242,7 +243,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateSingleFieldView(ct.ViewRegistry);
+        using var view = CreateSingleFieldView(ct);
 
         // Create first entity
         var pk1 = CreateAndCommit(dbe, 1.0f, 50, 2.0);
@@ -267,7 +268,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateSingleFieldView(ct.ViewRegistry);
+        using var view = CreateSingleFieldView(ct);
 
         // First commit + refresh → Added
         var pk1 = CreateAndCommit(dbe, 1.0f, 50, 2.0);
@@ -287,7 +288,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateSingleFieldView(ct.ViewRegistry);
+        using var view = CreateSingleFieldView(ct);
 
         // Create matching entity → Added
         var pk = CreateAndCommit(dbe, 1.0f, 50, 2.0);
@@ -309,7 +310,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateSingleFieldView(ct.ViewRegistry);
+        using var view = CreateSingleFieldView(ct);
 
         // Create matching, clear initial delta
         var pk = CreateAndCommit(dbe, 1.0f, 50, 2.0);
@@ -339,7 +340,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateSingleFieldView(ct.ViewRegistry);
+        using var view = CreateSingleFieldView(ct);
 
         // Create matching, clear initial delta
         var pk = CreateAndCommit(dbe, 1.0f, 50, 2.0);
@@ -369,7 +370,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateSingleFieldView(ct.ViewRegistry);
+        using var view = CreateSingleFieldView(ct);
 
         var pk = CreateAndCommit(dbe, 1.0f, 50, 2.0);
         RefreshView(dbe, view);
@@ -380,13 +381,13 @@ class ViewTests : TestBase<ViewTests>
     }
 
     [Test]
-    public void SingleField_Overflow_FreezeView()
+    public void SingleField_Overflow_RecoveryOnRefresh()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
         // Small buffer: capacity=4
-        using var view = CreateSingleFieldView(ct.ViewRegistry, bufferCapacity: 4);
+        using var view = CreateSingleFieldView(ct, bufferCapacity: 4);
 
         // Create 5 entities to overflow the capacity-4 buffer
         for (var i = 0; i < 5; i++)
@@ -399,8 +400,8 @@ class ViewTests : TestBase<ViewTests>
 
         RefreshView(dbe, view);
 
-        Assert.That(view.HasOverflow, Is.True, "View should detect overflow on Refresh");
-        Assert.That(view.Count, Is.EqualTo(0), "Frozen view should not have processed any entries");
+        Assert.That(view.HasOverflow, Is.False, "View should have recovered from overflow");
+        Assert.That(view.Count, Is.EqualTo(5), "View should contain all 5 matching entities after recovery");
     }
 
     #endregion
@@ -413,7 +414,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateMultiFieldView(ct.ViewRegistry);
+        using var view = CreateMultiFieldView(ct);
 
         // A=5.0 > 3.0, B=50 > 40 → both pass
         var pk = CreateAndCommit(dbe, 5.0f, 50, 2.0);
@@ -431,7 +432,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateMultiFieldView(ct.ViewRegistry);
+        using var view = CreateMultiFieldView(ct);
 
         // A=5.0 > 3.0 (pass), B=30 <= 40 (fail) → not in view
         var pk = CreateAndCommit(dbe, 5.0f, 30, 2.0);
@@ -447,7 +448,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateMultiFieldView(ct.ViewRegistry);
+        using var view = CreateMultiFieldView(ct);
 
         // Create with A=5.0 (pass), B=30 (fail) → not in view
         var pk = CreateAndCommit(dbe, 5.0f, 30, 2.0);
@@ -469,7 +470,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateMultiFieldView(ct.ViewRegistry);
+        using var view = CreateMultiFieldView(ct);
 
         // Create with A=2.0 (fail), B=30 (fail) → not in view
         var pk = CreateAndCommit(dbe, 2.0f, 30, 2.0);
@@ -490,7 +491,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateMultiFieldView(ct.ViewRegistry);
+        using var view = CreateMultiFieldView(ct);
 
         // Create with both passing: A=5.0, B=50 → in view
         var pk = CreateAndCommit(dbe, 5.0f, 50, 2.0);
@@ -513,7 +514,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateMultiFieldView(ct.ViewRegistry);
+        using var view = CreateMultiFieldView(ct);
 
         // Create with both passing: A=5.0, B=50 → in view
         var pk = CreateAndCommit(dbe, 5.0f, 50, 2.0);
@@ -535,7 +536,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateMultiFieldView(ct.ViewRegistry);
+        using var view = CreateMultiFieldView(ct);
 
         // Create with A=2.0 (fail), B=30 (fail) → not in view
         var pk = CreateAndCommit(dbe, 2.0f, 30, 2.0);
@@ -561,7 +562,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateSingleFieldView(ct.ViewRegistry);
+        using var view = CreateSingleFieldView(ct);
 
         var pk = CreateAndCommit(dbe, 1.0f, 50, 2.0);
         RefreshView(dbe, view);
@@ -580,7 +581,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateSingleFieldView(ct.ViewRegistry);
+        using var view = CreateSingleFieldView(ct);
 
         var pk1 = CreateAndCommit(dbe, 1.0f, 50, 2.0);
         var pk2 = CreateAndCommit(dbe, 1.0f, 60, 2.0);
@@ -603,7 +604,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        var view = CreateSingleFieldView(ct.ViewRegistry);
+        var view = CreateSingleFieldView(ct);
 
         Assert.That(ct.ViewRegistry.ViewCount, Is.EqualTo(1));
         Assert.That(view.IsDisposed, Is.False);
@@ -620,7 +621,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        var view = CreateSingleFieldView(ct.ViewRegistry);
+        var view = CreateSingleFieldView(ct);
         view.Dispose();
 
         using var t = dbe.CreateQuickTransaction();
@@ -637,7 +638,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateSingleFieldView(ct.ViewRegistry);
+        using var view = CreateSingleFieldView(ct);
 
         // Create matching and non-matching entities
         var pk1 = CreateAndCommit(dbe, 1.0f, 50, 2.0); // matching
@@ -683,7 +684,7 @@ class ViewTests : TestBase<ViewTests>
 
         // View on field A: A > 3.0f (single evaluator on float field)
         var evaluators = new[] { MakeEvaluator(0, 0, 4, KeyType.Float, CompareOp.GreaterThan, FloatThreshold(3.0f)) };
-        using var view = new View<CompD>(evaluators, ct.ViewRegistry);
+        using var view = new View<CompD>(evaluators, ct.ViewRegistry, ct);
         ct.ViewRegistry.RegisterView(view);
 
         var pkExact = CreateAndCommit(dbe, 3.0f, 10, 2.0);  // A=3.0, not > 3.0
@@ -703,7 +704,7 @@ class ViewTests : TestBase<ViewTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateSingleFieldView(ct.ViewRegistry);
+        using var view = CreateSingleFieldView(ct);
 
         var pk = CreateAndCommit(dbe, 1.0f, 50, 2.0);
 
@@ -734,6 +735,241 @@ class ViewTests : TestBase<ViewTests>
         delta = view.GetDelta();
         Assert.That(delta.Removed, Has.Length.EqualTo(1));
         Assert.That(view.Count, Is.EqualTo(0));
+    }
+
+    #endregion
+
+    #region Overflow recovery tests
+
+    [Test]
+    public void OverflowRecovery_SmallBuffer_CorrectEntitySet()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        var ct = dbe.GetComponentTable<CompD>();
+        using var view = CreateSingleFieldView(ct, bufferCapacity: 4);
+
+        // Create 3 matching + 2 non-matching to overflow buffer
+        var pks = new long[3];
+        pks[0] = CreateAndCommit(dbe, 1.0f, 50, 2.0);
+        pks[1] = CreateAndCommit(dbe, 1.0f, 60, 2.0);
+        CreateAndCommit(dbe, 1.0f, 30, 2.0); // non-matching
+        pks[2] = CreateAndCommit(dbe, 1.0f, 70, 2.0);
+        CreateAndCommit(dbe, 1.0f, 20, 2.0); // non-matching
+
+        Assert.That(view.DeltaBuffer.HasOverflow, Is.True);
+
+        RefreshView(dbe, view);
+
+        Assert.That(view.HasOverflow, Is.False);
+        Assert.That(view.Count, Is.EqualTo(3));
+        for (var i = 0; i < pks.Length; i++)
+        {
+            Assert.That(view.Contains(pks[i]), Is.True);
+        }
+    }
+
+    [Test]
+    public void OverflowRecovery_DeltaCorrectly_AddedAndRemoved()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        var ct = dbe.GetComponentTable<CompD>();
+        using var view = CreateSingleFieldView(ct, bufferCapacity: 4);
+
+        // Pre-populate: create entity in view before overflow
+        var pkOld = CreateAndCommit(dbe, 1.0f, 50, 2.0);
+        RefreshView(dbe, view);
+        view.ClearDelta();
+        Assert.That(view.Contains(pkOld), Is.True);
+
+        // Delete pkOld and create new entities to cause overflow
+        DeleteAndCommit(dbe, pkOld);
+        var pkNew1 = CreateAndCommit(dbe, 1.0f, 60, 2.0);
+        var pkNew2 = CreateAndCommit(dbe, 1.0f, 70, 2.0);
+        CreateAndCommit(dbe, 1.0f, 80, 2.0);
+        CreateAndCommit(dbe, 1.0f, 90, 2.0);
+
+        Assert.That(view.DeltaBuffer.HasOverflow, Is.True);
+
+        RefreshView(dbe, view);
+
+        var delta = view.GetDelta();
+        Assert.That(view.Contains(pkOld), Is.False, "Deleted entity should be absent");
+        Assert.That(view.Contains(pkNew1), Is.True);
+        Assert.That(view.Contains(pkNew2), Is.True);
+        Assert.That(delta.Removed, Does.Contain(pkOld), "pkOld should be in Removed");
+        Assert.That(delta.Added, Does.Contain(pkNew1), "pkNew1 should be in Added");
+        Assert.That(delta.Added, Does.Contain(pkNew2), "pkNew2 should be in Added");
+    }
+
+    [Test]
+    public void OverflowRecovery_ReturnsToIncrementalMode()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        var ct = dbe.GetComponentTable<CompD>();
+        using var view = CreateSingleFieldView(ct, bufferCapacity: 4);
+
+        // Overflow
+        for (var i = 0; i < 5; i++)
+        {
+            CreateAndCommit(dbe, 1.0f, 50 + i, 2.0);
+        }
+
+        RefreshView(dbe, view);
+        Assert.That(view.HasOverflow, Is.False, "Should have recovered");
+        view.ClearDelta();
+
+        // Now add one more entity incrementally (no overflow)
+        var pk = CreateAndCommit(dbe, 1.0f, 100, 2.0);
+        RefreshView(dbe, view);
+
+        Assert.That(view.HasOverflow, Is.False, "Should still be in incremental mode");
+        var delta = view.GetDelta();
+        Assert.That(delta.Added, Has.Length.EqualTo(1));
+        Assert.That(delta.Added[0], Is.EqualTo(pk));
+    }
+
+    [Test]
+    public void OverflowRecovery_EntityDeletedDuringOverflow()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        var ct = dbe.GetComponentTable<CompD>();
+        using var view = CreateSingleFieldView(ct, bufferCapacity: 4);
+
+        // Create entity, get it into view
+        var pk = CreateAndCommit(dbe, 1.0f, 50, 2.0);
+        RefreshView(dbe, view);
+        view.ClearDelta();
+        Assert.That(view.Contains(pk), Is.True);
+
+        // Now cause overflow and delete the entity during overflow
+        DeleteAndCommit(dbe, pk);
+        for (var i = 0; i < 5; i++)
+        {
+            CreateAndCommit(dbe, 1.0f, 60 + i, 2.0);
+        }
+
+        RefreshView(dbe, view);
+
+        Assert.That(view.Contains(pk), Is.False, "Deleted entity should be absent after recovery");
+        Assert.That(view.HasOverflow, Is.False);
+    }
+
+    [Test]
+    public void OverflowRecovery_NoPlanRebuild_ReusesEvaluators()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        var ct = dbe.GetComponentTable<CompD>();
+        using var view = CreateSingleFieldView(ct, bufferCapacity: 4);
+
+        // Overflow
+        for (var i = 0; i < 5; i++)
+        {
+            CreateAndCommit(dbe, 1.0f, 50 + i, 2.0);
+        }
+
+        RefreshView(dbe, view);
+
+        // Verify the view works correctly — evaluators are reused (same filter B > 40)
+        Assert.That(view.Count, Is.EqualTo(5));
+        view.ClearDelta();
+
+        // Add entity that does NOT match
+        CreateAndCommit(dbe, 1.0f, 30, 2.0);
+        RefreshView(dbe, view);
+
+        Assert.That(view.Count, Is.EqualTo(5), "Non-matching entity should not be in view");
+        Assert.That(view.GetDelta().IsEmpty, Is.True);
+    }
+
+    [Test]
+    [CancelAfter(5000)]
+    public void DisposalDuringActiveCommits_NoCrash()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        var ct = dbe.GetComponentTable<CompD>();
+        var view = CreateSingleFieldView(ct);
+
+        var running = 1;
+        var errors = 0;
+        var counter = 0;
+
+        // 4 concurrent commit threads
+        var threads = new Thread[4];
+        for (var t = 0; t < threads.Length; t++)
+        {
+            threads[t] = new Thread(() =>
+            {
+                while (Volatile.Read(ref running) == 1)
+                {
+                    try
+                    {
+                        var b = Interlocked.Increment(ref counter) + 10000;
+                        using var tx = dbe.CreateQuickTransaction();
+                        var d = new CompD(1.0f, b, 2.0);
+                        tx.CreateEntity(ref d);
+                        tx.Commit();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // Expected after engine/view disposal
+                    }
+                    catch (TyphonException)
+                    {
+                        // Expected: concurrency conflicts, constraint violations during shutdown
+                    }
+                    catch
+                    {
+                        Interlocked.Increment(ref errors);
+                    }
+                }
+            });
+            threads[t].Start();
+        }
+
+        // Let commits flow for a bit, then dispose mid-flight
+        Thread.Sleep(5);
+        view.Dispose();
+        Volatile.Write(ref running, 0);
+
+        for (var t = 0; t < threads.Length; t++)
+        {
+            threads[t].Join();
+        }
+
+        Assert.That(errors, Is.EqualTo(0), "No unexpected errors during concurrent dispose");
+        Assert.That(view.IsDisposed, Is.True);
+    }
+
+    [Test]
+    public void HighFrequencyRefreshCycles_NoCorruption()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        var ct = dbe.GetComponentTable<CompD>();
+        using var view = CreateSingleFieldView(ct);
+
+        var matchingCount = 0;
+        for (var i = 0; i < 100; i++)
+        {
+            // Unique B values: alternating below/above threshold (B > 40)
+            var b = (i % 2 == 0) ? 1000 + i : -(1000 + i); // even=matching (>40), odd=non-matching (<40)
+            CreateAndCommit(dbe, 1.0f, b, 2.0);
+            if (b > 40)
+            {
+                matchingCount++;
+            }
+
+            RefreshView(dbe, view);
+            view.ClearDelta();
+        }
+
+        Assert.That(view.Count, Is.EqualTo(matchingCount), $"Expected {matchingCount} matching entities");
     }
 
     #endregion

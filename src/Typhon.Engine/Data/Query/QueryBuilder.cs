@@ -36,7 +36,7 @@ public class QueryBuilder<T> where T : unmanaged
         }
 
         var evaluators = ResolveEvaluators(fieldPredicates, ct);
-        var view = new View<T>(evaluators, ct.ViewRegistry, bufferCapacity);
+        var view = new View<T>(evaluators, ct.ViewRegistry, ct, bufferCapacity);
 
         // Register before population so concurrent commits go to ring buffer
         ct.ViewRegistry.RegisterView(view);

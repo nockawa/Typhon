@@ -25,17 +25,16 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
         };
 
     /// <summary>Creates a cross-component view: CompD.B > 40 AND CompF.Gold > 10000.</summary>
-    private static View<CompD, CompF> CreateCrossComponentView(ViewRegistry registryD, ViewRegistry registryF,
-        int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity)
+    private static View<CompD, CompF> CreateCrossComponentView(ComponentTable ctD, ComponentTable ctF, int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity)
     {
         var evaluators = new[]
         {
             MakeEvaluator(1, 4, 4, KeyType.Int, CompareOp.GreaterThan, 40, componentTag: 0),    // CompD.B > 40
             MakeEvaluator(0, 0, 4, KeyType.Int, CompareOp.GreaterThan, 10000, componentTag: 1)   // CompF.Gold > 10000
         };
-        var view = new View<CompD, CompF>(evaluators, registryD, registryF, bufferCapacity);
-        registryD.RegisterView(view, [1], 0);    // CompD field index 1 (B)
-        registryF.RegisterView(view, [0], 1);    // CompF field index 0 (Gold)
+        var view = new View<CompD, CompF>(evaluators, ctD.ViewRegistry, ctF.ViewRegistry, ctD, ctF, bufferCapacity);
+        ctD.ViewRegistry.RegisterView(view, [1], 0);    // CompD field index 1 (B)
+        ctF.ViewRegistry.RegisterView(view, [0], 1);    // CompF field index 0 (Gold)
         return view;
     }
 
@@ -88,7 +87,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
         RegisterComponents(dbe);
         var ctD = dbe.GetComponentTable<CompD>();
         var ctF = dbe.GetComponentTable<CompF>();
-        using var view = CreateCrossComponentView(ctD.ViewRegistry, ctF.ViewRegistry);
+        using var view = CreateCrossComponentView(ctD, ctF);
 
         // CompD.B=50 > 40 (pass), CompF.Gold=20000 > 10000 (pass)
         var pk = CreateBothAndCommit(dbe, 1.0f, 50, 2.0, 20000, 1);
@@ -107,7 +106,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
         RegisterComponents(dbe);
         var ctD = dbe.GetComponentTable<CompD>();
         var ctF = dbe.GetComponentTable<CompF>();
-        using var view = CreateCrossComponentView(ctD.ViewRegistry, ctF.ViewRegistry);
+        using var view = CreateCrossComponentView(ctD, ctF);
 
         // CompD.B=50 > 40 (pass), CompF.Gold=5000 <= 10000 (fail)
         var pk = CreateBothAndCommit(dbe, 1.0f, 50, 2.0, 5000, 1);
@@ -124,7 +123,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
         RegisterComponents(dbe);
         var ctD = dbe.GetComponentTable<CompD>();
         var ctF = dbe.GetComponentTable<CompF>();
-        using var view = CreateCrossComponentView(ctD.ViewRegistry, ctF.ViewRegistry);
+        using var view = CreateCrossComponentView(ctD, ctF);
 
         // Start outside: B=30 (fail), Gold=5000 (fail)
         var pk = CreateBothAndCommit(dbe, 1.0f, 30, 2.0, 5000, 1);
@@ -154,7 +153,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
         RegisterComponents(dbe);
         var ctD = dbe.GetComponentTable<CompD>();
         var ctF = dbe.GetComponentTable<CompF>();
-        using var view = CreateCrossComponentView(ctD.ViewRegistry, ctF.ViewRegistry);
+        using var view = CreateCrossComponentView(ctD, ctF);
 
         // Start outside: B=30 (fail), Gold=5000 (fail)
         var pk = CreateBothAndCommit(dbe, 1.0f, 30, 2.0, 5000, 1);
@@ -179,7 +178,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
         RegisterComponents(dbe);
         var ctD = dbe.GetComponentTable<CompD>();
         var ctF = dbe.GetComponentTable<CompF>();
-        using var view = CreateCrossComponentView(ctD.ViewRegistry, ctF.ViewRegistry);
+        using var view = CreateCrossComponentView(ctD, ctF);
 
         // Start with CompD.B=30 (fail), CompF.Gold=20000 (pass)
         var pk = CreateBothAndCommit(dbe, 1.0f, 30, 2.0, 20000, 1);
@@ -203,7 +202,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
         RegisterComponents(dbe);
         var ctD = dbe.GetComponentTable<CompD>();
         var ctF = dbe.GetComponentTable<CompF>();
-        using var view = CreateCrossComponentView(ctD.ViewRegistry, ctF.ViewRegistry);
+        using var view = CreateCrossComponentView(ctD, ctF);
 
         // Start in view: B=50 (pass), Gold=20000 (pass)
         var pk = CreateBothAndCommit(dbe, 1.0f, 50, 2.0, 20000, 1);
@@ -227,7 +226,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
         RegisterComponents(dbe);
         var ctD = dbe.GetComponentTable<CompD>();
         var ctF = dbe.GetComponentTable<CompF>();
-        using var view = CreateCrossComponentView(ctD.ViewRegistry, ctF.ViewRegistry);
+        using var view = CreateCrossComponentView(ctD, ctF);
 
         // Start in view: B=50 (pass), Gold=20000 (pass)
         var pk = CreateBothAndCommit(dbe, 1.0f, 50, 2.0, 20000, 1);
@@ -250,7 +249,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
         RegisterComponents(dbe);
         var ctD = dbe.GetComponentTable<CompD>();
         var ctF = dbe.GetComponentTable<CompF>();
-        using var view = CreateCrossComponentView(ctD.ViewRegistry, ctF.ViewRegistry);
+        using var view = CreateCrossComponentView(ctD, ctF);
 
         // Create entity with only CompD (no CompF)
         long pk;
@@ -272,7 +271,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
         RegisterComponents(dbe);
         var ctD = dbe.GetComponentTable<CompD>();
         var ctF = dbe.GetComponentTable<CompF>();
-        using var view = CreateCrossComponentView(ctD.ViewRegistry, ctF.ViewRegistry);
+        using var view = CreateCrossComponentView(ctD, ctF);
 
         // Create matching entity
         var pk1 = CreateBothAndCommit(dbe, 1.0f, 50, 2.0, 20000, 1);
@@ -340,7 +339,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
         RegisterComponents(dbe);
         var ctD = dbe.GetComponentTable<CompD>();
         var ctF = dbe.GetComponentTable<CompF>();
-        var view = CreateCrossComponentView(ctD.ViewRegistry, ctF.ViewRegistry);
+        var view = CreateCrossComponentView(ctD, ctF);
 
         Assert.That(ctD.ViewRegistry.ViewCount, Is.EqualTo(1));
         Assert.That(ctF.ViewRegistry.ViewCount, Is.EqualTo(1));
@@ -350,6 +349,44 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
         Assert.That(view.IsDisposed, Is.True);
         Assert.That(ctD.ViewRegistry.ViewCount, Is.EqualTo(0));
         Assert.That(ctF.ViewRegistry.ViewCount, Is.EqualTo(0));
+    }
+
+    #endregion
+
+    #region Overflow recovery tests
+
+    [Test]
+    public void CrossComponent_OverflowRecovery_CorrectEntitySet()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        var ctD = dbe.GetComponentTable<CompD>();
+        var ctF = dbe.GetComponentTable<CompF>();
+        // Small buffer: capacity=4
+        using var view = CreateCrossComponentView(ctD, ctF, bufferCapacity: 4);
+
+        // Pre-populate one matching entity
+        var pkOld = CreateBothAndCommit(dbe, 1.0f, 50, 2.0, 20000, 1);
+        RefreshView(dbe, view);
+        view.ClearDelta();
+        Assert.That(view.Contains(pkOld), Is.True);
+
+        // Create enough entities to overflow the buffer
+        var pkNew1 = CreateBothAndCommit(dbe, 1.0f, 60, 2.0, 15000, 2); // matching
+        CreateBothAndCommit(dbe, 1.0f, 30, 2.0, 5000, 3);  // non-matching
+        var pkNew2 = CreateBothAndCommit(dbe, 1.0f, 70, 2.0, 25000, 4); // matching
+        CreateBothAndCommit(dbe, 1.0f, 80, 2.0, 30000, 5); // matching
+        CreateBothAndCommit(dbe, 1.0f, 90, 2.0, 40000, 6); // matching
+
+        Assert.That(view.DeltaBuffer.HasOverflow, Is.True);
+
+        RefreshView(dbe, view);
+
+        Assert.That(view.HasOverflow, Is.False, "Should have recovered from overflow");
+        Assert.That(view.Contains(pkOld), Is.True, "Old entity should still be in view");
+        Assert.That(view.Contains(pkNew1), Is.True, "New matching entity should be in view");
+        Assert.That(view.Contains(pkNew2), Is.True, "New matching entity should be in view");
+        Assert.That(view.Count, Is.EqualTo(5), "5 matching entities total");
     }
 
     #endregion

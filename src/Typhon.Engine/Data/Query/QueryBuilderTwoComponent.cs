@@ -50,7 +50,7 @@ public class QueryBuilder<T1, T2> where T1 : unmanaged where T2 : unmanaged
         Array.Copy(evals1, combinedEvaluators, evals1.Length);
         Array.Copy(evals2, 0, combinedEvaluators, evals1.Length, evals2.Length);
 
-        var view = new View<T1, T2>(combinedEvaluators, ct1.ViewRegistry, ct2.ViewRegistry, bufferCapacity);
+        var view = new View<T1, T2>(combinedEvaluators, ct1.ViewRegistry, ct2.ViewRegistry, ct1, ct2, bufferCapacity);
 
         // Build field dependency arrays for each component table
         var fieldDeps1 = new int[evals1.Length];
