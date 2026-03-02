@@ -186,6 +186,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     /// </summary>
     internal ushort WalTypeId { get; set; }
     internal IndexedFieldInfo[] IndexedFieldInfos { get; private set; }
+    internal ViewRegistry ViewRegistry { get; private set; }
 
     internal Dictionary<int, VariableSizedBufferSegmentBase> ComponentCollectionVSBSByOffset { get; private set; }
 
@@ -335,6 +336,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         }
 
         BuildIndexedFieldInfo(false, changeSet);
+        ViewRegistry = new ViewRegistry(IndexedFieldInfos.Length);
         BuildComponentCollectionInfo(changeSet);
     }
 
@@ -369,6 +371,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         }
 
         BuildIndexedFieldInfo(true, changeSet, newIndexFieldIds);
+        ViewRegistry = new ViewRegistry(IndexedFieldInfos.Length);
 
         ComponentCollectionVSBSByOffset = new Dictionary<int, VariableSizedBufferSegmentBase>();
     }
@@ -401,6 +404,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         }
 
         BuildIndexedFieldInfo(true, changeSet, newIndexFieldIds);
+        ViewRegistry = new ViewRegistry(IndexedFieldInfos.Length);
 
         ComponentCollectionVSBSByOffset = new Dictionary<int, VariableSizedBufferSegmentBase>();
     }

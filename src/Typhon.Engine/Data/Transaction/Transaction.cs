@@ -1225,7 +1225,7 @@ public unsafe class Transaction : IDisposable
             }
             else if (readCompChunkId != 0)
             {
-                IndexMaintainer.RemoveSecondaryIndices(info, readCompChunkId, compRevInfo.CompRevTableFirstChunkId, _changeSet, TSN);
+                IndexMaintainer.RemoveSecondaryIndices(pk, info, readCompChunkId, compRevInfo.CompRevTableFirstChunkId, _changeSet, TSN);
             }
 
             elementHandle.Commit(TSN);

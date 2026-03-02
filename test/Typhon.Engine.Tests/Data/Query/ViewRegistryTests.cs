@@ -8,11 +8,20 @@ namespace Typhon.Engine.Tests;
 [TestFixture]
 class ViewRegistryTests
 {
-    private class MockView : IView
+    private class MockView : IView, IDisposable
     {
+        private ViewDeltaRingBuffer _deltaBuffer;
+
         public int ViewId { get; set; }
         public int[] FieldDependencies { get; set; }
         public bool IsDisposed { get; set; }
+        public ViewDeltaRingBuffer DeltaBuffer => _deltaBuffer ??= new ViewDeltaRingBuffer();
+
+        public void Dispose()
+        {
+            _deltaBuffer?.Dispose();
+            IsDisposed = true;
+        }
     }
 
     [Test]

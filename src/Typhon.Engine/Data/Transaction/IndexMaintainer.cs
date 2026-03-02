@@ -1,6 +1,7 @@
 // unset
 
 using System;
+using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine;
 
@@ -63,6 +64,9 @@ internal static unsafe class IndexMaintainer
                         ifi.Index.Move(&prev[ifi.OffsetToField], &cur[ifi.OffsetToField], startChunkId, ref accessor);
                     }
                     accessor.Dispose();
+
+                    NotifyViews(info.ComponentTable, i, pk, tsn, prev + ifi.OffsetToField, cur + ifi.OffsetToField, ifi.Size, isCreation: false,
+                        isDeletion: false);
                 }
                 else if (ifi.Index.AllowMultiple)
                 {
@@ -112,13 +116,28 @@ internal static unsafe class IndexMaintainer
                 }
                 accessor.Dispose();
             }
+
+            // Notify views for all indexed fields on creation
+            for (int i = 0; i < indexedFieldInfos.Length; i++)
+            {
+                ref var ifi = ref indexedFieldInfos[i];
+                NotifyViews(info.ComponentTable, i, pk, tsn, null, cur + ifi.OffsetToField, ifi.Size, isCreation: true, isDeletion: false);
+            }
         }
     }
 
-    internal static void RemoveSecondaryIndices(ComponentInfo info, int prevCompChunkId, int startChunkId, ChangeSet changeSet, long tsn)
+    internal static void RemoveSecondaryIndices(long pk, ComponentInfo info, int prevCompChunkId, int startChunkId, ChangeSet changeSet, long tsn)
     {
         var prev = info.CompContentAccessor.GetChunkAddress(prevCompChunkId);
         var indexedFieldInfos = info.ComponentTable.IndexedFieldInfos;
+
+        // Notify views before B+Tree removal (prev pointer still valid)
+        for (int i = 0; i < indexedFieldInfos.Length; i++)
+        {
+            ref var ifi = ref indexedFieldInfos[i];
+            NotifyViews(info.ComponentTable, i, pk, tsn, prev + ifi.OffsetToField, null, ifi.Size, isCreation: false, isDeletion: true);
+        }
+
         for (int i = 0; i < indexedFieldInfos.Length; i++)
         {
             ref var ifi = ref indexedFieldInfos[i];
@@ -152,6 +171,33 @@ internal static unsafe class IndexMaintainer
                 ifi.Index.Remove(&prev[ifi.OffsetToField], out _, ref accessor);
             }
             accessor.Dispose();
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void NotifyViews(ComponentTable table, int fieldIndex, long pk, long tsn, byte* beforeFieldPtr, byte* afterFieldPtr, int fieldSize,
+        bool isCreation, bool isDeletion)
+    {
+        var views = table.ViewRegistry.GetViewsForField(fieldIndex);
+        if (views.Length == 0)
+        {
+            return;
+        }
+
+        var beforeKey = beforeFieldPtr != null ? KeyBytes8.FromPointer(beforeFieldPtr, fieldSize) : default;
+        var afterKey = afterFieldPtr != null ? KeyBytes8.FromPointer(afterFieldPtr, fieldSize) : default;
+
+        // Pack flags: [7]=isDeletion, [6]=isCreation, [5:0]=fieldIndex & 0x3F
+        var flags = (byte)((fieldIndex & 0x3F) | (isCreation ? 0x40 : 0) | (isDeletion ? 0x80 : 0));
+
+        for (int v = 0; v < views.Length; v++)
+        {
+            var view = views[v];
+            if (view.IsDisposed)
+            {
+                continue;
+            }
+            view.DeltaBuffer.TryAppend(pk, beforeKey, afterKey, tsn, flags);
         }
     }
 
