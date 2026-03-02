@@ -1159,6 +1159,8 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         _migrationRegistry.RegisterByte(componentName, fromRevision, toRevision, oldSize, newSize, func);
     }
 
+    public QueryBuilder<T> Query<T>() where T : unmanaged => new(this);
+
     public ComponentTable GetComponentTable<T>() where T : unmanaged => GetComponentTable(typeof(T));
 
     public ComponentTable GetComponentTable(Type type) => _componentTableByType.GetValueOrDefault(type);

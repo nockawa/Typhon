@@ -6,7 +6,7 @@ using System.Threading;
 
 namespace Typhon.Engine;
 
-internal unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : unmanaged
+public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : unmanaged
 {
     private static int _nextViewId;
 
@@ -20,7 +20,7 @@ internal unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : 
     private int _disposed;
     private bool _overflowDetected;
 
-    public View(FieldEvaluator[] evaluators, ViewRegistry registry,
+    internal View(FieldEvaluator[] evaluators, ViewRegistry registry,
         int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0)
     {
         _evaluators = evaluators;
@@ -41,12 +41,15 @@ internal unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : 
     public int ViewId { get; }
     public int[] FieldDependencies { get; }
     public bool IsDisposed => _disposed != 0;
-    public ViewDeltaRingBuffer DeltaBuffer { get; }
+    internal ViewDeltaRingBuffer DeltaBuffer { get; }
+    ViewDeltaRingBuffer IView.DeltaBuffer => DeltaBuffer;
     public int Count => _entityIds.Count;
     public long LastRefreshTSN => _lastRefreshTSN;
     public bool HasOverflow => _overflowDetected;
 
     public bool Contains(long pk) => _entityIds.Contains(pk);
+
+    internal void AddEntityDirect(long pk) => _entityIds.Add(pk);
 
     /// <summary>
     /// Drain the ring buffer up to the transaction's snapshot TSN, evaluate field predicates,
