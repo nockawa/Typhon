@@ -1161,6 +1161,8 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
     public QueryBuilder<T> Query<T>() where T : unmanaged => new(this);
 
+    public QueryBuilder<T1, T2> Query<T1, T2>() where T1 : unmanaged where T2 : unmanaged => new(this);
+
     public ComponentTable GetComponentTable<T>() where T : unmanaged => GetComponentTable(typeof(T));
 
     public ComponentTable GetComponentTable(Type type) => _componentTableByType.GetValueOrDefault(type);

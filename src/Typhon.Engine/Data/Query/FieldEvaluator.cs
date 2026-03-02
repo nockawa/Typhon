@@ -36,7 +36,7 @@ internal struct FieldEvaluator  // 24 bytes
     public byte FieldSize;       // 1B
     public KeyType KeyType;      // 1B
     public CompareOp CompareOp;  // 1B
-    private byte _padding;       // 1B
+    public byte ComponentTag;     // 1B — 0=T1, 1=T2 (for multi-component views)
     private int _reserved;       // 4B
     public long Threshold;       // 8B — widened constant (reinterpret for float/double)
 

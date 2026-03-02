@@ -4,15 +4,27 @@ using System.Threading;
 
 namespace Typhon.Engine;
 
+internal readonly struct ViewRegistration
+{
+    public readonly IView View;
+    public readonly byte ComponentTag;
+
+    public ViewRegistration(IView view, byte componentTag)
+    {
+        View = view;
+        ComponentTag = componentTag;
+    }
+}
+
 internal class ViewRegistry
 {
-    private readonly IView[][] _viewsByField;     // [fieldIndex] -> IView[] (copy-on-write)
+    private readonly ViewRegistration[][] _viewsByField;     // [fieldIndex] -> ViewRegistration[] (copy-on-write)
     private readonly Lock _writeLock = new();
     private int _viewCount;
 
     public ViewRegistry(int fieldCount)
     {
-        _viewsByField = new IView[fieldCount][];
+        _viewsByField = new ViewRegistration[fieldCount][];
         for (var i = 0; i < fieldCount; i++)
         {
             _viewsByField[i] = [];
@@ -24,24 +36,25 @@ internal class ViewRegistry
     public int FieldCount => _viewsByField.Length;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ReadOnlySpan<IView> GetViewsForField(int fieldIndex)
+    public ReadOnlySpan<ViewRegistration> GetViewsForField(int fieldIndex)
     {
         var views = _viewsByField;
         if ((uint)fieldIndex >= (uint)views.Length)
         {
-            return ReadOnlySpan<IView>.Empty;
+            return ReadOnlySpan<ViewRegistration>.Empty;
         }
         return views[fieldIndex];
     }
 
-    public void RegisterView(IView view)
+    public void RegisterView(IView view) => RegisterView(view, view.FieldDependencies, 0);
+
+    public void RegisterView(IView view, int[] fieldIndices, byte componentTag)
     {
         lock (_writeLock)
         {
-            var deps = view.FieldDependencies;
-            for (var i = 0; i < deps.Length; i++)
+            for (var i = 0; i < fieldIndices.Length; i++)
             {
-                var fieldIndex = deps[i];
+                var fieldIndex = fieldIndices[i];
                 if ((uint)fieldIndex >= (uint)_viewsByField.Length)
                 {
                     throw new ArgumentOutOfRangeException(
@@ -50,11 +63,11 @@ internal class ViewRegistry
 
                 var existing = _viewsByField[fieldIndex];
 
-                // Idempotent: skip if already present
+                // Idempotent: skip if already present with same view reference and tag
                 var found = false;
                 for (var j = 0; j < existing.Length; j++)
                 {
-                    if (ReferenceEquals(existing[j], view))
+                    if (ReferenceEquals(existing[j].View, view) && existing[j].ComponentTag == componentTag)
                     {
                         found = true;
                         break;
@@ -66,9 +79,9 @@ internal class ViewRegistry
                 }
 
                 // Copy-on-write: create new array +1
-                var newArray = new IView[existing.Length + 1];
+                var newArray = new ViewRegistration[existing.Length + 1];
                 Array.Copy(existing, newArray, existing.Length);
-                newArray[existing.Length] = view;
+                newArray[existing.Length] = new ViewRegistration(view, componentTag);
                 _viewsByField[fieldIndex] = newArray;
             }
             _viewCount++;
@@ -79,21 +92,16 @@ internal class ViewRegistry
     {
         lock (_writeLock)
         {
-            var deps = view.FieldDependencies;
             var removedAny = false;
-            for (var i = 0; i < deps.Length; i++)
-            {
-                var fieldIndex = deps[i];
-                if ((uint)fieldIndex >= (uint)_viewsByField.Length)
-                {
-                    continue;
-                }
 
-                var existing = _viewsByField[fieldIndex];
+            // Scan all field slots to find and remove all registrations for this view
+            for (var f = 0; f < _viewsByField.Length; f++)
+            {
+                var existing = _viewsByField[f];
                 var idx = -1;
                 for (var j = 0; j < existing.Length; j++)
                 {
-                    if (ReferenceEquals(existing[j], view))
+                    if (ReferenceEquals(existing[j].View, view))
                     {
                         idx = j;
                         break;
@@ -108,14 +116,14 @@ internal class ViewRegistry
                 removedAny = true;
                 if (existing.Length == 1)
                 {
-                    _viewsByField[fieldIndex] = [];
+                    _viewsByField[f] = [];
                 }
                 else
                 {
-                    var newArray = new IView[existing.Length - 1];
+                    var newArray = new ViewRegistration[existing.Length - 1];
                     Array.Copy(existing, 0, newArray, 0, idx);
                     Array.Copy(existing, idx + 1, newArray, idx, existing.Length - idx - 1);
-                    _viewsByField[fieldIndex] = newArray;
+                    _viewsByField[f] = newArray;
                 }
             }
             if (removedAny)

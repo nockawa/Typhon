@@ -192,12 +192,12 @@ internal static unsafe class IndexMaintainer
 
         for (int v = 0; v < views.Length; v++)
         {
-            var view = views[v];
-            if (view.IsDisposed)
+            var reg = views[v];
+            if (reg.View.IsDisposed)
             {
                 continue;
             }
-            view.DeltaBuffer.TryAppend(pk, beforeKey, afterKey, tsn, flags);
+            reg.View.DeltaBuffer.TryAppend(pk, beforeKey, afterKey, tsn, flags, reg.ComponentTag);
         }
     }
 

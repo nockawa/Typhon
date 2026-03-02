@@ -45,7 +45,7 @@ class ViewRegistryTests
 
         var views = registry.GetViewsForField(2);
         Assert.That(views.Length, Is.EqualTo(1));
-        Assert.That(views[0], Is.SameAs(view));
+        Assert.That(views[0].View, Is.SameAs(view));
     }
 
     [Test]
@@ -57,15 +57,15 @@ class ViewRegistryTests
         registry.RegisterView(view);
 
         Assert.That(registry.GetViewsForField(0).Length, Is.EqualTo(1));
-        Assert.That(registry.GetViewsForField(0)[0], Is.SameAs(view));
+        Assert.That(registry.GetViewsForField(0)[0].View, Is.SameAs(view));
 
         Assert.That(registry.GetViewsForField(1).Length, Is.EqualTo(0), "Field 1 not in dependencies");
 
         Assert.That(registry.GetViewsForField(2).Length, Is.EqualTo(1));
-        Assert.That(registry.GetViewsForField(2)[0], Is.SameAs(view));
+        Assert.That(registry.GetViewsForField(2)[0].View, Is.SameAs(view));
 
         Assert.That(registry.GetViewsForField(3).Length, Is.EqualTo(1));
-        Assert.That(registry.GetViewsForField(3)[0], Is.SameAs(view));
+        Assert.That(registry.GetViewsForField(3)[0].View, Is.SameAs(view));
     }
 
     [Test]
@@ -82,9 +82,9 @@ class ViewRegistryTests
 
         var views = registry.GetViewsForField(1);
         Assert.That(views.Length, Is.EqualTo(3));
-        Assert.That(views[0], Is.SameAs(viewA));
-        Assert.That(views[1], Is.SameAs(viewB));
-        Assert.That(views[2], Is.SameAs(viewC));
+        Assert.That(views[0].View, Is.SameAs(viewA));
+        Assert.That(views[1].View, Is.SameAs(viewB));
+        Assert.That(views[2].View, Is.SameAs(viewC));
     }
 
     [Test]
@@ -101,11 +101,11 @@ class ViewRegistryTests
 
         var field0 = registry.GetViewsForField(0);
         Assert.That(field0.Length, Is.EqualTo(1));
-        Assert.That(field0[0], Is.SameAs(viewB));
+        Assert.That(field0[0].View, Is.SameAs(viewB));
 
         var field1 = registry.GetViewsForField(1);
         Assert.That(field1.Length, Is.EqualTo(1));
-        Assert.That(field1[0], Is.SameAs(viewB));
+        Assert.That(field1[0].View, Is.SameAs(viewB));
     }
 
     [Test]
@@ -129,11 +129,11 @@ class ViewRegistryTests
 
         var field0 = registry.GetViewsForField(0);
         Assert.That(field0.Length, Is.EqualTo(1));
-        Assert.That(field0[0], Is.SameAs(view));
+        Assert.That(field0[0].View, Is.SameAs(view));
 
         var field2 = registry.GetViewsForField(2);
         Assert.That(field2.Length, Is.EqualTo(1));
-        Assert.That(field2[0], Is.SameAs(view));
+        Assert.That(field2[0].View, Is.SameAs(view));
     }
 
     [Test]
@@ -182,6 +182,45 @@ class ViewRegistryTests
     }
 
     [Test]
+    public void ExplicitRegistration_WithComponentTag_RoundTrips()
+    {
+        var registry = new ViewRegistry(4);
+        var view = new MockView { ViewId = 1, FieldDependencies = [] };
+
+        registry.RegisterView(view, [0, 2], 1);
+
+        var field0 = registry.GetViewsForField(0);
+        Assert.That(field0.Length, Is.EqualTo(1));
+        Assert.That(field0[0].View, Is.SameAs(view));
+        Assert.That(field0[0].ComponentTag, Is.EqualTo(1));
+
+        var field2 = registry.GetViewsForField(2);
+        Assert.That(field2.Length, Is.EqualTo(1));
+        Assert.That(field2[0].View, Is.SameAs(view));
+        Assert.That(field2[0].ComponentTag, Is.EqualTo(1));
+
+        // Unregistered field should be empty
+        Assert.That(registry.GetViewsForField(1).Length, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void ExplicitRegistration_SameViewTwoTags_BothPresent()
+    {
+        var registry = new ViewRegistry(4);
+        var view = new MockView { ViewId = 1, FieldDependencies = [] };
+
+        registry.RegisterView(view, [0], 0);
+        registry.RegisterView(view, [0], 1);
+
+        var field0 = registry.GetViewsForField(0);
+        Assert.That(field0.Length, Is.EqualTo(2));
+        Assert.That(field0[0].View, Is.SameAs(view));
+        Assert.That(field0[0].ComponentTag, Is.EqualTo(0));
+        Assert.That(field0[1].View, Is.SameAs(view));
+        Assert.That(field0[1].ComponentTag, Is.EqualTo(1));
+    }
+
+    [Test]
     [CancelAfter(5000)]
     public void ConcurrentReadDuringWrite_NoTornReads()
     {
@@ -227,7 +266,7 @@ class ViewRegistryTests
                             // Access every element to detect torn reads
                             for (var i = 0; i < span.Length; i++)
                             {
-                                var v = span[i];
+                                var v = span[i].View;
                                 if (v == null)
                                 {
                                     Interlocked.Increment(ref errors);

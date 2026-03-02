@@ -106,6 +106,24 @@ public struct CompE
     }
 }
 
+[Component(SchemaName, 1)]
+[StructLayout(LayoutKind.Sequential)]
+public struct CompF
+{
+    private const string SchemaName = "Typhon.Schema.UnitTest.CompF";
+
+    [Index(AllowMultiple = true)]
+    public int Gold;
+    [Index]
+    public int Rank;
+
+    public CompF(int gold, int rank)
+    {
+        Gold = gold;
+        Rank = rank;
+    }
+}
+
 [PublicAPI]
 public abstract class TestBase{
     protected readonly Random Rand;
@@ -172,6 +190,7 @@ public abstract class TestBase{
         dbe.RegisterComponentFromAccessor<CompC>();
         dbe.RegisterComponentFromAccessor<CompD>();
         dbe.RegisterComponentFromAccessor<CompE>();
+        dbe.RegisterComponentFromAccessor<CompF>();
     }
     
     protected long[] CreateNoiseCompA(DatabaseEngine dbe, Transaction t = null, int count = 10)

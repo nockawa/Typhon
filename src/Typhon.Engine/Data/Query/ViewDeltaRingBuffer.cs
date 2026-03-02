@@ -29,6 +29,7 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
     private ViewDeltaEntry* _entries;   // 24B × capacity
     private int* _deltaTSNs;           // 4B × capacity
     private byte* _flags;              // 1B × capacity
+    private byte* _componentTags;      // 1B × capacity — identifies source ComponentTable (0=T1, 1=T2)
     private byte* _written;            // 1B × capacity
 
     // Producer/consumer on separate cache lines
@@ -53,11 +54,13 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
         _entries = (ViewDeltaEntry*)NativeMemory.AlignedAlloc((nuint)(sizeof(ViewDeltaEntry) * capacity), 64);
         _deltaTSNs = (int*)NativeMemory.AlignedAlloc((nuint)(sizeof(int) * capacity), 64);
         _flags = (byte*)NativeMemory.AlignedAlloc((nuint)capacity, 64);
+        _componentTags = (byte*)NativeMemory.AlignedAlloc((nuint)capacity, 64);
         _written = (byte*)NativeMemory.AlignedAlloc((nuint)capacity, 64);
 
         NativeMemory.Clear(_entries, (nuint)(sizeof(ViewDeltaEntry) * capacity));
         NativeMemory.Clear(_deltaTSNs, (nuint)(sizeof(int) * capacity));
         NativeMemory.Clear(_flags, (nuint)capacity);
+        NativeMemory.Clear(_componentTags, (nuint)capacity);
         NativeMemory.Clear(_written, (nuint)capacity);
     }
 
@@ -76,7 +79,7 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
     /// </summary>
     /// <returns>True if the entry was appended; false if the buffer is full (overflow).</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryAppend(long entityPK, KeyBytes8 beforeKey, KeyBytes8 afterKey, long tsn, byte flags)
+    public bool TryAppend(long entityPK, KeyBytes8 beforeKey, KeyBytes8 afterKey, long tsn, byte flags, byte componentTag = 0)
     {
         while (true)
         {
@@ -101,6 +104,7 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
             _entries[index].AfterKey = afterKey;
             _deltaTSNs[index] = (int)(tsn - _baseTSN);
             _flags[index] = flags;
+            _componentTags[index] = componentTag;
 
             // Signal that this slot is ready to consume.
             // On x86 TSO, the preceding stores are visible before this store to any core
@@ -119,7 +123,7 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
     /// <param name="flags">The flags byte for the entry.</param>
     /// <param name="tsn">The absolute TSN of the entry.</param>
     /// <returns>True if an entry is available and within the target TSN range.</returns>
-    public bool TryPeek(long targetTSN, out ViewDeltaEntry entry, out byte flags, out long tsn)
+    public bool TryPeek(long targetTSN, out ViewDeltaEntry entry, out byte flags, out long tsn, out byte componentTag)
     {
         var head = _head.Value;
         var tail = _tail.Value;
@@ -129,6 +133,7 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
             entry = default;
             flags = 0;
             tsn = 0;
+            componentTag = 0;
             return false;
         }
 
@@ -147,11 +152,13 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
         {
             entry = default;
             flags = 0;
+            componentTag = 0;
             return false;
         }
 
         entry = _entries[index];
         flags = _flags[index];
+        componentTag = _componentTags[index];
         return true;
     }
 
@@ -173,6 +180,7 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
     public void Reset()
     {
         NativeMemory.Clear(_written, (nuint)_capacity);
+        NativeMemory.Clear(_componentTags, (nuint)_capacity);
         _head.Value = 0;
         _tail.Value = 0;
         _overflow = 0;
@@ -201,6 +209,12 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
         {
             NativeMemory.AlignedFree(_flags);
             _flags = null;
+        }
+
+        if (_componentTags != null)
+        {
+            NativeMemory.AlignedFree(_componentTags);
+            _componentTags = null;
         }
 
         if (_written != null)

@@ -6,7 +6,7 @@ using System.Threading;
 
 namespace Typhon.Engine;
 
-public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : unmanaged
+public unsafe class View<T1, T2> : IView, IDisposable, IEnumerable<long> where T1 : unmanaged where T2 : unmanaged
 {
     private static int _nextViewId;
 
@@ -15,27 +15,23 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
     private readonly HashSet<long> _removed = new();
     private readonly HashSet<long> _modified = new();
     private readonly FieldEvaluator[] _evaluators;
-    private readonly ViewRegistry _registry;
+    private readonly ViewRegistry _registry1;
+    private readonly ViewRegistry _registry2;
     private long _lastRefreshTSN;
     private int _disposed;
     private bool _overflowDetected;
 
-    internal View(FieldEvaluator[] evaluators, ViewRegistry registry,
+    internal View(FieldEvaluator[] evaluators, ViewRegistry registry1, ViewRegistry registry2,
         int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0)
     {
         _evaluators = evaluators;
-        _registry = registry;
+        _registry1 = registry1;
+        _registry2 = registry2;
         ViewId = Interlocked.Increment(ref _nextViewId);
         DeltaBuffer = new ViewDeltaRingBuffer(bufferCapacity, baseTSN);
 
-        // Build FieldDependencies from evaluator FieldIndex values (distinct, sorted)
-        var fieldIndices = new HashSet<int>();
-        for (var i = 0; i < evaluators.Length; i++)
-        {
-            fieldIndices.Add(evaluators[i].FieldIndex);
-        }
-        FieldDependencies = [.. fieldIndices];
-        Array.Sort(FieldDependencies);
+        // FieldDependencies is not used for multi-component views (explicit registration via overload)
+        FieldDependencies = [];
     }
 
     public int ViewId { get; }
@@ -51,15 +47,11 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
 
     internal void AddEntityDirect(long pk) => _entityIds.Add(pk);
 
-    /// <summary>
-    /// Drain the ring buffer up to the transaction's snapshot TSN, evaluate field predicates,
-    /// and update the entity set and delta tracking sets.
-    /// </summary>
     public void Refresh(Transaction tx)
     {
         if (_disposed != 0)
         {
-            throw new ObjectDisposedException(nameof(View<T>));
+            throw new ObjectDisposedException(nameof(View<T1, T2>));
         }
 
         if (DeltaBuffer.HasOverflow)
@@ -69,10 +61,10 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
         }
 
         var targetTSN = tx.TSN;
-        while (DeltaBuffer.TryPeek(targetTSN, out var entry, out var flags, out var tsn, out _))
+        while (DeltaBuffer.TryPeek(targetTSN, out var entry, out var flags, out var tsn, out var componentTag))
         {
             DeltaBuffer.Advance();
-            ProcessEntry(ref entry, flags & 0x3F, (flags & 0x40) != 0, (flags & 0x80) != 0, tx);
+            ProcessEntry(ref entry, flags & 0x3F, (flags & 0x40) != 0, (flags & 0x80) != 0, componentTag, tx);
             _lastRefreshTSN = tsn;
         }
     }
@@ -99,7 +91,8 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
             return;
         }
 
-        _registry.DeregisterView(this);
+        _registry1.DeregisterView(this);
+        _registry2.DeregisterView(this);
         DeltaBuffer.Dispose();
         _entityIds.Clear();
         _added.Clear();
@@ -108,9 +101,9 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ProcessEntry(ref ViewDeltaEntry entry, int fieldIndex, bool isCreation, bool isDeletion, Transaction tx)
+    private void ProcessEntry(ref ViewDeltaEntry entry, int fieldIndex, bool isCreation, bool isDeletion, byte componentTag, Transaction tx)
     {
-        ref var eval = ref FindEvaluator(fieldIndex);
+        ref var eval = ref FindEvaluator(fieldIndex, componentTag);
         if (Unsafe.IsNullRef(ref eval))
         {
             return;
@@ -125,14 +118,14 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
         }
         else
         {
-            ProcessMultiField(entry.EntityPK, fieldIndex, wasInView, shouldBeInView, tx);
+            ProcessMultiField(entry.EntityPK, fieldIndex, componentTag, wasInView, shouldBeInView, tx);
         }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool EvaluateKey(ref FieldEvaluator eval, ref KeyBytes8 key) => FieldEvaluator.Evaluate(ref eval, (byte*)Unsafe.AsPointer(ref key));
 
-    private void ProcessMultiField(long pk, int fieldIndex, bool wasInView, bool shouldBeInView, Transaction tx)
+    private void ProcessMultiField(long pk, int fieldIndex, byte componentTag, bool wasInView, bool shouldBeInView, Transaction tx)
     {
         if (wasInView == shouldBeInView)
         {
@@ -147,7 +140,7 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
         if (!wasInView && shouldBeInView)
         {
             // OUT→IN: verify all other fields pass before adding
-            if (CheckOtherFields(pk, fieldIndex, tx))
+            if (CheckOtherFields(pk, fieldIndex, componentTag, tx))
             {
                 ApplyDelta(pk, false, true);
             }
@@ -162,24 +155,55 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
         }
     }
 
-    private bool CheckOtherFields(long pk, int changedFieldIndex, Transaction tx)
+    private bool CheckOtherFields(long pk, int changedFieldIndex, byte changedComponentTag, Transaction tx)
     {
-        if (!tx.ReadEntity<T>(pk, out var comp))
-        {
-            return false;
-        }
+        // Cache component reads to avoid reading the same component twice
+        byte* comp1Ptr = null;
+        byte* comp2Ptr = null;
+        T1 comp1 = default;
+        T2 comp2 = default;
+        var read1 = false;
+        var read2 = false;
 
-        var compPtr = (byte*)Unsafe.AsPointer(ref comp);
         for (var i = 0; i < _evaluators.Length; i++)
         {
-            if (_evaluators[i].FieldIndex == changedFieldIndex)
+            ref var eval = ref _evaluators[i];
+            if (eval.FieldIndex == changedFieldIndex && eval.ComponentTag == changedComponentTag)
             {
                 continue;
             }
-            ref var eval = ref _evaluators[i];
-            if (!FieldEvaluator.Evaluate(ref eval, compPtr + eval.FieldOffset))
+
+            if (eval.ComponentTag == 0)
             {
-                return false;
+                if (!read1)
+                {
+                    if (!tx.ReadEntity<T1>(pk, out comp1))
+                    {
+                        return false;
+                    }
+                    comp1Ptr = (byte*)Unsafe.AsPointer(ref comp1);
+                    read1 = true;
+                }
+                if (!FieldEvaluator.Evaluate(ref eval, comp1Ptr + eval.FieldOffset))
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                if (!read2)
+                {
+                    if (!tx.ReadEntity<T2>(pk, out comp2))
+                    {
+                        return false;
+                    }
+                    comp2Ptr = (byte*)Unsafe.AsPointer(ref comp2);
+                    read2 = true;
+                }
+                if (!FieldEvaluator.Evaluate(ref eval, comp2Ptr + eval.FieldOffset))
+                {
+                    return false;
+                }
             }
         }
 
@@ -261,11 +285,11 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
         }
     }
 
-    private ref FieldEvaluator FindEvaluator(int fieldIndex)
+    private ref FieldEvaluator FindEvaluator(int fieldIndex, byte componentTag)
     {
         for (var i = 0; i < _evaluators.Length; i++)
         {
-            if (_evaluators[i].FieldIndex == fieldIndex)
+            if (_evaluators[i].FieldIndex == fieldIndex && _evaluators[i].ComponentTag == componentTag)
             {
                 return ref _evaluators[i];
             }

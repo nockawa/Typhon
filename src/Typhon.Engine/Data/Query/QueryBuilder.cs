@@ -78,7 +78,13 @@ public class QueryBuilder<T> where T : unmanaged
         return true;
     }
 
-    private static FieldEvaluator[] ResolveEvaluators(FieldPredicate[] predicates, ComponentTable ct)
+    private static FieldEvaluator[] ResolveEvaluators(FieldPredicate[] predicates, ComponentTable ct) =>
+        QueryResolverHelper.ResolveEvaluators(predicates, ct, 0);
+}
+
+internal static class QueryResolverHelper
+{
+    public static FieldEvaluator[] ResolveEvaluators(FieldPredicate[] predicates, ComponentTable ct, byte componentTag)
     {
         var definition = ct.Definition;
         var evaluators = new FieldEvaluator[predicates.Length];
@@ -108,7 +114,8 @@ public class QueryBuilder<T> where T : unmanaged
                 FieldSize = (byte)field.FieldSize,
                 KeyType = keyType,
                 CompareOp = pred.Operator,
-                Threshold = threshold
+                Threshold = threshold,
+                ComponentTag = componentTag
             };
         }
 
@@ -118,7 +125,7 @@ public class QueryBuilder<T> where T : unmanaged
     /// <summary>
     /// Finds the index into IndexedFieldInfos[] by replicating the iteration order from BuildIndexedFieldInfo.
     /// </summary>
-    private static int FindFieldIndex(DBComponentDefinition definition, DBComponentDefinition.Field targetField)
+    public static int FindFieldIndex(DBComponentDefinition definition, DBComponentDefinition.Field targetField)
     {
         var index = 0;
         for (var i = 0; i < definition.MaxFieldId; i++)
@@ -140,7 +147,7 @@ public class QueryBuilder<T> where T : unmanaged
         throw new InvalidOperationException($"Field '{targetField.Name}' not found in indexed fields.");
     }
 
-    private static KeyType MapFieldTypeToKeyType(FieldType fieldType) =>
+    public static KeyType MapFieldTypeToKeyType(FieldType fieldType) =>
         fieldType switch
         {
             FieldType.Boolean => KeyType.Bool,
@@ -157,7 +164,7 @@ public class QueryBuilder<T> where T : unmanaged
             _ => throw new NotSupportedException($"Field type {fieldType} is not supported for view predicates.")
         };
 
-    private static long EncodeThreshold(object value, KeyType keyType)
+    public static long EncodeThreshold(object value, KeyType keyType)
     {
         switch (keyType)
         {

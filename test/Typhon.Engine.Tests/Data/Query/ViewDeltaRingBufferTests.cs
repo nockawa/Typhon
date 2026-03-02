@@ -67,12 +67,13 @@ public class ViewDeltaRingBufferTests
         Assert.That(buffer.TryAppend(1L, before, after, 105, 0x01), Is.True);
         Assert.That(buffer.Count, Is.EqualTo(1));
 
-        Assert.That(buffer.TryPeek(200, out var entry, out var flags, out var tsn), Is.True);
+        Assert.That(buffer.TryPeek(200, out var entry, out var flags, out var tsn, out var componentTag), Is.True);
         Assert.That(entry.EntityPK, Is.EqualTo(1L));
         Assert.That(entry.BeforeKey.AsInt(), Is.EqualTo(42));
         Assert.That(entry.AfterKey.AsInt(), Is.EqualTo(99));
         Assert.That(flags, Is.EqualTo(0x01));
         Assert.That(tsn, Is.EqualTo(105));
+        Assert.That(componentTag, Is.EqualTo(0), "Default componentTag should be 0");
 
         buffer.Advance();
         Assert.That(buffer.Count, Is.EqualTo(0));
@@ -82,7 +83,32 @@ public class ViewDeltaRingBufferTests
     public void TryPeek_EmptyBuffer_ReturnsFalse()
     {
         using var buffer = new ViewDeltaRingBuffer(64);
-        Assert.That(buffer.TryPeek(long.MaxValue, out _, out _, out _), Is.False);
+        Assert.That(buffer.TryPeek(long.MaxValue, out _, out _, out _, out _), Is.False);
+    }
+
+    [Test]
+    public void ComponentTag_RoundTrips()
+    {
+        using var buffer = new ViewDeltaRingBuffer(64, baseTSN: 0);
+
+        Assert.That(buffer.TryAppend(1L, default, default, 1, 0x01, componentTag: 0), Is.True);
+        Assert.That(buffer.TryAppend(2L, default, default, 2, 0x02, componentTag: 1), Is.True);
+        Assert.That(buffer.TryAppend(3L, default, default, 3, 0x03, componentTag: 255), Is.True);
+
+        Assert.That(buffer.TryPeek(long.MaxValue, out var e1, out _, out _, out var tag1), Is.True);
+        Assert.That(e1.EntityPK, Is.EqualTo(1L));
+        Assert.That(tag1, Is.EqualTo(0));
+        buffer.Advance();
+
+        Assert.That(buffer.TryPeek(long.MaxValue, out var e2, out _, out _, out var tag2), Is.True);
+        Assert.That(e2.EntityPK, Is.EqualTo(2L));
+        Assert.That(tag2, Is.EqualTo(1));
+        buffer.Advance();
+
+        Assert.That(buffer.TryPeek(long.MaxValue, out var e3, out _, out _, out var tag3), Is.True);
+        Assert.That(e3.EntityPK, Is.EqualTo(3L));
+        Assert.That(tag3, Is.EqualTo(255));
+        buffer.Advance();
     }
 
     // ========================================
@@ -104,7 +130,7 @@ public class ViewDeltaRingBufferTests
 
         for (var i = 0; i < 100; i++)
         {
-            Assert.That(buffer.TryPeek(long.MaxValue, out var entry, out var flags, out var tsn), Is.True);
+            Assert.That(buffer.TryPeek(long.MaxValue, out var entry, out var flags, out var tsn, out _), Is.True);
             Assert.That(entry.EntityPK, Is.EqualTo(i));
             Assert.That(entry.BeforeKey.AsInt(), Is.EqualTo(i * 10));
             Assert.That(entry.AfterKey.AsInt(), Is.EqualTo(i * 10 + 1));
@@ -126,7 +152,7 @@ public class ViewDeltaRingBufferTests
         using var buffer = new ViewDeltaRingBuffer(64, baseTSN: 1_000_000);
 
         buffer.TryAppend(1, default, default, 1_000_042, 0);
-        Assert.That(buffer.TryPeek(long.MaxValue, out _, out _, out var tsn), Is.True);
+        Assert.That(buffer.TryPeek(long.MaxValue, out _, out _, out var tsn, out _), Is.True);
         Assert.That(tsn, Is.EqualTo(1_000_042));
         buffer.Advance();
     }
@@ -150,7 +176,7 @@ public class ViewDeltaRingBufferTests
         // Consume half
         for (var i = 0; i < capacity / 2; i++)
         {
-            Assert.That(buffer.TryPeek(long.MaxValue, out var entry, out _, out _), Is.True);
+            Assert.That(buffer.TryPeek(long.MaxValue, out var entry, out _, out _, out _), Is.True);
             Assert.That(entry.EntityPK, Is.EqualTo(i));
             buffer.Advance();
         }
@@ -164,7 +190,7 @@ public class ViewDeltaRingBufferTests
         // Verify all new entries
         for (var i = 0; i < capacity / 2 + 16; i++)
         {
-            Assert.That(buffer.TryPeek(long.MaxValue, out var entry, out _, out _), Is.True);
+            Assert.That(buffer.TryPeek(long.MaxValue, out var entry, out _, out _, out _), Is.True);
             Assert.That(entry.EntityPK, Is.EqualTo(1000 + i));
             buffer.Advance();
         }
@@ -190,7 +216,7 @@ public class ViewDeltaRingBufferTests
         Assert.That(buffer.HasOverflow, Is.True);
 
         // Overflow is sticky — consuming entries doesn't clear it
-        buffer.TryPeek(long.MaxValue, out _, out _, out _);
+        buffer.TryPeek(long.MaxValue, out _, out _, out _, out _);
         buffer.Advance();
         Assert.That(buffer.HasOverflow, Is.True);
     }
@@ -219,7 +245,7 @@ public class ViewDeltaRingBufferTests
         buffer.Reset();
         Assert.That(buffer.Count, Is.EqualTo(0));
         Assert.That(buffer.HasOverflow, Is.False);
-        Assert.That(buffer.TryPeek(long.MaxValue, out _, out _, out _), Is.False);
+        Assert.That(buffer.TryPeek(long.MaxValue, out _, out _, out _, out _), Is.False);
     }
 
     // ========================================
@@ -257,15 +283,15 @@ public class ViewDeltaRingBufferTests
         buffer.TryAppend(3, default, default, 130, 0);
 
         // Target = 115: should see entry with TSN 110 but not 120 or 130
-        Assert.That(buffer.TryPeek(115, out var entry, out _, out _), Is.True);
+        Assert.That(buffer.TryPeek(115, out var entry, out _, out _, out _), Is.True);
         Assert.That(entry.EntityPK, Is.EqualTo(1));
         buffer.Advance();
 
         // Now head is at TSN 120, which is > 115
-        Assert.That(buffer.TryPeek(115, out _, out _, out _), Is.False);
+        Assert.That(buffer.TryPeek(115, out _, out _, out _, out _), Is.False);
 
         // But with higher target, we can see it
-        Assert.That(buffer.TryPeek(125, out var entry2, out _, out _), Is.True);
+        Assert.That(buffer.TryPeek(125, out var entry2, out _, out _, out _), Is.True);
         Assert.That(entry2.EntityPK, Is.EqualTo(2));
     }
 
@@ -286,7 +312,7 @@ public class ViewDeltaRingBufferTests
         buffer.TryAppend(2, default, default, 1, 0);
         Assert.That(buffer.Count, Is.EqualTo(2));
 
-        buffer.TryPeek(long.MaxValue, out _, out _, out _);
+        buffer.TryPeek(long.MaxValue, out _, out _, out _, out _);
         buffer.Advance();
         Assert.That(buffer.Count, Is.EqualTo(1));
     }
@@ -314,7 +340,7 @@ public class ViewDeltaRingBufferTests
             var consumed = 0;
             while (consumed < totalEntries)
             {
-                if (buffer.TryPeek(long.MaxValue, out var entry, out _, out _))
+                if (buffer.TryPeek(long.MaxValue, out var entry, out _, out _, out _))
                 {
                     received.Add(entry.EntityPK);
                     buffer.Advance();
@@ -323,7 +349,7 @@ public class ViewDeltaRingBufferTests
                 else if (producersDone.IsSet)
                 {
                     // All producers done — try one more time
-                    if (!buffer.TryPeek(long.MaxValue, out entry, out _, out _))
+                    if (!buffer.TryPeek(long.MaxValue, out entry, out _, out _, out _))
                     {
                         break;
                     }
@@ -412,7 +438,7 @@ public class ViewDeltaRingBufferTests
 
         // Consume all appended entries without crash
         var consumed = 0;
-        while (buffer.TryPeek(long.MaxValue, out _, out _, out _))
+        while (buffer.TryPeek(long.MaxValue, out _, out _, out _, out _))
         {
             buffer.Advance();
             consumed++;
@@ -437,7 +463,7 @@ public class ViewDeltaRingBufferTests
             var consumed = 0;
             while (consumed < entryCount)
             {
-                if (buffer.TryPeek(long.MaxValue, out var entry, out _, out _))
+                if (buffer.TryPeek(long.MaxValue, out var entry, out _, out _, out _))
                 {
                     if (entry.EntityPK <= lastPK)
                     {

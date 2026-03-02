@@ -43,7 +43,7 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         }
 
         // Drain creation entry
-        Assert.That(view.DeltaBuffer.TryPeek(long.MaxValue, out _, out _, out _), Is.True);
+        Assert.That(view.DeltaBuffer.TryPeek(long.MaxValue, out _, out _, out _, out _), Is.True);
         view.DeltaBuffer.Advance();
 
         long updateTsn;
@@ -55,7 +55,7 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
             updateTsn = t.TSN;
         }
 
-        Assert.That(view.DeltaBuffer.TryPeek(long.MaxValue, out var entry, out var flags, out var tsn), Is.True);
+        Assert.That(view.DeltaBuffer.TryPeek(long.MaxValue, out var entry, out var flags, out var tsn, out _), Is.True);
         Assert.That(entry.EntityPK, Is.EqualTo(entityId));
         Assert.That(entry.BeforeKey.AsInt(), Is.EqualTo(10));
         Assert.That(entry.AfterKey.AsInt(), Is.EqualTo(20));
@@ -84,7 +84,7 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
             createTsn = t.TSN;
         }
 
-        Assert.That(view.DeltaBuffer.TryPeek(long.MaxValue, out var entry, out var flags, out var tsn), Is.True);
+        Assert.That(view.DeltaBuffer.TryPeek(long.MaxValue, out var entry, out var flags, out var tsn, out _), Is.True);
         Assert.That(entry.EntityPK, Is.EqualTo(entityId));
         Assert.That(entry.BeforeKey.IsZero, Is.True, "BeforeKey should be zeroed for creation");
         Assert.That(entry.AfterKey.AsInt(), Is.EqualTo(42));
@@ -112,7 +112,7 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         }
 
         // Drain creation entry
-        Assert.That(view.DeltaBuffer.TryPeek(long.MaxValue, out _, out _, out _), Is.True);
+        Assert.That(view.DeltaBuffer.TryPeek(long.MaxValue, out _, out _, out _, out _), Is.True);
         view.DeltaBuffer.Advance();
 
         long deleteTsn;
@@ -123,7 +123,7 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
             deleteTsn = t.TSN;
         }
 
-        Assert.That(view.DeltaBuffer.TryPeek(long.MaxValue, out var entry, out var flags, out var tsn), Is.True);
+        Assert.That(view.DeltaBuffer.TryPeek(long.MaxValue, out var entry, out var flags, out var tsn, out _), Is.True);
         Assert.That(entry.EntityPK, Is.EqualTo(entityId));
         Assert.That(entry.BeforeKey.AsInt(), Is.EqualTo(99), "BeforeKey should be old value");
         Assert.That(entry.AfterKey.IsZero, Is.True, "AfterKey should be zeroed for deletion");
@@ -175,15 +175,15 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         Assert.That(viewC.DeltaBuffer.Count, Is.EqualTo(1), "View on field C should get 1 entry");
 
         // Verify keys
-        viewA.DeltaBuffer.TryPeek(long.MaxValue, out var entryA, out _, out _);
+        viewA.DeltaBuffer.TryPeek(long.MaxValue, out var entryA, out _, out _, out _);
         Assert.That(entryA.BeforeKey.AsFloat(), Is.EqualTo(1.0f));
         Assert.That(entryA.AfterKey.AsFloat(), Is.EqualTo(5.0f));
 
-        viewB.DeltaBuffer.TryPeek(long.MaxValue, out var entryB, out _, out _);
+        viewB.DeltaBuffer.TryPeek(long.MaxValue, out var entryB, out _, out _, out _);
         Assert.That(entryB.BeforeKey.AsInt(), Is.EqualTo(10));
         Assert.That(entryB.AfterKey.AsInt(), Is.EqualTo(20));
 
-        viewC.DeltaBuffer.TryPeek(long.MaxValue, out var entryC, out _, out _);
+        viewC.DeltaBuffer.TryPeek(long.MaxValue, out var entryC, out _, out _, out _);
         Assert.That(entryC.BeforeKey.AsDouble(), Is.EqualTo(2.0));
         Assert.That(entryC.AfterKey.AsDouble(), Is.EqualTo(6.0));
     }
@@ -332,14 +332,14 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         }
 
         // Check field index encoded in bits [5:0]
-        view0.DeltaBuffer.TryPeek(long.MaxValue, out _, out var flags0, out _);
+        view0.DeltaBuffer.TryPeek(long.MaxValue, out _, out var flags0, out _, out _);
         Assert.That(flags0 & 0x3F, Is.EqualTo(0), "Field index 0 in bits [5:0]");
         Assert.That(flags0 & 0x40, Is.Not.EqualTo(0), "isCreation bit should be set");
 
-        view1.DeltaBuffer.TryPeek(long.MaxValue, out _, out var flags1, out _);
+        view1.DeltaBuffer.TryPeek(long.MaxValue, out _, out var flags1, out _, out _);
         Assert.That(flags1 & 0x3F, Is.EqualTo(1), "Field index 1 in bits [5:0]");
 
-        view2.DeltaBuffer.TryPeek(long.MaxValue, out _, out var flags2, out _);
+        view2.DeltaBuffer.TryPeek(long.MaxValue, out _, out var flags2, out _, out _);
         Assert.That(flags2 & 0x3F, Is.EqualTo(2), "Field index 2 in bits [5:0]");
     }
 
@@ -362,7 +362,7 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
             tsn1 = t.TSN;
         }
 
-        view.DeltaBuffer.TryPeek(long.MaxValue, out _, out _, out var storedTsn1);
+        view.DeltaBuffer.TryPeek(long.MaxValue, out _, out _, out var storedTsn1, out _);
         Assert.That(storedTsn1, Is.EqualTo(tsn1), "TSN from creation should match transaction TSN");
         view.DeltaBuffer.Advance();
 
@@ -375,14 +375,14 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
             tsn2 = t.TSN;
         }
 
-        view.DeltaBuffer.TryPeek(long.MaxValue, out _, out _, out var storedTsn2);
+        view.DeltaBuffer.TryPeek(long.MaxValue, out _, out _, out var storedTsn2, out _);
         Assert.That(storedTsn2, Is.EqualTo(tsn2), "TSN from second creation should match");
         Assert.That(tsn2, Is.GreaterThan(tsn1), "TSN should be monotonically increasing");
     }
 
     private static void DrainBuffer(ViewDeltaRingBuffer buffer)
     {
-        while (buffer.TryPeek(long.MaxValue, out _, out _, out _))
+        while (buffer.TryPeek(long.MaxValue, out _, out _, out _, out _))
         {
             buffer.Advance();
         }
