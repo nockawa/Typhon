@@ -1,0 +1,212 @@
+using System;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Threading;
+
+namespace Typhon.Engine;
+
+/// <summary>
+/// MPSC lock-free ring buffer with SOA layout for batching view delta entries.
+/// Multiple producers append concurrently; a single consumer peeks/advances sequentially.
+/// </summary>
+internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
+{
+    public const int DefaultCapacity = 8192;
+
+    // Cache-line padded counter to prevent false sharing between producer and consumer
+    [StructLayout(LayoutKind.Explicit, Size = 64)]
+    private struct PaddedLong
+    {
+        [FieldOffset(0)] public long Value;
+    }
+
+    // Immutable configuration
+    private readonly int _capacity;
+    private readonly int _capacityMask;
+    private readonly long _baseTSN;
+
+    // SOA arrays (unmanaged, cache-line aligned)
+    private ViewDeltaEntry* _entries;   // 24B × capacity
+    private int* _deltaTSNs;           // 4B × capacity
+    private byte* _flags;              // 1B × capacity
+    private byte* _written;            // 1B × capacity
+
+    // Producer/consumer on separate cache lines
+    private PaddedLong _tail;          // 64B (producer writes)
+    private PaddedLong _head;          // 64B (consumer writes)
+
+    // State
+    private int _overflow;             // Sticky flag
+    private int _disposed;
+
+    public ViewDeltaRingBuffer(int capacity = DefaultCapacity, long baseTSN = 0)
+    {
+        if (capacity <= 0 || (capacity & (capacity - 1)) != 0)
+        {
+            throw new ArgumentException("Capacity must be a positive power of 2.", nameof(capacity));
+        }
+
+        _capacity = capacity;
+        _capacityMask = capacity - 1;
+        _baseTSN = baseTSN;
+
+        _entries = (ViewDeltaEntry*)NativeMemory.AlignedAlloc((nuint)(sizeof(ViewDeltaEntry) * capacity), 64);
+        _deltaTSNs = (int*)NativeMemory.AlignedAlloc((nuint)(sizeof(int) * capacity), 64);
+        _flags = (byte*)NativeMemory.AlignedAlloc((nuint)capacity, 64);
+        _written = (byte*)NativeMemory.AlignedAlloc((nuint)capacity, 64);
+
+        NativeMemory.Clear(_entries, (nuint)(sizeof(ViewDeltaEntry) * capacity));
+        NativeMemory.Clear(_deltaTSNs, (nuint)(sizeof(int) * capacity));
+        NativeMemory.Clear(_flags, (nuint)capacity);
+        NativeMemory.Clear(_written, (nuint)capacity);
+    }
+
+    public int Capacity => _capacity;
+
+    public long BaseTSN => _baseTSN;
+
+    public long Count => _tail.Value - _head.Value;
+
+    public bool HasOverflow => _overflow != 0;
+
+    public bool IsDisposed => _disposed != 0;
+
+    /// <summary>
+    /// Append an entry to the ring buffer. Thread-safe for multiple concurrent producers.
+    /// </summary>
+    /// <returns>True if the entry was appended; false if the buffer is full (overflow).</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool TryAppend(long entityPK, KeyBytes8 beforeKey, KeyBytes8 afterKey, long tsn, byte flags)
+    {
+        while (true)
+        {
+            var tail = _tail.Value;
+            var head = _head.Value;
+
+            if (tail - head >= _capacity)
+            {
+                _overflow = 1;
+                return false;
+            }
+
+            if (Interlocked.CompareExchange(ref _tail.Value, tail + 1, tail) != tail)
+            {
+                continue;
+            }
+
+            var index = (int)(tail & _capacityMask);
+
+            _entries[index].EntityPK = entityPK;
+            _entries[index].BeforeKey = beforeKey;
+            _entries[index].AfterKey = afterKey;
+            _deltaTSNs[index] = (int)(tsn - _baseTSN);
+            _flags[index] = flags;
+
+            // Signal that this slot is ready to consume.
+            // On x86 TSO, the preceding stores are visible before this store to any core
+            // that observes _written[index] == 1.
+            _written[index] = 1;
+
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Peek at the next entry without consuming it. Single-consumer only.
+    /// </summary>
+    /// <param name="targetTSN">Maximum TSN to consume (entries beyond this are skipped).</param>
+    /// <param name="entry">The entry data if available.</param>
+    /// <param name="flags">The flags byte for the entry.</param>
+    /// <param name="tsn">The absolute TSN of the entry.</param>
+    /// <returns>True if an entry is available and within the target TSN range.</returns>
+    public bool TryPeek(long targetTSN, out ViewDeltaEntry entry, out byte flags, out long tsn)
+    {
+        var head = _head.Value;
+        var tail = _tail.Value;
+
+        if (head >= tail)
+        {
+            entry = default;
+            flags = 0;
+            tsn = 0;
+            return false;
+        }
+
+        var index = (int)(head & _capacityMask);
+
+        // Spin until the producer has finished writing this slot
+        var spinner = new SpinWait();
+        while (_written[index] == 0)
+        {
+            spinner.SpinOnce();
+        }
+
+        // Check TSN: don't consume entries beyond the target
+        tsn = _baseTSN + _deltaTSNs[index];
+        if (tsn > targetTSN)
+        {
+            entry = default;
+            flags = 0;
+            return false;
+        }
+
+        entry = _entries[index];
+        flags = _flags[index];
+        return true;
+    }
+
+    /// <summary>
+    /// Advance past the current head entry. Must be called after a successful TryPeek.
+    /// Single-consumer only.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void Advance()
+    {
+        var index = (int)(_head.Value & _capacityMask);
+        _written[index] = 0;
+        _head.Value++;
+    }
+
+    /// <summary>
+    /// Reset the buffer to empty state. Not thread-safe — caller must ensure no concurrent access.
+    /// </summary>
+    public void Reset()
+    {
+        NativeMemory.Clear(_written, (nuint)_capacity);
+        _head.Value = 0;
+        _tail.Value = 0;
+        _overflow = 0;
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        if (_entries != null)
+        {
+            NativeMemory.AlignedFree(_entries);
+            _entries = null;
+        }
+
+        if (_deltaTSNs != null)
+        {
+            NativeMemory.AlignedFree(_deltaTSNs);
+            _deltaTSNs = null;
+        }
+
+        if (_flags != null)
+        {
+            NativeMemory.AlignedFree(_flags);
+            _flags = null;
+        }
+
+        if (_written != null)
+        {
+            NativeMemory.AlignedFree(_written);
+            _written = null;
+        }
+    }
+}

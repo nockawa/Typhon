@@ -1,0 +1,130 @@
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+
+namespace Typhon.Engine;
+
+internal enum KeyType : byte
+{
+    Bool = 0,
+    Byte = 1,
+    SByte = 2,
+    Short = 3,
+    UShort = 4,
+    Int = 5,
+    UInt = 6,
+    Long = 7,
+    ULong = 8,
+    Float = 9,
+    Double = 10
+}
+
+internal enum CompareOp : byte
+{
+    Equal = 0,
+    NotEqual = 1,
+    GreaterThan = 2,
+    LessThan = 3,
+    GreaterThanOrEqual = 4,
+    LessThanOrEqual = 5
+}
+
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+internal struct FieldEvaluator  // 24 bytes
+{
+    public int FieldIndex;       // 4B — index into IndexedFieldInfos
+    public int FieldOffset;      // 4B — byte offset within component
+    public byte FieldSize;       // 1B
+    public KeyType KeyType;      // 1B
+    public CompareOp CompareOp;  // 1B
+    private byte _padding;       // 1B
+    private int _reserved;       // 4B
+    public long Threshold;       // 8B — widened constant (reinterpret for float/double)
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static unsafe bool Evaluate(ref FieldEvaluator eval, byte* fieldPtr)
+    {
+        // Read value from fieldPtr based on KeyType, dispatch to compare helpers
+        switch (eval.KeyType)
+        {
+            case KeyType.Bool:
+            {
+                var val = *fieldPtr != 0;
+                var thr = eval.Threshold != 0;
+                return eval.CompareOp switch
+                {
+                    CompareOp.Equal => val == thr,
+                    CompareOp.NotEqual => val != thr,
+                    _ => false
+                };
+            }
+            case KeyType.Byte:
+                return CompareUnsigned(*fieldPtr, (ulong)eval.Threshold, eval.CompareOp);
+            case KeyType.SByte:
+                return CompareSigned(*(sbyte*)fieldPtr, eval.Threshold, eval.CompareOp);
+            case KeyType.Short:
+                return CompareSigned(*(short*)fieldPtr, eval.Threshold, eval.CompareOp);
+            case KeyType.UShort:
+                return CompareUnsigned(*(ushort*)fieldPtr, (ulong)eval.Threshold, eval.CompareOp);
+            case KeyType.Int:
+                return CompareSigned(*(int*)fieldPtr, eval.Threshold, eval.CompareOp);
+            case KeyType.UInt:
+                return CompareUnsigned(*(uint*)fieldPtr, (ulong)eval.Threshold, eval.CompareOp);
+            case KeyType.Long:
+                return CompareSigned(*(long*)fieldPtr, eval.Threshold, eval.CompareOp);
+            case KeyType.ULong:
+                return CompareUnsigned(*(ulong*)fieldPtr, (ulong)eval.Threshold, eval.CompareOp);
+            case KeyType.Float:
+            {
+                var bits = (int)eval.Threshold;
+                var thr = Unsafe.As<int, float>(ref bits);
+                return CompareFloat(*(float*)fieldPtr, thr, eval.CompareOp);
+            }
+            case KeyType.Double:
+            {
+                var thr = Unsafe.As<long, double>(ref eval.Threshold);
+                return CompareFloat(*(double*)fieldPtr, thr, eval.CompareOp);
+            }
+            default:
+                return false;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool CompareSigned(long val, long thr, CompareOp op) =>
+        op switch
+        {
+            CompareOp.Equal => val == thr,
+            CompareOp.NotEqual => val != thr,
+            CompareOp.GreaterThan => val > thr,
+            CompareOp.LessThan => val < thr,
+            CompareOp.GreaterThanOrEqual => val >= thr,
+            CompareOp.LessThanOrEqual => val <= thr,
+            _ => false
+        };
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool CompareUnsigned(ulong val, ulong thr, CompareOp op) =>
+        op switch
+        {
+            CompareOp.Equal => val == thr,
+            CompareOp.NotEqual => val != thr,
+            CompareOp.GreaterThan => val > thr,
+            CompareOp.LessThan => val < thr,
+            CompareOp.GreaterThanOrEqual => val >= thr,
+            CompareOp.LessThanOrEqual => val <= thr,
+            _ => false
+        };
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool CompareFloat(double val, double thr, CompareOp op) =>
+        op switch
+        {
+            CompareOp.Equal => val == thr,
+            CompareOp.NotEqual => val != thr,
+            CompareOp.GreaterThan => val > thr,
+            CompareOp.LessThan => val < thr,
+            CompareOp.GreaterThanOrEqual => val >= thr,
+            CompareOp.LessThanOrEqual => val <= thr,
+            _ => false
+        };
+}
