@@ -761,8 +761,8 @@ class BtreeTests
                 foreach (var kvp in items)
                 {
                     var result = tree.TryGet(kvp.Key, ref accessor);
-                    Assert.That(result.IsSuccess, Is.True);
-                    Assert.That(result.Value, Is.EqualTo(kvp.Value), $"Failed to get value for key {kvp.Key}");
+                    Assert.That(result.IsSuccess, Is.True, $"Key {kvp.Key} not found after reload");
+                    Assert.That(result.Value, Is.EqualTo(kvp.Value), $"Wrong value for key {kvp.Key}");
                 }
 
                 accessor.Dispose();

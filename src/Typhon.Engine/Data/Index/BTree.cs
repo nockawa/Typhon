@@ -833,9 +833,14 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
                 if (_count > 0)
                 {
+                    // Use the non-caching NodeWrapper constructor: the Root property uses _height == 1
+                    // to determine isLeaf, but _height is not yet established during load bootstrap.
+                    // The 2-param constructor leaves _flags = 0, forcing GetIsLeaf to read from chunk data.
+                    var rootNode = new NodeWrapper(_storage, _rootChunkId);
+
                     // Traverse the leftmost path to find Height and LinkList (leftmost leaf)
                     Height = 1;
-                    var node = Root;
+                    var node = rootNode;
                     while (!node.GetIsLeaf(ref accessor))
                     {
                         node = node.GetLeft(ref accessor);
@@ -844,7 +849,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
                     _linkList = node;
 
                     // Traverse the rightmost path to find ReverseLinkList (rightmost leaf)
-                    node = Root;
+                    node = rootNode;
                     while (!node.GetIsLeaf(ref accessor))
                     {
                         node = node.GetLastChild(ref accessor);
