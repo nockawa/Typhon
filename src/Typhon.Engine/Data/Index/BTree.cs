@@ -675,7 +675,41 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     /// Returns an enumerator that walks the leaf-level linked list, yielding all entries in ascending key order.
     /// The caller must be inside an epoch scope. Uses per-leaf OLC validation (lock-free for readers).
     /// </summary>
-    public LeafEnumerator EnumerateLeaves() => new LeafEnumerator(this);
+    public RangeEnumerator EnumerateLeaves() => new RangeEnumerator(this);
+
+    /// <summary>
+    /// Returns an enumerator that yields entries in ascending key order within [<paramref name="minKey"/>, <paramref name="maxKey"/>].
+    /// The caller must be inside an epoch scope. Uses per-leaf OLC validation (lock-free for readers).
+    /// </summary>
+    public RangeEnumerator EnumerateRange(TKey minKey, TKey maxKey) => new RangeEnumerator(this, minKey, maxKey);
+
+    /// <summary>
+    /// Returns an enumerator that yields entries in descending key order within [<paramref name="minKey"/>, <paramref name="maxKey"/>].
+    /// The caller must be inside an epoch scope. Uses per-leaf OLC validation (lock-free for readers).
+    /// </summary>
+    public RangeEnumerator EnumerateRangeDescending(TKey minKey, TKey maxKey) => new RangeEnumerator(this, minKey, maxKey, true);
+
+    /// <summary>
+    /// Returns the minimum key in the BTree. Single-threaded use only (engine init / selectivity estimation).
+    /// </summary>
+    public TKey GetMinKey()
+    {
+        if (_count == 0)
+        {
+            return default;
+        }
+
+        using var guard = EpochGuard.Enter(_segment.Manager.EpochManager);
+        var accessor = _segment.CreateChunkAccessor();
+        try
+        {
+            return GetFirst(ref accessor).Key;
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+    }
 
     /// <summary>
     /// Returns the maximum key in the BTree. Single-threaded use only (engine init).

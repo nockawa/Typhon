@@ -63,7 +63,7 @@
         <Compile Update="Data\Index\BTree.Insert.cs">
           <DependentUpon>BTree.cs</DependentUpon>
         </Compile>
-        <Compile Update="Data\Index\BTree.LeafEnumerator.cs">
+        <Compile Update="Data\Index\BTree.RangeEnumerator.cs">
           <DependentUpon>BTree.cs</DependentUpon>
         </Compile>
         <Compile Update="Data\Index\BTree.LookupStatus.cs">
