@@ -11,9 +11,10 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
     private static int _nextViewId;
 
     private readonly HashSet<long> _entityIds = new();
-    private readonly HashSet<long> _added = new();
-    private readonly HashSet<long> _removed = new();
-    private readonly HashSet<long> _modified = new();
+    private readonly Dictionary<long, DeltaKind> _deltas = new();
+    private int _addedCount;
+    private int _removedCount;
+    private int _modifiedCount;
     private readonly FieldEvaluator[] _evaluators;
     private readonly ViewRegistry _registry;
     private readonly ComponentTable _componentTable;
@@ -79,13 +80,14 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
         }
     }
 
-    public ViewDelta GetDelta() => new(_added, _removed, _modified);
+    public ViewDelta GetDelta() => new(_deltas, _addedCount, _removedCount, _modifiedCount);
 
     public void ClearDelta()
     {
-        _added.Clear();
-        _removed.Clear();
-        _modified.Clear();
+        _deltas.Clear();
+        _addedCount = 0;
+        _removedCount = 0;
+        _modifiedCount = 0;
     }
 
     public HashSet<long>.Enumerator GetEnumerator() => _entityIds.GetEnumerator();
@@ -106,9 +108,10 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
         Thread.SpinWait(100);
         DeltaBuffer.Dispose();
         _entityIds.Clear();
-        _added.Clear();
-        _removed.Clear();
-        _modified.Clear();
+        _deltas.Clear();
+        _addedCount = 0;
+        _removedCount = 0;
+        _modifiedCount = 0;
     }
 
     private bool EvaluateAllFields(ref T comp)
@@ -147,12 +150,13 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
             }
         }
 
-        // Drain concurrent entries that arrived during re-scan
+        // Drain concurrent entries that arrived during re-scan — advance consumer position only.
+        // The PK index scan already captured the authoritative entity set as of tx.TSN;
+        // processing these entries via ProcessEntry would double-count deltas.
         var targetTSN = tx.TSN;
-        while (DeltaBuffer.TryPeek(targetTSN, out var entry, out var flags, out var tsn, out _))
+        while (DeltaBuffer.TryPeek(targetTSN, out _, out _, out var tsn, out _))
         {
             DeltaBuffer.Advance();
-            ProcessEntry(ref entry, flags & 0x3F, (flags & 0x40) != 0, (flags & 0x80) != 0, tx);
             _lastRefreshTSN = tsn;
         }
 
@@ -276,57 +280,48 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
 
     private void CompactDelta(long pk, DeltaKind newKind)
     {
-        if (_added.Contains(pk))
+        if (!_deltas.TryGetValue(pk, out var existing))
         {
+            // No existing delta — insert directly
+            _deltas[pk] = newKind;
             switch (newKind)
             {
-                case DeltaKind.Modified:
-                    return; // Added + Modified → Added
-                case DeltaKind.Removed:
-                    _added.Remove(pk);
-                    return; // Added + Removed → cancel
-                default:
-                    return; // Added + Added → Added
-            }
-        }
-
-        if (_modified.Contains(pk))
-        {
-            switch (newKind)
-            {
-                case DeltaKind.Modified:
-                    return; // Modified + Modified → Modified
-                case DeltaKind.Removed:
-                    _modified.Remove(pk);
-                    _removed.Add(pk);
-                    return; // Modified + Removed → Removed
-                default:
-                    return;
-            }
-        }
-
-        if (_removed.Contains(pk))
-        {
-            if (newKind == DeltaKind.Added)
-            {
-                _removed.Remove(pk);
-                _modified.Add(pk); // Removed + Added → Modified
+                case DeltaKind.Added: _addedCount++; break;
+                case DeltaKind.Removed: _removedCount++; break;
+                case DeltaKind.Modified: _modifiedCount++; break;
             }
             return;
         }
 
-        // No existing delta for this pk
-        switch (newKind)
+        switch (existing)
         {
             case DeltaKind.Added:
-                _added.Add(pk);
-                break;
-            case DeltaKind.Removed:
-                _removed.Add(pk);
-                break;
+                if (newKind == DeltaKind.Removed)
+                {
+                    _deltas.Remove(pk);
+                    _addedCount--; // Added + Removed → cancel
+                }
+                // Added + Modified → Added, Added + Added → Added (no change)
+                return;
+
             case DeltaKind.Modified:
-                _modified.Add(pk);
-                break;
+                if (newKind == DeltaKind.Removed)
+                {
+                    _deltas[pk] = DeltaKind.Removed;
+                    _modifiedCount--;
+                    _removedCount++; // Modified + Removed → Removed
+                }
+                // Modified + Modified → Modified (no change)
+                return;
+
+            case DeltaKind.Removed:
+                if (newKind == DeltaKind.Added)
+                {
+                    _deltas[pk] = DeltaKind.Modified;
+                    _removedCount--;
+                    _modifiedCount++; // Removed + Added → Modified
+                }
+                return;
         }
     }
 

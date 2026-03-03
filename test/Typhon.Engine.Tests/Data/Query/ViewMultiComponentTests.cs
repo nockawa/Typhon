@@ -94,8 +94,8 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
         RefreshView(dbe, view);
 
         var delta = view.GetDelta();
-        Assert.That(delta.Added, Has.Length.EqualTo(1));
-        Assert.That(delta.Added[0], Is.EqualTo(pk));
+        Assert.That(delta.Added, Has.Count.EqualTo(1));
+        Assert.That(delta.Added, Does.Contain(pk));
         Assert.That(view.Contains(pk), Is.True);
     }
 
@@ -143,7 +143,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
 
         Assert.That(view.Contains(pk), Is.True, "Entity should be in view after both fields pass");
         var delta = view.GetDelta();
-        Assert.That(delta.Added, Has.Length.EqualTo(1));
+        Assert.That(delta.Added, Has.Count.EqualTo(1));
     }
 
     [Test]
@@ -192,7 +192,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
 
         Assert.That(view.Contains(pk), Is.True);
         var delta = view.GetDelta();
-        Assert.That(delta.Added, Has.Length.EqualTo(1));
+        Assert.That(delta.Added, Has.Count.EqualTo(1));
     }
 
     [Test]
@@ -216,7 +216,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
 
         Assert.That(view.Contains(pk), Is.False);
         var delta = view.GetDelta();
-        Assert.That(delta.Removed, Has.Length.EqualTo(1));
+        Assert.That(delta.Removed, Has.Count.EqualTo(1));
     }
 
     [Test]
@@ -239,7 +239,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
 
         Assert.That(view.Contains(pk), Is.True);
         var delta = view.GetDelta();
-        Assert.That(delta.Modified, Has.Length.EqualTo(1));
+        Assert.That(delta.Modified, Has.Count.EqualTo(1));
     }
 
     [Test]
@@ -301,7 +301,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
         Assert.That(view.Contains(pk1), Is.False);
         Assert.That(view.Contains(pk2), Is.True);
         var delta = view.GetDelta();
-        Assert.That(delta.Removed, Has.Length.EqualTo(1));
+        Assert.That(delta.Removed, Has.Count.EqualTo(1));
     }
 
     [Test]

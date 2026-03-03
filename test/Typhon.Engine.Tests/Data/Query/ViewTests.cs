@@ -105,8 +105,8 @@ class ViewTests : TestBase<ViewTests>
         RefreshView(dbe, view);
 
         var delta = view.GetDelta();
-        Assert.That(delta.Added, Has.Length.EqualTo(1));
-        Assert.That(delta.Added[0], Is.EqualTo(pk));
+        Assert.That(delta.Added, Has.Count.EqualTo(1));
+        Assert.That(delta.Added, Does.Contain(pk));
         Assert.That(delta.Removed, Is.Empty);
         Assert.That(view.Contains(pk), Is.True);
     }
@@ -129,8 +129,8 @@ class ViewTests : TestBase<ViewTests>
         RefreshView(dbe, view);
 
         var delta = view.GetDelta();
-        Assert.That(delta.Removed, Has.Length.EqualTo(1));
-        Assert.That(delta.Removed[0], Is.EqualTo(pk));
+        Assert.That(delta.Removed, Has.Count.EqualTo(1));
+        Assert.That(delta.Removed, Does.Contain(pk));
         Assert.That(delta.Added, Is.Empty);
         Assert.That(view.Contains(pk), Is.False);
     }
@@ -153,8 +153,8 @@ class ViewTests : TestBase<ViewTests>
         RefreshView(dbe, view);
 
         var delta = view.GetDelta();
-        Assert.That(delta.Modified, Has.Length.EqualTo(1));
-        Assert.That(delta.Modified[0], Is.EqualTo(pk));
+        Assert.That(delta.Modified, Has.Count.EqualTo(1));
+        Assert.That(delta.Modified, Does.Contain(pk));
         Assert.That(delta.Added, Is.Empty);
         Assert.That(delta.Removed, Is.Empty);
         Assert.That(view.Contains(pk), Is.True);
@@ -194,8 +194,8 @@ class ViewTests : TestBase<ViewTests>
         RefreshView(dbe, view);
 
         var delta = view.GetDelta();
-        Assert.That(delta.Added, Has.Length.EqualTo(1));
-        Assert.That(delta.Added[0], Is.EqualTo(pk));
+        Assert.That(delta.Added, Has.Count.EqualTo(1));
+        Assert.That(delta.Added, Does.Contain(pk));
         Assert.That(view.Count, Is.EqualTo(1));
     }
 
@@ -232,8 +232,8 @@ class ViewTests : TestBase<ViewTests>
         RefreshView(dbe, view);
 
         var delta = view.GetDelta();
-        Assert.That(delta.Removed, Has.Length.EqualTo(1));
-        Assert.That(delta.Removed[0], Is.EqualTo(pk));
+        Assert.That(delta.Removed, Has.Count.EqualTo(1));
+        Assert.That(delta.Removed, Does.Contain(pk));
         Assert.That(view.Contains(pk), Is.False);
     }
 
@@ -279,7 +279,7 @@ class ViewTests : TestBase<ViewTests>
         RefreshView(dbe, view);
 
         var delta = view.GetDelta();
-        Assert.That(delta.Added, Has.Length.EqualTo(2));
+        Assert.That(delta.Added, Has.Count.EqualTo(2));
     }
 
     [Test]
@@ -328,8 +328,8 @@ class ViewTests : TestBase<ViewTests>
 
         // Modified + Removed = Removed
         var delta = view.GetDelta();
-        Assert.That(delta.Removed, Has.Length.EqualTo(1));
-        Assert.That(delta.Removed[0], Is.EqualTo(pk));
+        Assert.That(delta.Removed, Has.Count.EqualTo(1));
+        Assert.That(delta.Removed, Does.Contain(pk));
         Assert.That(delta.Added, Is.Empty);
         Assert.That(delta.Modified, Is.Empty);
     }
@@ -358,8 +358,8 @@ class ViewTests : TestBase<ViewTests>
 
         // Removed + Added = Modified
         var delta = view.GetDelta();
-        Assert.That(delta.Modified, Has.Length.EqualTo(1));
-        Assert.That(delta.Modified[0], Is.EqualTo(pk));
+        Assert.That(delta.Modified, Has.Count.EqualTo(1));
+        Assert.That(delta.Modified, Does.Contain(pk));
         Assert.That(delta.Added, Is.Empty);
         Assert.That(delta.Removed, Is.Empty);
     }
@@ -421,8 +421,8 @@ class ViewTests : TestBase<ViewTests>
         RefreshView(dbe, view);
 
         var delta = view.GetDelta();
-        Assert.That(delta.Added, Has.Length.EqualTo(1));
-        Assert.That(delta.Added[0], Is.EqualTo(pk));
+        Assert.That(delta.Added, Has.Count.EqualTo(1));
+        Assert.That(delta.Added, Does.Contain(pk));
         Assert.That(view.Contains(pk), Is.True);
     }
 
@@ -460,7 +460,7 @@ class ViewTests : TestBase<ViewTests>
         RefreshView(dbe, view);
 
         var delta = view.GetDelta();
-        Assert.That(delta.Added, Has.Length.EqualTo(1));
+        Assert.That(delta.Added, Has.Count.EqualTo(1));
         Assert.That(view.Contains(pk), Is.True);
     }
 
@@ -504,7 +504,7 @@ class ViewTests : TestBase<ViewTests>
         RefreshView(dbe, view);
 
         var delta = view.GetDelta();
-        Assert.That(delta.Removed, Has.Length.EqualTo(1));
+        Assert.That(delta.Removed, Has.Count.EqualTo(1));
         Assert.That(view.Contains(pk), Is.False);
     }
 
@@ -526,7 +526,7 @@ class ViewTests : TestBase<ViewTests>
         RefreshView(dbe, view);
 
         var delta = view.GetDelta();
-        Assert.That(delta.Modified, Has.Length.EqualTo(1));
+        Assert.That(delta.Modified, Has.Count.EqualTo(1));
         Assert.That(view.Contains(pk), Is.True);
     }
 
@@ -549,7 +549,7 @@ class ViewTests : TestBase<ViewTests>
 
         Assert.That(view.Contains(pk), Is.True, "Entity should be in view after both fields pass");
         var delta = view.GetDelta();
-        Assert.That(delta.Added, Has.Length.EqualTo(1));
+        Assert.That(delta.Added, Has.Count.EqualTo(1));
     }
 
     #endregion
@@ -571,8 +571,8 @@ class ViewTests : TestBase<ViewTests>
         var delta2 = view.GetDelta();
 
         Assert.That(delta1.Added, Is.Not.SameAs(delta2.Added), "GetDelta should return defensive copies");
-        Assert.That(delta1.Added, Has.Length.EqualTo(1));
-        Assert.That(delta2.Added, Has.Length.EqualTo(1));
+        Assert.That(delta1.Added, Has.Count.EqualTo(1));
+        Assert.That(delta2.Added, Has.Count.EqualTo(1));
     }
 
     [Test]
@@ -650,7 +650,7 @@ class ViewTests : TestBase<ViewTests>
         Assert.That(view.Contains(pk2), Is.False);
 
         var delta = view.GetDelta();
-        Assert.That(delta.Added, Has.Length.EqualTo(1));
+        Assert.That(delta.Added, Has.Count.EqualTo(1));
         view.ClearDelta();
 
         // Update pk1 (still matching), pk2 (now matching)
@@ -660,8 +660,8 @@ class ViewTests : TestBase<ViewTests>
 
         Assert.That(view.Count, Is.EqualTo(2));
         delta = view.GetDelta();
-        Assert.That(delta.Modified, Has.Length.EqualTo(1));
-        Assert.That(delta.Added, Has.Length.EqualTo(1));
+        Assert.That(delta.Modified, Has.Count.EqualTo(1));
+        Assert.That(delta.Added, Has.Count.EqualTo(1));
         view.ClearDelta();
 
         // Delete pk1
@@ -672,7 +672,7 @@ class ViewTests : TestBase<ViewTests>
         Assert.That(view.Contains(pk1), Is.False);
         Assert.That(view.Contains(pk2), Is.True);
         delta = view.GetDelta();
-        Assert.That(delta.Removed, Has.Length.EqualTo(1));
+        Assert.That(delta.Removed, Has.Count.EqualTo(1));
     }
 
     [Test]
@@ -711,14 +711,14 @@ class ViewTests : TestBase<ViewTests>
         // Frame 1: refresh → Added
         RefreshView(dbe, view);
         var delta = view.GetDelta();
-        Assert.That(delta.Added, Has.Length.EqualTo(1));
+        Assert.That(delta.Added, Has.Count.EqualTo(1));
         view.ClearDelta();
 
         // Frame 2: modify → Modified
         UpdateAndCommit(dbe, pk, 1.0f, 60, 2.0);
         RefreshView(dbe, view);
         delta = view.GetDelta();
-        Assert.That(delta.Modified, Has.Length.EqualTo(1));
+        Assert.That(delta.Modified, Has.Count.EqualTo(1));
         Assert.That(delta.Added, Is.Empty);
         Assert.That(delta.Removed, Is.Empty);
         view.ClearDelta();
@@ -733,7 +733,7 @@ class ViewTests : TestBase<ViewTests>
         UpdateAndCommit(dbe, pk, 1.0f, 30, 2.0);
         RefreshView(dbe, view);
         delta = view.GetDelta();
-        Assert.That(delta.Removed, Has.Length.EqualTo(1));
+        Assert.That(delta.Removed, Has.Count.EqualTo(1));
         Assert.That(view.Count, Is.EqualTo(0));
     }
 
@@ -827,8 +827,8 @@ class ViewTests : TestBase<ViewTests>
 
         Assert.That(view.HasOverflow, Is.False, "Should still be in incremental mode");
         var delta = view.GetDelta();
-        Assert.That(delta.Added, Has.Length.EqualTo(1));
-        Assert.That(delta.Added[0], Is.EqualTo(pk));
+        Assert.That(delta.Added, Has.Count.EqualTo(1));
+        Assert.That(delta.Added, Does.Contain(pk));
     }
 
     [Test]

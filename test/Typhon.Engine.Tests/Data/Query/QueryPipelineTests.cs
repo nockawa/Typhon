@@ -169,8 +169,8 @@ class QueryPipelineTests : TestBase<QueryPipelineTests>
         RefreshView(dbe, view);
 
         var delta = view.GetDelta();
-        Assert.That(delta.Added, Has.Length.EqualTo(1));
-        Assert.That(delta.Added[0], Is.EqualTo(pk));
+        Assert.That(delta.Added, Has.Count.EqualTo(1));
+        Assert.That(delta.Added, Does.Contain(pk));
     }
 
     [Test]
@@ -187,8 +187,8 @@ class QueryPipelineTests : TestBase<QueryPipelineTests>
         RefreshView(dbe, view);
 
         var delta = view.GetDelta();
-        Assert.That(delta.Removed, Has.Length.EqualTo(1));
-        Assert.That(delta.Removed[0], Is.EqualTo(pk));
+        Assert.That(delta.Removed, Has.Count.EqualTo(1));
+        Assert.That(delta.Removed, Does.Contain(pk));
         Assert.That(view.Contains(pk), Is.False);
     }
 
@@ -266,14 +266,14 @@ class QueryPipelineTests : TestBase<QueryPipelineTests>
         var pk = CreateAndCommit(dbe, 1.0f, 50, 2.0);
         RefreshView(dbe, view);
         var delta = view.GetDelta();
-        Assert.That(delta.Added, Has.Length.EqualTo(1));
+        Assert.That(delta.Added, Has.Count.EqualTo(1));
         view.ClearDelta();
 
         // Modify (still matching)
         UpdateAndCommit(dbe, pk, 1.0f, 60, 2.0);
         RefreshView(dbe, view);
         delta = view.GetDelta();
-        Assert.That(delta.Modified, Has.Length.EqualTo(1));
+        Assert.That(delta.Modified, Has.Count.EqualTo(1));
         view.ClearDelta();
 
         // No changes
@@ -286,7 +286,7 @@ class QueryPipelineTests : TestBase<QueryPipelineTests>
         UpdateAndCommit(dbe, pk, 1.0f, 30, 2.0);
         RefreshView(dbe, view);
         delta = view.GetDelta();
-        Assert.That(delta.Removed, Has.Length.EqualTo(1));
+        Assert.That(delta.Removed, Has.Count.EqualTo(1));
         Assert.That(view.Count, Is.EqualTo(0));
     }
 
