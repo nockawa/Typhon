@@ -28,6 +28,7 @@ Never deviate from established specs without explicitly noting the deviation and
 |------------------|-------|--------------|
 | **How the engine works** | `claude/overview/` | 11-part architecture guide covering all subsystems |
 | **Why a decision was made** | `claude/adr/` | 30 Architecture Decision Records with rationale |
+| **What must always hold** | `claude/rules/` | Correctness invariants by domain (WAL, checkpoint, page safety) |
 | **Current priorities** | [GitHub Project](https://github.com/users/nockawa/projects/7) | Work tracking, status, roadmap |
 | **Feature designs** | `claude/design/` | Pre-implementation specifications |
 | **Deep research** | `claude/research/` | Analysis studies (e.g., timeout patterns, query systems) |
@@ -50,6 +51,10 @@ The `claude/overview/` directory is the **authoritative architectural reference*
 | 09 | [Observability](claude/overview/09-observability.md) | Telemetry, metrics, diagnostics |
 | 10 | [Errors](claude/overview/10-errors.md) | Error model, exception hierarchy |
 | 11 | [Utilities](claude/overview/11-utilities.md) | Allocators, disk management, shared utilities |
+
+### Correctness Rules
+
+The `claude/rules/` directory is a curated database of invariants that define correctness in Typhon. Rules are the **source of truth** — code and tests must conform to them. Each rule file covers one domain (e.g., durability, concurrency), grouped by module, with invariants expressed in pseudo-code. When modifying code, cross-reference affected modules against the rule database to ensure no invariant is violated. See [`claude/rules/README.md`](claude/rules/README.md) for conventions and notation.
 
 ### Documentation-Heavy Project
 This project is documentation-first. Most work involves creating, updating, or refining markdown design docs, ADRs, and planning documents. When updating docs, preserve existing structure and version headers. Cross-reference related documents. Always check for consistency across the full doc set when making changes.
