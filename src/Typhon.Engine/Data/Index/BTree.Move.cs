@@ -57,6 +57,7 @@ public abstract partial class BTree<TKey>
                 {
                     // Same-leaf fast path: single WriteLock, net count unchanged
                     var leaf = _storage.LoadNode(oldLeafId);
+                    leaf.PreDirtyForWrite(ref opAccessor);
                     var latch = leaf.GetLatch(ref opAccessor);
                     if (!latch.TryWriteLock())
                     {
@@ -109,6 +110,7 @@ public abstract partial class BTree<TKey>
                     var firstLeaf = _storage.LoadNode(firstId);
                     var secondLeaf = _storage.LoadNode(secondId);
 
+                    firstLeaf.PreDirtyForWrite(ref opAccessor);
                     var firstLatch = firstLeaf.GetLatch(ref opAccessor);
                     if (!firstLatch.TryWriteLock())
                     {
@@ -116,6 +118,7 @@ public abstract partial class BTree<TKey>
                         continue;
                     }
 
+                    secondLeaf.PreDirtyForWrite(ref opAccessor);
                     var secondLatch = secondLeaf.GetLatch(ref opAccessor);
                     if (!secondLatch.TryWriteLock())
                     {
@@ -272,6 +275,7 @@ public abstract partial class BTree<TKey>
                 if (oldLeafId == newLeafId)
                 {
                     var leaf = _storage.LoadNode(oldLeafId);
+                    leaf.PreDirtyForWrite(ref opAccessor);
                     var latch = leaf.GetLatch(ref opAccessor);
                     if (!latch.TryWriteLock())
                     {
@@ -382,6 +386,7 @@ public abstract partial class BTree<TKey>
                     var firstLeaf = _storage.LoadNode(firstId);
                     var secondLeaf = _storage.LoadNode(secondId);
 
+                    firstLeaf.PreDirtyForWrite(ref opAccessor);
                     var firstLatch = firstLeaf.GetLatch(ref opAccessor);
                     if (!firstLatch.TryWriteLock())
                     {
@@ -389,6 +394,7 @@ public abstract partial class BTree<TKey>
                         continue;
                     }
 
+                    secondLeaf.PreDirtyForWrite(ref opAccessor);
                     var secondLatch = secondLeaf.GetLatch(ref opAccessor);
                     if (!secondLatch.TryWriteLock())
                     {

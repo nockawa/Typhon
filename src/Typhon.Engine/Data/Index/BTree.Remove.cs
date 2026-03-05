@@ -98,6 +98,7 @@ public abstract partial class BTree<TKey>
                 // Safe if: root leaf with count > 1, or non-root leaf above half-full
                 if ((isRoot && count > 1) || (!isRoot && count > capacity / 2))
                 {
+                    ll.PreDirtyForWrite(ref accessor);
                     if (!llLatch.TryWriteLock())
                     {
                         return OlcRemoveResult.Restart;
@@ -167,6 +168,7 @@ public abstract partial class BTree<TKey>
 
                 if ((isRoot && rllCount > 1) || (!isRoot && rllCount > capacity / 2))
                 {
+                    rll.PreDirtyForWrite(ref accessor);
                     if (!rllLatch.TryWriteLock())
                     {
                         return OlcRemoveResult.Restart;
@@ -226,6 +228,7 @@ public abstract partial class BTree<TKey>
 
             if ((isRoot && count > 1) || (!isRoot && count > capacity / 2))
             {
+                leaf.PreDirtyForWrite(ref accessor);
                 if (!leafLatch.TryWriteLock())
                 {
                     return OlcRemoveResult.Restart;
@@ -272,6 +275,7 @@ public abstract partial class BTree<TKey>
             // Begin-remove fast path (WriteLock protects against concurrent OLC writers)
             {
                 var ll = _linkList;
+                ll.PreDirtyForWrite(ref accessor);
                 SpinWriteLock(ll.GetLatch(ref accessor));
                 int order = args.Compare(args.Key, ll.GetFirst(ref accessor).Key);
                 if (order < 0)
@@ -299,6 +303,7 @@ public abstract partial class BTree<TKey>
             // End-remove fast path
             {
                 var rll = _reverseLinkList;
+                rll.PreDirtyForWrite(ref accessor);
                 SpinWriteLock(rll.GetLatch(ref accessor));
 
                 // Safety: if rll was split concurrently, it's no longer the rightmost leaf.
@@ -426,6 +431,7 @@ public abstract partial class BTree<TKey>
         // Phase 1.5A: Lock leaf with version validation.
         // Between Phase 1 descent and lock acquisition, a concurrent writer may have split/modified
         // this leaf. Snapshot the version before locking, then validate after.
+        node.PreDirtyForWrite(ref accessor);
         var leafLatch = node.GetLatch(ref accessor);
         int leafVersion = leafLatch.ReadVersion();
         if (leafVersion == 0)
@@ -467,10 +473,18 @@ public abstract partial class BTree<TKey>
         // AbortWriteLock on failure: no nodes modified yet — avoid spurious version bumps.
         var leafPrev = node.GetPrevious(ref accessor);
         var leafNext = node.GetNext(ref accessor);
+        if (leafPrev.IsValid)
+        {
+            leafPrev.PreDirtyForWrite(ref accessor);
+        }
         if (leafPrev.IsValid && !leafPrev.GetLatch(ref accessor).TryWriteLock())
         {
             node.GetLatch(ref accessor).AbortWriteLock();
             return false; // restart
+        }
+        if (leafNext.IsValid)
+        {
+            leafNext.PreDirtyForWrite(ref accessor);
         }
         if (leafNext.IsValid && !leafNext.GetLatch(ref accessor).TryWriteLock())
         {
@@ -487,6 +501,7 @@ public abstract partial class BTree<TKey>
         // AbortWriteLock on failure: no nodes modified yet — avoid spurious version bumps.
         for (int i = ctx.Depth - 1; i >= 0; i--)
         {
+            ctx.PathNodes[i].PreDirtyForWrite(ref accessor);
             var pathLatch = ctx.PathNodes[i].GetLatch(ref accessor);
             if (!pathLatch.TryWriteLock())
             {
@@ -568,10 +583,12 @@ public abstract partial class BTree<TKey>
             NodeWrapper rightSib = relatives.GetRightSibling(ref accessor);
             if (leftSib.IsValid)
             {
+                leftSib.PreDirtyForWrite(ref accessor);
                 SpinWriteLock(leftSib.GetLatch(ref accessor));
             }
             if (rightSib.IsValid)
             {
+                rightSib.PreDirtyForWrite(ref accessor);
                 SpinWriteLock(rightSib.GetLatch(ref accessor));
             }
 

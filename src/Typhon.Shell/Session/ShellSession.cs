@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using Typhon.Engine;
+using Typhon.Shell.Extensibility;
 
 namespace Typhon.Shell.Session;
 
@@ -26,6 +27,9 @@ internal sealed class ShellSession : IDisposable
     private readonly Dictionary<string, Schema.ComponentSchema> _componentSchemas = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Type> _componentTypes = new(StringComparer.OrdinalIgnoreCase);
 
+    // Extension commands discovered from loaded assemblies
+    private readonly Dictionary<string, ShellCommand> _customCommands = new(StringComparer.OrdinalIgnoreCase);
+
     // Settings
     public string Format { get; set; } = "table";
     public bool AutoCommit { get; set; }
@@ -33,6 +37,7 @@ internal sealed class ShellSession : IDisposable
     public int PageSize { get; set; } = 20;
     public string Color { get; set; } = "auto";
     public bool Timing { get; set; }
+    public LogLevel LogLevel { get; set; } = LogLevel.Warning;
 
     // Resource graph
     private IResourceRegistry _resourceRegistry;
@@ -50,6 +55,7 @@ internal sealed class ShellSession : IDisposable
     public IReadOnlyDictionary<string, Schema.ComponentSchema> ComponentSchemas => _componentSchemas;
     public IReadOnlyDictionary<string, Type> ComponentTypes => _componentTypes;
     public IReadOnlyList<string> AssemblyPaths => _assemblyPaths;
+    public IReadOnlyDictionary<string, ShellCommand> CustomCommands => _customCommands;
     public IResourceRegistry ResourceRegistry => _resourceRegistry;
     public ResourceGraph ResourceGraph => _resourceGraph;
 
@@ -84,7 +90,7 @@ internal sealed class ShellSession : IDisposable
                     options.SingleLine = true;
                     options.IncludeScopes = true;
                 });
-                builder.SetMinimumLevel(LogLevel.Warning);
+                builder.SetMinimumLevel(LogLevel);
             })
             .AddResourceRegistry()
             .AddMemoryAllocator()
@@ -95,10 +101,24 @@ internal sealed class ShellSession : IDisposable
             {
                 options.DatabaseName = _databaseName;
                 options.DatabaseDirectory = directory;
-                // DatabaseFileName defaults to DatabaseName; engine appends ".bin"
+                // 1024 pages = 8 MiB — generous enough for interactive bulk operations
+                // while still exercising the backpressure path under heavy writes.
+                options.DatabaseCacheSize = 1024 * 8192UL;
             })
             .AddMemoryAllocator()
-            .AddDatabaseEngine();
+            .AddSingleton<IWalFileIO, WalFileIO>()
+            .AddDatabaseEngine(engineOpts =>
+            {
+                var walDir = Path.Combine(directory, "wal");
+                Directory.CreateDirectory(walDir);
+                engineOpts.Wal = new WalWriterOptions
+                {
+                    WalDirectory = walDir,
+                    // Shell uses Deferred durability — WAL is only needed for checkpoint-driven page flushing.
+                    // FUA off since we don't need per-write durability guarantees in tsh.
+                    UseFUA = false
+                };
+            });
 
         _serviceProvider = services.BuildServiceProvider();
         _engine = _serviceProvider.GetRequiredService<DatabaseEngine>();
@@ -248,6 +268,16 @@ internal sealed class ShellSession : IDisposable
             _assemblyPaths.Add(fullPath);
         }
     }
+
+    /// <summary>
+    /// Registers an extension command discovered from a loaded assembly.
+    /// </summary>
+    public void RegisterCommand(ShellCommand command) => _customCommands[command.Name] = command;
+
+    /// <summary>
+    /// Clears all extension commands (for reload).
+    /// </summary>
+    public void ClearCommands() => _customCommands.Clear();
 
     /// <summary>
     /// Clears all loaded schemas (for reload).

@@ -100,6 +100,19 @@ public class LogicalSegment : IDisposable
     }
 
     /// <summary>
+    /// Like <see cref="GetPageExclusive"/> but skips CRC verification.
+    /// Used during segment growth where the page content will be immediately overwritten.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal PageAccessor GetPageExclusiveUnchecked(int segmentPageIndex, long epoch, out int memPageIndex)
+    {
+        Manager.RequestPageEpochUnchecked(Pages[segmentPageIndex], epoch, out memPageIndex);
+        var latched = Manager.TryLatchPageExclusive(memPageIndex);
+        Debug.Assert(latched, "TryLatchPageExclusive failed after RequestPageEpochUnchecked — page should be Idle");
+        return Manager.GetPage(memPageIndex);
+    }
+
+    /// <summary>
     /// Get the raw memory address for a segment page via epoch-based protection.
     /// Caller must be inside an <see cref="EpochGuard"/> scope.
     /// </summary>
@@ -331,12 +344,12 @@ public class LogicalSegment : IDisposable
                 int memPageIdx = -1;
                 var isPageDirty = false;
 
-                // If it's a new page, initialize it
+                // If it's a new page, initialize it (skip CRC — page will be fully overwritten)
                 if (isNewPage)
                 {
-                    Manager.RequestPageEpoch(curMapPageIndex, epoch, out memPageIdx);
+                    Manager.RequestPageEpochUnchecked(curMapPageIndex, epoch, out memPageIdx);
                     var latched = Manager.TryLatchPageExclusive(memPageIdx);
-                    Debug.Assert(latched, "TryLatchPageExclusive failed after RequestPageEpoch");
+                    Debug.Assert(latched, "TryLatchPageExclusive failed after RequestPageEpochUnchecked");
                     page = Manager.GetPage(memPageIdx);
                     hasPage = true;
 
@@ -392,9 +405,9 @@ public class LogicalSegment : IDisposable
                         // The current page is full, we need on fetch one more... just to store the termination 0 value
                         else
                         {
-                            Manager.RequestPageEpoch(mapIndices[curIndexMapIndex + 1], epoch, out var endMemIdx);
+                            Manager.RequestPageEpochUnchecked(mapIndices[curIndexMapIndex + 1], epoch, out var endMemIdx);
                             var endLatched = Manager.TryLatchPageExclusive(endMemIdx);
-                            Debug.Assert(endLatched, "TryLatchPageExclusive failed after RequestPageEpoch");
+                            Debug.Assert(endLatched, "TryLatchPageExclusive failed after RequestPageEpochUnchecked");
                             var endPage = Manager.GetPage(endMemIdx);
                             InitHeader(endPage.Address, PageClearMode.Header, PageBlockFlags.IsLogicalSegment, type, 1);
                             changeSet?.AddByMemPageIndex(endMemIdx);
@@ -435,12 +448,15 @@ public class LogicalSegment : IDisposable
         }
 
         // Initialize the subsequent pages on disk
+        // Use unchecked access: these are new pages about to be fully overwritten (cleared + header init).
+        // In WAL mode, CRC verification may fail because the growth path doesn't write WAL/FPI records, so evicted pages would have stale CRCs with
+        // no FPI available for repair.
         for (var i = growFrom; i < filePageIndices.Length; i++)
         {
             var pageIndex = filePageIndices[i];
-            Manager.RequestPageEpoch(pageIndex, epoch, out var memPageIdx);
+            Manager.RequestPageEpochUnchecked(pageIndex, epoch, out var memPageIdx);
             var latched = Manager.TryLatchPageExclusive(memPageIdx);
-            Debug.Assert(latched, "TryLatchPageExclusive failed after RequestPageEpoch");
+            Debug.Assert(latched, "TryLatchPageExclusive failed after RequestPageEpochUnchecked");
             var page = Manager.GetPage(memPageIdx);
 
             changeSet?.AddByMemPageIndex(memPageIdx);

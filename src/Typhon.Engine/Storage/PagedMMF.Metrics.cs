@@ -32,8 +32,11 @@ public partial class PagedMMF
         /// The exact number of Memory Pages that are currently free (and can be used to allocate new file pages).
         public int FreeMemPageCount;
         
-        /// 
+        ///
         public int TotalMemPageAllocatedCount;
+
+        /// Approximately the number of times allocation entered backpressure wait
+        public int BackpressureWaitCount;
 
         private readonly PagedMMF _owner;
 
@@ -49,12 +52,14 @@ public partial class PagedMMF
             public int PendingIOReadCount     { get; internal set; }
             public int MinClockSweepCounter   { get; internal set; }
             public int MaxClockSweepCounter   { get; internal set; }
+            public int BackpressureWaitCount  { get; internal set; }
 
             public override string ToString() =>
                 $"Free: {FreeMemPageCount}, Allocating: {AllocatingMemPageCount}, Idle: {IdleMemPageCount}, " +
                 $"Exclusive: {ExclusiveMemPageCount}, Dirty: {DirtyPageCount}, " +
                 $"LockedByThread: {LockedByThreadCount}, PendingIORead: {PendingIOReadCount}, " +
-                $"MinClockSweepCounter: {MinClockSweepCounter}, MaxClockSweepCounter: {MaxClockSweepCounter}";
+                $"MinClockSweepCounter: {MinClockSweepCounter}, MaxClockSweepCounter: {MaxClockSweepCounter}, " +
+                $"BackpressureWaitCount: {BackpressureWaitCount}";
         }
         
         public Metrics(PagedMMF owner, int freePageCount)

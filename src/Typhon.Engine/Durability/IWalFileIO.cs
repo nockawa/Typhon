@@ -67,6 +67,15 @@ public interface IWalFileIO : IDisposable
     void ReadAligned(SafeFileHandle handle, long offset, Span<byte> buffer);
 
     /// <summary>
+    /// Opens a WAL segment file for read-only access with sharing that allows concurrent writers.
+    /// Used by <see cref="WalSegmentReader"/> and <see cref="WalManager.SearchFpiForPage"/> where
+    /// the active segment may be held open by the <see cref="WalWriter"/>.
+    /// </summary>
+    /// <param name="path">File path for the segment.</param>
+    /// <returns>A safe handle to the opened segment file (read-only).</returns>
+    SafeFileHandle OpenSegmentForRead(string path);
+
+    /// <summary>
     /// Checks whether a segment file exists at the given path.
     /// </summary>
     /// <param name="path">File path to check.</param>

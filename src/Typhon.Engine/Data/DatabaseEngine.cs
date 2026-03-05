@@ -242,16 +242,19 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     [return: TransfersOwnership]
     public UnitOfWork CreateUnitOfWork(DurabilityMode durabilityMode = DurabilityMode.Deferred, TimeSpan timeout = default)
     {
+        LogUowLifecycle("CreateUnitOfWork enter");
         var effectiveTimeout = timeout == TimeSpan.Zero ? TimeoutOptions.Current.DefaultUowTimeout : timeout;
         var wc = WaitContext.FromTimeout(effectiveTimeout);
 
         // For Deferred/GroupCommit: create the ChangeSet early so AllocateUowId can track
         // the registry page mutation in it (avoiding a synchronous SaveChanges).
         var changeSet = durabilityMode != DurabilityMode.Immediate ? MMF.CreateChangeSet() : null;
+        LogUowLifecycle("ChangeSet created");
 
         // Back-pressure: if registry is full, wait for a slot to be freed.
         // The admission check is a fast-path optimization — AllocateUowId's CAS provides the real atomicity (TOCTOU by design).
         var uowId = UowRegistry.AllocateUowId(ref wc, changeSet);
+        LogUowLifecycle($"UowId allocated: {uowId}");
 
         return new UnitOfWork(this, durabilityMode, uowId, effectiveTimeout, changeSet);
     }
@@ -312,6 +315,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
         if (disposing)
         {
+            _log?.LogInformation("Engine disposing: CheckpointManager");
             // Checkpoint must dispose first: runs final cycle, writes pages + advances LSN before WAL shuts down
             CheckpointManager?.Dispose();
             CheckpointManager = null;
@@ -320,13 +324,16 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             _stagingBufferPool?.Dispose();
             _stagingBufferPool = null;
 
+            _log?.LogInformation("Engine disposing: PersistEngineState");
             // Persist final TSN counter and flush all dirty pages to disk. This ensures:
             // 1. TSN counter survives restart (MVCC visibility)
             // 2. All committed transaction data is on disk even without WAL/checkpoint
             PersistEngineState();
 
+            _log?.LogInformation("Engine disposing: WalManager");
             WalManager?.Dispose();
             WalManager = null;
+            _log?.LogInformation("Engine disposing: TransactionChain + cleanup");
             TransactionChain.Dispose();
             UowRegistry?.Dispose();
             MMF.Dispose();
@@ -350,6 +357,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         var lastLSN = _lastRecoveryResult.LastValidLSN;
         var lastSegmentId = 0L; // Segment continuity is handled by WalSegmentManager scanning existing files
         WalManager.Initialize(lastSegmentId, lastLSN > 0 ? lastLSN + 1 : 1);
+        WalManager.Logger = _log;
         WalManager.Start();
     }
 
@@ -381,6 +389,10 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         CheckpointManager = new CheckpointManager(MMF, UowRegistry, WalManager, _options.Resources, EpochManager, _stagingBufferPool, _durabilityNode,
             initialCheckpointLsn);
         CheckpointManager.Start();
+
+        // Wire demand-driven flush: when page cache backpressure fires, immediately wake
+        // the checkpoint thread instead of waiting for the 30s timer interval.
+        MMF.OnBackpressure = () => CheckpointManager?.ForceCheckpoint();
     }
 
     private void ConstructComponentStore()
@@ -1196,6 +1208,24 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     internal void LogDeferredUowNotFlushed(ushort uowId, int committedCount) =>
         _log?.LogWarning("Deferred UoW #{UowId} disposed with {Count} committed transaction(s) without Flush/FlushAsync. " +
                          "Data relies on engine shutdown safety net.", uowId, committedCount);
+
+    internal void LogUowFlushStart(ushort uowId, DurabilityMode mode, long targetLsn) =>
+        _log?.LogDebug("UoW #{UowId} ({Mode}) flush: waiting for WAL durable LSN {TargetLsn}", uowId, mode, targetLsn);
+
+    internal void LogUowFlushComplete(ushort uowId) =>
+        _log?.LogDebug("UoW #{UowId} flush complete", uowId);
+
+    internal void LogCommitStart(long tsn, int componentCount) =>
+        _log?.LogDebug("Tx #{Tsn} commit start: {Count} component types", tsn, componentCount);
+
+    internal void LogCommitPhase(long tsn, string phase) =>
+        _log?.LogDebug("Tx #{Tsn} commit: {Phase}", tsn, phase);
+
+    internal void LogTxDispose(long tsn, string phase) =>
+        _log?.LogDebug("Tx #{Tsn} dispose: {Phase}", tsn, phase);
+
+    internal void LogUowLifecycle(string phase) =>
+        _log?.LogDebug("UoW: {Phase}", phase);
 
     #endregion
 

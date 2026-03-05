@@ -43,6 +43,12 @@ internal static class ThrowHelper
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static void ThrowUniqueConstraintViolation() => throw new UniqueConstraintViolationException();
 
+    // --- Storage ---
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowPageCacheBackpressureTimeout(int dirtyPageCount, int epochProtectedCount, TimeSpan waitDuration)
+        => throw new PageCacheBackpressureTimeoutException(dirtyPageCount, epochProtectedCount, waitDuration);
+
     // --- Durability ---
 
     [MethodImpl(MethodImplOptions.NoInlining)]

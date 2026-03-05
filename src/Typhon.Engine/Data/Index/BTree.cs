@@ -119,37 +119,7 @@ internal static class BTreeExtensions
 
 #region BTree+ main class
 
-public interface IBTree
-{
-    ChunkBasedSegment Segment { get; }
-    bool AllowMultiple { get; }
-    int EntryCount { get; }
-    unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor);
-    unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor, out int bufferRootId);
-    unsafe bool Remove(void* keyAddr, out int value, ref ChunkAccessor accessor);
-    unsafe Result<int, BTreeLookupStatus> TryGet(void* keyAddr, ref ChunkAccessor accessor);
-    unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref ChunkAccessor accessor, bool preserveEmptyBuffer = false);
-    unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ref ChunkAccessor accessor);
-
-    /// <summary>
-    /// Compound move: atomically removes <paramref name="value"/> from <paramref name="oldKeyAddr"/>
-    /// and inserts it under <paramref name="newKeyAddr"/>. For unique indexes (!AllowMultiple).
-    /// </summary>
-    /// <returns>True if the old key was found and moved; false if old key not found.</returns>
-    unsafe bool Move(void* oldKeyAddr, void* newKeyAddr, int value, ref ChunkAccessor accessor);
-
-    /// <summary>
-    /// Compound move for multi-value indexes (AllowMultiple): removes <paramref name="elementId"/>/<paramref name="value"/>
-    /// from <paramref name="oldKeyAddr"/>'s buffer and appends <paramref name="value"/> under <paramref name="newKeyAddr"/>.
-    /// Returns the new element ID and both HEAD buffer IDs for inline TAIL tracking.
-    /// </summary>
-    unsafe int MoveValue(void* oldKeyAddr, void* newKeyAddr, int elementId, int value, ref ChunkAccessor accessor, out int oldHeadBufferId, 
-        out int newHeadBufferId, bool preserveEmptyBuffer = false);
-
-    void CheckConsistency(ref ChunkAccessor accessor);
-}
-
-public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged 
+public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
 {
     [DebuggerDisplay("Key: {Key}, Value: {Value}")]
     [StructLayout(LayoutKind.Sequential)]
@@ -460,7 +430,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     #region Private data
 
-    public abstract bool AllowMultiple { get; }
+    public abstract override bool AllowMultiple { get; }
     protected abstract BaseNodeStorage GetStorage();
     protected IComparer<TKey> Comparer;
 
@@ -634,7 +604,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public bool IsEmpty() => _count == 0;
 
-    public int EntryCount => _count;
+    public override int EntryCount => _count;
 
     /// <summary>Number of deferred nodes pending reclamation (test visibility).</summary>
     internal int DeferredNodeCount => _deferredNodes.Count;
@@ -733,6 +703,69 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
     }
 
+    /// <summary>
+    /// Converts a <typeparamref name="TKey"/> to <see cref="long"/> using the same encoding as
+    /// <see cref="QueryResolverHelper.EncodeThreshold"/>. JIT eliminates dead branches for each concrete TKey.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static long KeyToLong(TKey key)
+    {
+        if (typeof(TKey) == typeof(sbyte))
+        {
+            return (long)(sbyte)(object)key;
+        }
+        if (typeof(TKey) == typeof(byte))
+        {
+            return (long)(ulong)(byte)(object)key;
+        }
+        if (typeof(TKey) == typeof(short))
+        {
+            return (long)(short)(object)key;
+        }
+        if (typeof(TKey) == typeof(ushort))
+        {
+            return (long)(ulong)(ushort)(object)key;
+        }
+        if (typeof(TKey) == typeof(char))
+        {
+            return (long)(ulong)(char)(object)key;
+        }
+        if (typeof(TKey) == typeof(int))
+        {
+            return (long)(int)(object)key;
+        }
+        if (typeof(TKey) == typeof(uint))
+        {
+            return (long)(ulong)(uint)(object)key;
+        }
+        if (typeof(TKey) == typeof(long))
+        {
+            return (long)(object)key;
+        }
+        if (typeof(TKey) == typeof(ulong))
+        {
+            return (long)(ulong)(object)key;
+        }
+        if (typeof(TKey) == typeof(float))
+        {
+            var f = (float)(object)key;
+            return (long)Unsafe.As<float, int>(ref f);
+        }
+        if (typeof(TKey) == typeof(double))
+        {
+            var d = (double)(object)key;
+            return Unsafe.As<double, long>(ref d);
+        }
+
+        throw new NotSupportedException($"Key type {typeof(TKey).Name} is not supported for long encoding.");
+    }
+
+    /// <inheritdoc/>
+    public override long GetMinKeyAsLong() => _count == 0 ? 0L : KeyToLong(GetMinKey());
+
+    /// <inheritdoc/>
+    public override long GetMaxKeyAsLong() => _count == 0 ? 0L : KeyToLong(GetMaxKey());
+
     public int IncCount() => Interlocked.Increment(ref _count);
 
     public int DecCount() => Interlocked.Decrement(ref _count);
@@ -783,7 +816,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     #region Public API
     
-    public ChunkBasedSegment Segment => _segment;
+    public override ChunkBasedSegment Segment => _segment;
 
     protected BTree(ChunkBasedSegment segment, bool load, short stableId = 0, ChangeSet changeSet = null)
     {
@@ -946,18 +979,20 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         return (1 + adjusted / entriesPerChunk, (adjusted % entriesPerChunk) * BTreeDirectoryEntry.Size);
     }
 
-    public unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor) => Add(Unsafe.AsRef<TKey>(keyAddr), value, ref accessor, out _);
-    public unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor, out int bufferRootId)
+    public override unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor) => Add(Unsafe.AsRef<TKey>(keyAddr), value, ref accessor, out _);
+    public override unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor, out int bufferRootId)
         => Add(Unsafe.AsRef<TKey>(keyAddr), value, ref accessor, out bufferRootId);
-    public unsafe bool Remove(void* keyAddr, out int value, ref ChunkAccessor accessor) => Remove(Unsafe.AsRef<TKey>(keyAddr), out value, ref accessor);
-    public unsafe Result<int, BTreeLookupStatus> TryGet(void* keyAddr, ref ChunkAccessor accessor) => TryGet(Unsafe.AsRef<TKey>(keyAddr), ref accessor);
-    public unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref ChunkAccessor accessor, bool preserveEmptyBuffer = false)
+    public override unsafe bool Remove(void* keyAddr, out int value, ref ChunkAccessor accessor)
+        => Remove(Unsafe.AsRef<TKey>(keyAddr), out value, ref accessor);
+    public override unsafe Result<int, BTreeLookupStatus> TryGet(void* keyAddr, ref ChunkAccessor accessor)
+        => TryGet(Unsafe.AsRef<TKey>(keyAddr), ref accessor);
+    public override unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref ChunkAccessor accessor, bool preserveEmptyBuffer = false)
         => RemoveValue(Unsafe.AsRef<TKey>(keyAddr), elementId, value, ref accessor, preserveEmptyBuffer);
-    public unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ref ChunkAccessor accessor)
+    public override unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ref ChunkAccessor accessor)
         => TryGetMultiple(Unsafe.AsRef<TKey>(keyAddr), ref accessor);
-    public unsafe bool Move(void* oldKeyAddr, void* newKeyAddr, int value, ref ChunkAccessor accessor)
+    public override unsafe bool Move(void* oldKeyAddr, void* newKeyAddr, int value, ref ChunkAccessor accessor)
         => Move(Unsafe.AsRef<TKey>(oldKeyAddr), Unsafe.AsRef<TKey>(newKeyAddr), value, ref accessor);
-    public unsafe int MoveValue(void* oldKeyAddr, void* newKeyAddr, int elementId, int value,
+    public override unsafe int MoveValue(void* oldKeyAddr, void* newKeyAddr, int elementId, int value,
         ref ChunkAccessor accessor, out int oldHeadBufferId, out int newHeadBufferId, bool preserveEmptyBuffer = false)
         => MoveValue(Unsafe.AsRef<TKey>(oldKeyAddr), Unsafe.AsRef<TKey>(newKeyAddr), elementId, value,
             ref accessor, out oldHeadBufferId, out newHeadBufferId, preserveEmptyBuffer);
@@ -1016,7 +1051,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
     }
 
-    public void CheckConsistency(ref ChunkAccessor accessor)
+    public override void CheckConsistency(ref ChunkAccessor accessor)
     {
         // Recursive check from Root to leaf
         if (IsEmpty())
@@ -1206,6 +1241,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             }
 
             // WriteLock leaf for consistent index and to prevent concurrent OLC modification
+            leaf.PreDirtyForWrite(ref opAccessor);
             SpinWriteLock(leaf.GetLatch(ref opAccessor));
 
             // Re-find under lock (index might have shifted due to concurrent OLC fast path remove)

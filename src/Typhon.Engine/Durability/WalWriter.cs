@@ -1,4 +1,5 @@
 using JetBrains.Annotations;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -52,6 +53,9 @@ public sealed unsafe class WalWriter : ResourceNode, IMetricSource
     private readonly IWalFileIO _fileIO;
     private readonly WalWriterOptions _options;
     private readonly IMemoryAllocator _allocator;
+
+    /// <summary>Optional logger, set post-construction by engine initialization.</summary>
+    internal ILogger Logger { get; set; }
 
     // ═══════════════════════════════════════════════════════════════
     // Staging buffer (4096-aligned for O_DIRECT)
@@ -268,10 +272,15 @@ public sealed unsafe class WalWriter : ResourceNode, IMetricSource
 
     private void WriterLoop()
     {
+        Logger?.LogDebug("WAL writer thread started");
         try
         {
             while (!_shutdown)
             {
+                Logger?.LogDebug("WAL writer: loop iter, nextLsn={NextLsn} drain={DrainPos} tail={TailPos} swap={Swap} inflight={Inflight} active={Active}",
+                    _commitBuffer.NextLsn, _commitBuffer.DrainPosition, _commitBuffer.TailPosition,
+                    _commitBuffer.SwapState, _commitBuffer.InflightCount, _commitBuffer.ActiveBufferIndex);
+
                 // 1. Try to drain published frames from the commit buffer
                 if (!_commitBuffer.TryDrain(out var data, out var frameCount))
                 {
@@ -351,6 +360,8 @@ public sealed unsafe class WalWriter : ResourceNode, IMetricSource
                 // 7. Advance durable LSN and signal waiters
                 if (batchHighLsn > 0)
                 {
+                    Logger?.LogDebug("WAL writer: advancing durable LSN to {DurableLsn}, wrote {BytesWritten} bytes ({FrameCount} frames)",
+                        batchHighLsn, bytesToWrite, frameCount);
                     Interlocked.Exchange(ref _durableLsn, batchHighLsn);
                     _durabilityEvent.Set();
                 }
@@ -360,9 +371,20 @@ public sealed unsafe class WalWriter : ResourceNode, IMetricSource
                 // 8. Check segment rotation threshold
                 if (_segmentManager.ActiveSegmentUtilization >= RotationThreshold)
                 {
-                    var segment = _segmentManager.ActiveSegment;
-                    _segmentManager.RotateSegment(firstLSN: batchHighLsn + 1, prevLastLSN: batchHighLsn);
-                    _lastFooterCrc = 0; // Reset CRC chain for new segment
+                    Logger?.LogInformation("WAL segment rotation at {Utilization:P0}, rotating after LSN {LastLsn}",
+                        _segmentManager.ActiveSegmentUtilization, batchHighLsn);
+                    try
+                    {
+                        _segmentManager.RotateSegment(firstLSN: batchHighLsn + 1, prevLastLSN: batchHighLsn);
+                        _lastFooterCrc = 0; // Reset CRC chain for new segment
+                        Logger?.LogInformation("WAL segment rotation complete, new segment {SegmentId}",
+                            _segmentManager.ActiveSegment?.SegmentId ?? -1);
+                    }
+                    catch (Exception rotEx)
+                    {
+                        Logger?.LogError(rotEx, "WAL segment rotation FAILED");
+                        throw; // Let outer catch handle it
+                    }
                 }
 
                 // Handle explicit flush request
@@ -374,11 +396,13 @@ public sealed unsafe class WalWriter : ResourceNode, IMetricSource
             }
 
             // Shutdown: drain any remaining data
+            Logger?.LogDebug("WAL writer: shutdown requested, draining remaining");
             DrainRemaining();
         }
         catch (Exception ex)
         {
             // Fatal I/O error — set error flag and wake all waiters
+            Logger?.LogCritical(ex, "WAL writer FATAL error — thread terminating");
             _fatalError = ex;
             _durabilityEvent.Set();
         }

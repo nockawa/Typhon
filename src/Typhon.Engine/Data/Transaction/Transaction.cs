@@ -86,7 +86,9 @@ public unsafe class Transaction : IDisposable
     {
         _dbe = dbe;
         _epochManager = _dbe.EpochManager;
+        _dbe.LogUowLifecycle($"Tx.Init #{tsn}: entering epoch");
         _ = _epochManager.EnterScope(); // Depth unused: Transaction uses ExitScopeUnordered (not LIFO)
+        _dbe.LogUowLifecycle($"Tx.Init #{tsn}: epoch entered");
         _isDisposed = false;
         OwningUnitOfWork = uow;
 #if DEBUG
@@ -178,12 +180,22 @@ public unsafe class Transaction : IDisposable
 
         AssertThreadAffinity();
 
+        // Capture before ExitEpochAndRemove — Remove pools and Reset() nulls _dbe
+        var dbe = _dbe;
+        var tsn = TSN;
+
+        dbe.LogTxDispose(tsn, "EnsureCompleted");
         EnsureCompleted();
+        dbe.LogTxDispose(tsn, "ProcessDeferredCleanups");
         ProcessDeferredCleanups();
+        dbe.LogTxDispose(tsn, "FlushAccessors");
         FlushAccessors();
+        dbe.LogTxDispose(tsn, "PersistIfNeeded");
         PersistIfNeeded();
+        dbe.LogTxDispose(tsn, "ExitEpochAndRemove");
         ExitEpochAndRemove();
 
+        dbe.LogTxDispose(tsn, "Complete");
         _isDisposed = true;
     }
 
@@ -238,10 +250,21 @@ public unsafe class Transaction : IDisposable
     /// <summary>Exit epoch scope, remove from chain, auto-dispose owned UoW.</summary>
     private void ExitEpochAndRemove()
     {
+        // Capture before Remove() — Remove pools the transaction and Reset() nulls _dbe
+        var dbe = _dbe;
+        var tsn = TSN;
+
+        dbe.LogTxDispose(tsn, "ExitEpoch");
         _epochManager.ExitScopeUnordered();
         var owningUow = OwnsUnitOfWork ? OwningUnitOfWork : null;
+        dbe.LogTxDispose(tsn, "ChainRemove");
         _dbe.TransactionChain.Remove(this);
-        owningUow?.Dispose();
+        if (owningUow != null)
+        {
+            dbe.LogTxDispose(tsn, "UoWDispose");
+            owningUow.Dispose();
+        }
+        dbe.LogTxDispose(tsn, "ExitEpochAndRemoveDone");
     }
 
     public long CreateEntity<T>(ref T t) where T : unmanaged
@@ -538,14 +561,17 @@ public unsafe class Transaction : IDisposable
     {
         AssertThreadAffinity();
         var componentType = typeof(T);
-        
+
         // Fetch the cached info or create it if it's the first time we've operated on this Component type
+        _dbe.LogCommitPhase(TSN, $"CreateComponent<{componentType.Name}> pk={pk}: GetComponentInfo");
         var info = GetComponentInfo(componentType);
 
         // Allocate the chunk that will store the component's chunk
+        _dbe.LogCommitPhase(TSN, $"CreateComponent<{componentType.Name}> pk={pk}: AllocateChunk");
         var componentChunkId = info.CompContentSegment.AllocateChunk(false);
 
         // Allocate the component revision storage as it's a new component
+        _dbe.LogCommitPhase(TSN, $"CreateComponent<{componentType.Name}> pk={pk}: AllocCompRevStorage");
         var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, componentChunkId);
 
         var entry = new ComponentInfo.CompRevInfo
@@ -561,6 +587,7 @@ public unsafe class Transaction : IDisposable
         info.AddNew(pk, entry);
 
         // Copy the component data
+        _dbe.LogCommitPhase(TSN, $"CreateComponent<{componentType.Name}> pk={pk}: GetChunkAsSpan");
         int compSize = info.ComponentTable.ComponentStorageSize;
         var dst = info.CompContentAccessor.GetChunkAsSpan(componentChunkId, true);
         new Span<byte>(Unsafe.AsPointer(ref comp), compSize).CopyTo(dst.Slice(info.ComponentTable.ComponentOverhead));
@@ -570,7 +597,7 @@ public unsafe class Transaction : IDisposable
     {
         AssertThreadAffinity();
         var componentType = typeof(T);
-        
+
         // Fetch the cached info or create it if it's the first time we've operated on this Component type
         var info = GetComponentInfo(componentType);
 
@@ -1430,6 +1457,8 @@ public unsafe class Transaction : IDisposable
 
         var startTicks = Stopwatch.GetTimestamp();
 
+        _dbe.LogCommitStart(TSN, _componentInfos.Count);
+
         // ── Holdoff: entire commit loop runs to completion ──
         using var holdoff = ctx.EnterHoldoff();
 
@@ -1451,18 +1480,24 @@ public unsafe class Transaction : IDisposable
         context.TailTSN = _dbe.TransactionChain.MinTSN;
         _dbe.TransactionChain.Control.ExitSharedAccess();
 
+        _dbe.LogCommitPhase(TSN, "CommitComponentCore");
+
         // Process every Component Type and their components
         var commitAction = new CommitAction { Tx = this };
         foreach (var kvp in _componentInfos)
         {
             context.Info = kvp.Value;
+            _dbe.LogCommitPhase(TSN, $"CommitComponent {kvp.Key.Name} ({kvp.Value.EntryCount} entries)");
 
             // Start a sub-span for this component type
             using var componentActivity = TyphonActivitySource.StartActivity("Transaction.CommitComponentCore");
             componentActivity?.SetTag(TyphonSpanAttributes.ComponentType, kvp.Key.Name);
 
             kvp.Value.ForEachMutableEntry(ref context, ref commitAction);
+            _dbe.LogCommitPhase(TSN, $"CommitComponent {kvp.Key.Name} done");
         }
+
+        _dbe.LogCommitPhase(TSN, "DeferredCleanup");
 
         // Enqueue current transaction's entities for deferred cleanup (single lock acquire for all entities).
         // Processing happens in Dispose (after cached indices are no longer relevant) or via FlushDeferredCleanups.
@@ -1481,7 +1516,9 @@ public unsafe class Transaction : IDisposable
         activity?.SetTag(TyphonSpanAttributes.TransactionConflictDetected, hasConflict);
         activity?.SetTag(TyphonSpanAttributes.TransactionStatus, "committed");
 
+        _dbe.LogCommitPhase(TSN, "PersistAndFinalize");
         PersistAndFinalize(ref ctx, startTicks);
+        _dbe.LogCommitPhase(TSN, "Complete");
         return true;
     }
 

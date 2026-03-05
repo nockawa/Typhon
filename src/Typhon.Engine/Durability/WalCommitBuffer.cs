@@ -153,6 +153,15 @@ public sealed unsafe class WalCommitBuffer : IDisposable
     /// <summary>Number of claims currently in-flight (claimed but not yet published/abandoned).</summary>
     internal int InflightCount => _inflightCount;
 
+    /// <summary>Current drain position (consumer read head).</summary>
+    internal long DrainPosition => _drainPosition;
+
+    /// <summary>Current tail position (producer write head).</summary>
+    internal long TailPosition => Interlocked.Read(ref _tailPosition);
+
+    /// <summary>Current swap state (0=Normal, 1=Requested, 2=Draining).</summary>
+    internal int SwapState => _swapState;
+
     // ═══════════════════════════════════════════════════════════════════════
     // TryClaim — Atomic Space Allocation (Producer, lock-free)
     // ═══════════════════════════════════════════════════════════════════════

@@ -67,7 +67,7 @@ internal sealed class WalSegmentReader : IDisposable
             return false;
         }
 
-        using var handle = _fileIO.OpenSegment(path, withFUA: false);
+        using var handle = _fileIO.OpenSegmentForRead(path);
 
         // Read the header (first 4096 bytes)
         var headerBuffer = new byte[WalSegmentHeader.SizeInBytes];

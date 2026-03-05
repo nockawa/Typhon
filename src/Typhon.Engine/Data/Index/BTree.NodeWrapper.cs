@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Typhon.Engine;
@@ -38,6 +39,15 @@ public abstract partial class BTree<TKey>
         /// Creates an OlcLatch for this node by obtaining a ref to its OlcVersion field.
         /// </summary>
         internal OlcLatch GetLatch(ref ChunkAccessor accessor) => new OlcLatch(ref _storage.GetOlcVersionRef(ChunkId, ref accessor));
+
+        /// <summary>
+        /// Pre-dirties the page containing this node so that <see cref="ChunkAccessor.MarkSlotDirty"/>
+        /// increments ActiveChunkWriters BEFORE the OLC TryWriteLock modifies the page.
+        /// This ensures checkpoint skips pages with in-flight OLC mutations.
+        /// Must be called before every TryWriteLock/SpinWriteLock on a write path.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void PreDirtyForWrite(ref ChunkAccessor accessor) => accessor.PreDirtyChunk(ChunkId);
 
         public bool IsValid => _storage != null && ChunkId != 0;
 

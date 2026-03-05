@@ -1,19 +1,22 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Typhon.Schema.Definition;
+using Typhon.Shell.Extensibility;
 
 namespace Typhon.Shell.Schema;
 
 /// <summary>
 /// Loads component types from a compiled .NET assembly by scanning for [Component] attributes.
 /// Builds ComponentSchema instances for text-to-binary conversion.
+/// Also discovers <see cref="ShellCommand"/> subclasses contributed by extension assemblies.
 /// </summary>
 internal static class AssemblySchemaLoader
 {
-    public static List<(string Name, Type Type, ComponentSchema Schema)> LoadAssembly(string path)
+    public static (Assembly Assembly, List<(string Name, Type Type, ComponentSchema Schema)> Components) LoadAssembly(string path)
     {
         var assembly = Assembly.LoadFrom(path);
         var results = new List<(string, Type, ComponentSchema)>();
@@ -38,7 +41,105 @@ internal static class AssemblySchemaLoader
             }
         }
 
+        return (assembly, results);
+    }
+
+    /// <summary>
+    /// Scans an already-loaded assembly for non-abstract classes that inherit <see cref="ShellCommand"/>
+    /// and instantiates them via parameterless constructor.
+    /// </summary>
+    public static List<ShellCommand> LoadCommands(Assembly assembly)
+    {
+        var commands = new List<ShellCommand>();
+        ScanAssemblyForCommands(assembly, commands);
+        return commands;
+    }
+
+    /// <summary>
+    /// Discovers shell commands from sibling DLLs in the same directory as <paramref name="loadedAssemblyPath"/>.
+    /// Scans all .dll files that haven't already been loaded, looking for <see cref="ShellCommand"/> subclasses.
+    /// Returns the list of commands with their source assembly name for reporting.
+    /// </summary>
+    public static List<(ShellCommand Command, string AssemblyName)> DiscoverCommandsInDirectory(string loadedAssemblyPath, HashSet<string> alreadyScanned)
+    {
+        var results = new List<(ShellCommand, string)>();
+        var directory = Path.GetDirectoryName(Path.GetFullPath(loadedAssemblyPath));
+        if (directory == null)
+        {
+            return results;
+        }
+
+        var extensibilityName = typeof(ShellCommand).Assembly.GetName().Name;
+
+        foreach (var dll in Directory.GetFiles(directory, "*.dll"))
+        {
+            var fullPath = Path.GetFullPath(dll);
+            if (alreadyScanned.Contains(fullPath))
+            {
+                continue;
+            }
+
+            alreadyScanned.Add(fullPath);
+
+            try
+            {
+                // Quick check: only load assemblies that reference the extensibility assembly
+                var asm = Assembly.LoadFrom(fullPath);
+
+                var referencesExtensibility = false;
+                foreach (var refName in asm.GetReferencedAssemblies())
+                {
+                    if (string.Equals(refName.Name, extensibilityName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        referencesExtensibility = true;
+                        break;
+                    }
+                }
+
+                if (!referencesExtensibility)
+                {
+                    continue;
+                }
+
+                var commands = new List<ShellCommand>();
+                ScanAssemblyForCommands(asm, commands);
+
+                foreach (var cmd in commands)
+                {
+                    results.Add((cmd, asm.GetName().Name));
+                }
+            }
+            catch
+            {
+                // Skip assemblies that can't be loaded (not managed, wrong target, etc.)
+            }
+        }
+
         return results;
+    }
+
+    private static void ScanAssemblyForCommands(Assembly assembly, List<ShellCommand> commands)
+    {
+        foreach (var type in assembly.GetExportedTypes())
+        {
+            if (type.IsAbstract || type.IsInterface || !type.IsClass)
+            {
+                continue;
+            }
+
+            if (!typeof(ShellCommand).IsAssignableFrom(type))
+            {
+                continue;
+            }
+
+            if (type.GetConstructor(Type.EmptyTypes) == null)
+            {
+                continue;
+            }
+
+            var command = (ShellCommand)Activator.CreateInstance(type);
+            commands.Add(command);
+        }
     }
 
     private static ComponentSchema BuildSchema(Type type, ComponentAttribute componentAttr, string assemblyPath)

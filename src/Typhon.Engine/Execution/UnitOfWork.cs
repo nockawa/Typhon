@@ -185,8 +185,14 @@ public sealed class UnitOfWork : IDisposable
             var currentLsn = walManager.CommitBuffer.NextLsn - 1;
             if (currentLsn > 0)
             {
-                var ctx = _deadline == Deadline.Infinite ? WaitContext.Null : WaitContext.FromDeadline(_deadline);
+                _dbe.LogUowFlushStart(_uowId, _durabilityMode, currentLsn);
+                // Use the UoW's deadline if bounded; otherwise fall back to DefaultCommitTimeout
+                // to prevent infinite hangs (especially for Deferred UoWs with Deadline.Infinite).
+                var ctx = _deadline == Deadline.Infinite
+                    ? WaitContext.FromTimeout(TimeoutOptions.Current.DefaultCommitTimeout)
+                    : WaitContext.FromDeadline(_deadline);
                 walManager.WaitForDurable(currentLsn, ref ctx);
+                _dbe.LogUowFlushComplete(_uowId);
             }
 
             _state = UnitOfWorkState.WalDurable;
@@ -232,8 +238,21 @@ public sealed class UnitOfWork : IDisposable
 
         if (_dbe.WalManager != null)
         {
-            // WAL mode: always flush to ensure WAL durability
-            _ = FlushAsync();
+            // WAL mode: Deferred UoWs skip flush — WAL records are already in the commit
+            // buffer and will be written by the WAL writer thread asynchronously.
+            // Non-Deferred modes: flush for durability guarantee on dispose.
+            if (_durabilityMode != DurabilityMode.Deferred)
+            {
+                _ = FlushAsync();
+            }
+
+            // WAL mode: balance DirtyCounter to prevent inflation.
+            // In WAL mode, ChangeSet pages are never written via SaveChangesAsync — only checkpoint
+            // writes them. Each UoW's ChangeSet incremented DirtyCounter for pages it touched, but the
+            // balancing DecrementDirty (from SavePages completion) never runs. Cap at 1 so that:
+            //   (a) Pages stay dirty for checkpoint (counter >= 1)
+            //   (b) One checkpoint cycle makes them evictable (1 → 0)
+            ChangeSet?.ReleaseExcessDirtyMarks();
         }
         else if (_durabilityMode == DurabilityMode.Deferred)
         {
@@ -249,7 +268,7 @@ public sealed class UnitOfWork : IDisposable
         }
         else
         {
-            // GroupCommit / Immediate: flush on dispose for convenience
+            // GroupCommit / Immediate WAL-less: flush on dispose for convenience
             _ = FlushAsync();
         }
 

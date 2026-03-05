@@ -14,9 +14,11 @@
         <Project Path="src/Typhon.Engine/Typhon.Engine.csproj" />
         <Project Path="src/Typhon.Schema.Definition/Typhon.Schema.Definition.csproj" />
         <Project Path="src/Typhon.Shell/Typhon.Shell.csproj" />
+        <Project Path="src/Typhon.Shell.Extensibility/Typhon.Shell.Extensibility.csproj" />
     </Folder>
     <Folder Name="/test/">
         <Project Path="test/Typhon.ARPG.Schema/Typhon.ARPG.Schema.csproj" />
+        <Project Path="test/Typhon.ARPG.Shell/Typhon.ARPG.Shell.csproj" />
         <Project Path="test/Typhon.Benchmark/Typhon.Benchmark.csproj" />
         <Project Path="test/Typhon.Engine.Tests/Typhon.Engine.Tests.csproj" />
         <Project Path="test/Typhon.MonitoringDemo/Typhon.MonitoringDemo.csproj" />

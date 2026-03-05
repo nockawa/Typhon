@@ -292,7 +292,7 @@ public class SeqlockProtocolTests : AllocatorTestBase
 
         // Checkpoint: snapshot via seqlock, stamp CRC, write to disk
         using var stagingPool = new StagingBufferPool(MemoryAllocator, AllocationResource, StagingBufferPool.MinCapacity);
-        _mmf.WritePagesForCheckpoint([memPageIdx], stagingPool);
+        _mmf.WritePagesForCheckpoint([memPageIdx], stagingPool, out _);
 
         // Read page back from disk and verify
         var diskPage = new byte[PagedMMF.PageSize];
@@ -370,7 +370,7 @@ public class SeqlockProtocolTests : AllocatorTestBase
 
         for (int i = 0; i < checkpointIterations; i++)
         {
-            _mmf.WritePagesForCheckpoint([memPageIdx], stagingPool);
+            _mmf.WritePagesForCheckpoint([memPageIdx], stagingPool, out _);
 
             var diskPage = new byte[PagedMMF.PageSize];
             _mmf.ReadPageDirect(filePageIndex, diskPage);
@@ -439,7 +439,7 @@ public class SeqlockProtocolTests : AllocatorTestBase
 
         for (int i = 0; i < checkpointIterations; i++)
         {
-            _mmf.WritePagesForCheckpoint(memPageIndices, stagingPool);
+            _mmf.WritePagesForCheckpoint(memPageIndices, stagingPool, out _);
 
             // Verify each page independently
             for (int p = 0; p < pageCount; p++)

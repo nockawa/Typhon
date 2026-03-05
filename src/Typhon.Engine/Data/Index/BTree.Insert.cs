@@ -126,6 +126,7 @@ public abstract partial class BTree<TKey>
                     int order = args.Compare(args.Key, lastKey);
                     if (order > 0)
                     {
+                        rl.PreDirtyForWrite(ref accessor);
                         if (!latch.TryWriteLock())
                         {
                             return OlcInsertResult.Restart;
@@ -156,6 +157,7 @@ public abstract partial class BTree<TKey>
                     {
                         if (AllowMultiple)
                         {
+                            rl.PreDirtyForWrite(ref accessor);
                             if (!latch.TryWriteLock())
                             {
                                 return OlcInsertResult.Restart;
@@ -197,6 +199,7 @@ public abstract partial class BTree<TKey>
                     int order = args.Compare(args.Key, firstKey);
                     if (order < 0)
                     {
+                        ll.PreDirtyForWrite(ref accessor);
                         if (!llLatch.TryWriteLock())
                         {
                             return OlcInsertResult.Restart;
@@ -222,6 +225,7 @@ public abstract partial class BTree<TKey>
                     {
                         if (AllowMultiple)
                         {
+                            ll.PreDirtyForWrite(ref accessor);
                             if (!llLatch.TryWriteLock())
                             {
                                 return OlcInsertResult.Restart;
@@ -253,6 +257,7 @@ public abstract partial class BTree<TKey>
         }
 
         var leaf = new NodeWrapper(_storage, leafChunkId);
+        leaf.PreDirtyForWrite(ref accessor);
         var leafLatch = leaf.GetLatch(ref accessor);
         if (!leafLatch.TryWriteLock())
         {
@@ -330,6 +335,7 @@ public abstract partial class BTree<TKey>
                 var order = IsEmpty() ? 1 : args.Compare(args.Key, _hasCachedLastKey ? _cachedLastKey : rl.GetLast(ref accessor).Key);
                 if (!bypassAppendFastPath && order > 0 && !rl.GetIsFull(ref accessor))
                 {
+                    rl.PreDirtyForWrite(ref accessor);
                     var rlLatch = rl.GetLatch(ref accessor);
                     SpinWriteLock(rlLatch);
                     // Re-validate under lock: leaf may now be full, another writer inserted a larger key,
@@ -349,6 +355,7 @@ public abstract partial class BTree<TKey>
                 }
                 else if (order == 0 && AllowMultiple)
                 {
+                    rl.PreDirtyForWrite(ref accessor);
                     var rlLatch = rl.GetLatch(ref accessor);
                     SpinWriteLock(rlLatch);
                     var lastEntry = rl.GetLast(ref accessor);
@@ -375,6 +382,7 @@ public abstract partial class BTree<TKey>
                 int order = args.Compare(args.Key, ll.GetFirst(ref accessor).Key);
                 if (order < 0 && !ll.GetIsFull(ref accessor))
                 {
+                    ll.PreDirtyForWrite(ref accessor);
                     var llLatch = ll.GetLatch(ref accessor);
                     SpinWriteLock(llLatch);
                     if (!ll.GetIsFull(ref accessor) && args.Compare(args.Key, ll.GetFirst(ref accessor).Key) < 0)
@@ -390,6 +398,7 @@ public abstract partial class BTree<TKey>
                 }
                 else if (order == 0 && AllowMultiple)
                 {
+                    ll.PreDirtyForWrite(ref accessor);
                     var llLatch = ll.GetLatch(ref accessor);
                     SpinWriteLock(llLatch);
                     var firstEntry = ll.GetFirst(ref accessor);
@@ -504,6 +513,7 @@ public abstract partial class BTree<TKey>
         // Phase 1.5A: Lock leaf with version validation.
         // Between Phase 1 descent and lock acquisition, a concurrent writer may have split/modified this leaf. Snapshot the version before locking,
         // then validate after.
+        node.PreDirtyForWrite(ref accessor);
         var leafLatch = node.GetLatch(ref accessor);
         int leafVersion = leafLatch.ReadVersion();
         if (leafVersion == 0)
@@ -542,6 +552,7 @@ public abstract partial class BTree<TKey>
         {
             Interlocked.Increment(ref _moveRightCount);
             var nextNode = node.GetNext(ref accessor);
+            nextNode.PreDirtyForWrite(ref accessor);
             SpinWriteLock(nextNode.GetLatch(ref accessor));
 
             // Gap check: after locking next leaf, verify key belongs there.
@@ -606,6 +617,7 @@ public abstract partial class BTree<TKey>
             var mrNext = node.GetNext(ref accessor);
             if (mrNext.IsValid)
             {
+                mrNext.PreDirtyForWrite(ref accessor);
                 SpinWriteLock(mrNext.GetLatch(ref accessor));
             }
 
@@ -625,10 +637,18 @@ public abstract partial class BTree<TKey>
         // On lock failure: contention split uses WriteUnlock + completed=true (item is in); regular uses AbortWriteLock + restart.
         var leafPrev = itemAlreadyInserted ? default : node.GetPrevious(ref accessor);
         var leafNext = node.GetNext(ref accessor);
+        if (leafPrev.IsValid)
+        {
+            leafPrev.PreDirtyForWrite(ref accessor);
+        }
         if (leafPrev.IsValid && !leafPrev.GetLatch(ref accessor).TryWriteLock())
         {
             node.GetLatch(ref accessor).AbortWriteLock();
             return;
+        }
+        if (leafNext.IsValid)
+        {
+            leafNext.PreDirtyForWrite(ref accessor);
         }
         if (leafNext.IsValid && !leafNext.GetLatch(ref accessor).TryWriteLock())
         {
@@ -651,6 +671,7 @@ public abstract partial class BTree<TKey>
         // Required for ancestor key updates during spill and split propagation.
         for (int i = ctx.Depth - 1; i >= 0; i--)
         {
+            ctx.PathNodes[i].PreDirtyForWrite(ref accessor);
             var pathLatch = ctx.PathNodes[i].GetLatch(ref accessor);
             if (!pathLatch.TryWriteLock())
             {
@@ -745,10 +766,12 @@ public abstract partial class BTree<TKey>
                 rightSib = relatives.GetRightSibling(ref accessor);
                 if (leftSib.IsValid)
                 {
+                    leftSib.PreDirtyForWrite(ref accessor);
                     SpinWriteLock(leftSib.GetLatch(ref accessor));
                 }
                 if (rightSib.IsValid)
                 {
+                    rightSib.PreDirtyForWrite(ref accessor);
                     SpinWriteLock(rightSib.GetLatch(ref accessor));
                 }
             }

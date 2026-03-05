@@ -103,7 +103,7 @@ public partial class ChunkBasedSegment : LogicalSegment
             Manager.UnlatchPageExclusive(memPageIdx);
         }
 
-        _map = new BitmapL3(this, false);
+        _map = new BitmapL3(this, false, l0Only: true);
         ReserveChunk(0);                    // Mark chunk 0 as allocated ("null" sentinel) — data already cleared above
         return true;
     }
@@ -115,7 +115,7 @@ public partial class ChunkBasedSegment : LogicalSegment
             return false;
         }
 
-        _map = new BitmapL3(this, true);
+        _map = new BitmapL3(this, true, l0Only: true);
 
         return true;
     }
@@ -137,21 +137,26 @@ public partial class ChunkBasedSegment : LogicalSegment
         {
             var currentLength = Length;
             var oldMap = _map;
-            
+
             // Calculate new size: double current, or use minimum requested, whichever is larger
-            var newLength = minNewPageCount > 0 
-                ? Math.Max(currentLength * 2, minNewPageCount) 
+            var newLength = minNewPageCount > 0
+                ? Math.Max(currentLength * 2, minNewPageCount)
                 : currentLength * 2;
-            
+
             // Check if we can grow
             if (newLength <= currentLength)
             {
                 return false; // Already at maximum capacity
             }
-            
+
+            // When no external ChangeSet is provided (e.g., from GrowIfNeeded), create a local one to ensure newly allocated pages are marked dirty in
+            // the page cache. Without this, pages modified during growth (raw data cleared, metadata zeroed) can be evicted under cache pressure and
+            // re-loaded from disk with stale content — causing the occupancy bitmap to see "allocated" chunks where there should be free ones.
+            var localChangeSet = changeSet ?? new ChangeSet(Manager);
+
             // Grow the underlying logical segment (thread-safe, will allocate new pages)
-            base.Grow(newLength, clearNewPages: true, changeSet);
-            
+            base.Grow(newLength, clearNewPages: true, localChangeSet);
+
             // Clear the page metadata (bitmap) for newly allocated pages
             // This is critical! The base.Grow only clears raw data, not metadata.
             // Without this, InitFromLoad reads garbage and causes crashes.
@@ -159,20 +164,23 @@ public partial class ChunkBasedSegment : LogicalSegment
                 var epoch = Manager.EpochManager.GlobalEpoch;
                 for (int i = currentLength; i < newLength; i++)
                 {
-                    var page = GetPageExclusive(i, epoch, out var memPageIdx);
+                    var page = GetPageExclusiveUnchecked(i, epoch, out var memPageIdx);
                     int longSize = (ChunkCountPerPage + 63) >> 6;
                     page.Metadata<long>(0, longSize).Clear();
-                    changeSet?.AddByMemPageIndex(memPageIdx);
+                    localChangeSet.AddByMemPageIndex(memPageIdx);
                     Manager.UnlatchPageExclusive(memPageIdx);
                 }
             }
-            
-            // Create new bitmap by extending the old one incrementally.
-            // This avoids re-scanning ALL pages (which could deadlock if the caller
-            // holds pages via ChunkAccessor). Instead, we copy state from the old
-            // bitmap and rely on the fact that new pages are guaranteed empty.
+
+            // Note: we intentionally do NOT call SaveChanges on the local ChangeSet. The IncrementDirty calls from AddByMemPageIndex are sufficient — they
+            // prevent the page cache from evicting these pages with stale disk data. In WAL mode, calling SaveChanges would bypass the WAL write path and
+            // cause file lock conflicts. The dirty marks will be cleaned up naturally: transaction ChangeSets will track these pages when chunks are allocated,
+            // and checkpoint will eventually write them to stable storage.
+
+            // Create new bitmap by extending the old one incrementally. This avoids re-scanning ALL pages (which could deadlock if the caller holds pages via
+            // ChunkAccessor). Instead, we copy state from the old bitmap and rely on the fact that new pages are guaranteed empty.
             _map = new BitmapL3(this, oldMap, currentLength);
-            
+
             return true;
         }
     }
@@ -224,8 +232,7 @@ public partial class ChunkBasedSegment : LogicalSegment
     public void ReserveChunk(int index) => _map.SetL0(index);
 
     /// <summary>
-    /// Reserves a specific chunk by index. If the chunk was not previously reserved and <paramref name="clearContent"/> is true,
-    /// the chunk data is zeroed.
+    /// Reserves a specific chunk by index. If the chunk was not previously reserved and <paramref name="clearContent"/> is true, the chunk data is zeroed.
     /// </summary>
     /// <returns>True if the chunk was newly reserved; false if it was already reserved.</returns>
     public void ReserveChunk(int index, bool clearContent, ChangeSet changeSet = null)
@@ -258,16 +265,32 @@ public partial class ChunkBasedSegment : LogicalSegment
     public int AllocateChunk(bool clearContent)
     {
         var mem = SingleAlloc.Value;
-        
+        var loopCount = 0;
+
         while (true)
         {
             var map = _map; // Volatile read
-            
+
             if (map.Allocate(mem, clearContent))
             {
-                return mem.Span[0];
+                var chunkId = mem.Span[0];
+                // Verify allocated chunk is within segment bounds
+                if (chunkId >= ChunkCapacity)
+                {
+                    throw new InvalidOperationException(
+                        $"ChunkBasedSegment.AllocateChunk: bitmap returned chunkId={chunkId} >= ChunkCapacity={ChunkCapacity} " +
+                        $"(pages={Length}, rootChunks={_rootChunkCount}, otherChunks={_otherChunkCount})");
+                }
+                return chunkId;
             }
-            
+
+            loopCount++;
+
+            if (loopCount > 100)
+            {
+                throw new InvalidOperationException($"ChunkBasedSegment.AllocateChunk infinite loop: FreeChunkCount={_map.FreeChunkCount}, ChunkCapacity={ChunkCapacity}, AllocatedChunkCount={AllocatedChunkCount}");
+            }
+
             // Allocation failed - need to grow
             if (!GrowIfNeeded())
             {

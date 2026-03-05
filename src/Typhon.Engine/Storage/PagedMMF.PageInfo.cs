@@ -34,6 +34,21 @@ public partial class PagedMMF
         /// </summary>
         public bool CrcVerified;
 
+        /// <summary>
+        /// Number of <see cref="ChunkAccessor"/> instances that have marked this page dirty in their local
+        /// <c>_dirtyFlags</c> bitmask but have not yet flushed via <see cref="ChunkAccessor.CommitChanges"/>.
+        /// <para>
+        /// While &gt; 0, the page may contain partially-written B+Tree data (e.g., a node with odd OLC version).
+        /// <see cref="WritePagesForCheckpoint"/> skips such pages to avoid writing inconsistent snapshots to disk.
+        /// The page stays dirty and will be captured in the next checkpoint cycle after the writers commit.
+        /// </para>
+        /// <para>
+        /// Accessed via <see cref="Interlocked"/> from multiple threads (writer threads increment/decrement,
+        /// checkpoint thread reads). Plain reads are safe on x64 TSO after Interlocked barriers on writer side.
+        /// </para>
+        /// </summary>
+        public int ActiveChunkWriters;
+
         private int _clockSweepCounter;
         private Lazy<Task<int>> _ioReadTask;
 

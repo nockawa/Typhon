@@ -6,6 +6,7 @@ using PrettyPrompt;
 using PrettyPrompt.Completion;
 using PrettyPrompt.Documents;
 using PrettyPrompt.Highlighting;
+using Typhon.Shell.Extensibility;
 using Typhon.Shell.Session;
 
 namespace Typhon.Shell;
@@ -32,6 +33,7 @@ internal sealed class TshPromptCallbacks : PromptCallbacks
         "btree", "btree-dump", "btree-validate",
         "revisions", "mvcc-stats",
         "transactions", "memory", "resources",
+        "stats-show", "stats-rebuild",
         // Phase 5: Schema Inspection
         "schema-fields", "schema-diff", "schema-validate", "schema-history", "schema-export"
     ];
@@ -39,7 +41,8 @@ internal sealed class TshPromptCallbacks : PromptCallbacks
     // Commands that take a component name as next argument
     private static readonly HashSet<string> ComponentCommands = new(StringComparer.OrdinalIgnoreCase)
     {
-        "create", "read", "update", "delete", "describe", "mvcc-stats"
+        "create", "read", "update", "delete", "describe", "mvcc-stats",
+        "stats-show", "stats-rebuild"
     };
 
     // Commands that take a component name as second arg (after entity ID)
@@ -73,7 +76,7 @@ internal sealed class TshPromptCallbacks : PromptCallbacks
         // Phase 2
         "cache-stats", "cache-pages", "page-dump", "segments", "segment-detail",
         "btree", "btree-dump", "btree-validate", "revisions", "mvcc-stats",
-        "transactions", "memory", "resources", "where",
+        "transactions", "memory", "resources", "stats-show", "stats-rebuild", "where",
         // Phase 5
         "schema-fields", "schema-diff", "schema-validate", "schema-history", "schema-export"
     };
@@ -99,6 +102,19 @@ internal sealed class TshPromptCallbacks : PromptCallbacks
                     items.Add(new CompletionItem(
                         replacementText: cmd,
                         getExtendedDescription: _ => Task.FromResult<FormattedString>(GetCommandDescription(cmd))
+                    ));
+                }
+            }
+
+            // Extension commands
+            foreach (var kvp in _session.CustomCommands)
+            {
+                if (kvp.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    var desc = kvp.Value.Description;
+                    items.Add(new CompletionItem(
+                        replacementText: kvp.Key,
+                        getExtendedDescription: _ => Task.FromResult<FormattedString>(desc)
                     ));
                 }
             }
@@ -269,7 +285,7 @@ internal sealed class TshPromptCallbacks : PromptCallbacks
 
                 var word = text[start..i];
 
-                if (Keywords.Contains(word))
+                if (Keywords.Contains(word) || _session.CustomCommands.ContainsKey(word))
                 {
                     spans.Add(new FormatSpan(start, i - start, AnsiColor.BrightBlue));
                 }
@@ -323,6 +339,8 @@ internal sealed class TshPromptCallbacks : PromptCallbacks
             "transactions"   => "Active transaction list",
             "memory"         => "Memory usage by subsystem",
             "resources"      => "Resource graph explorer",
+            "stats-show"     => "Index statistics & histogram",
+            "stats-rebuild"  => "Rebuild histograms for indexes",
             // Phase 5: Schema Inspection
             "schema-fields"   => "Show persisted FieldId assignments",
             "schema-diff"     => "Compare persisted vs runtime schema",

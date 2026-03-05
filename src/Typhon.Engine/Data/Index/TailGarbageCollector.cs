@@ -24,7 +24,7 @@ namespace Typhon.Engine;
 /// <para>
 /// <b>Zombie BTree key cleanup:</b> After Prune empties a TAIL buffer, if the HEAD buffer for that key is also empty (due to preserveEmptyBuffer), the BTree
 /// key is a zombie that serves no purpose. The caller (GC integration layer) should detect this case and remove the BTree key entirely using
-/// <c>IBTree.Remove</c>. This is NOT handled inside Prune because it requires access to the BTree, which is outside the TAIL segment's scope.
+/// <c>BTreeBase.Remove</c>. This is NOT handled inside Prune because it requires access to the BTree, which is outside the TAIL segment's scope.
 /// </para>
 /// </remarks>
 internal static class TailGarbageCollector

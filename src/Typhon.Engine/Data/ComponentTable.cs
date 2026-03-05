@@ -136,7 +136,7 @@ internal struct IndexedFieldInfo
     public int Size;
 
     public int OffsetToIndexElementId;
-    public IBTree Index;
+    public BTreeBase Index;
 }
 
 [PublicAPI]
@@ -186,6 +186,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     /// </summary>
     internal ushort WalTypeId { get; set; }
     internal IndexedFieldInfo[] IndexedFieldInfos { get; private set; }
+    internal IndexStatistics[] IndexStats { get; private set; }
     internal ViewRegistry ViewRegistry { get; private set; }
 
     internal Dictionary<int, VariableSizedBufferSegmentBase> ComponentCollectionVSBSByOffset { get; private set; }
@@ -439,6 +440,12 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         }
 
         IndexedFieldInfos = l.ToArray();
+
+        IndexStats = new IndexStatistics[IndexedFieldInfos.Length];
+        for (var i = 0; i < IndexedFieldInfos.Length; i++)
+        {
+            IndexStats[i] = new IndexStatistics(IndexedFieldInfos[i].Index);
+        }
     }
 
     /// <summary>
@@ -521,18 +528,18 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     /// Creates a B+Tree index for a field on the given segment. Used by schema evolution to pre-create indexes
     /// on existing segments before the ComponentTable is fully loaded.
     /// </summary>
-    internal static IBTree CreateIndexForFieldStatic(DBComponentDefinition.Field field, short stableId, bool load, ChunkBasedSegment segment, 
+    internal static BTreeBase CreateIndexForFieldStatic(DBComponentDefinition.Field field, short stableId, bool load, ChunkBasedSegment segment, 
         ChangeSet changeSet = null) => CreateIndexForFieldCore(field, stableId, load, segment, changeSet);
 
-    private IBTree CreateIndexForField(DBComponentDefinition.Field field, short stableId, bool load = false, ChangeSet changeSet = null)
+    private BTreeBase CreateIndexForField(DBComponentDefinition.Field field, short stableId, bool load = false, ChangeSet changeSet = null)
     {
         var s = field.Type == FieldType.String64 ? String64IndexSegment : DefaultIndexSegment;
         return CreateIndexForFieldCore(field, stableId, load, s, changeSet);
     }
 
-    private static IBTree CreateIndexForFieldCore(DBComponentDefinition.Field field, short stableId, bool load, ChunkBasedSegment s, ChangeSet changeSet = null)
+    private static BTreeBase CreateIndexForFieldCore(DBComponentDefinition.Field field, short stableId, bool load, ChunkBasedSegment s, ChangeSet changeSet = null)
     {
-        IBTree index = field.Type switch
+        BTreeBase index = field.Type switch
         {
             FieldType.Byte     => field.IndexAllowMultiple ? new ByteMultipleBTree      (s, load, stableId, changeSet) : new ByteSingleBTree    (s, load, stableId, changeSet),
             FieldType.Short    => field.IndexAllowMultiple ? new ShortMultipleBTree     (s, load, stableId, changeSet) : new ShortSingleBTree   (s, load, stableId, changeSet),

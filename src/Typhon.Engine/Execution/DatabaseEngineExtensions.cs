@@ -27,7 +27,9 @@ public static class DatabaseEngineExtensions
     public static Transaction CreateQuickTransaction(this DatabaseEngine dbe, DurabilityMode durabilityMode = DurabilityMode.Deferred)
     {
         var uow = dbe.CreateUnitOfWork(durabilityMode);
+        dbe.LogUowLifecycle("CreateQuickTransaction: UoW created, calling CreateTransaction");
         var tx = uow.CreateTransaction();
+        dbe.LogUowLifecycle($"CreateQuickTransaction: Tx #{tx.TSN} created");
         tx.OwnsUnitOfWork = true;
         return tx;
     }

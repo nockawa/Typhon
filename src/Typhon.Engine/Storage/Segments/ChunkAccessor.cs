@@ -10,7 +10,7 @@ namespace Typhon.Engine;
 /// <summary>
 /// Epoch-protected chunk accessor with pure SOA layout and SIMD-optimized search.
 /// Replaces ref-counted page access with epoch-based protection for page lifetime.
-/// ~252 bytes (4 cache lines). Always pass by ref to avoid copies.
+/// Always pass by ref to avoid copies.
 /// </summary>
 /// <remarks>
 /// <para><b>Three-tier hot path:</b></para>
@@ -23,7 +23,7 @@ namespace Typhon.Engine;
 /// Dirty tracking uses a bitmask flushed to <see cref="ChangeSet"/> via
 /// <see cref="ChangeSet.AddByMemPageIndex"/>.</para>
 /// </remarks>
-[NoCopy(Reason = "~252 byte struct with mutable SIMD cache and epoch-pinned pages")]
+[NoCopy(Reason = "struct with mutable SIMD cache and epoch-pinned pages")]
 [StructLayout(LayoutKind.Sequential)]
 public unsafe struct ChunkAccessor : IDisposable
 {
@@ -38,6 +38,14 @@ public unsafe struct ChunkAccessor : IDisposable
     private byte _clockHand;                   // 1 byte — eviction cursor
     private byte _mruSlot;                     // 1 byte — most recently used slot
     private byte _usedSlots;                   // 1 byte — high water mark (0-16)
+
+    // === Deferred ACW tracking ===
+    // When a dirty slot is evicted, its ACW decrement is deferred until CommitChanges/Dispose.
+    // This prevents checkpoint from snapshotting a page while an OLC write lock is still held
+    // (the lock was acquired after PreDirtyForWrite incremented ACW, but the slot was evicted
+    // before the lock was released).
+    private byte _deferredACWCount;            // 1 byte — number of deferred ACW decrements
+    private fixed int _deferredACWPages[240];  // 960 bytes — memPageIndices awaiting ACW decrement
 
     // === Cached hot-path values ===
     private int _stride;                       // 4 bytes — chunk size in bytes
@@ -56,6 +64,7 @@ public unsafe struct ChunkAccessor : IDisposable
     // === Constants ===
     private const int Capacity = 16;
     private const int InvalidPageIndex = -1;
+    private const int DeferredACWCapacity = 240;
 
     public ChunkBasedSegment Segment => _segment;
 
@@ -97,6 +106,7 @@ public unsafe struct ChunkAccessor : IDisposable
         _usedSlots = 0;
         _clockHand = 0;
         _dirtyFlags = 0;
+        _deferredACWCount = 0;
         _stride = segment.Stride;
         _rootHeaderOffset = segment.RootChunkDataOffset;
         _otherHeaderOffset = segment.OtherChunkDataOffset;
@@ -106,6 +116,60 @@ public unsafe struct ChunkAccessor : IDisposable
         fixed (int* pageIndices = _pageIndices)
         {
             Unsafe.InitBlockUnaligned(pageIndices, 0xFF, 64);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Eager dirty tracking
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Marks a slot dirty and signals the page as actively being written.
+    /// <para>
+    /// Three protections are applied on the 0→1 dirty transition for each slot:
+    /// <list type="number">
+    ///   <item><b>ActiveChunkWriters</b>: Atomically incremented so that <see cref="PagedMMF.WritePagesForCheckpoint"/>
+    ///   skips this page (CAS sentinel). This prevents checkpoint from capturing a snapshot with partially-written
+    ///   B+Tree data (e.g., a node with odd OLC version).</item>
+    ///   <item><b>ChangeSet</b>: Eagerly registered via <see cref="ChangeSet.AddByMemPageIndex"/> so that
+    ///   dirty pages are tracked for writeback. On first registration, ChangeSet itself bumps DirtyCounter to 1.</item>
+    ///   <item><b>DirtyCounter guard</b>: On first ChangeSet registration, an extra <see cref="PagedMMF.IncrementDirty"/>
+    ///   brings DC to 2 (survives one checkpoint cycle). On subsequent accessor rentals within the same UoW
+    ///   (where AddByMemPageIndex is idempotent due to HashSet dedup), <see cref="PagedMMF.EnsureDirtyAtLeast"/>
+    ///   raises DC to 1 if checkpoint has drained it to 0, preventing premature eviction by the clock-sweep.
+    ///   This is safe because ACW &gt; 0 blocks checkpoint from writing the page mid-modification, so DC can only
+    ///   reach 0 AFTER a completed checkpoint write (on-disk version up to date).
+    ///   <see cref="ChangeSet.ReleaseExcessDirtyMarks"/> caps DC at 1 when the UoW disposes.</item>
+    /// </list>
+    /// </para>
+    /// ActiveChunkWriters is decremented in <see cref="CommitChanges"/> for live slots, and deferred
+    /// via <see cref="_deferredACWPages"/> for evicted slots.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void MarkSlotDirty(int slot)
+    {
+        var mask = (ushort)(1 << slot);
+        if ((_dirtyFlags & mask) == 0)
+        {
+            _dirtyFlags |= mask;
+            var memPageIndex = GetMemPageIndexFromSlot(slot);
+            _pagedMMF.IncrementActiveChunkWriters(memPageIndex);
+            if (_changeSet != null)
+            {
+                if (_changeSet.AddByMemPageIndex(memPageIndex))
+                {
+                    // First registration for this page in this ChangeSet: ChangeSet already bumped DC to 1,
+                    // add a second increment so DC=2 survives one checkpoint DecrementDirty cycle.
+                    _pagedMMF.IncrementDirty(memPageIndex);
+                }
+                else
+                {
+                    // Page already tracked by ChangeSet (re-dirtied in a subsequent accessor rental).
+                    // Checkpoint may have drained DC to 0 since the first registration. Raise to at least 1
+                    // so the page stays unevictable while we're about to write to it.
+                    _pagedMMF.EnsureDirtyAtLeast(memPageIndex, 1);
+                }
+            }
         }
     }
 
@@ -135,6 +199,13 @@ public unsafe struct ChunkAccessor : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public ReadOnlySpan<byte> GetChunkAsReadOnlySpan(int index) => new(GetChunkAddress(index, false), _stride);
 
+    /// <summary>
+    /// Loads and marks a chunk's page as dirty without returning a pointer.
+    /// Used by B+Tree to pre-dirty pages before OLC TryWriteLock, ensuring ACW blocks checkpoint.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void PreDirtyChunk(int chunkId) => GetChunkAddress(chunkId, dirty: true);
+
     internal void ClearChunk(int index)
     {
         var addr = GetChunkAddress(index);
@@ -156,7 +227,7 @@ public unsafe struct ChunkAccessor : IDisposable
             var mask0 = Vector256.Equals(v0, target).ExtractMostSignificantBits();
             if (mask0 != 0)
             {
-                _dirtyFlags |= (ushort)(1 << BitOperations.TrailingZeroCount(mask0));
+                MarkSlotDirty(BitOperations.TrailingZeroCount(mask0));
                 return;
             }
 
@@ -164,7 +235,7 @@ public unsafe struct ChunkAccessor : IDisposable
             var mask1 = Vector256.Equals(v1, target).ExtractMostSignificantBits();
             if (mask1 != 0)
             {
-                _dirtyFlags |= (ushort)(1 << (8 + BitOperations.TrailingZeroCount(mask1)));
+                MarkSlotDirty(8 + BitOperations.TrailingZeroCount(mask1));
             }
         }
     }
@@ -174,23 +245,50 @@ public unsafe struct ChunkAccessor : IDisposable
     // ═══════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Flush dirty bitmask to ChangeSet.
+    /// Flush dirty bitmask to ChangeSet and release ActiveChunkWriters signals.
+    /// For each dirty slot: registers the page with <see cref="ChangeSet"/> (idempotent if already registered
+    /// by <see cref="MarkSlotDirty"/>), then decrements <see cref="PagedMMF.DecrementActiveChunkWriters"/>
+    /// so checkpoint can safely snapshot the page.
+    /// Also flushes deferred ACW decrements from evicted dirty slots.
     /// </summary>
     public void CommitChanges()
     {
-        if (_changeSet == null || _dirtyFlags == 0)
+        // Decrement ACW for currently dirty slots
+        if (_dirtyFlags != 0)
+        {
+            var flags = (int)_dirtyFlags;
+            while (flags != 0)
+            {
+                var bit = BitOperations.TrailingZeroCount(flags);
+                var memPageIndex = GetMemPageIndexFromSlot(bit);
+                _changeSet?.AddByMemPageIndex(memPageIndex);
+                _pagedMMF.DecrementActiveChunkWriters(memPageIndex);
+                flags &= ~(1 << bit);
+            }
+            _dirtyFlags = 0;
+        }
+
+        // Flush deferred ACW decrements from evicted dirty slots
+        FlushDeferredACW();
+    }
+
+    /// <summary>
+    /// Decrements ACW for all pages that were deferred during slot eviction.
+    /// Called by CommitChanges and Dispose.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void FlushDeferredACW()
+    {
+        if (_deferredACWCount == 0)
         {
             return;
         }
 
-        var flags = (int)_dirtyFlags;
-        while (flags != 0)
+        for (int i = 0; i < _deferredACWCount; i++)
         {
-            var bit = BitOperations.TrailingZeroCount(flags);
-            _changeSet.AddByMemPageIndex(GetMemPageIndexFromSlot(bit));
-            flags &= ~(1 << bit);
+            _pagedMMF.DecrementActiveChunkWriters(_deferredACWPages[i]);
         }
-        _dirtyFlags = 0;
+        _deferredACWCount = 0;
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -296,7 +394,7 @@ public unsafe struct ChunkAccessor : IDisposable
         {
             if (dirty)
             {
-                _dirtyFlags |= (ushort)(1 << mru);
+                MarkSlotDirty(mru);
             }
 
             var headerOffset = pageIndex == 0 ? _rootHeaderOffset : _otherHeaderOffset;
@@ -341,7 +439,7 @@ public unsafe struct ChunkAccessor : IDisposable
 
         if (dirty)
         {
-            _dirtyFlags |= (ushort)(1 << slotIndex);
+            MarkSlotDirty(slotIndex);
         }
 
         var headerOffset = pageIndex == 0 ? _rootHeaderOffset : _otherHeaderOffset;
@@ -387,7 +485,13 @@ public unsafe struct ChunkAccessor : IDisposable
     }
 
     /// <summary>
-    /// Evict a slot: flush dirty state. No page release — epoch protects lifetime.
+    /// Evict a slot: flush dirty state to ChangeSet and defer ActiveChunkWriters decrement.
+    /// <para>
+    /// ACW decrement is deferred (not done here) because an OLC write lock may still be held on a node in this page. If ACW were decremented now, checkpoint
+    /// could snapshot the page with an odd OLC version (active write lock), causing corruption when the page is later reloaded from disk.
+    /// The deferred decrements are flushed in <see cref="CommitChanges"/> when all B+Tree write locks have been released.
+    /// </para>
+    /// No page release — epoch protects lifetime.
     /// </summary>
     private void EvictSlot(int slot)
     {
@@ -396,11 +500,22 @@ public unsafe struct ChunkAccessor : IDisposable
             return;
         }
 
-        // Flush dirty to ChangeSet before evicting
+        // Flush dirty to ChangeSet before evicting; defer ACW decrement
         var mask = 1 << slot;
-        if ((_dirtyFlags & mask) != 0 && _changeSet != null)
+        if ((_dirtyFlags & mask) != 0)
         {
-            _changeSet.AddByMemPageIndex(GetMemPageIndexFromSlot(slot));
+            var memPageIndex = GetMemPageIndexFromSlot(slot);
+            _changeSet?.AddByMemPageIndex(memPageIndex);
+            // Defer ACW decrement — OLC write lock may still be held on this page.
+            // The deferred queue MUST NOT be flushed here: flushing would decrement ACW for pages that still have active OLC write locks, allowing checkpoint
+            // to snapshot corrupt state.
+            // The queue is sized at 240 entries (byte max - 16 cache slots), which covers even the most extreme split-propagation-with-retries scenarios.
+            if (_deferredACWCount >= DeferredACWCapacity)
+            {
+                throw new InvalidOperationException($"Deferred ACW queue overflow: {_deferredACWCount} entries (capacity={DeferredACWCapacity}). " +
+                    "This indicates too many dirty slot evictions between CommitChanges calls.");
+            }
+            _deferredACWPages[_deferredACWCount++] = memPageIndex;
             _dirtyFlags = (ushort)(_dirtyFlags & ~mask);
         }
 
