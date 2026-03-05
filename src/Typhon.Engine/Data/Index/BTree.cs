@@ -145,7 +145,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
 
     public ref struct InsertArguments
     {
-        public InsertArguments(TKey key, int value, IComparer<TKey> comparer, ref ChunkAccessor accessor)
+        public InsertArguments(TKey key, int value, IComparer<TKey> comparer, ref ChunkAccessor accessor, ref ChunkAccessor sibAccessor)
         {
             _value = value;
             _keyComparer = comparer ?? Comparer<TKey>.Default;
@@ -153,6 +153,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
             Added = false;
             ElementId = 0;
             Accessor = ref accessor;
+            SiblingAccessor = ref sibAccessor;
         }
         public readonly TKey Key;
         public bool Added { get; private set; }
@@ -161,6 +162,8 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         public int BufferRootId;
 
         public ref ChunkAccessor Accessor;
+        /// <summary>Dedicated accessor for horizontal (sibling) navigation — prevents sibling page loads from evicting parent path pages in the primary accessor.</summary>
+        public ref ChunkAccessor SiblingAccessor;
 
         private readonly int _value;
         private readonly IComparer<TKey> _keyComparer;
@@ -205,6 +208,8 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         public readonly TKey Key;
         public readonly IComparer<TKey> Comparer;
         public ref ChunkAccessor Accessor;
+        /// <summary>Dedicated accessor for horizontal (sibling) navigation — prevents sibling page loads from evicting parent path pages in the primary accessor.</summary>
+        public ref ChunkAccessor SiblingAccessor;
 
         /// <summary>
         /// result is set once when the value is found at leaf node.
@@ -216,7 +221,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         /// </summary>
         public bool Removed { get; private set; }
 
-        public RemoveArguments(in TKey key, in IComparer<TKey> comparer, ref ChunkAccessor accessor)
+        public RemoveArguments(in TKey key, in IComparer<TKey> comparer, ref ChunkAccessor accessor, ref ChunkAccessor sibAccessor)
         {
             Key = key;
             Comparer = comparer;
@@ -224,6 +229,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
             Value = 0;
             Removed = false;
             Accessor = ref accessor;
+            SiblingAccessor = ref sibAccessor;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -381,7 +387,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         /// Ancestor fields are set eagerly (no chunk reads — just copies).
         /// Sibling fields are lazily resolved on first access via GetLeftSibling/GetRightSibling.
         /// </summary>
-        public static void Create(NodeWrapper child, int index, NodeWrapper parent, int parentCount, ref NodeRelatives parentRelatives, out NodeRelatives res, ref ChunkAccessor accessor)
+        public static void Create(NodeWrapper child, int index, NodeWrapper parent, int parentCount, ref NodeRelatives parentRelatives, out NodeRelatives res, ref ChunkAccessor accessor, ref ChunkAccessor sibAccessor)
         {
 
             // assign nearest ancestors between child and siblings.
@@ -395,7 +401,8 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
                 leftAncestor = parentRelatives.LeftAncestor;
                 leftAncestorIndex = parentRelatives.LeftAncestorIndex;
                 hasTrueLeftSibling = false;
-                cousinLeftSource = parentRelatives.GetLeftSibling(ref accessor);
+                // Cousin resolution uses sibling CA — prevents cousin page from evicting parent path pages in the primary CA
+                cousinLeftSource = parentRelatives.GetLeftSibling(ref sibAccessor);
 
                 rightAncestor = parent;
                 rightAncestorIndex = index + 1;
@@ -410,7 +417,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
                 rightAncestor = parentRelatives.RightAncestor;
                 rightAncestorIndex = parentRelatives.RightAncestorIndex;
                 hasTrueRightSibling = false;
-                cousinRightSource = parentRelatives.GetRightSibling(ref accessor);
+                cousinRightSource = parentRelatives.GetRightSibling(ref sibAccessor);
             }
             else // child is not right most nor left most.
             {
@@ -1009,9 +1016,10 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
 
         // Per-operation accessor for thread safety under OLC (thread-local warm cache)
         ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
+        ref var sibAccessor = ref _segment.RentWarmSiblingAccessor(accessor.ChangeSet);
         try
         {
-            var args = new InsertArguments(key, value, Comparer, ref opAccessor);
+            var args = new InsertArguments(key, value, Comparer, ref opAccessor, ref sibAccessor);
             AddOrUpdateCore(ref args);
             SyncHeader(ref opAccessor);
             activity?.SetTag(TyphonSpanAttributes.IndexOperation, "insert");
@@ -1020,6 +1028,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         }
         finally
         {
+            _segment.ReturnWarmSiblingAccessor();
             _segment.ReturnWarmAccessor();
             activity?.Dispose();
         }
@@ -1035,9 +1044,10 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
 
         // Per-operation accessor for thread safety under OLC (thread-local warm cache)
         ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
+        ref var sibAccessor = ref _segment.RentWarmSiblingAccessor(accessor.ChangeSet);
         try
         {
-            var args = new RemoveArguments(key, Comparer, ref opAccessor);
+            var args = new RemoveArguments(key, Comparer, ref opAccessor, ref sibAccessor);
             RemoveCore(ref args);
             SyncHeader(ref opAccessor);
             value = args.Value;
@@ -1046,6 +1056,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         }
         finally
         {
+            _segment.ReturnWarmSiblingAccessor();
             _segment.ReturnWarmAccessor();
             activity?.Dispose();
         }
@@ -1231,6 +1242,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
 
         // Per-operation accessor for thread safety under OLC (thread-local warm cache)
         ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
+        ref var sibAccessor = ref _segment.RentWarmSiblingAccessor(accessor.ChangeSet);
         try
         {
             // FindLeaf traversal is safe under OLC: internal nodes are stable.
@@ -1268,7 +1280,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
             // for temporal queries.
             if (res == 0 && !preserveEmptyBuffer)
             {
-                var args = new RemoveArguments(key, Comparer, ref opAccessor);
+                var args = new RemoveArguments(key, Comparer, ref opAccessor, ref sibAccessor);
                 RemoveCorePessimistic(ref args);
 
                 if (args.Removed)
@@ -1281,6 +1293,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         }
         finally
         {
+            _segment.ReturnWarmSiblingAccessor();
             _segment.ReturnWarmAccessor();
             activity?.Dispose();
         }

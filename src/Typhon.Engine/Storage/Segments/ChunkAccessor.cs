@@ -33,19 +33,23 @@ public unsafe struct ChunkAccessor : IDisposable
     // === Base addresses for direct pointer arithmetic (2 cache lines) ===
     private fixed long _baseAddresses[16];     // 128 bytes — raw data address per slot
 
+    // === Expected file page index per slot (for stale-pointer detection) ===
+    private fixed int _filePageIndices[16];    // 64 bytes — validates page identity on cache hit
+
     // === Compact state ===
     private ushort _dirtyFlags;                // 2 bytes — bitmask of dirty slots
     private byte _clockHand;                   // 1 byte — eviction cursor
     private byte _mruSlot;                     // 1 byte — most recently used slot
     private byte _usedSlots;                   // 1 byte — high water mark (0-16)
 
-    // === Deferred ACW tracking ===
-    // When a dirty slot is evicted, its ACW decrement is deferred until CommitChanges/Dispose.
-    // This prevents checkpoint from snapshotting a page while an OLC write lock is still held
-    // (the lock was acquired after PreDirtyForWrite incremented ACW, but the slot was evicted
-    // before the lock was released).
-    private byte _deferredACWCount;            // 1 byte — number of deferred ACW decrements
-    private fixed int _deferredACWPages[240];  // 960 bytes — memPageIndices awaiting ACW decrement
+    // === Deferred eviction cleanup ===
+    // When a slot is evicted, its SlotRefCount decrement (and ACW decrement for dirty slots) is deferred
+    // until CommitChanges/Dispose. SlotRefCount > 0 prevents PagedMMF.TryAcquire from reusing the memory
+    // page while callers may hold raw byte* or ref T pointers. EBR epochs provide long-term protection
+    // (bounded by FlushAndRefreshEpoch), SlotRefCount provides precise short-term protection for live slots.
+    // The sign bit of each entry encodes dirty (1) vs clean (0) for ACW handling.
+    private byte _deferredACWCount;            // 1 byte — number of deferred eviction entries
+    private fixed int _deferredACWPages[240];  // 960 bytes — memPageIndices awaiting cleanup (sign bit = dirty)
 
     // === Cached hot-path values ===
     private int _stride;                       // 4 bytes — chunk size in bytes
@@ -117,6 +121,12 @@ public unsafe struct ChunkAccessor : IDisposable
         {
             Unsafe.InitBlockUnaligned(pageIndices, 0xFF, 64);
         }
+
+        // Initialize file page indices to invalid (-1) for stale-pointer detection.
+        fixed (int* filePageIndices = _filePageIndices)
+        {
+            Unsafe.InitBlockUnaligned(filePageIndices, 0xFF, 64);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -143,7 +153,8 @@ public unsafe struct ChunkAccessor : IDisposable
     /// </list>
     /// </para>
     /// ActiveChunkWriters is decremented in <see cref="CommitChanges"/> for live slots, and deferred
-    /// via <see cref="_deferredACWPages"/> for evicted slots.
+    /// via <see cref="_deferredACWPages"/> for evicted slots. SlotRefCount is deferred for evicted slots
+    /// and decremented immediately in <see cref="Dispose"/> for live slots.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void MarkSlotDirty(int slot)
@@ -158,9 +169,11 @@ public unsafe struct ChunkAccessor : IDisposable
             {
                 if (_changeSet.AddByMemPageIndex(memPageIndex))
                 {
-                    // First registration for this page in this ChangeSet: ChangeSet already bumped DC to 1,
-                    // add a second increment so DC=2 survives one checkpoint DecrementDirty cycle.
-                    _pagedMMF.IncrementDirty(memPageIndex);
+                    // First registration for this page in this ChangeSet: ChangeSet already bumped DC to 1.
+                    // Raise to exactly 2 so DC survives one checkpoint DecrementDirty cycle.
+                    // Using EnsureDirtyAtLeast (not IncrementDirty) prevents DC inflation to 3
+                    // when re-registering after ReleaseExcessDirtyMarks capped DC at 1.
+                    _pagedMMF.EnsureDirtyAtLeast(memPageIndex, 2);
                 }
                 else
                 {
@@ -249,7 +262,7 @@ public unsafe struct ChunkAccessor : IDisposable
     /// For each dirty slot: registers the page with <see cref="ChangeSet"/> (idempotent if already registered
     /// by <see cref="MarkSlotDirty"/>), then decrements <see cref="PagedMMF.DecrementActiveChunkWriters"/>
     /// so checkpoint can safely snapshot the page.
-    /// Also flushes deferred ACW decrements from evicted dirty slots.
+    /// Also flushes deferred ACW + SlotRefCount decrements from evicted slots.
     /// </summary>
     public void CommitChanges()
     {
@@ -268,16 +281,16 @@ public unsafe struct ChunkAccessor : IDisposable
             _dirtyFlags = 0;
         }
 
-        // Flush deferred ACW decrements from evicted dirty slots
-        FlushDeferredACW();
+        // Flush deferred ACW + SlotRefCount decrements from evicted slots
+        FlushDeferred();
     }
 
     /// <summary>
-    /// Decrements ACW for all pages that were deferred during slot eviction.
-    /// Called by CommitChanges and Dispose.
+    /// Flushes deferred eviction cleanup: decrements SlotRefCount for all evicted slots,
+    /// and ACW for evicted dirty slots (encoded via sign bit). Called by CommitChanges and Dispose.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void FlushDeferredACW()
+    private void FlushDeferred()
     {
         if (_deferredACWCount == 0)
         {
@@ -286,7 +299,14 @@ public unsafe struct ChunkAccessor : IDisposable
 
         for (int i = 0; i < _deferredACWCount; i++)
         {
-            _pagedMMF.DecrementActiveChunkWriters(_deferredACWPages[i]);
+            var entry = _deferredACWPages[i];
+            var memIdx = entry & 0x7FFFFFFF; // Clear sign bit to get memPageIndex
+            if (entry < 0)
+            {
+                // Dirty slot eviction: also decrement ACW
+                _pagedMMF.DecrementActiveChunkWriters(memIdx);
+            }
+            _pagedMMF.DecrementSlotRefCount(memIdx);
         }
         _deferredACWCount = 0;
     }
@@ -386,12 +406,26 @@ public unsafe struct ChunkAccessor : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     internal byte* GetChunkAddress(int chunkId, bool dirty = false)
     {
+        // Bounds check: catch stale ChunkIds before they cause out-of-range page access.
+        // ChunkCapacity reads volatile _map.Capacity — always reflects the latest grown capacity.
+        if ((uint)chunkId >= (uint)_segment.ChunkCapacity)
+        {
+            ThrowChunkIdOutOfRange(chunkId, _segment.ChunkCapacity);
+        }
+
         (int pageIndex, int offset) = _segment.GetChunkLocation(chunkId);
 
         // === ULTRA FAST PATH: MRU check ===
         var mru = _mruSlot;
         if (_pageIndices[mru] == pageIndex)
         {
+            // Validate page identity (SlotRefCount prevents eviction of live slots)
+            var memIdx = GetMemPageIndexFromSlot(mru);
+            if (!_pagedMMF.ValidatePageIdentity(memIdx, _filePageIndices[mru]))
+            {
+                return ReloadStaleSlot(mru, pageIndex, offset, dirty);
+            }
+
             if (dirty)
             {
                 MarkSlotDirty(mru);
@@ -435,6 +469,13 @@ public unsafe struct ChunkAccessor : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private byte* GetFromSlot(int slotIndex, int pageIndex, int offset, bool dirty)
     {
+        // Validate page identity (SlotRefCount prevents eviction of live slots)
+        var memIdx = GetMemPageIndexFromSlot(slotIndex);
+        if (!_pagedMMF.ValidatePageIdentity(memIdx, _filePageIndices[slotIndex]))
+        {
+            return ReloadStaleSlot(slotIndex, pageIndex, offset, dirty);
+        }
+
         _mruSlot = (byte)slotIndex;
 
         if (dirty)
@@ -449,6 +490,42 @@ public unsafe struct ChunkAccessor : IDisposable
     // ═══════════════════════════════════════════════════════════════════════
     // SLOW PATH: eviction and page loading
     // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// A cached slot's underlying page was evicted and reused by PagedMMF. Re-load the page into the same slot.
+    /// </summary>
+    /// <remarks>
+    /// <b>Invariant: stale slots are never dirty.</b> If a slot is dirty (bit set in <c>_dirtyFlags</c>),
+    /// then ACW &gt; 0 for the page → checkpoint CAS sentinel fails → no <c>DecrementDirty</c> →
+    /// DC &gt;= 1 → <c>TryAcquire</c> rejects the page → page cannot be evicted → slot cannot be stale.
+    /// <para>
+    /// With <see cref="PageInfo.SlotRefCount"/> protection, this path should be effectively dead code —
+    /// TryAcquire rejects pages with SlotRefCount &gt; 0. Kept as defense-in-depth (FilePageIndex validation).
+    /// </para>
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private byte* ReloadStaleSlot(int slot, int pageIndex, int offset, bool dirty)
+    {
+        Debug.Assert((_dirtyFlags & (1 << slot)) == 0, "Stale slot should never be dirty (ACW→DC→eviction chain)");
+
+        // Decrement SlotRefCount for the old (now-reused) memory page before clearing the slot.
+        var oldMemIdx = GetMemPageIndexFromSlot(slot);
+        _pagedMMF.DecrementSlotRefCount(oldMemIdx);
+
+        _pageIndices[slot] = InvalidPageIndex;
+        LoadIntoSlot(slot, pageIndex);  // Increments SlotRefCount for the newly loaded page
+        return GetFromSlot(slot, pageIndex, offset, dirty);
+    }
+
+    /// <summary>
+    /// Cold path: throws when a stale or invalid ChunkId exceeds the segment's capacity.
+    /// Separated from the hot path to avoid polluting the instruction cache.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowChunkIdOutOfRange(int chunkId, int capacity) =>
+        throw new InvalidOperationException(
+            $"ChunkAccessor.GetChunkAddress: chunkId {chunkId} exceeds segment capacity {capacity}. " +
+            "This indicates a stale ChunkId read from evicted page data.");
 
     /// <summary>
     /// Cache miss slow path: clock-hand eviction, load new page.
@@ -485,13 +562,19 @@ public unsafe struct ChunkAccessor : IDisposable
     }
 
     /// <summary>
-    /// Evict a slot: flush dirty state to ChangeSet and defer ActiveChunkWriters decrement.
+    /// Evict a slot: flush dirty state to ChangeSet and defer cleanup of page protection counters.
     /// <para>
-    /// ACW decrement is deferred (not done here) because an OLC write lock may still be held on a node in this page. If ACW were decremented now, checkpoint
-    /// could snapshot the page with an odd OLC version (active write lock), causing corruption when the page is later reloaded from disk.
-    /// The deferred decrements are flushed in <see cref="CommitChanges"/> when all B+Tree write locks have been released.
+    /// <b>SlotRefCount</b> decrement is always deferred (both dirty and clean slots) because callers may still
+    /// hold raw <c>byte*</c> or <c>ref T</c> pointers to the evicted page's memory. While SlotRefCount &gt; 0,
+    /// <see cref="PagedMMF.TryAcquire"/> will not reuse the memory page, keeping those pointers valid.
     /// </para>
-    /// No page release — epoch protects lifetime.
+    /// <para>
+    /// <b>ACW</b> decrement is deferred for dirty slots because an OLC write lock may still be held on a node
+    /// in this page. The deferred decrements are flushed in <see cref="CommitChanges"/>.
+    /// </para>
+    /// <para>
+    /// For clean slots, the page's AccessEpoch is re-stamped as belt-and-suspenders alongside SlotRefCount.
+    /// </para>
     /// </summary>
     private void EvictSlot(int slot)
     {
@@ -500,23 +583,28 @@ public unsafe struct ChunkAccessor : IDisposable
             return;
         }
 
-        // Flush dirty to ChangeSet before evicting; defer ACW decrement
+        if (_deferredACWCount >= DeferredACWCapacity)
+        {
+            throw new InvalidOperationException($"Deferred eviction queue overflow: {_deferredACWCount} entries (capacity={DeferredACWCapacity}). " +
+                "This indicates too many slot evictions between CommitChanges calls.");
+        }
+
+        var memPageIndex = GetMemPageIndexFromSlot(slot);
         var mask = 1 << slot;
         if ((_dirtyFlags & mask) != 0)
         {
-            var memPageIndex = GetMemPageIndexFromSlot(slot);
+            // Dirty slot: flush to ChangeSet, defer ACW + SlotRefCount decrement.
+            // High bit encodes "dirty" so FlushDeferred knows to also decrement ACW.
             _changeSet?.AddByMemPageIndex(memPageIndex);
-            // Defer ACW decrement — OLC write lock may still be held on this page.
-            // The deferred queue MUST NOT be flushed here: flushing would decrement ACW for pages that still have active OLC write locks, allowing checkpoint
-            // to snapshot corrupt state.
-            // The queue is sized at 240 entries (byte max - 16 cache slots), which covers even the most extreme split-propagation-with-retries scenarios.
-            if (_deferredACWCount >= DeferredACWCapacity)
-            {
-                throw new InvalidOperationException($"Deferred ACW queue overflow: {_deferredACWCount} entries (capacity={DeferredACWCapacity}). " +
-                    "This indicates too many dirty slot evictions between CommitChanges calls.");
-            }
-            _deferredACWPages[_deferredACWCount++] = memPageIndex;
+            _deferredACWPages[_deferredACWCount++] = memPageIndex | unchecked((int)0x80000000);
             _dirtyFlags = (ushort)(_dirtyFlags & ~mask);
+        }
+        else
+        {
+            // Clean slot: defer SlotRefCount decrement only.
+            // Re-stamp epoch as belt-and-suspenders alongside SlotRefCount.
+            _pagedMMF.RestampPageEpoch(memPageIndex, _epochManager.GlobalEpoch);
+            _deferredACWPages[_deferredACWCount++] = memPageIndex;
         }
 
         _pageIndices[slot] = InvalidPageIndex;
@@ -524,6 +612,8 @@ public unsafe struct ChunkAccessor : IDisposable
 
     /// <summary>
     /// Load a page into a slot via epoch-protected access.
+    /// Increments <see cref="PageInfo.SlotRefCount"/> to prevent PagedMMF from evicting the page
+    /// while it is cached in this accessor (callers may hold raw pointers to the page memory).
     /// </summary>
     private void LoadIntoSlot(int slot, int pageIndex)
     {
@@ -538,6 +628,11 @@ public unsafe struct ChunkAccessor : IDisposable
 
         _pageIndices[slot] = pageIndex;
         _baseAddresses[slot] = (long)_pagedMMF.GetMemPageRawDataAddress(memPageIndex);
+        _filePageIndices[slot] = filePageIndex;
+
+        // SlotRefCount prevents PagedMMF from evicting this page while the accessor holds a slot reference.
+        // Deferred-decremented in EvictSlot, immediate-decremented in Dispose.
+        _pagedMMF.IncrementSlotRefCount(memPageIndex);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -545,7 +640,7 @@ public unsafe struct ChunkAccessor : IDisposable
     // ═══════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Dispose accessor: flush dirty pages. No page release — epoch handles lifetime.
+    /// Dispose accessor: flush dirty pages and release SlotRefCount for all live slots.
     /// </summary>
     public void Dispose()
     {
@@ -554,7 +649,29 @@ public unsafe struct ChunkAccessor : IDisposable
             return;
         }
 
+        // Guard against stale ThreadStatic warm cache: if the PagedMMF has been disposed
+        // (e.g., previous test run on the same thread), the page cache no longer exists.
+        // Skip all cleanup — SlotRefCount, ACW, dirty flags are meaningless for a disposed page cache.
+        if (_pagedMMF.IsDisposed)
+        {
+            _usedSlots = 0;
+            _segment = null!;
+            return;
+        }
+
         CommitChanges();
+
+        // Release SlotRefCount for live (non-evicted) slots.
+        // Evicted slots were already handled by FlushDeferred in CommitChanges above.
+        for (int i = 0; i < _usedSlots; i++)
+        {
+            if (_pageIndices[i] != InvalidPageIndex)
+            {
+                var memPageIndex = GetMemPageIndexFromSlot(i);
+                _pagedMMF.DecrementSlotRefCount(memPageIndex);
+            }
+        }
+
         _usedSlots = 0;
         _segment = null!;
     }

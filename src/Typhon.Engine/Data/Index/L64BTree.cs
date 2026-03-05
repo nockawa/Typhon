@@ -491,8 +491,7 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
         public override NodeWrapper SplitRight(NodeWrapper node, NodeStates states, ref ChunkAccessor accessor)
         {
-            ref var chunk = ref accessor.GetChunk<Index64Chunk>(node.ChunkId, true);
-            return SplitRight(ref chunk, states, ref accessor);
+            return SplitRight(node.ChunkId, states, ref accessor);
         }
 
         public override KeyValueItem RemoveAt(NodeWrapper node, int index, ref ChunkAccessor accessor)
@@ -695,12 +694,14 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
             if (length < 0 || length > Index64Chunk.Capacity)
             {
-                throw new ArgumentOutOfRangeException(nameof(length));
+                throw new ArgumentOutOfRangeException(nameof(length),
+                    $"LeftShift: length={length} out of range (index={index}, Count={chunk.Count}, Start={chunk.Start}, Control=0x{chunk.Control:X8})");
             }
 
             if (index < 0 || index >= Index64Chunk.Capacity)
             {
-                throw new ArgumentOutOfRangeException(nameof(length));
+                throw new ArgumentOutOfRangeException(nameof(index),
+                    $"LeftShift: index={index} out of range (length={length}, Count={chunk.Count}, Start={chunk.Start}, Control=0x{chunk.Control:X8})");
             }
 
             var k = chunk.KeysAsSpan;
@@ -746,12 +747,14 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
             if (length < 0 || length > Index64Chunk.Capacity)
             {
-                throw new ArgumentOutOfRangeException(nameof(length));
+                throw new ArgumentOutOfRangeException(nameof(length),
+                    $"RightShift: length={length} out of range (index={index}, Count={chunk.Count}, Start={chunk.Start}, Control=0x{chunk.Control:X8})");
             }
 
             if (index < 0 || index >= Index64Chunk.Capacity)
             {
-                throw new ArgumentOutOfRangeException(nameof(length));
+                throw new ArgumentOutOfRangeException(nameof(index),
+                    $"RightShift: index={index} out of range (length={length}, Count={chunk.Count}, Start={chunk.Start}, Control=0x{chunk.Control:X8})");
             }
 
             var k = chunk.KeysAsSpan;
@@ -779,12 +782,18 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
             }
         }
 
-        public NodeWrapper SplitRight(ref Index64Chunk left, NodeStates states, ref ChunkAccessor accessor)
+        public NodeWrapper SplitRight(int leftChunkId, NodeStates states, ref ChunkAccessor accessor)
         {
+            ref var left = ref accessor.GetChunk<Index64Chunk>(leftChunkId, true);
             var oldHighKey = left.HighKey; // save before split — right inherits original upper bound
 
             var rightNode = Owner.AllocNode(states, ref accessor);
+
+            // Re-obtain refs after allocation — AllocNode may trigger page cache eviction
+            // (slot eviction in ChunkAccessor or page eviction in PagedMMF), invalidating
+            // previously cached pointers held as managed refs.
             ref var right = ref accessor.GetChunk<Index64Chunk>(rightNode.ChunkId, true);
+            left = ref accessor.GetChunk<Index64Chunk>(leftChunkId, true);
 
             var lr = left.Count / 2; // length of right side
             var lrc = 1 + ((left.Count - 1) / 2); // length of right (ceiling of Length/2)

@@ -147,6 +147,7 @@ internal sealed class CommandExecutor
             "update"        => ExecuteUpdate(tokens, 1),
             "delete"        => ExecuteDelete(tokens, 1),
             "set"           => ExecuteSet(tokens, 1),
+            "echo"          => ExecuteEcho(tokens, 1),
             "help"          => ExecuteHelp(tokens, 1),
             "history"       => ExecuteHistory(),
             "exit" or "quit" => CommandResult.Exit(),
@@ -911,6 +912,45 @@ internal sealed class CommandExecutor
         return CommandResult.Ok();
     }
 
+    private CommandResult ExecuteEcho(List<Token> tokens, int pos)
+    {
+        // Determine timestamp format: --short (HH:mm:ss), --ms (HH:mm:ss.fff), --us (HH:mm:ss.ffffff), --full (yyyy-MM-dd HH:mm:ss.fffffff)
+        // Default is --ms
+        var format = "HH:mm:ss.fff";
+        var msgParts = new List<string>();
+
+        while (pos < tokens.Count && tokens[pos].Kind != TokenKind.End)
+        {
+            var val = tokens[pos].Value;
+            if (val == "--" && pos + 1 < tokens.Count && tokens[pos + 1].Kind != TokenKind.End)
+            {
+                pos++;
+                var flag = tokens[pos].Value.ToLowerInvariant();
+                switch (flag)
+                {
+                    case "short": format = "HH:mm:ss"; break;
+                    case "ms": format = "HH:mm:ss.fff"; break;
+                    case "us": format = "HH:mm:ss.ffffff"; break;
+                    case "full": format = "yyyy-MM-dd HH:mm:ss.fffffff"; break;
+                    default: msgParts.Add("--" + flag); break;
+                }
+            }
+            else
+            {
+                msgParts.Add(val);
+            }
+            pos++;
+        }
+
+        var timestamp = DateTime.Now.ToString(format);
+        var message = msgParts.Count > 0 ? string.Join(" ", msgParts) : "";
+        var output = message.Length > 0
+            ? $"  [grey][[{Markup.Escape(timestamp)}]][/] [white]{Markup.Escape(message)}[/]"
+            : $"  [grey][[{Markup.Escape(timestamp)}]][/]";
+
+        return CommandResult.Markup(output);
+    }
+
     private CommandResult ExecuteHelp(List<Token> tokens, int pos)
     {
         if (pos < tokens.Count && tokens[pos].Kind != TokenKind.End)
@@ -969,6 +1009,7 @@ internal sealed class CommandExecutor
         sb.AppendLine();
         sb.AppendLine("  [yellow]Shell:[/]");
         sb.AppendLine("    [cyan]set[/] [[key [[value]]]]                View/change shell settings");
+        sb.AppendLine("    [cyan]echo[/] [[--short|ms|us|full]] <msg>  Print timestamped message");
         sb.AppendLine("    [cyan]help[/] [[command]]                   Show help");
         sb.AppendLine("    [cyan]history[/]                          Show command history");
         sb.AppendLine("    [cyan]exit[/] / [cyan]quit[/]                      Exit the shell");
@@ -1007,6 +1048,7 @@ internal sealed class CommandExecutor
             "update"        => "  update <entityId> <component> { field=value, ... }\n    Updates entity data. Reads current, overlays specified fields, writes back.\n    Unspecified fields are preserved.",
             "delete"        => "  delete <entityId> <component>\n    Deletes an entity's component data.",
             "set"           => "  set [key [value]]\n    View or change settings.\n    Settings: format, auto-commit, verbose, page-size, color, timing",
+            "echo"          => "  echo [--short|--ms|--us|--full] <message>\n    Prints a timestamped message.\n    Formats: --short (HH:mm:ss), --ms (HH:mm:ss.fff, default),\n             --us (HH:mm:ss.ffffff), --full (yyyy-MM-dd HH:mm:ss.fffffff)",
             "help"          => "  help [command]\n    Shows help for all commands or a specific command.",
             "history"       => "  history\n    Shows recent command history.",
             "exit" or "quit" => "  exit / quit\n    Exits the shell.",

@@ -95,10 +95,21 @@ internal sealed class DiagnosticCommandExecutor
         sb.AppendLine($"  [grey]Reads from disk:[/] [white]{metrics.ReadFromDiskCount:N0}[/]");
         sb.AppendLine($"  [grey]Writes to disk:[/]  [white]{metrics.PageWrittenToDiskCount:N0}[/]  [grey]({metrics.WrittenOperationCount:N0} ops)[/]");
 
-        if (extra.BackpressureWaitCount > 0)
+        if (extra.BackpressureWaitCount > 0 || extra.EpochProtectedPageCount > 0 || extra.SlotRefPageCount > 0)
         {
             sb.AppendLine("  [grey]──────────────────────────────────────[/]");
-            sb.AppendLine($"  [grey]Backpressure:[/]    [yellow]{extra.BackpressureWaitCount:N0}[/] [grey]waits[/]");
+            if (extra.EpochProtectedPageCount > 0)
+            {
+                sb.AppendLine($"  [grey]Epoch-protected:[/] [white]{extra.EpochProtectedPageCount}[/]  [grey]({Pct(extra.EpochProtectedPageCount, totalPages)})[/]");
+            }
+            if (extra.SlotRefPageCount > 0)
+            {
+                sb.AppendLine($"  [grey]Slot-referenced:[/] [white]{extra.SlotRefPageCount}[/]  [grey]({Pct(extra.SlotRefPageCount, totalPages)})[/]");
+            }
+            if (extra.BackpressureWaitCount > 0)
+            {
+                sb.AppendLine($"  [grey]Backpressure:[/]    [yellow]{extra.BackpressureWaitCount:N0}[/] [grey]waits[/]");
+            }
         }
 
         return CommandResult.Markup(sb.ToString().TrimEnd());

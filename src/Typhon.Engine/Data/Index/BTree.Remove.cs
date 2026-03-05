@@ -387,6 +387,7 @@ public abstract partial class BTree<TKey>
         MutationContext ctx = default;
         var node = Root;
         var relatives = new NodeRelatives();
+        ref var sibAccessor = ref args.SiblingAccessor;
 
         // Phase 1: Descend from root to leaf, recording path + PathVersions for validation.
         // OLC protocol: read version BEFORE data, validate AFTER — ensures (index, version) are consistent.
@@ -414,7 +415,7 @@ public abstract partial class BTree<TKey>
                 return false; // node modified between version read and data read — restart
             }
 
-            NodeRelatives.Create(child, index, node, parentCount, ref relatives, out var childRelatives, ref accessor);
+            NodeRelatives.Create(child, index, node, parentCount, ref relatives, out var childRelatives, ref accessor, ref sibAccessor);
 
             ctx.PathNodes[ctx.Depth] = node;
             ctx.PathChildIndices[ctx.Depth] = index;
@@ -470,27 +471,28 @@ public abstract partial class BTree<TKey>
 
         // Slow path: leaf may underflow → need neighbors + path for borrow/merge.
         // Lock leaf neighbors for potential borrow or merge.
+        // Sibling pages loaded into sibling CA to avoid evicting parent path pages from primary CA.
         // AbortWriteLock on failure: no nodes modified yet — avoid spurious version bumps.
         var leafPrev = node.GetPrevious(ref accessor);
         var leafNext = node.GetNext(ref accessor);
         if (leafPrev.IsValid)
         {
-            leafPrev.PreDirtyForWrite(ref accessor);
+            leafPrev.PreDirtyForWrite(ref sibAccessor);
         }
-        if (leafPrev.IsValid && !leafPrev.GetLatch(ref accessor).TryWriteLock())
+        if (leafPrev.IsValid && !leafPrev.GetLatch(ref sibAccessor).TryWriteLock())
         {
             node.GetLatch(ref accessor).AbortWriteLock();
             return false; // restart
         }
         if (leafNext.IsValid)
         {
-            leafNext.PreDirtyForWrite(ref accessor);
+            leafNext.PreDirtyForWrite(ref sibAccessor);
         }
-        if (leafNext.IsValid && !leafNext.GetLatch(ref accessor).TryWriteLock())
+        if (leafNext.IsValid && !leafNext.GetLatch(ref sibAccessor).TryWriteLock())
         {
             if (leafPrev.IsValid)
             {
-                leafPrev.GetLatch(ref accessor).AbortWriteLock();
+                leafPrev.GetLatch(ref sibAccessor).AbortWriteLock();
             }
             node.GetLatch(ref accessor).AbortWriteLock();
             return false; // restart
@@ -511,11 +513,11 @@ public abstract partial class BTree<TKey>
                 }
                 if (leafNext.IsValid)
                 {
-                    leafNext.GetLatch(ref accessor).AbortWriteLock();
+                    leafNext.GetLatch(ref sibAccessor).AbortWriteLock();
                 }
                 if (leafPrev.IsValid)
                 {
-                    leafPrev.GetLatch(ref accessor).AbortWriteLock();
+                    leafPrev.GetLatch(ref sibAccessor).AbortWriteLock();
                 }
                 node.GetLatch(ref accessor).AbortWriteLock();
                 return false; // restart
@@ -529,11 +531,11 @@ public abstract partial class BTree<TKey>
                 }
                 if (leafNext.IsValid)
                 {
-                    leafNext.GetLatch(ref accessor).AbortWriteLock();
+                    leafNext.GetLatch(ref sibAccessor).AbortWriteLock();
                 }
                 if (leafPrev.IsValid)
                 {
-                    leafPrev.GetLatch(ref accessor).AbortWriteLock();
+                    leafPrev.GetLatch(ref sibAccessor).AbortWriteLock();
                 }
                 node.GetLatch(ref accessor).AbortWriteLock();
                 return false; // restart
@@ -557,17 +559,17 @@ public abstract partial class BTree<TKey>
             else if (relatives.HasTrueRightSibling && leafNext.IsValid)
             {
                 // Right sibling was merged into current — mark right sibling obsolete
-                leafNext.GetLatch(ref accessor).MarkObsolete();
+                leafNext.GetLatch(ref sibAccessor).MarkObsolete();
                 DeferredAdd(leafNext.ChunkId, retireEpoch);
             }
         }
         if (leafNext.IsValid)
         {
-            leafNext.GetLatch(ref accessor).WriteUnlock();
+            leafNext.GetLatch(ref sibAccessor).WriteUnlock();
         }
         if (leafPrev.IsValid)
         {
-            leafPrev.GetLatch(ref accessor).WriteUnlock();
+            leafPrev.GetLatch(ref sibAccessor).WriteUnlock();
         }
         node.GetLatch(ref accessor).WriteUnlock();
 
@@ -579,20 +581,20 @@ public abstract partial class BTree<TKey>
             relatives = ctx.PathRelatives[ctx.Depth];
 
             // Lock siblings that HandleChildMerge might borrow from or merge with
-            NodeWrapper leftSib = relatives.GetLeftSibling(ref accessor);
-            NodeWrapper rightSib = relatives.GetRightSibling(ref accessor);
+            NodeWrapper leftSib = relatives.GetLeftSibling(ref sibAccessor);
+            NodeWrapper rightSib = relatives.GetRightSibling(ref sibAccessor);
             if (leftSib.IsValid)
             {
-                leftSib.PreDirtyForWrite(ref accessor);
-                SpinWriteLock(leftSib.GetLatch(ref accessor));
+                leftSib.PreDirtyForWrite(ref sibAccessor);
+                SpinWriteLock(leftSib.GetLatch(ref sibAccessor));
             }
             if (rightSib.IsValid)
             {
-                rightSib.PreDirtyForWrite(ref accessor);
-                SpinWriteLock(rightSib.GetLatch(ref accessor));
+                rightSib.PreDirtyForWrite(ref sibAccessor);
+                SpinWriteLock(rightSib.GetLatch(ref sibAccessor));
             }
 
-            merged = node.HandleChildMerge(ctx.PathChildIndices[ctx.Depth], ref relatives, ref accessor);
+            merged = node.HandleChildMerge(ctx.PathChildIndices[ctx.Depth], ref relatives, ref accessor, ref sibAccessor);
 
             // Mark obsolete internal node that was merged
             if (merged)
@@ -607,7 +609,7 @@ public abstract partial class BTree<TKey>
                 else if (relatives.HasTrueRightSibling && rightSib.IsValid)
                 {
                     // Right sibling merged into current
-                    rightSib.GetLatch(ref accessor).MarkObsolete();
+                    rightSib.GetLatch(ref sibAccessor).MarkObsolete();
                     DeferredAdd(rightSib.ChunkId, retireEpoch);
                 }
             }
@@ -615,11 +617,11 @@ public abstract partial class BTree<TKey>
             // Unlock siblings + this path node
             if (rightSib.IsValid)
             {
-                rightSib.GetLatch(ref accessor).WriteUnlock();
+                rightSib.GetLatch(ref sibAccessor).WriteUnlock();
             }
             if (leftSib.IsValid)
             {
-                leftSib.GetLatch(ref accessor).WriteUnlock();
+                leftSib.GetLatch(ref sibAccessor).WriteUnlock();
             }
             node.GetLatch(ref accessor).WriteUnlock();
         }

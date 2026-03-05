@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -169,6 +170,19 @@ internal sealed class EpochThreadRegistry : IDisposable
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Atomically update the current thread's pinned epoch without going through the unpinned state.
+    /// The thread remains continuously pinned — no brief window where MinActiveEpoch jumps.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void RefreshPinnedEpoch(long newEpoch)
+    {
+        Debug.Assert(_threadRegistry == this, "RefreshPinnedEpoch called on wrong registry");
+        var slot = _threadSlotIndex;
+        Debug.Assert(_slots[slot].Depth > 0, "RefreshPinnedEpoch called outside epoch scope");
+        _slots[slot].PinnedEpoch = newEpoch;
     }
 
     /// <summary>

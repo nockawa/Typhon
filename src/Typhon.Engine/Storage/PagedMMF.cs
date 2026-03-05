@@ -53,8 +53,12 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         int dirtyCount = 0;
         int lockedByThreadCount = 0;
         int pendingIOReadCount = 0;
+        int epochProtectedCount = 0;
+        int slotRefPageCount = 0;
         int minClockSweepCounter = int.MaxValue;
         int maxClockSweepCounter = int.MinValue;
+
+        var minActive = EpochManager?.MinActiveEpoch ?? long.MaxValue;
 
         foreach (var pi in _memPagesInfo)
         {
@@ -85,6 +89,14 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             {
                 pendingIOReadCount++;
             }
+            if (pi.AccessEpoch >= minActive)
+            {
+                epochProtectedCount++;
+            }
+            if (pi.SlotRefCount > 0)
+            {
+                slotRefPageCount++;
+            }
             if (pi.ClockSweepCounter < minClockSweepCounter)
             {
                 minClockSweepCounter = pi.ClockSweepCounter;
@@ -106,7 +118,9 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             PendingIOReadCount = pendingIOReadCount,
             MinClockSweepCounter = minClockSweepCounter,
             MaxClockSweepCounter = maxClockSweepCounter,
-            BackpressureWaitCount = _metrics.BackpressureWaitCount
+            BackpressureWaitCount = _metrics.BackpressureWaitCount,
+            EpochProtectedPageCount = epochProtectedCount,
+            SlotRefPageCount = slotRefPageCount
         };
     }
 
@@ -700,25 +714,28 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                         }
                     }
 
-                    ++_metrics.BackpressureWaitCount;
-
-                    Logger.LogWarning(
-                        "Page cache backpressure: wait#{WaitCount} dirty={DirtyCount} epoch={EpochCount} retry={RetryCount} remaining={RemainingMs}ms",
-                        _metrics.BackpressureWaitCount, dirtyCount, epochCount, bpCtx.RetryCount, bpCtx.WaitContext.Remaining.TotalMilliseconds);
-
-                    // Demand-driven flush: wake the checkpoint manager immediately so dirty pages get written to
-                    // disk → DecrementDirty → SignalPageAvailable → waiter wakes.
-                    // Idempotent — safe to call on every retry iteration.
-                    OnBackpressure?.Invoke();
-
-                    if (!_backpressureStrategy.OnPressure(ref bpCtx, dirtyCount, epochCount))
+                    if (!found)
                     {
-                        ThrowHelper.ThrowPageCacheBackpressureTimeout(
-                            dirtyCount, epochCount,
-                            TimeoutOptions.Current.PageCacheBackpressureTimeout - bpCtx.WaitContext.Remaining);
-                    }
+                        ++_metrics.BackpressureWaitCount;
 
-                    continue;
+                        Logger.LogWarning(
+                            "Page cache backpressure: wait#{WaitCount} dirty={DirtyCount} epoch={EpochCount} retry={RetryCount} remaining={RemainingMs}ms",
+                            _metrics.BackpressureWaitCount, dirtyCount, epochCount, bpCtx.RetryCount, bpCtx.WaitContext.Remaining.TotalMilliseconds);
+
+                        // Demand-driven flush: wake the checkpoint manager immediately so dirty pages get written to
+                        // disk → DecrementDirty → SignalPageAvailable → waiter wakes.
+                        // Idempotent — safe to call on every retry iteration.
+                        OnBackpressure?.Invoke();
+
+                        if (!_backpressureStrategy.OnPressure(ref bpCtx, dirtyCount, epochCount))
+                        {
+                            ThrowHelper.ThrowPageCacheBackpressureTimeout(
+                                dirtyCount, epochCount,
+                                TimeoutOptions.Current.PageCacheBackpressureTimeout - bpCtx.WaitContext.Remaining);
+                        }
+
+                        continue;
+                    }
                 }
             }
 
@@ -783,10 +800,16 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             return false;
         }
 
-        // Don't evict pages that are epoch-protected or still dirty
+        // Don't evict pages that are slot-referenced, actively written, still dirty, or epoch-protected.
+        // Two-layer protection: SlotRefCount prevents eviction of pages with live accessor slots (short-term),
+        // EBR epoch protection prevents eviction of recently-accessed pages (long-term, bounded by re-stamp).
         if (state == PageState.Idle)
         {
-            if (info.AccessEpoch >= minActiveEpoch || info.DirtyCounter > 0)
+            if (info.SlotRefCount > 0 || info.ActiveChunkWriters > 0 || info.DirtyCounter > 0)
+            {
+                return false;
+            }
+            if (info.AccessEpoch >= minActiveEpoch)
             {
                 return false;
             }
@@ -810,8 +833,9 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             // We need to check the state again, because another thread might have changed between the first and second pass
             if (info.PageState is PageState.Free or PageState.Idle)
             {
-                // Re-check epoch + dirty under lock (may have changed since first pass)
-                if (info.PageState == PageState.Idle && (info.AccessEpoch >= minActiveEpoch || info.DirtyCounter > 0))
+                // Re-check all protection layers under lock (may have changed since first pass)
+                if (info.PageState == PageState.Idle &&
+                    (info.SlotRefCount > 0 || info.ActiveChunkWriters > 0 || info.DirtyCounter > 0 || info.AccessEpoch >= minActiveEpoch))
                 {
                     return false;
                 }
@@ -827,6 +851,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                 info.PageState = PageState.Allocating;
                 Interlocked.Decrement(ref _metrics.FreeMemPageCount);
                 Debug.Assert(info.ExclusiveLatchDepth == 0);
+                Debug.Assert(info.SlotRefCount == 0, $"Page evicted with SlotRefCount={info.SlotRefCount}");
                 return true;
             }
             else
@@ -1599,6 +1624,51 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     /// Used by ChunkAccessor to compute memPageIndex from raw data addresses.
     /// </summary>
     internal unsafe byte* MemPagesBaseAddress => _memPagesAddr;
+
+    /// <summary>
+    /// Returns the FilePageIndex currently stored in a memory page slot.
+    /// Used by <see cref="ChunkAccessor"/> to detect stale cached pointers after page eviction/reuse.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal int GetFilePageIndex(int memPageIndex) => _memPagesInfo[memPageIndex].FilePageIndex;
+
+    /// <summary>
+    /// Validates a page's identity and re-stamps its epoch in a single call.
+    /// Returns <c>true</c> if the page is still valid (FilePageIndex matches); <c>false</c> if stale.
+    /// On <c>true</c>, also updates AccessEpoch to keep the page epoch-protected while actively referenced.
+    /// </summary>
+    /// <summary>
+    /// Validates that a memory page still holds the expected file page (detects stale pointers after eviction).
+    /// Does NOT re-stamp AccessEpoch — SlotRefCount provides short-term protection for live accessor slots,
+    /// while epoch re-stamp (<see cref="EpochManager.RefreshScope"/>) bounds the long-term protected set.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool ValidatePageIdentity(int memPageIndex, int expectedFilePageIndex)
+    {
+        return _memPagesInfo[memPageIndex].FilePageIndex == expectedFilePageIndex;
+    }
+
+    /// <summary>
+    /// Re-stamps the page's AccessEpoch without validation. Used by <see cref="ChunkAccessor.EvictSlot"/>
+    /// to keep evicted pages epoch-protected while callers may still hold raw pointers.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void RestampPageEpoch(int memPageIndex, long epoch) => _memPagesInfo[memPageIndex].AccessEpoch = epoch;
+
+    /// <summary>
+    /// Increments the slot reference count for a memory page. While SlotRefCount &gt; 0,
+    /// <see cref="TryAcquire"/> will not evict this page, protecting raw pointers held by
+    /// ChunkAccessor slots. This complements EBR epoch protection: epochs bound the long-term
+    /// protected set, while SlotRefCount provides precise short-term protection for live slots.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void IncrementSlotRefCount(int memPageIndex) => Interlocked.Increment(ref _memPagesInfo[memPageIndex].SlotRefCount);
+
+    /// <summary>
+    /// Decrements the slot reference count for a memory page.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void DecrementSlotRefCount(int memPageIndex) => Interlocked.Decrement(ref _memPagesInfo[memPageIndex].SlotRefCount);
 
     #region Logging helpers
 

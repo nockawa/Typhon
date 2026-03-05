@@ -101,9 +101,10 @@ internal sealed class ShellSession : IDisposable
             {
                 options.DatabaseName = _databaseName;
                 options.DatabaseDirectory = directory;
-                // 1024 pages = 8 MiB — generous enough for interactive bulk operations
-                // while still exercising the backpressure path under heavy writes.
-                options.DatabaseCacheSize = 1024 * 8192UL;
+                // 128K pages = 1 GiB page cache.
+                // Large cache avoids eviction-induced stale page data (no WAL redo yet).
+                // Note: AllocatePinned takes int, so max ~2 GiB. 1 GiB is plenty for tsh workloads.
+                options.DatabaseCacheSize = 128UL * 1024 * 8192;
             })
             .AddMemoryAllocator()
             .AddSingleton<IWalFileIO, WalFileIO>()
@@ -297,7 +298,15 @@ internal sealed class ShellSession : IDisposable
         }
 
         var generic = method.MakeGenericMethod(componentType);
-        generic.Invoke(_engine, [null, SchemaValidationMode.Enforce]);
+        try
+        {
+            generic.Invoke(_engine, [null, SchemaValidationMode.Enforce]);
+        }
+        catch (System.Reflection.TargetInvocationException ex)
+        {
+            throw new InvalidOperationException(
+                $"Failed to register component {componentType.Name}: {ex.InnerException?.Message}", ex.InnerException);
+        }
     }
 
     public void Dispose() => CloseDatabase();

@@ -420,8 +420,7 @@ public abstract class String64BTree : BTree<String64>
 
         public override NodeWrapper SplitRight(NodeWrapper node, NodeStates states, ref ChunkAccessor accessor)
         {
-            ref var chunk = ref accessor.GetChunk<IndexString64Chunk>(node.ChunkId, true);
-            return SplitRight(ref chunk, states, ref accessor);
+            return SplitRight(node.ChunkId, states, ref accessor);
         }
 
         public override KeyValueItem RemoveAt(NodeWrapper node, int index, ref ChunkAccessor accessor)
@@ -707,10 +706,17 @@ public abstract class String64BTree : BTree<String64>
             }
         }
 
-        public NodeWrapper SplitRight(ref IndexString64Chunk left, NodeStates states, ref ChunkAccessor accessor)
+        public NodeWrapper SplitRight(int leftChunkId, NodeStates states, ref ChunkAccessor accessor)
         {
+            ref var left = ref accessor.GetChunk<IndexString64Chunk>(leftChunkId, true);
+
             var rightNode = Owner.AllocNode(states, ref accessor);
+
+            // Re-obtain refs after allocation — AllocNode may trigger page cache eviction
+            // (slot eviction in ChunkAccessor or page eviction in PagedMMF), invalidating
+            // previously cached pointers held as managed refs.
             ref var right = ref accessor.GetChunk<IndexString64Chunk>(rightNode.ChunkId, true);
+            left = ref accessor.GetChunk<IndexString64Chunk>(leftChunkId, true);
 
             var lr = left.Count / 2; // length of right side
             var lrc = 1 + ((left.Count - 1) / 2); // length of right (ceiling of Length/2)

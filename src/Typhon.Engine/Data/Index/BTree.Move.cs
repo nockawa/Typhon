@@ -194,6 +194,7 @@ public abstract partial class BTree<TKey>
     /// </summary>
     private bool MovePessimistic(TKey oldKey, TKey newKey, int value, ref ChunkAccessor accessor)
     {
+        ref var sibAccessor = ref _segment.RentWarmSiblingAccessor(accessor.ChangeSet);
         try
         {
             var oldLeaf = FindLeaf(oldKey, out var oldIndex, ref accessor);
@@ -210,7 +211,7 @@ public abstract partial class BTree<TKey>
             }
 
             // Remove old entry — use RemoveArguments/RemoveCore for proper structural handling
-            var removeArgs = new RemoveArguments(oldKey, Comparer, ref accessor);
+            var removeArgs = new RemoveArguments(oldKey, Comparer, ref accessor, ref sibAccessor);
             RemoveCorePessimistic(ref removeArgs);
             if (!removeArgs.Removed)
             {
@@ -218,13 +219,14 @@ public abstract partial class BTree<TKey>
             }
 
             // Insert new entry
-            var insertArgs = new InsertArguments(newKey, value, Comparer, ref accessor);
+            var insertArgs = new InsertArguments(newKey, value, Comparer, ref accessor, ref sibAccessor);
             AddOrUpdateCorePessimistic(ref insertArgs);
             SyncHeader(ref accessor);
             return true;
         }
         finally
         {
+            _segment.ReturnWarmSiblingAccessor();
             DeferredReclaim();
         }
     }
@@ -502,9 +504,10 @@ public abstract partial class BTree<TKey>
     /// appends to new buffer, handles empty-buffer cleanup.
     /// No global lock — concurrency is handled by per-node OLC latches in Remove/Insert.
     /// </summary>
-    private int MoveValuePessimistic(TKey oldKey, TKey newKey, int elementId, int value, ref ChunkAccessor accessor, out int oldHeadBufferId, 
+    private int MoveValuePessimistic(TKey oldKey, TKey newKey, int elementId, int value, ref ChunkAccessor accessor, out int oldHeadBufferId,
         out int newHeadBufferId, bool preserveEmptyBuffer = false)
     {
+        ref var sibAccessor = ref _segment.RentWarmSiblingAccessor(accessor.ChangeSet);
         try
         {
             var oldLeaf = FindLeaf(oldKey, out var oldIndex, ref accessor);
@@ -541,7 +544,7 @@ public abstract partial class BTree<TKey>
                 // newKey doesn't exist — create buffer and insert via AddOrUpdateCore
                 newBufferId = _storage.CreateBuffer(ref accessor);
                 newElementId = _storage.Append(newBufferId, value, ref accessor);
-                var insertArgs = new InsertArguments(newKey, newBufferId, Comparer, ref accessor);
+                var insertArgs = new InsertArguments(newKey, newBufferId, Comparer, ref accessor, ref sibAccessor);
                 AddOrUpdateCorePessimistic(ref insertArgs);
             }
             newHeadBufferId = newBufferId;
@@ -549,7 +552,7 @@ public abstract partial class BTree<TKey>
             // If old buffer is now empty, remove the BTree entry
             if (res == 0 && !preserveEmptyBuffer)
             {
-                var removeArgs = new RemoveArguments(oldKey, Comparer, ref accessor);
+                var removeArgs = new RemoveArguments(oldKey, Comparer, ref accessor, ref sibAccessor);
                 RemoveCorePessimistic(ref removeArgs);
                 if (removeArgs.Removed)
                 {
@@ -562,6 +565,7 @@ public abstract partial class BTree<TKey>
         }
         finally
         {
+            _segment.ReturnWarmSiblingAccessor();
             DeferredReclaim();
         }
     }

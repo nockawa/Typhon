@@ -49,6 +49,22 @@ public partial class PagedMMF
         /// </summary>
         public int ActiveChunkWriters;
 
+        /// <summary>
+        /// Number of <see cref="ChunkAccessor"/> slots currently referencing this memory page.
+        /// While &gt; 0, the page memory must not be reused — callers may hold raw <c>byte*</c> or
+        /// <c>ref T</c> pointers derived from the slot's cached base address.
+        /// <para>
+        /// Unlike <see cref="ActiveChunkWriters"/> (which prevents checkpoint from writing inconsistent data),
+        /// this counter only prevents page eviction in <see cref="TryAcquire"/>. Checkpoint can safely
+        /// snapshot a page with SlotRefCount &gt; 0 as long as ACW == 0.
+        /// </para>
+        /// <para>
+        /// Incremented in <see cref="ChunkAccessor.LoadIntoSlot"/>, decremented (deferred) in
+        /// <see cref="ChunkAccessor.EvictSlot"/> and (immediate) in <see cref="ChunkAccessor.Dispose"/>.
+        /// </para>
+        /// </summary>
+        public int SlotRefCount;
+
         private int _clockSweepCounter;
         private Lazy<Task<int>> _ioReadTask;
 

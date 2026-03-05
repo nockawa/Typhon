@@ -81,6 +81,24 @@ public sealed class EpochManager : ResourceNode, IMetricSource
     }
 
     /// <summary>
+    /// Advance the current thread's pinned epoch without unpinning.
+    /// Pages stamped with older epochs become evictable once no thread holds those epochs.
+    /// The thread remains continuously protected at the new epoch.
+    /// </summary>
+    /// <remarks>
+    /// Unlike <see cref="ExitScopeUnordered"/> + <see cref="EnterScope"/>, this has no brief unpinned window
+    /// where MinActiveEpoch could spike and allow aggressive eviction of pages the thread still references.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal long RefreshScope()
+    {
+        var newEpoch = Interlocked.Increment(ref _globalEpoch);
+        _registry.RefreshPinnedEpoch(newEpoch);
+        _epochAdvances++;
+        return newEpoch;
+    }
+
+    /// <summary>
     /// Exit an epoch scope without enforcing LIFO ordering. Used by <see cref="Transaction"/>
     /// which can be disposed in any order. If this is the outermost scope, unpins the thread
     /// and advances the global epoch.

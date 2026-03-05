@@ -50,16 +50,19 @@ public partial class PagedMMF
             public int DirtyPageCount         { get; internal set; }
             public int LockedByThreadCount    { get; internal set; }
             public int PendingIOReadCount     { get; internal set; }
-            public int MinClockSweepCounter   { get; internal set; }
-            public int MaxClockSweepCounter   { get; internal set; }
-            public int BackpressureWaitCount  { get; internal set; }
+            public int MinClockSweepCounter      { get; internal set; }
+            public int MaxClockSweepCounter      { get; internal set; }
+            public int BackpressureWaitCount     { get; internal set; }
+            public int EpochProtectedPageCount   { get; internal set; }
+            public int SlotRefPageCount          { get; internal set; }
 
             public override string ToString() =>
                 $"Free: {FreeMemPageCount}, Allocating: {AllocatingMemPageCount}, Idle: {IdleMemPageCount}, " +
                 $"Exclusive: {ExclusiveMemPageCount}, Dirty: {DirtyPageCount}, " +
                 $"LockedByThread: {LockedByThreadCount}, PendingIORead: {PendingIOReadCount}, " +
                 $"MinClockSweepCounter: {MinClockSweepCounter}, MaxClockSweepCounter: {MaxClockSweepCounter}, " +
-                $"BackpressureWaitCount: {BackpressureWaitCount}";
+                $"BackpressureWaitCount: {BackpressureWaitCount}, " +
+                $"EpochProtectedPageCount: {EpochProtectedPageCount}, SlotRefPageCount: {SlotRefPageCount}";
         }
         
         public Metrics(PagedMMF owner, int freePageCount)

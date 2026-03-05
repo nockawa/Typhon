@@ -414,6 +414,80 @@ public partial class ChunkBasedSegment : LogicalSegment
         // Do NOT Dispose — keep the page cache warm
     }
 
+    /// <summary>
+    /// Updates the warm accessor cache's epoch to match the new GlobalEpoch.
+    /// Called after <see cref="EpochManager.RefreshScope"/> within a transaction — the accessor's
+    /// slot cache remains valid (FilePageIndex validation catches stale slots), so we avoid
+    /// the costly cold-path that would re-stamp all hot pages via RequestPageEpoch.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void RefreshWarmCacheEpoch(long newEpoch)
+    {
+        var cache = WarmAccessorCache.Instance;
+        cache.Epoch = newEpoch;
+        var sibCache = WarmSiblingAccessorCache.Instance;
+        sibCache.Epoch = newEpoch;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Second warm accessor cache — for B+Tree sibling/horizontal navigation
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Second thread-local warm accessor cache dedicated to B+Tree sibling (horizontal) navigation.
+    /// Separating vertical (parent→child) and horizontal (sibling) page access prevents sibling
+    /// traversal from evicting parent path pages from the 16-slot accessor cache.
+    /// Parent pages stay pinned via SlotRefCount in the primary warm accessor while siblings
+    /// are loaded into this accessor — doubling the effective working set from 16 to 32 pages.
+    /// </summary>
+    private sealed class WarmSiblingAccessorCache
+    {
+        internal ChunkAccessor Accessor;
+        internal ChunkBasedSegment Segment;
+        internal long Epoch;
+        internal bool IsRented;
+
+        [ThreadStatic]
+        // ReSharper disable once InconsistentNaming
+        private static WarmSiblingAccessorCache _instance;
+        internal static WarmSiblingAccessorCache Instance => _instance ??= new();
+    }
+
+    [AllowCopy]
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal ref ChunkAccessor RentWarmSiblingAccessor(ChangeSet changeSet = null)
+    {
+        var cache = WarmSiblingAccessorCache.Instance;
+        Debug.Assert(!cache.IsRented, "double-rent sibling accessor (missing ReturnWarmSiblingAccessor?)");
+
+        var currentEpoch = _epochManager.GlobalEpoch;
+        if (cache.Segment == this && cache.Epoch == currentEpoch)
+        {
+            cache.Accessor.ChangeSet = changeSet;
+            cache.IsRented = true;
+            return ref cache.Accessor;
+        }
+
+        if (cache.Segment != null)
+        {
+            cache.Accessor.Dispose();
+        }
+        cache.Accessor = new ChunkAccessor(this, Manager, _epochManager, changeSet);
+        cache.Segment = this;
+        cache.Epoch = currentEpoch;
+        cache.IsRented = true;
+        return ref cache.Accessor;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void ReturnWarmSiblingAccessor()
+    {
+        var cache = WarmSiblingAccessorCache.Instance;
+        Debug.Assert(cache.IsRented, "return sibling without rent");
+        cache.Accessor.CommitChanges();
+        cache.IsRented = false;
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public (int segmentIndex, int offset) GetChunkLocation(int index)
     {

@@ -158,6 +158,7 @@ public abstract partial class BTree<TKey>
         internal KeyValueItem? InsertLeaf(ref InsertArguments args, ref NodeRelatives relatives, ref ChunkAccessor accessor, bool forceSplit = false)
         {
             KeyValueItem? rightLeaf = null;
+            ref var sibAccessor = ref args.SiblingAccessor;
 
             var index = Find(args.Key, args.KeyComparer, ref accessor);
 
@@ -181,10 +182,11 @@ public abstract partial class BTree<TKey>
                 }
                 else // cant add, spill or split
                 {
-                    if (!forceSplit && CanSpillTo(GetPrevious(ref accessor), ref accessor))
+                    // Sibling operations use sibAccessor to avoid evicting parent path pages from primary CA
+                    if (!forceSplit && CanSpillTo(GetPrevious(ref accessor), ref sibAccessor))
                     {
                         var first = InsertPopFirst(index, item, ref accessor);
-                        GetPrevious(ref accessor).PushLast(first, ref accessor); // move the smallest item to left sibling.
+                        GetPrevious(ref accessor).PushLast(first, ref sibAccessor); // move the smallest item to left sibling.
 
                         // update ancestors key.
                         var newSeparator = GetFirst(ref accessor).Key;
@@ -193,15 +195,15 @@ public abstract partial class BTree<TKey>
                         relatives.LeftAncestor.SetItem(relatives.LeftAncestorIndex, pl, ref accessor);
 
                         // Left's HighKey must match the new separator (spill moved the boundary).
-                        GetPrevious(ref accessor).SetHighKey(newSeparator, ref accessor);
+                        GetPrevious(ref accessor).SetHighKey(newSeparator, ref sibAccessor);
 
                         Validate();
                         Validate();
                     }
-                    else if (!forceSplit && CanSpillTo(GetNext(ref accessor), ref accessor))
+                    else if (!forceSplit && CanSpillTo(GetNext(ref accessor), ref sibAccessor))
                     {
                         var last = InsertPopLast(index, item, ref accessor);
-                        GetNext(ref accessor).PushFirst(last, ref accessor);
+                        GetNext(ref accessor).PushFirst(last, ref sibAccessor);
 
                         // update ancestors key.
                         var pr = relatives.RightAncestor.GetItem(relatives.RightAncestorIndex, ref accessor);
@@ -264,7 +266,7 @@ public abstract partial class BTree<TKey>
         /// Handles a promoted key from a child split during insert. Either inserts the promoted key at this internal node, spills to a sibling, or splits
         /// this node (returning a new promoted key). Called iteratively during upward propagation from <see cref="BTree{TKey}.InsertIterative"/>.
         /// </summary>
-        internal KeyValueItem? HandlePromotedInsert(int childIndex, KeyValueItem middle, ref NodeRelatives relatives, ref ChunkAccessor accessor)
+        internal KeyValueItem? HandlePromotedInsert(int childIndex, KeyValueItem middle, ref NodeRelatives relatives, ref ChunkAccessor accessor, ref ChunkAccessor sibAccessor)
         {
             // +1 because middle is always right side which is fresh node.
             // items at index already point to left node after split. so middle must go after index.
@@ -277,8 +279,8 @@ public abstract partial class BTree<TKey>
             }
             else
             {
-                // if left sibling has space, spill left child of this item to left sibling.
-                if (CanSpillTo(relatives.GetLeftSibling(ref accessor), ref accessor, out var leftSibling))
+                // Sibling resolution + data access uses sibAccessor to avoid evicting parent path pages from primary CA
+                if (CanSpillTo(relatives.GetLeftSibling(ref sibAccessor), ref sibAccessor, out var leftSibling))
                 {
                     #region Fix Pointers after share
                     // give first item to left sibling.
@@ -301,12 +303,12 @@ public abstract partial class BTree<TKey>
                     KeyValueItem.SwapKeys(ref pl, ref first); // swap ancestor key with item.
                     relatives.LeftAncestor.SetItem(relatives.LeftAncestorIndex, pl, ref accessor);
 
-                    leftSibling.PushLast(first, ref accessor);
+                    leftSibling.PushLast(first, ref sibAccessor);
 
                     Validate();
                     Validate();
                 }
-                else if (CanSpillTo(relatives.GetRightSibling(ref accessor), ref accessor, out var rightSibling)) // if right sibling has space
+                else if (CanSpillTo(relatives.GetRightSibling(ref sibAccessor), ref sibAccessor, out var rightSibling)) // if right sibling has space
                 {
                     #region Fix Pointers after share
                     // give last item to right sibling.
@@ -321,15 +323,15 @@ public abstract partial class BTree<TKey>
                     var last = InsertPopLast(index, middle, ref accessor);
 
                     // swap left and right node
-                    var temp = rightSibling.GetLeft(ref accessor).ChunkId;
-                    rightSibling.SetLeft(new NodeWrapper(_storage, last.Value), ref accessor);
+                    var temp = rightSibling.GetLeft(ref sibAccessor).ChunkId;
+                    rightSibling.SetLeft(new NodeWrapper(_storage, last.Value), ref sibAccessor);
                     last = new KeyValueItem(last.Key, temp);
 
                     var pr = relatives.RightAncestor.GetItem(relatives.RightAncestorIndex, ref accessor);
                     KeyValueItem.SwapKeys(ref pr, ref last); // swap ancestor key with item.
                     relatives.RightAncestor.SetItem(relatives.RightAncestorIndex, pr, ref accessor);
 
-                    rightSibling.PushFirst(last, ref accessor);
+                    rightSibling.PushFirst(last, ref sibAccessor);
 
                     Validate();
                     Validate();
@@ -408,6 +410,7 @@ public abstract partial class BTree<TKey>
         public bool RemoveLeaf(ref RemoveArguments args, ref NodeRelatives relatives, ref ChunkAccessor accessor)
         {
             var merge = false;
+            ref var sibAccessor = ref args.SiblingAccessor;
             var index = Find(args.Key, args.Comparer, ref accessor);
 
             if (index >= 0)
@@ -416,9 +419,10 @@ public abstract partial class BTree<TKey>
 
                 if (!GetIsHalfFull(ref accessor)) // borrow or merge
                 {
-                    if (CanBorrowFrom(GetPrevious(ref accessor), ref accessor)) // left sibling
+                    // Sibling operations use sibAccessor to avoid evicting parent path pages from primary CA
+                    if (CanBorrowFrom(GetPrevious(ref accessor), ref sibAccessor)) // left sibling
                     {
-                        var last = GetPrevious(ref accessor).PopLastInternal(ref accessor);
+                        var last = GetPrevious(ref accessor).PopLastInternal(ref sibAccessor);
                         PushFirst(last, ref accessor);
 
                         var p = relatives.LeftAncestor.GetItem(relatives.LeftAncestorIndex, ref accessor);
@@ -426,17 +430,17 @@ public abstract partial class BTree<TKey>
                         relatives.LeftAncestor.SetItem(relatives.LeftAncestorIndex, p, ref accessor);
 
                         // Left's HighKey must match the new separator (borrow moved the boundary).
-                        GetPrevious(ref accessor).SetHighKey(last.Key, ref accessor);
+                        GetPrevious(ref accessor).SetHighKey(last.Key, ref sibAccessor);
 
                         Validate();
                         Validate();
                     }
-                    else if (CanBorrowFrom(GetNext(ref accessor), ref accessor)) // right sibling
+                    else if (CanBorrowFrom(GetNext(ref accessor), ref sibAccessor)) // right sibling
                     {
-                        var first = GetNext(ref accessor).PopFirstInternal(ref accessor);
+                        var first = GetNext(ref accessor).PopFirstInternal(ref sibAccessor);
                         PushLast(first, ref accessor);
 
-                        var newSeparator = GetNext(ref accessor).GetFirst(ref accessor).Key;
+                        var newSeparator = GetNext(ref accessor).GetFirst(ref sibAccessor).Key;
                         var p = relatives.RightAncestor.GetItem(relatives.RightAncestorIndex, ref accessor);
                         KeyValueItem.ChangeKey(ref p, newSeparator);
                         relatives.RightAncestor.SetItem(relatives.RightAncestorIndex, p, ref accessor);
@@ -452,13 +456,13 @@ public abstract partial class BTree<TKey>
                         if (relatives.HasTrueLeftSibling) // current node will be removed from parent.
                         {
                             merge = true;
-                            GetPrevious(ref accessor).MergeLeft(this, ref accessor); // merge from left to keep items in order.
+                            GetPrevious(ref accessor).MergeLeft(this, ref sibAccessor); // merge from left to keep items in order.
                             var p = GetPrevious(ref accessor);
-                            p.SetNext(GetNext(ref accessor), ref accessor); // fix linked list
+                            p.SetNext(GetNext(ref accessor), ref sibAccessor); // fix linked list
                             if (GetNext(ref accessor).IsValid)
                             {
                                 var n = GetNext(ref accessor);
-                                n.SetPrevious(GetPrevious(ref accessor), ref accessor);
+                                n.SetPrevious(GetPrevious(ref accessor), ref sibAccessor);
                             }
 
                             Validate();
@@ -467,12 +471,12 @@ public abstract partial class BTree<TKey>
                         else if (relatives.HasTrueRightSibling) // right sibling will be removed from parent
                         {
                             merge = true;
-                            MergeLeft(GetNext(ref accessor), ref accessor); // merge from right to keep items in order.
-                            SetNext(GetNext(ref accessor).GetNext(ref accessor), ref accessor); // fix linked list
+                            MergeLeft(GetNext(ref accessor), ref sibAccessor); // merge from right to keep items in order.
+                            SetNext(GetNext(ref accessor).GetNext(ref sibAccessor), ref accessor); // fix linked list
                             if (GetNext(ref accessor).IsValid)
                             {
                                 var n = GetNext(ref accessor);
-                                n.SetPrevious(this, ref accessor);
+                                n.SetPrevious(this, ref sibAccessor);
                             }
 
                             Validate();
@@ -501,7 +505,7 @@ public abstract partial class BTree<TKey>
         /// Handles a child merge during remove. Removes the separator key from this internal node, then borrows from a sibling or merges with a sibling if
         /// below half-full. Called iteratively during upward propagation from <see cref="BTree{TKey}.RemoveIterative"/>.
         /// </summary>
-        internal bool HandleChildMerge(int childIndex, ref NodeRelatives relatives, ref ChunkAccessor accessor)
+        internal bool HandleChildMerge(int childIndex, ref NodeRelatives relatives, ref ChunkAccessor accessor, ref ChunkAccessor sibAccessor)
         {
             bool merge = false;
 
@@ -509,9 +513,10 @@ public abstract partial class BTree<TKey>
 
             if (!GetIsHalfFull(ref accessor)) // borrow or merge
             {
-                if (CanBorrowFrom(relatives.GetLeftSibling(ref accessor), ref accessor, out NodeWrapper leftSibling))
+                // Sibling resolution + data access uses sibAccessor to avoid evicting parent path pages from primary CA
+                if (CanBorrowFrom(relatives.GetLeftSibling(ref sibAccessor), ref sibAccessor, out NodeWrapper leftSibling))
                 {
-                    var last = leftSibling.PopLastInternal(ref accessor);
+                    var last = leftSibling.PopLastInternal(ref sibAccessor);
 
                     // swap left and right pointers.
                     var temp = GetLeft(ref accessor).ChunkId;
@@ -527,13 +532,13 @@ public abstract partial class BTree<TKey>
                     Validate();
                     Validate();
                 }
-                else if (CanBorrowFrom(relatives.GetRightSibling(ref accessor), ref accessor, out NodeWrapper rightSibling))
+                else if (CanBorrowFrom(relatives.GetRightSibling(ref sibAccessor), ref sibAccessor, out NodeWrapper rightSibling))
                 {
-                    var first = rightSibling.PopFirstInternal(ref accessor);
+                    var first = rightSibling.PopFirstInternal(ref sibAccessor);
 
                     // swap left and right pointers.
-                    var temp = rightSibling.GetLeft(ref accessor).ChunkId;
-                    rightSibling.SetLeft(new NodeWrapper(_storage, first.Value), ref accessor);
+                    var temp = rightSibling.GetLeft(ref sibAccessor).ChunkId;
+                    rightSibling.SetLeft(new NodeWrapper(_storage, first.Value), ref sibAccessor);
                     first.Value = temp;
 
                     var pl = relatives.RightAncestor.GetItem(relatives.RightAncestorIndex, ref accessor);
@@ -552,17 +557,17 @@ public abstract partial class BTree<TKey>
                     {
                         var pkey = relatives.LeftAncestor.GetItem(relatives.LeftAncestorIndex, ref accessor).Key; // demote key
                         var mid = new KeyValueItem(pkey, GetLeft(ref accessor).ChunkId);
-                        leftSibling.PushLast(mid, ref accessor);
-                        leftSibling.MergeLeft(this, ref accessor); // merge from left to keep items in order.
+                        leftSibling.PushLast(mid, ref sibAccessor);
+                        leftSibling.MergeLeft(this, ref sibAccessor); // merge from left to keep items in order.
 
                         Validate();
                     }
                     else if (relatives.HasTrueRightSibling) // right sibling will be removed from parent
                     {
                         var pkey = relatives.RightAncestor.GetItem(relatives.RightAncestorIndex, ref accessor).Key; // demote key
-                        var mid = new KeyValueItem(pkey, rightSibling.GetLeft(ref accessor).ChunkId);
+                        var mid = new KeyValueItem(pkey, rightSibling.GetLeft(ref sibAccessor).ChunkId);
                         PushLast(mid, ref accessor);
-                        MergeLeft(rightSibling, ref accessor); // merge from right to keep items in order.
+                        MergeLeft(rightSibling, ref sibAccessor); // merge from right to keep items in order.
 
                         Validate();
                     }

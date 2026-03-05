@@ -18,6 +18,12 @@ public unsafe class Transaction : IDisposable
     private const int ComponentInfosMaxCapacity = 131;
     private const int DeferredEnqueueBatchCapacity = 256;
 
+    /// <summary>
+    /// Number of entity operations between epoch refreshes. Each operation touches ~4-20 pages.
+    /// At 128 ops × ~10 pages/op = ~1280 pages — refreshes before saturating a 1024-page cache.
+    /// </summary>
+    private const int EpochRefreshInterval = 128;
+
     public enum TransactionState
     {
         Invalid = 0,
@@ -40,6 +46,7 @@ public unsafe class Transaction : IDisposable
 
     private int? _committedOperationCount;
     private int _deletedComponentCount;
+    private int _entityOperationCount;
     private ChangeSet _changeSet;
 
     // Reused across pooled Transaction lifetimes — collects deferred enqueue entries per commit/rollback
@@ -96,6 +103,7 @@ public unsafe class Transaction : IDisposable
 #endif
         _committedOperationCount = null;
         _deletedComponentCount = 0;
+        _entityOperationCount = 0;
         _changeSet = uow?.ChangeSet ?? _dbe.MMF.CreateChangeSet();
         State = TransactionState.Created;
         TSN = tsn;
@@ -557,6 +565,45 @@ public unsafe class Transaction : IDisposable
         return info;
     }
 
+    /// <summary>
+    /// Flush all pending dirty state and advance the epoch within this transaction.
+    /// Must only be called at a quiescent point — no B+Tree OLC write locks held,
+    /// no ChunkAccessor mid-operation.
+    /// </summary>
+    private void FlushAndRefreshEpoch()
+    {
+        // 1. Flush dirty state on all live per-transaction ChunkAccessors
+        foreach (var ci in _componentInfos.Values)
+        {
+            ci.CompContentAccessor.CommitChanges();
+            ci.CompRevTableAccessor.CommitChanges();
+        }
+
+        // 2. Cap DirtyCounter at 1 for all tracked pages, clear ChangeSet.
+        //    After clearing, re-registration in MarkSlotDirty brings DC to exactly 2
+        //    (ChangeSet.Add→DC=1, then EnsureDirtyAtLeast(2)→DC=2), so checkpoint needs at most 2 cycles.
+        _changeSet?.ReleaseExcessDirtyMarks();
+
+        // 3. Advance epoch atomically (no unpinned window)
+        var newEpoch = _epochManager.RefreshScope();
+
+        // 4. Keep warm accessor cache alive — update its epoch so RentWarmAccessor sees a match.
+        //    Without this, the next RentWarmAccessor creates a new accessor with empty slot cache,
+        //    forcing all hot pages through RequestPageEpoch which re-stamps their AccessEpoch,
+        //    making them permanently epoch-protected and causing unbounded cache pressure.
+        ChunkBasedSegment.RefreshWarmCacheEpoch(newEpoch);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void CheckEpochRefresh()
+    {
+        if (++_entityOperationCount >= EpochRefreshInterval)
+        {
+            FlushAndRefreshEpoch();
+            _entityOperationCount = 0;
+        }
+    }
+
     private void CreateComponent<T>(long pk, ref T comp) where T : unmanaged
     {
         AssertThreadAffinity();
@@ -591,6 +638,8 @@ public unsafe class Transaction : IDisposable
         int compSize = info.ComponentTable.ComponentStorageSize;
         var dst = info.CompContentAccessor.GetChunkAsSpan(componentChunkId, true);
         new Span<byte>(Unsafe.AsPointer(ref comp), compSize).CopyTo(dst.Slice(info.ComponentTable.ComponentOverhead));
+
+        CheckEpochRefresh();
     }
 
     private void CreateComponents<T>(long pk, ReadOnlySpan<T> compList) where T : unmanaged
@@ -625,8 +674,10 @@ public unsafe class Transaction : IDisposable
             var dst = info.CompContentAccessor.GetChunkAsSpan(componentChunkId, true);
             compList.Slice(i, 1).Cast<T, byte>().CopyTo(dst.Slice(info.ComponentTable.ComponentOverhead));
         }
+
+        CheckEpochRefresh();
     }
-    
+
     private bool ReadComponent<T>(long pk, out T t) where T : unmanaged
     {
         AssertThreadAffinity();
@@ -819,6 +870,7 @@ public unsafe class Transaction : IDisposable
             }
         }
 
+        CheckEpochRefresh();
         return true;
     }
 
@@ -929,6 +981,7 @@ public unsafe class Transaction : IDisposable
             CreateComponents(pk, compList.Slice(compRevInfoSpan.Length));
         }
 
+        CheckEpochRefresh();
         return true;
     }
 

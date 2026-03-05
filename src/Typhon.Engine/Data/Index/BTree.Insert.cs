@@ -469,6 +469,7 @@ public abstract partial class BTree<TKey>
         MutationContext ctx = default;
         var node = Root;
         var relatives = new NodeRelatives();
+        ref var sibAccessor = ref args.SiblingAccessor;
 
         // Phase 1: Descend from root to leaf, recording path + PathVersions for validation.
         // OLC protocol: read version BEFORE data, validate AFTER — ensures (index, version) are consistent.
@@ -496,7 +497,7 @@ public abstract partial class BTree<TKey>
                 return;
             }
 
-            NodeRelatives.Create(child, index, node, parentCount, ref relatives, out var childRelatives, ref accessor);
+            NodeRelatives.Create(child, index, node, parentCount, ref relatives, out var childRelatives, ref accessor, ref sibAccessor);
 
             ctx.PathNodes[ctx.Depth] = node;
             ctx.PathChildIndices[ctx.Depth] = index;
@@ -617,15 +618,15 @@ public abstract partial class BTree<TKey>
             var mrNext = node.GetNext(ref accessor);
             if (mrNext.IsValid)
             {
-                mrNext.PreDirtyForWrite(ref accessor);
-                SpinWriteLock(mrNext.GetLatch(ref accessor));
+                mrNext.PreDirtyForWrite(ref sibAccessor);
+                SpinWriteLock(mrNext.GetLatch(ref sibAccessor));
             }
 
             node.InsertLeaf(ref args, ref relatives, ref accessor, forceSplit: true);
 
             if (mrNext.IsValid)
             {
-                mrNext.GetLatch(ref accessor).WriteUnlock();
+                mrNext.GetLatch(ref sibAccessor).WriteUnlock();
             }
             node.GetLatch(ref accessor).WriteUnlock();
             completed = true;
@@ -635,26 +636,27 @@ public abstract partial class BTree<TKey>
         // Slow path: leaf full or contention split — structural modification needed.
         // For contention split, skip leafPrev lock (no spill needed — item already in, only need right neighbor for linked list).
         // On lock failure: contention split uses WriteUnlock + completed=true (item is in); regular uses AbortWriteLock + restart.
+        // Sibling locking: load sibling pages into the sibling CA to avoid evicting parent path pages from the primary CA
         var leafPrev = itemAlreadyInserted ? default : node.GetPrevious(ref accessor);
         var leafNext = node.GetNext(ref accessor);
         if (leafPrev.IsValid)
         {
-            leafPrev.PreDirtyForWrite(ref accessor);
+            leafPrev.PreDirtyForWrite(ref sibAccessor);
         }
-        if (leafPrev.IsValid && !leafPrev.GetLatch(ref accessor).TryWriteLock())
+        if (leafPrev.IsValid && !leafPrev.GetLatch(ref sibAccessor).TryWriteLock())
         {
             node.GetLatch(ref accessor).AbortWriteLock();
             return;
         }
         if (leafNext.IsValid)
         {
-            leafNext.PreDirtyForWrite(ref accessor);
+            leafNext.PreDirtyForWrite(ref sibAccessor);
         }
-        if (leafNext.IsValid && !leafNext.GetLatch(ref accessor).TryWriteLock())
+        if (leafNext.IsValid && !leafNext.GetLatch(ref sibAccessor).TryWriteLock())
         {
             if (leafPrev.IsValid)
             {
-                leafPrev.GetLatch(ref accessor).AbortWriteLock();
+                leafPrev.GetLatch(ref sibAccessor).AbortWriteLock();
             }
             if (itemAlreadyInserted)
             {
@@ -682,11 +684,11 @@ public abstract partial class BTree<TKey>
                 }
                 if (leafNext.IsValid)
                 {
-                    leafNext.GetLatch(ref accessor).AbortWriteLock();
+                    leafNext.GetLatch(ref sibAccessor).AbortWriteLock();
                 }
                 if (leafPrev.IsValid)
                 {
-                    leafPrev.GetLatch(ref accessor).AbortWriteLock();
+                    leafPrev.GetLatch(ref sibAccessor).AbortWriteLock();
                 }
                 if (itemAlreadyInserted)
                 {
@@ -706,11 +708,11 @@ public abstract partial class BTree<TKey>
                 }
                 if (leafNext.IsValid)
                 {
-                    leafNext.GetLatch(ref accessor).AbortWriteLock();
+                    leafNext.GetLatch(ref sibAccessor).AbortWriteLock();
                 }
                 if (leafPrev.IsValid)
                 {
-                    leafPrev.GetLatch(ref accessor).AbortWriteLock();
+                    leafPrev.GetLatch(ref sibAccessor).AbortWriteLock();
                 }
                 if (itemAlreadyInserted)
                 {
@@ -736,14 +738,14 @@ public abstract partial class BTree<TKey>
             promoted = node.InsertLeaf(ref args, ref relatives, ref accessor);
         }
 
-        // Phase 2.5: Unlock leaf neighbors (version bumped by WriteUnlock)
+        // Phase 2.5: Unlock leaf neighbors (version bumped by WriteUnlock) — sibling CA
         if (leafNext.IsValid)
         {
-            leafNext.GetLatch(ref accessor).WriteUnlock();
+            leafNext.GetLatch(ref sibAccessor).WriteUnlock();
         }
         if (leafPrev.IsValid)
         {
-            leafPrev.GetLatch(ref accessor).WriteUnlock();
+            leafPrev.GetLatch(ref sibAccessor).WriteUnlock();
         }
         // Defer leaf unlock if this is a root-leaf that split (need to hold lock for atomic root creation)
         if (!(ctx.Depth == 0 && promoted != null))
@@ -758,34 +760,34 @@ public abstract partial class BTree<TKey>
             node = ctx.PathNodes[ctx.Depth];
             relatives = ctx.PathRelatives[ctx.Depth];
 
-            // Lock siblings that HandlePromotedInsert might spill to (only when node is full)
+            // Lock siblings that HandlePromotedInsert might spill to (only when node is full) — sibling CA
             NodeWrapper leftSib = default, rightSib = default;
             if (node.GetIsFull(ref accessor))
             {
-                leftSib = relatives.GetLeftSibling(ref accessor);
-                rightSib = relatives.GetRightSibling(ref accessor);
+                leftSib = relatives.GetLeftSibling(ref sibAccessor);
+                rightSib = relatives.GetRightSibling(ref sibAccessor);
                 if (leftSib.IsValid)
                 {
-                    leftSib.PreDirtyForWrite(ref accessor);
-                    SpinWriteLock(leftSib.GetLatch(ref accessor));
+                    leftSib.PreDirtyForWrite(ref sibAccessor);
+                    SpinWriteLock(leftSib.GetLatch(ref sibAccessor));
                 }
                 if (rightSib.IsValid)
                 {
-                    rightSib.PreDirtyForWrite(ref accessor);
-                    SpinWriteLock(rightSib.GetLatch(ref accessor));
+                    rightSib.PreDirtyForWrite(ref sibAccessor);
+                    SpinWriteLock(rightSib.GetLatch(ref sibAccessor));
                 }
             }
 
-            promoted = node.HandlePromotedInsert(ctx.PathChildIndices[ctx.Depth], promoted.Value, ref relatives, ref accessor);
+            promoted = node.HandlePromotedInsert(ctx.PathChildIndices[ctx.Depth], promoted.Value, ref relatives, ref accessor, ref sibAccessor);
 
             // Unlock siblings
             if (rightSib.IsValid)
             {
-                rightSib.GetLatch(ref accessor).WriteUnlock();
+                rightSib.GetLatch(ref sibAccessor).WriteUnlock();
             }
             if (leftSib.IsValid)
             {
-                leftSib.GetLatch(ref accessor).WriteUnlock();
+                leftSib.GetLatch(ref sibAccessor).WriteUnlock();
             }
             // Defer root unlock if root split (need to hold lock for atomic root creation)
             if (!(ctx.Depth == 0 && promoted != null))
