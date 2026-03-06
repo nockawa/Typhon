@@ -466,6 +466,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
     internal long _pessimisticFallbacks;
     internal long _writeLockFailures;
     internal long _splitCount;
+    internal long _leafFullFromOlc;
     internal long _mergeCount;
     internal long _moveRightCount;
     internal long _contentionSplitCount;
@@ -616,17 +617,22 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
     /// <summary>Number of deferred nodes pending reclamation (test visibility).</summary>
     internal int DeferredNodeCount => _deferredNodes.Count;
 
+    public override long Count => _count;
+
     /// <summary>Number of OLC optimistic read restarts (version validation failures).</summary>
-    public long OptimisticRestarts => Interlocked.Read(ref _optimisticRestarts);
+    public override long OptimisticRestarts => Interlocked.Read(ref _optimisticRestarts);
 
     /// <summary>Number of fallbacks from optimistic to pessimistic path.</summary>
-    public long PessimisticFallbacks => Interlocked.Read(ref _pessimisticFallbacks);
+    public override long PessimisticFallbacks => Interlocked.Read(ref _pessimisticFallbacks);
 
     /// <summary>Number of SpinWriteLock spin iterations (contention on write locks).</summary>
     public long WriteLockFailures => Interlocked.Read(ref _writeLockFailures);
 
     /// <summary>Number of node splits (leaf + internal).</summary>
-    public long SplitCount => Interlocked.Read(ref _splitCount);
+    public override long SplitCount => Interlocked.Read(ref _splitCount);
+
+    /// <summary>Number of times OLC insert returned LeafFull (expected: ~1 per leaf capacity inserts).</summary>
+    public override long LeafFullFromOlc => Interlocked.Read(ref _leafFullFromOlc);
 
     /// <summary>Number of node merges (leaf + internal).</summary>
     public long MergeCount => Interlocked.Read(ref _mergeCount);
@@ -1265,7 +1271,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
             }
 
             var bufferId = leaf.GetItem(index, ref opAccessor).Value;
-            var res = _storage.RemoveFromBuffer(bufferId, elementId, value, ref opAccessor);
+            var res = _storage.RemoveFromBuffer(bufferId, elementId, value, ref sibAccessor);
 
             // WriteUnlock leaf — buffer manipulation is done, version bumped for OLC readers
             leaf.GetLatch(ref opAccessor).WriteUnlock();
@@ -1285,7 +1291,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
 
                 if (args.Removed)
                 {
-                    _storage.DeleteBuffer(args.Value, ref opAccessor);
+                    _storage.DeleteBuffer(args.Value, ref sibAccessor);
                 }
 
                 SyncHeader(ref opAccessor);
@@ -1388,7 +1394,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
 
     protected internal NodeWrapper AllocNode(NodeStates states, ref ChunkAccessor accessor)
     {
-        var node = new NodeWrapper(_storage, _segment.AllocateChunk(false), (states & NodeStates.IsLeaf) != 0);
+        var node = new NodeWrapper(_storage, _segment.AllocateChunk(false, accessor.ChangeSet), (states & NodeStates.IsLeaf) != 0);
         _storage.InitializeNode(node, states, ref accessor);
         return node;
     }

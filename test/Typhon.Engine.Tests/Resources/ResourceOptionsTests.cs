@@ -25,7 +25,7 @@ public class ResourceOptionsTests
         Assert.That(options.TransactionPoolSize, Is.EqualTo(16));
 
         // WAL defaults
-        Assert.That(options.WalRingBufferSizeBytes, Is.EqualTo(4 * 1024 * 1024), "Default WAL ring buffer should be 4 MB");
+        Assert.That(options.WalRingBufferSizeBytes, Is.EqualTo(8 * 1024 * 1024), "Default WAL ring buffer should be 8 MB");
         Assert.That(options.WalBackPressureThreshold, Is.EqualTo(0.8));
         Assert.That(options.WalMaxSegmentSizeBytes, Is.EqualTo(64L << 20), "Default WAL segment should be 64 MB");
         Assert.That(options.WalMaxSegments, Is.EqualTo(4));

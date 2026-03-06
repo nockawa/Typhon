@@ -20,14 +20,9 @@ public partial class ChunkBasedSegment
         private readonly long[] _l2All;
         private readonly long[] _l1Any;
 
-        // When true, skip L1/L2 acceleration and scan L0 linearly.
-        // L1/L2 are imperfect views that can go stale under pressure.
-        private readonly bool _l0Only;
-
-        public BitmapL3(ChunkBasedSegment segment, bool isLoading, bool l0Only = false)
+        public BitmapL3(ChunkBasedSegment segment, bool isLoading)
         {
             _segment = segment;
-            _l0Only = l0Only;
             _rootChunkCount = segment.ChunkCountRootPage;
             _otherChunkCount = segment.ChunkCountPerPage;
 
@@ -61,7 +56,6 @@ public partial class ChunkBasedSegment
         public BitmapL3(ChunkBasedSegment segment, BitmapL3 oldBitmap, int oldPageCount)
         {
             _segment = segment;
-            _l0Only = oldBitmap._l0Only;
             _rootChunkCount = segment.ChunkCountRootPage;
             _otherChunkCount = segment.ChunkCountPerPage;
 
@@ -207,7 +201,7 @@ public partial class ChunkBasedSegment
 
             var (pageIndex, pageOffset) = GetBitmapMaskLocation(l0Offset);
             var epoch = _segment.Manager.EpochManager.GlobalEpoch;
-            var page = _segment.GetPage(pageIndex, epoch, out _);
+            var page = _segment.GetPage(pageIndex, epoch, out var memPageIndex);
             var data = page.Metadata<long>();
             {
                 var prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
@@ -216,6 +210,12 @@ public partial class ChunkBasedSegment
                     // The bit was concurrently set by someone else
                     return false;
                 }
+
+                // Ensure DC≥1 so checkpoint includes this page in its next snapshot.
+                // EnsureDirtyAtLeast (not IncrementDirty) avoids DC inflation: multiple allocations
+                // on the same page between ReleaseExcessDirtyMarks calls would otherwise accumulate
+                // unbounded DC, since bitmap DC increments are not tracked by any ChangeSet.
+                _segment.Manager.EnsureDirtyAtLeast(memPageIndex, 1);
 
                 if (prevL0 != -1 && (prevL0 | l0Mask) == -1)
                 {
@@ -252,7 +252,7 @@ public partial class ChunkBasedSegment
 
             var (pageIndex, pageOffset) = GetBitmapMaskLocation(l0Offset);
             var epoch = _segment.Manager.EpochManager.GlobalEpoch;
-            var page = _segment.GetPage(pageIndex, epoch, out _);
+            var page = _segment.GetPage(pageIndex, epoch, out var memPageIndex);
             var data = page.Metadata<long>();
             {
                 // Use CompareExchange to atomically set all 64 bits ONLY if none were set.
@@ -263,6 +263,10 @@ public partial class ChunkBasedSegment
                     // Can't allocate the whole L1, some bits are set at L0
                     return false;
                 }
+
+                // Ensure DC≥1 so checkpoint includes this page in its next snapshot.
+                // EnsureDirtyAtLeast (not IncrementDirty) avoids DC inflation — see SetL0 comment.
+                _segment.Manager.EnsureDirtyAtLeast(memPageIndex, 1);
 
                 // prevL0 was 0, now it's -1, so L0 group is full -> set L1All
                 {
@@ -313,10 +317,11 @@ public partial class ChunkBasedSegment
                     return;
                 }
 
-                // Mark the page dirty so the cleared bit is persisted to disk by checkpoint.
+                // Ensure DC≥1 so checkpoint includes this page in its next snapshot.
                 // Without this, the page can be evicted as "clean" and reloaded from the last checkpoint snapshot — which still has the bit SET,
                 // causing _allocated to diverge from the actual popcount in page metadata.
-                _segment.Manager.IncrementDirty(memPageIndex);
+                // EnsureDirtyAtLeast (not IncrementDirty) avoids DC inflation — see SetL0 comment.
+                _segment.Manager.EnsureDirtyAtLeast(memPageIndex, 1);
 
                 // Update L1All: clear bit when L0 group transitions from full to not-full
                 if (prevL0 == -1)
@@ -406,46 +411,42 @@ public partial class ChunkBasedSegment
                             return false;
                         }
 
-                        // L1/L2 skip acceleration — only when not in L0-only mode
-                        if (!_l0Only)
-                        {
-                            var ll1 = _l1All.Length;
-                            var ll2 = _l2All.Length;
+                        var ll1 = _l1All.Length;
+                        var ll2 = _l2All.Length;
 
-                            // Check if we can skip the rest of the level 1
-                            for (int i1 = c0 >> 12; i1 < ll1; i1 = c0 >> 12)
+                        // L1/L2 skip acceleration: jump over fully-allocated regions
+                        for (int i1 = c0 >> 12; i1 < ll1; i1 = c0 >> 12)
+                        {
+                            var v1 = _l1All[i1] >> (i0 & 0x3F);
+                            if (v1 != -1)
                             {
-                                var v1 = _l1All[i1] >> (i0 & 0x3F);
-                                if (v1 != -1)
+                                break;
+                            }
+
+                            i0 = 0;
+                            c0 = ++i1 << 12;
+
+                            // Bounds check after skip
+                            if (c0 >= capacity)
+                            {
+                                return false;
+                            }
+
+                            // Check if we can skip the rest of the level 2
+                            for (int i2 = c0 >> 18; i2 < ll2; i2 = c0 >> 18)
+                            {
+                                var v2 = _l2All[i2] >> (i1 & 0x3F);
+                                if (v2 != -1)
                                 {
                                     break;
                                 }
-
-                                i0 = 0;
-                                c0 = ++i1 << 12;
+                                i1 = 0;
+                                c0 = ++i2 << 18;
 
                                 // Bounds check after skip
                                 if (c0 >= capacity)
                                 {
                                     return false;
-                                }
-
-                                // Check if we can skip the rest of the level 2
-                                for (int i2 = c0 >> 18; i2 < ll2; i2 = c0 >> 18)
-                                {
-                                    var v2 = _l2All[i2] >> (i1 & 0x3F);
-                                    if (v2 != -1)
-                                    {
-                                        break;
-                                    }
-                                    i1 = 0;
-                                    c0 = ++i2 << 18;
-
-                                    // Bounds check after skip
-                                    if (c0 >= capacity)
-                                    {
-                                        return false;
-                                    }
                                 }
                             }
                         }
@@ -480,12 +481,6 @@ public partial class ChunkBasedSegment
         [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
         private bool FindNextUnsetL1(ref int index, ref long mask)
         {
-            // L1 bulk allocation requires L1Any/L1All arrays — disabled in L0-only mode
-            if (_l0Only)
-            {
-                return false;
-            }
-
             var capacity = Capacity;
             
             // Calculate the maximum valid L1 index (each L1 represents 64 chunks)

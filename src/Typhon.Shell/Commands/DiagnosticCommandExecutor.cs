@@ -47,6 +47,7 @@ internal sealed class DiagnosticCommandExecutor
             "resources"        => ExecuteResources(tokens, 1),
             "stats-show"       => ExecuteStatsShow(tokens, 1),
             "stats-rebuild"    => ExecuteStatsRebuild(tokens, 1),
+            "db-stats"         => ExecuteDbStats(),
             _                  => null
         };
     }
@@ -306,6 +307,96 @@ internal sealed class DiagnosticCommandExecutor
 
             return raw ? CommandResult.Ok(sb.ToString().TrimEnd()) : CommandResult.Markup(sb.ToString().TrimEnd());
         }
+    }
+
+    // ── Database Volumetry ──────────────────────────────────────
+
+    private CommandResult ExecuteDbStats()
+    {
+        if (!RequireDatabase(out var error))
+        {
+            return error;
+        }
+
+        var sb = new StringBuilder();
+        var mmf = _session.Engine.MMF;
+
+        // ── File Pages ──
+        var capPages = mmf.OccupancyCapacityPages;
+        var capBytes = (long)capPages * PagedMMF.PageSize;
+
+        sb.AppendLine("  [white]File Pages[/]");
+        sb.AppendLine("  [grey]──────────────────────────────────────────────────────────────────────────[/]");
+        sb.AppendLine($"  [grey]Capacity:[/]        [white]{capPages:N0}[/] pages  [grey]({FormatBytes(capBytes)})[/]");
+        sb.AppendLine($"  [grey]Page size:[/]       [white]{PagedMMF.PageSize:N0} B[/]");
+        sb.AppendLine();
+
+        // ── Per-component segment breakdown ──
+        var tables = GetComponentTables();
+        if (tables.Count == 0)
+        {
+            sb.AppendLine("  [yellow]No component tables registered.[/]");
+            return CommandResult.Markup(sb.ToString().TrimEnd());
+        }
+
+        sb.AppendLine("  [white]Segments[/]");
+        sb.AppendLine("  [grey]Segment                    ChunkSz   Used     Cap       Fill      Pages  Data Size[/]");
+        sb.AppendLine("  [grey]─────────────────────────   ───────   ──────   ───────   ───────   ─────  ─────────[/]");
+
+        long totalChunksUsed = 0;
+        long totalChunksCap = 0;
+        long totalDataBytes = 0;
+        int totalPages = 0;
+
+        foreach (var (name, table) in tables)
+        {
+            AppendDbStatsSegmentRow(sb, $"{name}.Data", table.ComponentSegment, ref totalChunksUsed, ref totalChunksCap, ref totalDataBytes, ref totalPages);
+            AppendDbStatsSegmentRow(sb, $"{name}.RevTable", table.CompRevTableSegment, ref totalChunksUsed, ref totalChunksCap, ref totalDataBytes, ref totalPages);
+
+            if (table.DefaultIndexSegment != null)
+            {
+                AppendDbStatsSegmentRow(sb, $"{name}.PK_Index", table.DefaultIndexSegment, ref totalChunksUsed, ref totalChunksCap, ref totalDataBytes, ref totalPages);
+            }
+
+            if (table.String64IndexSegment != null)
+            {
+                AppendDbStatsSegmentRow(sb, $"{name}.Str64_Index", table.String64IndexSegment, ref totalChunksUsed, ref totalChunksCap, ref totalDataBytes, ref totalPages);
+            }
+
+            if (table.TailIndexSegment != null)
+            {
+                AppendDbStatsSegmentRow(sb, $"{name}.Tail_Index", table.TailIndexSegment, ref totalChunksUsed, ref totalChunksCap, ref totalDataBytes, ref totalPages);
+            }
+        }
+
+        sb.AppendLine("  [grey]─────────────────────────   ───────   ──────   ───────   ───────   ─────  ─────────[/]");
+        var totalFill = totalChunksCap > 0 ? (double)totalChunksUsed / totalChunksCap : 0.0;
+        sb.AppendLine($"  {"[white]Total[/]",-35} {"",9}   {totalChunksUsed,6:N0}   {totalChunksCap,7:N0}   {totalFill,7:P1}   {totalPages,5:N0}  [white]{FormatBytes(totalDataBytes)}[/]");
+
+        return CommandResult.Markup(sb.ToString().TrimEnd());
+    }
+
+    private static void AppendDbStatsSegmentRow(StringBuilder sb, string name, ChunkBasedSegment seg,
+        ref long totalChunksUsed, ref long totalChunksCap, ref long totalDataBytes, ref int totalPages)
+    {
+        if (seg == null)
+        {
+            return;
+        }
+
+        var used = seg.AllocatedChunkCount;
+        var cap = seg.ChunkCapacity;
+        var fill = cap > 0 ? (double)used / cap : 0.0;
+        var pages = seg.Length;
+        var dataBytes = (long)used * seg.Stride;
+
+        totalChunksUsed += used;
+        totalChunksCap += cap;
+        totalDataBytes += dataBytes;
+        totalPages += pages;
+
+        var chunkSz = seg.Stride < 1024 ? $"{seg.Stride} B" : $"{seg.Stride / 1024.0:F1} KB";
+        sb.AppendLine($"  {Markup.Escape(name),-27} {chunkSz,7}   {used,6:N0}   {cap,7:N0}   {fill,7:P1}   {pages,5:N0}  {FormatBytes(dataBytes)}");
     }
 
     // ── Segment Diagnostics ───────────────────────────────────

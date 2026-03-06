@@ -352,7 +352,7 @@ public abstract class L16BTree<TKey> : BTree<TKey> where TKey : unmanaged
             Set(ref chunk, c, item, true);
         }
 
-        public override int Append(int bufferId, int value, ref ChunkAccessor accessor) => throw new Exception("Shouldn't be called as key replace is not supported and multi-value neither");
+        public override int Append(int bufferId, int value, ref ChunkAccessor bufferAccessor) => throw new Exception("Shouldn't be called as key replace is not supported and multi-value neither");
 
         public override void Insert(NodeWrapper node, int index, KeyValueItem item, ref ChunkAccessor accessor)
         {
@@ -375,11 +375,11 @@ public abstract class L16BTree<TKey> : BTree<TKey> where TKey : unmanaged
             chunk.Count++;
         }
 
-        public override int CreateBuffer(ref ChunkAccessor accessor) => default;
+        public override int CreateBuffer(ref ChunkAccessor bufferAccessor) => default;
 
         public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId, ref ChunkAccessor accessor) => default;
-        public override int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor accessor) => default;
-        public override void DeleteBuffer(int bufferId, ref ChunkAccessor accessor) { }
+        public override int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor bufferAccessor) => default;
+        public override void DeleteBuffer(int bufferId, ref ChunkAccessor bufferAccessor) { }
 
         public override NodeWrapper GetFirstChild(NodeWrapper node, ref ChunkAccessor accessor)
         {
@@ -935,14 +935,14 @@ public class L16MultipleBTree<TKey> : L16BTree<TKey> where TKey : unmanaged
             _valueStore = new VariableSizedBufferSegment<int, IndexBufferExtraHeader>(segment);
         }
 
-        public override int Append(int bufferId, int value, ref ChunkAccessor accessor) => _valueStore.AddElement(bufferId, value, ref accessor);
+        public override int Append(int bufferId, int value, ref ChunkAccessor bufferAccessor) => _valueStore.AddElement(bufferId, value, ref bufferAccessor);
         public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId, ref ChunkAccessor accessor) => _valueStore.GetReadOnlyAccessor(bufferId);
 
-        public override int CreateBuffer(ref ChunkAccessor accessor) => _valueStore.AllocateBuffer(ref accessor);
+        public override int CreateBuffer(ref ChunkAccessor bufferAccessor) => _valueStore.AllocateBuffer(ref bufferAccessor);
 
-        public override int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor accessor) 
-            => _valueStore.DeleteElement(bufferId, elementId, value, ref accessor);
-        public override void DeleteBuffer(int bufferId, ref ChunkAccessor accessor) => _valueStore.DeleteBuffer(bufferId, ref accessor);
+        public override int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor bufferAccessor)
+            => _valueStore.DeleteElement(bufferId, elementId, value, ref bufferAccessor);
+        public override void DeleteBuffer(int bufferId, ref ChunkAccessor bufferAccessor) => _valueStore.DeleteBuffer(bufferId, ref bufferAccessor);
     }
 }
 

@@ -142,13 +142,12 @@ public unsafe struct ChunkAccessor : IDisposable
     ///   skips this page (CAS sentinel). This prevents checkpoint from capturing a snapshot with partially-written
     ///   B+Tree data (e.g., a node with odd OLC version).</item>
     ///   <item><b>ChangeSet</b>: Eagerly registered via <see cref="ChangeSet.AddByMemPageIndex"/> so that
-    ///   dirty pages are tracked for writeback. On first registration, ChangeSet itself bumps DirtyCounter to 1.</item>
-    ///   <item><b>DirtyCounter guard</b>: On first ChangeSet registration, an extra <see cref="PagedMMF.IncrementDirty"/>
-    ///   brings DC to 2 (survives one checkpoint cycle). On subsequent accessor rentals within the same UoW
-    ///   (where AddByMemPageIndex is idempotent due to HashSet dedup), <see cref="PagedMMF.EnsureDirtyAtLeast"/>
-    ///   raises DC to 1 if checkpoint has drained it to 0, preventing premature eviction by the clock-sweep.
-    ///   This is safe because ACW &gt; 0 blocks checkpoint from writing the page mid-modification, so DC can only
-    ///   reach 0 AFTER a completed checkpoint write (on-disk version up to date).
+    ///   dirty pages are tracked for writeback. On first registration, ChangeSet itself bumps DirtyCounter via
+    ///   <see cref="PagedMMF.IncrementDirty"/>.</item>
+    ///   <item><b>DirtyCounter guard (CP-04)</b>: On re-registration (same page re-dirtied in a subsequent accessor
+    ///   rental within the same UoW), <see cref="PagedMMF.IncrementDirty"/> unconditionally bumps DC. This handles
+    ///   the race where checkpoint snapshots the page (Step 3) between two accessor rentals: the snapshot is stale,
+    ///   so IncrementDirty ensures DC &gt; 1, surviving the pending DecrementDirty (Step 5).
     ///   <see cref="ChangeSet.ReleaseExcessDirtyMarks"/> caps DC at 1 when the UoW disposes.</item>
     /// </list>
     /// </para>
@@ -169,18 +168,24 @@ public unsafe struct ChunkAccessor : IDisposable
             {
                 if (_changeSet.AddByMemPageIndex(memPageIndex))
                 {
-                    // First registration for this page in this ChangeSet: ChangeSet already bumped DC to 1.
-                    // Raise to exactly 2 so DC survives one checkpoint DecrementDirty cycle.
-                    // Using EnsureDirtyAtLeast (not IncrementDirty) prevents DC inflation to 3
-                    // when re-registering after ReleaseExcessDirtyMarks capped DC at 1.
-                    _pagedMMF.EnsureDirtyAtLeast(memPageIndex, 2);
+                    // First registration: AddByMemPageIndex called IncrementDirty → DC≥1.
+                    // ACW > 0 (set above) blocks checkpoint from snapshotting this page
+                    // during the current write window.
                 }
                 else
                 {
                     // Page already tracked by ChangeSet (re-dirtied in a subsequent accessor rental).
-                    // Checkpoint may have drained DC to 0 since the first registration. Raise to at least 1
-                    // so the page stays unevictable while we're about to write to it.
-                    _pagedMMF.EnsureDirtyAtLeast(memPageIndex, 1);
+                    // Must IncrementDirty — NOT EnsureDirtyAtLeast — to satisfy CP-04:
+                    //   If checkpoint snapshots the page between our previous CommitChanges (ACW→0)
+                    //   and this re-dirty, the snapshot is stale. IncrementDirty pushes DC to ≥2,
+                    //   so the pending DecrementDirty (Step 5) leaves DC≥1, keeping the page dirty
+                    //   for the next checkpoint cycle which will capture our new modifications.
+                    // EnsureDirtyAtLeast(1) is wrong: it's a no-op when DC=1, leaving DC=1 for
+                    //   checkpoint to decrement to 0 — making the page evictable with stale disk data.
+                    // EnsureDirtyAtLeast(2) is wrong: it creates a livelock — checkpoint decrements
+                    //   2→1, next re-dirty bumps 1→2, DC never reaches 0.
+                    // ReleaseExcessDirtyMarks caps DC at 1 on UoW dispose, preventing inflation.
+                    _pagedMMF.IncrementDirty(memPageIndex);
                 }
             }
         }
@@ -522,10 +527,22 @@ public unsafe struct ChunkAccessor : IDisposable
     /// Separated from the hot path to avoid polluting the instruction cache.
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void ThrowChunkIdOutOfRange(int chunkId, int capacity) =>
+    private void ThrowChunkIdOutOfRange(int chunkId, int capacity)
+    {
+        // Collect diagnostic state for the most recently used slot to help trace stale data origins
+        var mru = _mruSlot;
+        var mruPageIdx = _pageIndices[mru];
+        var mruFilePageIdx = _filePageIndices[mru];
+        var memIdx = mruPageIdx >= 0 && mru < _usedSlots ? GetMemPageIndexFromSlot(mru) : -1;
+        var pi = memIdx >= 0 ? _pagedMMF.GetPageInfoForDiagnostic(memIdx) : default;
+
         throw new InvalidOperationException(
             $"ChunkAccessor.GetChunkAddress: chunkId {chunkId} exceeds segment capacity {capacity}. " +
+            $"MRU slot={mru} pageIdx={mruPageIdx} filePageIdx={mruFilePageIdx} memIdx={memIdx} " +
+            $"DC={pi.DirtyCounter} ACW={pi.ActiveChunkWriters} SlotRef={pi.SlotRefCount} " +
+            $"Epoch={pi.AccessEpoch} State={pi.PageState} CrcOk={pi.CrcVerified}. " +
             "This indicates a stale ChunkId read from evicted page data.");
+    }
 
     /// <summary>
     /// Cache miss slow path: clock-hand eviction, load new page.
@@ -573,7 +590,10 @@ public unsafe struct ChunkAccessor : IDisposable
     /// in this page. The deferred decrements are flushed in <see cref="CommitChanges"/>.
     /// </para>
     /// <para>
-    /// For clean slots, the page's AccessEpoch is re-stamped as belt-and-suspenders alongside SlotRefCount.
+    /// For clean slots, only SlotRefCount decrement is deferred. No epoch re-stamp: SlotRefCount alone
+    /// prevents page eviction until FlushDeferred, and the page's original AccessEpoch naturally expires
+    /// when the epoch advances, allowing proper eviction. Re-stamping would inflate epoch protection,
+    /// keeping pages permanently unevictable even after SlotRefCount drops to 0.
     /// </para>
     /// </summary>
     private void EvictSlot(int slot)
@@ -602,8 +622,6 @@ public unsafe struct ChunkAccessor : IDisposable
         else
         {
             // Clean slot: defer SlotRefCount decrement only.
-            // Re-stamp epoch as belt-and-suspenders alongside SlotRefCount.
-            _pagedMMF.RestampPageEpoch(memPageIndex, _epochManager.GlobalEpoch);
             _deferredACWPages[_deferredACWCount++] = memPageIndex;
         }
 

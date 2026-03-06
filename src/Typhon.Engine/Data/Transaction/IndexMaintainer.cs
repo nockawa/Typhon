@@ -14,7 +14,7 @@ internal static unsafe class IndexMaintainer
         if (prevCompChunkId != 0)
         {
             var prev = info.CompContentAccessor.GetChunkAddress(prevCompChunkId);
-            var cur = info.CompContentAccessor.GetChunkAddress(compRevInfo.CurCompContentChunkId);
+            var cur = info.CompContentAccessor.GetChunkAddress(compRevInfo.CurCompContentChunkId, true);
             var prevSpan = new Span<byte>(prev, info.ComponentTable.ComponentTotalSize);
             var curSpan = new Span<byte>(cur, info.ComponentTable.ComponentTotalSize);
 
@@ -81,7 +81,7 @@ internal static unsafe class IndexMaintainer
         // But only if this is truly a new component (Created operation), not a resurrection (Updated operation with prevCompChunkId == 0)
         else if ((compRevInfo.Operations & ComponentInfo.OperationType.Created) == ComponentInfo.OperationType.Created)
         {
-            var cur = info.CompContentAccessor.GetChunkAddress(compRevInfo.CurCompContentChunkId);
+            var cur = info.CompContentAccessor.GetChunkAddress(compRevInfo.CurCompContentChunkId, true);
 
             // Update the index with this new entry
             {

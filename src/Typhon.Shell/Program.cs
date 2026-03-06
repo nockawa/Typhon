@@ -68,6 +68,9 @@ internal sealed class TSHCommand : Command<TSHCommand.Settings>
 
         [CommandOption("-l|--log-level")]
         public string LogLevel { get; set; }
+
+        [CommandOption("--nowal")]
+        public bool NoWal { get; set; }
     }
 
     public override int Execute(CommandContext context, Settings settings, CancellationToken cancellationToken)
@@ -85,6 +88,9 @@ internal sealed class TSHCommand : Command<TSHCommand.Settings>
         {
             session.LogLevel = logLevel;
         }
+
+        // Apply nowal flag
+        session.NoWal = settings.NoWal;
 
         var executor = new CommandExecutor(session);
 

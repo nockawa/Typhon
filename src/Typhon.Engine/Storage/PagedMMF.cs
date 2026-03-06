@@ -1205,11 +1205,9 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         var pi = _memPagesInfo[memPageIndex];
         Debug.Assert(pi.PageState is PageState.Exclusive or PageState.Idle, "We can't increment the dirty counter for a page that is not Exclusive or Idle.");
 
-        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
-        if (!pi.StateSyncRoot.EnterExclusiveAccess(ref wc))
-        {
-            ThrowHelper.ThrowLockTimeout("PageCache/IncrementDirty", TimeoutOptions.Current.PageCacheLockTimeout);
-        }
+        // Use infinite wait (no Stopwatch.GetTimestamp overhead) — consistent with DecrementDirty.
+        // Hold time is nanoseconds (just ++DirtyCounter), so timeout is unnecessary.
+        pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
         ++pi.DirtyCounter;
         pi.StateSyncRoot.ExitExclusiveAccess();
     }
@@ -1274,11 +1272,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     internal void EnsureDirtyAtLeast(int memPageIndex, int minValue)
     {
         var pi = _memPagesInfo[memPageIndex];
-        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
-        if (!pi.StateSyncRoot.EnterExclusiveAccess(ref wc))
-        {
-            ThrowHelper.ThrowLockTimeout("PageCache/EnsureDirtyAtLeast", TimeoutOptions.Current.PageCacheLockTimeout);
-        }
+        pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
         if (pi.DirtyCounter < minValue)
         {
             pi.DirtyCounter = minValue;
@@ -1507,6 +1501,10 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
                 var headerAddr = (PageBaseHeader*)(memPageBaseAddr + (curPageInfo.MemPageIndex * PageSize));
                 ++headerAddr->ChangeRevision;
+
+                // Compute CRC over the updated page so the on-disk copy is self-consistent (CP-07 equivalent for SavePages)
+                var pageSpan = new ReadOnlySpan<byte>((byte*)headerAddr, PageSize);
+                headerAddr->PageChecksum = WalCrc.ComputeSkipping(pageSpan, PageBaseHeader.PageChecksumOffset, PageBaseHeader.PageChecksumSize);
             }
 
             var nextMemPageIndex = memPageIndices[i];
@@ -1537,6 +1535,9 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
             var headerAddr = (PageBaseHeader*)(memPageBaseAddr + (curPageInfo.MemPageIndex * PageSize));
             ++headerAddr->ChangeRevision;
+
+            var pageSpan = new ReadOnlySpan<byte>((byte*)headerAddr, PageSize);
+            headerAddr->PageChecksum = WalCrc.ComputeSkipping(pageSpan, PageBaseHeader.PageChecksumOffset, PageBaseHeader.PageChecksumSize);
         }
 
         // Don't forget to add the last operation
@@ -1557,6 +1558,11 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
         var saveTask = Task.WhenAll(tasks).ContinueWith(_ =>
         {
+            // CP-03: fsync data file before decrementing DirtyCounter.
+            // Without this, pages become evictable (DC=0) while data is only in OS buffer cache,
+            // risking stale reload after eviction if the OS hasn't flushed to stable media.
+            FlushToDisk();
+
             foreach (int memPageIndex in memPageIndices)
             {
                 DecrementDirty(memPageIndex);
@@ -1603,6 +1609,13 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     }
 
     internal unsafe byte* GetMemPageAddress(int memPageIndex) => &_memPagesAddr[memPageIndex * (long)PageSize];
+
+    /// <summary>Diagnostic snapshot of a page's protection state. Used by ChunkAccessor error reporting.</summary>
+    internal (int DirtyCounter, int ActiveChunkWriters, int SlotRefCount, long AccessEpoch, PageState PageState, bool CrcVerified) GetPageInfoForDiagnostic(int memPageIndex)
+    {
+        var pi = _memPagesInfo[memPageIndex];
+        return (pi.DirtyCounter, pi.ActiveChunkWriters, pi.SlotRefCount, pi.AccessEpoch, pi.PageState, pi.CrcVerified);
+    }
 
     /// <summary>
     /// Get a typed <see cref="PageAccessor"/> for a memory page.

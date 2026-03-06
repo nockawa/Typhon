@@ -103,7 +103,7 @@ public partial class ChunkBasedSegment : LogicalSegment
             Manager.UnlatchPageExclusive(memPageIdx);
         }
 
-        _map = new BitmapL3(this, false, l0Only: true);
+        _map = new BitmapL3(this, false);
         ReserveChunk(0);                    // Mark chunk 0 as allocated ("null" sentinel) — data already cleared above
         return true;
     }
@@ -115,7 +115,7 @@ public partial class ChunkBasedSegment : LogicalSegment
             return false;
         }
 
-        _map = new BitmapL3(this, true, l0Only: true);
+        _map = new BitmapL3(this, true);
 
         return true;
     }
@@ -149,13 +149,15 @@ public partial class ChunkBasedSegment : LogicalSegment
                 return false; // Already at maximum capacity
             }
 
-            // When no external ChangeSet is provided (e.g., from GrowIfNeeded), create a local one to ensure newly allocated pages are marked dirty in
-            // the page cache. Without this, pages modified during growth (raw data cleared, metadata zeroed) can be evicted under cache pressure and
-            // re-loaded from disk with stale content — causing the occupancy bitmap to see "allocated" chunks where there should be free ones.
-            var localChangeSet = changeSet ?? new ChangeSet(Manager);
+            // Prefer the caller's ChangeSet so that DirtyCounter increments for new pages are tracked by the UoW lifecycle
+            // (ReleaseExcessDirtyMarks caps at 1, checkpoint writes correct data, DC→0). When no ChangeSet is provided,
+            // a local one ensures pages are at least marked dirty — but these DC increments are "orphaned" (no UoW manages
+            // their lifecycle), meaning a single checkpoint cycle can write zeros and decrement DC to 0, making the page
+            // evictable before the caller protects it.
+            var effectiveChangeSet = changeSet ?? new ChangeSet(Manager);
 
             // Grow the underlying logical segment (thread-safe, will allocate new pages)
-            base.Grow(newLength, clearNewPages: true, localChangeSet);
+            base.Grow(newLength, clearNewPages: true, effectiveChangeSet);
 
             // Clear the page metadata (bitmap) for newly allocated pages
             // This is critical! The base.Grow only clears raw data, not metadata.
@@ -167,15 +169,20 @@ public partial class ChunkBasedSegment : LogicalSegment
                     var page = GetPageExclusiveUnchecked(i, epoch, out var memPageIdx);
                     int longSize = (ChunkCountPerPage + 63) >> 6;
                     page.Metadata<long>(0, longSize).Clear();
-                    localChangeSet.AddByMemPageIndex(memPageIdx);
+                    effectiveChangeSet.AddByMemPageIndex(memPageIdx);
+
+                    // Protect new pages against the checkpoint race during Grow→first-access window.
+                    // After base.Grow unlatched each page (DC=1, ACW=0), checkpoint may have snapshot zeros,
+                    // written to disk, and DecrementDirty→DC=0 before we re-latched here. The ChangeSet add
+                    // above is idempotent (already tracked from base.Grow), so it doesn't re-increment DC.
+                    // EnsureDirtyAtLeast(2) guarantees DC survives one checkpoint cycle: checkpoint decrements
+                    // to 1 (page stays non-evictable) until AllocateBuffer's GetChunkAddress establishes
+                    // ACW>0 protection.
+                    Manager.EnsureDirtyAtLeast(memPageIdx, 2);
+
                     Manager.UnlatchPageExclusive(memPageIdx);
                 }
             }
-
-            // Note: we intentionally do NOT call SaveChanges on the local ChangeSet. The IncrementDirty calls from AddByMemPageIndex are sufficient — they
-            // prevent the page cache from evicting these pages with stale disk data. In WAL mode, calling SaveChanges would bypass the WAL write path and
-            // cause file lock conflicts. The dirty marks will be cleaned up naturally: transaction ChangeSets will track these pages when chunks are allocated,
-            // and checkpoint will eventually write them to stable storage.
 
             // Create new bitmap by extending the old one incrementally. This avoids re-scanning ALL pages (which could deadlock if the caller holds pages via
             // ChunkAccessor). Instead, we copy state from the old bitmap and rely on the fact that new pages are guaranteed empty.
@@ -204,8 +211,11 @@ public partial class ChunkBasedSegment : LogicalSegment
     /// <summary>
     /// Attempts to grow the segment if capacity is exhausted.
     /// </summary>
+    /// <param name="changeSet">Optional ChangeSet to track dirty pages from growth. When provided, new pages are tracked
+    /// by the caller's ChangeSet (tied to a UoW lifecycle), preventing orphaned DirtyCounter increments that checkpoint
+    /// can consume before the caller protects the page.</param>
     /// <returns>True if growth occurred or capacity was already available, false if at maximum capacity.</returns>
-    private bool GrowIfNeeded()
+    private bool GrowIfNeeded(ChangeSet changeSet = null)
     {
         // Quick check without lock - if we have free chunks, no need to grow
         var map = _map;
@@ -213,7 +223,7 @@ public partial class ChunkBasedSegment : LogicalSegment
         {
             return true;
         }
-        
+
         // Need to grow - acquire lock and double-check
         lock (_growLock)
         {
@@ -222,8 +232,8 @@ public partial class ChunkBasedSegment : LogicalSegment
             {
                 return true; // Another thread grew while we waited
             }
-            
-            return Grow();
+
+            return Grow(changeSet: changeSet);
         }
     }
 
@@ -251,18 +261,21 @@ public partial class ChunkBasedSegment : LogicalSegment
             }
         }
     }
-    
+
     /// <summary>
     /// Allocates a single chunk from the segment.
     /// </summary>
     /// <param name="clearContent">Whether to clear the chunk content after allocation.</param>
+    /// <param name="changeSet">Optional ChangeSet for tracking dirty pages during segment growth. When provided, growth pages are
+    /// tracked by this ChangeSet (tied to a UoW lifecycle) instead of an orphaned local ChangeSet. This prevents a race where checkpoint
+    /// writes newly-grown pages (zeros) and decrements their DirtyCounter to 0 before the caller can protect them.</param>
     /// <returns>The allocated chunk ID.</returns>
     /// <exception cref="ResourceExhaustedException">Thrown when the segment is at maximum capacity and cannot grow.</exception>
     /// <remarks>
     /// This method automatically grows the segment when capacity is exhausted.
     /// The allocation itself is lock-free; only growth operations require synchronization.
     /// </remarks>
-    public int AllocateChunk(bool clearContent)
+    public int AllocateChunk(bool clearContent, ChangeSet changeSet = null)
     {
         var mem = SingleAlloc.Value;
         var loopCount = 0;
@@ -292,7 +305,7 @@ public partial class ChunkBasedSegment : LogicalSegment
             }
 
             // Allocation failed - need to grow
-            if (!GrowIfNeeded())
+            if (!GrowIfNeeded(changeSet))
             {
                 ThrowHelper.ThrowResourceExhausted("Storage/ChunkBasedSegment/AllocateChunk", ResourceType.Memory, AllocatedChunkCount, ChunkCapacity);
             }
@@ -305,17 +318,18 @@ public partial class ChunkBasedSegment : LogicalSegment
     /// </summary>
     /// <param name="count">The number of chunks to allocate.</param>
     /// <param name="clearContent">Whether to clear the chunk content after allocation.</param>
+    /// <param name="changeSet">Optional ChangeSet for tracking dirty pages during segment growth.</param>
     /// <returns>A memory owner containing the allocated chunk IDs.</returns>
     /// <exception cref="ResourceExhaustedException">Thrown when the segment cannot accommodate the requested chunks.</exception>
     /// <remarks>
     /// This method automatically grows the segment when capacity is exhausted.
     /// Growth is attempted iteratively until the request can be satisfied or maximum capacity is reached.
     /// </remarks>
-    public IMemoryOwner<int> AllocateChunks(int count, bool clearContent)
+    public IMemoryOwner<int> AllocateChunks(int count, bool clearContent, ChangeSet changeSet = null)
     {
         var res = MemoryPool<int>.Shared.Rent(count);
         var memory = res.Memory[..count]; // Slice to exact count
-        
+
         while (true)
         {
             var map = _map; // Volatile read
@@ -323,14 +337,14 @@ public partial class ChunkBasedSegment : LogicalSegment
             {
                 return res;
             }
-            
+
             // Allocation failed - need to grow
             // Calculate minimum pages needed to accommodate the request
             var chunksNeeded = count - map.FreeChunkCount;
             var pagesNeeded = (chunksNeeded + ChunkCountPerPage - 1) / ChunkCountPerPage;
             var minNewPageCount = Length + pagesNeeded;
-            
-            if (!Grow(minNewPageCount))
+
+            if (!Grow(minNewPageCount, changeSet))
             {
                 res.Dispose();
                 ThrowHelper.ThrowResourceExhausted("Storage/ChunkBasedSegment/AllocateChunks", ResourceType.Memory, AllocatedChunkCount, ChunkCapacity);
@@ -535,6 +549,7 @@ public partial class ChunkBasedSegment : LogicalSegment
     internal int OtherChunkDataOffset => _otherAlignmentPadding;
 
     public int ChunkCapacity => _map.Capacity;
+
     public int AllocatedChunkCount => _map.Allocated;
     public int FreeChunkCount => ChunkCapacity - AllocatedChunkCount;
 

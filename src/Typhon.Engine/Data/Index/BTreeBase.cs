@@ -41,6 +41,13 @@ public abstract class BTreeBase
 
     public abstract void CheckConsistency(ref ChunkAccessor accessor);
 
+    // Diagnostic counters
+    public abstract long Count { get; }
+    public abstract long OptimisticRestarts { get; }
+    public abstract long PessimisticFallbacks { get; }
+    public abstract long LeafFullFromOlc { get; }
+    public abstract long SplitCount { get; }
+
     /// <summary>
     /// Returns the minimum key encoded as a <see cref="long"/> using the same encoding as
     /// <see cref="QueryResolverHelper.EncodeThreshold"/>. Returns 0 for empty trees.

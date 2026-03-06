@@ -24,8 +24,11 @@ public abstract partial class BTree<TKey>
     {
         if (AllowMultiple)
         {
-            var bufferId = _storage.CreateBuffer(ref accessor);
-            args.ElementId = _storage.Append(bufferId, args.GetValue(), ref accessor);
+            // VSBS buffer operations use SiblingAccessor to avoid evicting the leaf node's
+            // slot from the primary CA's 16-slot cache.
+            ref var bufferAccessor = ref args.SiblingAccessor;
+            var bufferId = _storage.CreateBuffer(ref bufferAccessor);
+            args.ElementId = _storage.Append(bufferId, args.GetValue(), ref bufferAccessor);
             args.BufferRootId = bufferId;
             return bufferId;
         }
@@ -69,6 +72,7 @@ public abstract partial class BTree<TKey>
             }
             if (result == OlcInsertResult.LeafFull)
             {
+                Interlocked.Increment(ref _leafFullFromOlc);
                 break; // Need pessimistic path for split/spill
             }
             // Restart: version validation failed
@@ -168,7 +172,7 @@ public abstract partial class BTree<TKey>
                                 return OlcInsertResult.Restart;
                             }
                             var bufferRootId = rl.GetLast(ref accessor).Value;
-                            args.ElementId = _storage.Append(bufferRootId, args.GetValue(), ref accessor);
+                            args.ElementId = _storage.Append(bufferRootId, args.GetValue(), ref args.SiblingAccessor);
                             args.BufferRootId = bufferRootId;
                             latch.WriteUnlock();
                             return OlcInsertResult.Completed;
@@ -236,7 +240,7 @@ public abstract partial class BTree<TKey>
                                 return OlcInsertResult.Restart;
                             }
                             var bufferRootId = ll.GetFirst(ref accessor).Value;
-                            args.ElementId = _storage.Append(bufferRootId, args.GetValue(), ref accessor);
+                            args.ElementId = _storage.Append(bufferRootId, args.GetValue(), ref args.SiblingAccessor);
                             args.BufferRootId = bufferRootId;
                             llLatch.WriteUnlock();
                             return OlcInsertResult.Completed;
@@ -297,7 +301,7 @@ public abstract partial class BTree<TKey>
         if (AllowMultiple)
         {
             var curItem = leaf.GetItem(keyIndex, ref accessor);
-            args.ElementId = _storage.Append(curItem.Value, args.GetValue(), ref accessor);
+            args.ElementId = _storage.Append(curItem.Value, args.GetValue(), ref args.SiblingAccessor);
             args.BufferRootId = curItem.Value;
             leafLatch.WriteUnlock();
             return OlcInsertResult.Completed;
@@ -361,7 +365,7 @@ public abstract partial class BTree<TKey>
                     var lastEntry = rl.GetLast(ref accessor);
                     if (args.Compare(args.Key, lastEntry.Key) == 0)
                     {
-                        args.ElementId = _storage.Append(lastEntry.Value, args.GetValue(), ref accessor);
+                        args.ElementId = _storage.Append(lastEntry.Value, args.GetValue(), ref args.SiblingAccessor);
                         args.BufferRootId = lastEntry.Value;
                         rlLatch.WriteUnlock();
                         return;
@@ -404,7 +408,7 @@ public abstract partial class BTree<TKey>
                     var firstEntry = ll.GetFirst(ref accessor);
                     if (args.Compare(args.Key, firstEntry.Key) == 0)
                     {
-                        args.ElementId = _storage.Append(firstEntry.Value, args.GetValue(), ref accessor);
+                        args.ElementId = _storage.Append(firstEntry.Value, args.GetValue(), ref args.SiblingAccessor);
                         args.BufferRootId = firstEntry.Value;
                         llLatch.WriteUnlock();
                         return;

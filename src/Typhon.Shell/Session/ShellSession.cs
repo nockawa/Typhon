@@ -38,6 +38,7 @@ internal sealed class ShellSession : IDisposable
     public string Color { get; set; } = "auto";
     public bool Timing { get; set; }
     public LogLevel LogLevel { get; set; } = LogLevel.Warning;
+    public bool NoWal { get; set; }
 
     // Resource graph
     private IResourceRegistry _resourceRegistry;
@@ -90,7 +91,8 @@ internal sealed class ShellSession : IDisposable
                     options.SingleLine = true;
                     options.IncludeScopes = true;
                 });
-                builder.SetMinimumLevel(LogLevel);
+                // Use a dynamic filter so runtime `log-level` command changes take effect immediately.
+                builder.AddFilter((_, level) => level >= LogLevel);
             })
             .AddResourceRegistry()
             .AddMemoryAllocator()
@@ -101,24 +103,25 @@ internal sealed class ShellSession : IDisposable
             {
                 options.DatabaseName = _databaseName;
                 options.DatabaseDirectory = directory;
-                // 128K pages = 1 GiB page cache.
-                // Large cache avoids eviction-induced stale page data (no WAL redo yet).
-                // Note: AllocatePinned takes int, so max ~2 GiB. 1 GiB is plenty for tsh workloads.
-                options.DatabaseCacheSize = 128UL * 1024 * 8192;
+                // 65536 pages = 512 MiB page cache.
+                options.DatabaseCacheSize = 65536UL * 8192;
             })
             .AddMemoryAllocator()
             .AddSingleton<IWalFileIO, WalFileIO>()
             .AddDatabaseEngine(engineOpts =>
             {
-                var walDir = Path.Combine(directory, "wal");
-                Directory.CreateDirectory(walDir);
-                engineOpts.Wal = new WalWriterOptions
+                if (!NoWal)
                 {
-                    WalDirectory = walDir,
-                    // Shell uses Deferred durability — WAL is only needed for checkpoint-driven page flushing.
-                    // FUA off since we don't need per-write durability guarantees in tsh.
-                    UseFUA = false
-                };
+                    var walDir = Path.Combine(directory, "wal");
+                    Directory.CreateDirectory(walDir);
+                    engineOpts.Wal = new WalWriterOptions
+                    {
+                        WalDirectory = walDir,
+                        // Shell uses Deferred durability — WAL is only needed for checkpoint-driven page flushing.
+                        // FUA off since we don't need per-write durability guarantees in tsh.
+                        UseFUA = false
+                    };
+                }
             });
 
         _serviceProvider = services.BuildServiceProvider();

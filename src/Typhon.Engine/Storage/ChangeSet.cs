@@ -73,8 +73,9 @@ public class ChangeSet
     /// <summary>
     /// Undo all dirty marks tracked by this ChangeSet (used on transaction rollback).
     /// <para>
-    /// Note: pages whose DirtyCounter was double-incremented by <see cref="ChunkAccessor.MarkSlotDirty"/> (DC=2 for checkpoint survival) will only be
-    /// decremented to DC=1 here, since the extra increment was applied outside ChangeSet tracking. This minor leak is cleaned up by the next checkpoint cycle.
+    /// Note: pages re-dirtied via <see cref="ChunkAccessor.MarkSlotDirty"/> (IncrementDirty on re-registration)
+    /// may have DC &gt; 1. This method only decrements once per page. The remaining DC is cleaned up by checkpoint
+    /// or by <see cref="ReleaseExcessDirtyMarks"/> in subsequent UoW disposal.
     /// </para>
     /// </summary>
     public void Reset()

@@ -128,7 +128,7 @@ internal ref struct ComponentRevisionManager
             }
 
             // Allocate a new component
-            var componentChunkId = isDelete ? 0 : compContent.AllocateChunk(false);
+            var componentChunkId = isDelete ? 0 : compContent.AllocateChunk(false, info.CompContentAccessor.ChangeSet);
 
             // Add our new entry
             curChunkElements[indexInChunk].TSN = tsn;
@@ -156,7 +156,7 @@ internal ref struct ComponentRevisionManager
 
     internal static unsafe int AllocCompRevStorage(ComponentInfo info, long tsn, ushort uowId, int firstChunkId)
     {
-        var chunkId = info.CompRevTableSegment.AllocateChunk(false);
+        var chunkId = info.CompRevTableSegment.AllocateChunk(false, info.CompRevTableAccessor.ChangeSet);
         var chunkSpan = info.CompRevTableAccessor.GetChunkAsSpan(chunkId, true);
 
         ref var header = ref chunkSpan.Cast<byte, CompRevStorageHeader>()[0];
@@ -298,7 +298,7 @@ internal ref struct ComponentRevisionManager
                                 curDestIndexInChunk = 0;
                                 tempFirstHeader[0].ChainLength++;
 
-                                newChunkId = ct.CompRevTableSegment.AllocateChunk(false);
+                                newChunkId = ct.CompRevTableSegment.AllocateChunk(false, compRevTableAccessor.ChangeSet);
                                 curNextChunkId[0] = newChunkId;
                                 var newChunkSpan = compRevTableAccessor.GetChunkAsSpan(newChunkId, true);
                                 newChunkSpan.Split(out curNextChunkId, out curDestElements);
@@ -326,7 +326,7 @@ internal ref struct ComponentRevisionManager
                     curDestIndexInChunk = 0;
                     tempFirstHeader[0].ChainLength++;
 
-                    newChunkId = ct.CompRevTableSegment.AllocateChunk(false);
+                    newChunkId = ct.CompRevTableSegment.AllocateChunk(false, compRevTableAccessor.ChangeSet);
                     curNextChunkId[0] = newChunkId;
                     var newChunkSpan = compRevTableAccessor.GetChunkAsSpan(newChunkId, true);
                     newChunkSpan.Split(out curNextChunkId, out curDestElements);
@@ -461,7 +461,7 @@ internal ref struct ComponentRevisionManager
         {
             using var enumerator = new RevisionEnumerator(ref compRevTableAccessor, firstChunkId, false, false);
             enumerator.StepToChunk(firstHeader.ChainLength - 1, false);         // Walk to the last chunk in the chain
-            enumerator.NextChunkId = compRevTable.AllocateChunk(true);          // Allocated, clear content to make sure the next chunk ID is 0, set as next
+            enumerator.NextChunkId = compRevTable.AllocateChunk(true, info.CompRevTableAccessor.ChangeSet); // Allocated, clear content to make sure the next chunk ID is 0, set as next
             compRevTableAccessor.DirtyChunk(enumerator.CurChunkId);
             firstHeader.ChainLength++;
         }
@@ -476,7 +476,7 @@ internal ref struct ComponentRevisionManager
             var firstChunkIndexInChain = enumerator.NextChunkId;
 
             // Add a new chunk after the last in the chain
-            var newChunkId = compRevTable.AllocateChunk(true);              // Clear content to make sure the next chunk ID is 0
+            var newChunkId = compRevTable.AllocateChunk(true, info.CompRevTableAccessor.ChangeSet); // Clear content to make sure the next chunk ID is 0
             enumerator.NextChunkId = newChunkId;
             compRevTableAccessor.DirtyChunk(enumerator.CurChunkId);
 

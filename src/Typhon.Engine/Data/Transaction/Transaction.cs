@@ -615,7 +615,7 @@ public unsafe class Transaction : IDisposable
 
         // Allocate the chunk that will store the component's chunk
         _dbe.LogCommitPhase(TSN, $"CreateComponent<{componentType.Name}> pk={pk}: AllocateChunk");
-        var componentChunkId = info.CompContentSegment.AllocateChunk(false);
+        var componentChunkId = info.CompContentSegment.AllocateChunk(false, _changeSet);
 
         // Allocate the component revision storage as it's a new component
         _dbe.LogCommitPhase(TSN, $"CreateComponent<{componentType.Name}> pk={pk}: AllocCompRevStorage");
@@ -653,7 +653,7 @@ public unsafe class Transaction : IDisposable
         for (int i = 0; i < compList.Length; i++)
         {
             // Allocate the chunk that will store the component's chunk
-            var componentChunkId = info.CompContentSegment.AllocateChunk(false);
+            var componentChunkId = info.CompContentSegment.AllocateChunk(false, _changeSet);
 
             // Allocate the component revision storage as it's a new component
             var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, componentChunkId);

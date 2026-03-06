@@ -55,12 +55,12 @@ public abstract partial class BTree<TKey>
 
         public abstract void PushFirst(NodeWrapper node, KeyValueItem item, ref ChunkAccessor accessor);
         public abstract void PushLast(NodeWrapper node, KeyValueItem item, ref ChunkAccessor accessor);
-        public abstract int Append(int bufferId, int value, ref ChunkAccessor accessor);
+        public abstract int Append(int bufferId, int value, ref ChunkAccessor bufferAccessor);
         public abstract void Insert(NodeWrapper node, int index, KeyValueItem item, ref ChunkAccessor accessor);
-        public abstract int CreateBuffer(ref ChunkAccessor accessor);
+        public abstract int CreateBuffer(ref ChunkAccessor bufferAccessor);
         public abstract VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId, ref ChunkAccessor accessor);
-        public abstract int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor accessor);
-        public abstract void DeleteBuffer(int bufferId, ref ChunkAccessor accessor);
+        public abstract int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor bufferAccessor);
+        public abstract void DeleteBuffer(int bufferId, ref ChunkAccessor bufferAccessor);
         public abstract NodeWrapper GetLastChild(NodeWrapper node, ref ChunkAccessor accessor);
         public abstract NodeWrapper GetFirstChild(NodeWrapper node, ref ChunkAccessor accessor);
         public NodeWrapper GetChild(NodeWrapper node, int index, ref ChunkAccessor accessor)

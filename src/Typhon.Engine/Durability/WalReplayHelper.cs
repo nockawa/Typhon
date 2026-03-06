@@ -63,14 +63,14 @@ internal static class WalReplayHelper
         var cs = dbe.MMF.CreateChangeSet();
 
         // Allocate a component content chunk and write payload
-        var componentChunkId = table.ComponentSegment.AllocateChunk(false);
+        var componentChunkId = table.ComponentSegment.AllocateChunk(false, cs);
         var contentAccessor = table.ComponentSegment.CreateChunkAccessor(cs);
         var dst = contentAccessor.GetChunkAsSpan(componentChunkId, true);
         var toCopy = Math.Min(payload.Length, dst.Length);
         payload[..toCopy].CopyTo(dst);
 
         // Allocate a revision chain root chunk and initialize it
-        var compRevChunkId = table.CompRevTableSegment.AllocateChunk(false);
+        var compRevChunkId = table.CompRevTableSegment.AllocateChunk(false, cs);
         var revAccessor = table.CompRevTableSegment.CreateChunkAccessor(cs);
         var revSpan = revAccessor.GetChunkAsSpan(compRevChunkId, true);
 
@@ -130,7 +130,7 @@ internal static class WalReplayHelper
         var compRevChunkId = lookupResult.Value;
 
         // Allocate a new component content chunk with the updated data
-        var newComponentChunkId = table.ComponentSegment.AllocateChunk(false);
+        var newComponentChunkId = table.ComponentSegment.AllocateChunk(false, cs);
         var contentAccessor = table.ComponentSegment.CreateChunkAccessor(cs);
         var dst = contentAccessor.GetChunkAsSpan(newComponentChunkId, true);
         var toCopy = Math.Min(payload.Length, dst.Length);

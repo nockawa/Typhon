@@ -6,6 +6,8 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
+using Microsoft.Extensions.Logging;
 using Spectre.Console;
 using Typhon.Engine;
 using Typhon.Shell.Formatting;
@@ -147,9 +149,11 @@ internal sealed class CommandExecutor
             "update"        => ExecuteUpdate(tokens, 1),
             "delete"        => ExecuteDelete(tokens, 1),
             "set"           => ExecuteSet(tokens, 1),
+            "log-level"     => ExecuteLogLevel(tokens, 1),
             "echo"          => ExecuteEcho(tokens, 1),
             "help"          => ExecuteHelp(tokens, 1),
             "history"       => ExecuteHistory(),
+            "pause"         => ExecutePause(tokens, 1),
             "exit" or "quit" => CommandResult.Exit(),
             _               => (CommandResult?)null
         };
@@ -827,7 +831,8 @@ internal sealed class CommandExecutor
             "page-size"   => SetPageSize(value),
             "color"       => SetColor(value),
             "timing"      => SetBool(value, v => _session.Timing = v, "timing"),
-            _             => CommandResult.Error($"Error: Unknown setting '{key}'. Known: format, auto-commit, verbose, page-size, color, timing")
+            "log-level"   => SetLogLevel(value),
+            _             => CommandResult.Error($"Error: Unknown setting '{key}'. Known: format, auto-commit, verbose, page-size, color, timing, log-level")
         };
     }
 
@@ -840,7 +845,8 @@ internal sealed class CommandExecutor
         sb.AppendLine($"    [grey]verbose:[/]      [white]{(_session.Verbose ? "on" : "off")}[/]");
         sb.AppendLine($"    [grey]page-size:[/]    [white]{_session.PageSize}[/]");
         sb.AppendLine($"    [grey]color:[/]        [white]{Markup.Escape(_session.Color)}[/]");
-        sb.Append($"    [grey]timing:[/]       [white]{(_session.Timing ? "on" : "off")}[/]");
+        sb.AppendLine($"    [grey]timing:[/]       [white]{(_session.Timing ? "on" : "off")}[/]");
+        sb.Append($"    [grey]log-level:[/]    [white]{_session.LogLevel}[/]");
         return CommandResult.Markup(sb.ToString());
     }
 
@@ -854,6 +860,7 @@ internal sealed class CommandExecutor
             "page-size"   => _session.PageSize.ToString(),
             "color"       => _session.Color,
             "timing"      => _session.Timing ? "on" : "off",
+            "log-level"   => _session.LogLevel.ToString(),
             _             => null
         };
 
@@ -910,6 +917,27 @@ internal sealed class CommandExecutor
 
         // Color control is handled by Spectre.Console; we store the preference
         return CommandResult.Ok();
+    }
+
+    private CommandResult ExecuteLogLevel(List<Token> tokens, int pos)
+    {
+        if (pos >= tokens.Count || tokens[pos].Kind == TokenKind.End)
+        {
+            return CommandResult.Markup($"  [grey]log-level:[/] [white]{_session.LogLevel}[/]");
+        }
+
+        return SetLogLevel(tokens[pos].Value);
+    }
+
+    private CommandResult SetLogLevel(string value)
+    {
+        if (!Enum.TryParse<LogLevel>(value, ignoreCase: true, out var level))
+        {
+            return CommandResult.Error("Error: Invalid log level. Valid: Trace, Debug, Information, Warning, Error, Critical, None");
+        }
+
+        _session.LogLevel = level;
+        return CommandResult.Markup($"  [grey]log-level set to:[/] [white]{level}[/]");
     }
 
     private CommandResult ExecuteEcho(List<Token> tokens, int pos)
@@ -991,6 +1019,7 @@ internal sealed class CommandExecutor
         sb.AppendLine("    [cyan]schema-export[/] [[component]]        Export persisted schema (respects format)");
         sb.AppendLine();
         sb.AppendLine("  [yellow]Diagnostics:[/]");
+        sb.AppendLine("    [cyan]db-stats[/]                           Database volumetry: pages, segments, chunks, bytes");
         sb.AppendLine("    [cyan]cache-stats[/]                        Page cache hit rate & state breakdown");
         sb.AppendLine("    [cyan]cache-pages[/] [[where state=...]]      Memory page state summary");
         sb.AppendLine("    [cyan]page-dump[/] <N> [[--raw]]              Inspect page header + data");
@@ -1052,6 +1081,7 @@ internal sealed class CommandExecutor
             "help"          => "  help [command]\n    Shows help for all commands or a specific command.",
             "history"       => "  history\n    Shows recent command history.",
             "exit" or "quit" => "  exit / quit\n    Exits the shell.",
+            "db-stats"       => "  db-stats\n    Database volumetry overview: file pages (allocated/capacity), per-component\n    segment breakdown (chunks, bytes, fill%), and totals.",
             "cache-stats"    => "  cache-stats\n    Shows page cache hit rate, state breakdown (free/idle/shared/exclusive/dirty),\n    and disk I/O counters.",
             "cache-pages"    => "  cache-pages [where state=<state>]\n    Summarizes memory page states. Optional filter by state name\n    (free, idle, shared, exclusive, dirty, allocating).",
             "page-dump"      => "  page-dump <pageNumber> [--raw]\n    Displays structured page header info and a data preview.\n    With --raw, shows a full hex dump of the entire 8KB page.",
@@ -1103,6 +1133,22 @@ internal sealed class CommandExecutor
         }
 
         return CommandResult.Ok(sb.ToString().TrimEnd());
+    }
+
+    private CommandResult ExecutePause(List<Token> tokens, int pos)
+    {
+        if (pos >= tokens.Count || tokens[pos].Kind == TokenKind.End)
+        {
+            return CommandResult.Error("Usage: pause <seconds>");
+        }
+
+        if (!int.TryParse(tokens[pos].Value, out var seconds) || seconds <= 0)
+        {
+            return CommandResult.Error($"Invalid pause duration: '{tokens[pos].Value}'. Expected a positive integer (seconds).");
+        }
+
+        Thread.Sleep(seconds * 1000);
+        return CommandResult.Ok($"Paused for {seconds}s.");
     }
 
     // ── Reflection Bridge ──────────────────────────────────────

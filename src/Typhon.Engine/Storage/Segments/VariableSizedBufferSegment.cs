@@ -60,7 +60,7 @@ public unsafe class VariableSizedBufferSegmentBase
     {
         // Allocate and initialize the first chunk of the Buffer
         var segment = accessor.Segment;
-        var chunkId = segment.AllocateChunk(false);
+        var chunkId = segment.AllocateChunk(false, accessor.ChangeSet);
         var addr = accessor.GetChunkAddress(chunkId, true);
         ref var rh = ref Unsafe.AsRef<VariableSizedBufferRootHeader>(addr);
         rh.Lock.Reset();
@@ -103,23 +103,41 @@ public unsafe class VariableSizedBufferSegmentBase
     public int BufferRelease(int bufferId, ref ChunkAccessor accessor)
     {
         ref var rh = ref accessor.GetChunk<VariableSizedBufferRootHeader>(bufferId, true);
+        var deleted = false;
         try
         {
-            // Lock the whole buffer as we are going to update it
             LockBuffer(ref rh);
 
             var newValue = --rh.RefCounter;
             if (newValue == 0)
             {
-                DeleteBuffer(bufferId, ref accessor);
+                // Chain cleanup inline — do NOT call DeleteBuffer here, it would double-decrement RefCounter.
+                // Copy FirstStoredChunkId to local — rh may go stale during the loop
+                int curChunkId = rh.FirstStoredChunkId;
+                while (curChunkId != 0)
+                {
+                    var curChunkAddr = accessor.GetChunkAddress(curChunkId, true);
+                    ref var curChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(curChunkAddr);
+                    var toDeleteChunkId = curChunkId;
+                    curChunkId = curChunkHeader.NextChunkId;
+                    if (toDeleteChunkId != bufferId)
+                    {
+                        accessor.Segment.FreeChunk(toDeleteChunkId);
+                    }
+                }
+                deleted = true;
             }
             return newValue;
         }
         finally
         {
-            // Re-fetch rh — DeleteBuffer uses accessor internally, which can evict rh's slot
+            // Re-fetch rh — chain traversal may have evicted its slot
             rh = ref accessor.GetChunk<VariableSizedBufferRootHeader>(bufferId, true);
             ReleaseLockOnBuffer(ref rh);
+            if (deleted)
+            {
+                accessor.Segment.FreeChunk(bufferId);
+            }
         }
     }
 
@@ -216,10 +234,22 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
     {
         // Fetch the root chunk — epoch protects page lifetime
         ref var rh = ref accessor.GetChunk<VariableSizedBufferRootHeader>(bufferId, true);
+
         try
         {
             // Lock the whole buffer as we are going to update it
             LockBuffer(ref rh);
+
+            // Detect use-after-free: refCount should be >= 1 for any live buffer.
+            // refCount=0 means the buffer was freed via BufferRelease/DeleteBuffer and
+            // the chunk may have been returned to the segment's free pool and reused.
+            if (rh.RefCounter <= 0)
+            {
+                throw new InvalidOperationException(
+                    $"VSBS.AddElement: use-after-free detected! bufferId={bufferId} refCount={rh.RefCounter} " +
+                    $"isAllocated={accessor.Segment.IsChunkAllocated(bufferId)} capacity={accessor.Segment.ChunkCapacity} " +
+                    $"FirstStoredChunkId={rh.FirstStoredChunkId} TotalCount={rh.TotalCount}");
+            }
 
             // Copy structural fields to locals BEFORE any GetChunkAddress/AllocateChunk calls.
             // These calls can evict rh's slot from the 16-slot accessor cache, making rh point
@@ -228,7 +258,16 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
             int firstFreeChunkId = rh.FirstFreeChunkId;
             short totalFreeChunk = rh.TotalFreeChunk;
 
-            var curChunkAddr = accessor.GetChunkAddress(curChunkId);
+            // Validate that the root header contains a valid FirstStoredChunkId
+            if ((uint)curChunkId >= (uint)accessor.Segment.ChunkCapacity)
+            {
+                throw new InvalidOperationException(
+                    $"VSBS.AddElement: root header at bufferId={bufferId} has stale FirstStoredChunkId={curChunkId} " +
+                    $"(capacity={accessor.Segment.ChunkCapacity}, firstFree={firstFreeChunkId}, totalFree={totalFreeChunk}, " +
+                    $"totalCount={rh.TotalCount}, refCount={rh.RefCounter})");
+            }
+
+            var curChunkAddr = accessor.GetChunkAddress(curChunkId, true);
             ref var curChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(curChunkAddr);
 
             var isRoot = bufferId == curChunkId;
@@ -245,7 +284,7 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
                 }
                 else
                 {
-                    curChunkId = accessor.Segment.AllocateChunk(false);
+                    curChunkId = accessor.Segment.AllocateChunk(false, accessor.ChangeSet);
                 }
 
                 curChunkHeader.NextChunkId = curChunkId;
@@ -301,7 +340,7 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
             short totalFreeChunk = rh.TotalFreeChunk;
             int totalCount = rh.TotalCount;
 
-            var curChunkAddr = accessor.GetChunkAddress(curChunkId);
+            var curChunkAddr = accessor.GetChunkAddress(curChunkId, true);
             ref var curChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(curChunkAddr);
 
             var curSourceIndex = 0;
@@ -322,7 +361,7 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
                     }
                     else
                     {
-                        curChunkId = accessor.Segment.AllocateChunk(false);
+                        curChunkId = accessor.Segment.AllocateChunk(false, accessor.ChangeSet);
                     }
 
                     curChunkHeader.NextChunkId = curChunkId;
