@@ -189,15 +189,15 @@ public sealed class ArpgGenerateCommand : ShellCommand
         // Pre-allocate affix buffer outside all loops (max 6 affixes per item)
         Span<ItemAffixes> affixBuf = stackalloc ItemAffixes[6];
 
+        using var uow = ctx.Engine.CreateUnitOfWork();
+
         for (var batch = 0; batch < count; batch += BatchSize)
         {
             var batchCount = Math.Min(BatchSize, count - batch);
-            using var uow = ctx.Engine.CreateUnitOfWork();
+            var tx = uow.CreateTransaction();
 
             for (var i = 0; i < batchCount; i++)
             {
-                var tx = uow.CreateTransaction();
-
                 var rarity = rng.Next(0, 5); // 0=Normal, 1=Magic, 2=Rare, 3=Unique, 4=Legendary
                 var item = MakeItemData(rng, rarity);
 
@@ -225,11 +225,12 @@ public sealed class ArpgGenerateCommand : ShellCommand
                     tx.CreateEntity(ref item);
                 }
 
-                var uowCtx = uow.CreateContext();
-                tx.Commit(ref uowCtx);
-                tx.Dispose();
                 entities++;
             }
+
+            var uowCtx = uow.CreateContext();
+            tx.Commit(ref uowCtx);
+            tx.Dispose();
         }
 
         return (entities, null);

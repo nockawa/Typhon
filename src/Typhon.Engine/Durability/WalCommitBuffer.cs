@@ -232,14 +232,21 @@ public sealed unsafe class WalCommitBuffer : IDisposable
                 };
             }
 
-            // CASE B: This producer straddles the boundary (overlap initiator)
+            // CASE B: This producer straddles the boundary (overlap initiator).
+            // offset < BufferCapacity: the claim starts inside the buffer but extends past the end.
+            //   Write a padding sentinel at the claim offset so TryDrain/CompleteDrain knows to stop.
+            // offset == BufferCapacity: the previous claim filled the buffer exactly. No space for a
+            //   sentinel, but we still need to request a swap so the writer advances to a new buffer.
             if (offset < BufferCapacity)
             {
                 // Write padding sentinel at our offset
                 var frameHeader = (WalFrameHeader*)(buffer + offset);
                 frameHeader->RecordCount = 0;
                 Interlocked.Exchange(ref frameHeader->FrameLength, WalFrameHeader.PaddingSentinel);
+            }
 
+            if (offset <= BufferCapacity)
+            {
                 // Request a buffer swap
                 Interlocked.CompareExchange(ref _swapState, SwapRequested, SwapNormal);
 
@@ -354,11 +361,13 @@ public sealed unsafe class WalCommitBuffer : IDisposable
         var buffer = bufferIndex == 0 ? _buffer0 : _buffer1;
         var scanPos = _drainPosition;
 
-        // If the drain position is at a padding sentinel with a pending swap, perform the swap now so we can scan the fresh buffer.
-        if (scanPos < BufferCapacity && _swapState == SwapRequested)
+        // If the drain position is at a padding sentinel (or at the exact buffer boundary) with a pending swap,
+        // perform the swap now so we can scan the fresh buffer.
+        if (_swapState == SwapRequested)
         {
-            var header = (WalFrameHeader*)(buffer + scanPos);
-            if (header->FrameLength == WalFrameHeader.PaddingSentinel)
+            var atBoundary = scanPos >= BufferCapacity;
+            var atPadding = !atBoundary && ((WalFrameHeader*)(buffer + scanPos))->FrameLength == WalFrameHeader.PaddingSentinel;
+            if (atBoundary || atPadding)
             {
                 PerformSwap(buffer);
 
