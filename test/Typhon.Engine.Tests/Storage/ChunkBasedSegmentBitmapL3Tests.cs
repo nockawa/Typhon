@@ -928,93 +928,40 @@ public class ChunkBasedSegmentBitmapL3Tests
     }
 
     /// <summary>
-    /// Test that demonstrates the cascading effect of the allocation bug.
-    /// 
-    /// When AllocateChunk returns invalid IDs (0 or beyond capacity), multiple components
-    /// end up "stored" at the same location, causing data corruption.
-    /// 
-    /// The bug can manifest in two ways depending on segment configuration:
-    /// 1. Returns incrementing IDs beyond capacity (if L0 bitmap overflows within page bounds)
-    /// 2. Throws IndexOutOfRangeException (if chunk ID maps to non-existent page)
-    /// 
-    /// This test uses a configuration that triggers the "same ID" corruption scenario.
+    /// Test that AllocateChunk auto-grows when capacity is exhausted, returning valid IDs.
+    /// Previously, over-allocation returned invalid IDs beyond capacity — now fixed by auto-growth.
     /// </summary>
     [Test]
-    public void AllocateChunk_CapacityExhausted_CausesDataCorruption()
+    public void AllocateChunk_CapacityExhausted_AutoGrowsAndReturnsValidIds()
     {
-        
-        // Use 2 pages with a stride that leaves room for overflow within page bounds
-        // This ensures we get invalid IDs rather than IndexOutOfRangeException
         const int pageCount = 2;
-        const int stride = 512; // Moderate stride
-        
+        const int stride = 512;
+
         var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, pageCount, stride);
-        
-        var capacity = segment.ChunkCapacity;
+
+        var initialCapacity = segment.ChunkCapacity;
         var freeCount = segment.FreeChunkCount;
-        
-        _logger.LogInformation("Test segment: Capacity={Capacity}, Free={Free}", capacity, freeCount);
-        
-        // Exhaust capacity
+
+        // Exhaust initial capacity
         var validChunks = new List<int>();
         for (int i = 0; i < freeCount; i++)
         {
             validChunks.Add(segment.AllocateChunk(false));
         }
-        
+
         Assert.That(segment.FreeChunkCount, Is.EqualTo(0));
-        
-        // Now allocate more - these will get invalid IDs beyond capacity
-        var overAllocatedChunks = new List<int>();
-        Exception caughtException = null;
-        
+
+        // Allocate beyond initial capacity — should auto-grow
         for (int i = 0; i < 5; i++)
         {
-            try
-            {
-                var id = segment.AllocateChunk(false);
-                overAllocatedChunks.Add(id);
-                _logger.LogWarning("Over-allocation #{Num}: ChunkId={Id}", i + 1, id);
-            }
-            catch (Exception ex)
-            {
-                caughtException = ex;
-                _logger.LogError("Over-allocation #{Num} threw: {Ex}", i + 1, ex.Message);
-                break;
-            }
+            var id = segment.AllocateChunk(false);
+            Assert.That(id, Is.GreaterThan(0), $"Over-capacity allocation #{i + 1} should return valid ID");
+            Assert.That(id, Is.LessThan(segment.ChunkCapacity), $"ID {id} should be within grown capacity");
+            validChunks.Add(id);
         }
-        
-        // The bug manifests as either invalid IDs or exception
-        if (caughtException != null)
-        {
-            Assert.Pass($"BUG CONFIRMED: AllocateChunk throws {caughtException.GetType().Name} " +
-                        "when capacity is exhausted instead of returning error gracefully");
-        }
-        
-        Assert.That(overAllocatedChunks, Is.Not.Empty,
-            "Should have received some invalid chunk IDs");
-        
-        // All returned IDs should be >= capacity (invalid)
-        Assert.That(overAllocatedChunks.All(id => id >= capacity), Is.True,
-            $"BUG: All over-allocated chunks should have ID >= capacity ({capacity}). " +
-            $"Got: [{string.Join(", ", overAllocatedChunks)}]");
-        
-        // Demonstrate the corruption: if we try to use these invalid IDs,
-        // they would either crash or corrupt valid data
-        
-        // The IDs are beyond capacity, so GetChunkLocation will return
-        // page indices that may or may not exist
-        var (pageIndex, offset) = segment.GetChunkLocation(overAllocatedChunks[0]);
-        _logger.LogWarning(
-            "Invalid chunk {Id} maps to Page={Page}, Offset={Offset} (segment has {PageCount} pages)",
-            overAllocatedChunks[0], pageIndex, offset, pageCount);
-        
-        // This proves the bug: returned chunk IDs map to non-existent pages
-        // or to offsets that overlap with valid data
-        Assert.That(
-            pageIndex >= pageCount || overAllocatedChunks[0] >= capacity,
-            Is.True,
-            "BUG CONFIRMED: Invalid chunk ID returned that would cause corruption or crash");
+
+        Assert.That(segment.ChunkCapacity, Is.GreaterThan(initialCapacity), "Segment should have grown");
+        Assert.That(validChunks.Distinct().Count(), Is.EqualTo(validChunks.Count), "All IDs should be unique");
     }
 
     [Test]

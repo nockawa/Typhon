@@ -1,9 +1,10 @@
-﻿// unset
+// unset
 
 using JetBrains.Annotations;
 using System;
 using System.Buffers;
 using System.Diagnostics;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -25,15 +26,18 @@ public struct ChunkBasedSegmentHeader
 /// Logical Segment that stores fixed sized chunk of data.
 /// </summary>
 /// <remarks>
-/// Provides API to allocate chunks; the occupancy map is stored in the Metadata of each page. The minimum chunk size is 8 bytes.
+/// Provides API to allocate chunks; the occupancy map is stored in the Metadata of each page.
+/// Free-page tracking uses a lock-free Treiber stack of pages with available chunks.
+/// The minimum chunk size is 8 bytes.
 /// </remarks>
 public partial class ChunkBasedSegment : LogicalSegment
 {
+    private const int EMPTY_PAGE = -1;
+
     private readonly Lock _growLock = new();
-    private volatile BitmapL3 _map;
     private readonly EpochManager _epochManager;
 
-    // Cached values for fast GetChunkLocation (avoids _map indirection)
+    // Cached values for fast GetChunkLocation (avoids indirection)
     private readonly int _rootChunkCount;
     private readonly int _otherChunkCount;
 
@@ -44,6 +48,34 @@ public partial class ChunkBasedSegment : LogicalSegment
     // Alignment padding: ensures chunks start at stride-aligned absolute page offsets (for ACLP).
     private readonly int _rootAlignmentPadding;
     private readonly int _otherAlignmentPadding;
+
+    // Bitmap configuration: number of metadata longs used for L0 bitmap per page type
+    private readonly int _bitmapLongsRoot;
+    private readonly int _bitmapLongsOther;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Treiber stack allocator state
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // Tagged pointer: version:32 | pageIndex:32. EMPTY_PAGE (-1) in lower 32 = empty stack.
+    // Reads/writes are naturally atomic on x64. CAS via Interlocked.CompareExchange.
+    private long _freeHead;
+
+    // Total allocated chunks across all pages. Updated via Interlocked.Increment/Decrement.
+    private int _allocatedCount;
+
+    // Per-page free chunk count. The 0→1 transition triggers PushToFreeStack.
+    private int[] _pageFreeCount;
+
+    // Per-page next pointer for Treiber stack linked list. EMPTY_PAGE = tail.
+    private int[] _nextPage;
+
+    // Per-page "in free list" flag. Prevents double-push and stack cycles.
+    // 0 = not in list, 1 = in list. Set via CAS in PushToFreeStack, cleared on pop.
+    private int[] _inFreeList;
+
+    // Total chunk capacity (updated on Grow under _growLock)
+    private int _capacity;
 
     internal ChunkBasedSegment(EpochManager epochManager, ManagedPagedMMF manager, int stride) : base(manager)
     {
@@ -74,7 +106,15 @@ public partial class ChunkBasedSegment : LogicalSegment
         // Formula: magic = ceil(2^32 / divisor) = (2^32 + divisor - 1) / divisor
         // This works for divisors where the maximum dividend fits in 32 bits
         _divMagic = (0x1_0000_0000UL + (uint)_otherChunkCount - 1) / (uint)_otherChunkCount;
+
+        // Bitmap longs per page type: ceil(chunks / 64)
+        _bitmapLongsRoot = (ChunkCountRootPage + 63) >> 6;
+        _bitmapLongsOther = (ChunkCountPerPage + 63) >> 6;
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Segment lifecycle: Create, Load, Grow
+    // ═══════════════════════════════════════════════════════════════════════
 
     internal override bool Create(PageBlockType type, Span<int> filePageIndices, bool clear, ChangeSet changeSet = null)
     {
@@ -89,7 +129,7 @@ public partial class ChunkBasedSegment : LogicalSegment
         for (int i = 0; i < length; i++)
         {
             var page = GetPageExclusive(i, epoch, out var memPageIdx);
-            int longSize = (i == 0 ? (ChunkCountRootPage + 63) : (ChunkCountPerPage + 63)) >> 6;
+            int longSize = i == 0 ? _bitmapLongsRoot : _bitmapLongsOther;
             page.Metadata<long>(0, longSize).Clear();
 
             // Clear chunk 0's raw data on the root page so the BTree directory starts clean.
@@ -103,7 +143,26 @@ public partial class ChunkBasedSegment : LogicalSegment
             Manager.UnlatchPageExclusive(memPageIdx);
         }
 
-        _map = new BitmapL3(this, false);
+        // Initialize allocator state for a fresh (empty) segment
+        _capacity = ComputeCapacity(length);
+        _allocatedCount = 0;
+        _pageFreeCount = new int[length];
+        _nextPage = new int[length];
+        _inFreeList = new int[length];
+
+        _pageFreeCount[0] = ChunkCountRootPage;
+        for (int i = 1; i < length; i++)
+        {
+            _pageFreeCount[i] = ChunkCountPerPage;
+        }
+
+        // Push all pages to free stack (reverse order for sequential fill)
+        _freeHead = PackHead(0, EMPTY_PAGE);
+        for (int i = length - 1; i >= 0; i--)
+        {
+            PushToFreeStack(i);
+        }
+
         ReserveChunk(0);                    // Mark chunk 0 as allocated ("null" sentinel) — data already cleared above
         return true;
     }
@@ -115,7 +174,37 @@ public partial class ChunkBasedSegment : LogicalSegment
             return false;
         }
 
-        _map = new BitmapL3(this, true);
+        // Rebuild allocator state from L0 bitmaps (source of truth)
+        var epoch = Manager.EpochManager.GlobalEpoch;
+        var length = Length;
+        _capacity = ComputeCapacity(length);
+        _allocatedCount = 0;
+        _pageFreeCount = new int[length];
+        _nextPage = new int[length];
+        _inFreeList = new int[length];
+
+        for (int i = 0; i < length; i++)
+        {
+            var maxChunks = i == 0 ? _rootChunkCount : _otherChunkCount;
+            var bitmapLongs = i == 0 ? _bitmapLongsRoot : _bitmapLongsOther;
+            var page = GetPage(i, epoch, out _);
+            var metadata = page.MetadataReadOnly<long>();
+
+            var popcount = CountAllocatedBits(metadata, bitmapLongs, maxChunks);
+
+            _pageFreeCount[i] = maxChunks - popcount;
+            _allocatedCount += popcount;
+        }
+
+        // Push pages with free space (reverse order for sequential fill)
+        _freeHead = PackHead(0, EMPTY_PAGE);
+        for (int i = length - 1; i >= 0; i--)
+        {
+            if (_pageFreeCount[i] > 0)
+            {
+                PushToFreeStack(i);
+            }
+        }
 
         return true;
     }
@@ -128,15 +217,13 @@ public partial class ChunkBasedSegment : LogicalSegment
     /// <returns>True if growth occurred, false if already at maximum capacity.</returns>
     /// <remarks>
     /// This method is thread-safe. It uses a lock to ensure only one thread grows the segment at a time.
-    /// After growth, a new <see cref="BitmapL3"/> is created by loading state from disk, ensuring
-    /// consistency with the expanded segment.
+    /// After growth, new pages are pushed to the Treiber stack as free pages.
     /// </remarks>
     private bool Grow(int minNewPageCount = 0, ChangeSet changeSet = null)
     {
         lock (_growLock)
         {
             var currentLength = Length;
-            var oldMap = _map;
 
             // Calculate new size: double current, or use minimum requested, whichever is larger
             var newLength = minNewPageCount > 0
@@ -159,16 +246,13 @@ public partial class ChunkBasedSegment : LogicalSegment
             // Grow the underlying logical segment (thread-safe, will allocate new pages)
             base.Grow(newLength, clearNewPages: true, effectiveChangeSet);
 
-            // Clear the page metadata (bitmap) for newly allocated pages
-            // This is critical! The base.Grow only clears raw data, not metadata.
-            // Without this, InitFromLoad reads garbage and causes crashes.
+            // Clear the page metadata (bitmap) for newly allocated pages and protect against checkpoint race
             {
                 var epoch = Manager.EpochManager.GlobalEpoch;
                 for (int i = currentLength; i < newLength; i++)
                 {
                     var page = GetPageExclusiveUnchecked(i, epoch, out var memPageIdx);
-                    int longSize = (ChunkCountPerPage + 63) >> 6;
-                    page.Metadata<long>(0, longSize).Clear();
+                    page.Metadata<long>(0, _bitmapLongsOther).Clear();
                     effectiveChangeSet.AddByMemPageIndex(memPageIdx);
 
                     // Protect new pages against the checkpoint race during Grow→first-access window.
@@ -184,14 +268,34 @@ public partial class ChunkBasedSegment : LogicalSegment
                 }
             }
 
-            // Create new bitmap by extending the old one incrementally. This avoids re-scanning ALL pages (which could deadlock if the caller holds pages via
-            // ChunkAccessor). Instead, we copy state from the old bitmap and rely on the fact that new pages are guaranteed empty.
-            _map = new BitmapL3(this, oldMap, currentLength);
+            // Expand allocator arrays — CAS on _freeHead (in PushToFreeStack below) provides memory barrier
+            var newFreeCount = new int[newLength];
+            var newNextPage = new int[newLength];
+            var newInFreeList = new int[newLength];
+            Array.Copy(_pageFreeCount, newFreeCount, currentLength);
+            Array.Copy(_nextPage, newNextPage, currentLength);
+            Array.Copy(_inFreeList, newInFreeList, currentLength);
+
+            for (int i = currentLength; i < newLength; i++)
+            {
+                newFreeCount[i] = ChunkCountPerPage;
+            }
+
+            _pageFreeCount = newFreeCount;
+            _nextPage = newNextPage;
+            _inFreeList = newInFreeList;
+            _capacity = ComputeCapacity(newLength);
+
+            // Push new pages to free stack (reverse order for sequential fill)
+            for (int i = newLength - 1; i >= currentLength; i--)
+            {
+                PushToFreeStack(i);
+            }
 
             return true;
         }
     }
-    
+
     /// <summary>
     /// Ensures the segment can hold at least <paramref name="minChunkCount"/> chunks by growing if necessary.
     /// Used during schema migration to pre-size new segments before mirroring occupancy bitmaps.
@@ -218,8 +322,7 @@ public partial class ChunkBasedSegment : LogicalSegment
     private bool GrowIfNeeded(ChangeSet changeSet = null)
     {
         // Quick check without lock - if we have free chunks, no need to grow
-        var map = _map;
-        if (map.FreeChunkCount > 0)
+        if (_allocatedCount < _capacity)
         {
             return true;
         }
@@ -227,8 +330,7 @@ public partial class ChunkBasedSegment : LogicalSegment
         // Need to grow - acquire lock and double-check
         lock (_growLock)
         {
-            map = _map;
-            if (map.FreeChunkCount > 0)
+            if (_allocatedCount < _capacity)
             {
                 return true; // Another thread grew while we waited
             }
@@ -237,28 +339,41 @@ public partial class ChunkBasedSegment : LogicalSegment
         }
     }
 
-    private static readonly ThreadLocal<Memory<int>> SingleAlloc = new(() => new Memory<int>(new int[1]));
+    // ═══════════════════════════════════════════════════════════════════════
+    // Allocation and deallocation
+    // ═══════════════════════════════════════════════════════════════════════
 
-    public void ReserveChunk(int index) => _map.SetL0(index);
+    public void ReserveChunk(int index)
+    {
+        var (pageIndex, chunkInPage) = GetChunkLocation(index);
+        var wordIndex = chunkInPage >> 6;
+        var mask = 1L << (chunkInPage & 0x3F);
+
+        var epoch = Manager.EpochManager.GlobalEpoch;
+        var page = GetPage(pageIndex, epoch, out var memPageIdx);
+        var metadata = page.Metadata<long>();
+
+        var prev = Interlocked.Or(ref metadata[wordIndex], mask);
+        if ((prev & mask) != 0)
+        {
+            return; // already reserved
+        }
+
+        Manager.EnsureDirtyAtLeast(memPageIdx, 1);
+        Interlocked.Increment(ref _allocatedCount);
+        Interlocked.Decrement(ref _pageFreeCount[pageIndex]);
+    }
 
     /// <summary>
     /// Reserves a specific chunk by index. If the chunk was not previously reserved and <paramref name="clearContent"/> is true, the chunk data is zeroed.
     /// </summary>
-    /// <returns>True if the chunk was newly reserved; false if it was already reserved.</returns>
     public void ReserveChunk(int index, bool clearContent, ChangeSet changeSet = null)
     {
-        _map.SetL0(index);
+        ReserveChunk(index);
         if (clearContent)
         {
-            var accessor = CreateChunkAccessor(changeSet);
-            try
-            {
-                accessor.ClearChunk(index);
-            }
-            finally
-            {
-                accessor.Dispose();
-            }
+            using var accessor = CreateChunkAccessor(changeSet);
+            accessor.ClearChunk(index);
         }
     }
 
@@ -273,43 +388,81 @@ public partial class ChunkBasedSegment : LogicalSegment
     /// <exception cref="ResourceExhaustedException">Thrown when the segment is at maximum capacity and cannot grow.</exception>
     /// <remarks>
     /// This method automatically grows the segment when capacity is exhausted.
-    /// The allocation itself is lock-free; only growth operations require synchronization.
+    /// The allocation itself is lock-free; only growth and rebuild operations require synchronization.
     /// </remarks>
     public int AllocateChunk(bool clearContent, ChangeSet changeSet = null)
     {
-        var mem = SingleAlloc.Value;
-        var loopCount = 0;
+        using var accessor = clearContent ? CreateChunkAccessor(changeSet) : default;
 
         while (true)
         {
-            var map = _map; // Volatile read
+            var head = _freeHead;
+            var pageIndex = UnpackPage(head);
 
-            if (map.Allocate(mem, clearContent))
+            if (pageIndex == EMPTY_PAGE)
             {
-                var chunkId = mem.Span[0];
-                // Verify allocated chunk is within segment bounds
-                if (chunkId >= ChunkCapacity)
+                if (_allocatedCount < _capacity)
                 {
-                    throw new InvalidOperationException(
-                        $"ChunkBasedSegment.AllocateChunk: bitmap returned chunkId={chunkId} >= ChunkCapacity={ChunkCapacity} " +
-                        $"(pages={Length}, rootChunks={_rootChunkCount}, otherChunks={_otherChunkCount})");
+                    // Free space exists but stack is empty — recover orphaned pages
+                    RebuildFreeStack();
+                    continue;
                 }
-                return chunkId;
+
+                // Truly full — need to grow
+                if (!GrowIfNeeded(changeSet))
+                {
+                    ThrowHelper.ThrowResourceExhausted("Storage/ChunkBasedSegment/AllocateChunk", ResourceType.Memory, _allocatedCount, _capacity);
+                }
+                continue;
             }
 
-            loopCount++;
+            // Try to allocate from the head page
+            var maxChunks = pageIndex == 0 ? _rootChunkCount : _otherChunkCount;
+            var bitmapLongs = pageIndex == 0 ? _bitmapLongsRoot : _bitmapLongsOther;
+            var epoch = Manager.EpochManager.GlobalEpoch;
+            var page = GetPage(pageIndex, epoch, out var memPageIdx);
+            var metadata = page.Metadata<long>();
 
-            if (loopCount > 100)
+            for (int w = 0; w < bitmapLongs; w++)
             {
-                throw new InvalidOperationException($"ChunkBasedSegment.AllocateChunk infinite loop: FreeChunkCount={_map.FreeChunkCount}, ChunkCapacity={ChunkCapacity}, AllocatedChunkCount={AllocatedChunkCount}");
+                var word = metadata[w];
+                while (word != -1L)
+                {
+                    var bit = BitOperations.TrailingZeroCount(~word);
+                    var chunkInPage = w * 64 + bit;
+                    if (chunkInPage >= maxChunks)
+                    {
+                        goto pageExhausted;
+                    }
+
+                    var mask = 1L << bit;
+                    var prev = Interlocked.Or(ref metadata[w], mask);
+                    if ((prev & mask) != 0)
+                    {
+                        // Lost race — update word with current state and retry next bit
+                        word = prev | mask;
+                        continue;
+                    }
+
+                    // SUCCESS — chunk claimed
+                    Manager.EnsureDirtyAtLeast(memPageIdx, 1);
+                    Interlocked.Increment(ref _allocatedCount);
+                    Interlocked.Decrement(ref _pageFreeCount[pageIndex]);
+
+                    var chunkId = PageOffsetToChunkIndex(pageIndex, chunkInPage);
+
+                    if (clearContent)
+                    {
+                        accessor.ClearChunk(chunkId);
+                    }
+
+                    return chunkId;
+                }
             }
 
-            // Allocation failed - need to grow
-            if (!GrowIfNeeded(changeSet))
-            {
-                ThrowHelper.ThrowResourceExhausted("Storage/ChunkBasedSegment/AllocateChunk", ResourceType.Memory, AllocatedChunkCount, ChunkCapacity);
-            }
-            // Retry with the new (grown) map
+            pageExhausted:
+            // No free bit found on this page (consumed by concurrent allocators) — lazy pop
+            TryPopFreeStack(head);
         }
     }
 
@@ -328,32 +481,216 @@ public partial class ChunkBasedSegment : LogicalSegment
     public IMemoryOwner<int> AllocateChunks(int count, bool clearContent, ChangeSet changeSet = null)
     {
         var res = MemoryPool<int>.Shared.Rent(count);
-        var memory = res.Memory[..count]; // Slice to exact count
+        var span = res.Memory.Span;
+        var allocated = 0;
 
-        while (true)
+        try
         {
-            var map = _map; // Volatile read
-            if (map.Allocate(memory, clearContent))
+            for (int i = 0; i < count; i++)
             {
-                return res;
+                span[i] = AllocateChunk(clearContent, changeSet);
+                allocated++;
             }
-
-            // Allocation failed - need to grow
-            // Calculate minimum pages needed to accommodate the request
-            var chunksNeeded = count - map.FreeChunkCount;
-            var pagesNeeded = (chunksNeeded + ChunkCountPerPage - 1) / ChunkCountPerPage;
-            var minNewPageCount = Length + pagesNeeded;
-
-            if (!Grow(minNewPageCount, changeSet))
+        }
+        catch
+        {
+            // Rollback: free any chunks we already allocated
+            for (int i = 0; i < allocated; i++)
             {
-                res.Dispose();
-                ThrowHelper.ThrowResourceExhausted("Storage/ChunkBasedSegment/AllocateChunks", ResourceType.Memory, AllocatedChunkCount, ChunkCapacity);
+                FreeChunk(span[i]);
             }
-            // Retry with the new (grown) map
+            res.Dispose();
+            throw;
+        }
+
+        return res;
+    }
+
+    public void FreeChunk(int chunkId)
+    {
+        var (pageIndex, chunkInPage) = GetChunkLocation(chunkId);
+        var wordIndex = chunkInPage >> 6;
+        var mask = 1L << (chunkInPage & 0x3F);
+
+        var epoch = Manager.EpochManager.GlobalEpoch;
+        var page = GetPage(pageIndex, epoch, out var memPageIdx);
+        var metadata = page.Metadata<long>();
+
+        var prev = Interlocked.And(ref metadata[wordIndex], ~mask);
+
+        // Guard against double-free - only proceed if the bit was actually set
+        if ((prev & mask) == 0)
+        {
+            return;
+        }
+
+        // Ensure DC≥1 so checkpoint includes this page in its next snapshot.
+        // Without this, the page can be evicted as "clean" and reloaded from the last checkpoint snapshot
+        // — which still has the bit SET, causing _allocatedCount to diverge from actual popcount.
+        Manager.EnsureDirtyAtLeast(memPageIdx, 1);
+        Interlocked.Decrement(ref _allocatedCount);
+
+        var newFreeCount = Interlocked.Increment(ref _pageFreeCount[pageIndex]);
+        if (newFreeCount == 1)
+        {
+            // Page just transitioned full → has-space: push to free stack
+            PushToFreeStack(pageIndex);
         }
     }
 
-    public void FreeChunk(int chunkId) => _map.ClearL0(chunkId);
+    // ═══════════════════════════════════════════════════════════════════════
+    // Treiber stack operations
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static long PackHead(int version, int pageIndex) => ((long)version << 32) | (uint)pageIndex;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int UnpackPage(long head) => (int)head;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int UnpackVersion(long head) => (int)(head >> 32);
+
+    /// <summary>
+    /// Pushes a page onto the free stack. Uses an <see cref="_inFreeList"/> flag to prevent double-push (which would create cycles in the singly-linked list).
+    /// </summary>
+    private void PushToFreeStack(int pageIndex)
+    {
+        // CAS flag 0→1: prevents double-push and stack cycles.
+        // If the page is already in the list, skip — another thread's push succeeded first.
+        if (Interlocked.CompareExchange(ref _inFreeList[pageIndex], 1, 0) != 0)
+        {
+            return;
+        }
+
+        while (true)
+        {
+            var oldHead = _freeHead;
+            _nextPage[pageIndex] = UnpackPage(oldHead);
+            var newHead = PackHead(UnpackVersion(oldHead) + 1, pageIndex);
+            if (Interlocked.CompareExchange(ref _freeHead, newHead, oldHead) == oldHead)
+            {
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Attempts to pop the head page from the free stack. Only succeeds if the head hasn't changed since <paramref name="expectedHead"/> was read.
+    /// On success, clears the <see cref="_inFreeList"/> flag and re-pushes the page if it still has free chunks (recovers orphans from the race where
+    /// a concurrent FreeChunk's 0→1 push was blocked by _inFreeList=1 while the page was the head).
+    /// </summary>
+    private void TryPopFreeStack(long expectedHead)
+    {
+        var headPage = UnpackPage(expectedHead);
+        if (headPage == EMPTY_PAGE)
+        {
+            return;
+        }
+
+        var nextPage = _nextPage[headPage];
+        var newHead = PackHead(UnpackVersion(expectedHead) + 1, nextPage);
+        if (Interlocked.CompareExchange(ref _freeHead, newHead, expectedHead) == expectedHead)
+        {
+            // Pop succeeded — page is no longer in the list.
+            _inFreeList[headPage] = 0;
+
+            // Re-push if the page still has free space. This handles the race where a concurrent FreeChunk's 0→1 push was blocked by _inFreeList=1 while
+            // the page was the head. If freeCount is transiently wrong (says >0 but page is full), the re-pushed page will be lazily popped on the next
+            // scan — freeCount settles within 1-2 iterations.
+            if (_pageFreeCount[headPage] > 0)
+            {
+                PushToFreeStack(headPage);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Rebuilds the free stack from L0 bitmap truth when the stack is empty but free space exists.
+    /// This recovers pages orphaned by rare concurrent race conditions (push-skip + pop).
+    /// </summary>
+    private void RebuildFreeStack()
+    {
+        lock (_growLock)
+        {
+            // Re-check under lock — another thread may have already rebuilt or grown
+            if (UnpackPage(_freeHead) != EMPTY_PAGE)
+            {
+                return;
+            }
+
+            var epoch = Manager.EpochManager.GlobalEpoch;
+            var length = Length;
+            var totalAllocated = 0;
+
+            for (int i = 0; i < length; i++)
+            {
+                var maxChunks = i == 0 ? _rootChunkCount : _otherChunkCount;
+                var bitmapLongs = i == 0 ? _bitmapLongsRoot : _bitmapLongsOther;
+                var page = GetPage(i, epoch, out _);
+                var metadata = page.MetadataReadOnly<long>();
+
+                var popcount = CountAllocatedBits(metadata, bitmapLongs, maxChunks);
+                var freeCount = maxChunks - popcount;
+
+                // Use Exchange to safely update even if concurrent FreeChunk is modifying this counter
+                Interlocked.Exchange(ref _pageFreeCount[i], freeCount);
+                totalAllocated += popcount;
+
+                // Push pages with free space — _inFreeList guard in PushToFreeStack prevents duplicates if a concurrent FreeChunk already pushed this page
+                if (freeCount > 0)
+                {
+                    PushToFreeStack(i);
+                }
+            }
+
+            Interlocked.Exchange(ref _allocatedCount, totalAllocated);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Helpers
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int ComputeCapacity(int pageCount) => _rootChunkCount + (pageCount - 1) * _otherChunkCount;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int PageOffsetToChunkIndex(int pageIndex, int chunkInPage)
+    {
+        if (pageIndex == 0)
+        {
+            return chunkInPage;
+        }
+        return _rootChunkCount + (pageIndex - 1) * _otherChunkCount + chunkInPage;
+    }
+
+    /// <summary>
+    /// Counts allocated (set) bits in L0 bitmap words, masking invalid bits in the last word.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int CountAllocatedBits(ReadOnlySpan<long> metadata, int bitmapLongs, int maxChunks)
+    {
+        var popcount = 0;
+        for (int w = 0; w < bitmapLongs; w++)
+        {
+            var word = metadata[w];
+            if (w == bitmapLongs - 1)
+            {
+                var validBits = maxChunks - w * 64;
+                if (validBits < 64)
+                {
+                    word &= (1L << validBits) - 1;
+                }
+            }
+            popcount += BitOperations.PopCount((ulong)word);
+        }
+        return popcount;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ChunkAccessor factory and warm caches
+    // ═══════════════════════════════════════════════════════════════════════
 
     /// <summary>
     /// Create an ChunkAccessor using the stored PagedMMF and EpochManager references.
@@ -502,6 +839,10 @@ public partial class ChunkBasedSegment : LogicalSegment
         cache.IsRented = false;
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // Addressing
+    // ═══════════════════════════════════════════════════════════════════════
+
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public (int segmentIndex, int offset) GetChunkLocation(int index)
     {
@@ -522,7 +863,7 @@ public partial class ChunkBasedSegment : LogicalSegment
         var offset = (int)(adjusted - (uint)(pageIndex * _otherChunkCount));
 
         var resultPageIndex = pageIndex + 1;
-        
+
         // Safety check: ensure the page index is within the segment's bounds
         // This catches cases where a chunk ID from a grown segment is accessed
         // through a stale reference or invalid chunk ID
@@ -538,6 +879,10 @@ public partial class ChunkBasedSegment : LogicalSegment
         return (resultPageIndex, offset);
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // Properties
+    // ═══════════════════════════════════════════════════════════════════════
+
     public int Stride { get; }
     public int ChunkCountRootPage { get; }
     public int ChunkCountPerPage { get; }
@@ -548,14 +893,24 @@ public partial class ChunkBasedSegment : LogicalSegment
     /// <summary>Byte offset from start of raw data to first chunk on non-root pages (alignment padding only).</summary>
     internal int OtherChunkDataOffset => _otherAlignmentPadding;
 
-    public int ChunkCapacity => _map.Capacity;
+    public int ChunkCapacity => _capacity;
 
-    public int AllocatedChunkCount => _map.Allocated;
-    public int FreeChunkCount => ChunkCapacity - AllocatedChunkCount;
+    public int AllocatedChunkCount => _allocatedCount;
+    public int FreeChunkCount => _capacity - _allocatedCount;
 
     /// <summary>
     /// Checks whether the given chunk index is marked as allocated in the occupancy bitmap.
     /// </summary>
-    public bool IsChunkAllocated(int index) => _map.IsSet(index);
+    public bool IsChunkAllocated(int index)
+    {
+        var (pageIndex, chunkInPage) = GetChunkLocation(index);
+        var wordIndex = chunkInPage >> 6;
+        var mask = 1L << (chunkInPage & 0x3F);
+
+        var epoch = Manager.EpochManager.GlobalEpoch;
+        var page = GetPage(pageIndex, epoch, out _);
+        var data = page.MetadataReadOnly<long>();
+        return (data[wordIndex] & mask) != 0L;
+    }
 
 }
