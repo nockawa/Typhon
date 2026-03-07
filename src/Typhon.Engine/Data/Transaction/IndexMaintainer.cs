@@ -41,17 +41,22 @@ internal static unsafe class IndexMaintainer
                         {
                             var tailAccessor = tailVSBS.Segment.CreateChunkAccessor(changeSet);
 
-                            // Tombstone on old key's TAIL buffer
+                            // Tombstone on old key's TAIL buffer (entity left this key)
                             if (oldHeadBufferId >= 0)
                             {
-                                var oldTailBufferId = GetOrCreateTailBuffer(oldHeadBufferId, tailVSBS, ref accessor, ref tailAccessor);
+                                var oldTailBufferId = EnsureTailPopulated(oldHeadBufferId, tailVSBS,
+                                    ref accessor, ref tailAccessor, info, includeChainId: startChunkId);
+                                // Ensure this entity has an Active entry (may be missing if created after a prior backfill)
+                                var creationTsn = LookupCreationTSN(startChunkId, info);
+                                tailVSBS.AddElement(oldTailBufferId, VersionedIndexEntry.Active(startChunkId, creationTsn), ref tailAccessor);
                                 tailVSBS.AddElement(oldTailBufferId, VersionedIndexEntry.Tombstone(startChunkId, tsn), ref tailAccessor);
                             }
 
-                            // Active on new key's TAIL buffer
+                            // Active on new key's TAIL buffer (entity arrived at this key)
                             if (newHeadBufferId >= 0)
                             {
-                                var newTailBufferId = GetOrCreateTailBuffer(newHeadBufferId, tailVSBS, ref accessor, ref tailAccessor);
+                                var newTailBufferId = EnsureTailPopulated(newHeadBufferId, tailVSBS,
+                                    ref accessor, ref tailAccessor, info, excludeChainId: startChunkId);
                                 tailVSBS.AddElement(newTailBufferId, VersionedIndexEntry.Active(startChunkId, tsn), ref tailAccessor);
                             }
 
@@ -98,17 +103,8 @@ internal static unsafe class IndexMaintainer
                 var accessor = ifi.Index.Segment.CreateChunkAccessor(changeSet);
                 if (ifi.Index.AllowMultiple)
                 {
-                    *(int*)&cur[ifi.OffsetToIndexElementId] = ifi.Index.Add(&cur[ifi.OffsetToField], startChunkId, ref accessor, out var headBufferId);
-
-                    // TAIL: append Active entry for newly created entity
-                    var tailVSBS = info.ComponentTable.TailVSBS;
-                    if (tailVSBS != null)
-                    {
-                        var tailAccessor = tailVSBS.Segment.CreateChunkAccessor(changeSet);
-                        var tailBufferId = GetOrCreateTailBuffer(headBufferId, tailVSBS, ref accessor, ref tailAccessor);
-                        tailVSBS.AddElement(tailBufferId, VersionedIndexEntry.Active(startChunkId, tsn), ref tailAccessor);
-                        tailAccessor.Dispose();
-                    }
+                    *(int*)&cur[ifi.OffsetToIndexElementId] = ifi.Index.Add(&cur[ifi.OffsetToField], startChunkId, ref accessor, out _);
+                    // TAIL write deferred to first mutation — see EnsureTailPopulated
                 }
                 else
                 {
@@ -151,16 +147,18 @@ internal static unsafe class IndexMaintainer
                 ifi.Index.RemoveValue(&prev[ifi.OffsetToField], *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref accessor,
                     preserveEmptyBuffer: tailVSBS != null);
 
-                // TAIL: append Tombstone for the deleted entity.
-                // Since preserveEmptyBuffer keeps the key alive, we can TryGet after RemoveValue
-                // and use GetOrCreateTailBuffer which properly links the TAIL to the HEAD root header.
+                // TAIL: backfill + Active + Tombstone for the deleted entity.
+                // preserveEmptyBuffer keeps the key alive so TryGet succeeds after RemoveValue.
                 if (tailVSBS != null)
                 {
                     var tailAccessor = tailVSBS.Segment.CreateChunkAccessor(changeSet);
                     var headResult = ifi.Index.TryGet(&prev[ifi.OffsetToField], ref accessor);
                     if (headResult.IsSuccess)
                     {
-                        var tailBufId = GetOrCreateTailBuffer(headResult.Value, tailVSBS, ref accessor, ref tailAccessor);
+                        var tailBufId = EnsureTailPopulated(headResult.Value, tailVSBS,
+                            ref accessor, ref tailAccessor, info, includeChainId: startChunkId);
+                        var creationTsn = LookupCreationTSN(startChunkId, info);
+                        tailVSBS.AddElement(tailBufId, VersionedIndexEntry.Active(startChunkId, creationTsn), ref tailAccessor);
                         tailVSBS.AddElement(tailBufId, VersionedIndexEntry.Tombstone(startChunkId, tsn), ref tailAccessor);
                     }
                     tailAccessor.Dispose();
@@ -202,26 +200,123 @@ internal static unsafe class IndexMaintainer
     }
 
     /// <summary>
-    /// Gets the existing TAIL buffer ID or lazily allocates a new one, storing the link in the HEAD root header's extra header.
+    /// Ensures the TAIL version-history buffer is populated for the given HEAD buffer.
+    /// On first call (TailBufferId == 0), locks the HEAD buffer, scans all HEAD entries,
+    /// and backfills Active entries to a newly allocated TAIL buffer.
+    /// Subsequent calls return the existing TailBufferId immediately (fast path).
     /// </summary>
     /// <param name="headBufferId">Root chunk ID of the HEAD buffer.</param>
     /// <param name="tailVSBS">The TAIL VSBS for VersionedIndexEntry storage.</param>
-    /// <param name="headAccessor">ChunkAccessor for the BTree's segment (to read/write HEAD root header).</param>
+    /// <param name="headAccessor">ChunkAccessor for the BTree's segment (HEAD buffer lives here).</param>
     /// <param name="tailAccessor">ChunkAccessor for the TailIndexSegment.</param>
-    /// <returns>The TAIL buffer ID (existing or newly allocated).</returns>
-    private static int GetOrCreateTailBuffer(int headBufferId, VariableSizedBufferSegment<VersionedIndexEntry> tailVSBS,
-        ref ChunkAccessor headAccessor, ref ChunkAccessor tailAccessor)
+    /// <param name="info">ComponentInfo for looking up creation TSNs via the revision chain.</param>
+    /// <param name="excludeChainId">Chain ID to skip during backfill (entity just arrived at this key via MoveValue).</param>
+    /// <param name="includeChainId">Chain ID to include even though it's been removed from HEAD (entity just left via MoveValue/RemoveValue).</param>
+    /// <returns>The TAIL buffer ID (existing or newly allocated and backfilled).</returns>
+    private static int EnsureTailPopulated(int headBufferId, VariableSizedBufferSegment<VersionedIndexEntry> tailVSBS, ref ChunkAccessor headAccessor, 
+        ref ChunkAccessor tailAccessor, ComponentInfo info, int excludeChainId = 0, int includeChainId = 0)
     {
-        var chunkAddr = headAccessor.GetChunkAddress(headBufferId, true);
-        ref var extra = ref IndexBufferExtraHeader.FromChunkAddress(chunkAddr);
+        // Fast path: TAIL already exists
+        ref var extra = ref IndexBufferExtraHeader.FromChunkAddress(headAccessor.GetChunkAddress(headBufferId));
         if (extra.TailBufferId != 0)
         {
             return extra.TailBufferId;
         }
 
-        // Allocate a new TAIL buffer and link it in the extra header
-        var tailBufferId = tailVSBS.AllocateBuffer(ref tailAccessor);
-        extra.TailBufferId = tailBufferId;
-        return tailBufferId;
+        // Slow path: lock HEAD buffer, double-check, backfill
+        ref var rh = ref headAccessor.GetChunk<VariableSizedBufferRootHeader>(headBufferId, true);
+        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.SegmentAllocationLockTimeout);
+        if (!rh.Lock.EnterExclusiveAccess(ref wc))
+        {
+            ThrowHelper.ThrowLockTimeout("IndexMaintainer/EnsureTailPopulated", TimeoutOptions.Current.SegmentAllocationLockTimeout);
+        }
+
+        try
+        {
+            // Re-read after lock (another thread may have populated)
+            extra = ref IndexBufferExtraHeader.FromChunkAddress(headAccessor.GetChunkAddress(headBufferId, true));
+            if (extra.TailBufferId != 0)
+            {
+                return extra.TailBufferId;
+            }
+
+            // Allocate TAIL buffer
+            var tailBufferId = tailVSBS.AllocateBuffer(ref tailAccessor);
+
+            // Backfill: scan HEAD entries, write Active for each to TAIL
+            BackfillHeadEntriesToTail(headBufferId, tailBufferId, tailVSBS, ref headAccessor, ref tailAccessor, info, excludeChainId, includeChainId);
+
+            // Publish (visible after lock release)
+            extra = ref IndexBufferExtraHeader.FromChunkAddress(headAccessor.GetChunkAddress(headBufferId, true));
+            extra.TailBufferId = tailBufferId;
+            return tailBufferId;
+        }
+        finally
+        {
+            rh = ref headAccessor.GetChunk<VariableSizedBufferRootHeader>(headBufferId, true);
+            rh.Lock.ExitExclusiveAccess();
+        }
+    }
+
+    /// <summary>
+    /// Scans all entries in the HEAD buffer and writes corresponding Active entries to the TAIL buffer.
+    /// Called once per key on first mutation to populate the TAIL version history.
+    /// </summary>
+    private static void BackfillHeadEntriesToTail(int headBufferId, int tailBufferId, VariableSizedBufferSegment<VersionedIndexEntry> tailVSBS, 
+        ref ChunkAccessor headAccessor, ref ChunkAccessor tailAccessor, ComponentInfo info, int excludeChainId, int includeChainId)
+    {
+        int rootHeaderTotalSize = sizeof(VariableSizedBufferRootHeader) + sizeof(IndexBufferExtraHeader);
+
+        // Read root header to get the stored chunk chain start
+        ref var rh = ref headAccessor.GetChunk<VariableSizedBufferRootHeader>(headBufferId);
+        var curChunkId = rh.FirstStoredChunkId;
+
+        while (curChunkId != 0)
+        {
+            var chunkAddr = headAccessor.GetChunkAddress(curChunkId);
+            ref var chunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(chunkAddr);
+            var elementCount = chunkHeader.ElementCount;
+            // Read NextChunkId to local before any further accessor calls that might evict this slot
+            var nextChunkId = chunkHeader.NextChunkId;
+            var isRoot = (curChunkId == headBufferId);
+            var offset = isRoot ? rootHeaderTotalSize : sizeof(VariableSizedBufferChunkHeader);
+            var elements = new Span<int>(chunkAddr + offset, elementCount);
+
+            for (int i = 0; i < elements.Length; i++)
+            {
+                var chainId = elements[i];
+                if (chainId == excludeChainId)
+                {
+                    continue;
+                }
+                var creationTsn = LookupCreationTSN(chainId, info);
+                tailVSBS.AddElement(tailBufferId, VersionedIndexEntry.Active(chainId, creationTsn), ref tailAccessor);
+            }
+
+            curChunkId = nextChunkId;
+        }
+
+        // Include entry that was already removed from HEAD (by MoveValue/RemoveValue)
+        if (includeChainId > 0)
+        {
+            var creationTsn = LookupCreationTSN(includeChainId, info);
+            tailVSBS.AddElement(tailBufferId, VersionedIndexEntry.Active(includeChainId, creationTsn), ref tailAccessor);
+        }
+    }
+
+    /// <summary>
+    /// Recovers the creation TSN for a given revision chain by reading the oldest surviving revision element.
+    /// Returns 0 (sentinel) if the chain has been fully cleaned up, meaning "active since before recorded history".
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static long LookupCreationTSN(int startChunkId, ComponentInfo info)
+    {
+        ref var header = ref info.CompRevTableAccessor.GetChunk<CompRevStorageHeader>(startChunkId);
+        if (header.ItemCount == 0)
+        {
+            return 0;
+        }
+        var element = ComponentRevisionManager.GetRevisionElement(ref info.CompRevTableAccessor, startChunkId, header.FirstItemIndex);
+        return element.Element.TSN;
     }
 }

@@ -227,7 +227,11 @@ public abstract partial class BTree<TKey>
         finally
         {
             _segment.ReturnWarmSiblingAccessor();
-            DeferredReclaim();
+            if (++_deferredReclaimSkip >= 64)
+            {
+                _deferredReclaimSkip = 0;
+                DeferredReclaim();
+            }
         }
     }
 
@@ -568,7 +572,11 @@ public abstract partial class BTree<TKey>
         }
         finally
         {
-            DeferredReclaim();
+            if (++_deferredReclaimSkip >= 64)
+            {
+                _deferredReclaimSkip = 0;
+                DeferredReclaim();
+            }
         }
     }
 }

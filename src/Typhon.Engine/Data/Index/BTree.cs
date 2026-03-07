@@ -461,6 +461,10 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
     // Protected by _deferredLock for thread safety under concurrent merge operations.
     private DeferredNodeList _deferredNodes;
 
+    // Batching counter for DeferredReclaim: only reclaim every 64 mutations to reduce MinActiveEpoch calls.
+    // Non-atomic by design — racy reads are harmless (DeferredReclaim is idempotent, serialized by _deferredLock).
+    private int _deferredReclaimSkip;
+
     // OLC diagnostics counters (always-on, only incremented on slow paths)
     internal long _optimisticRestarts;
     internal long _pessimisticFallbacks;

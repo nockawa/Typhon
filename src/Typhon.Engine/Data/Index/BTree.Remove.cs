@@ -371,8 +371,12 @@ public abstract partial class BTree<TKey>
         }
         finally
         {
-            // Reclaim deferred nodes whose epoch is safe (all readers have exited).
-            DeferredReclaim();
+            // Reclaim deferred nodes every 64 mutations to amortize MinActiveEpoch cost.
+            if (++_deferredReclaimSkip >= 64)
+            {
+                _deferredReclaimSkip = 0;
+                DeferredReclaim();
+            }
         }
     }
     /// <summary>

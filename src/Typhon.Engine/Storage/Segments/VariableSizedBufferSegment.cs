@@ -188,7 +188,21 @@ public unsafe class VariableSizedBufferSegmentBase
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void LockBuffer(ref VariableSizedBufferRootHeader rh)
+    {
+        // Fast path: uncontended lock — no timestamp syscall needed
+        if (rh.Lock.TryEnterExclusiveAccess())
+        {
+            return;
+        }
+
+        // Slow path: contended — create WaitContext for timeout
+        LockBufferSlow(ref rh);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void LockBufferSlow(ref VariableSizedBufferRootHeader rh)
     {
         var wc = WaitContext.FromTimeout(TimeoutOptions.Current.SegmentAllocationLockTimeout);
         if (!rh.Lock.EnterExclusiveAccess(ref wc))
