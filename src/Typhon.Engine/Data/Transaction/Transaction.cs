@@ -622,15 +622,24 @@ public unsafe class Transaction : IDisposable
         var componentType = typeof(T);
 
         // Fetch the cached info or create it if it's the first time we've operated on this Component type
-        _dbe.LogCommitPhase(TSN, $"CreateComponent<{componentType.Name}> pk={pk}: GetComponentInfo");
+        if (_dbe.IsCommitLoggingEnabled)
+        {
+            _dbe.LogCommitPhase(TSN, $"CreateComponent<{componentType.Name}> pk={pk}: GetComponentInfo");
+        }
         var info = GetComponentInfo(componentType);
 
         // Allocate the chunk that will store the component's chunk
-        _dbe.LogCommitPhase(TSN, $"CreateComponent<{componentType.Name}> pk={pk}: AllocateChunk");
+        if (_dbe.IsCommitLoggingEnabled)
+        {
+            _dbe.LogCommitPhase(TSN, $"CreateComponent<{componentType.Name}> pk={pk}: AllocateChunk");
+        }
         var componentChunkId = info.CompContentSegment.AllocateChunk(false, _changeSet);
 
         // Allocate the component revision storage as it's a new component
-        _dbe.LogCommitPhase(TSN, $"CreateComponent<{componentType.Name}> pk={pk}: AllocCompRevStorage");
+        if (_dbe.IsCommitLoggingEnabled)
+        {
+            _dbe.LogCommitPhase(TSN, $"CreateComponent<{componentType.Name}> pk={pk}: AllocCompRevStorage");
+        }
         var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, componentChunkId);
 
         var entry = new ComponentInfo.CompRevInfo
@@ -646,7 +655,10 @@ public unsafe class Transaction : IDisposable
         info.AddNew(pk, entry);
 
         // Copy the component data
-        _dbe.LogCommitPhase(TSN, $"CreateComponent<{componentType.Name}> pk={pk}: GetChunkAsSpan");
+        if (_dbe.IsCommitLoggingEnabled)
+        {
+            _dbe.LogCommitPhase(TSN, $"CreateComponent<{componentType.Name}> pk={pk}: GetChunkAsSpan");
+        }
         int compSize = info.ComponentTable.ComponentStorageSize;
         var dst = info.CompContentAccessor.GetChunkAsSpan(componentChunkId, true);
         new Span<byte>(Unsafe.AsPointer(ref comp), compSize).CopyTo(dst.Slice(info.ComponentTable.ComponentOverhead));
@@ -1315,8 +1327,8 @@ public unsafe class Transaction : IDisposable
             {
                 if (_batchIndexActive)
                 {
-                    IndexMaintainer.UpdateIndices(pk, info, compRevInfo, readCompChunkId, _changeSet, TSN, _batchIndexAccessors, ref _batchPkAccessor, 
-                        ref _batchTailAccessor);
+                    IndexMaintainer.UpdateIndices(pk, info, compRevInfo, readCompChunkId, _changeSet, TSN, _batchIndexAccessors,
+                        ref _batchPkAccessor, ref _batchTailAccessor);
                 }
                 else
                 {
@@ -1589,13 +1601,16 @@ public unsafe class Transaction : IDisposable
         {
             context.Info = kvp.Value;
             var info = kvp.Value;
-            _dbe.LogCommitPhase(TSN, $"CommitComponent {kvp.Key.Name} ({info.EntryCount} entries)");
+            if (_dbe.IsCommitLoggingEnabled)
+            {
+                _dbe.LogCommitPhase(TSN, $"CommitComponent {kvp.Key.Name} ({info.EntryCount} entries)");
+            }
 
             // Start a sub-span for this component type
             using var componentActivity = TyphonActivitySource.StartActivity("Transaction.CommitComponentCore");
             componentActivity?.SetTag(TyphonSpanAttributes.ComponentType, kvp.Key.Name);
 
-            // Phase A: hoist accessor creation + enter batch mode
+            // Hoist accessor creation for batch index maintenance
             var indexedFieldInfos = info.ComponentTable.IndexedFieldInfos;
             _batchIndexAccessors = new ChunkAccessor[indexedFieldInfos.Length];
             for (int i = 0; i < indexedFieldInfos.Length; i++)
@@ -1632,7 +1647,10 @@ public unsafe class Transaction : IDisposable
                 _batchIndexAccessors = null;
             }
 
-            _dbe.LogCommitPhase(TSN, $"CommitComponent {kvp.Key.Name} done");
+            if (_dbe.IsCommitLoggingEnabled)
+            {
+                _dbe.LogCommitPhase(TSN, $"CommitComponent {kvp.Key.Name} done");
+            }
         }
 
         _dbe.LogCommitPhase(TSN, "DeferredCleanup");

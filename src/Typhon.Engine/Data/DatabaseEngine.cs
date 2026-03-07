@@ -1218,6 +1218,8 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     internal void LogCommitStart(long tsn, int componentCount) =>
         _log?.LogDebug("Tx #{Tsn} commit start: {Count} component types", tsn, componentCount);
 
+    internal bool IsCommitLoggingEnabled => _log != null;
+
     internal void LogCommitPhase(long tsn, string phase) =>
         _log?.LogDebug("Tx #{Tsn} commit: {Phase}", tsn, phase);
 
