@@ -142,7 +142,7 @@ public class DatabaseEngineOptions
 /// </para>
 /// </remarks>
 [PublicAPI]
-public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvider
+public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvider
 {
     private readonly DatabaseEngineOptions      _options;
     private readonly ILogger<DatabaseEngine>    _log;
@@ -254,7 +254,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         // Back-pressure: if registry is full, wait for a slot to be freed.
         // The admission check is a fast-path optimization — AllocateUowId's CAS provides the real atomicity (TOCTOU by design).
         var uowId = UowRegistry.AllocateUowId(ref wc, changeSet);
-        LogUowLifecycle($"UowId allocated: {uowId}");
+        LogUowIdAllocated(uowId);
 
         return new UnitOfWork(this, durabilityMode, uowId, effectiveTimeout, changeSet);
     }
@@ -1013,7 +1013,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             if (persistedFields != null)
             {
                 diff = SchemaValidator.ComputeDiff(schemaName, persistedFields, persisted.Comp, definition, 
-                    resolver?.Renames ?? (IReadOnlyList<(string, string, int)>)[]);
+                    resolver.Renames ?? (IReadOnlyList<(string, string, int)>)[]);
 
                 if (diff.HasBreakingChanges && schemaValidation != SchemaValidationMode.Skip)
                 {
@@ -1205,29 +1205,44 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
     internal void RecordConflict() => Interlocked.Increment(ref _transactionConflicts);
 
-    internal void LogDeferredUowNotFlushed(ushort uowId, int committedCount) =>
-        _log?.LogWarning("Deferred UoW #{UowId} disposed with {Count} committed transaction(s) without Flush/FlushAsync. " +
-                         "Data relies on engine shutdown safety net.", uowId, committedCount);
+    [LoggerMessage(LogLevel.Warning, "Deferred UoW #{uowId} disposed with {count} committed transaction(s) without Flush/FlushAsync. Data relies on engine shutdown safety net.")]
+    internal partial void LogDeferredUowNotFlushed(ushort uowId, int count);
 
-    internal void LogUowFlushStart(ushort uowId, DurabilityMode mode, long targetLsn) =>
-        _log?.LogDebug("UoW #{UowId} ({Mode}) flush: waiting for WAL durable LSN {TargetLsn}", uowId, mode, targetLsn);
+    [LoggerMessage(LogLevel.Debug, "UoW #{uowId} ({mode}) flush: waiting for WAL durable LSN {targetLsn}")]
+    internal partial void LogUowFlushStart(ushort uowId, DurabilityMode mode, long targetLsn);
 
-    internal void LogUowFlushComplete(ushort uowId) =>
-        _log?.LogDebug("UoW #{UowId} flush complete", uowId);
+    [LoggerMessage(LogLevel.Debug, "UoW #{uowId} flush complete")]
+    internal partial void LogUowFlushComplete(ushort uowId);
 
-    internal void LogCommitStart(long tsn, int componentCount) =>
-        _log?.LogDebug("Tx #{Tsn} commit start: {Count} component types", tsn, componentCount);
+    [LoggerMessage(LogLevel.Debug, "Tx #{tsn} commit start: {count} component types")]
+    internal partial void LogCommitStart(long tsn, int count);
 
-    internal bool IsCommitLoggingEnabled => _log != null;
+    [LoggerMessage(LogLevel.Debug, "Tx #{tsn} commit: {phase}")]
+    internal partial void LogCommitPhase(long tsn, string phase);
 
-    internal void LogCommitPhase(long tsn, string phase) =>
-        _log?.LogDebug("Tx #{Tsn} commit: {Phase}", tsn, phase);
+    [LoggerMessage(LogLevel.Debug, "Tx #{tsn} dispose: {phase}")]
+    internal partial void LogTxDispose(long tsn, string phase);
 
-    internal void LogTxDispose(long tsn, string phase) =>
-        _log?.LogDebug("Tx #{Tsn} dispose: {Phase}", tsn, phase);
+    [LoggerMessage(LogLevel.Debug, "UoW: {phase}")]
+    internal partial void LogUowLifecycle(string phase);
 
-    internal void LogUowLifecycle(string phase) =>
-        _log?.LogDebug("UoW: {Phase}", phase);
+    [LoggerMessage(LogLevel.Debug, "UoW: UowId allocated: {uowId}")]
+    internal partial void LogUowIdAllocated(ushort uowId);
+
+    [LoggerMessage(LogLevel.Debug, "Tx.Init #{tsn}: {phase}")]
+    internal partial void LogTxInitPhase(long tsn, string phase);
+
+    [LoggerMessage(LogLevel.Debug, "CreateQuickTransaction: Tx #{tsn} created")]
+    internal partial void LogQuickTxCreated(long tsn);
+
+    [LoggerMessage(LogLevel.Debug, "Tx #{tsn} commit: CreateComponent<{componentName}> pk={pk}: {step}")]
+    internal partial void LogCommitCreateComponent(long tsn, string componentName, long pk, string step);
+
+    [LoggerMessage(LogLevel.Debug, "Tx #{tsn} commit: CommitComponent {componentName} ({entryCount} entries)")]
+    internal partial void LogCommitComponentEntries(long tsn, string componentName, int entryCount);
+
+    [LoggerMessage(LogLevel.Debug, "Tx #{tsn} commit: CommitComponent {componentName} done")]
+    internal partial void LogCommitComponentDone(long tsn, string componentName);
 
     #endregion
 

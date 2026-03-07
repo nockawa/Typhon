@@ -29,7 +29,7 @@ public static class DatabaseEngineExtensions
         var uow = dbe.CreateUnitOfWork(durabilityMode);
         dbe.LogUowLifecycle("CreateQuickTransaction: UoW created, calling CreateTransaction");
         var tx = uow.CreateTransaction();
-        dbe.LogUowLifecycle($"CreateQuickTransaction: Tx #{tx.TSN} created");
+        dbe.LogQuickTxCreated(tx.TSN);
         tx.OwnsUnitOfWork = true;
         return tx;
     }

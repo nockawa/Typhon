@@ -1646,29 +1646,6 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     internal int GetFilePageIndex(int memPageIndex) => _memPagesInfo[memPageIndex].FilePageIndex;
 
     /// <summary>
-    /// Validates a page's identity and re-stamps its epoch in a single call.
-    /// Returns <c>true</c> if the page is still valid (FilePageIndex matches); <c>false</c> if stale.
-    /// On <c>true</c>, also updates AccessEpoch to keep the page epoch-protected while actively referenced.
-    /// </summary>
-    /// <summary>
-    /// Validates that a memory page still holds the expected file page (detects stale pointers after eviction).
-    /// Does NOT re-stamp AccessEpoch — SlotRefCount provides short-term protection for live accessor slots,
-    /// while epoch re-stamp (<see cref="EpochManager.RefreshScope"/>) bounds the long-term protected set.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal bool ValidatePageIdentity(int memPageIndex, int expectedFilePageIndex)
-    {
-        return _memPagesInfo[memPageIndex].FilePageIndex == expectedFilePageIndex;
-    }
-
-    /// <summary>
-    /// Re-stamps the page's AccessEpoch without validation. Used by <see cref="ChunkAccessor.EvictSlot"/>
-    /// to keep evicted pages epoch-protected while callers may still hold raw pointers.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void RestampPageEpoch(int memPageIndex, long epoch) => _memPagesInfo[memPageIndex].AccessEpoch = epoch;
-
-    /// <summary>
     /// Increments the slot reference count for a memory page. While SlotRefCount &gt; 0,
     /// <see cref="TryAcquire"/> will not evict this page, protecting raw pointers held by
     /// ChunkAccessor slots. This complements EBR epoch protection: epochs bound the long-term

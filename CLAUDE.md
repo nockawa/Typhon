@@ -141,6 +141,7 @@ dotnet run -c Release --filter '*PagedMemoryFile*'
 - **No LINQ in hot paths**: Avoid LINQ in performance-critical code due to allocations and delegate overhead.
 - **Prefer `ref struct` for short-lived helpers**: Use `ref struct` for stack-only types that wrap references (e.g., `AtomicChange`, `LockData`).
 - **No `Volatile.Read`/`Write` for ≤64-bit types**: On x64, reads and writes of primitives up to 64 bits are naturally atomic. `Volatile.Read`/`Write` only adds unnecessary memory barrier overhead. Use plain field access instead. Reserve `Interlocked` operations for read-modify-write sequences (increment, compare-exchange, etc.).
+- **Use `[LoggerMessage]` for all logging**: Never use `ILogger.LogDebug(...)` / `LogWarning(...)` directly — the `params object[]` overload allocates an array and boxes value types at the call site *before* the level check. Instead, use the `[LoggerMessage]` source generator on `partial` methods: it emits code that checks `IsEnabled` first (zero cost when filtered) and uses typed parameters (no boxing). The containing class must be `partial` and have an `ILogger` / `ILogger<T>` field. Never pass interpolated strings to log methods — create dedicated `[LoggerMessage]` methods with typed parameters instead.
 
 ### Concurrency / synchronization primitives
 - Rely on .NET's Interlocked class.
