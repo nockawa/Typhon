@@ -172,6 +172,145 @@ internal static unsafe class IndexMaintainer
         }
     }
 
+    /// <summary>
+    /// Batched overload of <see cref="UpdateIndices"/>: uses pre-created accessors to eliminate per-entity accessor create/dispose overhead.
+    /// Caller owns accessor lifecycle.
+    /// </summary>
+    internal static void UpdateIndices(long pk, ComponentInfo info, ComponentInfo.CompRevInfo compRevInfo, int prevCompChunkId, ChangeSet changeSet, long tsn,
+        ChunkAccessor[] indexAccessors, ref ChunkAccessor pkAccessor, ref ChunkAccessor tailAccessor)
+    {
+        var startChunkId = compRevInfo.CompRevTableFirstChunkId;
+        if (prevCompChunkId != 0)
+        {
+            var prev = info.CompContentAccessor.GetChunkAddress(prevCompChunkId);
+            var cur = info.CompContentAccessor.GetChunkAddress(compRevInfo.CurCompContentChunkId, true);
+            var prevSpan = new Span<byte>(prev, info.ComponentTable.ComponentTotalSize);
+            var curSpan = new Span<byte>(cur, info.ComponentTable.ComponentTotalSize);
+
+            var indexedFieldInfos = info.ComponentTable.IndexedFieldInfos;
+            for (int i = 0; i < indexedFieldInfos.Length; i++)
+            {
+                ref var ifi = ref indexedFieldInfos[i];
+
+                if (prevSpan.Slice(ifi.OffsetToField, ifi.Size).SequenceEqual(curSpan.Slice(ifi.OffsetToField, ifi.Size)) == false)
+                {
+                    if (ifi.Index.AllowMultiple)
+                    {
+                        var tailVSBS = info.ComponentTable.TailVSBS;
+
+                        *(int*)&cur[ifi.OffsetToIndexElementId] = ifi.Index.MoveValue(&prev[ifi.OffsetToField], &cur[ifi.OffsetToField],
+                            *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref indexAccessors[i],
+                            out var oldHeadBufferId, out var newHeadBufferId, preserveEmptyBuffer: tailVSBS != null);
+
+                        if (tailVSBS != null)
+                        {
+                            if (oldHeadBufferId >= 0)
+                            {
+                                var oldTailBufferId = EnsureTailPopulated(oldHeadBufferId, tailVSBS,
+                                    ref indexAccessors[i], ref tailAccessor, info, includeChainId: startChunkId);
+                                var creationTsn = LookupCreationTSN(startChunkId, info);
+                                tailVSBS.AddElement(oldTailBufferId, VersionedIndexEntry.Active(startChunkId, creationTsn), ref tailAccessor);
+                                tailVSBS.AddElement(oldTailBufferId, VersionedIndexEntry.Tombstone(startChunkId, tsn), ref tailAccessor);
+                            }
+
+                            if (newHeadBufferId >= 0)
+                            {
+                                var newTailBufferId = EnsureTailPopulated(newHeadBufferId, tailVSBS,
+                                    ref indexAccessors[i], ref tailAccessor, info, excludeChainId: startChunkId);
+                                tailVSBS.AddElement(newTailBufferId, VersionedIndexEntry.Active(startChunkId, tsn), ref tailAccessor);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        ifi.Index.Move(&prev[ifi.OffsetToField], &cur[ifi.OffsetToField], startChunkId, ref indexAccessors[i]);
+                    }
+
+                    NotifyViews(info.ComponentTable, i, pk, tsn, prev + ifi.OffsetToField, cur + ifi.OffsetToField, ifi.Size, isCreation: false,
+                        isDeletion: false);
+                }
+                else if (ifi.Index.AllowMultiple)
+                {
+                    *(int*)&cur[ifi.OffsetToIndexElementId] = *(int*)&prev[ifi.OffsetToIndexElementId];
+                }
+            }
+        }
+        else if ((compRevInfo.Operations & ComponentInfo.OperationType.Created) == ComponentInfo.OperationType.Created)
+        {
+            var cur = info.CompContentAccessor.GetChunkAddress(compRevInfo.CurCompContentChunkId, true);
+
+            info.PrimaryKeyIndex.Add(pk, startChunkId, ref pkAccessor);
+
+            var indexedFieldInfos = info.ComponentTable.IndexedFieldInfos;
+            for (int i = 0; i < indexedFieldInfos.Length; i++)
+            {
+                ref var ifi = ref indexedFieldInfos[i];
+
+                if (ifi.Index.AllowMultiple)
+                {
+                    *(int*)&cur[ifi.OffsetToIndexElementId] = ifi.Index.Add(&cur[ifi.OffsetToField], startChunkId, ref indexAccessors[i], out _);
+                }
+                else
+                {
+                    ifi.Index.Add(&cur[ifi.OffsetToField], startChunkId, ref indexAccessors[i]);
+                }
+            }
+
+            for (int i = 0; i < indexedFieldInfos.Length; i++)
+            {
+                ref var ifi = ref indexedFieldInfos[i];
+                NotifyViews(info.ComponentTable, i, pk, tsn, null, cur + ifi.OffsetToField, ifi.Size, isCreation: true, isDeletion: false);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Batched overload of <see cref="RemoveSecondaryIndices"/>: uses pre-created accessors to eliminate per-entity accessor create/dispose overhead.
+    /// Caller owns accessor lifecycle.
+    /// </summary>
+    internal static void RemoveSecondaryIndices(long pk, ComponentInfo info, int prevCompChunkId, int startChunkId, ChangeSet changeSet, long tsn,
+        ChunkAccessor[] indexAccessors, ref ChunkAccessor tailAccessor)
+    {
+        var prev = info.CompContentAccessor.GetChunkAddress(prevCompChunkId);
+        var indexedFieldInfos = info.ComponentTable.IndexedFieldInfos;
+
+        // Notify views before B+Tree removal (prev pointer still valid)
+        for (int i = 0; i < indexedFieldInfos.Length; i++)
+        {
+            ref var ifi = ref indexedFieldInfos[i];
+            NotifyViews(info.ComponentTable, i, pk, tsn, prev + ifi.OffsetToField, null, ifi.Size, isCreation: false, isDeletion: true);
+        }
+
+        for (int i = 0; i < indexedFieldInfos.Length; i++)
+        {
+            ref var ifi = ref indexedFieldInfos[i];
+            if (ifi.Index.AllowMultiple)
+            {
+                var tailVSBS = info.ComponentTable.TailVSBS;
+
+                ifi.Index.RemoveValue(&prev[ifi.OffsetToField], *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref indexAccessors[i],
+                    preserveEmptyBuffer: tailVSBS != null);
+
+                if (tailVSBS != null)
+                {
+                    var headResult = ifi.Index.TryGet(&prev[ifi.OffsetToField], ref indexAccessors[i]);
+                    if (headResult.IsSuccess)
+                    {
+                        var tailBufId = EnsureTailPopulated(headResult.Value, tailVSBS,
+                            ref indexAccessors[i], ref tailAccessor, info, includeChainId: startChunkId);
+                        var creationTsn = LookupCreationTSN(startChunkId, info);
+                        tailVSBS.AddElement(tailBufId, VersionedIndexEntry.Active(startChunkId, creationTsn), ref tailAccessor);
+                        tailVSBS.AddElement(tailBufId, VersionedIndexEntry.Tombstone(startChunkId, tsn), ref tailAccessor);
+                    }
+                }
+            }
+            else
+            {
+                ifi.Index.Remove(&prev[ifi.OffsetToField], out _, ref indexAccessors[i]);
+            }
+        }
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void NotifyViews(ComponentTable table, int fieldIndex, long pk, long tsn, byte* beforeFieldPtr, byte* afterFieldPtr, int fieldSize,
         bool isCreation, bool isDeletion)

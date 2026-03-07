@@ -53,6 +53,13 @@ public unsafe class Transaction : IDisposable
     // to flush in a single batch (one lock acquire instead of N). Never re-allocated after warmup.
     private List<DeferredCleanupManager.CleanupEntry> _deferredEnqueueBatch;
 
+    // Hoisted accessors for batch index maintenance (set per component type during Commit)
+    private ChunkAccessor[] _batchIndexAccessors;
+    private ChunkAccessor _batchPkAccessor;
+    private ChunkAccessor _batchTailAccessor;
+    private bool _batchIndexActive;
+    private int _batchEntityCount;
+
     /// <summary>The UoW that owns this transaction (null for legacy <c>CreateTransaction()</c> path, UoW ID effectively 0).</summary>
     internal UnitOfWork OwningUnitOfWork { get; private set; }
 
@@ -181,6 +188,11 @@ public unsafe class Transaction : IDisposable
 
     public void Dispose()
     {
+        // Dispose transient batch accessors first — safe even on double-dispose or if never created
+        // (ChunkAccessor.Dispose() is idempotent: no-op when _segment==null).
+        _batchPkAccessor.Dispose();
+        _batchTailAccessor.Dispose();
+
         if (_isDisposed)
         {
             return;
@@ -1301,11 +1313,47 @@ public unsafe class Transaction : IDisposable
             // Commit the revision: update indices, clear IsolationFlag, update LastCommitRevisionIndex
             if (compRevInfo.CurCompContentChunkId != 0)
             {
-                IndexMaintainer.UpdateIndices(pk, info, compRevInfo, readCompChunkId, _changeSet, TSN);
+                if (_batchIndexActive)
+                {
+                    IndexMaintainer.UpdateIndices(pk, info, compRevInfo, readCompChunkId, _changeSet, TSN, _batchIndexAccessors, ref _batchPkAccessor, 
+                        ref _batchTailAccessor);
+                }
+                else
+                {
+                    IndexMaintainer.UpdateIndices(pk, info, compRevInfo, readCompChunkId, _changeSet, TSN);
+                }
             }
             else if (readCompChunkId != 0)
             {
-                IndexMaintainer.RemoveSecondaryIndices(pk, info, readCompChunkId, compRevInfo.CompRevTableFirstChunkId, _changeSet, TSN);
+                if (_batchIndexActive)
+                {
+                    IndexMaintainer.RemoveSecondaryIndices(pk, info, readCompChunkId, compRevInfo.CompRevTableFirstChunkId, _changeSet, TSN,
+                        _batchIndexAccessors, ref _batchTailAccessor);
+                }
+                else
+                {
+                    IndexMaintainer.RemoveSecondaryIndices(pk, info, readCompChunkId, compRevInfo.CompRevTableFirstChunkId, _changeSet, TSN);
+                }
+            }
+
+            // Periodic flush: bound dirty counter inflation for large transactions
+            if (_batchIndexActive && (++_batchEntityCount & 0x3FF) == 0)
+            {
+                for (int i = 0; i < _batchIndexAccessors.Length; i++)
+                {
+                    _batchIndexAccessors[i].CommitChanges();
+                }
+                _batchPkAccessor.CommitChanges();
+                if (info.ComponentTable.TailVSBS != null)
+                {
+                    _batchTailAccessor.CommitChanges();
+                }
+
+                // Flush warm accessors: exit+enter cycle performs a single CommitChanges per cache
+                ChunkBasedSegment.ExitBatchMode();
+                ChunkBasedSegment.EnterBatchMode();
+
+                _changeSet.ReleaseExcessDirtyMarks();
             }
 
             elementHandle.Commit(TSN);
@@ -1540,13 +1588,50 @@ public unsafe class Transaction : IDisposable
         foreach (var kvp in _componentInfos)
         {
             context.Info = kvp.Value;
-            _dbe.LogCommitPhase(TSN, $"CommitComponent {kvp.Key.Name} ({kvp.Value.EntryCount} entries)");
+            var info = kvp.Value;
+            _dbe.LogCommitPhase(TSN, $"CommitComponent {kvp.Key.Name} ({info.EntryCount} entries)");
 
             // Start a sub-span for this component type
             using var componentActivity = TyphonActivitySource.StartActivity("Transaction.CommitComponentCore");
             componentActivity?.SetTag(TyphonSpanAttributes.ComponentType, kvp.Key.Name);
 
-            kvp.Value.ForEachMutableEntry(ref context, ref commitAction);
+            // Phase A: hoist accessor creation + enter batch mode
+            var indexedFieldInfos = info.ComponentTable.IndexedFieldInfos;
+            _batchIndexAccessors = new ChunkAccessor[indexedFieldInfos.Length];
+            for (int i = 0; i < indexedFieldInfos.Length; i++)
+            {
+                _batchIndexAccessors[i] = indexedFieldInfos[i].Index.Segment.CreateChunkAccessor(_changeSet);
+            }
+            _batchPkAccessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
+            var tailVSBS = info.ComponentTable.TailVSBS;
+            _batchTailAccessor = tailVSBS != null
+                ? tailVSBS.Segment.CreateChunkAccessor(_changeSet)
+                : default;
+            _batchIndexActive = true;
+            _batchEntityCount = 0;
+            ChunkBasedSegment.EnterBatchMode();
+
+            try
+            {
+                kvp.Value.ForEachMutableEntry(ref context, ref commitAction);
+            }
+            finally
+            {
+                // Exit batch mode + dispose hoisted accessors
+                ChunkBasedSegment.ExitBatchMode();
+                _batchIndexActive = false;
+                for (int i = 0; i < _batchIndexAccessors.Length; i++)
+                {
+                    _batchIndexAccessors[i].Dispose();
+                }
+                _batchPkAccessor.Dispose();
+                if (tailVSBS != null)
+                {
+                    _batchTailAccessor.Dispose();
+                }
+                _batchIndexAccessors = null;
+            }
+
             _dbe.LogCommitPhase(TSN, $"CommitComponent {kvp.Key.Name} done");
         }
 

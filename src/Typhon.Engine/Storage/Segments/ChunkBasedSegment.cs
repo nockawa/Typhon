@@ -709,6 +709,7 @@ public partial class ChunkBasedSegment : LogicalSegment
         internal ChunkBasedSegment Segment;    // which segment this accessor belongs to
         internal long Epoch;                   // GlobalEpoch at creation time
         internal bool IsRented;                // debug guard against double-rent
+        internal bool SuppressCommitChanges;   // batch mode: skip CommitChanges on return
 
         [ThreadStatic]
         // ReSharper disable once InconsistentNaming
@@ -760,7 +761,16 @@ public partial class ChunkBasedSegment : LogicalSegment
     {
         var cache = WarmAccessorCache.Instance;
         Debug.Assert(cache.IsRented, "return without rent");
-        cache.Accessor.CommitChanges();  // flush dirty pages, preserve page cache
+        if (!cache.SuppressCommitChanges)
+        {
+            cache.Accessor.CommitChanges();  // flush dirty pages, preserve page cache
+        }
+        else
+        {
+            // Batch mode: drain eviction queue only (prevents overflow).
+            // Live dirty flags stay set → ACW > 0 → blocks checkpoint (safe under holdoff).
+            cache.Accessor.FlushDeferredEvictions();
+        }
         cache.IsRented = false;
         // Do NOT Dispose — keep the page cache warm
     }
@@ -780,6 +790,38 @@ public partial class ChunkBasedSegment : LogicalSegment
         sibCache.Epoch = newEpoch;
     }
 
+    /// <summary>
+    /// Enters batch mode: suppresses <see cref="ChunkAccessor.CommitChanges"/> on warm accessor return.
+    /// During batch mode, <c>ActiveChunkWriters</c> stays &gt; 0 on dirty pages, which is safe — the commit
+    /// runs under holdoff and completes in bounded time. Call <see cref="ExitBatchMode"/> to flush.
+    /// </summary>
+    internal static void EnterBatchMode()
+    {
+        WarmAccessorCache.Instance.SuppressCommitChanges = true;
+        WarmSiblingAccessorCache.Instance.SuppressCommitChanges = true;
+    }
+
+    /// <summary>
+    /// Exits batch mode: re-enables <see cref="ChunkAccessor.CommitChanges"/> on warm accessor return
+    /// and performs a single flush of accumulated dirty pages on both warm accessor caches.
+    /// </summary>
+    internal static void ExitBatchMode()
+    {
+        var cache = WarmAccessorCache.Instance;
+        cache.SuppressCommitChanges = false;
+        if (cache.Segment != null)
+        {
+            cache.Accessor.CommitChanges();
+        }
+
+        var sibCache = WarmSiblingAccessorCache.Instance;
+        sibCache.SuppressCommitChanges = false;
+        if (sibCache.Segment != null)
+        {
+            sibCache.Accessor.CommitChanges();
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     // Second warm accessor cache — for B+Tree sibling/horizontal navigation
     // ═══════════════════════════════════════════════════════════════════════
@@ -797,6 +839,7 @@ public partial class ChunkBasedSegment : LogicalSegment
         internal ChunkBasedSegment Segment;
         internal long Epoch;
         internal bool IsRented;
+        internal bool SuppressCommitChanges;   // batch mode: skip CommitChanges on return
 
         [ThreadStatic]
         // ReSharper disable once InconsistentNaming
@@ -835,7 +878,14 @@ public partial class ChunkBasedSegment : LogicalSegment
     {
         var cache = WarmSiblingAccessorCache.Instance;
         Debug.Assert(cache.IsRented, "return sibling without rent");
-        cache.Accessor.CommitChanges();
+        if (!cache.SuppressCommitChanges)
+        {
+            cache.Accessor.CommitChanges();
+        }
+        else
+        {
+            cache.Accessor.FlushDeferredEvictions();
+        }
         cache.IsRented = false;
     }
 

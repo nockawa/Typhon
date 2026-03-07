@@ -291,6 +291,14 @@ public unsafe struct ChunkAccessor : IDisposable
     }
 
     /// <summary>
+    /// Drains the deferred eviction queue without processing live dirty flags.
+    /// Used during batch mode: keeps ACW &gt; 0 on live dirty slots (blocks checkpoint)
+    /// while preventing deferred eviction queue overflow.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void FlushDeferredEvictions() => FlushDeferred();
+
+    /// <summary>
     /// Flushes deferred eviction cleanup: decrements SlotRefCount for all evicted slots,
     /// and ACW for evicted dirty slots (encoded via sign bit). Called by CommitChanges and Dispose.
     /// </summary>
