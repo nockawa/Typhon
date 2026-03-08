@@ -2,10 +2,9 @@
 <RunSettings>
   <NUnit>
     <!-- Default timeout (ms) for tests without explicit [CancelAfter] or [Timeout].
-         Safety net to catch deadlocks and infinite loops only. Set high enough for
-         stress tests under parallel contention (first-batch JIT overhead + 8-way
-         parallel initialization can push a ~50ms test to ~20s on rare occasions).
-         Tests with explicit [CancelAfter] attributes override this value. -->
-    <DefaultTimeout>60000</DefaultTimeout>
+         Safety net to catch deadlocks and infinite loops quickly (~5s) instead of
+         waiting 60s. Tests that legitimately need more time should use explicit
+         [CancelAfter(N)] attributes, which override this value. -->
+    <DefaultTimeout>5000</DefaultTimeout>
   </NUnit>
 </RunSettings>

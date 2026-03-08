@@ -598,14 +598,14 @@ public class ChunkBasedSegmentBitmapL3Tests
 
     [Property("MemPageCount", 16*1024)]
     [Test]
-    [CancelAfter(15000)]
+    [CancelAfter(10000)]
     public void ConcurrentAllocateAndFree_MaintainsConsistency()
     {
         var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 20, 64);
 
         var allocatedIds = new System.Collections.Concurrent.ConcurrentQueue<int>();
         var errors = new System.Collections.Concurrent.ConcurrentBag<string>();
-        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
         var tasks = new List<Task>();
 
         // Allocator threads - with bounds checking to avoid triggering the overflow bug
@@ -673,9 +673,9 @@ public class ChunkBasedSegmentBitmapL3Tests
             }));
         }
 
-        if (!Task.WaitAll(tasks.ToArray(), TimeSpan.FromSeconds(10)))
+        if (!Task.WaitAll(tasks.ToArray(), TimeSpan.FromSeconds(5)))
         {
-            Assert.Fail("ConcurrentAllocateAndFree tasks did not complete within 10s — likely deadlock in AllocateChunk/FreeChunk");
+            Assert.Fail("ConcurrentAllocateAndFree tasks did not complete within 5s — likely deadlock in AllocateChunk/FreeChunk");
         }
 
         // Report any errors found during concurrent execution

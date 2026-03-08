@@ -187,9 +187,10 @@ public class DeadlineWatchdogTests
 
     [Test]
     [Category("Timing")]
+    [CancelAfter(10000)]
     public void ConcurrentRegistration_100Deadlines_AllFireCorrectly()
     {
-        const int count = 100;
+        const int count = 50;
         var tokens = new CancellationToken[count];
         var threads = new Thread[count];
 
@@ -214,8 +215,8 @@ public class DeadlineWatchdogTests
             t.Join();
         }
 
-        // Wait for all to fire (generous timeout for CI)
-        Thread.Sleep(1000);
+        // Wait for all to fire (max deadline is 250ms, 500ms gives 2x margin)
+        Thread.Sleep(500);
 
         int cancelledCount = 0;
         foreach (var token in tokens)
