@@ -12,10 +12,49 @@ public class ChangeSet
     private readonly HashSet<int> _changedMemoryPageIndices;
     private Task _saveTask;
 
+    // Deferred eviction queue: when a ChunkAccessor slot is evicted, SlotRefCount and ACW
+    // decrements are deferred here until CommitChanges/Dispose. This lives on ChangeSet (a class)
+    // rather than ChunkAccessor (a struct) to keep the struct blittable for JIT inlining.
+    // The sign bit of each entry encodes dirty (1) vs clean (0) for ACW handling.
+    private List<int> _deferredEvictions;
+
     public ChangeSet(PagedMMF owner)
     {
         _owner = owner;
         _changedMemoryPageIndices = [];
+    }
+
+    /// <summary>
+    /// Enqueue a deferred SlotRefCount decrement (and optionally ACW decrement) for an evicted slot.
+    /// The sign bit encodes dirty (needs ACW decrement) vs clean (SlotRefCount only).
+    /// </summary>
+    internal void DeferEviction(int entry)
+    {
+        _deferredEvictions ??= new List<int>(16);
+        _deferredEvictions.Add(entry);
+    }
+
+    /// <summary>
+    /// Flush all deferred eviction decrements (SlotRefCount + ACW for dirty slots).
+    /// Called by <see cref="ChunkAccessor.CommitChanges"/> and <see cref="ChunkAccessor.Dispose"/>.
+    /// </summary>
+    internal void FlushDeferredEvictions()
+    {
+        if (_deferredEvictions == null || _deferredEvictions.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var entry in _deferredEvictions)
+        {
+            var memIdx = entry & 0x7FFFFFFF;
+            if (entry < 0)
+            {
+                _owner.DecrementActiveChunkWriters(memIdx);
+            }
+            _owner.DecrementSlotRefCount(memIdx);
+        }
+        _deferredEvictions.Clear();
     }
 
     /// <summary>
