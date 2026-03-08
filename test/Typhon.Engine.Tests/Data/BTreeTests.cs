@@ -63,8 +63,11 @@ class BtreeTests
         _serviceProvider = _serviceCollection.BuildServiceProvider();
         _serviceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
 
-        _logger = _serviceCollection.BuildServiceProvider().GetRequiredService<ILogger<BtreeTests>>();
+        _logger = _serviceProvider.GetRequiredService<ILogger<BtreeTests>>();
     }
+
+    [TearDown]
+    public void TearDown() => (_serviceProvider as IDisposable)?.Dispose();
 
     [Test]
     unsafe public void ForwardInsertionTest()

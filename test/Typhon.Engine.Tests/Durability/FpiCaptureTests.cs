@@ -347,17 +347,26 @@ public class FpiCaptureTests : AllocatorTestBase
 
         using var barrier = new Barrier(threadCount);
         var threads = new Thread[threadCount];
+        var exceptions = new Exception[threadCount];
 
         for (int i = 0; i < threadCount; i++)
         {
             // Each thread targets a different page (1, 2, 3, 4) — page 0 is the root file header
             var filePageIndex = i + 1;
+            var threadIndex = i;
             threads[i] = new Thread(() =>
             {
-                barrier.SignalAndWait();
-                using var guard = EpochGuard.Enter(_epochManager);
-                var memPageIdx = LatchPage(filePageIndex, guard.Epoch);
-                _mmf.UnlatchPageExclusive(memPageIdx);
+                try
+                {
+                    barrier.SignalAndWait();
+                    using var guard = EpochGuard.Enter(_epochManager);
+                    var memPageIdx = LatchPage(filePageIndex, guard.Epoch);
+                    _mmf.UnlatchPageExclusive(memPageIdx);
+                }
+                catch (Exception ex)
+                {
+                    exceptions[threadIndex] = ex;
+                }
             });
             threads[i].Start();
         }
@@ -365,6 +374,13 @@ public class FpiCaptureTests : AllocatorTestBase
         foreach (var t in threads)
         {
             t.Join();
+        }
+
+        // Check for thread exceptions
+        for (int i = 0; i < threadCount; i++)
+        {
+            Assert.That(exceptions[i], Is.Null,
+                $"Thread {i} (filePage={i + 1}) threw: {exceptions[i]?.GetType().Name}: {exceptions[i]?.Message}");
         }
 
         // Each page should have consumed exactly one FPI LSN

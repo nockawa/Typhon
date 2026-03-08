@@ -103,9 +103,7 @@ class ChunkAccessorTests
     }
 
     [TearDown]
-    public void TearDown()
-    {
-    }
+    public void TearDown() => (_serviceProvider as IDisposable)?.Dispose();
 
     /// <summary>
     /// Return the first chunk index on a given segment page for TestChunkLarge (2048-byte stride).

@@ -1045,42 +1045,56 @@ public class AccessControlSmallTests
         // guaranteeing overlap so maxConcurrent > 1 is always achieved.
         using var gate = new CountdownEvent(threadCount);
         var threads = new Thread[threadCount];
+        var exceptions = new Exception[threadCount];
 
         for (int i = 0; i < threadCount; i++)
         {
+            var threadIndex = i;
             threads[i] = new Thread(() =>
             {
-                for (int j = 0; j < iterations; j++)
+                try
                 {
-                    control.EnterSharedAccess(ref TestWaitContext.Default);
-
-                    var current = Interlocked.Increment(ref currentConcurrent);
-                    var maxSeen = maxConcurrent;
-                    while (current > maxSeen &&
-                           Interlocked.CompareExchange(ref maxConcurrent, current, maxSeen) != maxSeen)
+                    for (int j = 0; j < iterations; j++)
                     {
-                        maxSeen = maxConcurrent;
+                        control.EnterSharedAccess(ref TestWaitContext.Default);
+
+                        var current = Interlocked.Increment(ref currentConcurrent);
+                        var maxSeen = maxConcurrent;
+                        while (current > maxSeen &&
+                               Interlocked.CompareExchange(ref maxConcurrent, current, maxSeen) != maxSeen)
+                        {
+                            maxSeen = maxConcurrent;
+                        }
+
+                        // On the first iteration, wait until all threads are inside the shared region
+                        if (j == 0)
+                        {
+                            gate.Signal();
+                            gate.Wait();
+                        }
+
+                        Thread.SpinWait(10);
+
+                        Interlocked.Decrement(ref currentConcurrent);
+                        control.ExitSharedAccess();
+
+                        Interlocked.Increment(ref operationCount);
                     }
-
-                    // On the first iteration, wait until all threads are inside the shared region
-                    if (j == 0)
-                    {
-                        gate.Signal();
-                        gate.Wait();
-                    }
-
-                    Thread.SpinWait(10);
-
-                    Interlocked.Decrement(ref currentConcurrent);
-                    control.ExitSharedAccess();
-
-                    Interlocked.Increment(ref operationCount);
+                }
+                catch (Exception ex)
+                {
+                    exceptions[threadIndex] = ex;
                 }
             });
         }
 
         foreach (var t in threads) { t.Start(); }
         foreach (var t in threads) { t.Join(); }
+
+        for (int i = 0; i < threadCount; i++)
+        {
+            Assert.That(exceptions[i], Is.Null, $"Thread {i} threw: {exceptions[i]}");
+        }
 
         Console.WriteLine($"Max concurrent shared access: {maxConcurrent}");
         Assert.That(operationCount, Is.EqualTo(threadCount * iterations), "All operations should complete");

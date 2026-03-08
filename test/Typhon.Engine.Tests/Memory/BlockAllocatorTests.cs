@@ -1385,6 +1385,7 @@ public class BlockAllocatorThreadSafetyTests
     #region Mixed Concurrent Operations Tests
 
     [Test]
+    [CancelAfter(15000)]
     public void ConcurrentAllocateAndFree_MaintainsConsistency()
     {
         const int threadCount = 8;

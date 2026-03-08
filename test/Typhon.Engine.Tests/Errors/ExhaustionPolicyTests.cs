@@ -225,7 +225,7 @@ class ExhaustionPolicyTests : TestBase<ExhaustionPolicyTests>
 
         ServiceProvider = ServiceCollection.BuildServiceProvider();
         ServiceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
-        Logger = ServiceCollection.BuildServiceProvider().GetRequiredService<ILogger<ExhaustionPolicyTests>>();
+        Logger = ServiceProvider.GetRequiredService<ILogger<ExhaustionPolicyTests>>();
     }
 
     #endregion

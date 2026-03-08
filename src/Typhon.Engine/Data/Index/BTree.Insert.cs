@@ -616,29 +616,15 @@ public abstract partial class BTree<TKey>
             }
         }
 
-        // After move_right, PathVersions and relatives are stale (recorded for the original leaf's// path). The gap check above prevents wrong-subtree inserts.
-        // Force split (skip spill which uses stale relatives) and don't propagate — B-link right-link chain provides correct routing until a future insert
-        // naturally propagates the separator.
-        // This avoids the restart livelock that occurs when the slow path repeatedly fails.
+        // After move_right, PathVersions and relatives are stale (recorded for the original leaf's path).
+        // Cannot force-split here: the move-right may have crossed a subtree boundary via the leaf linked list.
+        // A force-split without parent propagation would strand keys in the wrong subtree, unreachable by tree descent.
+        // Return incomplete to retry from root with fresh path — stale separators are transient (resolved by the concurrent split's Phase 3 propagation
+        // within microseconds).
         if (movedRight)
         {
-            // Lock the next neighbor for the split's linked list update (SetPrevious on next node)
-            var mrNext = node.GetNext(ref accessor);
-            if (mrNext.IsValid)
-            {
-                mrNext.PreDirtyForWrite(ref sibAccessor);
-                SpinWriteLock(mrNext.GetLatch(ref sibAccessor));
-            }
-
-            node.InsertLeaf(ref args, ref relatives, ref accessor, forceSplit: true);
-
-            if (mrNext.IsValid)
-            {
-                mrNext.GetLatch(ref sibAccessor).WriteUnlock();
-            }
             node.GetLatch(ref accessor).WriteUnlock();
-            completed = true;
-            return;
+            return; // completed=false — retry with fresh path from root
         }
 
         // Slow path: leaf full or contention split — structural modification needed.

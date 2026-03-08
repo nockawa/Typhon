@@ -6,8 +6,7 @@ using NUnit.Framework;
 [assembly: Parallelizable(ParallelScope.Fixtures)]
 
 // Note: LevelOfParallelism requires a compile-time constant.
-// For dynamic configuration (e.g., ProcessorCount / 2), use the .runsettings file
-// or the NUnit.NumberOfTestWorkers environment variable.
-// 8 workers balances speed with test stability (some timing-sensitive concurrency
-// tests become flaky at higher parallelism due to CPU contention).
+// For dynamic configuration (e.g., ProcessorCount / 2), use the .runsettings file or the NUnit.NumberOfTestWorkers environment variable.
+// 8 workers balances speed with test stability. The JIT warmup fixture (AssemblyWarmup.cs) pre-compiles hot code paths before parallel execution begins,
+// preventing timeout failures from cold JIT in the first batch.
 [assembly: LevelOfParallelism(8)]

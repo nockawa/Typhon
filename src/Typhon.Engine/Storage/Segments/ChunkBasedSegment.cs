@@ -27,12 +27,17 @@ public struct ChunkBasedSegmentHeader
 /// </summary>
 /// <remarks>
 /// Provides API to allocate chunks; the occupancy map is stored in the Metadata of each page.
-/// Free-page tracking uses a lock-free Treiber stack of pages with available chunks.
-/// The minimum chunk size is 8 bytes.
+/// Free-page tracking uses a lock-free forward singly-linked list of pages with available chunks.
+/// Allocators walk the list, naturally distributing across pages. Exhausted pages are removed mid-walk.
+/// Freed pages are appended at the tail. The minimum chunk size is 8 bytes.
 /// </remarks>
-public partial class ChunkBasedSegment : LogicalSegment
+public class ChunkBasedSegment : LogicalSegment
 {
+    // ReSharper disable InconsistentNaming
     private const int EMPTY_PAGE = -1;
+    private const int NOT_IN_LIST = -2;
+    private const int HEAD_SENTINEL = -3;
+    // ReSharper restore InconsistentNaming
 
     private readonly Lock _growLock = new();
     private readonly EpochManager _epochManager;
@@ -54,25 +59,21 @@ public partial class ChunkBasedSegment : LogicalSegment
     private readonly int _bitmapLongsOther;
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Treiber stack allocator state
+    // Lock-free forward linked list allocator state
     // ═══════════════════════════════════════════════════════════════════════
 
-    // Tagged pointer: version:32 | pageIndex:32. EMPTY_PAGE (-1) in lower 32 = empty stack.
-    // Reads/writes are naturally atomic on x64. CAS via Interlocked.CompareExchange.
-    private long _freeHead;
+    // Head of the forward linked list of pages with free chunks.
+    // EMPTY_PAGE = empty list. Reads/writes are naturally atomic on x64.
+    private int _freeHead;
 
     // Total allocated chunks across all pages. Updated via Interlocked.Increment/Decrement.
     private int _allocatedCount;
 
-    // Per-page free chunk count. The 0→1 transition triggers PushToFreeStack.
-    private int[] _pageFreeCount;
-
-    // Per-page next pointer for Treiber stack linked list. EMPTY_PAGE = tail.
+    // Per-page next pointer for the forward linked list.
+    // >= 0: successor page index (page is in the list)
+    // EMPTY_PAGE (-1): tail of the list (page is in the list)
+    // NOT_IN_LIST (-2): page is NOT in the list
     private int[] _nextPage;
-
-    // Per-page "in free list" flag. Prevents double-push and stack cycles.
-    // 0 = not in list, 1 = in list. Set via CAS in PushToFreeStack, cleared on pop.
-    private int[] _inFreeList;
 
     // Total chunk capacity (updated on Grow under _growLock)
     private int _capacity;
@@ -146,22 +147,15 @@ public partial class ChunkBasedSegment : LogicalSegment
         // Initialize allocator state for a fresh (empty) segment
         _capacity = ComputeCapacity(length);
         _allocatedCount = 0;
-        _pageFreeCount = new int[length];
         _nextPage = new int[length];
-        _inFreeList = new int[length];
 
-        _pageFreeCount[0] = ChunkCountRootPage;
-        for (int i = 1; i < length; i++)
+        // Build forward chain: page 0 → page 1 → ... → page N-1 → EMPTY_PAGE
+        _freeHead = 0;
+        for (int i = 0; i < length - 1; i++)
         {
-            _pageFreeCount[i] = ChunkCountPerPage;
+            _nextPage[i] = i + 1;
         }
-
-        // Push all pages to free stack (reverse order for sequential fill)
-        _freeHead = PackHead(0, EMPTY_PAGE);
-        for (int i = length - 1; i >= 0; i--)
-        {
-            PushToFreeStack(i);
-        }
+        _nextPage[length - 1] = EMPTY_PAGE;
 
         ReserveChunk(0);                    // Mark chunk 0 as allocated ("null" sentinel) — data already cleared above
         return true;
@@ -179,9 +173,12 @@ public partial class ChunkBasedSegment : LogicalSegment
         var length = Length;
         _capacity = ComputeCapacity(length);
         _allocatedCount = 0;
-        _pageFreeCount = new int[length];
         _nextPage = new int[length];
-        _inFreeList = new int[length];
+        Array.Fill(_nextPage, NOT_IN_LIST);
+
+        // Build forward chain of pages with free space
+        int lastInList = -1;
+        _freeHead = EMPTY_PAGE;
 
         for (int i = 0; i < length; i++)
         {
@@ -191,18 +188,20 @@ public partial class ChunkBasedSegment : LogicalSegment
             var metadata = page.MetadataReadOnly<long>();
 
             var popcount = CountAllocatedBits(metadata, bitmapLongs, maxChunks);
-
-            _pageFreeCount[i] = maxChunks - popcount;
             _allocatedCount += popcount;
-        }
 
-        // Push pages with free space (reverse order for sequential fill)
-        _freeHead = PackHead(0, EMPTY_PAGE);
-        for (int i = length - 1; i >= 0; i--)
-        {
-            if (_pageFreeCount[i] > 0)
+            if (popcount < maxChunks) // page has free space
             {
-                PushToFreeStack(i);
+                _nextPage[i] = EMPTY_PAGE; // mark as tail
+                if (lastInList >= 0)
+                {
+                    _nextPage[lastInList] = i;
+                }
+                else
+                {
+                    _freeHead = i;
+                }
+                lastInList = i;
             }
         }
 
@@ -217,7 +216,7 @@ public partial class ChunkBasedSegment : LogicalSegment
     /// <returns>True if growth occurred, false if already at maximum capacity.</returns>
     /// <remarks>
     /// This method is thread-safe. It uses a lock to ensure only one thread grows the segment at a time.
-    /// After growth, new pages are pushed to the Treiber stack as free pages.
+    /// After growth, new pages are spliced into the forward linked list.
     /// </remarks>
     private bool Grow(int minNewPageCount = 0, ChangeSet changeSet = null)
     {
@@ -268,29 +267,55 @@ public partial class ChunkBasedSegment : LogicalSegment
                 }
             }
 
-            // Expand allocator arrays — CAS on _freeHead (in PushToFreeStack below) provides memory barrier
-            var newFreeCount = new int[newLength];
+            // Expand _nextPage array and chain new pages
             var newNextPage = new int[newLength];
-            var newInFreeList = new int[newLength];
-            Array.Copy(_pageFreeCount, newFreeCount, currentLength);
             Array.Copy(_nextPage, newNextPage, currentLength);
-            Array.Copy(_inFreeList, newInFreeList, currentLength);
 
-            for (int i = currentLength; i < newLength; i++)
+            // Chain new pages: currentLength → currentLength+1 → ... → newLength-1 → EMPTY_PAGE
+            for (int i = currentLength; i < newLength - 1; i++)
             {
-                newFreeCount[i] = ChunkCountPerPage;
+                newNextPage[i] = i + 1;
             }
+            newNextPage[newLength - 1] = EMPTY_PAGE;
 
-            _pageFreeCount = newFreeCount;
             _nextPage = newNextPage;
-            _inFreeList = newInFreeList;
             _capacity = ComputeCapacity(newLength);
 
-            // Push new pages to free stack (reverse order for sequential fill)
-            for (int i = newLength - 1; i >= currentLength; i--)
+            // Splice new pages at tail of existing list
+            while (true)
             {
-                PushToFreeStack(i);
+                var head = _freeHead;
+                if (head == EMPTY_PAGE)
+                {
+                    // List is empty, make first new page the head
+                    if (Interlocked.CompareExchange(ref _freeHead, currentLength, EMPTY_PAGE) == EMPTY_PAGE)
+                    {
+                        break;
+                    }
+                    continue;
+                }
+
+                // Walk to tail and link new chain
+                var cur = head;
+                while (true)
+                {
+                    var next = _nextPage[cur];
+                    if (next == EMPTY_PAGE)
+                    {
+                        if (Interlocked.CompareExchange(ref _nextPage[cur], currentLength, EMPTY_PAGE) == EMPTY_PAGE)
+                        {
+                            goto spliced;
+                        }
+                        continue;
+                    }
+                    if (next == NOT_IN_LIST)
+                    {
+                        break; // cur removed, restart from head
+                    }
+                    cur = next;
+                }
             }
+            spliced:
 
             return true;
         }
@@ -361,7 +386,6 @@ public partial class ChunkBasedSegment : LogicalSegment
 
         Manager.EnsureDirtyAtLeast(memPageIdx, 1);
         Interlocked.Increment(ref _allocatedCount);
-        Interlocked.Decrement(ref _pageFreeCount[pageIndex]);
     }
 
     /// <summary>
@@ -393,34 +417,43 @@ public partial class ChunkBasedSegment : LogicalSegment
     public int AllocateChunk(bool clearContent, ChangeSet changeSet = null)
     {
         using var accessor = clearContent ? CreateChunkAccessor(changeSet) : default;
+        int pass = 0;
 
-        while (true)
+        restart:
+        int prev = HEAD_SENTINEL;
+        int cur = _freeHead;
+        int restarts = 0;
+        var length = Length;
+
+        while (cur != EMPTY_PAGE)
         {
-            var head = _freeHead;
-            var pageIndex = UnpackPage(head);
+            int next = _nextPage[cur];
 
-            if (pageIndex == EMPTY_PAGE)
+            if (next == NOT_IN_LIST)
             {
-                if (_allocatedCount < _capacity)
+                // cur was removed (Phase A) but predecessor still points here (Phase B failed).
+                // Fix stale head if needed, then restart from _freeHead with bounded counter.
+                restarts++;
+                if (restarts > length)
                 {
-                    // Free space exists but stack is empty — recover orphaned pages
-                    RebuildFreeStack();
-                    continue;
+                    break; // fall through to pass++/RebuildFreeList
                 }
 
-                // Truly full — need to grow
-                if (!GrowIfNeeded(changeSet))
+                if (cur == _freeHead)
                 {
-                    ThrowHelper.ThrowResourceExhausted("Storage/ChunkBasedSegment/AllocateChunk", ResourceType.Memory, _allocatedCount, _capacity);
+                    Interlocked.CompareExchange(ref _freeHead, EMPTY_PAGE, cur);
                 }
+
+                prev = HEAD_SENTINEL;
+                cur = _freeHead;
                 continue;
             }
 
-            // Try to allocate from the head page
-            var maxChunks = pageIndex == 0 ? _rootChunkCount : _otherChunkCount;
-            var bitmapLongs = pageIndex == 0 ? _bitmapLongsRoot : _bitmapLongsOther;
+            // Scan cur's bitmap for a free bit
+            var maxChunks = cur == 0 ? _rootChunkCount : _otherChunkCount;
+            var bitmapLongs = cur == 0 ? _bitmapLongsRoot : _bitmapLongsOther;
             var epoch = Manager.EpochManager.GlobalEpoch;
-            var page = GetPage(pageIndex, epoch, out var memPageIdx);
+            var page = GetPage(cur, epoch, out var memPageIdx);
             var metadata = page.Metadata<long>();
 
             for (int w = 0; w < bitmapLongs; w++)
@@ -436,20 +469,19 @@ public partial class ChunkBasedSegment : LogicalSegment
                     }
 
                     var mask = 1L << bit;
-                    var prev = Interlocked.Or(ref metadata[w], mask);
-                    if ((prev & mask) != 0)
+                    var prevBits = Interlocked.Or(ref metadata[w], mask);
+                    if ((prevBits & mask) != 0)
                     {
                         // Lost race — update word with current state and retry next bit
-                        word = prev | mask;
+                        word = prevBits | mask;
                         continue;
                     }
 
                     // SUCCESS — chunk claimed
                     Manager.EnsureDirtyAtLeast(memPageIdx, 1);
                     Interlocked.Increment(ref _allocatedCount);
-                    Interlocked.Decrement(ref _pageFreeCount[pageIndex]);
 
-                    var chunkId = PageOffsetToChunkIndex(pageIndex, chunkInPage);
+                    var chunkId = PageOffsetToChunkIndex(cur, chunkInPage);
 
                     if (clearContent)
                     {
@@ -461,9 +493,50 @@ public partial class ChunkBasedSegment : LogicalSegment
             }
 
             pageExhausted:
-            // No free bit found on this page (consumed by concurrent allocators) — lazy pop
-            TryPopFreeStack(head);
+            // Page appears exhausted — remove from list and continue from successor
+            RemoveFromFreeList(prev, cur, next);
+
+            // Guard against concurrent FreeChunk orphaning: if a chunk was freed during our scan,
+            // the page has free space but is now NOT_IN_LIST. Re-add to prevent permanent orphaning.
+            // Cost: ~5ns popcount on 1-2 longs — only on the rare "page exhausted" path.
+            if (_nextPage[cur] == NOT_IN_LIST)
+            {
+                var mc2 = cur == 0 ? _rootChunkCount : _otherChunkCount;
+                var bl2 = cur == 0 ? _bitmapLongsRoot : _bitmapLongsOther;
+                var ep2 = Manager.EpochManager.GlobalEpoch;
+                var pg2 = GetPage(cur, ep2, out _);
+                var md2 = pg2.MetadataReadOnly<long>();
+                if (CountAllocatedBits(md2, bl2, mc2) < mc2)
+                {
+                    AddToFreeList(cur);
+                }
+            }
+
+            cur = next;
         }
+
+        // Walked entire list without success
+        pass++;
+        if (pass == 1)
+        {
+            goto restart;
+        }
+
+        // Two passes failed
+        if (_allocatedCount < _capacity)
+        {
+            RebuildFreeList();
+            pass = 0;
+            goto restart;
+        }
+
+        if (!GrowIfNeeded(changeSet))
+        {
+            ThrowHelper.ThrowResourceExhausted("Storage/ChunkBasedSegment/AllocateChunk", ResourceType.Memory, _allocatedCount, _capacity);
+        }
+
+        pass = 0;
+        goto restart;
     }
 
     /// <summary>
@@ -530,98 +603,141 @@ public partial class ChunkBasedSegment : LogicalSegment
         Manager.EnsureDirtyAtLeast(memPageIdx, 1);
         Interlocked.Decrement(ref _allocatedCount);
 
-        var newFreeCount = Interlocked.Increment(ref _pageFreeCount[pageIndex]);
-        if (newFreeCount == 1)
-        {
-            // Page just transitioned full → has-space: push to free stack
-            PushToFreeStack(pageIndex);
-        }
+        // Add page to free list if not already present.
+        // AddToFreeList's CAS guard (_nextPage NOT_IN_LIST → EMPTY_PAGE) prevents duplicates.
+        AddToFreeList(pageIndex);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Treiber stack operations
+    // Forward linked list operations
     // ═══════════════════════════════════════════════════════════════════════
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static long PackHead(int version, int pageIndex) => ((long)version << 32) | (uint)pageIndex;
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int UnpackPage(long head) => (int)head;
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int UnpackVersion(long head) => (int)(head >> 32);
-
     /// <summary>
-    /// Pushes a page onto the free stack. Uses an <see cref="_inFreeList"/> flag to prevent double-push (which would create cycles in the singly-linked list).
+    /// Adds a page to the free list by appending at the tail.
+    /// Uses CAS on <see cref="_nextPage"/> to prevent duplicate insertions.
     /// </summary>
-    private void PushToFreeStack(int pageIndex)
+    private void AddToFreeList(int pageIndex)
     {
-        // CAS flag 0→1: prevents double-push and stack cycles.
-        // If the page is already in the list, skip — another thread's push succeeded first.
-        if (Interlocked.CompareExchange(ref _inFreeList[pageIndex], 1, 0) != 0)
+        // Step 1: Claim — atomically mark page as "in list, at tail"
+        if (Interlocked.CompareExchange(ref _nextPage[pageIndex], EMPTY_PAGE, NOT_IN_LIST) != NOT_IN_LIST)
         {
-            return;
+            return; // page already in list
         }
 
-        while (true)
+        // Step 2: Try to become head of empty list
+        if (Interlocked.CompareExchange(ref _freeHead, pageIndex, EMPTY_PAGE) == EMPTY_PAGE)
         {
-            var oldHead = _freeHead;
-            _nextPage[pageIndex] = UnpackPage(oldHead);
-            var newHead = PackHead(UnpackVersion(oldHead) + 1, pageIndex);
-            if (Interlocked.CompareExchange(ref _freeHead, newHead, oldHead) == oldHead)
+            return; // sole node, done
+        }
+
+        // Step 3: Walk to tail and append (bounded to prevent infinite loops)
+        var maxIter = Length * 2;
+        for (int iter = 0; iter < maxIter; iter++)
+        {
+            var head = _freeHead;
+            if (head == EMPTY_PAGE)
             {
-                return;
+                // List became empty, retry as head
+                if (Interlocked.CompareExchange(ref _freeHead, pageIndex, EMPTY_PAGE) == EMPTY_PAGE)
+                {
+                    return;
+                }
+                continue;
             }
+
+            // Head points to removed page — fix stale head and retry
+            if (_nextPage[head] == NOT_IN_LIST)
+            {
+                Interlocked.CompareExchange(ref _freeHead, EMPTY_PAGE, head);
+                continue;
+            }
+
+            var cur = head;
+            var walkBudget = maxIter;
+            while (walkBudget-- > 0)
+            {
+                var next = _nextPage[cur];
+                if (next == EMPTY_PAGE)
+                {
+                    // Found tail, try to append
+                    if (Interlocked.CompareExchange(ref _nextPage[cur], pageIndex, EMPTY_PAGE) == EMPTY_PAGE)
+                    {
+                        return; // success
+                    }
+                    // CAS failed — someone else appended or page was removed, re-read
+                    continue;
+                }
+                if (next == NOT_IN_LIST)
+                {
+                    // cur was removed, restart from head
+                    break;
+                }
+                cur = next;
+            }
+        }
+
+        // Bounded iteration exhausted — page is already claimed (EMPTY_PAGE), leave it.
+        // It will be picked up by RebuildFreeList. This is a rare fallback path.
+    }
+
+    /// <summary>
+    /// Removes a page from the free list using two-phase mark + unlink.
+    /// Phase A (mark) is the linearization point; Phase B (unlink) failure is harmless.
+    /// </summary>
+    private void RemoveFromFreeList(int prevPage, int pageIndex, int capturedNext)
+    {
+        // Phase A: Mark page as removed (linearization point)
+        if (Interlocked.CompareExchange(ref _nextPage[pageIndex], NOT_IN_LIST, capturedNext) != capturedNext)
+        {
+            return; // page already removed or next changed
+        }
+
+        // Phase B: Unlink from predecessor (best-effort)
+        if (prevPage == HEAD_SENTINEL)
+        {
+            Interlocked.CompareExchange(ref _freeHead, capturedNext, pageIndex);
+        }
+        else
+        {
+            Interlocked.CompareExchange(ref _nextPage[prevPage], capturedNext, pageIndex);
         }
     }
 
     /// <summary>
-    /// Attempts to pop the head page from the free stack. Only succeeds if the head hasn't changed since <paramref name="expectedHead"/> was read.
-    /// On success, clears the <see cref="_inFreeList"/> flag and re-pushes the page if it still has free chunks (recovers orphans from the race where
-    /// a concurrent FreeChunk's 0→1 push was blocked by _inFreeList=1 while the page was the head).
+    /// Rebuilds the free list from L0 bitmap truth when the list is empty but free space exists.
+    /// Recovers pages orphaned by rare concurrent race conditions.
+    /// Uses plain writes under <see cref="_growLock"/> — safe because the full reset makes all concurrent traversals see EMPTY_PAGE or NOT_IN_LIST and
+    /// fall through to rebuild/grow.
     /// </summary>
-    private void TryPopFreeStack(long expectedHead)
-    {
-        var headPage = UnpackPage(expectedHead);
-        if (headPage == EMPTY_PAGE)
-        {
-            return;
-        }
-
-        var nextPage = _nextPage[headPage];
-        var newHead = PackHead(UnpackVersion(expectedHead) + 1, nextPage);
-        if (Interlocked.CompareExchange(ref _freeHead, newHead, expectedHead) == expectedHead)
-        {
-            // Pop succeeded — page is no longer in the list.
-            _inFreeList[headPage] = 0;
-
-            // Re-push if the page still has free space. This handles the race where a concurrent FreeChunk's 0→1 push was blocked by _inFreeList=1 while
-            // the page was the head. If freeCount is transiently wrong (says >0 but page is full), the re-pushed page will be lazily popped on the next
-            // scan — freeCount settles within 1-2 iterations.
-            if (_pageFreeCount[headPage] > 0)
-            {
-                PushToFreeStack(headPage);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Rebuilds the free stack from L0 bitmap truth when the stack is empty but free space exists.
-    /// This recovers pages orphaned by rare concurrent race conditions (push-skip + pop).
-    /// </summary>
-    private void RebuildFreeStack()
+    private void RebuildFreeList()
     {
         lock (_growLock)
         {
-            // Re-check under lock — another thread may have already rebuilt or grown
-            if (UnpackPage(_freeHead) != EMPTY_PAGE)
+            // Re-check under lock — another thread may have already rebuilt or grown.
+            var head = _freeHead;
+            if (head != EMPTY_PAGE && head >= 0 && _nextPage[head] != NOT_IN_LIST)
             {
-                return;
+                return; // list looks valid, another thread fixed it
             }
 
             var epoch = Manager.EpochManager.GlobalEpoch;
             var length = Length;
+            var nextPage = _nextPage;
             var totalAllocated = 0;
+
+            // Phase 1: Reset all pages to NOT_IN_LIST and _freeHead to EMPTY_PAGE.
+            // Concurrent traversers will see NOT_IN_LIST and fall through to pass++/rebuild.
+            _freeHead = EMPTY_PAGE;
+            for (int i = 0; i < length; i++)
+            {
+                nextPage[i] = NOT_IN_LIST;
+            }
+
+            // Phase 2: Scan bitmaps and build forward chain with plain writes.
+            // Under _growLock, no concurrent AddToFreeList can interfere because all pages start as NOT_IN_LIST — concurrent FreeChunk→AddToFreeList will
+            // CAS NOT_IN_LIST→EMPTY_PAGE and then try to link, which is compatible with our chain building.
+            int firstFree = EMPTY_PAGE;
+            int lastInList = EMPTY_PAGE;
 
             for (int i = 0; i < length; i++)
             {
@@ -631,19 +747,25 @@ public partial class ChunkBasedSegment : LogicalSegment
                 var metadata = page.MetadataReadOnly<long>();
 
                 var popcount = CountAllocatedBits(metadata, bitmapLongs, maxChunks);
-                var freeCount = maxChunks - popcount;
-
-                // Use Exchange to safely update even if concurrent FreeChunk is modifying this counter
-                Interlocked.Exchange(ref _pageFreeCount[i], freeCount);
                 totalAllocated += popcount;
 
-                // Push pages with free space — _inFreeList guard in PushToFreeStack prevents duplicates if a concurrent FreeChunk already pushed this page
-                if (freeCount > 0)
+                if (popcount < maxChunks)
                 {
-                    PushToFreeStack(i);
+                    nextPage[i] = EMPTY_PAGE; // mark as in-list, tail
+                    if (firstFree == EMPTY_PAGE)
+                    {
+                        firstFree = i;
+                    }
+                    else
+                    {
+                        nextPage[lastInList] = i;
+                    }
+                    lastInList = i;
                 }
             }
 
+            // Publish the chain head last — makes the entire chain visible atomically.
+            Interlocked.Exchange(ref _freeHead, firstFree);
             Interlocked.Exchange(ref _allocatedCount, totalAllocated);
         }
     }
@@ -828,10 +950,9 @@ public partial class ChunkBasedSegment : LogicalSegment
 
     /// <summary>
     /// Second thread-local warm accessor cache dedicated to B+Tree sibling (horizontal) navigation.
-    /// Separating vertical (parent→child) and horizontal (sibling) page access prevents sibling
-    /// traversal from evicting parent path pages from the 16-slot accessor cache.
-    /// Parent pages stay pinned via SlotRefCount in the primary warm accessor while siblings
-    /// are loaded into this accessor — doubling the effective working set from 16 to 32 pages.
+    /// Separating vertical (parent→child) and horizontal (sibling) page access prevents sibling traversal from evicting parent path pages from the 16-slot
+    /// accessor cache. Parent pages stay pinned via SlotRefCount in the primary warm accessor while siblings are loaded into this accessor — doubling the
+    /// effective working set from 16 to 32 pages.
     /// </summary>
     private sealed class WarmSiblingAccessorCache
     {

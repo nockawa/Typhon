@@ -69,7 +69,11 @@ class PagedMMFTests
     
 
     [TearDown]
-    public void TearDown() => Log.CloseAndFlush();
+    public void TearDown()
+    {
+        (_serviceProvider as IDisposable)?.Dispose();
+        Log.CloseAndFlush();
+    }
 
     private const int CreateFillPagesThenReadThemMemPageCount = 512;
     [Test]

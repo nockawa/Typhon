@@ -99,6 +99,7 @@ public class ChunkBasedSegmentBitmapL3Tests
         }
 
         _pmmf?.Dispose();
+        (_serviceProvider as IDisposable)?.Dispose();
     }
 
     #region Basic Allocation Tests
@@ -467,19 +468,21 @@ public class ChunkBasedSegmentBitmapL3Tests
     [Test]
     public void ClearL0_MultipleGroups_BitmapConsistency()
     {
-        // Test that freeing chunks in one L0 group doesn't corrupt other groups
+        // Test that freeing chunks in one L0 group doesn't corrupt other groups.
+        // Exhaust all chunks first so freed pages are the ONLY source of free space.
         var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 20, 64);
 
-        // Allocate 200 chunks across multiple L0 groups
+        // Allocate ALL chunks to exhaust the segment
         var allChunks = new List<int>();
-        for (int i = 0; i < 200; i++)
+        var totalFree = segment.FreeChunkCount;
+        for (int i = 0; i < totalFree; i++)
         {
-            var id = segment.AllocateChunk(false);
-            if (id > 0) allChunks.Add(id);
+            allChunks.Add(segment.AllocateChunk(false));
         }
 
         var allocatedBefore = segment.AllocatedChunkCount;
-        _logger.LogInformation("Allocated {Count} chunks, AllocatedCount={Allocated}", 
+        Assert.That(segment.FreeChunkCount, Is.EqualTo(0), "Segment should be fully exhausted");
+        _logger.LogInformation("Allocated {Count} chunks, AllocatedCount={Allocated}",
             allChunks.Count, allocatedBefore);
 
         // Free every other chunk
@@ -581,7 +584,10 @@ public class ChunkBasedSegmentBitmapL3Tests
             }));
         }
 
-        Task.WaitAll(tasks.ToArray());
+        if (!Task.WaitAll(tasks.ToArray(), TimeSpan.FromSeconds(10)))
+        {
+            Assert.Fail("ConcurrentAllocate tasks did not complete within 10s — likely deadlock in AllocateChunk");
+        }
 
         var idList = allIds.ToList();
         var uniqueCount = idList.Distinct().Count();
@@ -592,6 +598,7 @@ public class ChunkBasedSegmentBitmapL3Tests
 
     [Property("MemPageCount", 16*1024)]
     [Test]
+    [CancelAfter(15000)]
     public void ConcurrentAllocateAndFree_MaintainsConsistency()
     {
         var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 20, 64);
@@ -666,7 +673,10 @@ public class ChunkBasedSegmentBitmapL3Tests
             }));
         }
 
-        Task.WaitAll(tasks.ToArray());
+        if (!Task.WaitAll(tasks.ToArray(), TimeSpan.FromSeconds(10)))
+        {
+            Assert.Fail("ConcurrentAllocateAndFree tasks did not complete within 10s — likely deadlock in AllocateChunk/FreeChunk");
+        }
 
         // Report any errors found during concurrent execution
         foreach (var error in errors)

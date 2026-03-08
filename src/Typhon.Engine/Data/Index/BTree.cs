@@ -1477,6 +1477,13 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         }
     }
 
+    /// <summary>Force-flush all pending deferred nodes, bypassing the batching counter. Test-only.</summary>
+    internal void FlushDeferredNodes()
+    {
+        _deferredReclaimSkip = 0;
+        DeferredReclaim();
+    }
+
     private NodeWrapper FindLeaf(TKey key, out int index, ref ChunkAccessor accessor)
     {
         index = -1;

@@ -848,6 +848,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                 info.ResetClockSweepCounter();
                 info.FilePageIndex = -1;
                 info.AccessEpoch = 0;  // Clear epoch tag on reallocation
+                _fpiBitmap?.Clear(info.MemPageIndex);  // Clear stale FPI bit so the new occupant gets a fresh capture
                 info.PageState = PageState.Allocating;
                 Interlocked.Decrement(ref _metrics.FreeMemPageCount);
                 Debug.Assert(info.ExclusiveLatchDepth == 0);

@@ -10,6 +10,7 @@
         <Platforms>AnyCPU</Platforms>
 
         <LangVersion>default</LangVersion>
+        <RunSettingsFilePath>$(MSBuildProjectDirectory)\test.runsettings</RunSettingsFilePath>
     </PropertyGroup>
 
     <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">

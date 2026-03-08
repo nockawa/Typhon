@@ -136,10 +136,18 @@ public class StagingBufferPoolTests : AllocatorTestBase
 
         // Next rent should block; use a background thread
         using var rentCompleted = new ManualResetEventSlim(false);
+        Exception threadException = null;
         var thread = new Thread(() =>
         {
-            using var extra = pool.Rent();
-            rentCompleted.Set();
+            try
+            {
+                using var extra = pool.Rent();
+                rentCompleted.Set();
+            }
+            catch (Exception ex)
+            {
+                threadException = ex;
+            }
         });
         thread.Start();
 
@@ -153,6 +161,7 @@ public class StagingBufferPoolTests : AllocatorTestBase
         Assert.That(rentCompleted.Wait(2000), Is.True, "Rent should unblock after a buffer is returned");
 
         thread.Join();
+        Assert.That(threadException, Is.Null, $"Rent thread threw: {threadException}");
 
         // Cleanup remaining
         for (var i = 1; i < capacity; i++)
@@ -255,37 +264,45 @@ public class StagingBufferPoolTests : AllocatorTestBase
         var errors = new int[1];
 
         var threads = new Thread[threadCount];
+        var exceptions = new Exception[threadCount];
         for (var t = 0; t < threadCount; t++)
         {
             var threadId = t;
             threads[t] = new Thread(() =>
             {
-                barrier.SignalAndWait();
-                for (var i = 0; i < iterations; i++)
+                try
                 {
-                    using var buf = pool.Rent();
-                    if (!buf.IsValid || buf.Span.Length != StagingBufferPool.BufferSize)
+                    barrier.SignalAndWait();
+                    for (var i = 0; i < iterations; i++)
                     {
-                        Interlocked.Increment(ref errors[0]);
-                        return;
-                    }
-
-                    // Fill with unique pattern and verify
-                    var pattern = (byte)((threadId * 37 + i) & 0xFF);
-                    buf.Span.Fill(pattern);
-
-                    // Small delay to increase overlap with other threads
-                    Thread.SpinWait(10);
-
-                    // Verify pattern is still intact (no corruption from other threads)
-                    for (var j = 0; j < buf.Span.Length; j++)
-                    {
-                        if (buf.Span[j] != pattern)
+                        using var buf = pool.Rent();
+                        if (!buf.IsValid || buf.Span.Length != StagingBufferPool.BufferSize)
                         {
                             Interlocked.Increment(ref errors[0]);
                             return;
                         }
+
+                        // Fill with unique pattern and verify
+                        var pattern = (byte)((threadId * 37 + i) & 0xFF);
+                        buf.Span.Fill(pattern);
+
+                        // Small delay to increase overlap with other threads
+                        Thread.SpinWait(10);
+
+                        // Verify pattern is still intact (no corruption from other threads)
+                        for (var j = 0; j < buf.Span.Length; j++)
+                        {
+                            if (buf.Span[j] != pattern)
+                            {
+                                Interlocked.Increment(ref errors[0]);
+                                return;
+                            }
+                        }
                     }
+                }
+                catch (Exception ex)
+                {
+                    exceptions[threadId] = ex;
                 }
             });
             threads[t].Start();
@@ -294,6 +311,11 @@ public class StagingBufferPoolTests : AllocatorTestBase
         foreach (var thread in threads)
         {
             thread.Join();
+        }
+
+        for (var i = 0; i < threadCount; i++)
+        {
+            Assert.That(exceptions[i], Is.Null, $"Thread {i} threw: {exceptions[i]}");
         }
 
         Assert.That(errors[0], Is.EqualTo(0), "Data corruption detected in concurrent rent/return");

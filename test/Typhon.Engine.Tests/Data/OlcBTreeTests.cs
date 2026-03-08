@@ -32,6 +32,9 @@ public class OlcBTreeTests
         _serviceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
     }
 
+    [TearDown]
+    public void TearDown() => (_serviceProvider as IDisposable)?.Dispose();
+
     // ========================================
     // #111 — OLC Optimistic Read Path
     // ========================================
@@ -1202,6 +1205,9 @@ public class OlcBTreeTests
             // Trigger one more operation to reclaim any remaining deferred nodes from last cycle
             tree.Remove(0, out _, ref accessor);
             tree.Add(0, 99999, ref accessor);
+
+            // Force-flush deferred nodes (DeferredReclaim batches every 64 mutations, so the 2 ops above won't trigger it)
+            tree.FlushDeferredNodes();
 
             var finalAllocated = segment.AllocatedChunkCount;
             // Allow 3x headroom (tree may have different shape after cycles, but shouldn't grow unboundedly)

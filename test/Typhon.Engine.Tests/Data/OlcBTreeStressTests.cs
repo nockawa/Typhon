@@ -36,6 +36,9 @@ public class OlcBTreeStressTests
         _serviceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
     }
 
+    [TearDown]
+    public void TearDown() => (_serviceProvider as IDisposable)?.Dispose();
+
     private void LogDiagnostics<TKey>(BTree<TKey> tree) where TKey : unmanaged
     {
         TestContext.Out.WriteLine(

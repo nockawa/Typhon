@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Threading;
 using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
@@ -14,6 +15,7 @@ public class DatabaseDefinitions
 {
     private readonly Dictionary<string, DBComponentDefinition> _components;
     private Dictionary<string, DBObjectDefinition> _objects;
+    private readonly Lock _componentLock = new();
 
     public int ComponentCount => _components.Count;
     public IEnumerable<string> ComponentNames => _components.Keys;
@@ -74,9 +76,12 @@ public class DatabaseDefinitions
 
     public void AddComponent(DBComponentDefinition component)
     {
-        if (!_components.TryAdd(component.FullName, component))
+        lock (_componentLock)
         {
-            throw new ArgumentException($"The component name '{component.Name}' is already taken", nameof(component));
+            if (!_components.TryAdd(component.FullName, component))
+            {
+                throw new ArgumentException($"The component name '{component.Name}' is already taken", nameof(component));
+            }
         }
     }
 
@@ -127,9 +132,12 @@ public class DatabaseDefinitions
 
         var compDef = new DBComponentDefinition(ca.Name ?? t.Name, ca.Revision, ca.AllowMultiple) { POCOType = t };
 
-        if (_components.TryGetValue(compDef.FullName, out _))
+        lock (_componentLock)
         {
-            return null;
+            if (_components.TryGetValue(compDef.FullName, out _))
+            {
+                return null;
+            }
         }
 
         var members = t.GetFields();
@@ -192,7 +200,14 @@ public class DatabaseDefinitions
 
         compDef.Build();
 
-        _components.Add(compDef.FullName, compDef);
+        lock (_componentLock)
+        {
+            if (!_components.TryAdd(compDef.FullName, compDef))
+            {
+                return null;
+            }
+        }
+
         return compDef;
     }
 }

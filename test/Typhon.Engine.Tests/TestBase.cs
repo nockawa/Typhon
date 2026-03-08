@@ -312,9 +312,13 @@ abstract class TestBase<T> : TestBase
         
         ServiceProvider = ServiceCollection.BuildServiceProvider();
         ServiceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
-        Logger = ServiceCollection.BuildServiceProvider().GetRequiredService<ILogger<T>>();
+        Logger = ServiceProvider.GetRequiredService<ILogger<T>>();
     }
 
     [TearDown]
-    public virtual void TearDown() => Log.CloseAndFlush();
+    public virtual void TearDown()
+    {
+        (ServiceProvider as IDisposable)?.Dispose();
+        Log.CloseAndFlush();
+    }
 }
