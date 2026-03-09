@@ -27,6 +27,20 @@ internal static class ExpressionParser
         return predicates.ToArray();
     }
 
+    public static string ExtractFieldName<T, TKey>(Expression<Func<T, TKey>> keySelector)
+    {
+        var body = keySelector.Body;
+        while (body is UnaryExpression { NodeType: ExpressionType.Convert } unary)
+        {
+            body = unary.Operand;
+        }
+        if (body is MemberExpression member && member.Expression == keySelector.Parameters[0])
+        {
+            return member.Member.Name;
+        }
+        throw new NotSupportedException("OrderBy expression must be a simple field access (e.g., p => p.Level).");
+    }
+
     public static (FieldPredicate[] ForT1, FieldPredicate[] ForT2) Parse<T1, T2>(Expression<Func<T1, T2, bool>> expression)
     {
         var predicates = new List<FieldPredicate>();

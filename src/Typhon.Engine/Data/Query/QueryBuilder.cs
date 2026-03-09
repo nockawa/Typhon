@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
 using Typhon.Schema.Definition;
@@ -8,7 +9,10 @@ namespace Typhon.Engine;
 public class QueryBuilder<T> where T : unmanaged
 {
     private readonly DatabaseEngine _dbe;
-    private Expression<Func<T, bool>> _predicate;
+    private readonly List<FieldPredicate> _predicates = new();
+    private OrderByField? _orderBy;
+    private int _skip;
+    private int _take = int.MaxValue;
 
     internal QueryBuilder(DatabaseEngine dbe)
     {
@@ -17,65 +21,156 @@ public class QueryBuilder<T> where T : unmanaged
 
     public QueryBuilder<T> Where(Expression<Func<T, bool>> predicate)
     {
-        _predicate = predicate;
+        _predicates.AddRange(ExpressionParser.Parse(predicate));
+        return this;
+    }
+
+    public QueryBuilder<T> OrderBy<TKey>(Expression<Func<T, TKey>> keySelector)
+    {
+        _orderBy = new OrderByField(ResolveOrderByFieldIndex(keySelector));
+        return this;
+    }
+
+    public QueryBuilder<T> OrderByDescending<TKey>(Expression<Func<T, TKey>> keySelector)
+    {
+        _orderBy = new OrderByField(ResolveOrderByFieldIndex(keySelector), descending: true);
+        return this;
+    }
+
+    public QueryBuilder<T> OrderByPK(bool descending = false)
+    {
+        _orderBy = new OrderByField(-1, descending: descending);
+        return this;
+    }
+
+    public QueryBuilder<T> Skip(int count)
+    {
+        if (!_orderBy.HasValue)
+        {
+            throw new InvalidOperationException("Skip requires OrderBy.");
+        }
+        _skip = count;
+        return this;
+    }
+
+    public QueryBuilder<T> Take(int count)
+    {
+        if (!_orderBy.HasValue)
+        {
+            throw new InvalidOperationException("Take requires OrderBy.");
+        }
+        _take = count;
         return this;
     }
 
     public View<T> ToView(int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity)
     {
-        if (_predicate == null)
+        if (_orderBy.HasValue)
         {
-            throw new InvalidOperationException("A Where predicate must be specified before calling ToView().");
+            throw new InvalidOperationException("OrderBy is not supported with ToView(). Use Execute(tx) for ordered results.");
         }
+        ValidatePredicates();
 
-        var fieldPredicates = ExpressionParser.Parse<T>(_predicate);
-        var ct = _dbe.GetComponentTable<T>();
-        if (ct == null)
-        {
-            throw new InvalidOperationException($"Component type {typeof(T).Name} is not registered.");
-        }
+        var ct = GetComponentTable();
+        var evaluators = ResolveEvaluators(_predicates.ToArray(), ct);
+        var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, BasicSelectivityEstimator.Instance);
 
-        var evaluators = ResolveEvaluators(fieldPredicates, ct);
-        var view = new View<T>(evaluators, ct.ViewRegistry, ct, bufferCapacity);
-
-        // Register before population so concurrent commits go to ring buffer
+        var view = new View<T>(evaluators, ct.ViewRegistry, ct, plan, bufferCapacity);
         ct.ViewRegistry.RegisterView(view);
 
-        // Populate initial entity set via PK index scan
         using var tx = _dbe.CreateQuickTransaction();
-        var pkIndex = ct.PrimaryKeyIndex;
-
-        foreach (var kv in pkIndex.EnumerateLeaves())
+        var results = PipelineExecutor.Instance.Execute<T>(plan, plan.OrderedEvaluators, ct, tx);
+        foreach (var pk in results)
         {
-            if (tx.ReadEntity<T>(kv.Key, out var comp))
-            {
-                if (EvaluateAll(evaluators, ref comp))
-                {
-                    view.AddEntityDirect(kv.Key);
-                }
-            }
+            view.AddEntityDirect(pk);
         }
 
-        // Drain any concurrent entries that arrived during population
         view.Refresh(tx);
-        // Discard baseline artifacts
         view.ClearDelta();
 
         return view;
     }
 
-    private static unsafe bool EvaluateAll(FieldEvaluator[] evaluators, ref T comp)
+    public HashSet<long> Execute(Transaction tx)
     {
-        var compPtr = (byte*)Unsafe.AsPointer(ref comp);
-        for (var i = 0; i < evaluators.Length; i++)
+        ValidatePredicates();
+        var ct = GetComponentTable();
+        var evaluators = ResolveEvaluators(_predicates.ToArray(), ct);
+        var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, BasicSelectivityEstimator.Instance);
+        return PipelineExecutor.Instance.Execute<T>(plan, plan.OrderedEvaluators, ct, tx);
+    }
+
+    public List<long> ExecuteOrdered(Transaction tx)
+    {
+        if (!_orderBy.HasValue)
         {
-            ref var eval = ref evaluators[i];
-            if (!FieldEvaluator.Evaluate(ref eval, compPtr + eval.FieldOffset))
-            {
-                return false;
-            }
+            throw new InvalidOperationException("ExecuteOrdered requires OrderBy.");
         }
-        return true;
+        ValidatePredicates();
+        var ct = GetComponentTable();
+        var evaluators = ResolveEvaluators(_predicates.ToArray(), ct);
+        var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, BasicSelectivityEstimator.Instance, _orderBy.Value);
+        return PipelineExecutor.Instance.ExecuteOrdered<T>(plan, plan.OrderedEvaluators, ct, tx, _skip, _take);
+    }
+
+    public int Count(Transaction tx)
+    {
+        ValidatePredicates();
+        var ct = GetComponentTable();
+        var evaluators = ResolveEvaluators(_predicates.ToArray(), ct);
+        var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, BasicSelectivityEstimator.Instance);
+        return PipelineExecutor.Instance.Execute<T>(plan, plan.OrderedEvaluators, ct, tx).Count;
+    }
+
+    public bool Any(Transaction tx)
+    {
+        ValidatePredicates();
+        var ct = GetComponentTable();
+        var evaluators = ResolveEvaluators(_predicates.ToArray(), ct);
+        var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, BasicSelectivityEstimator.Instance);
+        return PipelineExecutor.Instance.ExecuteOrdered<T>(plan, plan.OrderedEvaluators, ct, tx, 0, 1).Count > 0;
+    }
+
+    public ExecutionPlan GetExecutionPlan()
+    {
+        ValidatePredicates();
+        var ct = GetComponentTable();
+        var evaluators = ResolveEvaluators(_predicates.ToArray(), ct);
+        return _orderBy.HasValue ? PlanBuilder.Instance.BuildPlan(evaluators, ct, BasicSelectivityEstimator.Instance, _orderBy.Value) : 
+            PlanBuilder.Instance.BuildPlan(evaluators, ct, BasicSelectivityEstimator.Instance);
+    }
+
+    private void ValidatePredicates()
+    {
+        if (_predicates.Count == 0)
+        {
+            throw new InvalidOperationException("A Where predicate must be specified.");
+        }
+    }
+
+    private ComponentTable GetComponentTable()
+    {
+        var ct = _dbe.GetComponentTable<T>();
+        if (ct == null)
+        {
+            throw new InvalidOperationException($"Component type {typeof(T).Name} is not registered.");
+        }
+        return ct;
+    }
+
+    private int ResolveOrderByFieldIndex<TKey>(Expression<Func<T, TKey>> keySelector)
+    {
+        var fieldName = ExpressionParser.ExtractFieldName(keySelector);
+        var ct = GetComponentTable();
+        if (!ct.Definition.FieldsByName.TryGetValue(fieldName, out var field))
+        {
+            throw new InvalidOperationException($"Field '{fieldName}' not found on component '{ct.Definition.Name}'.");
+        }
+        if (!field.HasIndex)
+        {
+            throw new InvalidOperationException($"Field '{fieldName}' must be indexed to use as OrderBy.");
+        }
+        return QueryResolverHelper.FindFieldIndex(ct.Definition, field);
     }
 
     private static FieldEvaluator[] ResolveEvaluators(FieldPredicate[] predicates, ComponentTable ct) =>
@@ -173,15 +268,15 @@ internal static class QueryResolverHelper
             case KeyType.SByte:
                 return Convert.ToSByte(value);
             case KeyType.Byte:
-                return (long)(ulong)Convert.ToByte(value);
+                return Convert.ToByte(value);
             case KeyType.Short:
                 return Convert.ToInt16(value);
             case KeyType.UShort:
-                return (long)(ulong)Convert.ToUInt16(value);
+                return Convert.ToUInt16(value);
             case KeyType.Int:
                 return Convert.ToInt32(value);
             case KeyType.UInt:
-                return (long)(ulong)Convert.ToUInt32(value);
+                return Convert.ToUInt32(value);
             case KeyType.Long:
                 return Convert.ToInt64(value);
             case KeyType.ULong:
@@ -189,7 +284,7 @@ internal static class QueryResolverHelper
             case KeyType.Float:
             {
                 var f = Convert.ToSingle(value);
-                return (long)Unsafe.As<float, int>(ref f);
+                return Unsafe.As<float, int>(ref f);
             }
             case KeyType.Double:
             {

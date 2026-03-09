@@ -21,6 +21,8 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
     private long _lastRefreshTSN;
     private int _disposed;
     private bool _overflowDetected;
+    private readonly ExecutionPlan _cachedPlan;
+    private readonly bool _hasCachedPlan;
 
     internal View(FieldEvaluator[] evaluators, ViewRegistry registry, ComponentTable componentTable, int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity,
         long baseTSN = 0)
@@ -41,6 +43,13 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
         Array.Sort(FieldDependencies);
     }
 
+    internal View(FieldEvaluator[] evaluators, ViewRegistry registry, ComponentTable componentTable, ExecutionPlan plan, 
+        int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0) : this(evaluators, registry, componentTable, bufferCapacity, baseTSN)
+    {
+        _cachedPlan = plan;
+        _hasCachedPlan = true;
+    }
+
     public int ViewId { get; }
     public int[] FieldDependencies { get; }
     public bool IsDisposed => _disposed != 0;
@@ -49,6 +58,8 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
     public int Count => _entityIds.Count;
     public long LastRefreshTSN => _lastRefreshTSN;
     public bool HasOverflow => _overflowDetected;
+    public ExecutionPlan ExecutionPlan => _cachedPlan;
+    public bool HasCachedPlan => _hasCachedPlan;
 
     public bool Contains(long pk) => _entityIds.Contains(pk);
 
@@ -136,16 +147,28 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
         // Reset buffer — clears overflow flag, allows new appends during re-scan
         DeltaBuffer.Reset();
 
-        // Clear and rebuild entity set from PK index scan
+        // Clear and rebuild entity set
         _entityIds.Clear();
-        var pkIndex = _componentTable.PrimaryKeyIndex;
-        foreach (var kv in pkIndex.EnumerateLeaves())
+        if (_hasCachedPlan)
         {
-            if (tx.ReadEntity<T>(kv.Key, out var comp))
+            var results = PipelineExecutor.Instance.Execute<T>(_cachedPlan, _cachedPlan.OrderedEvaluators, _componentTable, tx);
+            foreach (var pk in results)
             {
-                if (EvaluateAllFields(ref comp))
+                _entityIds.Add(pk);
+            }
+        }
+        else
+        {
+            // Fallback for views constructed without a plan (e.g., test harness)
+            var pkIndex = _componentTable.PrimaryKeyIndex;
+            foreach (var kv in pkIndex.EnumerateLeaves())
+            {
+                if (tx.ReadEntity<T>(kv.Key, out var comp))
                 {
-                    _entityIds.Add(kv.Key);
+                    if (EvaluateAllFields(ref comp))
+                    {
+                        _entityIds.Add(kv.Key);
+                    }
                 }
             }
         }
@@ -217,7 +240,7 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
             return;
         }
 
-        if (!wasInView && shouldBeInView)
+        if (!wasInView)
         {
             // OUT→IN: verify all other fields pass before adding
             if (CheckOtherFields(pk, fieldIndex, tx))
@@ -272,7 +295,7 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
             _entityIds.Remove(pk);
             CompactDelta(pk, DeltaKind.Removed);
         }
-        else if (wasInView && shouldBeInView)
+        else if (wasInView)
         {
             CompactDelta(pk, DeltaKind.Modified);
         }

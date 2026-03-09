@@ -1,13 +1,14 @@
 using System;
+using System.Collections.Generic;
 using System.Linq.Expressions;
-using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine;
 
 public class QueryBuilder<T1, T2> where T1 : unmanaged where T2 : unmanaged
 {
     private readonly DatabaseEngine _dbe;
-    private Expression<Func<T1, T2, bool>> _predicate;
+    private readonly List<FieldPredicate> _predicatesT1 = new();
+    private readonly List<FieldPredicate> _predicatesT2 = new();
 
     internal QueryBuilder(DatabaseEngine dbe)
     {
@@ -16,18 +17,18 @@ public class QueryBuilder<T1, T2> where T1 : unmanaged where T2 : unmanaged
 
     public QueryBuilder<T1, T2> Where(Expression<Func<T1, T2, bool>> predicate)
     {
-        _predicate = predicate;
+        var (forT1, forT2) = ExpressionParser.Parse(predicate);
+        _predicatesT1.AddRange(forT1);
+        _predicatesT2.AddRange(forT2);
         return this;
     }
 
     public View<T1, T2> ToView(int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity)
     {
-        if (_predicate == null)
+        if (_predicatesT1.Count == 0 && _predicatesT2.Count == 0)
         {
             throw new InvalidOperationException("A Where predicate must be specified before calling ToView().");
         }
-
-        var (predicatesForT1, predicatesForT2) = ExpressionParser.Parse<T1, T2>(_predicate);
 
         var ct1 = _dbe.GetComponentTable<T1>();
         if (ct1 == null)
@@ -42,15 +43,18 @@ public class QueryBuilder<T1, T2> where T1 : unmanaged where T2 : unmanaged
         }
 
         // Resolve evaluators for each component with their respective tags
-        var evals1 = QueryResolverHelper.ResolveEvaluators(predicatesForT1, ct1, 0);
-        var evals2 = QueryResolverHelper.ResolveEvaluators(predicatesForT2, ct2, 1);
+        var evals1 = QueryResolverHelper.ResolveEvaluators(_predicatesT1.ToArray(), ct1, 0);
+        var evals2 = QueryResolverHelper.ResolveEvaluators(_predicatesT2.ToArray(), ct2, 1);
 
-        // Combine evaluators
+        // Combine evaluators for filter evaluation
         var combinedEvaluators = new FieldEvaluator[evals1.Length + evals2.Length];
         Array.Copy(evals1, combinedEvaluators, evals1.Length);
         Array.Copy(evals2, 0, combinedEvaluators, evals1.Length, evals2.Length);
 
-        var view = new View<T1, T2>(combinedEvaluators, ct1.ViewRegistry, ct2.ViewRegistry, ct1, ct2, bufferCapacity);
+        // Select best plan: prefer secondary index, fallback to PK scan
+        var (plan, planTable) = SelectBestPlan(evals1, ct1, evals2, ct2);
+
+        var view = new View<T1, T2>(combinedEvaluators, ct1.ViewRegistry, ct2.ViewRegistry, ct1, ct2, plan, planTable, bufferCapacity);
 
         // Build field dependency arrays for each component table
         var fieldDeps1 = new int[evals1.Length];
@@ -65,46 +69,82 @@ public class QueryBuilder<T1, T2> where T1 : unmanaged where T2 : unmanaged
             fieldDeps2[i] = evals2[i].FieldIndex;
         }
 
-        // Register in BOTH registries BEFORE scanning PK index
+        // Register in BOTH registries BEFORE population
         ct1.ViewRegistry.RegisterView(view, fieldDeps1, 0);
         ct2.ViewRegistry.RegisterView(view, fieldDeps2, 1);
 
-        // Populate initial entity set via PK index scan on T1
+        // Populate initial entity set via pipeline execution
         using var tx = _dbe.CreateQuickTransaction();
-        var pkIndex = ct1.PrimaryKeyIndex;
-
-        foreach (var kv in pkIndex.EnumerateLeaves())
+        var results = PipelineExecutor.Instance.Execute<T1, T2>(plan, combinedEvaluators, planTable, tx);
+        foreach (var pk in results)
         {
-            if (tx.ReadEntity<T1>(kv.Key, out var comp1) && tx.ReadEntity<T2>(kv.Key, out var comp2))
-            {
-                if (EvaluateAll(combinedEvaluators, ref comp1, ref comp2))
-                {
-                    view.AddEntityDirect(kv.Key);
-                }
-            }
+            view.AddEntityDirect(pk);
         }
 
         // Drain any concurrent entries that arrived during population
         view.Refresh(tx);
-        // Discard baseline artifacts
         view.ClearDelta();
 
         return view;
     }
 
-    private static unsafe bool EvaluateAll(FieldEvaluator[] evaluators, ref T1 comp1, ref T2 comp2)
+    public ExecutionPlan GetExecutionPlan()
     {
-        var comp1Ptr = (byte*)Unsafe.AsPointer(ref comp1);
-        var comp2Ptr = (byte*)Unsafe.AsPointer(ref comp2);
-        for (var i = 0; i < evaluators.Length; i++)
+        if (_predicatesT1.Count == 0 && _predicatesT2.Count == 0)
         {
-            ref var eval = ref evaluators[i];
-            var ptr = eval.ComponentTag == 0 ? comp1Ptr : comp2Ptr;
-            if (!FieldEvaluator.Evaluate(ref eval, ptr + eval.FieldOffset))
-            {
-                return false;
-            }
+            throw new InvalidOperationException("A Where predicate must be specified.");
         }
-        return true;
+
+        var ct1 = _dbe.GetComponentTable<T1>();
+        if (ct1 == null)
+        {
+            throw new InvalidOperationException($"Component type {typeof(T1).Name} is not registered.");
+        }
+
+        var ct2 = _dbe.GetComponentTable<T2>();
+        if (ct2 == null)
+        {
+            throw new InvalidOperationException($"Component type {typeof(T2).Name} is not registered.");
+        }
+
+        var evals1 = QueryResolverHelper.ResolveEvaluators(_predicatesT1.ToArray(), ct1, 0);
+        var evals2 = QueryResolverHelper.ResolveEvaluators(_predicatesT2.ToArray(), ct2, 1);
+
+        var (plan, _) = SelectBestPlan(evals1, ct1, evals2, ct2);
+        return plan;
+    }
+
+    private static (ExecutionPlan Plan, ComponentTable Table) SelectBestPlan(FieldEvaluator[] evals1, ComponentTable ct1, FieldEvaluator[] evals2, ComponentTable ct2)
+    {
+        var estimator = BasicSelectivityEstimator.Instance;
+
+        ExecutionPlan? plan1 = evals1.Length > 0 ? PlanBuilder.Instance.BuildPlan(evals1, ct1, estimator) : null;
+        ExecutionPlan? plan2 = evals2.Length > 0 ? PlanBuilder.Instance.BuildPlan(evals2, ct2, estimator) : null;
+
+        if (plan1.HasValue && plan2.HasValue)
+        {
+            if (plan1.Value.UsesSecondaryIndex && !plan2.Value.UsesSecondaryIndex)
+            {
+                return (plan1.Value, ct1);
+            }
+            if (plan2.Value.UsesSecondaryIndex && !plan1.Value.UsesSecondaryIndex)
+            {
+                return (plan2.Value, ct2);
+            }
+            // Both use secondary index or both use PK — prefer T1 as default driving table
+            return (plan1.Value, ct1);
+        }
+
+        if (plan1.HasValue)
+        {
+            return (plan1.Value, ct1);
+        }
+        if (plan2.HasValue)
+        {
+            return (plan2.Value, ct2);
+        }
+
+        // No evaluators at all — PK scan on T1 (shouldn't happen, validation catches this)
+        return (PlanBuilder.Instance.BuildPlan([], ct1, estimator), ct1);
     }
 }

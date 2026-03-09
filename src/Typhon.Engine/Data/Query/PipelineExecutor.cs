@@ -157,7 +157,7 @@ internal class PipelineExecutor
         var enumerator = plan.Descending ? index.EnumerateRangeDescending(minKey, maxKey) : index.EnumerateRange(minKey, maxKey);
 
         var result = new List<long>();
-        var compRevAccessor = table.CompRevTableSegment.CreateChunkAccessor(null);
+        var compRevAccessor = table.CompRevTableSegment.CreateChunkAccessor();
         try
         {
             foreach (var kv in enumerator)
@@ -176,7 +176,7 @@ internal class PipelineExecutor
         return result;
     }
 
-    private static unsafe bool ProcessBatch<T>(Span<long> batch, FieldEvaluator[] evaluators, Transaction tx, bool hasFilters, HashSet<long> unorderedResult, 
+    private static bool ProcessBatch<T>(Span<long> batch, FieldEvaluator[] evaluators, Transaction tx, bool hasFilters, HashSet<long> unorderedResult, 
         List<long> orderedResult, ref int skip, ref int take, ref int collected) where T : unmanaged
     {
         for (var i = 0; i < batch.Length; i++)
@@ -232,4 +232,170 @@ internal class PipelineExecutor
 
         return true;
     }
+
+    #region Two-component overloads
+
+    /// <summary>
+    /// Executes a two-component query plan and returns matching entity PKs as a <see cref="HashSet{T}"/> (unordered).
+    /// Reads both components per entity and dispatches evaluator checks on <see cref="FieldEvaluator.ComponentTag"/>.
+    /// </summary>
+    public HashSet<long> Execute<T1, T2>(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx)
+        where T1 : unmanaged where T2 : unmanaged
+    {
+        var result = new HashSet<long>();
+        ExecuteCoreTwo<T1, T2>(plan, evaluators, table, tx, result, null, 0, int.MaxValue);
+        return result;
+    }
+
+    /// <summary>
+    /// Executes a two-component query plan and returns matching entity PKs as a <see cref="List{T}"/> preserving iteration order.
+    /// Supports Skip/Take with early termination.
+    /// </summary>
+    public List<long> ExecuteOrderedTwo<T1, T2>(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx,
+        int skip = 0, int take = int.MaxValue) where T1 : unmanaged where T2 : unmanaged
+    {
+        var result = new List<long>();
+        ExecuteCoreTwo<T1, T2>(plan, evaluators, table, tx, null, result, skip, take);
+        return result;
+    }
+
+    private void ExecuteCoreTwo<T1, T2>(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx,
+        HashSet<long> unorderedResult, List<long> orderedResult, int skip, int take) where T1 : unmanaged where T2 : unmanaged
+    {
+        if (take == 0)
+        {
+            return;
+        }
+
+        if (plan.UsesSecondaryIndex)
+        {
+            ExecuteCoreSecondaryIndexTwo<T1, T2>(plan, evaluators, table, tx, unorderedResult, orderedResult, skip, take);
+            return;
+        }
+
+        // PK scan path
+        var pkIndex = table.PrimaryKeyIndex;
+        var hasFilters = evaluators.Length > 0;
+
+        var collected = 0;
+        Span<long> batch = stackalloc long[BatchSize];
+        var batchCount = 0;
+
+        var enumerator = plan.Descending ? pkIndex.EnumerateRangeDescending(plan.PrimaryScanMin, plan.PrimaryScanMax) :
+            pkIndex.EnumerateRange(plan.PrimaryScanMin, plan.PrimaryScanMax);
+
+        foreach (var kv in enumerator)
+        {
+            batch[batchCount++] = kv.Key;
+            if (batchCount < BatchSize)
+            {
+                continue;
+            }
+
+            if (ProcessBatchTwo<T1, T2>(batch[..batchCount], evaluators, tx, hasFilters, unorderedResult, orderedResult, ref skip, ref take, ref collected))
+            {
+                return;
+            }
+            batchCount = 0;
+        }
+
+        if (batchCount > 0)
+        {
+            ProcessBatchTwo<T1, T2>(batch[..batchCount], evaluators, tx, hasFilters, unorderedResult, orderedResult, ref skip, ref take, ref collected);
+        }
+    }
+
+    private void ExecuteCoreSecondaryIndexTwo<T1, T2>(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx,
+        HashSet<long> unorderedResult, List<long> orderedResult, int skip, int take) where T1 : unmanaged where T2 : unmanaged
+    {
+        var pks = CollectPKsFromSecondaryIndex(plan, table);
+
+        var hasFilters = evaluators.Length > 0;
+        var collected = 0;
+        Span<long> batch = stackalloc long[BatchSize];
+        var batchCount = 0;
+
+        for (var i = 0; i < pks.Count; i++)
+        {
+            batch[batchCount++] = pks[i];
+            if (batchCount < BatchSize)
+            {
+                continue;
+            }
+
+            if (ProcessBatchTwo<T1, T2>(batch[..batchCount], evaluators, tx, hasFilters, unorderedResult, orderedResult, ref skip, ref take, ref collected))
+            {
+                return;
+            }
+            batchCount = 0;
+        }
+
+        if (batchCount > 0)
+        {
+            ProcessBatchTwo<T1, T2>(batch[..batchCount], evaluators, tx, hasFilters, unorderedResult, orderedResult, ref skip, ref take, ref collected);
+        }
+    }
+
+    private static unsafe bool ProcessBatchTwo<T1, T2>(Span<long> batch, FieldEvaluator[] evaluators, Transaction tx, bool hasFilters,
+        HashSet<long> unorderedResult, List<long> orderedResult, ref int skip, ref int take, ref int collected)
+        where T1 : unmanaged where T2 : unmanaged
+    {
+        for (var i = 0; i < batch.Length; i++)
+        {
+            var pk = batch[i];
+
+            if (hasFilters && !EvaluateFiltersTwo<T1, T2>(evaluators, tx, pk))
+            {
+                continue;
+            }
+
+            if (skip > 0)
+            {
+                skip--;
+                continue;
+            }
+
+            if (unorderedResult != null)
+            {
+                unorderedResult.Add(pk);
+            }
+            else
+            {
+                orderedResult.Add(pk);
+            }
+            collected++;
+            if (collected >= take)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe bool EvaluateFiltersTwo<T1, T2>(FieldEvaluator[] evaluators, Transaction tx, long pk)
+        where T1 : unmanaged where T2 : unmanaged
+    {
+        if (!tx.ReadEntity<T1>(pk, out var comp1) || !tx.ReadEntity<T2>(pk, out var comp2))
+        {
+            return false;
+        }
+
+        var ptr1 = (byte*)Unsafe.AsPointer(ref comp1);
+        var ptr2 = (byte*)Unsafe.AsPointer(ref comp2);
+        for (var i = 0; i < evaluators.Length; i++)
+        {
+            ref var eval = ref evaluators[i];
+            var ptr = eval.ComponentTag == 0 ? ptr1 : ptr2;
+            if (!FieldEvaluator.Evaluate(ref eval, ptr + eval.FieldOffset))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    #endregion
 }

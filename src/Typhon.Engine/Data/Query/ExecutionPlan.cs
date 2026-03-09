@@ -11,7 +11,7 @@ namespace Typhon.Engine;
 /// When a secondary index is selected, entity PKs are recovered via <see cref="CompRevStorageHeader.EntityPK"/>.
 /// The planner selects the most selective unique index to minimize the number of entities scanned.
 /// </remarks>
-internal readonly struct ExecutionPlan
+public readonly struct ExecutionPlan
 {
     /// <summary>
     /// Index into <see cref="ComponentTable.IndexedFieldInfos"/> for the primary scan stream.

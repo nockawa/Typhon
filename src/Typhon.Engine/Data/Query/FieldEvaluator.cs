@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace Typhon.Engine;
 
-internal enum KeyType : byte
+public enum KeyType : byte
 {
     Bool = 0,
     Byte = 1,
@@ -18,7 +18,7 @@ internal enum KeyType : byte
     Double = 10
 }
 
-internal enum CompareOp : byte
+public enum CompareOp : byte
 {
     Equal = 0,
     NotEqual = 1,
@@ -29,7 +29,7 @@ internal enum CompareOp : byte
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
-internal struct FieldEvaluator  // 24 bytes
+public struct FieldEvaluator  // 24 bytes
 {
     public int FieldIndex;       // 4B — index into IndexedFieldInfos
     public int FieldOffset;      // 4B — byte offset within component

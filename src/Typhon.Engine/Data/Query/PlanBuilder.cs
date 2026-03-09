@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine;
 
@@ -43,10 +44,10 @@ internal class PlanBuilder
 
         if (primaryFieldIndex < 0)
         {
-            // Fall back to PK scan
-            var pkIndex = table.PrimaryKeyIndex;
-            scanMin = pkIndex.EntryCount > 0 ? pkIndex.GetMinKeyAsLong() : long.MinValue;
-            scanMax = pkIndex.EntryCount > 0 ? pkIndex.GetMaxKeyAsLong() : long.MaxValue;
+            // Fall back to PK scan — use full long range so the plan remains valid
+            // when reused after new entities are inserted (e.g., overflow recovery).
+            scanMin = long.MinValue;
+            scanMax = long.MaxValue;
         }
 
         return new ExecutionPlan(primaryFieldIndex, primaryKeyType, scanMin, scanMax, descending, orderedEvaluators, estimates);
@@ -110,18 +111,18 @@ internal class PlanBuilder
                 continue;
             }
 
-            var minKey = ifi.Index.GetMinKeyAsLong();
-            var maxKey = ifi.Index.GetMaxKeyAsLong();
-
-            // Compute narrowed scan range from operator
+            // Use type-appropriate max/min for unbounded ranges so the plan remains valid when reused after new keys are inserted (e.g., overflow recovery).
+            // long.MaxValue/MinValue cannot be used because LongToKey truncates to the target type (e.g., (int)long.MaxValue = -1), creating invalid scan ranges.
+            var typeMin = TypeMinAsLong(eval.KeyType);
+            var typeMax = TypeMaxAsLong(eval.KeyType);
             var (scanMin, scanMax) = eval.CompareOp switch
             {
                 CompareOp.Equal => (eval.Threshold, eval.Threshold),
-                CompareOp.GreaterThan => (eval.Threshold, maxKey),
-                CompareOp.GreaterThanOrEqual => (eval.Threshold, maxKey),
-                CompareOp.LessThan => (minKey, eval.Threshold),
-                CompareOp.LessThanOrEqual => (minKey, eval.Threshold),
-                _ => (minKey, maxKey)
+                CompareOp.GreaterThan => (eval.Threshold, typeMax),
+                CompareOp.GreaterThanOrEqual => (eval.Threshold, typeMax),
+                CompareOp.LessThan => (typeMin, eval.Threshold),
+                CompareOp.LessThanOrEqual => (typeMin, eval.Threshold),
+                _ => (typeMin, typeMax)
             };
 
             return (eval.FieldIndex, eval.KeyType, scanMin, scanMax);
@@ -164,5 +165,59 @@ internal class PlanBuilder
         }
 
         return (ordered, orderedEstimates);
+    }
+
+    private static long TypeMaxAsLong(KeyType keyType)
+    {
+        switch (keyType)
+        {
+            case KeyType.Bool: return 1L;
+            case KeyType.SByte: return sbyte.MaxValue;
+            case KeyType.Byte: return (long)(ulong)byte.MaxValue;
+            case KeyType.Short: return short.MaxValue;
+            case KeyType.UShort: return (long)(ulong)ushort.MaxValue;
+            case KeyType.Int: return int.MaxValue;
+            case KeyType.UInt: return (long)(ulong)uint.MaxValue;
+            case KeyType.Long: return long.MaxValue;
+            case KeyType.ULong: return unchecked((long)ulong.MaxValue);
+            case KeyType.Float:
+            {
+                var f = float.MaxValue;
+                return (long)Unsafe.As<float, int>(ref f);
+            }
+            case KeyType.Double:
+            {
+                var d = double.MaxValue;
+                return Unsafe.As<double, long>(ref d);
+            }
+            default: return long.MaxValue;
+        }
+    }
+
+    private static long TypeMinAsLong(KeyType keyType)
+    {
+        switch (keyType)
+        {
+            case KeyType.Bool: return 0L;
+            case KeyType.SByte: return sbyte.MinValue;
+            case KeyType.Byte: return 0L;
+            case KeyType.Short: return short.MinValue;
+            case KeyType.UShort: return 0L;
+            case KeyType.Int: return int.MinValue;
+            case KeyType.UInt: return 0L;
+            case KeyType.Long: return long.MinValue;
+            case KeyType.ULong: return 0L;
+            case KeyType.Float:
+            {
+                var f = float.MinValue;
+                return (long)Unsafe.As<float, int>(ref f);
+            }
+            case KeyType.Double:
+            {
+                var d = double.MinValue;
+                return Unsafe.As<double, long>(ref d);
+            }
+            default: return long.MinValue;
+        }
     }
 }

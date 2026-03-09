@@ -23,6 +23,9 @@ public unsafe class View<T1, T2> : IView, IDisposable, IEnumerable<long> where T
     private long _lastRefreshTSN;
     private int _disposed;
     private bool _overflowDetected;
+    private readonly ExecutionPlan _cachedPlan;
+    private readonly ComponentTable _planTable;
+    private readonly bool _hasCachedPlan;
 
     internal View(FieldEvaluator[] evaluators, ViewRegistry registry1, ViewRegistry registry2, ComponentTable componentTable1, ComponentTable componentTable2,
         int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0)
@@ -39,6 +42,15 @@ public unsafe class View<T1, T2> : IView, IDisposable, IEnumerable<long> where T
         FieldDependencies = [];
     }
 
+    internal View(FieldEvaluator[] evaluators, ViewRegistry registry1, ViewRegistry registry2, ComponentTable componentTable1, ComponentTable componentTable2,
+        ExecutionPlan plan, ComponentTable planTable, int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0)
+        : this(evaluators, registry1, registry2, componentTable1, componentTable2, bufferCapacity, baseTSN)
+    {
+        _cachedPlan = plan;
+        _planTable = planTable;
+        _hasCachedPlan = true;
+    }
+
     public int ViewId { get; }
     public int[] FieldDependencies { get; }
     public bool IsDisposed => _disposed != 0;
@@ -47,6 +59,8 @@ public unsafe class View<T1, T2> : IView, IDisposable, IEnumerable<long> where T
     public int Count => _entityIds.Count;
     public long LastRefreshTSN => _lastRefreshTSN;
     public bool HasOverflow => _overflowDetected;
+    public ExecutionPlan ExecutionPlan => _cachedPlan;
+    public bool HasCachedPlan => _hasCachedPlan;
 
     public bool Contains(long pk) => _entityIds.Contains(pk);
 
@@ -133,16 +147,28 @@ public unsafe class View<T1, T2> : IView, IDisposable, IEnumerable<long> where T
         // Reset buffer — clears overflow flag, allows new appends during re-scan
         DeltaBuffer.Reset();
 
-        // Clear and rebuild entity set from PK index scan on T1
+        // Clear and rebuild entity set
         _entityIds.Clear();
-        var pkIndex = _componentTable1.PrimaryKeyIndex;
-        foreach (var kv in pkIndex.EnumerateLeaves())
+        if (_hasCachedPlan)
         {
-            if (tx.ReadEntity<T1>(kv.Key, out var comp1) && tx.ReadEntity<T2>(kv.Key, out var comp2))
+            var results = PipelineExecutor.Instance.Execute<T1, T2>(_cachedPlan, _evaluators, _planTable, tx);
+            foreach (var pk in results)
             {
-                if (EvaluateAllFields(ref comp1, ref comp2))
+                _entityIds.Add(pk);
+            }
+        }
+        else
+        {
+            // Fallback for views constructed without a plan (e.g., test harness)
+            var pkIndex = _componentTable1.PrimaryKeyIndex;
+            foreach (var kv in pkIndex.EnumerateLeaves())
+            {
+                if (tx.ReadEntity<T1>(kv.Key, out var comp1) && tx.ReadEntity<T2>(kv.Key, out var comp2))
                 {
-                    _entityIds.Add(kv.Key);
+                    if (EvaluateAllFields(ref comp1, ref comp2))
+                    {
+                        _entityIds.Add(kv.Key);
+                    }
                 }
             }
         }
@@ -214,7 +240,7 @@ public unsafe class View<T1, T2> : IView, IDisposable, IEnumerable<long> where T
             return;
         }
 
-        if (!wasInView && shouldBeInView)
+        if (!wasInView)
         {
             // OUT→IN: verify all other fields pass before adding
             if (CheckOtherFields(pk, fieldIndex, componentTag, tx))
@@ -237,8 +263,6 @@ public unsafe class View<T1, T2> : IView, IDisposable, IEnumerable<long> where T
         // Cache component reads to avoid reading the same component twice
         byte* comp1Ptr = null;
         byte* comp2Ptr = null;
-        T1 comp1 = default;
-        T2 comp2 = default;
         var read1 = false;
         var read2 = false;
 
@@ -254,7 +278,7 @@ public unsafe class View<T1, T2> : IView, IDisposable, IEnumerable<long> where T
             {
                 if (!read1)
                 {
-                    if (!tx.ReadEntity<T1>(pk, out comp1))
+                    if (!tx.ReadEntity<T1>(pk, out T1 comp1))
                     {
                         return false;
                     }
@@ -270,7 +294,7 @@ public unsafe class View<T1, T2> : IView, IDisposable, IEnumerable<long> where T
             {
                 if (!read2)
                 {
-                    if (!tx.ReadEntity<T2>(pk, out comp2))
+                    if (!tx.ReadEntity<T2>(pk, out T2 comp2))
                     {
                         return false;
                     }
@@ -300,7 +324,7 @@ public unsafe class View<T1, T2> : IView, IDisposable, IEnumerable<long> where T
             _entityIds.Remove(pk);
             CompactDelta(pk, DeltaKind.Removed);
         }
-        else if (wasInView && shouldBeInView)
+        else if (wasInView)
         {
             CompactDelta(pk, DeltaKind.Modified);
         }
