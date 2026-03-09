@@ -716,7 +716,7 @@ internal sealed class DiagnosticCommandExecutor
                 sb.AppendLine($"  [white]Entity {entityId} — {Markup.Escape(componentName)} revision chain[/]");
                 sb.AppendLine("  [grey]──────────────────────────────────────[/]");
                 sb.AppendLine($"  [grey]Chain:[/]           [white]{revPtr->ChainLength} chunk(s), {revPtr->ItemCount} items[/]");
-                sb.AppendLine($"  [grey]First revision:[/]  [white]{revPtr->FirstItemRevision}[/] [grey](index {revPtr->FirstItemIndex})[/]");
+                sb.AppendLine($"  [grey]Entity PK:[/]  [white]{revPtr->EntityPK}[/]  [grey]CommitSeq:[/] [white]{revPtr->CommitSequence}[/] [grey](index {revPtr->FirstItemIndex})[/]");
                 sb.AppendLine($"  [grey]Next chunk:[/]      [white]{(revPtr->NextChunkId >= 0 ? revPtr->NextChunkId.ToString() : "(none)")}[/]");
 
                 return CommandResult.Markup(sb.ToString().TrimEnd());

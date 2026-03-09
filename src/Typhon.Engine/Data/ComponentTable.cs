@@ -26,32 +26,34 @@ namespace Typhon.Engine;
 /// The chain is a circular buffer, location of the first item is given through <see cref="FirstItemIndex"/>
 /// </p>
 /// </remarks>
+[StructLayout(LayoutKind.Sequential, Pack = 4)]
 internal struct CompRevStorageHeader
 {
     /// ID of the next chunk in the chain. MUST BE THE FIRST FIELD OF THIS STRUCTURE !
     public int NextChunkId;
-    
+
     /// Access control to be thread-safe
     public AccessControlSmall Control;
-    
-    /// Revision of the first item, the revision of the following ones is computed from this revision + the position of the item in the chain
-    public int FirstItemRevision;
-    
+
     /// The whole chain is a circular buffer because we remove the oldest revisions and add the new ones in chronological order. This is the index
     /// of the first item in the chain (e.g. 18 would be 3rd chunk, 2nd entry for 8 entries per chunk)
     public short FirstItemIndex;
-    
+
     /// Number of items in the chain
     public short ItemCount;
-    
+
     /// Total length of the chain
     public short ChainLength;
 
     /// Index in the chain of the last committed revision, allows us to detect concurrency conflicts
     public short LastCommitRevisionIndex;
 
+    /// Primary key of the entity that owns this revision chain.
+    /// Enables reverse lookup from secondary index results back to entity PKs.
+    public long EntityPK;
+
     /// Monotonically increasing counter incremented on every commit to this entity.
-    /// Used for conflict detection — immune to revision index ordering and cleanup compaction.
+    /// Used for conflict detection and as the public "revision number" returned by GetComponentRevision.
     public int CommitSequence;
 
     internal void EnterControlLockForTest() => Control.EnterExclusiveAccess(ref WaitContext.Null);
@@ -81,7 +83,7 @@ internal struct CompRevStorageHeader
 ///   8      2    _packedTickLow      (full 16 bits of TSN)
 ///  10      2    _packedUowId        (bits 0-14: UowId, bit 15: IsolationFlag)
 /// </code>
-/// Root chunk: 3 elements ((64 − 20) / 12). Overflow chunks: 5 elements (64 / 12).
+/// Root chunk: 3 elements ((64 − 28) / 12). Overflow chunks: 5 elements (64 / 12).
 /// </remarks>
 [PublicAPI]
 [StructLayout(LayoutKind.Sequential, Pack = 2)]

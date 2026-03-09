@@ -285,9 +285,9 @@ internal static class SchemaEvolutionEngine
                 newHeader.ChainLength = 1;
                 newHeader.ItemCount = 1;
                 newHeader.FirstItemIndex = 0;
-                newHeader.FirstItemRevision = (int)headElement.TSN;
                 newHeader.LastCommitRevisionIndex = 0;
                 newHeader.CommitSequence = header.CommitSequence;
+                newHeader.EntityPK = header.EntityPK;
 
                 var elements = (CompRevStorageElement*)(newChunk + Unsafe.SizeOf<CompRevStorageHeader>());
                 elements[0] = headElement;

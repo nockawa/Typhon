@@ -777,6 +777,62 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         throw new NotSupportedException($"Key type {typeof(TKey).Name} is not supported for long encoding.");
     }
 
+    /// <summary>
+    /// Converts a long-encoded key (produced by <see cref="KeyToLong"/> or <see cref="QueryResolverHelper.EncodeThreshold"/>)
+    /// back into a typed <typeparamref name="TKey"/>. JIT eliminates dead branches for each TKey instantiation.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static TKey LongToKey(long encoded)
+    {
+        if (typeof(TKey) == typeof(sbyte))
+        {
+            return (TKey)(object)(sbyte)encoded;
+        }
+        if (typeof(TKey) == typeof(byte))
+        {
+            return (TKey)(object)(byte)(ulong)encoded;
+        }
+        if (typeof(TKey) == typeof(short))
+        {
+            return (TKey)(object)(short)encoded;
+        }
+        if (typeof(TKey) == typeof(ushort))
+        {
+            return (TKey)(object)(ushort)(ulong)encoded;
+        }
+        if (typeof(TKey) == typeof(char))
+        {
+            return (TKey)(object)(char)(ulong)encoded;
+        }
+        if (typeof(TKey) == typeof(int))
+        {
+            return (TKey)(object)(int)encoded;
+        }
+        if (typeof(TKey) == typeof(uint))
+        {
+            return (TKey)(object)(uint)(ulong)encoded;
+        }
+        if (typeof(TKey) == typeof(long))
+        {
+            return (TKey)(object)encoded;
+        }
+        if (typeof(TKey) == typeof(ulong))
+        {
+            return (TKey)(object)(ulong)encoded;
+        }
+        if (typeof(TKey) == typeof(float))
+        {
+            var i = (int)encoded;
+            return (TKey)(object)Unsafe.As<int, float>(ref i);
+        }
+        if (typeof(TKey) == typeof(double))
+        {
+            return (TKey)(object)Unsafe.As<long, double>(ref encoded);
+        }
+
+        throw new NotSupportedException($"Key type {typeof(TKey).Name} is not supported for long decoding.");
+    }
+
     /// <inheritdoc/>
     public override long GetMinKeyAsLong() => _count == 0 ? 0L : KeyToLong(GetMinKey());
 

@@ -78,11 +78,12 @@ internal static class WalReplayHelper
         ref var revHeader = ref Unsafe.As<byte, CompRevStorageHeader>(ref revSpan[0]);
         revHeader.NextChunkId = 0;
         revHeader.Control = default;
-        revHeader.FirstItemRevision = 0;
         revHeader.FirstItemIndex = 0;
         revHeader.ItemCount = 1;
         revHeader.ChainLength = 1;
         revHeader.LastCommitRevisionIndex = 0;
+        revHeader.CommitSequence = 1;
+        revHeader.EntityPK = header.EntityId;
 
         // Write the first revision element after the header
         var headerSize = sizeof(CompRevStorageHeader);

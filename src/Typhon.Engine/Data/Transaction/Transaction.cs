@@ -480,8 +480,7 @@ public unsafe class Transaction : IDisposable
             return -1;
         }
 
-        ref var header = ref info.CompRevTableAccessor.GetChunk<CompRevStorageHeader>(compRevInfo.CompRevTableFirstChunkId);
-        return header.FirstItemRevision + (compRevInfo.CurRevisionIndex - header.FirstItemIndex);
+        return compRevInfo.ReadCommitSequence + (compRevInfo.CurRevisionIndex - compRevInfo.ReadRevisionIndex);
     }
 
     public ComponentCollectionAccessor<T> CreateComponentCollectionAccessor<T>(ref ComponentCollection<T> field) where T : unmanaged
@@ -631,7 +630,7 @@ public unsafe class Transaction : IDisposable
 
         // Allocate the component revision storage as it's a new component
         _dbe.LogCommitCreateComponent(TSN, componentType.Name, pk, "AllocCompRevStorage");
-        var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, componentChunkId);
+        var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, componentChunkId, pk);
 
         var entry = new ComponentInfo.CompRevInfo
         {
@@ -640,7 +639,9 @@ public unsafe class Transaction : IDisposable
             PrevRevisionIndex = -1,
             CurCompContentChunkId = componentChunkId,
             CompRevTableFirstChunkId = compRevChunkId,
-            CurRevisionIndex = 0
+            CurRevisionIndex = 0,
+            ReadCommitSequence = 1,
+            ReadRevisionIndex = 0
         };
 
         info.AddNew(pk, entry);
@@ -668,7 +669,7 @@ public unsafe class Transaction : IDisposable
             var componentChunkId = info.CompContentSegment.AllocateChunk(false, _changeSet);
 
             // Allocate the component revision storage as it's a new component
-            var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, componentChunkId);
+            var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, componentChunkId, pk);
 
             var entry = new ComponentInfo.CompRevInfo
             {
@@ -677,7 +678,9 @@ public unsafe class Transaction : IDisposable
                 PrevRevisionIndex = -1,
                 CurCompContentChunkId = componentChunkId,
                 CompRevTableFirstChunkId = compRevChunkId,
-                CurRevisionIndex = 0
+                CurRevisionIndex = 0,
+                ReadCommitSequence = 1,
+                ReadRevisionIndex = 0
             };
 
             info.AddNew(pk, entry);
@@ -1358,7 +1361,10 @@ public unsafe class Transaction : IDisposable
 
             elementHandle.Commit(TSN);
             compRev.SetLastCommitRevisionIndex(Math.Max(lastCommitRevisionIndex, compRevInfo.CurRevisionIndex));
-            compRev.IncrementCommitSequence();
+            if ((compRevInfo.Operations & ComponentInfo.OperationType.Created) == 0)
+            {
+                compRev.IncrementCommitSequence();
+            }
         }
         finally
         {
