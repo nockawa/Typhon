@@ -529,6 +529,7 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
     }
 
     [Test]
+    [Property("CacheSize", 4 * 1024 * 1024)] // 4MB cache for 10K entity migration
     public void BulkMigration_Performance()
     {
         const int entityCount = 10_000;

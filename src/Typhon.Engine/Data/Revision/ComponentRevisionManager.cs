@@ -128,7 +128,7 @@ internal ref struct ComponentRevisionManager
             }
 
             // Allocate a new component
-            var componentChunkId = isDelete ? 0 : compContent.AllocateChunk(false);
+            var componentChunkId = isDelete ? 0 : compContent.AllocateChunk(false, info.CompContentAccessor.ChangeSet);
 
             // Add our new entry
             curChunkElements[indexInChunk].TSN = tsn;
@@ -154,22 +154,22 @@ internal ref struct ComponentRevisionManager
         }
     }
 
-    internal static unsafe int AllocCompRevStorage(ComponentInfo info, long tsn, ushort uowId, int firstChunkId)
+    internal static unsafe int AllocCompRevStorage(ComponentInfo info, long tsn, ushort uowId, int firstChunkId, long pk)
     {
-        var chunkId = info.CompRevTableSegment.AllocateChunk(false);
+        var chunkId = info.CompRevTableSegment.AllocateChunk(false, info.CompRevTableAccessor.ChangeSet);
         var chunkSpan = info.CompRevTableAccessor.GetChunkAsSpan(chunkId, true);
 
         ref var header = ref chunkSpan.Cast<byte, CompRevStorageHeader>()[0];
 
         // Initialize the header
         header.NextChunkId = 0;
-        header.FirstItemRevision = 1;
         header.Control = default;
         header.FirstItemIndex = 0;
         header.ItemCount = 1;
         header.ChainLength = 1;
         header.LastCommitRevisionIndex = -1;
-        header.CommitSequence = 0;
+        header.CommitSequence = 1;
+        header.EntityPK = pk;
 
         // Initialize the first element
         var elements = chunkSpan.Slice(sizeof(CompRevStorageHeader)).Cast<byte, CompRevStorageElement>();
@@ -208,6 +208,7 @@ internal ref struct ComponentRevisionManager
         tempChunk.Split(out Span<CompRevStorageHeader> tempFirstHeader, out Span<CompRevStorageElement> tempElements);
         tempFirstHeader[0].ChainLength = 1;
         tempFirstHeader[0].CommitSequence = firstChunkHeader.CommitSequence;
+        tempFirstHeader[0].EntityPK = firstChunkHeader.EntityPK;
         var curNextChunkId = tempChunk.Slice(0, sizeof(int)).Cast<byte, int>();
         var curDestElements = tempElements;
         var curDestIndex = 0;
@@ -298,7 +299,7 @@ internal ref struct ComponentRevisionManager
                                 curDestIndexInChunk = 0;
                                 tempFirstHeader[0].ChainLength++;
 
-                                newChunkId = ct.CompRevTableSegment.AllocateChunk(false);
+                                newChunkId = ct.CompRevTableSegment.AllocateChunk(false, compRevTableAccessor.ChangeSet);
                                 curNextChunkId[0] = newChunkId;
                                 var newChunkSpan = compRevTableAccessor.GetChunkAsSpan(newChunkId, true);
                                 newChunkSpan.Split(out curNextChunkId, out curDestElements);
@@ -326,7 +327,7 @@ internal ref struct ComponentRevisionManager
                     curDestIndexInChunk = 0;
                     tempFirstHeader[0].ChainLength++;
 
-                    newChunkId = ct.CompRevTableSegment.AllocateChunk(false);
+                    newChunkId = ct.CompRevTableSegment.AllocateChunk(false, compRevTableAccessor.ChangeSet);
                     curNextChunkId[0] = newChunkId;
                     var newChunkSpan = compRevTableAccessor.GetChunkAsSpan(newChunkId, true);
                     newChunkSpan.Split(out curNextChunkId, out curDestElements);
@@ -352,15 +353,10 @@ internal ref struct ComponentRevisionManager
             ct.CompRevTableSegment.FreeChunk(chunkId);
         }
 
-        tempFirstHeader[0].FirstItemRevision = firstChunkHeader.FirstItemRevision + skipCount;
-
-        // When cleanup removes entries (skipCount > 0), increment CommitSequence so that any reader who captured ReadCommitSequence before cleanup will see
-        // a mismatch at commit time. Without this, a reader could: capture CS → cleanup compacts chain → reader walks stale chain → commit
-        // sees CS == ReadCS → no conflict detected, even though the chain was restructured.
-        if (skipCount > 0)
-        {
-            tempFirstHeader[0].CommitSequence++;
-        }
+        // Cleanup does NOT increment CommitSequence. CS represents the total number of commits to this entity, and cleanup removing old entries
+        // doesn't constitute a new commit. The commit path's CurRevisionIndex re-validation (FindRevisionIndexByChunkId) handles stale indices
+        // caused by chain compaction. Keeping CS stable across cleanup ensures the snapshot-isolated revision number formula
+        // (CS - totalCommitted + visibleOrdinal) remains correct.
 
         // Copy the compacted data to the first chunk, but SKIP the Control field (offset 4, size 4)
         // to avoid zeroing it. The caller holds the exclusive lock and the Control must remain intact.
@@ -461,7 +457,7 @@ internal ref struct ComponentRevisionManager
         {
             using var enumerator = new RevisionEnumerator(ref compRevTableAccessor, firstChunkId, false, false);
             enumerator.StepToChunk(firstHeader.ChainLength - 1, false);         // Walk to the last chunk in the chain
-            enumerator.NextChunkId = compRevTable.AllocateChunk(true);          // Allocated, clear content to make sure the next chunk ID is 0, set as next
+            enumerator.NextChunkId = compRevTable.AllocateChunk(true, info.CompRevTableAccessor.ChangeSet); // Allocated, clear content to make sure the next chunk ID is 0, set as next
             compRevTableAccessor.DirtyChunk(enumerator.CurChunkId);
             firstHeader.ChainLength++;
         }
@@ -476,7 +472,7 @@ internal ref struct ComponentRevisionManager
             var firstChunkIndexInChain = enumerator.NextChunkId;
 
             // Add a new chunk after the last in the chain
-            var newChunkId = compRevTable.AllocateChunk(true);              // Clear content to make sure the next chunk ID is 0
+            var newChunkId = compRevTable.AllocateChunk(true, info.CompRevTableAccessor.ChangeSet); // Clear content to make sure the next chunk ID is 0
             enumerator.NextChunkId = newChunkId;
             compRevTableAccessor.DirtyChunk(enumerator.CurChunkId);
 

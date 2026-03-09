@@ -51,6 +51,9 @@ public class DatabaseSchemaTests
         _serviceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
     }
 
+    [TearDown]
+    public void TearDown() => (_serviceProvider as IDisposable)?.Dispose();
+
     public struct DBObject
     {
         

@@ -1,0 +1,4 @@
+load-schema Typhon.ARPG.Schema.dll
+open profile-arpg-200k --nowal
+arpg-generate items 200000
+close

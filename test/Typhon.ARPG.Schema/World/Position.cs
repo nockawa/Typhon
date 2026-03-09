@@ -16,7 +16,7 @@ public struct Position
     [Field] public float MovementSpeed;
     [Field] public Point3F Velocity;
 
-    [Field] /*[Index(AllowMultiple = true)]*/ public int ZoneId;
+    [Field] [Index(AllowMultiple = true)] public int ZoneId;
 
     [Field] public bool IsGrounded;
 }

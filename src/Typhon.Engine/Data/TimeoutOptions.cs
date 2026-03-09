@@ -77,6 +77,13 @@ public class TimeoutOptions
     public TimeSpan DefaultUowTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
+    /// Timeout for page cache back-pressure waits.
+    /// When all cache pages are dirty or epoch-protected, allocation threads wait
+    /// for IO completion to make pages evictable.
+    /// </summary>
+    public TimeSpan PageCacheBackpressureTimeout { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
     /// Timeout for WAL commit buffer back-pressure waits.
     /// When the ring buffer is full, commit threads spin-wait for the WAL writer to drain it.
     /// </summary>

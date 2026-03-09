@@ -56,6 +56,9 @@ public sealed class InMemoryWalFileIO : IWalFileIO
     }
 
     /// <inheritdoc />
+    public SafeFileHandle OpenSegmentForRead(string path) => OpenSegment(path, withFUA: false);
+
+    /// <inheritdoc />
     public void WriteAligned(SafeFileHandle handle, long offset, ReadOnlySpan<byte> data)
     {
         var seg = FindSegment(handle);

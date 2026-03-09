@@ -98,6 +98,7 @@ public abstract partial class BTree<TKey>
                 // Safe if: root leaf with count > 1, or non-root leaf above half-full
                 if ((isRoot && count > 1) || (!isRoot && count > capacity / 2))
                 {
+                    ll.PreDirtyForWrite(ref accessor);
                     if (!llLatch.TryWriteLock())
                     {
                         return OlcRemoveResult.Restart;
@@ -167,6 +168,7 @@ public abstract partial class BTree<TKey>
 
                 if ((isRoot && rllCount > 1) || (!isRoot && rllCount > capacity / 2))
                 {
+                    rll.PreDirtyForWrite(ref accessor);
                     if (!rllLatch.TryWriteLock())
                     {
                         return OlcRemoveResult.Restart;
@@ -226,6 +228,7 @@ public abstract partial class BTree<TKey>
 
             if ((isRoot && count > 1) || (!isRoot && count > capacity / 2))
             {
+                leaf.PreDirtyForWrite(ref accessor);
                 if (!leafLatch.TryWriteLock())
                 {
                     return OlcRemoveResult.Restart;
@@ -272,6 +275,7 @@ public abstract partial class BTree<TKey>
             // Begin-remove fast path (WriteLock protects against concurrent OLC writers)
             {
                 var ll = _linkList;
+                ll.PreDirtyForWrite(ref accessor);
                 SpinWriteLock(ll.GetLatch(ref accessor));
                 int order = args.Compare(args.Key, ll.GetFirst(ref accessor).Key);
                 if (order < 0)
@@ -299,6 +303,7 @@ public abstract partial class BTree<TKey>
             // End-remove fast path
             {
                 var rll = _reverseLinkList;
+                rll.PreDirtyForWrite(ref accessor);
                 SpinWriteLock(rll.GetLatch(ref accessor));
 
                 // Safety: if rll was split concurrently, it's no longer the rightmost leaf.
@@ -366,8 +371,12 @@ public abstract partial class BTree<TKey>
         }
         finally
         {
-            // Reclaim deferred nodes whose epoch is safe (all readers have exited).
-            DeferredReclaim();
+            // Reclaim deferred nodes every 64 mutations to amortize MinActiveEpoch cost.
+            if (++_deferredReclaimSkip >= 64)
+            {
+                _deferredReclaimSkip = 0;
+                DeferredReclaim();
+            }
         }
     }
     /// <summary>
@@ -382,6 +391,7 @@ public abstract partial class BTree<TKey>
         MutationContext ctx = default;
         var node = Root;
         var relatives = new NodeRelatives();
+        ref var sibAccessor = ref args.SiblingAccessor;
 
         // Phase 1: Descend from root to leaf, recording path + PathVersions for validation.
         // OLC protocol: read version BEFORE data, validate AFTER — ensures (index, version) are consistent.
@@ -409,7 +419,7 @@ public abstract partial class BTree<TKey>
                 return false; // node modified between version read and data read — restart
             }
 
-            NodeRelatives.Create(child, index, node, parentCount, ref relatives, out var childRelatives, ref accessor);
+            NodeRelatives.Create(child, index, node, parentCount, ref relatives, out var childRelatives, ref accessor, ref sibAccessor);
 
             ctx.PathNodes[ctx.Depth] = node;
             ctx.PathChildIndices[ctx.Depth] = index;
@@ -426,6 +436,7 @@ public abstract partial class BTree<TKey>
         // Phase 1.5A: Lock leaf with version validation.
         // Between Phase 1 descent and lock acquisition, a concurrent writer may have split/modified
         // this leaf. Snapshot the version before locking, then validate after.
+        node.PreDirtyForWrite(ref accessor);
         var leafLatch = node.GetLatch(ref accessor);
         int leafVersion = leafLatch.ReadVersion();
         if (leafVersion == 0)
@@ -464,19 +475,28 @@ public abstract partial class BTree<TKey>
 
         // Slow path: leaf may underflow → need neighbors + path for borrow/merge.
         // Lock leaf neighbors for potential borrow or merge.
+        // Sibling pages loaded into sibling CA to avoid evicting parent path pages from primary CA.
         // AbortWriteLock on failure: no nodes modified yet — avoid spurious version bumps.
         var leafPrev = node.GetPrevious(ref accessor);
         var leafNext = node.GetNext(ref accessor);
-        if (leafPrev.IsValid && !leafPrev.GetLatch(ref accessor).TryWriteLock())
+        if (leafPrev.IsValid)
+        {
+            leafPrev.PreDirtyForWrite(ref sibAccessor);
+        }
+        if (leafPrev.IsValid && !leafPrev.GetLatch(ref sibAccessor).TryWriteLock())
         {
             node.GetLatch(ref accessor).AbortWriteLock();
             return false; // restart
         }
-        if (leafNext.IsValid && !leafNext.GetLatch(ref accessor).TryWriteLock())
+        if (leafNext.IsValid)
+        {
+            leafNext.PreDirtyForWrite(ref sibAccessor);
+        }
+        if (leafNext.IsValid && !leafNext.GetLatch(ref sibAccessor).TryWriteLock())
         {
             if (leafPrev.IsValid)
             {
-                leafPrev.GetLatch(ref accessor).AbortWriteLock();
+                leafPrev.GetLatch(ref sibAccessor).AbortWriteLock();
             }
             node.GetLatch(ref accessor).AbortWriteLock();
             return false; // restart
@@ -487,6 +507,7 @@ public abstract partial class BTree<TKey>
         // AbortWriteLock on failure: no nodes modified yet — avoid spurious version bumps.
         for (int i = ctx.Depth - 1; i >= 0; i--)
         {
+            ctx.PathNodes[i].PreDirtyForWrite(ref accessor);
             var pathLatch = ctx.PathNodes[i].GetLatch(ref accessor);
             if (!pathLatch.TryWriteLock())
             {
@@ -496,11 +517,11 @@ public abstract partial class BTree<TKey>
                 }
                 if (leafNext.IsValid)
                 {
-                    leafNext.GetLatch(ref accessor).AbortWriteLock();
+                    leafNext.GetLatch(ref sibAccessor).AbortWriteLock();
                 }
                 if (leafPrev.IsValid)
                 {
-                    leafPrev.GetLatch(ref accessor).AbortWriteLock();
+                    leafPrev.GetLatch(ref sibAccessor).AbortWriteLock();
                 }
                 node.GetLatch(ref accessor).AbortWriteLock();
                 return false; // restart
@@ -514,11 +535,11 @@ public abstract partial class BTree<TKey>
                 }
                 if (leafNext.IsValid)
                 {
-                    leafNext.GetLatch(ref accessor).AbortWriteLock();
+                    leafNext.GetLatch(ref sibAccessor).AbortWriteLock();
                 }
                 if (leafPrev.IsValid)
                 {
-                    leafPrev.GetLatch(ref accessor).AbortWriteLock();
+                    leafPrev.GetLatch(ref sibAccessor).AbortWriteLock();
                 }
                 node.GetLatch(ref accessor).AbortWriteLock();
                 return false; // restart
@@ -542,17 +563,17 @@ public abstract partial class BTree<TKey>
             else if (relatives.HasTrueRightSibling && leafNext.IsValid)
             {
                 // Right sibling was merged into current — mark right sibling obsolete
-                leafNext.GetLatch(ref accessor).MarkObsolete();
+                leafNext.GetLatch(ref sibAccessor).MarkObsolete();
                 DeferredAdd(leafNext.ChunkId, retireEpoch);
             }
         }
         if (leafNext.IsValid)
         {
-            leafNext.GetLatch(ref accessor).WriteUnlock();
+            leafNext.GetLatch(ref sibAccessor).WriteUnlock();
         }
         if (leafPrev.IsValid)
         {
-            leafPrev.GetLatch(ref accessor).WriteUnlock();
+            leafPrev.GetLatch(ref sibAccessor).WriteUnlock();
         }
         node.GetLatch(ref accessor).WriteUnlock();
 
@@ -564,18 +585,20 @@ public abstract partial class BTree<TKey>
             relatives = ctx.PathRelatives[ctx.Depth];
 
             // Lock siblings that HandleChildMerge might borrow from or merge with
-            NodeWrapper leftSib = relatives.GetLeftSibling(ref accessor);
-            NodeWrapper rightSib = relatives.GetRightSibling(ref accessor);
+            NodeWrapper leftSib = relatives.GetLeftSibling(ref sibAccessor);
+            NodeWrapper rightSib = relatives.GetRightSibling(ref sibAccessor);
             if (leftSib.IsValid)
             {
-                SpinWriteLock(leftSib.GetLatch(ref accessor));
+                leftSib.PreDirtyForWrite(ref sibAccessor);
+                SpinWriteLock(leftSib.GetLatch(ref sibAccessor));
             }
             if (rightSib.IsValid)
             {
-                SpinWriteLock(rightSib.GetLatch(ref accessor));
+                rightSib.PreDirtyForWrite(ref sibAccessor);
+                SpinWriteLock(rightSib.GetLatch(ref sibAccessor));
             }
 
-            merged = node.HandleChildMerge(ctx.PathChildIndices[ctx.Depth], ref relatives, ref accessor);
+            merged = node.HandleChildMerge(ctx.PathChildIndices[ctx.Depth], ref relatives, ref accessor, ref sibAccessor);
 
             // Mark obsolete internal node that was merged
             if (merged)
@@ -590,7 +613,7 @@ public abstract partial class BTree<TKey>
                 else if (relatives.HasTrueRightSibling && rightSib.IsValid)
                 {
                     // Right sibling merged into current
-                    rightSib.GetLatch(ref accessor).MarkObsolete();
+                    rightSib.GetLatch(ref sibAccessor).MarkObsolete();
                     DeferredAdd(rightSib.ChunkId, retireEpoch);
                 }
             }
@@ -598,11 +621,11 @@ public abstract partial class BTree<TKey>
             // Unlock siblings + this path node
             if (rightSib.IsValid)
             {
-                rightSib.GetLatch(ref accessor).WriteUnlock();
+                rightSib.GetLatch(ref sibAccessor).WriteUnlock();
             }
             if (leftSib.IsValid)
             {
-                leftSib.GetLatch(ref accessor).WriteUnlock();
+                leftSib.GetLatch(ref sibAccessor).WriteUnlock();
             }
             node.GetLatch(ref accessor).WriteUnlock();
         }

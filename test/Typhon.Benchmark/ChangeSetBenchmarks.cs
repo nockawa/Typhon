@@ -13,7 +13,7 @@ namespace Typhon.Benchmark;
 
 [SimpleJob(warmupCount: 3, iterationCount: 5)]
 [MemoryDiagnoser]
-[BenchmarkCategory("Storage", "Regression")]
+[BenchmarkCategory("Storage")]
 public class ChangeSetBenchmarks
 {
     private ServiceProvider _serviceProvider;

@@ -29,6 +29,15 @@ internal static class Program
         catch (Exception ex)
         {
             AnsiConsole.MarkupLine($"[red]Fatal: {Markup.Escape(ex.Message)}[/]");
+#if DEBUG
+            AnsiConsole.MarkupLine($"[red]{Markup.Escape(ex.GetType().FullName)}[/]");
+            Console.WriteLine(ex.StackTrace);
+            if (ex.InnerException != null)
+            {
+                AnsiConsole.MarkupLine($"[red]Inner: {Markup.Escape(ex.InnerException.Message)}[/]");
+                Console.WriteLine(ex.InnerException.StackTrace);
+            }
+#endif
             return 10;
         }
     }
@@ -56,6 +65,12 @@ internal sealed class TSHCommand : Command<TSHCommand.Settings>
 
         [CommandOption("-f|--format")]
         public string Format { get; set; }
+
+        [CommandOption("-l|--log-level")]
+        public string LogLevel { get; set; }
+
+        [CommandOption("--nowal")]
+        public bool NoWal { get; set; }
     }
 
     public override int Execute(CommandContext context, Settings settings, CancellationToken cancellationToken)
@@ -67,6 +82,15 @@ internal sealed class TSHCommand : Command<TSHCommand.Settings>
         {
             session.Format = settings.Format;
         }
+
+        // Apply log level if specified
+        if (!string.IsNullOrEmpty(settings.LogLevel) && Enum.TryParse<Microsoft.Extensions.Logging.LogLevel>(settings.LogLevel, true, out var logLevel))
+        {
+            session.LogLevel = logLevel;
+        }
+
+        // Apply nowal flag
+        session.NoWal = settings.NoWal;
 
         var executor = new CommandExecutor(session);
 
@@ -224,8 +248,35 @@ internal sealed class TSHCommand : Command<TSHCommand.Settings>
                     continue;
                 }
 
-                var result = executor.Execute(input);
-                WriteResult(result);
+                CommandResult result;
+                try
+                {
+                    result = executor.Execute(input);
+                }
+                catch (Exception ex)
+                {
+                    WriteException(ex, session.Verbose);
+                    continue;
+                }
+
+                try
+                {
+                    WriteResult(result);
+                }
+                catch (Exception ex)
+                {
+                    // Markup rendering failure — fall back to plain text
+                    AnsiConsole.MarkupLine($"[red]Output rendering error: {Markup.Escape(ex.Message)}[/]");
+                    if (session.Verbose)
+                    {
+                        Console.WriteLine(ex.StackTrace);
+                    }
+
+                    if (!string.IsNullOrEmpty(result.Output))
+                    {
+                        Console.WriteLine(result.Output.Replace("\r\n", "\n").Replace("\n", "\r\n"));
+                    }
+                }
 
                 if (result.ShouldExit)
                 {
@@ -263,7 +314,34 @@ internal sealed class TSHCommand : Command<TSHCommand.Settings>
         }
         else
         {
-            Console.WriteLine(result.Output);
+            // PrettyPrompt enables VT100 mode where \n is a pure LF (cursor stays in column).
+            // Normalize to \r\n so plain-text output renders correctly.
+            Console.WriteLine(result.Output.Replace("\r\n", "\n").Replace("\n", "\r\n"));
+        }
+    }
+
+    private static void WriteException(Exception ex, bool verbose)
+    {
+        AnsiConsole.MarkupLine($"[red]Error: {Markup.Escape(ex.GetType().Name)}: {Markup.Escape(ex.Message)}[/]");
+
+        if (!verbose)
+        {
+#if DEBUG
+            // Always show stack trace in debug builds
+            Console.WriteLine(ex.StackTrace);
+#else
+            AnsiConsole.MarkupLine("[dim]  (use 'set verbose on' for full stack trace)[/]");
+#endif
+            return;
+        }
+
+        Console.WriteLine(ex.StackTrace);
+        var inner = ex.InnerException;
+        while (inner != null)
+        {
+            AnsiConsole.MarkupLine($"[red]  Inner: {Markup.Escape(inner.GetType().Name)}: {Markup.Escape(inner.Message)}[/]");
+            Console.WriteLine(inner.StackTrace);
+            inner = inner.InnerException;
         }
     }
 }

@@ -667,16 +667,18 @@ public class ResourceAccessControlTests
     {
         var control = new ResourceAccessControl();
         var canRelease = new ManualResetEventSlim(false);
+        var accessHeld = new ManualResetEventSlim(false);
 
         // Hold ACCESSING indefinitely
         var accessTask = Task.Run(() =>
         {
             control.EnterAccessing(ref TestWaitContext.Default);
+            accessHeld.Set();
             canRelease.Wait();
             control.ExitAccessing();
         });
 
-        Thread.Sleep(50);
+        accessHeld.Wait();
 
         // Try to destroy with timeout
         var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(100));

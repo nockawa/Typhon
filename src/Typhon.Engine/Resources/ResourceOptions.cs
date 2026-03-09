@@ -38,7 +38,7 @@ public enum PageChecksumVerification
 ///     {
 ///         PageCachePages = 262144,           // 2 GB
 ///         MaxActiveTransactions = 1000,
-///         WalRingBufferSizeBytes = 4 &lt;&lt; 20,  // 4 MB
+///         WalRingBufferSizeBytes = 8 &lt;&lt; 20,  // 8 MB
 ///     }
 /// };
 /// options.Resources.Validate();
@@ -88,7 +88,7 @@ public class ResourceOptions
     /// Size of the WAL ring buffer in bytes.
     /// When full, commit threads block until WAL writer drains it.
     /// </summary>
-    public int WalRingBufferSizeBytes { get; set; } = 4 * 1024 * 1024;  // 4 MB
+    public int WalRingBufferSizeBytes { get; set; } = 8 * 1024 * 1024;  // 8 MB
 
     /// <summary>
     /// Back-pressure threshold as fraction of ring buffer capacity.

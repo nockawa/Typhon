@@ -22,9 +22,10 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\..\test\Typhon.ARPG.Schema\Typhon.ARPG.Schema.csproj" />
+        <ProjectReference Include="..\..\test\Typhon.ARPG.Shell\Typhon.ARPG.Shell.csproj" />
         <ProjectReference Include="..\Typhon.Engine\Typhon.Engine.csproj" />
         <ProjectReference Include="..\Typhon.Schema.Definition\Typhon.Schema.Definition.csproj" />
+        <ProjectReference Include="..\Typhon.Shell.Extensibility\Typhon.Shell.Extensibility.csproj" />
     </ItemGroup>
 
 </Project>

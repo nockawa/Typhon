@@ -119,37 +119,7 @@ internal static class BTreeExtensions
 
 #region BTree+ main class
 
-public interface IBTree
-{
-    ChunkBasedSegment Segment { get; }
-    bool AllowMultiple { get; }
-    int EntryCount { get; }
-    unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor);
-    unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor, out int bufferRootId);
-    unsafe bool Remove(void* keyAddr, out int value, ref ChunkAccessor accessor);
-    unsafe Result<int, BTreeLookupStatus> TryGet(void* keyAddr, ref ChunkAccessor accessor);
-    unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref ChunkAccessor accessor, bool preserveEmptyBuffer = false);
-    unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ref ChunkAccessor accessor);
-
-    /// <summary>
-    /// Compound move: atomically removes <paramref name="value"/> from <paramref name="oldKeyAddr"/>
-    /// and inserts it under <paramref name="newKeyAddr"/>. For unique indexes (!AllowMultiple).
-    /// </summary>
-    /// <returns>True if the old key was found and moved; false if old key not found.</returns>
-    unsafe bool Move(void* oldKeyAddr, void* newKeyAddr, int value, ref ChunkAccessor accessor);
-
-    /// <summary>
-    /// Compound move for multi-value indexes (AllowMultiple): removes <paramref name="elementId"/>/<paramref name="value"/>
-    /// from <paramref name="oldKeyAddr"/>'s buffer and appends <paramref name="value"/> under <paramref name="newKeyAddr"/>.
-    /// Returns the new element ID and both HEAD buffer IDs for inline TAIL tracking.
-    /// </summary>
-    unsafe int MoveValue(void* oldKeyAddr, void* newKeyAddr, int elementId, int value, ref ChunkAccessor accessor, out int oldHeadBufferId, 
-        out int newHeadBufferId, bool preserveEmptyBuffer = false);
-
-    void CheckConsistency(ref ChunkAccessor accessor);
-}
-
-public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged 
+public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
 {
     [DebuggerDisplay("Key: {Key}, Value: {Value}")]
     [StructLayout(LayoutKind.Sequential)]
@@ -175,7 +145,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public ref struct InsertArguments
     {
-        public InsertArguments(TKey key, int value, IComparer<TKey> comparer, ref ChunkAccessor accessor)
+        public InsertArguments(TKey key, int value, IComparer<TKey> comparer, ref ChunkAccessor accessor, ref ChunkAccessor sibAccessor)
         {
             _value = value;
             _keyComparer = comparer ?? Comparer<TKey>.Default;
@@ -183,6 +153,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             Added = false;
             ElementId = 0;
             Accessor = ref accessor;
+            SiblingAccessor = ref sibAccessor;
         }
         public readonly TKey Key;
         public bool Added { get; private set; }
@@ -191,6 +162,8 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         public int BufferRootId;
 
         public ref ChunkAccessor Accessor;
+        /// <summary>Dedicated accessor for horizontal (sibling) navigation — prevents sibling page loads from evicting parent path pages in the primary accessor.</summary>
+        public ref ChunkAccessor SiblingAccessor;
 
         private readonly int _value;
         private readonly IComparer<TKey> _keyComparer;
@@ -235,6 +208,8 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         public readonly TKey Key;
         public readonly IComparer<TKey> Comparer;
         public ref ChunkAccessor Accessor;
+        /// <summary>Dedicated accessor for horizontal (sibling) navigation — prevents sibling page loads from evicting parent path pages in the primary accessor.</summary>
+        public ref ChunkAccessor SiblingAccessor;
 
         /// <summary>
         /// result is set once when the value is found at leaf node.
@@ -246,7 +221,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         /// </summary>
         public bool Removed { get; private set; }
 
-        public RemoveArguments(in TKey key, in IComparer<TKey> comparer, ref ChunkAccessor accessor)
+        public RemoveArguments(in TKey key, in IComparer<TKey> comparer, ref ChunkAccessor accessor, ref ChunkAccessor sibAccessor)
         {
             Key = key;
             Comparer = comparer;
@@ -254,6 +229,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             Value = 0;
             Removed = false;
             Accessor = ref accessor;
+            SiblingAccessor = ref sibAccessor;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -411,7 +387,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         /// Ancestor fields are set eagerly (no chunk reads — just copies).
         /// Sibling fields are lazily resolved on first access via GetLeftSibling/GetRightSibling.
         /// </summary>
-        public static void Create(NodeWrapper child, int index, NodeWrapper parent, int parentCount, ref NodeRelatives parentRelatives, out NodeRelatives res, ref ChunkAccessor accessor)
+        public static void Create(NodeWrapper child, int index, NodeWrapper parent, int parentCount, ref NodeRelatives parentRelatives, out NodeRelatives res, ref ChunkAccessor accessor, ref ChunkAccessor sibAccessor)
         {
 
             // assign nearest ancestors between child and siblings.
@@ -425,7 +401,8 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
                 leftAncestor = parentRelatives.LeftAncestor;
                 leftAncestorIndex = parentRelatives.LeftAncestorIndex;
                 hasTrueLeftSibling = false;
-                cousinLeftSource = parentRelatives.GetLeftSibling(ref accessor);
+                // Cousin resolution uses sibling CA — prevents cousin page from evicting parent path pages in the primary CA
+                cousinLeftSource = parentRelatives.GetLeftSibling(ref sibAccessor);
 
                 rightAncestor = parent;
                 rightAncestorIndex = index + 1;
@@ -440,7 +417,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
                 rightAncestor = parentRelatives.RightAncestor;
                 rightAncestorIndex = parentRelatives.RightAncestorIndex;
                 hasTrueRightSibling = false;
-                cousinRightSource = parentRelatives.GetRightSibling(ref accessor);
+                cousinRightSource = parentRelatives.GetRightSibling(ref sibAccessor);
             }
             else // child is not right most nor left most.
             {
@@ -460,7 +437,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     #region Private data
 
-    public abstract bool AllowMultiple { get; }
+    public abstract override bool AllowMultiple { get; }
     protected abstract BaseNodeStorage GetStorage();
     protected IComparer<TKey> Comparer;
 
@@ -484,11 +461,16 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     // Protected by _deferredLock for thread safety under concurrent merge operations.
     private DeferredNodeList _deferredNodes;
 
+    // Batching counter for DeferredReclaim: only reclaim every 64 mutations to reduce MinActiveEpoch calls.
+    // Non-atomic by design — racy reads are harmless (DeferredReclaim is idempotent, serialized by _deferredLock).
+    private int _deferredReclaimSkip;
+
     // OLC diagnostics counters (always-on, only incremented on slow paths)
     internal long _optimisticRestarts;
     internal long _pessimisticFallbacks;
     internal long _writeLockFailures;
     internal long _splitCount;
+    internal long _leafFullFromOlc;
     internal long _mergeCount;
     internal long _moveRightCount;
     internal long _contentionSplitCount;
@@ -634,22 +616,27 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     public bool IsEmpty() => _count == 0;
 
-    public int EntryCount => _count;
+    public override int EntryCount => _count;
 
     /// <summary>Number of deferred nodes pending reclamation (test visibility).</summary>
     internal int DeferredNodeCount => _deferredNodes.Count;
 
+    public override long Count => _count;
+
     /// <summary>Number of OLC optimistic read restarts (version validation failures).</summary>
-    public long OptimisticRestarts => Interlocked.Read(ref _optimisticRestarts);
+    public override long OptimisticRestarts => Interlocked.Read(ref _optimisticRestarts);
 
     /// <summary>Number of fallbacks from optimistic to pessimistic path.</summary>
-    public long PessimisticFallbacks => Interlocked.Read(ref _pessimisticFallbacks);
+    public override long PessimisticFallbacks => Interlocked.Read(ref _pessimisticFallbacks);
 
     /// <summary>Number of SpinWriteLock spin iterations (contention on write locks).</summary>
     public long WriteLockFailures => Interlocked.Read(ref _writeLockFailures);
 
     /// <summary>Number of node splits (leaf + internal).</summary>
-    public long SplitCount => Interlocked.Read(ref _splitCount);
+    public override long SplitCount => Interlocked.Read(ref _splitCount);
+
+    /// <summary>Number of times OLC insert returned LeafFull (expected: ~1 per leaf capacity inserts).</summary>
+    public override long LeafFullFromOlc => Interlocked.Read(ref _leafFullFromOlc);
 
     /// <summary>Number of node merges (leaf + internal).</summary>
     public long MergeCount => Interlocked.Read(ref _mergeCount);
@@ -675,7 +662,85 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
     /// Returns an enumerator that walks the leaf-level linked list, yielding all entries in ascending key order.
     /// The caller must be inside an epoch scope. Uses per-leaf OLC validation (lock-free for readers).
     /// </summary>
-    public LeafEnumerator EnumerateLeaves() => new LeafEnumerator(this);
+    public RangeEnumerator EnumerateLeaves() => new RangeEnumerator(this);
+
+    /// <summary>
+    /// Returns an enumerator that yields entries in ascending key order within [<paramref name="minKey"/>, <paramref name="maxKey"/>].
+    /// For unique indexes only — throws on AllowMultiple. Use <see cref="EnumerateRangeMultiple"/> for AllowMultiple indexes.
+    /// The caller must be inside an epoch scope. Uses per-leaf OLC validation (lock-free for readers).
+    /// </summary>
+    public RangeEnumerator EnumerateRange(TKey minKey, TKey maxKey)
+    {
+        if (AllowMultiple)
+        {
+            ThrowHelper.ThrowEnumerateRangeOnAllowMultiple();
+        }
+        return new RangeEnumerator(this, minKey, maxKey);
+    }
+
+    /// <summary>
+    /// Returns an enumerator that yields entries in descending key order within [<paramref name="minKey"/>, <paramref name="maxKey"/>].
+    /// For unique indexes only — throws on AllowMultiple. Use <see cref="EnumerateRangeMultipleDescending"/> for AllowMultiple indexes.
+    /// The caller must be inside an epoch scope. Uses per-leaf OLC validation (lock-free for readers).
+    /// </summary>
+    public RangeEnumerator EnumerateRangeDescending(TKey minKey, TKey maxKey)
+    {
+        if (AllowMultiple)
+        {
+            ThrowHelper.ThrowEnumerateRangeOnAllowMultiple();
+        }
+        return new RangeEnumerator(this, minKey, maxKey, true);
+    }
+
+    /// <summary>
+    /// Returns an enumerator that yields keys with their expanded VSBS values in ascending key order within [<paramref name="minKey"/>, <paramref name="maxKey"/>].
+    /// For AllowMultiple indexes only — throws on unique indexes. Use <see cref="EnumerateRange"/> for unique indexes.
+    /// The caller must be inside an epoch scope.
+    /// </summary>
+    public RangeMultipleEnumerator EnumerateRangeMultiple(TKey minKey, TKey maxKey)
+    {
+        if (!AllowMultiple)
+        {
+            ThrowHelper.ThrowEnumerateRangeMultipleOnUnique();
+        }
+        return new RangeMultipleEnumerator(this, minKey, maxKey);
+    }
+
+    /// <summary>
+    /// Returns an enumerator that yields keys with their expanded VSBS values in descending key order within [<paramref name="minKey"/>, <paramref name="maxKey"/>].
+    /// For AllowMultiple indexes only — throws on unique indexes. Use <see cref="EnumerateRangeDescending"/> for unique indexes.
+    /// The caller must be inside an epoch scope.
+    /// </summary>
+    public RangeMultipleEnumerator EnumerateRangeMultipleDescending(TKey minKey, TKey maxKey)
+    {
+        if (!AllowMultiple)
+        {
+            ThrowHelper.ThrowEnumerateRangeMultipleOnUnique();
+        }
+        return new RangeMultipleEnumerator(this, minKey, maxKey, true);
+    }
+
+    /// <summary>
+    /// Returns the minimum key in the BTree. Single-threaded use only (engine init / selectivity estimation).
+    /// </summary>
+    public TKey GetMinKey()
+    {
+        if (_count == 0)
+        {
+            return default;
+        }
+
+        using var guard = EpochGuard.Enter(_segment.Manager.EpochManager);
+        var accessor = _segment.CreateChunkAccessor();
+        try
+        {
+            return GetFirst(ref accessor).Key;
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+    }
 
     /// <summary>
     /// Returns the maximum key in the BTree. Single-threaded use only (engine init).
@@ -698,6 +763,125 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             accessor.Dispose();
         }
     }
+
+    /// <summary>
+    /// Converts a <typeparamref name="TKey"/> to <see cref="long"/> using the same encoding as
+    /// <see cref="QueryResolverHelper.EncodeThreshold"/>. JIT eliminates dead branches for each concrete TKey.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static long KeyToLong(TKey key)
+    {
+        if (typeof(TKey) == typeof(sbyte))
+        {
+            return (sbyte)(object)key;
+        }
+        if (typeof(TKey) == typeof(byte))
+        {
+            return (byte)(object)key;
+        }
+        if (typeof(TKey) == typeof(short))
+        {
+            return (short)(object)key;
+        }
+        if (typeof(TKey) == typeof(ushort))
+        {
+            return (ushort)(object)key;
+        }
+        if (typeof(TKey) == typeof(char))
+        {
+            return (char)(object)key;
+        }
+        if (typeof(TKey) == typeof(int))
+        {
+            return (int)(object)key;
+        }
+        if (typeof(TKey) == typeof(uint))
+        {
+            return (uint)(object)key;
+        }
+        if (typeof(TKey) == typeof(long))
+        {
+            return (long)(object)key;
+        }
+        if (typeof(TKey) == typeof(ulong))
+        {
+            return (long)(ulong)(object)key;
+        }
+        if (typeof(TKey) == typeof(float))
+        {
+            var f = (float)(object)key;
+            return Unsafe.As<float, int>(ref f);
+        }
+        if (typeof(TKey) == typeof(double))
+        {
+            var d = (double)(object)key;
+            return Unsafe.As<double, long>(ref d);
+        }
+
+        throw new NotSupportedException($"Key type {typeof(TKey).Name} is not supported for long encoding.");
+    }
+
+    /// <summary>
+    /// Converts a long-encoded key (produced by <see cref="KeyToLong"/> or <see cref="QueryResolverHelper.EncodeThreshold"/>)
+    /// back into a typed <typeparamref name="TKey"/>. JIT eliminates dead branches for each TKey instantiation.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static TKey LongToKey(long encoded)
+    {
+        if (typeof(TKey) == typeof(sbyte))
+        {
+            return (TKey)(object)(sbyte)encoded;
+        }
+        if (typeof(TKey) == typeof(byte))
+        {
+            return (TKey)(object)(byte)(ulong)encoded;
+        }
+        if (typeof(TKey) == typeof(short))
+        {
+            return (TKey)(object)(short)encoded;
+        }
+        if (typeof(TKey) == typeof(ushort))
+        {
+            return (TKey)(object)(ushort)(ulong)encoded;
+        }
+        if (typeof(TKey) == typeof(char))
+        {
+            return (TKey)(object)(char)(ulong)encoded;
+        }
+        if (typeof(TKey) == typeof(int))
+        {
+            return (TKey)(object)(int)encoded;
+        }
+        if (typeof(TKey) == typeof(uint))
+        {
+            return (TKey)(object)(uint)(ulong)encoded;
+        }
+        if (typeof(TKey) == typeof(long))
+        {
+            return (TKey)(object)encoded;
+        }
+        if (typeof(TKey) == typeof(ulong))
+        {
+            return (TKey)(object)(ulong)encoded;
+        }
+        if (typeof(TKey) == typeof(float))
+        {
+            var i = (int)encoded;
+            return (TKey)(object)Unsafe.As<int, float>(ref i);
+        }
+        if (typeof(TKey) == typeof(double))
+        {
+            return (TKey)(object)Unsafe.As<long, double>(ref encoded);
+        }
+
+        throw new NotSupportedException($"Key type {typeof(TKey).Name} is not supported for long decoding.");
+    }
+
+    /// <inheritdoc/>
+    public override long GetMinKeyAsLong() => _count == 0 ? 0L : KeyToLong(GetMinKey());
+
+    /// <inheritdoc/>
+    public override long GetMaxKeyAsLong() => _count == 0 ? 0L : KeyToLong(GetMaxKey());
 
     public int IncCount() => Interlocked.Increment(ref _count);
 
@@ -749,7 +933,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     #region Public API
     
-    public ChunkBasedSegment Segment => _segment;
+    public override ChunkBasedSegment Segment => _segment;
 
     protected BTree(ChunkBasedSegment segment, bool load, short stableId = 0, ChangeSet changeSet = null)
     {
@@ -799,9 +983,14 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
                 if (_count > 0)
                 {
+                    // Use the non-caching NodeWrapper constructor: the Root property uses _height == 1
+                    // to determine isLeaf, but _height is not yet established during load bootstrap.
+                    // The 2-param constructor leaves _flags = 0, forcing GetIsLeaf to read from chunk data.
+                    var rootNode = new NodeWrapper(_storage, _rootChunkId);
+
                     // Traverse the leftmost path to find Height and LinkList (leftmost leaf)
                     Height = 1;
-                    var node = Root;
+                    var node = rootNode;
                     while (!node.GetIsLeaf(ref accessor))
                     {
                         node = node.GetLeft(ref accessor);
@@ -810,7 +999,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
                     _linkList = node;
 
                     // Traverse the rightmost path to find ReverseLinkList (rightmost leaf)
-                    node = Root;
+                    node = rootNode;
                     while (!node.GetIsLeaf(ref accessor))
                     {
                         node = node.GetLastChild(ref accessor);
@@ -907,18 +1096,20 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         return (1 + adjusted / entriesPerChunk, (adjusted % entriesPerChunk) * BTreeDirectoryEntry.Size);
     }
 
-    public unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor) => Add(Unsafe.AsRef<TKey>(keyAddr), value, ref accessor, out _);
-    public unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor, out int bufferRootId)
+    public override unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor) => Add(Unsafe.AsRef<TKey>(keyAddr), value, ref accessor, out _);
+    public override unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor, out int bufferRootId)
         => Add(Unsafe.AsRef<TKey>(keyAddr), value, ref accessor, out bufferRootId);
-    public unsafe bool Remove(void* keyAddr, out int value, ref ChunkAccessor accessor) => Remove(Unsafe.AsRef<TKey>(keyAddr), out value, ref accessor);
-    public unsafe Result<int, BTreeLookupStatus> TryGet(void* keyAddr, ref ChunkAccessor accessor) => TryGet(Unsafe.AsRef<TKey>(keyAddr), ref accessor);
-    public unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref ChunkAccessor accessor, bool preserveEmptyBuffer = false)
+    public override unsafe bool Remove(void* keyAddr, out int value, ref ChunkAccessor accessor)
+        => Remove(Unsafe.AsRef<TKey>(keyAddr), out value, ref accessor);
+    public override unsafe Result<int, BTreeLookupStatus> TryGet(void* keyAddr, ref ChunkAccessor accessor)
+        => TryGet(Unsafe.AsRef<TKey>(keyAddr), ref accessor);
+    public override unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref ChunkAccessor accessor, bool preserveEmptyBuffer = false)
         => RemoveValue(Unsafe.AsRef<TKey>(keyAddr), elementId, value, ref accessor, preserveEmptyBuffer);
-    public unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ref ChunkAccessor accessor)
+    public override unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ref ChunkAccessor accessor)
         => TryGetMultiple(Unsafe.AsRef<TKey>(keyAddr), ref accessor);
-    public unsafe bool Move(void* oldKeyAddr, void* newKeyAddr, int value, ref ChunkAccessor accessor)
+    public override unsafe bool Move(void* oldKeyAddr, void* newKeyAddr, int value, ref ChunkAccessor accessor)
         => Move(Unsafe.AsRef<TKey>(oldKeyAddr), Unsafe.AsRef<TKey>(newKeyAddr), value, ref accessor);
-    public unsafe int MoveValue(void* oldKeyAddr, void* newKeyAddr, int elementId, int value,
+    public override unsafe int MoveValue(void* oldKeyAddr, void* newKeyAddr, int elementId, int value,
         ref ChunkAccessor accessor, out int oldHeadBufferId, out int newHeadBufferId, bool preserveEmptyBuffer = false)
         => MoveValue(Unsafe.AsRef<TKey>(oldKeyAddr), Unsafe.AsRef<TKey>(newKeyAddr), elementId, value,
             ref accessor, out oldHeadBufferId, out newHeadBufferId, preserveEmptyBuffer);
@@ -935,9 +1126,10 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
         // Per-operation accessor for thread safety under OLC (thread-local warm cache)
         ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
+        ref var sibAccessor = ref _segment.RentWarmSiblingAccessor(accessor.ChangeSet);
         try
         {
-            var args = new InsertArguments(key, value, Comparer, ref opAccessor);
+            var args = new InsertArguments(key, value, Comparer, ref opAccessor, ref sibAccessor);
             AddOrUpdateCore(ref args);
             SyncHeader(ref opAccessor);
             activity?.SetTag(TyphonSpanAttributes.IndexOperation, "insert");
@@ -946,6 +1138,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
         finally
         {
+            _segment.ReturnWarmSiblingAccessor();
             _segment.ReturnWarmAccessor();
             activity?.Dispose();
         }
@@ -961,9 +1154,10 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
         // Per-operation accessor for thread safety under OLC (thread-local warm cache)
         ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
+        ref var sibAccessor = ref _segment.RentWarmSiblingAccessor(accessor.ChangeSet);
         try
         {
-            var args = new RemoveArguments(key, Comparer, ref opAccessor);
+            var args = new RemoveArguments(key, Comparer, ref opAccessor, ref sibAccessor);
             RemoveCore(ref args);
             SyncHeader(ref opAccessor);
             value = args.Value;
@@ -972,12 +1166,13 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
         finally
         {
+            _segment.ReturnWarmSiblingAccessor();
             _segment.ReturnWarmAccessor();
             activity?.Dispose();
         }
     }
 
-    public void CheckConsistency(ref ChunkAccessor accessor)
+    public override void CheckConsistency(ref ChunkAccessor accessor)
     {
         // Recursive check from Root to leaf
         if (IsEmpty())
@@ -1157,6 +1352,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
         // Per-operation accessor for thread safety under OLC (thread-local warm cache)
         ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
+        ref var sibAccessor = ref _segment.RentWarmSiblingAccessor(accessor.ChangeSet);
         try
         {
             // FindLeaf traversal is safe under OLC: internal nodes are stable.
@@ -1167,6 +1363,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             }
 
             // WriteLock leaf for consistent index and to prevent concurrent OLC modification
+            leaf.PreDirtyForWrite(ref opAccessor);
             SpinWriteLock(leaf.GetLatch(ref opAccessor));
 
             // Re-find under lock (index might have shifted due to concurrent OLC fast path remove)
@@ -1178,7 +1375,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             }
 
             var bufferId = leaf.GetItem(index, ref opAccessor).Value;
-            var res = _storage.RemoveFromBuffer(bufferId, elementId, value, ref opAccessor);
+            var res = _storage.RemoveFromBuffer(bufferId, elementId, value, ref sibAccessor);
 
             // WriteUnlock leaf — buffer manipulation is done, version bumped for OLC readers
             leaf.GetLatch(ref opAccessor).WriteUnlock();
@@ -1193,12 +1390,12 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
             // for temporal queries.
             if (res == 0 && !preserveEmptyBuffer)
             {
-                var args = new RemoveArguments(key, Comparer, ref opAccessor);
+                var args = new RemoveArguments(key, Comparer, ref opAccessor, ref sibAccessor);
                 RemoveCorePessimistic(ref args);
 
                 if (args.Removed)
                 {
-                    _storage.DeleteBuffer(args.Value, ref opAccessor);
+                    _storage.DeleteBuffer(args.Value, ref sibAccessor);
                 }
 
                 SyncHeader(ref opAccessor);
@@ -1206,6 +1403,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         }
         finally
         {
+            _segment.ReturnWarmSiblingAccessor();
             _segment.ReturnWarmAccessor();
             activity?.Dispose();
         }
@@ -1300,7 +1498,7 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
 
     protected internal NodeWrapper AllocNode(NodeStates states, ref ChunkAccessor accessor)
     {
-        var node = new NodeWrapper(_storage, _segment.AllocateChunk(false), (states & NodeStates.IsLeaf) != 0);
+        var node = new NodeWrapper(_storage, _segment.AllocateChunk(false, accessor.ChangeSet), (states & NodeStates.IsLeaf) != 0);
         _storage.InitializeNode(node, states, ref accessor);
         return node;
     }
@@ -1377,6 +1575,13 @@ public abstract partial class BTree<TKey> : IBTree where TKey : unmanaged
         {
             _deferredLock.Exit(useMemoryBarrier: false);
         }
+    }
+
+    /// <summary>Force-flush all pending deferred nodes, bypassing the batching counter. Test-only.</summary>
+    internal void FlushDeferredNodes()
+    {
+        _deferredReclaimSkip = 0;
+        DeferredReclaim();
     }
 
     private NodeWrapper FindLeaf(TKey key, out int index, ref ChunkAccessor accessor)

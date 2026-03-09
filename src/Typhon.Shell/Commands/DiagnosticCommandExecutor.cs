@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -44,6 +45,9 @@ internal sealed class DiagnosticCommandExecutor
             "mvcc-stats"       => ExecuteMvccStats(tokens, 1),
             "memory"           => ExecuteMemory(),
             "resources"        => ExecuteResources(tokens, 1),
+            "stats-show"       => ExecuteStatsShow(tokens, 1),
+            "stats-rebuild"    => ExecuteStatsRebuild(tokens, 1),
+            "db-stats"         => ExecuteDbStats(),
             _                  => null
         };
     }
@@ -91,6 +95,23 @@ internal sealed class DiagnosticCommandExecutor
 
         sb.AppendLine($"  [grey]Reads from disk:[/] [white]{metrics.ReadFromDiskCount:N0}[/]");
         sb.AppendLine($"  [grey]Writes to disk:[/]  [white]{metrics.PageWrittenToDiskCount:N0}[/]  [grey]({metrics.WrittenOperationCount:N0} ops)[/]");
+
+        if (extra.BackpressureWaitCount > 0 || extra.EpochProtectedPageCount > 0 || extra.SlotRefPageCount > 0)
+        {
+            sb.AppendLine("  [grey]──────────────────────────────────────[/]");
+            if (extra.EpochProtectedPageCount > 0)
+            {
+                sb.AppendLine($"  [grey]Epoch-protected:[/] [white]{extra.EpochProtectedPageCount}[/]  [grey]({Pct(extra.EpochProtectedPageCount, totalPages)})[/]");
+            }
+            if (extra.SlotRefPageCount > 0)
+            {
+                sb.AppendLine($"  [grey]Slot-referenced:[/] [white]{extra.SlotRefPageCount}[/]  [grey]({Pct(extra.SlotRefPageCount, totalPages)})[/]");
+            }
+            if (extra.BackpressureWaitCount > 0)
+            {
+                sb.AppendLine($"  [grey]Backpressure:[/]    [yellow]{extra.BackpressureWaitCount:N0}[/] [grey]waits[/]");
+            }
+        }
 
         return CommandResult.Markup(sb.ToString().TrimEnd());
     }
@@ -286,6 +307,96 @@ internal sealed class DiagnosticCommandExecutor
 
             return raw ? CommandResult.Ok(sb.ToString().TrimEnd()) : CommandResult.Markup(sb.ToString().TrimEnd());
         }
+    }
+
+    // ── Database Volumetry ──────────────────────────────────────
+
+    private CommandResult ExecuteDbStats()
+    {
+        if (!RequireDatabase(out var error))
+        {
+            return error;
+        }
+
+        var sb = new StringBuilder();
+        var mmf = _session.Engine.MMF;
+
+        // ── File Pages ──
+        var capPages = mmf.OccupancyCapacityPages;
+        var capBytes = (long)capPages * PagedMMF.PageSize;
+
+        sb.AppendLine("  [white]File Pages[/]");
+        sb.AppendLine("  [grey]──────────────────────────────────────────────────────────────────────────[/]");
+        sb.AppendLine($"  [grey]Capacity:[/]        [white]{capPages:N0}[/] pages  [grey]({FormatBytes(capBytes)})[/]");
+        sb.AppendLine($"  [grey]Page size:[/]       [white]{PagedMMF.PageSize:N0} B[/]");
+        sb.AppendLine();
+
+        // ── Per-component segment breakdown ──
+        var tables = GetComponentTables();
+        if (tables.Count == 0)
+        {
+            sb.AppendLine("  [yellow]No component tables registered.[/]");
+            return CommandResult.Markup(sb.ToString().TrimEnd());
+        }
+
+        sb.AppendLine("  [white]Segments[/]");
+        sb.AppendLine("  [grey]Segment                    ChunkSz   Used     Cap       Fill      Pages  Data Size[/]");
+        sb.AppendLine("  [grey]─────────────────────────   ───────   ──────   ───────   ───────   ─────  ─────────[/]");
+
+        long totalChunksUsed = 0;
+        long totalChunksCap = 0;
+        long totalDataBytes = 0;
+        int totalPages = 0;
+
+        foreach (var (name, table) in tables)
+        {
+            AppendDbStatsSegmentRow(sb, $"{name}.Data", table.ComponentSegment, ref totalChunksUsed, ref totalChunksCap, ref totalDataBytes, ref totalPages);
+            AppendDbStatsSegmentRow(sb, $"{name}.RevTable", table.CompRevTableSegment, ref totalChunksUsed, ref totalChunksCap, ref totalDataBytes, ref totalPages);
+
+            if (table.DefaultIndexSegment != null)
+            {
+                AppendDbStatsSegmentRow(sb, $"{name}.PK_Index", table.DefaultIndexSegment, ref totalChunksUsed, ref totalChunksCap, ref totalDataBytes, ref totalPages);
+            }
+
+            if (table.String64IndexSegment != null)
+            {
+                AppendDbStatsSegmentRow(sb, $"{name}.Str64_Index", table.String64IndexSegment, ref totalChunksUsed, ref totalChunksCap, ref totalDataBytes, ref totalPages);
+            }
+
+            if (table.TailIndexSegment != null)
+            {
+                AppendDbStatsSegmentRow(sb, $"{name}.Tail_Index", table.TailIndexSegment, ref totalChunksUsed, ref totalChunksCap, ref totalDataBytes, ref totalPages);
+            }
+        }
+
+        sb.AppendLine("  [grey]─────────────────────────   ───────   ──────   ───────   ───────   ─────  ─────────[/]");
+        var totalFill = totalChunksCap > 0 ? (double)totalChunksUsed / totalChunksCap : 0.0;
+        sb.AppendLine($"  {"[white]Total[/]",-35} {"",9}   {totalChunksUsed,6:N0}   {totalChunksCap,7:N0}   {totalFill,7:P1}   {totalPages,5:N0}  [white]{FormatBytes(totalDataBytes)}[/]");
+
+        return CommandResult.Markup(sb.ToString().TrimEnd());
+    }
+
+    private static void AppendDbStatsSegmentRow(StringBuilder sb, string name, ChunkBasedSegment seg,
+        ref long totalChunksUsed, ref long totalChunksCap, ref long totalDataBytes, ref int totalPages)
+    {
+        if (seg == null)
+        {
+            return;
+        }
+
+        var used = seg.AllocatedChunkCount;
+        var cap = seg.ChunkCapacity;
+        var fill = cap > 0 ? (double)used / cap : 0.0;
+        var pages = seg.Length;
+        var dataBytes = (long)used * seg.Stride;
+
+        totalChunksUsed += used;
+        totalChunksCap += cap;
+        totalDataBytes += dataBytes;
+        totalPages += pages;
+
+        var chunkSz = seg.Stride < 1024 ? $"{seg.Stride} B" : $"{seg.Stride / 1024.0:F1} KB";
+        sb.AppendLine($"  {Markup.Escape(name),-27} {chunkSz,7}   {used,6:N0}   {cap,7:N0}   {fill,7:P1}   {pages,5:N0}  {FormatBytes(dataBytes)}");
     }
 
     // ── Segment Diagnostics ───────────────────────────────────
@@ -605,7 +716,7 @@ internal sealed class DiagnosticCommandExecutor
                 sb.AppendLine($"  [white]Entity {entityId} — {Markup.Escape(componentName)} revision chain[/]");
                 sb.AppendLine("  [grey]──────────────────────────────────────[/]");
                 sb.AppendLine($"  [grey]Chain:[/]           [white]{revPtr->ChainLength} chunk(s), {revPtr->ItemCount} items[/]");
-                sb.AppendLine($"  [grey]First revision:[/]  [white]{revPtr->FirstItemRevision}[/] [grey](index {revPtr->FirstItemIndex})[/]");
+                sb.AppendLine($"  [grey]Entity PK:[/]  [white]{revPtr->EntityPK}[/]  [grey]CommitSeq:[/] [white]{revPtr->CommitSequence}[/] [grey](index {revPtr->FirstItemIndex})[/]");
                 sb.AppendLine($"  [grey]Next chunk:[/]      [white]{(revPtr->NextChunkId >= 0 ? revPtr->NextChunkId.ToString() : "(none)")}[/]");
 
                 return CommandResult.Markup(sb.ToString().TrimEnd());
@@ -915,7 +1026,7 @@ internal sealed class DiagnosticCommandExecutor
         };
     }
 
-    private (IBTree Tree, string Error) ResolveIndex(string name)
+    private (BTreeBase Tree, string Error) ResolveIndex(string name)
     {
         // Format: ComponentName.FieldName (e.g., ARPG.Position.PK or ARPG.Position.PlayerId)
         var dotPos = name.LastIndexOf('.');
@@ -961,6 +1072,395 @@ internal sealed class DiagnosticCommandExecutor
         }
 
         return (null, $"Error: Index '{fieldName}' not found on component '{componentName}'. Use 'describe {componentName}' to see indexed fields.");
+    }
+
+    // ── Statistics & Histograms ─────────────────────────────
+
+    private CommandResult ExecuteStatsShow(List<Token> tokens, int pos)
+    {
+        if (!RequireDatabase(out var error))
+        {
+            return error;
+        }
+
+        if (pos >= tokens.Count || tokens[pos].Kind == TokenKind.End)
+        {
+            return CommandResult.Error("Syntax error: stats-show <Component.Field> | <Component> | --all");
+        }
+
+        // --all: all components
+        if (tokens[pos].Kind == TokenKind.DoubleDash)
+        {
+            pos++;
+            if (pos >= tokens.Count || !tokens[pos].Value.Equals("all", StringComparison.OrdinalIgnoreCase))
+            {
+                return CommandResult.Error("Syntax error: stats-show --all");
+            }
+
+            var tables = GetComponentTables();
+            if (tables.Count == 0)
+            {
+                return CommandResult.Ok("  No component tables found.");
+            }
+
+            var sb = new StringBuilder();
+            foreach (var (name, table) in tables)
+            {
+                AppendComponentStats(sb, name, table);
+            }
+
+            return CommandResult.Markup(sb.ToString().TrimEnd());
+        }
+
+        var target = tokens[pos].Value;
+
+        // Try as a component name first (handles dotted names like ARPG.Position)
+        if (_session.ComponentTypes.TryGetValue(target, out var componentType))
+        {
+            var compTable = _session.Engine.GetComponentTable(componentType);
+            if (compTable == null)
+            {
+                return CommandResult.Error($"Error: No component table for '{target}'.");
+            }
+
+            var sb = new StringBuilder();
+            AppendComponentStats(sb, target, compTable);
+            return CommandResult.Markup(sb.ToString().TrimEnd());
+        }
+
+        // Not a known component — try as Component.Field
+        if (target.Contains('.'))
+        {
+            var resolved = ResolveIndexStats(target);
+            if (resolved.Error != null)
+            {
+                return CommandResult.Error(resolved.Error);
+            }
+
+            var sb = new StringBuilder();
+            AppendSingleIndexStats(sb, target, resolved.Stats, resolved.Index);
+            return CommandResult.Markup(sb.ToString().TrimEnd());
+        }
+
+        return CommandResult.Error($"Error: Component '{target}' not found.");
+    }
+
+    private CommandResult ExecuteStatsRebuild(List<Token> tokens, int pos)
+    {
+        if (!RequireDatabase(out var error))
+        {
+            return error;
+        }
+
+        if (pos >= tokens.Count || tokens[pos].Kind == TokenKind.End)
+        {
+            return CommandResult.Error("Syntax error: stats-rebuild <Component.Field> | <Component> | --all");
+        }
+
+        // --all: all components
+        if (tokens[pos].Kind == TokenKind.DoubleDash)
+        {
+            pos++;
+            if (pos >= tokens.Count || !tokens[pos].Value.Equals("all", StringComparison.OrdinalIgnoreCase))
+            {
+                return CommandResult.Error("Syntax error: stats-rebuild --all");
+            }
+
+            var tables = GetComponentTables();
+            if (tables.Count == 0)
+            {
+                return CommandResult.Ok("  No component tables found.");
+            }
+
+            var sb = new StringBuilder();
+            var totalSw = Stopwatch.StartNew();
+            var totalRebuilt = 0;
+            foreach (var (name, table) in tables)
+            {
+                totalRebuilt += RebuildComponentHistograms(sb, name, table);
+            }
+
+            totalSw.Stop();
+            sb.AppendLine();
+            sb.AppendLine($"  [white]Rebuilt {totalRebuilt} histogram(s) in {FormatElapsed(totalSw.Elapsed)}[/]");
+            return CommandResult.Markup(sb.ToString().TrimEnd());
+        }
+
+        var target = tokens[pos].Value;
+
+        // Try as a component name first (handles dotted names like ARPG.Position)
+        if (_session.ComponentTypes.TryGetValue(target, out var componentType))
+        {
+            var compTable = _session.Engine.GetComponentTable(componentType);
+            if (compTable == null)
+            {
+                return CommandResult.Error($"Error: No component table for '{target}'.");
+            }
+
+            var sb = new StringBuilder();
+            var count = RebuildComponentHistograms(sb, target, compTable);
+            sb.AppendLine();
+            sb.AppendLine($"  [white]Rebuilt {count} histogram(s)[/]");
+            return CommandResult.Markup(sb.ToString().TrimEnd());
+        }
+
+        // Not a known component — try as Component.Field
+        if (target.Contains('.'))
+        {
+            var resolved = ResolveIndexStats(target);
+            if (resolved.Error != null)
+            {
+                return CommandResult.Error(resolved.Error);
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"  [white]Rebuilding histogram: {Markup.Escape(target)}[/]");
+            sb.AppendLine("  [grey]──────────────────────────────────────[/]");
+
+            var sw = Stopwatch.StartNew();
+            resolved.Stats.RebuildHistogram();
+            sw.Stop();
+
+            var multiStr = resolved.Index.AllowMultiple ? " [yellow]AllowMultiple[/]" : "";
+            sb.AppendLine($"  [grey]Entries:[/]      [white]{resolved.Stats.EntryCount:N0}[/]{multiStr}");
+
+            if (resolved.Stats.Histogram != null)
+            {
+                AppendHistogramSummary(sb, resolved.Stats.Histogram);
+                AppendHistogramChart(sb, resolved.Stats.Histogram);
+            }
+            else
+            {
+                sb.AppendLine("  [grey]Histogram:[/]    [dim](empty index — no histogram)[/]");
+            }
+
+            sb.AppendLine($"  [grey]Rebuilt in:[/]   [green]{FormatElapsed(sw.Elapsed)}[/]");
+            return CommandResult.Markup(sb.ToString().TrimEnd());
+        }
+
+        return CommandResult.Error($"Error: Component '{target}' not found.");
+    }
+
+    private void AppendComponentStats(StringBuilder sb, string componentName, ComponentTable table)
+    {
+        sb.AppendLine($"  [white]Index Statistics — {Markup.Escape(componentName)}[/]");
+        sb.AppendLine("  [grey]──────────────────────────────────────[/]");
+
+        if (table.IndexedFieldInfos == null || table.IndexedFieldInfos.Length == 0)
+        {
+            sb.AppendLine("  [dim](no indexed fields)[/]");
+            sb.AppendLine();
+            return;
+        }
+
+        for (var i = 0; i < table.IndexedFieldInfos.Length; i++)
+        {
+            var info = table.IndexedFieldInfos[i];
+            var stats = table.IndexStats[i];
+            var fieldName = ResolveFieldName(table, info.OffsetToField);
+            var qualifiedName = $"{componentName}.{fieldName}";
+            AppendSingleIndexStats(sb, qualifiedName, stats, info.Index);
+        }
+
+        sb.AppendLine();
+    }
+
+    private static void AppendSingleIndexStats(StringBuilder sb, string qualifiedName, IndexStatistics stats, BTreeBase index)
+    {
+        var multiStr = index.AllowMultiple ? " [yellow]AllowMultiple[/]" : " [dim]Unique[/]";
+        sb.AppendLine($"  [cyan]{Markup.Escape(qualifiedName)}[/]{multiStr}");
+        sb.AppendLine($"    [grey]Entries:[/]    [white]{stats.EntryCount:N0}[/]");
+
+        if (stats.EntryCount > 0)
+        {
+            sb.AppendLine($"    [grey]Min:[/]        [white]{stats.MinValue:N0}[/]");
+            sb.AppendLine($"    [grey]Max:[/]        [white]{stats.MaxValue:N0}[/]");
+        }
+
+        if (stats.Histogram != null)
+        {
+            AppendHistogramSummary(sb, stats.Histogram, indent: 4);
+            AppendHistogramChart(sb, stats.Histogram, indent: 4);
+        }
+        else
+        {
+            sb.AppendLine("    [grey]Histogram:[/]  [dim](not built — use stats-rebuild)[/]");
+        }
+    }
+
+    private static void AppendHistogramSummary(StringBuilder sb, Histogram histogram, int indent = 2)
+    {
+        var pad = new string(' ', indent);
+        sb.AppendLine($"{pad}[grey]Histogram:[/]  [white]{histogram.TotalCount:N0} entities[/], range [[{histogram.MinValue:N0}..{histogram.MaxValue:N0}]], bucket width {histogram.BucketWidth:N0}");
+
+        // Show non-empty bucket count
+        var nonEmpty = 0;
+        for (var i = 0; i < Histogram.BucketCount; i++)
+        {
+            if (histogram.BucketCounts[i] > 0)
+            {
+                nonEmpty++;
+            }
+        }
+
+        sb.AppendLine($"{pad}[grey]Buckets:[/]    [white]{nonEmpty}[/] / {Histogram.BucketCount} non-empty");
+    }
+
+    /// <summary>
+    /// Renders a compact sparkline-style histogram using Unicode block characters.
+    /// Each of the 100 buckets maps to one character: ▁▂▃▄▅▆▇█ (scaled relative to max bucket count).
+    /// Empty buckets render as a space. The sparkline is split into two rows of 50 characters for readability.
+    /// </summary>
+    private static void AppendHistogramChart(StringBuilder sb, Histogram histogram, int indent = 2)
+    {
+        var pad = new string(' ', indent);
+        var buckets = histogram.BucketCounts;
+        var max = 0;
+        for (var i = 0; i < Histogram.BucketCount; i++)
+        {
+            if (buckets[i] > max)
+            {
+                max = buckets[i];
+            }
+        }
+
+        if (max == 0)
+        {
+            return;
+        }
+
+        ReadOnlySpan<char> blocks = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+        // Build the sparkline characters
+        var chars = new char[Histogram.BucketCount];
+        for (var i = 0; i < Histogram.BucketCount; i++)
+        {
+            if (buckets[i] == 0)
+            {
+                chars[i] = ' ';
+            }
+            else
+            {
+                // Scale to 1..8 (never 0 for non-empty buckets)
+                var level = (int)((long)buckets[i] * 7 / max);
+                chars[i] = blocks[level];
+            }
+        }
+
+        // Render two rows of 50 characters each
+        var row1 = new string(chars, 0, 50);
+        var row2 = new string(chars, 50, 50);
+        sb.AppendLine($"{pad}[grey]Distribution:[/]");
+        sb.AppendLine($"{pad}  [green]{Markup.Escape(row1)}[/] [dim]0-49[/]");
+        sb.AppendLine($"{pad}  [green]{Markup.Escape(row2)}[/] [dim]50-99[/]");
+    }
+
+    private int RebuildComponentHistograms(StringBuilder sb, string componentName, ComponentTable table)
+    {
+        sb.AppendLine($"  [white]{Markup.Escape(componentName)}[/]");
+
+        if (table.IndexedFieldInfos == null || table.IndexedFieldInfos.Length == 0)
+        {
+            sb.AppendLine("    [dim](no indexed fields)[/]");
+            return 0;
+        }
+
+        var count = 0;
+        for (var i = 0; i < table.IndexedFieldInfos.Length; i++)
+        {
+            var info = table.IndexedFieldInfos[i];
+            var stats = table.IndexStats[i];
+            var fieldName = ResolveFieldName(table, info.OffsetToField);
+
+            var sw = Stopwatch.StartNew();
+            stats.RebuildHistogram();
+            sw.Stop();
+
+            var multiStr = info.Index.AllowMultiple ? " [yellow]multi[/]" : "";
+            if (stats.Histogram != null)
+            {
+                sb.AppendLine($"    [cyan]{Markup.Escape(fieldName)}[/]{multiStr}  [white]{stats.Histogram.TotalCount:N0} entities[/], range [[{stats.Histogram.MinValue:N0}..{stats.Histogram.MaxValue:N0}]]  [green]{FormatElapsed(sw.Elapsed)}[/]");
+            }
+            else
+            {
+                sb.AppendLine($"    [cyan]{Markup.Escape(fieldName)}[/]{multiStr}  [dim](empty)[/]  [green]{FormatElapsed(sw.Elapsed)}[/]");
+            }
+
+            count++;
+        }
+
+        return count;
+    }
+
+    private (IndexStatistics Stats, BTreeBase Index, string Error) ResolveIndexStats(string name)
+    {
+        var dotPos = name.LastIndexOf('.');
+        if (dotPos < 0)
+        {
+            return (null, null, $"Error: Index name must be Component.Field (e.g., CompA.Gold). Got '{name}'.");
+        }
+
+        var componentName = name[..dotPos];
+        var fieldName = name[(dotPos + 1)..];
+
+        if (!_session.ComponentTypes.TryGetValue(componentName, out var componentType))
+        {
+            return (null, null, $"Error: Component '{componentName}' not found.");
+        }
+
+        var table = _session.Engine.GetComponentTable(componentType);
+        if (table == null)
+        {
+            return (null, null, $"Error: No component table for '{componentName}'.");
+        }
+
+        if (table.IndexedFieldInfos == null || table.Definition.FieldsByName == null)
+        {
+            return (null, null, $"Error: Component '{componentName}' has no indexed fields.");
+        }
+
+        if (!table.Definition.FieldsByName.TryGetValue(fieldName, out var field))
+        {
+            return (null, null, $"Error: Field '{fieldName}' not found on component '{componentName}'.");
+        }
+
+        for (var i = 0; i < table.IndexedFieldInfos.Length; i++)
+        {
+            if (table.IndexedFieldInfos[i].OffsetToField == field.OffsetInComponentStorage)
+            {
+                return (table.IndexStats[i], table.IndexedFieldInfos[i].Index, null);
+            }
+        }
+
+        return (null, null, $"Error: Field '{fieldName}' on component '{componentName}' is not indexed.");
+    }
+
+    private static string ResolveFieldName(ComponentTable table, int offsetToField)
+    {
+        if (table.Definition.FieldsByName != null)
+        {
+            foreach (var kvp in table.Definition.FieldsByName)
+            {
+                if (kvp.Value.OffsetInComponentStorage == offsetToField)
+                {
+                    return kvp.Key;
+                }
+            }
+        }
+
+        return $"@offset{offsetToField}";
+    }
+
+    private static string FormatElapsed(TimeSpan elapsed)
+    {
+        if (elapsed.TotalMilliseconds < 1)
+        {
+            return $"{elapsed.TotalMicroseconds:F0}µs";
+        }
+
+        return elapsed.TotalMilliseconds < 1000
+            ? $"{elapsed.TotalMilliseconds:F1}ms"
+            : $"{elapsed.TotalSeconds:F2}s";
     }
 
     private static string FormatBytes(long bytes)

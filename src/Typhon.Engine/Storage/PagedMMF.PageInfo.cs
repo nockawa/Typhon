@@ -34,6 +34,37 @@ public partial class PagedMMF
         /// </summary>
         public bool CrcVerified;
 
+        /// <summary>
+        /// Number of <see cref="ChunkAccessor"/> instances that have marked this page dirty in their local
+        /// <c>_dirtyFlags</c> bitmask but have not yet flushed via <see cref="ChunkAccessor.CommitChanges"/>.
+        /// <para>
+        /// While &gt; 0, the page may contain partially-written B+Tree data (e.g., a node with odd OLC version).
+        /// <see cref="WritePagesForCheckpoint"/> skips such pages to avoid writing inconsistent snapshots to disk.
+        /// The page stays dirty and will be captured in the next checkpoint cycle after the writers commit.
+        /// </para>
+        /// <para>
+        /// Accessed via <see cref="Interlocked"/> from multiple threads (writer threads increment/decrement,
+        /// checkpoint thread reads). Plain reads are safe on x64 TSO after Interlocked barriers on writer side.
+        /// </para>
+        /// </summary>
+        public int ActiveChunkWriters;
+
+        /// <summary>
+        /// Number of <see cref="ChunkAccessor"/> slots currently referencing this memory page.
+        /// While &gt; 0, the page memory must not be reused — callers may hold raw <c>byte*</c> or
+        /// <c>ref T</c> pointers derived from the slot's cached base address.
+        /// <para>
+        /// Unlike <see cref="ActiveChunkWriters"/> (which prevents checkpoint from writing inconsistent data),
+        /// this counter only prevents page eviction in <see cref="TryAcquire"/>. Checkpoint can safely
+        /// snapshot a page with SlotRefCount &gt; 0 as long as ACW == 0.
+        /// </para>
+        /// <para>
+        /// Incremented in <see cref="ChunkAccessor.LoadIntoSlot"/>, decremented (deferred) in
+        /// <see cref="ChunkAccessor.EvictSlot"/> and (immediate) in <see cref="ChunkAccessor.Dispose"/>.
+        /// </para>
+        /// </summary>
+        public int SlotRefCount;
+
         private int _clockSweepCounter;
         private Lazy<Task<int>> _ioReadTask;
 

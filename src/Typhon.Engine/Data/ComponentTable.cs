@@ -26,32 +26,34 @@ namespace Typhon.Engine;
 /// The chain is a circular buffer, location of the first item is given through <see cref="FirstItemIndex"/>
 /// </p>
 /// </remarks>
+[StructLayout(LayoutKind.Sequential, Pack = 4)]
 internal struct CompRevStorageHeader
 {
     /// ID of the next chunk in the chain. MUST BE THE FIRST FIELD OF THIS STRUCTURE !
     public int NextChunkId;
-    
+
     /// Access control to be thread-safe
     public AccessControlSmall Control;
-    
-    /// Revision of the first item, the revision of the following ones is computed from this revision + the position of the item in the chain
-    public int FirstItemRevision;
-    
+
     /// The whole chain is a circular buffer because we remove the oldest revisions and add the new ones in chronological order. This is the index
     /// of the first item in the chain (e.g. 18 would be 3rd chunk, 2nd entry for 8 entries per chunk)
     public short FirstItemIndex;
-    
+
     /// Number of items in the chain
     public short ItemCount;
-    
+
     /// Total length of the chain
     public short ChainLength;
 
     /// Index in the chain of the last committed revision, allows us to detect concurrency conflicts
     public short LastCommitRevisionIndex;
 
+    /// Primary key of the entity that owns this revision chain.
+    /// Enables reverse lookup from secondary index results back to entity PKs.
+    public long EntityPK;
+
     /// Monotonically increasing counter incremented on every commit to this entity.
-    /// Used for conflict detection — immune to revision index ordering and cleanup compaction.
+    /// Used for conflict detection and as the public "revision number" returned by GetComponentRevision.
     public int CommitSequence;
 
     internal void EnterControlLockForTest() => Control.EnterExclusiveAccess(ref WaitContext.Null);
@@ -81,7 +83,7 @@ internal struct CompRevStorageHeader
 ///   8      2    _packedTickLow      (full 16 bits of TSN)
 ///  10      2    _packedUowId        (bits 0-14: UowId, bit 15: IsolationFlag)
 /// </code>
-/// Root chunk: 3 elements ((64 − 20) / 12). Overflow chunks: 5 elements (64 / 12).
+/// Root chunk: 3 elements ((64 − 28) / 12). Overflow chunks: 5 elements (64 / 12).
 /// </remarks>
 [PublicAPI]
 [StructLayout(LayoutKind.Sequential, Pack = 2)]
@@ -136,7 +138,7 @@ internal struct IndexedFieldInfo
     public int Size;
 
     public int OffsetToIndexElementId;
-    public IBTree Index;
+    public BTreeBase Index;
 }
 
 [PublicAPI]
@@ -186,6 +188,8 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     /// </summary>
     internal ushort WalTypeId { get; set; }
     internal IndexedFieldInfo[] IndexedFieldInfos { get; private set; }
+    internal IndexStatistics[] IndexStats { get; private set; }
+    internal ViewRegistry ViewRegistry { get; private set; }
 
     internal Dictionary<int, VariableSizedBufferSegmentBase> ComponentCollectionVSBSByOffset { get; private set; }
 
@@ -335,6 +339,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         }
 
         BuildIndexedFieldInfo(false, changeSet);
+        ViewRegistry = new ViewRegistry(IndexedFieldInfos.Length);
         BuildComponentCollectionInfo(changeSet);
     }
 
@@ -369,6 +374,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         }
 
         BuildIndexedFieldInfo(true, changeSet, newIndexFieldIds);
+        ViewRegistry = new ViewRegistry(IndexedFieldInfos.Length);
 
         ComponentCollectionVSBSByOffset = new Dictionary<int, VariableSizedBufferSegmentBase>();
     }
@@ -401,6 +407,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         }
 
         BuildIndexedFieldInfo(true, changeSet, newIndexFieldIds);
+        ViewRegistry = new ViewRegistry(IndexedFieldInfos.Length);
 
         ComponentCollectionVSBSByOffset = new Dictionary<int, VariableSizedBufferSegmentBase>();
     }
@@ -435,6 +442,12 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         }
 
         IndexedFieldInfos = l.ToArray();
+
+        IndexStats = new IndexStatistics[IndexedFieldInfos.Length];
+        for (var i = 0; i < IndexedFieldInfos.Length; i++)
+        {
+            IndexStats[i] = new IndexStatistics(IndexedFieldInfos[i].Index);
+        }
     }
 
     /// <summary>
@@ -517,18 +530,18 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     /// Creates a B+Tree index for a field on the given segment. Used by schema evolution to pre-create indexes
     /// on existing segments before the ComponentTable is fully loaded.
     /// </summary>
-    internal static IBTree CreateIndexForFieldStatic(DBComponentDefinition.Field field, short stableId, bool load, ChunkBasedSegment segment, 
+    internal static BTreeBase CreateIndexForFieldStatic(DBComponentDefinition.Field field, short stableId, bool load, ChunkBasedSegment segment, 
         ChangeSet changeSet = null) => CreateIndexForFieldCore(field, stableId, load, segment, changeSet);
 
-    private IBTree CreateIndexForField(DBComponentDefinition.Field field, short stableId, bool load = false, ChangeSet changeSet = null)
+    private BTreeBase CreateIndexForField(DBComponentDefinition.Field field, short stableId, bool load = false, ChangeSet changeSet = null)
     {
         var s = field.Type == FieldType.String64 ? String64IndexSegment : DefaultIndexSegment;
         return CreateIndexForFieldCore(field, stableId, load, s, changeSet);
     }
 
-    private static IBTree CreateIndexForFieldCore(DBComponentDefinition.Field field, short stableId, bool load, ChunkBasedSegment s, ChangeSet changeSet = null)
+    private static BTreeBase CreateIndexForFieldCore(DBComponentDefinition.Field field, short stableId, bool load, ChunkBasedSegment s, ChangeSet changeSet = null)
     {
-        IBTree index = field.Type switch
+        BTreeBase index = field.Type switch
         {
             FieldType.Byte     => field.IndexAllowMultiple ? new ByteMultipleBTree      (s, load, stableId, changeSet) : new ByteSingleBTree    (s, load, stableId, changeSet),
             FieldType.Short    => field.IndexAllowMultiple ? new ShortMultipleBTree     (s, load, stableId, changeSet) : new ShortSingleBTree   (s, load, stableId, changeSet),

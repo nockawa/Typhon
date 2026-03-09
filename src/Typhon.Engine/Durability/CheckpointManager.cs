@@ -264,9 +264,12 @@ internal sealed class CheckpointManager : ResourceNode, IMetricSource
             var dirtyPages = _mmf.CollectDirtyMemPageIndices();
 
             // Step 3: Write dirty pages via staging buffers (without decrementing DirtyCounter)
+            // Pages with an active writer (odd ModificationCounter) are skipped to prevent
+            // deadlock with the backpressure path. writtenCount <= dirtyPages.Length.
+            int writtenCount = 0;
             if (dirtyPages.Length > 0)
             {
-                _mmf.WritePagesForCheckpoint(dirtyPages, _stagingPool);
+                _mmf.WritePagesForCheckpoint(dirtyPages, _stagingPool, out writtenCount);
             }
 
             if (_shutdown)
@@ -277,14 +280,15 @@ internal sealed class CheckpointManager : ResourceNode, IMetricSource
             // Step 4: Fsync data file
             _mmf.FlushToDisk();
 
-            // Step 5: Decrement DirtyCounter for written pages
+            // Step 5: Decrement DirtyCounter for written pages only (first writtenCount entries)
+            // Skipped pages retain their DirtyCounter and will be flushed in the next cycle.
             // Pages re-dirtied during write will have DirtyCounter > 1, so after decrement they stay > 0
-            foreach (var memPageIndex in dirtyPages)
+            for (int i = 0; i < writtenCount; i++)
             {
-                _mmf.DecrementDirty(memPageIndex);
+                _mmf.DecrementDirty(dirtyPages[i]);
             }
 
-            Interlocked.Add(ref _totalPagesWritten, dirtyPages.Length);
+            Interlocked.Add(ref _totalPagesWritten, writtenCount);
 
             // Step 6: Transition WalDurable → Committed
             var transitioned = _uowRegistry.TransitionWalDurableToCommitted();

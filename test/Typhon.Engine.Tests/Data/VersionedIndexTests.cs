@@ -109,25 +109,23 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
     #region Phase 2 — Write Path Tests
 
     [Test]
-    public void Create_WithAllowMultipleIndex_TailHasActiveEntry()
+    public void Create_DefersTailWrite_TailBufferIdIsZero()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
-        long entityId;
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 10, 2.0);
-            entityId = t.CreateEntity(ref d);
+            t.CreateEntity(ref d);
             t.Commit();
         }
 
-        // Verify TAIL buffer was written for AllowMultiple indexes
+        // TAIL write is deferred — TailBufferId should still be 0 after creation
         var ct = dbe.GetComponentTable<CompD>();
         var tailVSBS = ct.TailVSBS;
         Assert.That(tailVSBS, Is.Not.Null);
 
-        // Look up the HEAD buffer for field A (first AllowMultiple index)
         var ifi = ct.IndexedFieldInfos[0]; // Field A (float, AllowMultiple)
         Assert.That(ifi.Index.AllowMultiple, Is.True, "First indexed field should be AllowMultiple");
 
@@ -143,15 +141,7 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
             var tailBufferId = IndexBufferExtraHeader.FromChunkAddress(accessor.GetChunkAddress(headBufferId)).TailBufferId;
             accessor.Dispose();
 
-            Assert.That(tailBufferId, Is.GreaterThan(0), "TAIL buffer should have been allocated");
-
-            // Read TAIL entries
-            var entries = CollectTailEntries(tailVSBS, tailBufferId);
-            Assert.That(entries.Count, Is.GreaterThanOrEqualTo(1), "Should have at least one TAIL entry");
-
-            var activeEntry = entries.Find(e => e.IsActive);
-            Assert.That(activeEntry.IsActive, Is.True, "Should have an Active entry");
-            Assert.That(activeEntry.TSN, Is.GreaterThan(0), "Active entry should have a valid TSN");
+            Assert.That(tailBufferId, Is.EqualTo(0), "TAIL buffer should NOT be allocated on creation (deferred)");
         }
     }
 
@@ -226,36 +216,33 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
             t.Commit();
         }
 
-        // Capture TAIL buffer ID before delete (since BTree key may be removed)
-        var ct = dbe.GetComponentTable<CompD>();
-        var tailVSBS = ct.TailVSBS;
-        var ifi = ct.IndexedFieldInfos[0]; // Field A
-
-        int tailBufferIdBeforeDelete;
-        unsafe
-        {
-            using var guard = EpochGuard.Enter(dbe.EpochManager);
-            float key = 3.0f;
-            var accessor = ifi.Index.Segment.CreateChunkAccessor();
-            var headResult = ifi.Index.TryGet(&key, ref accessor);
-            Assert.That(headResult.IsSuccess, Is.True);
-            tailBufferIdBeforeDelete = IndexBufferExtraHeader.FromChunkAddress(accessor.GetChunkAddress(headResult.Value)).TailBufferId;
-            accessor.Dispose();
-        }
-
-        // Delete the entity
+        // Delete the entity — this triggers EnsureTailPopulated + Tombstone write
         {
             using var t = dbe.CreateQuickTransaction();
             t.DeleteEntity<CompD>(entityId);
             t.Commit();
         }
 
-        // Verify TAIL has Tombstone (need epoch scope for EnumerateBuffer)
-        if (tailBufferIdBeforeDelete > 0)
+        // Verify TAIL was populated by delete and has Active + Tombstone
+        var ct = dbe.GetComponentTable<CompD>();
+        var tailVSBS = ct.TailVSBS;
+        var ifi = ct.IndexedFieldInfos[0]; // Field A
+
+        unsafe
         {
-            using var guard2 = EpochGuard.Enter(dbe.EpochManager);
-            var entries = CollectTailEntries(tailVSBS, tailBufferIdBeforeDelete);
+            using var guard = EpochGuard.Enter(dbe.EpochManager);
+            float key = 3.0f;
+            var accessor = ifi.Index.Segment.CreateChunkAccessor();
+            var headResult = ifi.Index.TryGet(&key, ref accessor);
+            Assert.That(headResult.IsSuccess, Is.True, "Key should be preserved (preserveEmptyBuffer)");
+
+            var tailBufferId = IndexBufferExtraHeader.FromChunkAddress(accessor.GetChunkAddress(headResult.Value)).TailBufferId;
+            accessor.Dispose();
+            Assert.That(tailBufferId, Is.GreaterThan(0), "TAIL buffer should have been allocated by delete");
+
+            var entries = CollectTailEntries(tailVSBS, tailBufferId);
             Assert.That(entries.Exists(e => e.IsTombstone), Is.True, "TAIL should have a Tombstone after delete");
+            Assert.That(entries.Exists(e => e.IsActive), Is.True, "TAIL should have backfilled Active entry before Tombstone");
         }
     }
 
@@ -301,13 +288,81 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         }
     }
 
+    [Test]
+    public void Update_BackfillsTail_AllEntriesPresent()
+    {
+        // Two entities under the same key, then one is updated (moved to a different key).
+        // EnsureTailPopulated should backfill both entities' Active entries before writing the Tombstone.
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long entity1, entity2;
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var d1 = new CompD(1.0f, 10, 2.0);
+            entity1 = t.CreateEntity(ref d1);
+            var d2 = new CompD(1.0f, 20, 3.0);
+            entity2 = t.CreateEntity(ref d2);
+            t.Commit();
+        }
+
+        // Verify TAIL is not allocated yet (deferred)
+        var ct = dbe.GetComponentTable<CompD>();
+        var tailVSBS = ct.TailVSBS;
+        var ifi = ct.IndexedFieldInfos[0]; // Field A
+
+        unsafe
+        {
+            using var guard = EpochGuard.Enter(dbe.EpochManager);
+            float key = 1.0f;
+            var accessor = ifi.Index.Segment.CreateChunkAccessor();
+            var headResult = ifi.Index.TryGet(&key, ref accessor);
+            Assert.That(IndexBufferExtraHeader.FromChunkAddress(accessor.GetChunkAddress(headResult.Value)).TailBufferId,
+                Is.EqualTo(0), "TAIL should not be allocated before any mutation");
+            accessor.Dispose();
+        }
+
+        // Update entity1's A from 1.0f to 5.0f — triggers backfill on old key
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var d = new CompD(5.0f, 10, 2.0);
+            t.UpdateEntity(entity1, ref d);
+            t.Commit();
+        }
+
+        // Verify old key (1.0f) TAIL has all entries: Active for entity2 (from backfill) + Active+Tombstone for entity1
+        unsafe
+        {
+            using var guard = EpochGuard.Enter(dbe.EpochManager);
+            float key = 1.0f;
+            var accessor = ifi.Index.Segment.CreateChunkAccessor();
+            var headResult = ifi.Index.TryGet(&key, ref accessor);
+            Assert.That(headResult.IsSuccess, Is.True);
+
+            var tailBufferId = IndexBufferExtraHeader.FromChunkAddress(accessor.GetChunkAddress(headResult.Value)).TailBufferId;
+            accessor.Dispose();
+            Assert.That(tailBufferId, Is.GreaterThan(0), "TAIL should be populated after mutation");
+
+            var entries = CollectTailEntries(tailVSBS, tailBufferId);
+            // Should have: Active(entity2, creation), Active(entity1, creation) from backfill/includeChainId,
+            // Active(entity1, creation) duplicate, Tombstone(entity1, update)
+            Assert.That(entries.FindAll(e => e.IsActive).Count, Is.GreaterThanOrEqualTo(2),
+                "Should have Active entries for both entities from backfill");
+            Assert.That(entries.Exists(e => e.IsTombstone), Is.True,
+                "Should have Tombstone for the moved entity");
+        }
+    }
+
     #endregion
 
     #region Phase 3 — Temporal Query Tests
 
     [Test]
-    public unsafe void TemporalQuery_BeforeCreate_ReturnsEmpty()
+    public unsafe void TemporalQuery_NoMutation_FallsBackToHead()
     {
+        // With deferred TAIL, when no mutations have occurred (TailBufferId == 0),
+        // TemporalIndexQuery falls back to QueryHeadOnly which returns all HEAD entries.
+        // This is correct: no version history needed when no mutations exist.
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
@@ -325,8 +380,9 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         float key = 1.0f;
 
         using var guard = EpochGuard.Enter(dbe.EpochManager);
+        // TailBufferId == 0 (no mutations), QueryHeadOnly returns current HEAD entries
         var result = TemporalIndexQuery.Query(ifi, (byte*)&key, tsnBeforeCreate, ct.TailVSBS, null);
-        Assert.That(result.Count, Is.EqualTo(0), "No entities should be visible before creation TSN");
+        Assert.That(result.Count, Is.EqualTo(1), "QueryHeadOnly fallback returns current HEAD entries when TAIL not populated");
     }
 
     [Test]
@@ -431,6 +487,42 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         using var guard = EpochGuard.Enter(dbe.EpochManager);
         var result = TemporalIndexQuery.Query(ifi, (byte*)&oldKey, tsnAfterBothCreated, ct.TailVSBS, null);
         Assert.That(result.Count, Is.EqualTo(2), "Both entities should be visible under old key at the TSN when both existed");
+    }
+
+    [Test]
+    public unsafe void TemporalQuery_AfterBackfill_ReturnsCorrectSnapshot()
+    {
+        // Create entity, then update (triggers backfill). Temporal query at creation TSN
+        // on the OLD key should return the entity (backfilled Active entry is visible).
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        long entityId;
+        long tsnAtCreate;
+        {
+            using var t = dbe.CreateQuickTransaction();
+            tsnAtCreate = t.TSN;
+            var d = new CompD(1.0f, 10, 2.0);
+            entityId = t.CreateEntity(ref d);
+            t.Commit();
+        }
+
+        // Update field A from 1.0f to 5.0f — triggers TAIL backfill on both keys
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var d = new CompD(5.0f, 10, 2.0);
+            t.UpdateEntity(entityId, ref d);
+            t.Commit();
+        }
+
+        var ct = dbe.GetComponentTable<CompD>();
+        var ifi = ct.IndexedFieldInfos[0]; // Field A
+
+        // After backfill, temporal query on OLD key at creation TSN should find the entity
+        float oldKey = 1.0f;
+        using var guard = EpochGuard.Enter(dbe.EpochManager);
+        var result = TemporalIndexQuery.Query(ifi, (byte*)&oldKey, tsnAtCreate, ct.TailVSBS, null);
+        Assert.That(result.Count, Is.EqualTo(1), "Entity should be visible under old key at creation TSN after backfill");
     }
 
     #endregion

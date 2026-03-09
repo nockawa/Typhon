@@ -53,8 +53,12 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         int dirtyCount = 0;
         int lockedByThreadCount = 0;
         int pendingIOReadCount = 0;
+        int epochProtectedCount = 0;
+        int slotRefPageCount = 0;
         int minClockSweepCounter = int.MaxValue;
         int maxClockSweepCounter = int.MinValue;
+
+        var minActive = EpochManager?.MinActiveEpoch ?? long.MaxValue;
 
         foreach (var pi in _memPagesInfo)
         {
@@ -85,6 +89,14 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             {
                 pendingIOReadCount++;
             }
+            if (pi.AccessEpoch >= minActive)
+            {
+                epochProtectedCount++;
+            }
+            if (pi.SlotRefCount > 0)
+            {
+                slotRefPageCount++;
+            }
             if (pi.ClockSweepCounter < minClockSweepCounter)
             {
                 minClockSweepCounter = pi.ClockSweepCounter;
@@ -105,7 +117,10 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             LockedByThreadCount = lockedByThreadCount,
             PendingIOReadCount = pendingIOReadCount,
             MinClockSweepCounter = minClockSweepCounter,
-            MaxClockSweepCounter = maxClockSweepCounter
+            MaxClockSweepCounter = maxClockSweepCounter,
+            BackpressureWaitCount = _metrics.BackpressureWaitCount,
+            EpochProtectedPageCount = epochProtectedCount,
+            SlotRefPageCount = slotRefPageCount
         };
     }
 
@@ -135,6 +150,14 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     
     private SafeFileHandle _fileHandle;
     private long _fileSize;
+    private readonly IPageCacheBackpressureStrategy _backpressureStrategy;
+
+    /// <summary>
+    /// Callback invoked when page cache backpressure is detected.
+    /// Set by <see cref="DatabaseEngine"/> to trigger <see cref="CheckpointManager.ForceCheckpoint"/> so dirty pages are flushed immediately instead of
+    /// waiting for the timer-based checkpoint cycle.
+    /// </summary>
+    internal Action OnBackpressure { get; set; }
 
     /// <summary>
     /// Atomically advances <see cref="_fileSize"/> to at least <paramref name="newSize"/>.
@@ -222,6 +245,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         _memPageIndexByFilePageIndex = new ConcurrentDictionary<int, int>();
 
         _metrics = new Metrics (this, MemPagesCount);
+        _backpressureStrategy = options.BackpressureStrategyFactory();
 
         try
         {
@@ -316,6 +340,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         
             _memPagesInfo = null;
             _memPagesAddr = null;
+            _backpressureStrategy.Dispose();
 
             Logger.LogInformation("Virtual Disk Manager disposed");
         }
@@ -374,6 +399,57 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
             pi.IncrementClockSweepCounter();
             EnsurePageVerified(memPageIndex);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Like <see cref="RequestPageEpoch"/> but skips CRC verification. Used during segment growth where pages are immediately overwritten (cleared + header
+    /// initialized), making CRC verification unnecessary. In WAL mode, evicted pages may have stale CRCs with no FPI available because the growth path does
+    /// not write WAL records — skipping CRC avoids false corruption exceptions.
+    /// </summary>
+    internal bool RequestPageEpochUnchecked(int filePageIndex, long currentEpoch, out int memPageIndex)
+    {
+        while (true)
+        {
+            if (!FetchPageToMemory(filePageIndex, out memPageIndex))
+            {
+                return false;
+            }
+
+            var pi = _memPagesInfo[memPageIndex];
+
+            long existing;
+            do
+            {
+                existing = pi.AccessEpoch;
+                if (currentEpoch <= existing)
+                {
+                    break;
+                }
+            } while (Interlocked.CompareExchange(ref pi.AccessEpoch, currentEpoch, existing) != existing);
+
+            if (pi.PageState == PageState.Allocating)
+            {
+                pi.PageState = PageState.Idle;
+                Interlocked.Increment(ref _metrics.FreeMemPageCount);
+            }
+
+            if (pi.FilePageIndex != filePageIndex)
+            {
+                continue;
+            }
+
+            var ioTask = pi.IOReadTask;
+            if (ioTask != null && !ioTask.IsCompletedSuccessfully)
+            {
+                ioTask.GetAwaiter().GetResult();
+                pi.ResetIOCompletionTask();
+            }
+
+            pi.IncrementClockSweepCounter();
+            // Skip EnsurePageVerified — caller will overwrite the page content
+            pi.CrcVerified = true;
             return true;
         }
     }
@@ -524,9 +600,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
     private bool AllocateMemoryPageCore(int filePageIndex, out int memPageIndex, long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
     {
-        var minActiveEpoch = EpochManager?.MinActiveEpoch ?? long.MaxValue;
-        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
-        var waiter = new AdaptiveWaiter();
+        var bpCtx = new BackpressureContext("Storage/PagedMMF/AllocateMemoryPage", TimeoutOptions.Current.PageCacheBackpressureTimeout);
 
         LogAllocatePageEnter();
         while (true)
@@ -536,7 +610,10 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                 memPageIndex = -1;
                 return false;
             }
-            
+
+            // Refresh each iteration so committed transactions release their epoch protection
+            var minActiveEpoch = EpochManager?.MinActiveEpoch ?? long.MaxValue;
+
             bool found = false;
             PageInfo pi = null;
             memPageIndex = -1;
@@ -615,14 +692,50 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
                 if (!found)
                 {
-                    if (wc.ShouldStop)
+                    // Collect pressure diagnostics for the strategy
+                    var dirtyCount = 0;
+                    var epochCount = 0;
+                    for (var i = 0; i < MemPagesCount; i++)
                     {
-                        ThrowHelper.ThrowResourceExhausted("Storage/PagedMMF/AllocateMemoryPage", ResourceType.Memory, 
-                            MemPagesCount - _metrics.FreeMemPageCount, MemPagesCount);
+                        var p = _memPagesInfo[i];
+                        if (p.PageState == PageState.Free)
+                        {
+                            continue;
+                        }
+
+                        if (p.DirtyCounter > 0)
+                        {
+                            dirtyCount++;
+                        }
+
+                        if (p.AccessEpoch >= minActiveEpoch)
+                        {
+                            epochCount++;
+                        }
                     }
 
-                    waiter.Wait();
-                    continue;
+                    if (!found)
+                    {
+                        ++_metrics.BackpressureWaitCount;
+
+                        Logger.LogWarning(
+                            "Page cache backpressure: wait#{WaitCount} dirty={DirtyCount} epoch={EpochCount} retry={RetryCount} remaining={RemainingMs}ms",
+                            _metrics.BackpressureWaitCount, dirtyCount, epochCount, bpCtx.RetryCount, bpCtx.WaitContext.Remaining.TotalMilliseconds);
+
+                        // Demand-driven flush: wake the checkpoint manager immediately so dirty pages get written to
+                        // disk → DecrementDirty → SignalPageAvailable → waiter wakes.
+                        // Idempotent — safe to call on every retry iteration.
+                        OnBackpressure?.Invoke();
+
+                        if (!_backpressureStrategy.OnPressure(ref bpCtx, dirtyCount, epochCount))
+                        {
+                            ThrowHelper.ThrowPageCacheBackpressureTimeout(
+                                dirtyCount, epochCount,
+                                TimeoutOptions.Current.PageCacheBackpressureTimeout - bpCtx.WaitContext.Remaining);
+                        }
+
+                        continue;
+                    }
                 }
             }
 
@@ -687,10 +800,16 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             return false;
         }
 
-        // Don't evict pages that are epoch-protected or still dirty
+        // Don't evict pages that are slot-referenced, actively written, still dirty, or epoch-protected.
+        // Two-layer protection: SlotRefCount prevents eviction of pages with live accessor slots (short-term),
+        // EBR epoch protection prevents eviction of recently-accessed pages (long-term, bounded by re-stamp).
         if (state == PageState.Idle)
         {
-            if (info.AccessEpoch >= minActiveEpoch || info.DirtyCounter > 0)
+            if (info.SlotRefCount > 0 || info.ActiveChunkWriters > 0 || info.DirtyCounter > 0)
+            {
+                return false;
+            }
+            if (info.AccessEpoch >= minActiveEpoch)
             {
                 return false;
             }
@@ -714,8 +833,9 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             // We need to check the state again, because another thread might have changed between the first and second pass
             if (info.PageState is PageState.Free or PageState.Idle)
             {
-                // Re-check epoch + dirty under lock (may have changed since first pass)
-                if (info.PageState == PageState.Idle && (info.AccessEpoch >= minActiveEpoch || info.DirtyCounter > 0))
+                // Re-check all protection layers under lock (may have changed since first pass)
+                if (info.PageState == PageState.Idle &&
+                    (info.SlotRefCount > 0 || info.ActiveChunkWriters > 0 || info.DirtyCounter > 0 || info.AccessEpoch >= minActiveEpoch))
                 {
                     return false;
                 }
@@ -728,9 +848,11 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                 info.ResetClockSweepCounter();
                 info.FilePageIndex = -1;
                 info.AccessEpoch = 0;  // Clear epoch tag on reallocation
+                _fpiBitmap?.Clear(info.MemPageIndex);  // Clear stale FPI bit so the new occupant gets a fresh capture
                 info.PageState = PageState.Allocating;
                 Interlocked.Decrement(ref _metrics.FreeMemPageCount);
                 Debug.Assert(info.ExclusiveLatchDepth == 0);
+                Debug.Assert(info.SlotRefCount == 0, $"Page evicted with SlotRefCount={info.SlotRefCount}");
                 return true;
             }
             else
@@ -1084,11 +1206,9 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         var pi = _memPagesInfo[memPageIndex];
         Debug.Assert(pi.PageState is PageState.Exclusive or PageState.Idle, "We can't increment the dirty counter for a page that is not Exclusive or Idle.");
 
-        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
-        if (!pi.StateSyncRoot.EnterExclusiveAccess(ref wc))
-        {
-            ThrowHelper.ThrowLockTimeout("PageCache/IncrementDirty", TimeoutOptions.Current.PageCacheLockTimeout);
-        }
+        // Use infinite wait (no Stopwatch.GetTimestamp overhead) — consistent with DecrementDirty.
+        // Hold time is nanoseconds (just ++DirtyCounter), so timeout is unnecessary.
+        pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
         ++pi.DirtyCounter;
         pi.StateSyncRoot.ExitExclusiveAccess();
     }
@@ -1098,6 +1218,77 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         var pi = _memPagesInfo[memPageIndex];
         pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
         --pi.DirtyCounter;
+        var nowClean = pi.DirtyCounter == 0;
+        pi.StateSyncRoot.ExitExclusiveAccess();
+
+        if (nowClean)
+        {
+            _backpressureStrategy.SignalPageAvailable();
+        }
+    }
+
+    /// <summary>
+    /// Atomically increments the <see cref="PageInfo.ActiveChunkWriters"/> counter for a page.
+    /// Spins while ACW is negative (sentinel = checkpoint snapshot in progress on this page).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void IncrementActiveChunkWriters(int memPageIndex)
+    {
+        ref var acw = ref _memPagesInfo[memPageIndex].ActiveChunkWriters;
+        SpinWait sw = default;
+        while (true)
+        {
+            var current = acw;
+            if (current < 0)
+            {
+                // Checkpoint is copying this page (~250ns). Spin until done.
+                sw.SpinOnce();
+                continue;
+            }
+
+            if (Interlocked.CompareExchange(ref acw, current + 1, current) == current)
+            {
+                return;
+            }
+            sw.SpinOnce();
+        }
+    }
+
+    /// <summary>
+    /// Atomically decrements the <see cref="PageInfo.ActiveChunkWriters"/> counter for a page.
+    /// Called by <see cref="ChunkAccessor.CommitChanges"/> and <see cref="ChunkAccessor.EvictSlot"/>
+    /// when a dirty slot is flushed to the <see cref="ChangeSet"/>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void DecrementActiveChunkWriters(int memPageIndex) => Interlocked.Decrement(ref _memPagesInfo[memPageIndex].ActiveChunkWriters);
+
+    /// <summary>
+    /// Raises <see cref="PageInfo.DirtyCounter"/> to <paramref name="minValue"/> if it is currently below that threshold.
+    /// Used by <see cref="ChunkAccessor.MarkSlotDirty"/> when re-dirtying a page already tracked by the ChangeSet:
+    /// <see cref="ChangeSet.AddByMemPageIndex"/> is idempotent (HashSet dedup), so subsequent accessor rentals
+    /// within the same UoW don't increment DC. If checkpoint has drained DC to 0 in the meantime, this ensures
+    /// the page stays dirty (DC &gt;= 1) to prevent premature eviction by the clock-sweep.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void EnsureDirtyAtLeast(int memPageIndex, int minValue)
+    {
+        var pi = _memPagesInfo[memPageIndex];
+        pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
+        if (pi.DirtyCounter < minValue)
+        {
+            pi.DirtyCounter = minValue;
+        }
+        pi.StateSyncRoot.ExitExclusiveAccess();
+    }
+
+    internal void DecrementDirtyToMin(int memPageIndex, int minValue)
+    {
+        var pi = _memPagesInfo[memPageIndex];
+        pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
+        if (pi.DirtyCounter > minValue)
+        {
+            pi.DirtyCounter = minValue;
+        }
         pi.StateSyncRoot.ExitExclusiveAccess();
     }
 
@@ -1135,19 +1326,45 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     /// Spins while the page's <see cref="PageBaseHeader.ModificationCounter"/> is odd (writer in progress),
     /// then memcpys the page and validates the counter hasn't changed. Retries on torn reads.
     /// </summary>
-    private unsafe void CopyPageWithSeqlock(byte* pageAddr, byte* destAddr)
+    /// <returns>True if a consistent snapshot was obtained; false if the page was skipped because a writer
+    /// held the modification counter odd for longer than the checkpoint skip threshold (100ms).
+    /// Skipping is safe: the page remains dirty and will be captured in the next checkpoint cycle.</returns>
+    private unsafe bool CopyPageWithSeqlock(byte* pageAddr, byte* destAddr)
     {
         var sw = new SpinWait();
+        long oddSpinStart = 0;
         while (true)
         {
             // Read the modification counter (must be even = quiescent)
             var counter = ((PageBaseHeader*)pageAddr)->ModificationCounter;
             if ((counter & 1) != 0)
             {
-                // Writer in progress — spin and retry
+                // Writer in progress — track how long we've been waiting
+                if (oddSpinStart == 0)
+                {
+                    oddSpinStart = Stopwatch.GetTimestamp();
+                }
+                else
+                {
+                    var elapsedMs = (Stopwatch.GetTimestamp() - oddSpinStart) * 1000.0 / Stopwatch.Frequency;
+                    if (elapsedMs > 100)
+                    {
+                        // Writer has held the page for >100ms — likely blocked (e.g., waiting for
+                        // backpressure to free cache pages). Skip this page to avoid deadlock:
+                        // the writer may be waiting for this checkpoint to complete DecrementDirty.
+                        Logger.LogWarning(
+                            "CopyPageWithSeqlock: skipping page after {ElapsedMs:F0}ms — writer holding odd ModificationCounter={Counter}",
+                            elapsedMs, counter);
+                        return false;
+                    }
+                }
+
                 sw.SpinOnce();
                 continue;
             }
+
+            // Writer finished (or was never active) — reset odd-spin timer
+            oddSpinStart = 0;
 
             // Copy the full page
             Buffer.MemoryCopy(pageAddr, destAddr, PageSize, PageSize);
@@ -1155,7 +1372,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             // Validate counter hasn't changed (no torn read)
             if (((PageBaseHeader*)pageAddr)->ModificationCounter == counter)
             {
-                return; // Consistent snapshot obtained
+                return true; // Consistent snapshot obtained
             }
 
             // Counter changed — torn read, retry
@@ -1168,14 +1385,21 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     /// Each page is snapshot-copied through the seqlock protocol, then CRC-stamped on the staging copy,
     /// and written synchronously to the data file. Called on the checkpoint thread.
     /// </summary>
-    /// <param name="memPageIndices">Memory page indices of dirty pages to write.</param>
+    /// <param name="memPageIndices">Memory page indices of dirty pages to write. On return, the first
+    /// <paramref name="writtenCount"/> entries contain the indices of pages that were actually written.
+    /// Pages with an actively-held writer (odd ModificationCounter for &gt;100ms) are skipped.</param>
     /// <param name="stagingPool">Pool from which to rent page-sized staging buffers.</param>
-    unsafe internal void WritePagesForCheckpoint(int[] memPageIndices, StagingBufferPool stagingPool)
+    /// <param name="writtenCount">Number of pages actually written (may be less than input length if pages were skipped).</param>
+    unsafe internal void WritePagesForCheckpoint(int[] memPageIndices, StagingBufferPool stagingPool, out int writtenCount)
     {
+        writtenCount = 0;
+
         if (memPageIndices.Length == 0)
         {
             return;
         }
+
+        Logger.LogInformation("Checkpoint: writing {PageCount} dirty pages", memPageIndices.Length);
 
         var memPageBaseAddr = _memPagesAddr;
 
@@ -1193,9 +1417,30 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
             var livePageAddr = memPageBaseAddr + (memPageIndex * (long)PageSize);
 
-            // Rent a staging buffer and snapshot the live page via seqlock
+            // Atomically claim the page for snapshot: CAS(ACW, -1, 0).
+            // ACW = -1 is a sentinel that blocks new writers (they spin in IncrementActiveChunkWriters).
+            // If ACW != 0, a writer is active — skip this page for the next checkpoint cycle.
+            // This eliminates the TOCTOU race where a writer starts and completes (ACW 0→1→0) during the ~250ns memcpy, which CopyPageWithSeqlock can't
+            // detect because OLC writes don't update ModificationCounter.
+            if (Interlocked.CompareExchange(ref pi.ActiveChunkWriters, -1, 0) != 0)
+            {
+                continue;
+            }
+
+            // Rent a staging buffer and snapshot the live page via seqlock.
+            // No concurrent OLC writers can start while ACW = -1 (they spin-wait).
+            // Page-level latches (TryLatchPageExclusive) are still detected by the seqlock.
             using var staging = stagingPool.Rent();
-            CopyPageWithSeqlock(livePageAddr, staging.Pointer);
+            if (!CopyPageWithSeqlock(livePageAddr, staging.Pointer))
+            {
+                // Page has an active writer (via TryLatchPageExclusive) — skip it. The page stays dirty and will be picked up in the next checkpoint cycle.
+                // This prevents deadlock when the writer is blocked on backpressure waiting for THIS checkpoint to free pages.
+                Interlocked.Exchange(ref pi.ActiveChunkWriters, 0); // Release sentinel
+                continue;
+            }
+
+            // Release the sentinel — writers can resume.
+            Interlocked.Exchange(ref pi.ActiveChunkWriters, 0);
 
             // Increment ChangeRevision and compute CRC on the staging copy (not the live page)
             if (pi.FilePageIndex > 0)
@@ -1211,8 +1456,16 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             RandomAccess.Write(_fileHandle, staging.Span, pageOffset);
             TrackFileGrowth(pageOffset + PageSize);
 
+            // Compact: move written index to front of array so caller knows which pages to decrement
+            memPageIndices[writtenCount++] = memPageIndex;
+
             _metrics.PageWrittenToDiskCount++;
             _metrics.WrittenOperationCount++;
+        }
+
+        if (writtenCount < memPageIndices.Length)
+        {
+            Logger.LogInformation("Checkpoint: skipped {SkippedCount} pages with active writers", memPageIndices.Length - writtenCount);
         }
     }
 
@@ -1249,6 +1502,10 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
                 var headerAddr = (PageBaseHeader*)(memPageBaseAddr + (curPageInfo.MemPageIndex * PageSize));
                 ++headerAddr->ChangeRevision;
+
+                // Compute CRC over the updated page so the on-disk copy is self-consistent (CP-07 equivalent for SavePages)
+                var pageSpan = new ReadOnlySpan<byte>((byte*)headerAddr, PageSize);
+                headerAddr->PageChecksum = WalCrc.ComputeSkipping(pageSpan, PageBaseHeader.PageChecksumOffset, PageBaseHeader.PageChecksumSize);
             }
 
             var nextMemPageIndex = memPageIndices[i];
@@ -1279,6 +1536,9 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
             var headerAddr = (PageBaseHeader*)(memPageBaseAddr + (curPageInfo.MemPageIndex * PageSize));
             ++headerAddr->ChangeRevision;
+
+            var pageSpan = new ReadOnlySpan<byte>((byte*)headerAddr, PageSize);
+            headerAddr->PageChecksum = WalCrc.ComputeSkipping(pageSpan, PageBaseHeader.PageChecksumOffset, PageBaseHeader.PageChecksumSize);
         }
 
         // Don't forget to add the last operation
@@ -1299,6 +1559,11 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
         var saveTask = Task.WhenAll(tasks).ContinueWith(_ =>
         {
+            // CP-03: fsync data file before decrementing DirtyCounter.
+            // Without this, pages become evictable (DC=0) while data is only in OS buffer cache,
+            // risking stale reload after eviction if the OS hasn't flushed to stable media.
+            FlushToDisk();
+
             foreach (int memPageIndex in memPageIndices)
             {
                 DecrementDirty(memPageIndex);
@@ -1346,6 +1611,13 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
     internal unsafe byte* GetMemPageAddress(int memPageIndex) => &_memPagesAddr[memPageIndex * (long)PageSize];
 
+    /// <summary>Diagnostic snapshot of a page's protection state. Used by ChunkAccessor error reporting.</summary>
+    internal (int DirtyCounter, int ActiveChunkWriters, int SlotRefCount, long AccessEpoch, PageState PageState, bool CrcVerified) GetPageInfoForDiagnostic(int memPageIndex)
+    {
+        var pi = _memPagesInfo[memPageIndex];
+        return (pi.DirtyCounter, pi.ActiveChunkWriters, pi.SlotRefCount, pi.AccessEpoch, pi.PageState, pi.CrcVerified);
+    }
+
     /// <summary>
     /// Get a typed <see cref="PageAccessor"/> for a memory page.
     /// Provides type-safe access to page header, metadata, and raw data regions.
@@ -1366,6 +1638,28 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     /// Used by ChunkAccessor to compute memPageIndex from raw data addresses.
     /// </summary>
     internal unsafe byte* MemPagesBaseAddress => _memPagesAddr;
+
+    /// <summary>
+    /// Returns the FilePageIndex currently stored in a memory page slot.
+    /// Used by <see cref="ChunkAccessor"/> to detect stale cached pointers after page eviction/reuse.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal int GetFilePageIndex(int memPageIndex) => _memPagesInfo[memPageIndex].FilePageIndex;
+
+    /// <summary>
+    /// Increments the slot reference count for a memory page. While SlotRefCount &gt; 0,
+    /// <see cref="TryAcquire"/> will not evict this page, protecting raw pointers held by
+    /// ChunkAccessor slots. This complements EBR epoch protection: epochs bound the long-term
+    /// protected set, while SlotRefCount provides precise short-term protection for live slots.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void IncrementSlotRefCount(int memPageIndex) => Interlocked.Increment(ref _memPagesInfo[memPageIndex].SlotRefCount);
+
+    /// <summary>
+    /// Decrements the slot reference count for a memory page.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void DecrementSlotRefCount(int memPageIndex) => Interlocked.Decrement(ref _memPagesInfo[memPageIndex].SlotRefCount);
 
     #region Logging helpers
 

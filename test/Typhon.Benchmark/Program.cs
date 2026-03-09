@@ -79,6 +79,12 @@ class Program
                 return;
             }
 
+            if (args.Contains("--profile-scan"))
+            {
+                BTreeScanProfile.Run();
+                return;
+            }
+
             // BTree profile shortcuts: --btree-fast, --btree-medium, --btree-full
             // These run curated subsets of BTree benchmarks for quick/medium/full analysis.
             if (args.Contains("--btree-fast"))

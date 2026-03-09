@@ -18,6 +18,12 @@ public unsafe class Transaction : IDisposable
     private const int ComponentInfosMaxCapacity = 131;
     private const int DeferredEnqueueBatchCapacity = 256;
 
+    /// <summary>
+    /// Number of entity operations between epoch refreshes. Each operation touches ~4-20 pages.
+    /// At 128 ops × ~10 pages/op = ~1280 pages — refreshes before saturating a 1024-page cache.
+    /// </summary>
+    private const int EpochRefreshInterval = 128;
+
     public enum TransactionState
     {
         Invalid = 0,
@@ -40,11 +46,19 @@ public unsafe class Transaction : IDisposable
 
     private int? _committedOperationCount;
     private int _deletedComponentCount;
+    private int _entityOperationCount;
     private ChangeSet _changeSet;
 
     // Reused across pooled Transaction lifetimes — collects deferred enqueue entries per commit/rollback
     // to flush in a single batch (one lock acquire instead of N). Never re-allocated after warmup.
     private List<DeferredCleanupManager.CleanupEntry> _deferredEnqueueBatch;
+
+    // Hoisted accessors for batch index maintenance (set per component type during Commit)
+    private ChunkAccessor[] _batchIndexAccessors;
+    private ChunkAccessor _batchPkAccessor;
+    private ChunkAccessor _batchTailAccessor;
+    private bool _batchIndexActive;
+    private int _batchEntityCount;
 
     /// <summary>The UoW that owns this transaction (null for legacy <c>CreateTransaction()</c> path, UoW ID effectively 0).</summary>
     internal UnitOfWork OwningUnitOfWork { get; private set; }
@@ -86,7 +100,9 @@ public unsafe class Transaction : IDisposable
     {
         _dbe = dbe;
         _epochManager = _dbe.EpochManager;
+        _dbe.LogTxInitPhase(tsn, "entering epoch");
         _ = _epochManager.EnterScope(); // Depth unused: Transaction uses ExitScopeUnordered (not LIFO)
+        _dbe.LogTxInitPhase(tsn, "epoch entered");
         _isDisposed = false;
         OwningUnitOfWork = uow;
 #if DEBUG
@@ -94,6 +110,7 @@ public unsafe class Transaction : IDisposable
 #endif
         _committedOperationCount = null;
         _deletedComponentCount = 0;
+        _entityOperationCount = 0;
         _changeSet = uow?.ChangeSet ?? _dbe.MMF.CreateChangeSet();
         State = TransactionState.Created;
         TSN = tsn;
@@ -171,6 +188,11 @@ public unsafe class Transaction : IDisposable
 
     public void Dispose()
     {
+        // Dispose transient batch accessors first — safe even on double-dispose or if never created
+        // (ChunkAccessor.Dispose() is idempotent: no-op when _segment==null).
+        _batchPkAccessor.Dispose();
+        _batchTailAccessor.Dispose();
+
         if (_isDisposed)
         {
             return;
@@ -178,12 +200,22 @@ public unsafe class Transaction : IDisposable
 
         AssertThreadAffinity();
 
+        // Capture before ExitEpochAndRemove — Remove pools and Reset() nulls _dbe
+        var dbe = _dbe;
+        var tsn = TSN;
+
+        dbe.LogTxDispose(tsn, "EnsureCompleted");
         EnsureCompleted();
+        dbe.LogTxDispose(tsn, "ProcessDeferredCleanups");
         ProcessDeferredCleanups();
+        dbe.LogTxDispose(tsn, "FlushAccessors");
         FlushAccessors();
+        dbe.LogTxDispose(tsn, "PersistIfNeeded");
         PersistIfNeeded();
+        dbe.LogTxDispose(tsn, "ExitEpochAndRemove");
         ExitEpochAndRemove();
 
+        dbe.LogTxDispose(tsn, "Complete");
         _isDisposed = true;
     }
 
@@ -238,10 +270,21 @@ public unsafe class Transaction : IDisposable
     /// <summary>Exit epoch scope, remove from chain, auto-dispose owned UoW.</summary>
     private void ExitEpochAndRemove()
     {
+        // Capture before Remove() — Remove pools the transaction and Reset() nulls _dbe
+        var dbe = _dbe;
+        var tsn = TSN;
+
+        dbe.LogTxDispose(tsn, "ExitEpoch");
         _epochManager.ExitScopeUnordered();
         var owningUow = OwnsUnitOfWork ? OwningUnitOfWork : null;
+        dbe.LogTxDispose(tsn, "ChainRemove");
         _dbe.TransactionChain.Remove(this);
-        owningUow?.Dispose();
+        if (owningUow != null)
+        {
+            dbe.LogTxDispose(tsn, "UoWDispose");
+            owningUow.Dispose();
+        }
+        dbe.LogTxDispose(tsn, "ExitEpochAndRemoveDone");
     }
 
     public long CreateEntity<T>(ref T t) where T : unmanaged
@@ -437,8 +480,7 @@ public unsafe class Transaction : IDisposable
             return -1;
         }
 
-        ref var header = ref info.CompRevTableAccessor.GetChunk<CompRevStorageHeader>(compRevInfo.CompRevTableFirstChunkId);
-        return header.FirstItemRevision + (compRevInfo.CurRevisionIndex - header.FirstItemIndex);
+        return compRevInfo.ReadCommitSequence + (compRevInfo.CurRevisionIndex - compRevInfo.ReadRevisionIndex);
     }
 
     public ComponentCollectionAccessor<T> CreateComponentCollectionAccessor<T>(ref ComponentCollection<T> field) where T : unmanaged
@@ -534,19 +576,61 @@ public unsafe class Transaction : IDisposable
         return info;
     }
 
+    /// <summary>
+    /// Flush all pending dirty state and advance the epoch within this transaction.
+    /// Must only be called at a quiescent point — no B+Tree OLC write locks held,
+    /// no ChunkAccessor mid-operation.
+    /// </summary>
+    private void FlushAndRefreshEpoch()
+    {
+        // 1. Flush dirty state on all live per-transaction ChunkAccessors
+        foreach (var ci in _componentInfos.Values)
+        {
+            ci.CompContentAccessor.CommitChanges();
+            ci.CompRevTableAccessor.CommitChanges();
+        }
+
+        // 2. Cap DirtyCounter at 1 for all tracked pages, clear ChangeSet.
+        //    After clearing, re-registration in MarkSlotDirty brings DC to exactly 2
+        //    (ChangeSet.Add→DC=1, then EnsureDirtyAtLeast(2)→DC=2), so checkpoint needs at most 2 cycles.
+        _changeSet?.ReleaseExcessDirtyMarks();
+
+        // 3. Advance epoch atomically (no unpinned window)
+        var newEpoch = _epochManager.RefreshScope();
+
+        // 4. Keep warm accessor cache alive — update its epoch so RentWarmAccessor sees a match.
+        //    Without this, the next RentWarmAccessor creates a new accessor with empty slot cache,
+        //    forcing all hot pages through RequestPageEpoch which re-stamps their AccessEpoch,
+        //    making them permanently epoch-protected and causing unbounded cache pressure.
+        ChunkBasedSegment.RefreshWarmCacheEpoch(newEpoch);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void CheckEpochRefresh()
+    {
+        if (++_entityOperationCount >= EpochRefreshInterval)
+        {
+            FlushAndRefreshEpoch();
+            _entityOperationCount = 0;
+        }
+    }
+
     private void CreateComponent<T>(long pk, ref T comp) where T : unmanaged
     {
         AssertThreadAffinity();
         var componentType = typeof(T);
-        
+
         // Fetch the cached info or create it if it's the first time we've operated on this Component type
+        _dbe.LogCommitCreateComponent(TSN, componentType.Name, pk, "GetComponentInfo");
         var info = GetComponentInfo(componentType);
 
         // Allocate the chunk that will store the component's chunk
-        var componentChunkId = info.CompContentSegment.AllocateChunk(false);
+        _dbe.LogCommitCreateComponent(TSN, componentType.Name, pk, "AllocateChunk");
+        var componentChunkId = info.CompContentSegment.AllocateChunk(false, _changeSet);
 
         // Allocate the component revision storage as it's a new component
-        var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, componentChunkId);
+        _dbe.LogCommitCreateComponent(TSN, componentType.Name, pk, "AllocCompRevStorage");
+        var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, componentChunkId, pk);
 
         var entry = new ComponentInfo.CompRevInfo
         {
@@ -555,32 +639,37 @@ public unsafe class Transaction : IDisposable
             PrevRevisionIndex = -1,
             CurCompContentChunkId = componentChunkId,
             CompRevTableFirstChunkId = compRevChunkId,
-            CurRevisionIndex = 0
+            CurRevisionIndex = 0,
+            ReadCommitSequence = 1,
+            ReadRevisionIndex = 0
         };
 
         info.AddNew(pk, entry);
 
         // Copy the component data
+        _dbe.LogCommitCreateComponent(TSN, componentType.Name, pk, "GetChunkAsSpan");
         int compSize = info.ComponentTable.ComponentStorageSize;
         var dst = info.CompContentAccessor.GetChunkAsSpan(componentChunkId, true);
         new Span<byte>(Unsafe.AsPointer(ref comp), compSize).CopyTo(dst.Slice(info.ComponentTable.ComponentOverhead));
+
+        CheckEpochRefresh();
     }
 
     private void CreateComponents<T>(long pk, ReadOnlySpan<T> compList) where T : unmanaged
     {
         AssertThreadAffinity();
         var componentType = typeof(T);
-        
+
         // Fetch the cached info or create it if it's the first time we've operated on this Component type
         var info = GetComponentInfo(componentType);
 
         for (int i = 0; i < compList.Length; i++)
         {
             // Allocate the chunk that will store the component's chunk
-            var componentChunkId = info.CompContentSegment.AllocateChunk(false);
+            var componentChunkId = info.CompContentSegment.AllocateChunk(false, _changeSet);
 
             // Allocate the component revision storage as it's a new component
-            var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, componentChunkId);
+            var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, componentChunkId, pk);
 
             var entry = new ComponentInfo.CompRevInfo
             {
@@ -589,7 +678,9 @@ public unsafe class Transaction : IDisposable
                 PrevRevisionIndex = -1,
                 CurCompContentChunkId = componentChunkId,
                 CompRevTableFirstChunkId = compRevChunkId,
-                CurRevisionIndex = 0
+                CurRevisionIndex = 0,
+                ReadCommitSequence = 1,
+                ReadRevisionIndex = 0
             };
 
             info.AddNew(pk, entry);
@@ -598,8 +689,10 @@ public unsafe class Transaction : IDisposable
             var dst = info.CompContentAccessor.GetChunkAsSpan(componentChunkId, true);
             compList.Slice(i, 1).Cast<T, byte>().CopyTo(dst.Slice(info.ComponentTable.ComponentOverhead));
         }
+
+        CheckEpochRefresh();
     }
-    
+
     private bool ReadComponent<T>(long pk, out T t) where T : unmanaged
     {
         AssertThreadAffinity();
@@ -792,6 +885,7 @@ public unsafe class Transaction : IDisposable
             }
         }
 
+        CheckEpochRefresh();
         return true;
     }
 
@@ -902,6 +996,7 @@ public unsafe class Transaction : IDisposable
             CreateComponents(pk, compList.Slice(compRevInfoSpan.Length));
         }
 
+        CheckEpochRefresh();
         return true;
     }
 
@@ -1221,16 +1316,55 @@ public unsafe class Transaction : IDisposable
             // Commit the revision: update indices, clear IsolationFlag, update LastCommitRevisionIndex
             if (compRevInfo.CurCompContentChunkId != 0)
             {
-                IndexMaintainer.UpdateIndices(pk, info, compRevInfo, readCompChunkId, _changeSet, TSN);
+                if (_batchIndexActive)
+                {
+                    IndexMaintainer.UpdateIndices(pk, info, compRevInfo, readCompChunkId, _changeSet, TSN, _batchIndexAccessors,
+                        ref _batchPkAccessor, ref _batchTailAccessor);
+                }
+                else
+                {
+                    IndexMaintainer.UpdateIndices(pk, info, compRevInfo, readCompChunkId, _changeSet, TSN);
+                }
             }
             else if (readCompChunkId != 0)
             {
-                IndexMaintainer.RemoveSecondaryIndices(info, readCompChunkId, compRevInfo.CompRevTableFirstChunkId, _changeSet, TSN);
+                if (_batchIndexActive)
+                {
+                    IndexMaintainer.RemoveSecondaryIndices(pk, info, readCompChunkId, compRevInfo.CompRevTableFirstChunkId, _changeSet, TSN,
+                        _batchIndexAccessors, ref _batchTailAccessor);
+                }
+                else
+                {
+                    IndexMaintainer.RemoveSecondaryIndices(pk, info, readCompChunkId, compRevInfo.CompRevTableFirstChunkId, _changeSet, TSN);
+                }
+            }
+
+            // Periodic flush: bound dirty counter inflation for large transactions
+            if (_batchIndexActive && (++_batchEntityCount & 0x3FF) == 0)
+            {
+                for (int i = 0; i < _batchIndexAccessors.Length; i++)
+                {
+                    _batchIndexAccessors[i].CommitChanges();
+                }
+                _batchPkAccessor.CommitChanges();
+                if (info.ComponentTable.TailVSBS != null)
+                {
+                    _batchTailAccessor.CommitChanges();
+                }
+
+                // Flush warm accessors: exit+enter cycle performs a single CommitChanges per cache
+                ChunkBasedSegment.ExitBatchMode();
+                ChunkBasedSegment.EnterBatchMode();
+
+                _changeSet.ReleaseExcessDirtyMarks();
             }
 
             elementHandle.Commit(TSN);
             compRev.SetLastCommitRevisionIndex(Math.Max(lastCommitRevisionIndex, compRevInfo.CurRevisionIndex));
-            compRev.IncrementCommitSequence();
+            if ((compRevInfo.Operations & ComponentInfo.OperationType.Created) == 0)
+            {
+                compRev.IncrementCommitSequence();
+            }
         }
         finally
         {
@@ -1430,6 +1564,8 @@ public unsafe class Transaction : IDisposable
 
         var startTicks = Stopwatch.GetTimestamp();
 
+        _dbe.LogCommitStart(TSN, _componentInfos.Count);
+
         // ── Holdoff: entire commit loop runs to completion ──
         using var holdoff = ctx.EnterHoldoff();
 
@@ -1451,18 +1587,61 @@ public unsafe class Transaction : IDisposable
         context.TailTSN = _dbe.TransactionChain.MinTSN;
         _dbe.TransactionChain.Control.ExitSharedAccess();
 
+        _dbe.LogCommitPhase(TSN, "CommitComponentCore");
+
         // Process every Component Type and their components
         var commitAction = new CommitAction { Tx = this };
         foreach (var kvp in _componentInfos)
         {
             context.Info = kvp.Value;
+            var info = kvp.Value;
+            _dbe.LogCommitComponentEntries(TSN, kvp.Key.Name, info.EntryCount);
 
             // Start a sub-span for this component type
             using var componentActivity = TyphonActivitySource.StartActivity("Transaction.CommitComponentCore");
             componentActivity?.SetTag(TyphonSpanAttributes.ComponentType, kvp.Key.Name);
 
-            kvp.Value.ForEachMutableEntry(ref context, ref commitAction);
+            // Hoist accessor creation for batch index maintenance
+            var indexedFieldInfos = info.ComponentTable.IndexedFieldInfos;
+            _batchIndexAccessors = new ChunkAccessor[indexedFieldInfos.Length];
+            for (int i = 0; i < indexedFieldInfos.Length; i++)
+            {
+                _batchIndexAccessors[i] = indexedFieldInfos[i].Index.Segment.CreateChunkAccessor(_changeSet);
+            }
+            _batchPkAccessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
+            var tailVSBS = info.ComponentTable.TailVSBS;
+            _batchTailAccessor = tailVSBS != null
+                ? tailVSBS.Segment.CreateChunkAccessor(_changeSet)
+                : default;
+            _batchIndexActive = true;
+            _batchEntityCount = 0;
+            ChunkBasedSegment.EnterBatchMode();
+
+            try
+            {
+                kvp.Value.ForEachMutableEntry(ref context, ref commitAction);
+            }
+            finally
+            {
+                // Exit batch mode + dispose hoisted accessors
+                ChunkBasedSegment.ExitBatchMode();
+                _batchIndexActive = false;
+                for (int i = 0; i < _batchIndexAccessors.Length; i++)
+                {
+                    _batchIndexAccessors[i].Dispose();
+                }
+                _batchPkAccessor.Dispose();
+                if (tailVSBS != null)
+                {
+                    _batchTailAccessor.Dispose();
+                }
+                _batchIndexAccessors = null;
+            }
+
+            _dbe.LogCommitComponentDone(TSN, kvp.Key.Name);
         }
+
+        _dbe.LogCommitPhase(TSN, "DeferredCleanup");
 
         // Enqueue current transaction's entities for deferred cleanup (single lock acquire for all entities).
         // Processing happens in Dispose (after cached indices are no longer relevant) or via FlushDeferredCleanups.
@@ -1481,7 +1660,9 @@ public unsafe class Transaction : IDisposable
         activity?.SetTag(TyphonSpanAttributes.TransactionConflictDetected, hasConflict);
         activity?.SetTag(TyphonSpanAttributes.TransactionStatus, "committed");
 
+        _dbe.LogCommitPhase(TSN, "PersistAndFinalize");
         PersistAndFinalize(ref ctx, startTicks);
+        _dbe.LogCommitPhase(TSN, "Complete");
         return true;
     }
 

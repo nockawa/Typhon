@@ -33,12 +33,17 @@ public sealed class WalFileIO : IWalFileIO
             options |= FileOptions.WriteThrough;
         }
 
-        return File.OpenHandle(
-            path,
-            FileMode.OpenOrCreate,
-            FileAccess.ReadWrite,
-            FileShare.Read,
-            options);
+        return File.OpenHandle(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read, options);
+    }
+
+    /// <inheritdoc />
+    public SafeFileHandle OpenSegmentForRead(string path)
+    {
+        // Read-only access with ReadWrite sharing: allows the WAL writer to keep
+        // the active segment open for writing while readers (FPI search, recovery) read it.
+        var options = OperatingSystem.IsWindows() ? NoBuffering : FileOptions.None;
+
+        return File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, options);
     }
 
     /// <inheritdoc />

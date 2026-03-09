@@ -137,16 +137,17 @@ public class DatabaseEngineOptions
 /// </summary>
 /// <remarks>
 /// <para>
-/// DatabaseEngine registers itself under the <see cref="ResourceSubsystem.DataEngine"/> subsystem
-/// in the resource tree. ComponentTables are registered as children of this engine.
+/// DatabaseEngine registers itself under the <see cref="ResourceSubsystem.DataEngine"/> subsystem in the resource tree. ComponentTables are registered
+/// as children of this engine.
 /// </para>
 /// </remarks>
 [PublicAPI]
-public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvider
+public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvider
 {
     private readonly DatabaseEngineOptions      _options;
     private readonly ILogger<DatabaseEngine>    _log;
     private readonly IMemoryAllocator           _memoryAllocator;
+    internal IMemoryAllocator                   MemoryAllocator => _memoryAllocator;
     private readonly IWalFileIO                 _walFileIO;
     private readonly IResource                  _durabilityNode;
     private WalRecoveryResult                   _lastRecoveryResult;
@@ -242,16 +243,19 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
     [return: TransfersOwnership]
     public UnitOfWork CreateUnitOfWork(DurabilityMode durabilityMode = DurabilityMode.Deferred, TimeSpan timeout = default)
     {
+        LogUowLifecycle("CreateUnitOfWork enter");
         var effectiveTimeout = timeout == TimeSpan.Zero ? TimeoutOptions.Current.DefaultUowTimeout : timeout;
         var wc = WaitContext.FromTimeout(effectiveTimeout);
 
         // For Deferred/GroupCommit: create the ChangeSet early so AllocateUowId can track
         // the registry page mutation in it (avoiding a synchronous SaveChanges).
         var changeSet = durabilityMode != DurabilityMode.Immediate ? MMF.CreateChangeSet() : null;
+        LogUowLifecycle("ChangeSet created");
 
         // Back-pressure: if registry is full, wait for a slot to be freed.
         // The admission check is a fast-path optimization — AllocateUowId's CAS provides the real atomicity (TOCTOU by design).
         var uowId = UowRegistry.AllocateUowId(ref wc, changeSet);
+        LogUowIdAllocated(uowId);
 
         return new UnitOfWork(this, durabilityMode, uowId, effectiveTimeout, changeSet);
     }
@@ -312,6 +316,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
         if (disposing)
         {
+            _log?.LogInformation("Engine disposing: CheckpointManager");
             // Checkpoint must dispose first: runs final cycle, writes pages + advances LSN before WAL shuts down
             CheckpointManager?.Dispose();
             CheckpointManager = null;
@@ -320,13 +325,16 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             _stagingBufferPool?.Dispose();
             _stagingBufferPool = null;
 
+            _log?.LogInformation("Engine disposing: PersistEngineState");
             // Persist final TSN counter and flush all dirty pages to disk. This ensures:
             // 1. TSN counter survives restart (MVCC visibility)
             // 2. All committed transaction data is on disk even without WAL/checkpoint
             PersistEngineState();
 
+            _log?.LogInformation("Engine disposing: WalManager");
             WalManager?.Dispose();
             WalManager = null;
+            _log?.LogInformation("Engine disposing: TransactionChain + cleanup");
             TransactionChain.Dispose();
             UowRegistry?.Dispose();
             MMF.Dispose();
@@ -350,6 +358,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         var lastLSN = _lastRecoveryResult.LastValidLSN;
         var lastSegmentId = 0L; // Segment continuity is handled by WalSegmentManager scanning existing files
         WalManager.Initialize(lastSegmentId, lastLSN > 0 ? lastLSN + 1 : 1);
+        WalManager.Logger = _log;
         WalManager.Start();
     }
 
@@ -381,6 +390,10 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         CheckpointManager = new CheckpointManager(MMF, UowRegistry, WalManager, _options.Resources, EpochManager, _stagingBufferPool, _durabilityNode,
             initialCheckpointLsn);
         CheckpointManager.Start();
+
+        // Wire demand-driven flush: when page cache backpressure fires, immediately wake
+        // the checkpoint thread instead of waiting for the 30s timer interval.
+        MMF.OnBackpressure = () => CheckpointManager?.ForceCheckpoint();
     }
 
     private void ConstructComponentStore()
@@ -1001,7 +1014,7 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
             if (persistedFields != null)
             {
                 diff = SchemaValidator.ComputeDiff(schemaName, persistedFields, persisted.Comp, definition, 
-                    resolver?.Renames ?? (IReadOnlyList<(string, string, int)>)[]);
+                    resolver.Renames ?? (IReadOnlyList<(string, string, int)>)[]);
 
                 if (diff.HasBreakingChanges && schemaValidation != SchemaValidationMode.Skip)
                 {
@@ -1159,6 +1172,10 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
         _migrationRegistry.RegisterByte(componentName, fromRevision, toRevision, oldSize, newSize, func);
     }
 
+    public QueryBuilder<T> Query<T>() where T : unmanaged => new(this);
+
+    public QueryBuilder<T1, T2> Query<T1, T2>() where T1 : unmanaged where T2 : unmanaged => new(this);
+
     public ComponentTable GetComponentTable<T>() where T : unmanaged => GetComponentTable(typeof(T));
 
     public ComponentTable GetComponentTable(Type type) => _componentTableByType.GetValueOrDefault(type);
@@ -1189,9 +1206,44 @@ public class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvi
 
     internal void RecordConflict() => Interlocked.Increment(ref _transactionConflicts);
 
-    internal void LogDeferredUowNotFlushed(ushort uowId, int committedCount) =>
-        _log?.LogWarning("Deferred UoW #{UowId} disposed with {Count} committed transaction(s) without Flush/FlushAsync. " +
-                         "Data relies on engine shutdown safety net.", uowId, committedCount);
+    [LoggerMessage(LogLevel.Warning, "Deferred UoW #{uowId} disposed with {count} committed transaction(s) without Flush/FlushAsync. Data relies on engine shutdown safety net.")]
+    internal partial void LogDeferredUowNotFlushed(ushort uowId, int count);
+
+    [LoggerMessage(LogLevel.Debug, "UoW #{uowId} ({mode}) flush: waiting for WAL durable LSN {targetLsn}")]
+    internal partial void LogUowFlushStart(ushort uowId, DurabilityMode mode, long targetLsn);
+
+    [LoggerMessage(LogLevel.Debug, "UoW #{uowId} flush complete")]
+    internal partial void LogUowFlushComplete(ushort uowId);
+
+    [LoggerMessage(LogLevel.Debug, "Tx #{tsn} commit start: {count} component types")]
+    internal partial void LogCommitStart(long tsn, int count);
+
+    [LoggerMessage(LogLevel.Debug, "Tx #{tsn} commit: {phase}")]
+    internal partial void LogCommitPhase(long tsn, string phase);
+
+    [LoggerMessage(LogLevel.Debug, "Tx #{tsn} dispose: {phase}")]
+    internal partial void LogTxDispose(long tsn, string phase);
+
+    [LoggerMessage(LogLevel.Debug, "UoW: {phase}")]
+    internal partial void LogUowLifecycle(string phase);
+
+    [LoggerMessage(LogLevel.Debug, "UoW: UowId allocated: {uowId}")]
+    internal partial void LogUowIdAllocated(ushort uowId);
+
+    [LoggerMessage(LogLevel.Debug, "Tx.Init #{tsn}: {phase}")]
+    internal partial void LogTxInitPhase(long tsn, string phase);
+
+    [LoggerMessage(LogLevel.Debug, "CreateQuickTransaction: Tx #{tsn} created")]
+    internal partial void LogQuickTxCreated(long tsn);
+
+    [LoggerMessage(LogLevel.Debug, "Tx #{tsn} commit: CreateComponent<{componentName}> pk={pk}: {step}")]
+    internal partial void LogCommitCreateComponent(long tsn, string componentName, long pk, string step);
+
+    [LoggerMessage(LogLevel.Debug, "Tx #{tsn} commit: CommitComponent {componentName} ({entryCount} entries)")]
+    internal partial void LogCommitComponentEntries(long tsn, string componentName, int entryCount);
+
+    [LoggerMessage(LogLevel.Debug, "Tx #{tsn} commit: CommitComponent {componentName} done")]
+    internal partial void LogCommitComponentDone(long tsn, string componentName);
 
     #endregion
 

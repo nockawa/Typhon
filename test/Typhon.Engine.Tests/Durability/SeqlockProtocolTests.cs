@@ -292,7 +292,7 @@ public class SeqlockProtocolTests : AllocatorTestBase
 
         // Checkpoint: snapshot via seqlock, stamp CRC, write to disk
         using var stagingPool = new StagingBufferPool(MemoryAllocator, AllocationResource, StagingBufferPool.MinCapacity);
-        _mmf.WritePagesForCheckpoint([memPageIdx], stagingPool);
+        _mmf.WritePagesForCheckpoint([memPageIdx], stagingPool, out _);
 
         // Read page back from disk and verify
         var diskPage = new byte[PagedMMF.PageSize];
@@ -342,25 +342,33 @@ public class SeqlockProtocolTests : AllocatorTestBase
         using var barrier = new Barrier(2);
 
         // Writer thread: repeatedly latches, writes a uniform byte, unlatches
+        Exception writerException = null;
         var writerThread = new Thread(() =>
         {
-            byte pattern = 0;
-            barrier.SignalAndWait();
-
-            while (Volatile.Read(ref stopWriter) == 0)
+            try
             {
-                pattern++;
-                using var guard = EpochGuard.Enter(_epochManager);
-                _mmf.RequestPageEpoch(filePageIndex, guard.Epoch, out var writerMemIdx);
-                if (_mmf.TryLatchPageExclusive(writerMemIdx))
+                byte pattern = 0;
+                barrier.SignalAndWait();
+
+                while (Volatile.Read(ref stopWriter) == 0)
                 {
-                    unsafe
+                    pattern++;
+                    using var guard = EpochGuard.Enter(_epochManager);
+                    _mmf.RequestPageEpoch(filePageIndex, guard.Epoch, out var writerMemIdx);
+                    if (_mmf.TryLatchPageExclusive(writerMemIdx))
                     {
-                        var pageAddr = _mmf.GetMemPageAddress(writerMemIdx);
-                        new Span<byte>(pageAddr + PagedMMF.PageHeaderSize, PagedMMF.PageSize - PagedMMF.PageHeaderSize).Fill(pattern);
+                        unsafe
+                        {
+                            var pageAddr = _mmf.GetMemPageAddress(writerMemIdx);
+                            new Span<byte>(pageAddr + PagedMMF.PageHeaderSize, PagedMMF.PageSize - PagedMMF.PageHeaderSize).Fill(pattern);
+                        }
+                        _mmf.UnlatchPageExclusive(writerMemIdx);
                     }
-                    _mmf.UnlatchPageExclusive(writerMemIdx);
                 }
+            }
+            catch (Exception ex)
+            {
+                writerException = ex;
             }
         });
         writerThread.Start();
@@ -370,7 +378,7 @@ public class SeqlockProtocolTests : AllocatorTestBase
 
         for (int i = 0; i < checkpointIterations; i++)
         {
-            _mmf.WritePagesForCheckpoint([memPageIdx], stagingPool);
+            _mmf.WritePagesForCheckpoint([memPageIdx], stagingPool, out _);
 
             var diskPage = new byte[PagedMMF.PageSize];
             _mmf.ReadPageDirect(filePageIndex, diskPage);
@@ -379,6 +387,7 @@ public class SeqlockProtocolTests : AllocatorTestBase
 
         Volatile.Write(ref stopWriter, 1);
         writerThread.Join();
+        Assert.That(writerException, Is.Null, $"Writer thread threw: {writerException}");
     }
 
     [Test]
@@ -406,29 +415,38 @@ public class SeqlockProtocolTests : AllocatorTestBase
 
         // Spawn one writer per page
         var writers = new Thread[pageCount];
+        var writerExceptions = new Exception[pageCount];
         for (int p = 0; p < pageCount; p++)
         {
             var pageFileIndex = firstPageIndex + p;
             var writerByte = (byte)(0xA0 + p); // Each writer uses a unique base byte
+            var idx = p;
             writers[p] = new Thread(() =>
             {
-                byte pattern = writerByte;
-                barrier.SignalAndWait();
-
-                while (Volatile.Read(ref stopWriters) == 0)
+                try
                 {
-                    pattern = (byte)(writerByte + (pattern + 1) % 100);
-                    using var guard = EpochGuard.Enter(_epochManager);
-                    _mmf.RequestPageEpoch(pageFileIndex, guard.Epoch, out var writerMemIdx);
-                    if (_mmf.TryLatchPageExclusive(writerMemIdx))
+                    byte pattern = writerByte;
+                    barrier.SignalAndWait();
+
+                    while (Volatile.Read(ref stopWriters) == 0)
                     {
-                        unsafe
+                        pattern = (byte)(writerByte + (pattern + 1) % 100);
+                        using var guard = EpochGuard.Enter(_epochManager);
+                        _mmf.RequestPageEpoch(pageFileIndex, guard.Epoch, out var writerMemIdx);
+                        if (_mmf.TryLatchPageExclusive(writerMemIdx))
                         {
-                            var pageAddr = _mmf.GetMemPageAddress(writerMemIdx);
-                            new Span<byte>(pageAddr + PagedMMF.PageHeaderSize, PagedMMF.PageSize - PagedMMF.PageHeaderSize).Fill(pattern);
+                            unsafe
+                            {
+                                var pageAddr = _mmf.GetMemPageAddress(writerMemIdx);
+                                new Span<byte>(pageAddr + PagedMMF.PageHeaderSize, PagedMMF.PageSize - PagedMMF.PageHeaderSize).Fill(pattern);
+                            }
+                            _mmf.UnlatchPageExclusive(writerMemIdx);
                         }
-                        _mmf.UnlatchPageExclusive(writerMemIdx);
                     }
+                }
+                catch (Exception ex)
+                {
+                    writerExceptions[idx] = ex;
                 }
             });
             writers[p].Start();
@@ -439,7 +457,7 @@ public class SeqlockProtocolTests : AllocatorTestBase
 
         for (int i = 0; i < checkpointIterations; i++)
         {
-            _mmf.WritePagesForCheckpoint(memPageIndices, stagingPool);
+            _mmf.WritePagesForCheckpoint(memPageIndices, stagingPool, out _);
 
             // Verify each page independently
             for (int p = 0; p < pageCount; p++)
@@ -454,6 +472,11 @@ public class SeqlockProtocolTests : AllocatorTestBase
         foreach (var w in writers)
         {
             w.Join();
+        }
+
+        for (int i = 0; i < pageCount; i++)
+        {
+            Assert.That(writerExceptions[i], Is.Null, $"Writer {i} threw: {writerExceptions[i]}");
         }
     }
 }

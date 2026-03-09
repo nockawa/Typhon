@@ -55,6 +55,10 @@ internal sealed class ComponentInfo
         /// Monotonic commit counter captured at read time. Compared against header.CommitSequence during commit to detect any commits since our
         /// read — immune to revision index ordering and cleanup compaction that can fool TSN/LCRI-based detection.
         public int ReadCommitSequence;
+
+        /// CurRevisionIndex captured at read/create time. Used by GetComponentRevision to compute position-based offset:
+        /// revision = ReadCommitSequence + (CurRevisionIndex - ReadRevisionIndex).
+        public short ReadRevisionIndex;
     }
 
     // Identity

@@ -66,13 +66,11 @@ public class ManagedPagedMMFTests
         _serviceProvider = _serviceCollection.BuildServiceProvider();
         _serviceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
 
-        _logger = _serviceCollection.BuildServiceProvider().GetRequiredService<ILogger<ManagedPagedMMFTests>>();
+        _logger = _serviceProvider.GetRequiredService<ILogger<ManagedPagedMMFTests>>();
     }
 
     [TearDown]
-    public void TearDown()
-    {
-    }
+    public void TearDown() => (_serviceProvider as IDisposable)?.Dispose();
 
     [Test]
     public unsafe void InitializationTest()

@@ -50,7 +50,11 @@ class EpochPageCacheTests
     }
 
     [TearDown]
-    public void TearDown() => Log.CloseAndFlush();
+    public void TearDown()
+    {
+        (_serviceProvider as IDisposable)?.Dispose();
+        Log.CloseAndFlush();
+    }
 
     // ========================================
     // Epoch-based eviction protection

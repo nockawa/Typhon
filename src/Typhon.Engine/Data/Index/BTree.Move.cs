@@ -57,6 +57,7 @@ public abstract partial class BTree<TKey>
                 {
                     // Same-leaf fast path: single WriteLock, net count unchanged
                     var leaf = _storage.LoadNode(oldLeafId);
+                    leaf.PreDirtyForWrite(ref opAccessor);
                     var latch = leaf.GetLatch(ref opAccessor);
                     if (!latch.TryWriteLock())
                     {
@@ -109,6 +110,7 @@ public abstract partial class BTree<TKey>
                     var firstLeaf = _storage.LoadNode(firstId);
                     var secondLeaf = _storage.LoadNode(secondId);
 
+                    firstLeaf.PreDirtyForWrite(ref opAccessor);
                     var firstLatch = firstLeaf.GetLatch(ref opAccessor);
                     if (!firstLatch.TryWriteLock())
                     {
@@ -116,6 +118,7 @@ public abstract partial class BTree<TKey>
                         continue;
                     }
 
+                    secondLeaf.PreDirtyForWrite(ref opAccessor);
                     var secondLatch = secondLeaf.GetLatch(ref opAccessor);
                     if (!secondLatch.TryWriteLock())
                     {
@@ -191,6 +194,7 @@ public abstract partial class BTree<TKey>
     /// </summary>
     private bool MovePessimistic(TKey oldKey, TKey newKey, int value, ref ChunkAccessor accessor)
     {
+        ref var sibAccessor = ref _segment.RentWarmSiblingAccessor(accessor.ChangeSet);
         try
         {
             var oldLeaf = FindLeaf(oldKey, out var oldIndex, ref accessor);
@@ -207,7 +211,7 @@ public abstract partial class BTree<TKey>
             }
 
             // Remove old entry — use RemoveArguments/RemoveCore for proper structural handling
-            var removeArgs = new RemoveArguments(oldKey, Comparer, ref accessor);
+            var removeArgs = new RemoveArguments(oldKey, Comparer, ref accessor, ref sibAccessor);
             RemoveCorePessimistic(ref removeArgs);
             if (!removeArgs.Removed)
             {
@@ -215,14 +219,19 @@ public abstract partial class BTree<TKey>
             }
 
             // Insert new entry
-            var insertArgs = new InsertArguments(newKey, value, Comparer, ref accessor);
+            var insertArgs = new InsertArguments(newKey, value, Comparer, ref accessor, ref sibAccessor);
             AddOrUpdateCorePessimistic(ref insertArgs);
             SyncHeader(ref accessor);
             return true;
         }
         finally
         {
-            DeferredReclaim();
+            _segment.ReturnWarmSiblingAccessor();
+            if (++_deferredReclaimSkip >= 64)
+            {
+                _deferredReclaimSkip = 0;
+                DeferredReclaim();
+            }
         }
     }
 
@@ -236,6 +245,9 @@ public abstract partial class BTree<TKey>
     {
         // Per-operation accessor for thread safety under OLC (thread-local warm cache)
         ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
+        // Separate CA for VSBS buffer operations — prevents VSBS page loads from evicting
+        // B+Tree leaf node slots in the primary CA's 16-slot cache.
+        ref var sibAccessor = ref _segment.RentWarmSiblingAccessor(accessor.ChangeSet);
         try
         {
             for (int attempt = 0; attempt < MaxOptimisticRestarts; attempt++)
@@ -272,6 +284,7 @@ public abstract partial class BTree<TKey>
                 if (oldLeafId == newLeafId)
                 {
                     var leaf = _storage.LoadNode(oldLeafId);
+                    leaf.PreDirtyForWrite(ref opAccessor);
                     var latch = leaf.GetLatch(ref opAccessor);
                     if (!latch.TryWriteLock())
                     {
@@ -296,9 +309,9 @@ public abstract partial class BTree<TKey>
                         return -1;
                     }
 
-                    // Remove element from old buffer
+                    // Remove element from old buffer (VSBS via sibAccessor to avoid CA slot eviction)
                     var oldBufferId = leaf.GetItem(oi, ref opAccessor).Value;
-                    var res = _storage.RemoveFromBuffer(oldBufferId, elementId, value, ref opAccessor);
+                    var res = _storage.RemoveFromBuffer(oldBufferId, elementId, value, ref sibAccessor);
                     oldHeadBufferId = oldBufferId;
 
                     if (res == -1)
@@ -316,7 +329,7 @@ public abstract partial class BTree<TKey>
                     {
                         // newKey exists — append to its buffer
                         newBufferId = leaf.GetItem(ni, ref opAccessor).Value;
-                        newElementId = _storage.Append(newBufferId, value, ref opAccessor);
+                        newElementId = _storage.Append(newBufferId, value, ref sibAccessor);
                     }
                     else
                     {
@@ -326,13 +339,13 @@ public abstract partial class BTree<TKey>
                         if (leaf.GetIsFull(ref opAccessor) && (res != 0 || preserveEmptyBuffer))
                         {
                             // Undo the buffer removal — re-add the element
-                            _storage.Append(oldBufferId, value, ref opAccessor);
+                            _storage.Append(oldBufferId, value, ref sibAccessor);
                             latch.WriteUnlock();
                             break; // fall to pessimistic
                         }
 
-                        newBufferId = _storage.CreateBuffer(ref opAccessor);
-                        newElementId = _storage.Append(newBufferId, value, ref opAccessor);
+                        newBufferId = _storage.CreateBuffer(ref sibAccessor);
+                        newElementId = _storage.Append(newBufferId, value, ref sibAccessor);
                         ni = ~ni;
                         // If old buffer empty (res==0) and not preserving, remove old key first to free a slot
                         if (res == 0 && !preserveEmptyBuffer)
@@ -341,7 +354,7 @@ public abstract partial class BTree<TKey>
                             if (oi >= 0)
                             {
                                 leaf.RemoveAtInternal(oi, ref opAccessor);
-                                _storage.DeleteBuffer(oldBufferId, ref opAccessor);
+                                _storage.DeleteBuffer(oldBufferId, ref sibAccessor);
                                 Interlocked.Decrement(ref _count);
                             }
                             // Re-find insertion point after removal
@@ -362,7 +375,7 @@ public abstract partial class BTree<TKey>
                         if (oi >= 0)
                         {
                             leaf.RemoveAtInternal(oi, ref opAccessor);
-                            _storage.DeleteBuffer(oldBufferId, ref opAccessor);
+                            _storage.DeleteBuffer(oldBufferId, ref sibAccessor);
                             Interlocked.Decrement(ref _count);
                         }
                     }
@@ -382,6 +395,7 @@ public abstract partial class BTree<TKey>
                     var firstLeaf = _storage.LoadNode(firstId);
                     var secondLeaf = _storage.LoadNode(secondId);
 
+                    firstLeaf.PreDirtyForWrite(ref opAccessor);
                     var firstLatch = firstLeaf.GetLatch(ref opAccessor);
                     if (!firstLatch.TryWriteLock())
                     {
@@ -389,6 +403,7 @@ public abstract partial class BTree<TKey>
                         continue;
                     }
 
+                    secondLeaf.PreDirtyForWrite(ref opAccessor);
                     var secondLatch = secondLeaf.GetLatch(ref opAccessor);
                     if (!secondLatch.TryWriteLock())
                     {
@@ -432,7 +447,7 @@ public abstract partial class BTree<TKey>
                     }
 
                     var oldBufferId = oldLeaf.GetItem(oi, ref opAccessor).Value;
-                    var res = _storage.RemoveFromBuffer(oldBufferId, elementId, value, ref opAccessor);
+                    var res = _storage.RemoveFromBuffer(oldBufferId, elementId, value, ref sibAccessor);
                     oldHeadBufferId = oldBufferId;
 
                     if (res == -1)
@@ -450,12 +465,12 @@ public abstract partial class BTree<TKey>
                     if (ni >= 0)
                     {
                         newBufferId = newLeaf.GetItem(ni, ref opAccessor).Value;
-                        newElementId = _storage.Append(newBufferId, value, ref opAccessor);
+                        newElementId = _storage.Append(newBufferId, value, ref sibAccessor);
                     }
                     else
                     {
-                        newBufferId = _storage.CreateBuffer(ref opAccessor);
-                        newElementId = _storage.Append(newBufferId, value, ref opAccessor);
+                        newBufferId = _storage.CreateBuffer(ref sibAccessor);
+                        newElementId = _storage.Append(newBufferId, value, ref sibAccessor);
                         ni = ~ni;
                         newLeaf.Insert(ni, new KeyValueItem(newKey, newBufferId), ref opAccessor);
                         Interlocked.Increment(ref _count);
@@ -469,7 +484,7 @@ public abstract partial class BTree<TKey>
                         if (oi >= 0)
                         {
                             oldLeaf.RemoveAtInternal(oi, ref opAccessor);
-                            _storage.DeleteBuffer(oldBufferId, ref opAccessor);
+                            _storage.DeleteBuffer(oldBufferId, ref sibAccessor);
                             Interlocked.Decrement(ref _count);
                         }
                     }
@@ -483,10 +498,11 @@ public abstract partial class BTree<TKey>
 
             // Pessimistic fallback
             Interlocked.Increment(ref _pessimisticFallbacks);
-            return MoveValuePessimistic(oldKey, newKey, elementId, value, ref opAccessor, out oldHeadBufferId, out newHeadBufferId, preserveEmptyBuffer);
+            return MoveValuePessimistic(oldKey, newKey, elementId, value, ref opAccessor, ref sibAccessor, out oldHeadBufferId, out newHeadBufferId, preserveEmptyBuffer);
         }
         finally
         {
+            _segment.ReturnWarmSiblingAccessor();
             _segment.ReturnWarmAccessor();
         }
     }
@@ -496,8 +512,8 @@ public abstract partial class BTree<TKey>
     /// appends to new buffer, handles empty-buffer cleanup.
     /// No global lock — concurrency is handled by per-node OLC latches in Remove/Insert.
     /// </summary>
-    private int MoveValuePessimistic(TKey oldKey, TKey newKey, int elementId, int value, ref ChunkAccessor accessor, out int oldHeadBufferId, 
-        out int newHeadBufferId, bool preserveEmptyBuffer = false)
+    private int MoveValuePessimistic(TKey oldKey, TKey newKey, int elementId, int value, ref ChunkAccessor accessor, ref ChunkAccessor sibAccessor,
+        out int oldHeadBufferId, out int newHeadBufferId, bool preserveEmptyBuffer = false)
     {
         try
         {
@@ -509,9 +525,9 @@ public abstract partial class BTree<TKey>
                 return -1;
             }
 
-            // Remove element from old buffer
+            // Remove element from old buffer (VSBS via sibAccessor)
             var oldBufferId = oldLeaf.GetItem(oldIndex, ref accessor).Value;
-            var res = _storage.RemoveFromBuffer(oldBufferId, elementId, value, ref accessor);
+            var res = _storage.RemoveFromBuffer(oldBufferId, elementId, value, ref sibAccessor);
             oldHeadBufferId = oldBufferId;
 
             if (res == -1)
@@ -528,14 +544,14 @@ public abstract partial class BTree<TKey>
             {
                 // newKey exists — append to its buffer
                 newBufferId = newLeaf.GetItem(newIndex, ref accessor).Value;
-                newElementId = _storage.Append(newBufferId, value, ref accessor);
+                newElementId = _storage.Append(newBufferId, value, ref sibAccessor);
             }
             else
             {
                 // newKey doesn't exist — create buffer and insert via AddOrUpdateCore
-                newBufferId = _storage.CreateBuffer(ref accessor);
-                newElementId = _storage.Append(newBufferId, value, ref accessor);
-                var insertArgs = new InsertArguments(newKey, newBufferId, Comparer, ref accessor);
+                newBufferId = _storage.CreateBuffer(ref sibAccessor);
+                newElementId = _storage.Append(newBufferId, value, ref sibAccessor);
+                var insertArgs = new InsertArguments(newKey, newBufferId, Comparer, ref accessor, ref sibAccessor);
                 AddOrUpdateCorePessimistic(ref insertArgs);
             }
             newHeadBufferId = newBufferId;
@@ -543,11 +559,11 @@ public abstract partial class BTree<TKey>
             // If old buffer is now empty, remove the BTree entry
             if (res == 0 && !preserveEmptyBuffer)
             {
-                var removeArgs = new RemoveArguments(oldKey, Comparer, ref accessor);
+                var removeArgs = new RemoveArguments(oldKey, Comparer, ref accessor, ref sibAccessor);
                 RemoveCorePessimistic(ref removeArgs);
                 if (removeArgs.Removed)
                 {
-                    _storage.DeleteBuffer(oldBufferId, ref accessor);
+                    _storage.DeleteBuffer(oldBufferId, ref sibAccessor);
                 }
             }
 
@@ -556,7 +572,11 @@ public abstract partial class BTree<TKey>
         }
         finally
         {
-            DeferredReclaim();
+            if (++_deferredReclaimSkip >= 64)
+            {
+                _deferredReclaimSkip = 0;
+                DeferredReclaim();
+            }
         }
     }
 }

@@ -350,7 +350,7 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
             Set(ref chunk, c, item, true);
         }
 
-        public override int Append(int bufferId, int value, ref ChunkAccessor accessor) => throw new Exception("Shouldn't be called as key replace is not supported and multi-value neither");
+        public override int Append(int bufferId, int value, ref ChunkAccessor bufferAccessor) => throw new Exception("Shouldn't be called as key replace is not supported and multi-value neither");
 
         public override void Insert(NodeWrapper node, int index, KeyValueItem item, ref ChunkAccessor accessor)
         {
@@ -373,11 +373,12 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
             chunk.Count++;
         }
 
-        public override int CreateBuffer(ref ChunkAccessor accessor) => default;
+        public override int CreateBuffer(ref ChunkAccessor bufferAccessor) => default;
 
         public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId, ref ChunkAccessor accessor) => default;
-        public override int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor accessor) => default;
-        public override void DeleteBuffer(int bufferId, ref ChunkAccessor accessor) { }
+        public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId) => default;
+        public override int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor bufferAccessor) => default;
+        public override void DeleteBuffer(int bufferId, ref ChunkAccessor bufferAccessor) { }
 
         public override NodeWrapper GetFirstChild(NodeWrapper node, ref ChunkAccessor accessor)
         {
@@ -491,8 +492,7 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
         public override NodeWrapper SplitRight(NodeWrapper node, NodeStates states, ref ChunkAccessor accessor)
         {
-            ref var chunk = ref accessor.GetChunk<Index64Chunk>(node.ChunkId, true);
-            return SplitRight(ref chunk, states, ref accessor);
+            return SplitRight(node.ChunkId, states, ref accessor);
         }
 
         public override KeyValueItem RemoveAt(NodeWrapper node, int index, ref ChunkAccessor accessor)
@@ -695,12 +695,14 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
             if (length < 0 || length > Index64Chunk.Capacity)
             {
-                throw new ArgumentOutOfRangeException(nameof(length));
+                throw new ArgumentOutOfRangeException(nameof(length),
+                    $"LeftShift: length={length} out of range (index={index}, Count={chunk.Count}, Start={chunk.Start}, Control=0x{chunk.Control:X8})");
             }
 
             if (index < 0 || index >= Index64Chunk.Capacity)
             {
-                throw new ArgumentOutOfRangeException(nameof(length));
+                throw new ArgumentOutOfRangeException(nameof(index),
+                    $"LeftShift: index={index} out of range (length={length}, Count={chunk.Count}, Start={chunk.Start}, Control=0x{chunk.Control:X8})");
             }
 
             var k = chunk.KeysAsSpan;
@@ -746,12 +748,14 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
             if (length < 0 || length > Index64Chunk.Capacity)
             {
-                throw new ArgumentOutOfRangeException(nameof(length));
+                throw new ArgumentOutOfRangeException(nameof(length),
+                    $"RightShift: length={length} out of range (index={index}, Count={chunk.Count}, Start={chunk.Start}, Control=0x{chunk.Control:X8})");
             }
 
             if (index < 0 || index >= Index64Chunk.Capacity)
             {
-                throw new ArgumentOutOfRangeException(nameof(length));
+                throw new ArgumentOutOfRangeException(nameof(index),
+                    $"RightShift: index={index} out of range (length={length}, Count={chunk.Count}, Start={chunk.Start}, Control=0x{chunk.Control:X8})");
             }
 
             var k = chunk.KeysAsSpan;
@@ -779,12 +783,18 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
             }
         }
 
-        public NodeWrapper SplitRight(ref Index64Chunk left, NodeStates states, ref ChunkAccessor accessor)
+        public NodeWrapper SplitRight(int leftChunkId, NodeStates states, ref ChunkAccessor accessor)
         {
+            ref var left = ref accessor.GetChunk<Index64Chunk>(leftChunkId, true);
             var oldHighKey = left.HighKey; // save before split — right inherits original upper bound
 
             var rightNode = Owner.AllocNode(states, ref accessor);
+
+            // Re-obtain refs after allocation — AllocNode may trigger page cache eviction
+            // (slot eviction in ChunkAccessor or page eviction in PagedMMF), invalidating
+            // previously cached pointers held as managed refs.
             ref var right = ref accessor.GetChunk<Index64Chunk>(rightNode.ChunkId, true);
+            left = ref accessor.GetChunk<Index64Chunk>(leftChunkId, true);
 
             var lr = left.Count / 2; // length of right side
             var lrc = 1 + ((left.Count - 1) / 2); // length of right (ceiling of Length/2)
@@ -860,14 +870,15 @@ public class L64MultipleBTree<TKey> : L64BTree<TKey> where TKey : unmanaged
 
         }
 
-        public override int Append(int bufferId, int value, ref ChunkAccessor accessor) => _valueStore.AddElement(bufferId, value, ref accessor);
+        public override int Append(int bufferId, int value, ref ChunkAccessor bufferAccessor) => _valueStore.AddElement(bufferId, value, ref bufferAccessor);
         public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId, ref ChunkAccessor accessor) => _valueStore.GetReadOnlyAccessor(bufferId);
+        public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId) => _valueStore.GetReadOnlyAccessor(bufferId);
 
-        public override int CreateBuffer(ref ChunkAccessor accessor) => _valueStore.AllocateBuffer(ref accessor);
+        public override int CreateBuffer(ref ChunkAccessor bufferAccessor) => _valueStore.AllocateBuffer(ref bufferAccessor);
 
-        public override int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor accessor) 
-            => _valueStore.DeleteElement(bufferId, elementId, value, ref accessor);
-        public override void DeleteBuffer(int bufferId, ref ChunkAccessor accessor) => _valueStore.DeleteBuffer(bufferId, ref accessor);
+        public override int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor bufferAccessor)
+            => _valueStore.DeleteElement(bufferId, elementId, value, ref bufferAccessor);
+        public override void DeleteBuffer(int bufferId, ref ChunkAccessor bufferAccessor) => _valueStore.DeleteBuffer(bufferId, ref bufferAccessor);
     }
 }
 

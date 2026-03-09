@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using Typhon.Engine;
+using Typhon.Shell.Extensibility;
 
 namespace Typhon.Shell.Session;
 
@@ -26,6 +27,9 @@ internal sealed class ShellSession : IDisposable
     private readonly Dictionary<string, Schema.ComponentSchema> _componentSchemas = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Type> _componentTypes = new(StringComparer.OrdinalIgnoreCase);
 
+    // Extension commands discovered from loaded assemblies
+    private readonly Dictionary<string, ShellCommand> _customCommands = new(StringComparer.OrdinalIgnoreCase);
+
     // Settings
     public string Format { get; set; } = "table";
     public bool AutoCommit { get; set; }
@@ -33,6 +37,8 @@ internal sealed class ShellSession : IDisposable
     public int PageSize { get; set; } = 20;
     public string Color { get; set; } = "auto";
     public bool Timing { get; set; }
+    public LogLevel LogLevel { get; set; } = LogLevel.Warning;
+    public bool NoWal { get; set; }
 
     // Resource graph
     private IResourceRegistry _resourceRegistry;
@@ -50,6 +56,7 @@ internal sealed class ShellSession : IDisposable
     public IReadOnlyDictionary<string, Schema.ComponentSchema> ComponentSchemas => _componentSchemas;
     public IReadOnlyDictionary<string, Type> ComponentTypes => _componentTypes;
     public IReadOnlyList<string> AssemblyPaths => _assemblyPaths;
+    public IReadOnlyDictionary<string, ShellCommand> CustomCommands => _customCommands;
     public IResourceRegistry ResourceRegistry => _resourceRegistry;
     public ResourceGraph ResourceGraph => _resourceGraph;
 
@@ -84,7 +91,8 @@ internal sealed class ShellSession : IDisposable
                     options.SingleLine = true;
                     options.IncludeScopes = true;
                 });
-                builder.SetMinimumLevel(LogLevel.Warning);
+                // Use a dynamic filter so runtime `log-level` command changes take effect immediately.
+                builder.AddFilter((_, level) => level >= LogLevel);
             })
             .AddResourceRegistry()
             .AddMemoryAllocator()
@@ -95,10 +103,26 @@ internal sealed class ShellSession : IDisposable
             {
                 options.DatabaseName = _databaseName;
                 options.DatabaseDirectory = directory;
-                // DatabaseFileName defaults to DatabaseName; engine appends ".bin"
+                // 65536 pages = 512 MiB page cache.
+                options.DatabaseCacheSize = 65536UL * 8192;
             })
             .AddMemoryAllocator()
-            .AddDatabaseEngine();
+            .AddSingleton<IWalFileIO, WalFileIO>()
+            .AddDatabaseEngine(engineOpts =>
+            {
+                if (!NoWal)
+                {
+                    var walDir = Path.Combine(directory, "wal");
+                    Directory.CreateDirectory(walDir);
+                    engineOpts.Wal = new WalWriterOptions
+                    {
+                        WalDirectory = walDir,
+                        // Shell uses Deferred durability — WAL is only needed for checkpoint-driven page flushing.
+                        // FUA off since we don't need per-write durability guarantees in tsh.
+                        UseFUA = false
+                    };
+                }
+            });
 
         _serviceProvider = services.BuildServiceProvider();
         _engine = _serviceProvider.GetRequiredService<DatabaseEngine>();
@@ -250,6 +274,16 @@ internal sealed class ShellSession : IDisposable
     }
 
     /// <summary>
+    /// Registers an extension command discovered from a loaded assembly.
+    /// </summary>
+    public void RegisterCommand(ShellCommand command) => _customCommands[command.Name] = command;
+
+    /// <summary>
+    /// Clears all extension commands (for reload).
+    /// </summary>
+    public void ClearCommands() => _customCommands.Clear();
+
+    /// <summary>
     /// Clears all loaded schemas (for reload).
     /// </summary>
     public void ClearSchemas()
@@ -267,7 +301,15 @@ internal sealed class ShellSession : IDisposable
         }
 
         var generic = method.MakeGenericMethod(componentType);
-        generic.Invoke(_engine, [null, SchemaValidationMode.Enforce]);
+        try
+        {
+            generic.Invoke(_engine, [null, SchemaValidationMode.Enforce]);
+        }
+        catch (System.Reflection.TargetInvocationException ex)
+        {
+            throw new InvalidOperationException(
+                $"Failed to register component {componentType.Name}: {ex.InnerException?.Message}", ex.InnerException);
+        }
     }
 
     public void Dispose() => CloseDatabase();

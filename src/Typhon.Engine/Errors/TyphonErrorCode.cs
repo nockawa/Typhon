@@ -18,6 +18,7 @@ public enum TyphonErrorCode : int
     DataCorruption              = 2003,
     StorageCapacityExceeded     = 2004,
     PageChecksumMismatch        = 2005,
+    PageCacheBackpressureTimeout = 2006,
 
     // 3xxx — Component
     SchemaValidation            = 3001,

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <NUnit>
+    <!-- Default timeout (ms) for tests without explicit [CancelAfter] or [Timeout].
+         Safety net to catch deadlocks and infinite loops quickly (~5s) instead of
+         waiting 60s. Tests that legitimately need more time should use explicit
+         [CancelAfter(N)] attributes, which override this value. -->
+    <DefaultTimeout>5000</DefaultTimeout>
+  </NUnit>
+</RunSettings>

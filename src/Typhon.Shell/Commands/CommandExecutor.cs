@@ -6,6 +6,8 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
+using Microsoft.Extensions.Logging;
 using Spectre.Console;
 using Typhon.Engine;
 using Typhon.Shell.Formatting;
@@ -90,9 +92,7 @@ internal sealed class CommandExecutor
         }
         catch (Exception ex)
         {
-            result = _session.Verbose
-                ? CommandResult.Error($"Error: {ex.Message}\n{ex.StackTrace}")
-                : CommandResult.Error($"Error: {ex.Message}");
+            result = CommandResult.Error($"Error: {ex.Message}");
         }
 
         if (sw != null)
@@ -132,7 +132,7 @@ internal sealed class CommandExecutor
             return schemaResult.Value;
         }
 
-        return cmd.Value.ToLowerInvariant() switch
+        var builtinResult = cmd.Value.ToLowerInvariant() switch
         {
             "open"          => ExecuteOpen(tokens, 1),
             "close"         => ExecuteClose(),
@@ -149,11 +149,60 @@ internal sealed class CommandExecutor
             "update"        => ExecuteUpdate(tokens, 1),
             "delete"        => ExecuteDelete(tokens, 1),
             "set"           => ExecuteSet(tokens, 1),
+            "log-level"     => ExecuteLogLevel(tokens, 1),
+            "echo"          => ExecuteEcho(tokens, 1),
             "help"          => ExecuteHelp(tokens, 1),
             "history"       => ExecuteHistory(),
+            "pause"         => ExecutePause(tokens, 1),
             "exit" or "quit" => CommandResult.Exit(),
-            _               => CommandResult.Error($"Unknown command: '{cmd.Value}'. Type 'help' for available commands.")
+            _               => (CommandResult?)null
         };
+
+        if (builtinResult.HasValue)
+        {
+            return builtinResult.Value;
+        }
+
+        // Try extension commands
+        return DispatchCustomCommand(cmd.Value, tokens);
+    }
+
+    private CommandResult DispatchCustomCommand(string name, List<Token> tokens)
+    {
+        if (!_session.CustomCommands.TryGetValue(name, out var command))
+        {
+            return CommandResult.Error($"Unknown command: '{name}'. Type 'help' for available commands.");
+        }
+
+        if (command.RequiresDatabase && !_session.IsOpen)
+        {
+            return CommandResult.Error($"Error: '{command.Name}' requires an open database. Use 'open <path>' first.");
+        }
+
+        // Build string[] args from tokens
+        var args = new List<string>();
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            if (tokens[i].Kind == TokenKind.End)
+            {
+                break;
+            }
+
+            args.Add(tokens[i].Value);
+        }
+
+        var context = new ShellCommandContext(_session);
+        var result = command.Execute(context, args.ToArray());
+
+        // Map ShellCommandResult → CommandResult
+        if (!result.Success)
+        {
+            return CommandResult.Error(result.Output);
+        }
+
+        return result.UseMarkup
+            ? CommandResult.Markup(result.Output)
+            : CommandResult.Ok(result.Output);
     }
 
     // ── Database Commands ──────────────────────────────────────
@@ -221,11 +270,7 @@ internal sealed class CommandExecutor
             return CommandResult.Error("Syntax error: load-schema <path>");
         }
 
-        var components = AssemblySchemaLoader.LoadAssembly(path);
-        if (components.Count == 0)
-        {
-            return CommandResult.Ok($"  No [Component] types found in {System.IO.Path.GetFileName(path)}");
-        }
+        var (assembly, components) = AssemblySchemaLoader.LoadAssembly(path);
 
         _session.AddAssemblyPath(path);
 
@@ -234,8 +279,62 @@ internal sealed class CommandExecutor
             _session.RegisterComponent(name, type, schema);
         }
 
-        var names = string.Join("[grey],[/] ", components.Select(c => $"[green]{Markup.Escape(c.Name)}[/]"));
-        return CommandResult.Markup($"  [white]Loaded {components.Count} component{(components.Count != 1 ? "s" : "")}:[/] {names}");
+        // Discover extension commands from the loaded assembly itself
+        var commands = AssemblySchemaLoader.LoadCommands(assembly);
+        foreach (var command in commands)
+        {
+            _session.RegisterCommand(command);
+        }
+
+        // Also discover commands from sibling assemblies in the same directory
+        var scanned = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            System.IO.Path.GetFullPath(path)
+        };
+
+        var siblingCommands = AssemblySchemaLoader.DiscoverCommandsInDirectory(path, scanned);
+        foreach (var (command, _) in siblingCommands)
+        {
+            _session.RegisterCommand(command);
+        }
+
+        // Build output report
+        var sb = new StringBuilder();
+
+        if (components.Count > 0)
+        {
+            var names = string.Join("[grey],[/] ", components.Select(c => $"[green]{Markup.Escape(c.Name)}[/]"));
+            sb.Append($"  [white]Loaded {components.Count} component{(components.Count != 1 ? "s" : "")}:[/] {names}");
+        }
+
+        // Report each discovered command with its source assembly
+        var allCommands = new List<(string Name, string Assembly)>();
+        foreach (var cmd in commands)
+        {
+            allCommands.Add((cmd.Name, assembly.GetName().Name));
+        }
+
+        foreach (var (cmd, asmName) in siblingCommands)
+        {
+            allCommands.Add((cmd.Name, asmName));
+        }
+
+        foreach (var (cmdName, asmName) in allCommands)
+        {
+            if (sb.Length > 0)
+            {
+                sb.AppendLine();
+            }
+
+            sb.Append($"  [white]Command:[/] [cyan]{Markup.Escape(cmdName)}[/] [grey](from {Markup.Escape(asmName)})[/]");
+        }
+
+        if (components.Count == 0 && allCommands.Count == 0)
+        {
+            return CommandResult.Ok($"  No [Component] types or commands found in {System.IO.Path.GetFileName(path)}");
+        }
+
+        return CommandResult.Markup(sb.ToString());
     }
 
     private CommandResult ExecuteReloadSchema()
@@ -256,24 +355,49 @@ internal sealed class CommandExecutor
         // Close database
         _session.CloseDatabase();
         _session.ClearSchemas();
+        _session.ClearCommands();
 
         // Reload assemblies
         var totalComponents = 0;
+        var totalCommands = 0;
+        var scanned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var asmPath in assemblyPaths)
         {
-            var components = AssemblySchemaLoader.LoadAssembly(asmPath);
+            var (assembly, components) = AssemblySchemaLoader.LoadAssembly(asmPath);
+            scanned.Add(System.IO.Path.GetFullPath(asmPath));
             _session.AddAssemblyPath(asmPath);
             foreach (var (name, type, schema) in components)
             {
                 _session.RegisterComponent(name, type, schema);
                 totalComponents++;
             }
+
+            var commands = AssemblySchemaLoader.LoadCommands(assembly);
+            foreach (var command in commands)
+            {
+                _session.RegisterCommand(command);
+                totalCommands++;
+            }
+
+            var siblingCommands = AssemblySchemaLoader.DiscoverCommandsInDirectory(asmPath, scanned);
+            foreach (var (command, _) in siblingCommands)
+            {
+                _session.RegisterCommand(command);
+                totalCommands++;
+            }
         }
 
         // Reopen database
         _session.OpenDatabase(dbPath);
 
-        return CommandResult.Markup($"  [green]Reloaded {totalComponents} component{(totalComponents != 1 ? "s" : "")} from {assemblyPaths.Count} assembl{(assemblyPaths.Count != 1 ? "ies" : "y")}. Database ready.[/]");
+        var msg = $"  [green]Reloaded {totalComponents} component{(totalComponents != 1 ? "s" : "")}";
+        if (totalCommands > 0)
+        {
+            msg += $", {totalCommands} command{(totalCommands != 1 ? "s" : "")}";
+        }
+
+        msg += $" from {assemblyPaths.Count} assembl{(assemblyPaths.Count != 1 ? "ies" : "y")}. Database ready.[/]";
+        return CommandResult.Markup(msg);
     }
 
     private CommandResult ExecuteSchema()
@@ -707,7 +831,8 @@ internal sealed class CommandExecutor
             "page-size"   => SetPageSize(value),
             "color"       => SetColor(value),
             "timing"      => SetBool(value, v => _session.Timing = v, "timing"),
-            _             => CommandResult.Error($"Error: Unknown setting '{key}'. Known: format, auto-commit, verbose, page-size, color, timing")
+            "log-level"   => SetLogLevel(value),
+            _             => CommandResult.Error($"Error: Unknown setting '{key}'. Known: format, auto-commit, verbose, page-size, color, timing, log-level")
         };
     }
 
@@ -720,7 +845,8 @@ internal sealed class CommandExecutor
         sb.AppendLine($"    [grey]verbose:[/]      [white]{(_session.Verbose ? "on" : "off")}[/]");
         sb.AppendLine($"    [grey]page-size:[/]    [white]{_session.PageSize}[/]");
         sb.AppendLine($"    [grey]color:[/]        [white]{Markup.Escape(_session.Color)}[/]");
-        sb.Append($"    [grey]timing:[/]       [white]{(_session.Timing ? "on" : "off")}[/]");
+        sb.AppendLine($"    [grey]timing:[/]       [white]{(_session.Timing ? "on" : "off")}[/]");
+        sb.Append($"    [grey]log-level:[/]    [white]{_session.LogLevel}[/]");
         return CommandResult.Markup(sb.ToString());
     }
 
@@ -734,6 +860,7 @@ internal sealed class CommandExecutor
             "page-size"   => _session.PageSize.ToString(),
             "color"       => _session.Color,
             "timing"      => _session.Timing ? "on" : "off",
+            "log-level"   => _session.LogLevel.ToString(),
             _             => null
         };
 
@@ -792,6 +919,66 @@ internal sealed class CommandExecutor
         return CommandResult.Ok();
     }
 
+    private CommandResult ExecuteLogLevel(List<Token> tokens, int pos)
+    {
+        if (pos >= tokens.Count || tokens[pos].Kind == TokenKind.End)
+        {
+            return CommandResult.Markup($"  [grey]log-level:[/] [white]{_session.LogLevel}[/]");
+        }
+
+        return SetLogLevel(tokens[pos].Value);
+    }
+
+    private CommandResult SetLogLevel(string value)
+    {
+        if (!Enum.TryParse<LogLevel>(value, ignoreCase: true, out var level))
+        {
+            return CommandResult.Error("Error: Invalid log level. Valid: Trace, Debug, Information, Warning, Error, Critical, None");
+        }
+
+        _session.LogLevel = level;
+        return CommandResult.Markup($"  [grey]log-level set to:[/] [white]{level}[/]");
+    }
+
+    private CommandResult ExecuteEcho(List<Token> tokens, int pos)
+    {
+        // Determine timestamp format: --short (HH:mm:ss), --ms (HH:mm:ss.fff), --us (HH:mm:ss.ffffff), --full (yyyy-MM-dd HH:mm:ss.fffffff)
+        // Default is --ms
+        var format = "HH:mm:ss.fff";
+        var msgParts = new List<string>();
+
+        while (pos < tokens.Count && tokens[pos].Kind != TokenKind.End)
+        {
+            var val = tokens[pos].Value;
+            if (val == "--" && pos + 1 < tokens.Count && tokens[pos + 1].Kind != TokenKind.End)
+            {
+                pos++;
+                var flag = tokens[pos].Value.ToLowerInvariant();
+                switch (flag)
+                {
+                    case "short": format = "HH:mm:ss"; break;
+                    case "ms": format = "HH:mm:ss.fff"; break;
+                    case "us": format = "HH:mm:ss.ffffff"; break;
+                    case "full": format = "yyyy-MM-dd HH:mm:ss.fffffff"; break;
+                    default: msgParts.Add("--" + flag); break;
+                }
+            }
+            else
+            {
+                msgParts.Add(val);
+            }
+            pos++;
+        }
+
+        var timestamp = DateTime.Now.ToString(format);
+        var message = msgParts.Count > 0 ? string.Join(" ", msgParts) : "";
+        var output = message.Length > 0
+            ? $"  [grey][[{Markup.Escape(timestamp)}]][/] [white]{Markup.Escape(message)}[/]"
+            : $"  [grey][[{Markup.Escape(timestamp)}]][/]";
+
+        return CommandResult.Markup(output);
+    }
+
     private CommandResult ExecuteHelp(List<Token> tokens, int pos)
     {
         if (pos < tokens.Count && tokens[pos].Kind != TokenKind.End)
@@ -829,9 +1016,10 @@ internal sealed class CommandExecutor
         sb.AppendLine("    [cyan]schema-diff[/] <component>          Compare persisted vs runtime schema");
         sb.AppendLine("    [cyan]schema-validate[/]                  Dry-run validation for all components");
         sb.AppendLine("    [cyan]schema-history[/]                   Show schema change audit trail");
-        sb.AppendLine("    [cyan]schema-export[/] [component]        Export persisted schema (respects format)");
+        sb.AppendLine("    [cyan]schema-export[/] [[component]]        Export persisted schema (respects format)");
         sb.AppendLine();
         sb.AppendLine("  [yellow]Diagnostics:[/]");
+        sb.AppendLine("    [cyan]db-stats[/]                           Database volumetry: pages, segments, chunks, bytes");
         sb.AppendLine("    [cyan]cache-stats[/]                        Page cache hit rate & state breakdown");
         sb.AppendLine("    [cyan]cache-pages[/] [[where state=...]]      Memory page state summary");
         sb.AppendLine("    [cyan]page-dump[/] <N> [[--raw]]              Inspect page header + data");
@@ -845,16 +1033,32 @@ internal sealed class CommandExecutor
         sb.AppendLine("    [cyan]transactions[/]                       Active transaction list");
         sb.AppendLine("    [cyan]memory[/]                             Memory usage by subsystem");
         sb.AppendLine("    [cyan]resources[/] [[--flat]]                 Resource graph (TUI or flat table)");
+        sb.AppendLine("    [cyan]stats-show[/] <Comp.Field|Comp|--all>    Index statistics & histogram");
+        sb.AppendLine("    [cyan]stats-rebuild[/] <Comp.Field|Comp|--all>  Rebuild histograms");
         sb.AppendLine();
         sb.AppendLine("  [yellow]Shell:[/]");
         sb.AppendLine("    [cyan]set[/] [[key [[value]]]]                View/change shell settings");
+        sb.AppendLine("    [cyan]echo[/] [[--short|ms|us|full]] <msg>  Print timestamped message");
         sb.AppendLine("    [cyan]help[/] [[command]]                   Show help");
         sb.AppendLine("    [cyan]history[/]                          Show command history");
-        sb.Append("    [cyan]exit[/] / [cyan]quit[/]                      Exit the shell");
-        return CommandResult.Markup(sb.ToString());
+        sb.AppendLine("    [cyan]exit[/] / [cyan]quit[/]                      Exit the shell");
+
+        // Extension commands
+        if (_session.CustomCommands.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("  [yellow]Extensions:[/]");
+            foreach (var cmd in _session.CustomCommands.Values)
+            {
+                var padded = cmd.Name.PadRight(30);
+                sb.AppendLine($"    [cyan]{Markup.Escape(padded)}[/]  {Markup.Escape(cmd.Description)}");
+            }
+        }
+
+        return CommandResult.Markup(sb.ToString().TrimEnd());
     }
 
-    private static CommandResult ShowCommandHelp(string command)
+    private CommandResult ShowCommandHelp(string command)
     {
         var text = command switch
         {
@@ -873,9 +1077,11 @@ internal sealed class CommandExecutor
             "update"        => "  update <entityId> <component> { field=value, ... }\n    Updates entity data. Reads current, overlays specified fields, writes back.\n    Unspecified fields are preserved.",
             "delete"        => "  delete <entityId> <component>\n    Deletes an entity's component data.",
             "set"           => "  set [key [value]]\n    View or change settings.\n    Settings: format, auto-commit, verbose, page-size, color, timing",
+            "echo"          => "  echo [--short|--ms|--us|--full] <message>\n    Prints a timestamped message.\n    Formats: --short (HH:mm:ss), --ms (HH:mm:ss.fff, default),\n             --us (HH:mm:ss.ffffff), --full (yyyy-MM-dd HH:mm:ss.fffffff)",
             "help"          => "  help [command]\n    Shows help for all commands or a specific command.",
             "history"       => "  history\n    Shows recent command history.",
             "exit" or "quit" => "  exit / quit\n    Exits the shell.",
+            "db-stats"       => "  db-stats\n    Database volumetry overview: file pages (allocated/capacity), per-component\n    segment breakdown (chunks, bytes, fill%), and totals.",
             "cache-stats"    => "  cache-stats\n    Shows page cache hit rate, state breakdown (free/idle/shared/exclusive/dirty),\n    and disk I/O counters.",
             "cache-pages"    => "  cache-pages [where state=<state>]\n    Summarizes memory page states. Optional filter by state name\n    (free, idle, shared, exclusive, dirty, allocating).",
             "page-dump"      => "  page-dump <pageNumber> [--raw]\n    Displays structured page header info and a data preview.\n    With --raw, shows a full hex dump of the entire 8KB page.",
@@ -889,6 +1095,8 @@ internal sealed class CommandExecutor
             "transactions"   => "  transactions\n    Lists active transactions with TSN and state.\n    Shows MinTSN and NextTSN from the transaction chain.",
             "memory"         => "  memory\n    Shows memory usage grouped by engine subsystem\n    (Storage, DataEngine, Durability, Allocation).",
             "resources"      => "  resources [--flat]\n    Without --flat: launches interactive Terminal.Gui resource explorer.\n    With --flat: prints all resource nodes as a table.",
+            "stats-show"     => "  stats-show <Component.Field> | <Component> | --all\n    Shows index statistics: entry count, min/max key, and histogram\n    distribution (if built). Use stats-rebuild to build histograms first.\n    Examples: stats-show Player.Gold, stats-show Player, stats-show --all",
+            "stats-rebuild"  => "  stats-rebuild <Component.Field> | <Component> | --all\n    Rebuilds equi-width histograms via full index scan.\n    Reports entity count, key range, and elapsed time per index.\n    Examples: stats-rebuild Player.Gold, stats-rebuild Player, stats-rebuild --all",
             "schema-fields"  => "  schema-fields <component>\n    Shows persisted FieldId assignments, types, offsets, and sizes.\n    Accepts short name (e.g. 'Player') or full schema name.",
             "schema-diff"    => "  schema-diff <component>\n    Compares persisted vs runtime schema and shows field-level changes.\n    Requires a loaded assembly (load-schema). Color-coded output:\n    green=added, red=removed/breaking, yellow=widened.",
             "schema-validate" => "  schema-validate\n    Dry-run validation of all loaded component types against persisted schema.\n    Reports OK/FAIL per component with change summaries.",
@@ -897,9 +1105,18 @@ internal sealed class CommandExecutor
             _               => null,
         };
 
-        return text != null
-            ? CommandResult.Ok(text)
-            : CommandResult.Error($"Error: Unknown command '{command}'. Type 'help' for available commands.");
+        if (text != null)
+        {
+            return CommandResult.Ok(text);
+        }
+
+        // Check extension commands
+        if (_session.CustomCommands.TryGetValue(command, out var customCmd))
+        {
+            return CommandResult.Ok(customCmd.DetailedHelp);
+        }
+
+        return CommandResult.Error($"Error: Unknown command '{command}'. Type 'help' for available commands.");
     }
 
     private CommandResult ExecuteHistory()
@@ -916,6 +1133,22 @@ internal sealed class CommandExecutor
         }
 
         return CommandResult.Ok(sb.ToString().TrimEnd());
+    }
+
+    private CommandResult ExecutePause(List<Token> tokens, int pos)
+    {
+        if (pos >= tokens.Count || tokens[pos].Kind == TokenKind.End)
+        {
+            return CommandResult.Error("Usage: pause <seconds>");
+        }
+
+        if (!int.TryParse(tokens[pos].Value, out var seconds) || seconds <= 0)
+        {
+            return CommandResult.Error($"Invalid pause duration: '{tokens[pos].Value}'. Expected a positive integer (seconds).");
+        }
+
+        Thread.Sleep(seconds * 1000);
+        return CommandResult.Ok($"Paused for {seconds}s.");
     }
 
     // ── Reflection Bridge ──────────────────────────────────────

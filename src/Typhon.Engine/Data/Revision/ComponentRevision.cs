@@ -34,7 +34,7 @@ internal ref struct ComponentRevision
         => ComponentRevisionManager.GetRevisionElement(ref _accessor, _firstChunkId, revisionIndex);
     internal void AddCompRev(long tsn, bool isDelete)
         => ComponentRevisionManager.AddCompRev(_info, ref _compRevInfo, tsn, _uowId, isDelete);
-    internal int AllocCompRevStorage(long tsn) => ComponentRevisionManager.AllocCompRevStorage(_info, tsn, _uowId, _firstChunkId);
+    internal int AllocCompRevStorage(long tsn, long pk) => ComponentRevisionManager.AllocCompRevStorage(_info, tsn, _uowId, _firstChunkId, pk);
     public void VoidElement(ComponentRevisionManager.ElementRevisionHandle elementRevisionHandle)
     {
         ref var firstHeader = ref _accessor.GetChunk<CompRevStorageHeader>(_firstChunkId, true);

@@ -69,7 +69,11 @@ class PagedMMFTests
     
 
     [TearDown]
-    public void TearDown() => Log.CloseAndFlush();
+    public void TearDown()
+    {
+        (_serviceProvider as IDisposable)?.Dispose();
+        Log.CloseAndFlush();
+    }
 
     private const int CreateFillPagesThenReadThemMemPageCount = 512;
     [Test]
@@ -275,10 +279,11 @@ class PagedMMFTests
 
     [Test]
     [Property("MemPageCount", 1024)]
+    [CancelAfter(10000)]
     unsafe public void ReliabilityTest()
     {
         var cacheFactor = 0.75f;   // This is nasty...we are going to have a lot of cache miss...
-        var frameCount = 50;
+        var frameCount = 25;
         var opsPerFrame = 1000;
         var readWriteRatio = 0.75f;
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();

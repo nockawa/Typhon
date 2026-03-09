@@ -212,13 +212,21 @@ public class FpiBitmapTests
         using var barrier = new Barrier(threadCount);
 
         var threads = new Thread[threadCount];
+        var exceptions = new Exception[threadCount];
         for (var i = 0; i < threadCount; i++)
         {
             var index = i;
             threads[i] = new Thread(() =>
             {
-                barrier.SignalAndWait();
-                results[index] = bitmap.TestAndSet(0);
+                try
+                {
+                    barrier.SignalAndWait();
+                    results[index] = bitmap.TestAndSet(0);
+                }
+                catch (Exception ex)
+                {
+                    exceptions[index] = ex;
+                }
             });
             threads[i].Start();
         }
@@ -226,6 +234,11 @@ public class FpiBitmapTests
         foreach (var t in threads)
         {
             t.Join();
+        }
+
+        for (var i = 0; i < threadCount; i++)
+        {
+            Assert.That(exceptions[i], Is.Null, $"Thread {i} threw: {exceptions[i]}");
         }
 
         // Exactly one thread should have gotten false (the first to set the bit)
@@ -257,6 +270,7 @@ public class FpiBitmapTests
         using var barrier = new Barrier(threadCount);
 
         var threads = new Thread[threadCount];
+        var exceptions = new Exception[threadCount];
         for (var i = 0; i < threadCount; i++)
         {
             var index = i;
@@ -264,8 +278,15 @@ public class FpiBitmapTests
             var bitIndex = index * 30; // 0, 30, 60, 90, 120, 150, 180, 210
             threads[i] = new Thread(() =>
             {
-                barrier.SignalAndWait();
-                results[index] = bitmap.TestAndSet(bitIndex);
+                try
+                {
+                    barrier.SignalAndWait();
+                    results[index] = bitmap.TestAndSet(bitIndex);
+                }
+                catch (Exception ex)
+                {
+                    exceptions[index] = ex;
+                }
             });
             threads[i].Start();
         }
@@ -273,6 +294,11 @@ public class FpiBitmapTests
         foreach (var t in threads)
         {
             t.Join();
+        }
+
+        for (var i = 0; i < threadCount; i++)
+        {
+            Assert.That(exceptions[i], Is.Null, $"Thread {i} threw: {exceptions[i]}");
         }
 
         // All threads target different bits, so all should get false

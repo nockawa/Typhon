@@ -9,8 +9,7 @@ namespace Typhon.Engine;
 internal static class RevisionChainReader
 {
     /// <summary>
-    /// Walks a revision chain and returns the <see cref="ComponentInfo.CompRevInfo"/> for the latest
-    /// visible revision at the given <paramref name="transactionTSN"/>.
+    /// Walks a revision chain and returns the <see cref="ComponentInfo.CompRevInfo"/> for the latest visible revision at the given <paramref name="transactionTSN"/>.
     /// </summary>
     /// <param name="compRevTableAccessor">Accessor for reading revision table chunks.</param>
     /// <param name="compRevFirstChunkId">First chunk ID of the entity's revision chain.</param>
@@ -20,22 +19,25 @@ internal static class RevisionChainReader
     /// <see cref="RevisionReadStatus.SnapshotInvisible"/> if no committed entry is visible;
     /// <see cref="RevisionReadStatus.Deleted"/> if the latest visible entry is a tombstone (ComponentChunkId == 0).
     /// </returns>
-    internal static Result<ComponentInfo.CompRevInfo, RevisionReadStatus> WalkChain(
-        ref ChunkAccessor compRevTableAccessor, int compRevFirstChunkId, long transactionTSN)
+    internal static Result<ComponentInfo.CompRevInfo, RevisionReadStatus> WalkChain(ref ChunkAccessor compRevTableAccessor, int compRevFirstChunkId, 
+        long transactionTSN)
     {
         short prevCompRevisionIndex = -1;
         short curCompRevisionIndex = -1;
         int prevCompChunkId = 0;
         int curCompChunkId = 0;
 
-        // CommitSequence must be captured INSIDE the shared lock (held by RevisionEnumerator) so that ReadCS and the chain walk observe the same consistent
-        // chain state. Capturing it outside the lock creates a race: cleanup or another commit can modify the chain between ReadCS capture and the lock
-        // acquisition, leaving ReadCS consistent with a state the chain walk never sees.
+        // CommitSequence and committed-entry count must be captured INSIDE the shared lock (held by RevisionEnumerator) so that the chain walk
+        // observes a consistent chain state. Capturing outside the lock creates a race: cleanup or another commit can modify the chain between
+        // capture and the lock acquisition, leaving values consistent with a state the chain walk never sees.
         int readCommitSequence;
 
         {
             using var enumerator = new RevisionEnumerator(ref compRevTableAccessor, compRevFirstChunkId, false, true);
             readCommitSequence = compRevTableAccessor.GetChunk<CompRevStorageHeader>(compRevFirstChunkId).CommitSequence;
+            int totalCommitted = 0;
+            int visibleOrdinal = 0;
+
             while (enumerator.MoveNext())
             {
                 ref var element = ref enumerator.Current;
@@ -46,23 +48,33 @@ internal static class RevisionChainReader
                     continue;
                 }
 
-                // Do NOT break on TSN > reader.TSN — entries in the chain are NOT guaranteed to be in monotonically increasing TSN order. A higher-TSN
-                // transaction can write (AddCompRev) before a lower-TSN transaction, placing its entry at a lower index. Breaking early would miss
-                // committed entries with lower TSN at higher indices.
+                // Count ALL committed entries (visible and invisible) to compute the snapshot-isolated revision number.
+                // Do NOT break on TSN > reader.TSN — entries in the chain are NOT guaranteed to be in monotonically increasing TSN order.
+                bool isCommitted = (element.TSN > 0) && !element.IsolationFlag;
+                if (isCommitted)
+                {
+                    totalCommitted++;
+                }
+
                 if (element.TSN > transactionTSN)
                 {
                     continue;
                 }
 
                 // Update the current revision (and the previous) if a valid entry (tick == 0 means a rollbacked entry) and it's not an isolated one
-                if ((element.TSN > 0) && !element.IsolationFlag)
+                if (isCommitted)
                 {
                     prevCompRevisionIndex = curCompRevisionIndex;
                     prevCompChunkId = curCompChunkId;
                     curCompRevisionIndex = (short)(enumerator.Header.FirstItemIndex + enumerator.RevisionIndex);
                     curCompChunkId = element.ComponentChunkId;
+                    visibleOrdinal = totalCommitted;
                 }
             }
+
+            // Compute snapshot-isolated revision number: CS tracks total commits, totalCommitted tracks how many committed entries remain in the
+            // chain (cleanup may have removed some). visibleOrdinal is the 1-based position of the visible entry among committed entries.
+            readCommitSequence = readCommitSequence - totalCommitted + visibleOrdinal;
         }
 
         if (curCompRevisionIndex == -1)
@@ -78,7 +90,8 @@ internal static class RevisionChainReader
             CurRevisionIndex = curCompRevisionIndex,
             PrevCompContentChunkId = prevCompChunkId,
             PrevRevisionIndex = prevCompRevisionIndex,
-            ReadCommitSequence = readCommitSequence
+            ReadCommitSequence = readCommitSequence,
+            ReadRevisionIndex = curCompRevisionIndex
         };
 
         // Tombstoned entity: carry the value (callers like UpdateComponent need revision metadata) but signal Deleted

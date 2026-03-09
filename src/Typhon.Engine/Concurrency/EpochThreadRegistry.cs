@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -172,6 +173,19 @@ internal sealed class EpochThreadRegistry : IDisposable
     }
 
     /// <summary>
+    /// Atomically update the current thread's pinned epoch without going through the unpinned state.
+    /// The thread remains continuously pinned — no brief window where MinActiveEpoch jumps.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void RefreshPinnedEpoch(long newEpoch)
+    {
+        Debug.Assert(_threadRegistry == this, "RefreshPinnedEpoch called on wrong registry");
+        var slot = _threadSlotIndex;
+        Debug.Assert(_slots[slot].Depth > 0, "RefreshPinnedEpoch called outside epoch scope");
+        _slots[slot].PinnedEpoch = newEpoch;
+    }
+
+    /// <summary>
     /// Claim a free slot for the current thread. Called once per thread lifetime (or when a thread encounters a new registry instance).
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]  // Keep hot path (PinCurrentThread) small
@@ -289,15 +303,17 @@ internal sealed class EpochThreadRegistry : IDisposable
     /// Compute the minimum epoch pinned by any active thread. Returns <paramref name="currentGlobalEpoch"/> if no threads are pinned.
     /// </summary>
     /// <remarks>
-    /// Scans all 256 slots. Each PaddedEpochSlot is 64 bytes (one cache line), so PinnedEpoch sits at offset 0 of each slot. Scanning 256 slots = 256 cache
-    /// lines, ~256 × 4 cycles = ~1024 cycles (~300ns at 3.5GHz). This is called during eviction, which is already a slow path.
+    /// Scans up to <c>_highWaterMark</c> slots (capped at MaxSlots after wrap-around). Each PaddedEpochSlot is 64 bytes (one cache line).
+    /// For typical workloads (few threads), this scans only a handful of cache lines instead of all 256.
     /// </remarks>
     public long ComputeMinActiveEpoch(long currentGlobalEpoch)
     {
         var min = currentGlobalEpoch;
 
-        // Scan with liveness check: skip slots whose owning thread has died
-        for (int i = 0; i < MaxSlots; i++)
+        // Scan only allocated slots: _highWaterMark grows monotonically on allocation.
+        // After wrap-around (256+ threads lifetime), Math.Min caps at MaxSlots.
+        var scanLimit = Math.Min(Volatile.Read(ref _highWaterMark), MaxSlots);
+        for (int i = 0; i < scanLimit; i++)
         {
             var pinned = _slots[i].PinnedEpoch;
             if (pinned == 0)

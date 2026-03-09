@@ -1,4 +1,5 @@
 using JetBrains.Annotations;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Runtime.InteropServices;
 
@@ -70,6 +71,12 @@ public sealed class WalManager : ResourceNode
 
     /// <summary>Whether a fatal I/O error has occurred.</summary>
     public bool HasFatalError => _writer?.HasFatalError ?? false;
+
+    /// <summary>Optional logger, propagated to the WAL writer thread for diagnostics.</summary>
+    internal ILogger Logger
+    {
+        set => _writer?.Logger = value;
+    }
 
     // ═══════════════════════════════════════════════════════════════
     // Lifecycle

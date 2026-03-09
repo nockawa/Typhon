@@ -26,6 +26,12 @@ public class PagedMMFOptions
     public ulong DatabaseCacheSize { get; set; } = PagedMMF.DefaultMemPageCount * PagedMMF.PageSize;
     public bool PagesDebugPattern { get; set; } = false;
 
+    /// <summary>
+    /// Factory that creates the backpressure strategy for page cache allocation.
+    /// Defaults to <see cref="WaitForIOStrategy"/> (signal-driven passive wait).
+    /// </summary>
+    internal Func<IPageCacheBackpressureStrategy> BackpressureStrategyFactory { get; set; } = () => new WaitForIOStrategy();
+
     internal bool OverrideDatabaseCacheMinSize { get; set; }
     
     public void EnsureFileDeleted()
