@@ -376,6 +376,7 @@ public abstract class L32BTree<TKey> : BTree<TKey> where TKey : unmanaged
         public override int CreateBuffer(ref ChunkAccessor bufferAccessor) => default;
 
         public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId, ref ChunkAccessor accessor) => default;
+        public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId) => default;
         public override int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor bufferAccessor) => default;
         public override void DeleteBuffer(int bufferId, ref ChunkAccessor bufferAccessor) { }
 
@@ -936,6 +937,7 @@ public class L32MultipleBTree<TKey> : L32BTree<TKey> where TKey : unmanaged
 
         public override int Append(int bufferId, int value, ref ChunkAccessor bufferAccessor) => _valueStore.AddElement(bufferId, value, ref bufferAccessor);
         public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId, ref ChunkAccessor accessor) => _valueStore.GetReadOnlyAccessor(bufferId);
+        public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId) => _valueStore.GetReadOnlyAccessor(bufferId);
 
         public override int CreateBuffer(ref ChunkAccessor bufferAccessor) => _valueStore.AllocateBuffer(ref bufferAccessor);
 

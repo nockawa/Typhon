@@ -1,5 +1,6 @@
 // unset
 
+using System;
 using System.Collections.Generic;
 using System.Threading;
 
@@ -61,7 +62,7 @@ public abstract partial class BTree<TKey>
         /// Forward (<paramref name="reverse"/>=false): seeks to <paramref name="minKey"/>, stops at <paramref name="maxKey"/>.
         /// Reverse (<paramref name="reverse"/>=true): seeks to <paramref name="maxKey"/>, stops at <paramref name="minKey"/>.
         /// </summary>
-        internal RangeEnumerator(BTree<TKey> tree, TKey minKey, TKey maxKey, bool reverse)
+        internal RangeEnumerator(BTree<TKey> tree, TKey minKey, TKey maxKey, bool reverse = false)
         {
             _accessor = tree._segment.CreateChunkAccessor();
             _comparer = tree.Comparer;
@@ -107,9 +108,6 @@ public abstract partial class BTree<TKey>
                 }
             }
         }
-
-        /// <summary>Forward-only bounded constructor shorthand (used by <see cref="EnumerateRange"/>).</summary>
-        internal RangeEnumerator(BTree<TKey> tree, TKey minKey, TKey maxKey) : this(tree, minKey, maxKey, false) { }
 
         /// <summary>Positions the cursor for forward iteration starting at the leaf containing minKey.</summary>
         private void InitForward(int index)
@@ -301,6 +299,105 @@ public abstract partial class BTree<TKey>
             {
                 _disposed = true;
                 _accessor.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Enumerates an AllowMultiple BTree in key order, expanding each key's VSBS buffer to yield <see cref="ReadOnlySpan{Int32}"/>
+    /// chunks of values. Wraps <see cref="RangeEnumerator"/> for leaf traversal and <see cref="VariableSizedBufferAccessor{T}"/>
+    /// for per-key buffer expansion.
+    /// </summary>
+    /// <remarks>
+    /// <para>Iteration is two-level: call <see cref="MoveNextKey"/> to advance to the next distinct key, then read <see cref="CurrentValues"/>
+    /// (and call <see cref="NextChunk"/> for multi-chunk buffers).
+    /// <see cref="CurrentKey"/> returns the current key.</para>
+    /// <para>The caller must be inside an epoch scope (e.g., via a Transaction).</para>
+    /// <para>Supports <c>foreach</c> via duck-typing — the <c>foreach</c> loop iterates keys. Within each key, iterate values
+    /// via <see cref="CurrentValues"/> + <see cref="NextChunk"/>.</para>
+    /// </remarks>
+    public ref struct RangeMultipleEnumerator
+    {
+        private RangeEnumerator _inner;
+        private readonly BaseNodeStorage _storage;
+        private VariableSizedBufferAccessor<int> _currentBuffer;
+        private bool _hasCurrentBuffer;
+        private bool _disposed;
+
+        internal RangeMultipleEnumerator(BTree<TKey> tree, TKey minKey, TKey maxKey, bool reverse = false)
+        {
+            _inner = reverse ? new RangeEnumerator(tree, minKey, maxKey, true) : new RangeEnumerator(tree, minKey, maxKey);
+            _storage = tree._storage;
+            _currentBuffer = default;
+            _hasCurrentBuffer = false;
+            _disposed = false;
+        }
+
+        /// <summary>Returns this enumerator (required for foreach pattern).</summary>
+        public RangeMultipleEnumerator GetEnumerator() => this;
+
+        /// <summary>The key at the current position.</summary>
+        public TKey CurrentKey => _inner.Current.Key;
+
+        /// <summary>
+        /// The current chunk of values for the current key. Valid after <see cref="MoveNextKey"/> returns true.
+        /// Call <see cref="NextChunk"/> to advance to subsequent chunks if the buffer spans multiple chunks.
+        /// </summary>
+        public ReadOnlySpan<int> CurrentValues => _currentBuffer.ReadOnlyElements;
+
+        /// <summary>Advances to the next chunk of the current key's VSBS buffer.</summary>
+        /// <returns>True if another chunk is available; false if all values for this key have been yielded.</returns>
+        public bool NextChunk() => _currentBuffer.NextChunk();
+
+        /// <summary>
+        /// Advances to the next key in iteration order, opening its VSBS buffer.
+        /// After this returns true, read <see cref="CurrentValues"/> (+ <see cref="NextChunk"/>) to get the values.
+        /// </summary>
+        public bool MoveNextKey()
+        {
+            // Dispose previous buffer if any
+            if (_hasCurrentBuffer)
+            {
+                _currentBuffer.Dispose();
+                _hasCurrentBuffer = false;
+            }
+
+            if (!_inner.MoveNext())
+            {
+                return false;
+            }
+
+            var bufferId = _inner.Current.Value;
+            _currentBuffer = _storage.GetBufferReadOnlyAccessor(bufferId);
+            _hasCurrentBuffer = true;
+
+            if (!_currentBuffer.IsValid)
+            {
+                // Empty buffer — skip to next key
+                return MoveNextKey();
+            }
+
+            return true;
+        }
+
+        /// <summary>Alias for <see cref="MoveNextKey"/> — enables foreach duck-typing.</summary>
+        public bool MoveNext() => MoveNextKey();
+
+        /// <summary>Returns the current enumerator position (for foreach — current is this enumerator itself).</summary>
+        public RangeMultipleEnumerator Current => this;
+
+        /// <summary>Releases all resources.</summary>
+        public void Dispose()
+        {
+            if (!_disposed)
+            {
+                _disposed = true;
+                if (_hasCurrentBuffer)
+                {
+                    _currentBuffer.Dispose();
+                    _hasCurrentBuffer = false;
+                }
+                _inner.Dispose();
             }
         }
     }

@@ -79,11 +79,7 @@ public class QueryBuilder<T> where T : unmanaged
         ct.ViewRegistry.RegisterView(view);
 
         using var tx = _dbe.CreateQuickTransaction();
-        var results = PipelineExecutor.Instance.Execute<T>(plan, plan.OrderedEvaluators, ct, tx);
-        foreach (var pk in results)
-        {
-            view.AddEntityDirect(pk);
-        }
+        PipelineExecutor.Instance.Execute<T>(plan, plan.OrderedEvaluators, ct, tx, view.EntityIdsInternal);
 
         view.Refresh(tx);
         view.ClearDelta();
@@ -97,7 +93,9 @@ public class QueryBuilder<T> where T : unmanaged
         var ct = GetComponentTable();
         var evaluators = ResolveEvaluators(_predicates.ToArray(), ct);
         var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, BasicSelectivityEstimator.Instance);
-        return PipelineExecutor.Instance.Execute<T>(plan, plan.OrderedEvaluators, ct, tx);
+        var result = new HashSet<long>();
+        PipelineExecutor.Instance.Execute<T>(plan, plan.OrderedEvaluators, ct, tx, result);
+        return result;
     }
 
     public List<long> ExecuteOrdered(Transaction tx)
@@ -110,7 +108,9 @@ public class QueryBuilder<T> where T : unmanaged
         var ct = GetComponentTable();
         var evaluators = ResolveEvaluators(_predicates.ToArray(), ct);
         var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, BasicSelectivityEstimator.Instance, _orderBy.Value);
-        return PipelineExecutor.Instance.ExecuteOrdered<T>(plan, plan.OrderedEvaluators, ct, tx, _skip, _take);
+        var result = new List<long>();
+        PipelineExecutor.Instance.ExecuteOrdered<T>(plan, plan.OrderedEvaluators, ct, tx, result, _skip, _take);
+        return result;
     }
 
     public int Count(Transaction tx)
@@ -119,7 +119,7 @@ public class QueryBuilder<T> where T : unmanaged
         var ct = GetComponentTable();
         var evaluators = ResolveEvaluators(_predicates.ToArray(), ct);
         var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, BasicSelectivityEstimator.Instance);
-        return PipelineExecutor.Instance.Execute<T>(plan, plan.OrderedEvaluators, ct, tx).Count;
+        return PipelineExecutor.Instance.Count<T>(plan, plan.OrderedEvaluators, ct, tx);
     }
 
     public bool Any(Transaction tx)
@@ -128,7 +128,9 @@ public class QueryBuilder<T> where T : unmanaged
         var ct = GetComponentTable();
         var evaluators = ResolveEvaluators(_predicates.ToArray(), ct);
         var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, BasicSelectivityEstimator.Instance);
-        return PipelineExecutor.Instance.ExecuteOrdered<T>(plan, plan.OrderedEvaluators, ct, tx, 0, 1).Count > 0;
+        var result = new List<long>();
+        PipelineExecutor.Instance.ExecuteOrdered<T>(plan, plan.OrderedEvaluators, ct, tx, result, 0, 1);
+        return result.Count > 0;
     }
 
     public ExecutionPlan GetExecutionPlan()

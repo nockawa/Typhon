@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using System;
 using System.Collections.Concurrent;
@@ -9,47 +10,71 @@ namespace Typhon.Engine.Tests;
 [TestFixture]
 public class ViewDeltaRingBufferTests
 {
+    private ServiceProvider _sp;
+    private IMemoryAllocator _allocator;
+    private IResource _parent;
+
+    [OneTimeSetUp]
+    public void OneTimeSetUp()
+    {
+        var sc = new ServiceCollection();
+        sc.AddResourceRegistry()
+          .AddMemoryAllocator();
+        _sp = sc.BuildServiceProvider();
+        _allocator = _sp.GetRequiredService<IMemoryAllocator>();
+        _parent = _sp.GetRequiredService<IResourceRegistry>().Allocation;
+    }
+
+    [OneTimeTearDown]
+    public void OneTimeTearDown()
+    {
+        _sp?.Dispose();
+    }
+
+    private ViewDeltaRingBuffer CreateBuffer(int capacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0)
+        => new(_allocator, _parent, capacity, baseTSN);
+
     // ========================================
     // Constructor
     // ========================================
 
     [Test]
-    public void Constructor_DefaultCapacity_Is8192()
+    public void Constructor_DefaultCapacity_Is4096()
     {
-        using var buffer = new ViewDeltaRingBuffer();
+        using var buffer = CreateBuffer();
         Assert.That(buffer.Capacity, Is.EqualTo(ViewDeltaRingBuffer.DefaultCapacity));
-        Assert.That(buffer.Capacity, Is.EqualTo(8192));
+        Assert.That(buffer.Capacity, Is.EqualTo(4096));
     }
 
     [Test]
     public void Constructor_CustomCapacity_Accepted()
     {
-        using var buffer = new ViewDeltaRingBuffer(256);
+        using var buffer = CreateBuffer(256);
         Assert.That(buffer.Capacity, Is.EqualTo(256));
     }
 
     [Test]
     public void Constructor_NonPowerOfTwo_Throws()
     {
-        Assert.Throws<ArgumentException>(() => new ViewDeltaRingBuffer(100));
+        Assert.Throws<ArgumentException>(() => CreateBuffer(100));
     }
 
     [Test]
     public void Constructor_Zero_Throws()
     {
-        Assert.Throws<ArgumentException>(() => new ViewDeltaRingBuffer(0));
+        Assert.Throws<ArgumentException>(() => CreateBuffer(0));
     }
 
     [Test]
     public void Constructor_Negative_Throws()
     {
-        Assert.Throws<ArgumentException>(() => new ViewDeltaRingBuffer(-4));
+        Assert.Throws<ArgumentException>(() => CreateBuffer(-4));
     }
 
     [Test]
     public void Constructor_BaseTSN_Stored()
     {
-        using var buffer = new ViewDeltaRingBuffer(64, baseTSN: 1000);
+        using var buffer = CreateBuffer(64, baseTSN: 1000);
         Assert.That(buffer.BaseTSN, Is.EqualTo(1000));
     }
 
@@ -60,7 +85,7 @@ public class ViewDeltaRingBufferTests
     [Test]
     public void AppendPeekAdvance_SingleEntry_Roundtrip()
     {
-        using var buffer = new ViewDeltaRingBuffer(64, baseTSN: 100);
+        using var buffer = CreateBuffer(64, baseTSN: 100);
 
         var before = KeyBytes8.FromInt(42);
         var after = KeyBytes8.FromInt(99);
@@ -82,14 +107,14 @@ public class ViewDeltaRingBufferTests
     [Test]
     public void TryPeek_EmptyBuffer_ReturnsFalse()
     {
-        using var buffer = new ViewDeltaRingBuffer(64);
+        using var buffer = CreateBuffer(64);
         Assert.That(buffer.TryPeek(long.MaxValue, out _, out _, out _, out _), Is.False);
     }
 
     [Test]
     public void ComponentTag_RoundTrips()
     {
-        using var buffer = new ViewDeltaRingBuffer(64, baseTSN: 0);
+        using var buffer = CreateBuffer(64);
 
         Assert.That(buffer.TryAppend(1L, default, default, 1, 0x01, componentTag: 0), Is.True);
         Assert.That(buffer.TryAppend(2L, default, default, 2, 0x02, componentTag: 1), Is.True);
@@ -118,7 +143,7 @@ public class ViewDeltaRingBufferTests
     [Test]
     public void Sequential_100Entries_OrderAndDataPreserved()
     {
-        using var buffer = new ViewDeltaRingBuffer(128, baseTSN: 0);
+        using var buffer = CreateBuffer(128);
 
         for (var i = 0; i < 100; i++)
         {
@@ -149,7 +174,7 @@ public class ViewDeltaRingBufferTests
     [Test]
     public void DeltaTSN_StoredAsOffsetFromBaseTSN()
     {
-        using var buffer = new ViewDeltaRingBuffer(64, baseTSN: 1_000_000);
+        using var buffer = CreateBuffer(64, baseTSN: 1_000_000);
 
         buffer.TryAppend(1, default, default, 1_000_042, 0);
         Assert.That(buffer.TryPeek(long.MaxValue, out _, out _, out var tsn, out _), Is.True);
@@ -165,7 +190,7 @@ public class ViewDeltaRingBufferTests
     public void WrapAround_FillHalfConsumeHalfFillMore()
     {
         const int capacity = 64;
-        using var buffer = new ViewDeltaRingBuffer(capacity, baseTSN: 0);
+        using var buffer = CreateBuffer(capacity);
 
         // Fill half
         for (var i = 0; i < capacity / 2; i++)
@@ -204,7 +229,7 @@ public class ViewDeltaRingBufferTests
     public void FullBuffer_TryAppend_ReturnsFalse_OverflowSticky()
     {
         const int capacity = 16;
-        using var buffer = new ViewDeltaRingBuffer(capacity, baseTSN: 0);
+        using var buffer = CreateBuffer(capacity);
 
         for (var i = 0; i < capacity; i++)
         {
@@ -229,7 +254,7 @@ public class ViewDeltaRingBufferTests
     public void Reset_ClearsEverything()
     {
         const int capacity = 64;
-        using var buffer = new ViewDeltaRingBuffer(capacity, baseTSN: 0);
+        using var buffer = CreateBuffer(capacity);
 
         for (var i = 0; i < 10; i++)
         {
@@ -255,7 +280,7 @@ public class ViewDeltaRingBufferTests
     [Test]
     public void Dispose_SetsDisposedFlag()
     {
-        var buffer = new ViewDeltaRingBuffer(64);
+        var buffer = CreateBuffer(64);
         Assert.That(buffer.IsDisposed, Is.False);
         buffer.Dispose();
         Assert.That(buffer.IsDisposed, Is.True);
@@ -264,7 +289,7 @@ public class ViewDeltaRingBufferTests
     [Test]
     public void Dispose_DoubleDispose_NoThrow()
     {
-        var buffer = new ViewDeltaRingBuffer(64);
+        var buffer = CreateBuffer(64);
         buffer.Dispose();
         Assert.DoesNotThrow(() => buffer.Dispose());
     }
@@ -276,7 +301,7 @@ public class ViewDeltaRingBufferTests
     [Test]
     public void TryPeek_TSNBeyondTarget_ReturnsFalse()
     {
-        using var buffer = new ViewDeltaRingBuffer(64, baseTSN: 100);
+        using var buffer = CreateBuffer(64, baseTSN: 100);
 
         buffer.TryAppend(1, default, default, 110, 0);
         buffer.TryAppend(2, default, default, 120, 0);
@@ -302,7 +327,7 @@ public class ViewDeltaRingBufferTests
     [Test]
     public void Count_TracksAppendAndAdvance()
     {
-        using var buffer = new ViewDeltaRingBuffer(64);
+        using var buffer = CreateBuffer(64);
 
         Assert.That(buffer.Count, Is.EqualTo(0));
 
@@ -328,7 +353,7 @@ public class ViewDeltaRingBufferTests
         const int entriesPerProducer = 1000;
         const int producerCount = 4;
         const int totalEntries = producerCount * entriesPerProducer;
-        using var buffer = new ViewDeltaRingBuffer(8192, baseTSN: 0);
+        using var buffer = CreateBuffer(8192);
 
         var received = new ConcurrentBag<long>();
         var producersDone = new CountdownEvent(producerCount);
@@ -407,7 +432,7 @@ public class ViewDeltaRingBufferTests
         const int capacity = 64;
         const int producerCount = 4;
         const int entriesPerProducer = 500;
-        using var buffer = new ViewDeltaRingBuffer(capacity, baseTSN: 0);
+        using var buffer = CreateBuffer(capacity);
 
         var startBarrier = new ManualResetEventSlim(false);
         var appendedCount = 0;
@@ -452,7 +477,7 @@ public class ViewDeltaRingBufferTests
     public void Concurrent_SingleProducer_OrderPreserved()
     {
         const int entryCount = 2000;
-        using var buffer = new ViewDeltaRingBuffer(4096, baseTSN: 0);
+        using var buffer = CreateBuffer(4096);
 
         var consumerDone = new ManualResetEventSlim(false);
         var orderViolation = false;

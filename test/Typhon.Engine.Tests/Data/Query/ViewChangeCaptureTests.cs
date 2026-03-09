@@ -8,12 +8,20 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
 {
     private class TestView : IView, IDisposable
     {
+        private readonly IMemoryAllocator _allocator;
+        private readonly IResource _resourceParent;
         private ViewDeltaRingBuffer _deltaBuffer;
+
+        public TestView(IMemoryAllocator allocator, IResource resourceParent)
+        {
+            _allocator = allocator;
+            _resourceParent = resourceParent;
+        }
 
         public int ViewId { get; set; }
         public int[] FieldDependencies { get; set; }
         public bool IsDisposed { get; set; }
-        public ViewDeltaRingBuffer DeltaBuffer => _deltaBuffer ??= new ViewDeltaRingBuffer();
+        public ViewDeltaRingBuffer DeltaBuffer => _deltaBuffer ??= new ViewDeltaRingBuffer(_allocator, _resourceParent);
 
         public void Dispose()
         {
@@ -29,7 +37,7 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         RegisterComponents(dbe);
 
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = new TestView { ViewId = 1, FieldDependencies = [1] }; // Field B (int, index 1)
+        using var view = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 1, FieldDependencies = [1] }; // Field B (int, index 1)
         ct.ViewRegistry.RegisterView(view);
 
         long entityId;
@@ -71,7 +79,7 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         RegisterComponents(dbe);
 
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = new TestView { ViewId = 1, FieldDependencies = [1] }; // Field B (int)
+        using var view = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 1, FieldDependencies = [1] }; // Field B (int)
         ct.ViewRegistry.RegisterView(view);
 
         long entityId;
@@ -100,7 +108,7 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         RegisterComponents(dbe);
 
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = new TestView { ViewId = 1, FieldDependencies = [1] }; // Field B (int)
+        using var view = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 1, FieldDependencies = [1] }; // Field B (int)
         ct.ViewRegistry.RegisterView(view);
 
         long entityId;
@@ -141,9 +149,9 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         var ct = dbe.GetComponentTable<CompD>();
 
         // Register views on all 3 indexed fields
-        using var viewA = new TestView { ViewId = 1, FieldDependencies = [0] }; // Field A (float)
-        using var viewB = new TestView { ViewId = 2, FieldDependencies = [1] }; // Field B (int)
-        using var viewC = new TestView { ViewId = 3, FieldDependencies = [2] }; // Field C (double)
+        using var viewA = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 1, FieldDependencies = [0] }; // Field A (float)
+        using var viewB = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 2, FieldDependencies = [1] }; // Field B (int)
+        using var viewC = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 3, FieldDependencies = [2] }; // Field C (double)
         ct.ViewRegistry.RegisterView(viewA);
         ct.ViewRegistry.RegisterView(viewB);
         ct.ViewRegistry.RegisterView(viewC);
@@ -195,8 +203,8 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         RegisterComponents(dbe);
 
         var ct = dbe.GetComponentTable<CompD>();
-        using var viewB = new TestView { ViewId = 1, FieldDependencies = [1] }; // Field B (int)
-        using var viewC = new TestView { ViewId = 2, FieldDependencies = [2] }; // Field C (double)
+        using var viewB = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 1, FieldDependencies = [1] }; // Field B (int)
+        using var viewC = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 2, FieldDependencies = [2] }; // Field C (double)
         ct.ViewRegistry.RegisterView(viewB);
         ct.ViewRegistry.RegisterView(viewC);
 
@@ -230,7 +238,7 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         RegisterComponents(dbe);
 
         var ct = dbe.GetComponentTable<CompD>();
-        var view = new TestView { ViewId = 1, FieldDependencies = [1] }; // Field B
+        var view = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 1, FieldDependencies = [1] }; // Field B
         ct.ViewRegistry.RegisterView(view);
 
         long entityId;
@@ -262,8 +270,8 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         RegisterComponents(dbe);
 
         var ct = dbe.GetComponentTable<CompD>();
-        using var view1 = new TestView { ViewId = 1, FieldDependencies = [1] }; // Field B
-        using var view2 = new TestView { ViewId = 2, FieldDependencies = [1] }; // Field B
+        using var view1 = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 1, FieldDependencies = [1] }; // Field B
+        using var view2 = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 2, FieldDependencies = [1] }; // Field B
         ct.ViewRegistry.RegisterView(view1);
         ct.ViewRegistry.RegisterView(view2);
 
@@ -317,9 +325,9 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         var ct = dbe.GetComponentTable<CompD>();
 
         // Register views on fields 0, 1, 2
-        using var view0 = new TestView { ViewId = 1, FieldDependencies = [0] };
-        using var view1 = new TestView { ViewId = 2, FieldDependencies = [1] };
-        using var view2 = new TestView { ViewId = 3, FieldDependencies = [2] };
+        using var view0 = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 1, FieldDependencies = [0] };
+        using var view1 = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 2, FieldDependencies = [1] };
+        using var view2 = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 3, FieldDependencies = [2] };
         ct.ViewRegistry.RegisterView(view0);
         ct.ViewRegistry.RegisterView(view1);
         ct.ViewRegistry.RegisterView(view2);
@@ -350,7 +358,7 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         RegisterComponents(dbe);
 
         var ct = dbe.GetComponentTable<CompD>();
-        using var view = new TestView { ViewId = 1, FieldDependencies = [1] }; // Field B
+        using var view = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 1, FieldDependencies = [1] }; // Field B
         ct.ViewRegistry.RegisterView(view);
 
         long tsn1, tsn2;

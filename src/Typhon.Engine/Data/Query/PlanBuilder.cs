@@ -5,7 +5,7 @@ namespace Typhon.Engine;
 
 /// <summary>
 /// Builds an <see cref="ExecutionPlan"/> from evaluators and index statistics.
-/// Selects the most selective unique secondary index as the primary scan stream when possible, falling back to a full PK index scan otherwise.
+/// Selects the most selective secondary index (unique or AllowMultiple) as the primary scan stream when possible, falling back to a full PK index scan otherwise.
 /// </summary>
 internal class PlanBuilder
 {
@@ -54,8 +54,8 @@ internal class PlanBuilder
     }
 
     /// <summary>
-    /// Selects the most selective unique secondary index as the primary scan stream.
-    /// Only considers unique indexes (AllowMultiple = false) and operators that can narrow a range (not NE).
+    /// Selects the most selective secondary index as the primary scan stream.
+    /// Only considers operators that can narrow a range (not NE).
     /// </summary>
     /// <param name="orderedEvaluators">Evaluators sorted by ascending selectivity.</param>
     /// <param name="table">Component table with index metadata.</param>
@@ -93,12 +93,6 @@ internal class PlanBuilder
 
             ref var ifi = ref indexedFieldInfos[eval.FieldIndex];
 
-            // Only unique indexes for primary stream (AllowMultiple requires VSBS buffer expansion)
-            if (ifi.Index.AllowMultiple)
-            {
-                continue;
-            }
-
             // If OrderBy is specified, only select this field if it matches
             if (orderByFieldIndex != int.MinValue && orderByFieldIndex != eval.FieldIndex)
             {
@@ -115,12 +109,13 @@ internal class PlanBuilder
             // long.MaxValue/MinValue cannot be used because LongToKey truncates to the target type (e.g., (int)long.MaxValue = -1), creating invalid scan ranges.
             var typeMin = TypeMinAsLong(eval.KeyType);
             var typeMax = TypeMaxAsLong(eval.KeyType);
+            var isInteger = IsIntegerKeyType(eval.KeyType);
             var (scanMin, scanMax) = eval.CompareOp switch
             {
                 CompareOp.Equal => (eval.Threshold, eval.Threshold),
-                CompareOp.GreaterThan => (eval.Threshold, typeMax),
+                CompareOp.GreaterThan => (isInteger ? eval.Threshold + 1 : eval.Threshold, typeMax),
                 CompareOp.GreaterThanOrEqual => (eval.Threshold, typeMax),
-                CompareOp.LessThan => (typeMin, eval.Threshold),
+                CompareOp.LessThan => (typeMin, isInteger ? eval.Threshold - 1 : eval.Threshold),
                 CompareOp.LessThanOrEqual => (typeMin, eval.Threshold),
                 _ => (typeMin, typeMax)
             };
@@ -138,34 +133,38 @@ internal class PlanBuilder
             return ([], []);
         }
 
-        // Estimate cardinality for each predicate
-        var estimates = new long[evaluators.Length];
-        var indices = new int[evaluators.Length];
-        for (var i = 0; i < evaluators.Length; i++)
-        {
-            ref var eval = ref evaluators[i];
-            estimates[i] = estimator.EstimateCardinality(table, eval.FieldIndex, eval.CompareOp, eval.Threshold);
-            indices[i] = i;
-        }
-
-        // Sort by ascending cardinality, tie-break by lower FieldIndex
-        Array.Sort(indices, (a, b) =>
-        {
-            var cmp = estimates[a].CompareTo(estimates[b]);
-            return cmp != 0 ? cmp : evaluators[a].FieldIndex.CompareTo(evaluators[b].FieldIndex);
-        });
-
-        // Build ordered arrays
+        // Copy evaluators and estimate cardinality in a single pass
         var ordered = new FieldEvaluator[evaluators.Length];
-        var orderedEstimates = new long[evaluators.Length];
+        var estimates = new long[evaluators.Length];
         for (var i = 0; i < evaluators.Length; i++)
         {
-            ordered[i] = evaluators[indices[i]];
-            orderedEstimates[i] = estimates[indices[i]];
+            ordered[i] = evaluators[i];
+            ref var eval = ref ordered[i];
+            estimates[i] = estimator.EstimateCardinality(table, eval.FieldIndex, eval.CompareOp, eval.Threshold);
         }
 
-        return (ordered, orderedEstimates);
+        // Insertion sort by ascending cardinality, tie-break by lower FieldIndex.
+        // Optimal for typical predicate counts (1-3), avoids delegate allocation from Array.Sort.
+        for (var i = 1; i < ordered.Length; i++)
+        {
+            var keyEval = ordered[i];
+            var keyEst = estimates[i];
+            var j = i - 1;
+            while (j >= 0 && (estimates[j] > keyEst || (estimates[j] == keyEst && ordered[j].FieldIndex > keyEval.FieldIndex)))
+            {
+                ordered[j + 1] = ordered[j];
+                estimates[j + 1] = estimates[j];
+                j--;
+            }
+            ordered[j + 1] = keyEval;
+            estimates[j + 1] = keyEst;
+        }
+
+        return (ordered, estimates);
     }
+
+    private static bool IsIntegerKeyType(KeyType kt) => kt is KeyType.Bool or KeyType.Byte or KeyType.SByte or KeyType.Short or 
+                                                        KeyType.UShort or KeyType.Int or KeyType.UInt or KeyType.Long or KeyType.ULong;
 
     private static long TypeMaxAsLong(KeyType keyType)
     {

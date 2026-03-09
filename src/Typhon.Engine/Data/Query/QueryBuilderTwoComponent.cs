@@ -75,11 +75,7 @@ public class QueryBuilder<T1, T2> where T1 : unmanaged where T2 : unmanaged
 
         // Populate initial entity set via pipeline execution
         using var tx = _dbe.CreateQuickTransaction();
-        var results = PipelineExecutor.Instance.Execute<T1, T2>(plan, combinedEvaluators, planTable, tx);
-        foreach (var pk in results)
-        {
-            view.AddEntityDirect(pk);
-        }
+        PipelineExecutor.Instance.Execute<T1, T2>(plan, combinedEvaluators, planTable, tx, view.EntityIdsInternal);
 
         // Drain any concurrent entries that arrived during population
         view.Refresh(tx);
@@ -131,7 +127,14 @@ public class QueryBuilder<T1, T2> where T1 : unmanaged where T2 : unmanaged
             {
                 return (plan2.Value, ct2);
             }
-            // Both use secondary index or both use PK — prefer T1 as default driving table
+            // Both use secondary index — pick the one with lower primary stream estimate.
+            // Both use PK scan — default to T1.
+            if (plan1.Value.UsesSecondaryIndex && plan2.Value.UsesSecondaryIndex)
+            {
+                var est1 = plan1.Value.EstimatedCounts.Length > 0 ? plan1.Value.EstimatedCounts[0] : long.MaxValue;
+                var est2 = plan2.Value.EstimatedCounts.Length > 0 ? plan2.Value.EstimatedCounts[0] : long.MaxValue;
+                return est1 <= est2 ? (plan1.Value, ct1) : (plan2.Value, ct2);
+            }
             return (plan1.Value, ct1);
         }
 

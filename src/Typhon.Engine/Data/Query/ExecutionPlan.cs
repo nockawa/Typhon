@@ -7,9 +7,9 @@ namespace Typhon.Engine;
 /// Built by <see cref="PlanBuilder"/>, consumed by <see cref="PipelineExecutor"/>.
 /// </summary>
 /// <remarks>
-/// The primary stream scans either the PK index (<see cref="PrimaryFieldIndex"/> == -1) or a unique secondary index (<see cref="PrimaryFieldIndex"/> >= 0).
-/// When a secondary index is selected, entity PKs are recovered via <see cref="CompRevStorageHeader.EntityPK"/>.
-/// The planner selects the most selective unique index to minimize the number of entities scanned.
+/// The primary stream scans either the PK index (<see cref="PrimaryFieldIndex"/> == -1) or a secondary index (<see cref="PrimaryFieldIndex"/> >= 0).
+/// When a secondary index is selected (unique or AllowMultiple), entity PKs are recovered via <see cref="CompRevStorageHeader.EntityPK"/>.
+/// The planner selects the most selective index to minimize the number of entities scanned.
 /// </remarks>
 public readonly struct ExecutionPlan
 {

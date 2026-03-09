@@ -1,69 +1,30 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
-using System.Threading;
 
 namespace Typhon.Engine;
 
-public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : unmanaged
+public unsafe class View<T> : ViewBase where T : unmanaged
 {
-    private static int _nextViewId;
-
-    private readonly HashSet<long> _entityIds = new();
-    private readonly Dictionary<long, DeltaKind> _deltas = new();
-    private int _addedCount;
-    private int _removedCount;
-    private int _modifiedCount;
-    private readonly FieldEvaluator[] _evaluators;
     private readonly ViewRegistry _registry;
     private readonly ComponentTable _componentTable;
-    private long _lastRefreshTSN;
-    private int _disposed;
-    private bool _overflowDetected;
-    private readonly ExecutionPlan _cachedPlan;
-    private readonly bool _hasCachedPlan;
 
     internal View(FieldEvaluator[] evaluators, ViewRegistry registry, ComponentTable componentTable, int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity,
-        long baseTSN = 0)
+        long baseTSN = 0) : base(evaluators, BuildFieldDependencies(evaluators), componentTable.DBE.MemoryAllocator, componentTable, bufferCapacity, baseTSN)
     {
-        _evaluators = evaluators;
         _registry = registry;
         _componentTable = componentTable;
-        ViewId = Interlocked.Increment(ref _nextViewId);
-        DeltaBuffer = new ViewDeltaRingBuffer(bufferCapacity, baseTSN);
-
-        // Build FieldDependencies from evaluator FieldIndex values (distinct, sorted)
-        var fieldIndices = new HashSet<int>();
-        for (var i = 0; i < evaluators.Length; i++)
-        {
-            fieldIndices.Add(evaluators[i].FieldIndex);
-        }
-        FieldDependencies = [.. fieldIndices];
-        Array.Sort(FieldDependencies);
     }
 
-    internal View(FieldEvaluator[] evaluators, ViewRegistry registry, ComponentTable componentTable, ExecutionPlan plan, 
-        int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0) : this(evaluators, registry, componentTable, bufferCapacity, baseTSN)
+    internal View(FieldEvaluator[] evaluators, ViewRegistry registry, ComponentTable componentTable, ExecutionPlan plan,
+        int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0) : 
+        base(evaluators, BuildFieldDependencies(evaluators), componentTable.DBE.MemoryAllocator, componentTable, plan, bufferCapacity, baseTSN)
     {
-        _cachedPlan = plan;
-        _hasCachedPlan = true;
+        _registry = registry;
+        _componentTable = componentTable;
     }
 
-    public int ViewId { get; }
-    public int[] FieldDependencies { get; }
-    public bool IsDisposed => _disposed != 0;
-    internal ViewDeltaRingBuffer DeltaBuffer { get; }
-    ViewDeltaRingBuffer IView.DeltaBuffer => DeltaBuffer;
-    public int Count => _entityIds.Count;
-    public long LastRefreshTSN => _lastRefreshTSN;
-    public bool HasOverflow => _overflowDetected;
-    public ExecutionPlan ExecutionPlan => _cachedPlan;
-    public bool HasCachedPlan => _hasCachedPlan;
-
-    public bool Contains(long pk) => _entityIds.Contains(pk);
-
-    internal void AddEntityDirect(long pk) => _entityIds.Add(pk);
+    protected override void DeregisterFromRegistries() => _registry.DeregisterView(this);
 
     /// <summary>
     /// Drain the ring buffer up to the transaction's snapshot TSN, evaluate field predicates,
@@ -71,13 +32,14 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
     /// </summary>
     public void Refresh(Transaction tx)
     {
-        if (_disposed != 0)
+        if (IsDisposed)
         {
             throw new ObjectDisposedException(nameof(View<T>));
         }
 
         if (DeltaBuffer.HasOverflow)
         {
+            SetOverflowDetected(true);
             RefreshFull(tx);
             return;
         }
@@ -87,42 +49,8 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
         {
             DeltaBuffer.Advance();
             ProcessEntry(ref entry, flags & 0x3F, (flags & 0x40) != 0, (flags & 0x80) != 0, tx);
-            _lastRefreshTSN = tsn;
+            SetLastRefreshTSN(tsn);
         }
-    }
-
-    public ViewDelta GetDelta() => new(_deltas, _addedCount, _removedCount, _modifiedCount);
-
-    public void ClearDelta()
-    {
-        _deltas.Clear();
-        _addedCount = 0;
-        _removedCount = 0;
-        _modifiedCount = 0;
-    }
-
-    public HashSet<long>.Enumerator GetEnumerator() => _entityIds.GetEnumerator();
-
-    IEnumerator<long> IEnumerable<long>.GetEnumerator() => _entityIds.GetEnumerator();
-
-    IEnumerator IEnumerable.GetEnumerator() => _entityIds.GetEnumerator();
-
-    public void Dispose()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-        {
-            return;
-        }
-
-        _registry.DeregisterView(this);
-        // Safety fence: allow in-flight producers to complete TryAppend before freeing buffer memory
-        Thread.SpinWait(100);
-        DeltaBuffer.Dispose();
-        _entityIds.Clear();
-        _deltas.Clear();
-        _addedCount = 0;
-        _removedCount = 0;
-        _modifiedCount = 0;
     }
 
     private bool EvaluateAllFields(ref T comp)
@@ -144,18 +72,15 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
         // Snapshot old entity set for delta computation
         var oldEntities = new HashSet<long>(_entityIds);
 
-        // Reset buffer — clears overflow flag, allows new appends during re-scan
-        DeltaBuffer.Reset();
+        // Reset buffer — clears overflow flag, reanchors base TSN
+        DeltaBuffer.Reset(tx.TSN);
 
         // Clear and rebuild entity set
         _entityIds.Clear();
-        if (_hasCachedPlan)
+        if (HasCachedPlanInternal)
         {
-            var results = PipelineExecutor.Instance.Execute<T>(_cachedPlan, _cachedPlan.OrderedEvaluators, _componentTable, tx);
-            foreach (var pk in results)
-            {
-                _entityIds.Add(pk);
-            }
+            // For single-component views, plan.OrderedEvaluators == the full evaluator set (selectivity-ordered)
+            PipelineExecutor.Instance.Execute<T>(CachedPlan, CachedPlan.OrderedEvaluators, _componentTable, tx, _entityIds);
         }
         else
         {
@@ -173,34 +98,11 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
             }
         }
 
-        // Drain concurrent entries that arrived during re-scan — advance consumer position only.
-        // The PK index scan already captured the authoritative entity set as of tx.TSN;
-        // processing these entries via ProcessEntry would double-count deltas.
-        var targetTSN = tx.TSN;
-        while (DeltaBuffer.TryPeek(targetTSN, out _, out _, out var tsn, out _))
-        {
-            DeltaBuffer.Advance();
-            _lastRefreshTSN = tsn;
-        }
+        DrainBufferAfterRefreshFull(tx.TSN);
+        ComputeRefreshFullDeltas(oldEntities);
 
-        // Compute delta: new-only → Added, old-only → Removed
-        foreach (var pk in _entityIds)
-        {
-            if (!oldEntities.Contains(pk))
-            {
-                CompactDelta(pk, DeltaKind.Added);
-            }
-        }
-        foreach (var pk in oldEntities)
-        {
-            if (!_entityIds.Contains(pk))
-            {
-                CompactDelta(pk, DeltaKind.Removed);
-            }
-        }
-
-        _overflowDetected = false;
-        _lastRefreshTSN = tx.TSN;
+        SetOverflowDetected(false);
+        SetLastRefreshTSN(tx.TSN);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -282,72 +184,6 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
         return true;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ApplyDelta(long pk, bool wasInView, bool shouldBeInView)
-    {
-        if (!wasInView && shouldBeInView)
-        {
-            _entityIds.Add(pk);
-            CompactDelta(pk, DeltaKind.Added);
-        }
-        else if (wasInView && !shouldBeInView)
-        {
-            _entityIds.Remove(pk);
-            CompactDelta(pk, DeltaKind.Removed);
-        }
-        else if (wasInView)
-        {
-            CompactDelta(pk, DeltaKind.Modified);
-        }
-    }
-
-    private void CompactDelta(long pk, DeltaKind newKind)
-    {
-        if (!_deltas.TryGetValue(pk, out var existing))
-        {
-            // No existing delta — insert directly
-            _deltas[pk] = newKind;
-            switch (newKind)
-            {
-                case DeltaKind.Added: _addedCount++; break;
-                case DeltaKind.Removed: _removedCount++; break;
-                case DeltaKind.Modified: _modifiedCount++; break;
-            }
-            return;
-        }
-
-        switch (existing)
-        {
-            case DeltaKind.Added:
-                if (newKind == DeltaKind.Removed)
-                {
-                    _deltas.Remove(pk);
-                    _addedCount--; // Added + Removed → cancel
-                }
-                // Added + Modified → Added, Added + Added → Added (no change)
-                return;
-
-            case DeltaKind.Modified:
-                if (newKind == DeltaKind.Removed)
-                {
-                    _deltas[pk] = DeltaKind.Removed;
-                    _modifiedCount--;
-                    _removedCount++; // Modified + Removed → Removed
-                }
-                // Modified + Modified → Modified (no change)
-                return;
-
-            case DeltaKind.Removed:
-                if (newKind == DeltaKind.Added)
-                {
-                    _deltas[pk] = DeltaKind.Modified;
-                    _removedCount--;
-                    _modifiedCount++; // Removed + Added → Modified
-                }
-                return;
-        }
-    }
-
     private ref FieldEvaluator FindEvaluator(int fieldIndex)
     {
         for (var i = 0; i < _evaluators.Length; i++)
@@ -358,5 +194,18 @@ public unsafe class View<T> : IView, IDisposable, IEnumerable<long> where T : un
             }
         }
         return ref Unsafe.NullRef<FieldEvaluator>();
+    }
+
+    private static int[] BuildFieldDependencies(FieldEvaluator[] evaluators)
+    {
+        var fieldIndices = new HashSet<int>();
+        for (var i = 0; i < evaluators.Length; i++)
+        {
+            fieldIndices.Add(evaluators[i].FieldIndex);
+        }
+        var deps = new int[fieldIndices.Count];
+        fieldIndices.CopyTo(deps);
+        Array.Sort(deps);
+        return deps;
     }
 }

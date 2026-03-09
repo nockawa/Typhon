@@ -43,6 +43,18 @@ internal static class ThrowHelper
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static void ThrowUniqueConstraintViolation() => throw new UniqueConstraintViolationException();
 
+    // --- BTree API misuse ---
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowEnumerateRangeOnAllowMultiple() => 
+        throw new InvalidOperationException("EnumerateRange/EnumerateRangeDescending cannot be used on AllowMultiple indexes. Use EnumerateRangeMultiple/EnumerateRangeMultipleDescending instead.");
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowEnumerateRangeMultipleOnUnique() => 
+        throw new InvalidOperationException("EnumerateRangeMultiple/EnumerateRangeMultipleDescending cannot be used on unique indexes. Use EnumerateRange/EnumerateRangeDescending instead.");
+
     // --- Storage ---
 
     [MethodImpl(MethodImplOptions.NoInlining)]

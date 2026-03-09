@@ -94,35 +94,42 @@ internal class ViewRegistry
         {
             var removedAny = false;
 
-            // Scan all field slots to find and remove all registrations for this view
+            // Scan all field slots to find and remove ALL registrations for this view (may have multiple tags)
             for (var f = 0; f < _viewsByField.Length; f++)
             {
                 var existing = _viewsByField[f];
-                var idx = -1;
+
+                // Count how many registrations match this view (may differ by ComponentTag)
+                var removeCount = 0;
                 for (var j = 0; j < existing.Length; j++)
                 {
                     if (ReferenceEquals(existing[j].View, view))
                     {
-                        idx = j;
-                        break;
+                        removeCount++;
                     }
                 }
 
-                if (idx < 0)
+                if (removeCount == 0)
                 {
                     continue;
                 }
 
                 removedAny = true;
-                if (existing.Length == 1)
+                if (removeCount == existing.Length)
                 {
                     _viewsByField[f] = [];
                 }
                 else
                 {
-                    var newArray = new ViewRegistration[existing.Length - 1];
-                    Array.Copy(existing, 0, newArray, 0, idx);
-                    Array.Copy(existing, idx + 1, newArray, idx, existing.Length - idx - 1);
+                    var newArray = new ViewRegistration[existing.Length - removeCount];
+                    var k = 0;
+                    for (var j = 0; j < existing.Length; j++)
+                    {
+                        if (!ReferenceEquals(existing[j].View, view))
+                        {
+                            newArray[k++] = existing[j];
+                        }
+                    }
                     _viewsByField[f] = newArray;
                 }
             }

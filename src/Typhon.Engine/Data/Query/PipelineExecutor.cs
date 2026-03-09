@@ -18,33 +18,171 @@ internal class PipelineExecutor
     private PipelineExecutor() { }
 
     /// <summary>
-    /// Executes the plan and returns matching entity PKs as a <see cref="HashSet{T}"/> (unordered).
-    /// Used by <see cref="View{T}"/> for initial population and overflow recovery.
+    /// Executes the plan and adds matching entity PKs to the caller-provided <paramref name="result"/> set (unordered).
+    /// The caller owns the collection lifecycle — one-shot queries pass a fresh instance, Views reuse and clear theirs.
     /// </summary>
     /// <param name="plan">The execution plan built by <see cref="PlanBuilder"/>.</param>
     /// <param name="evaluators">All field evaluators, ordered by ascending selectivity (most selective first).</param>
     /// <param name="table">The component table to read entities from.</param>
     /// <param name="tx">Transaction for MVCC-consistent reads.</param>
-    public HashSet<long> Execute<T>(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx) where T : unmanaged
+    /// <param name="result">Caller-provided set to populate. Must be empty (or pre-cleared by caller).</param>
+    public void Execute<T>(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, HashSet<long> result) where T : unmanaged 
+        => ExecuteCore<T>(plan, evaluators, table, tx, result, null, 0, int.MaxValue);
+
+    /// <summary>
+    /// Executes the plan and adds matching entity PKs to the caller-provided <paramref name="result"/> list preserving iteration order.
+    /// Supports Skip/Take with early termination.
+    /// </summary>
+    public void ExecuteOrdered<T>(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, List<long> result, int skip = 0,
+        int take = int.MaxValue) where T : unmanaged => ExecuteCore<T>(plan, evaluators, table, tx, null, result, skip, take);
+
+    /// <summary>
+    /// Counts matching entities without allocating a result collection. Runs the same scan + filter pipeline but only increments a counter.
+    /// </summary>
+    public int Count<T>(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx) where T : unmanaged
     {
-        var result = new HashSet<long>();
-        ExecuteCore<T>(plan, evaluators, table, tx, result, null, 0, int.MaxValue);
-        return result;
+        if (plan.UsesSecondaryIndex)
+        {
+            return CountCoreSecondaryIndex<T>(plan, evaluators, table, tx);
+        }
+
+        var pkIndex = table.PrimaryKeyIndex;
+        var hasFilters = evaluators.Length > 0;
+        var count = 0;
+        Span<long> batch = stackalloc long[BatchSize];
+        var batchCount = 0;
+
+        var enumerator = plan.Descending ? pkIndex.EnumerateRangeDescending(plan.PrimaryScanMin, plan.PrimaryScanMax) :
+            pkIndex.EnumerateRange(plan.PrimaryScanMin, plan.PrimaryScanMax);
+
+        foreach (var kv in enumerator)
+        {
+            batch[batchCount++] = kv.Key;
+            if (batchCount < BatchSize)
+            {
+                continue;
+            }
+
+            count += CountBatch<T>(batch[..batchCount], evaluators, tx, hasFilters);
+            batchCount = 0;
+        }
+
+        if (batchCount > 0)
+        {
+            count += CountBatch<T>(batch[..batchCount], evaluators, tx, hasFilters);
+        }
+
+        return count;
     }
 
     /// <summary>
-    /// Executes the plan and returns matching entity PKs as a <see cref="List{T}"/> preserving iteration order.
-    /// Supports Skip/Take with early termination.
+    /// Streams PKs from the secondary index directly into batch counting, avoiding the intermediate <see cref="List{T}"/> allocation
+    /// that <see cref="CollectPKsFromSecondaryIndex"/> would produce.
     /// </summary>
-    public List<long> ExecuteOrdered<T>(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, int skip = 0, 
-        int take = int.MaxValue) where T : unmanaged
+    private int CountCoreSecondaryIndex<T>(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx) where T : unmanaged
     {
-        var result = new List<long>();
-        ExecuteCore<T>(plan, evaluators, table, tx, null, result, skip, take);
-        return result;
+        var ifi = table.IndexedFieldInfos[plan.PrimaryFieldIndex];
+        return plan.PrimaryKeyType switch
+        {
+            KeyType.Byte => CountPKsTyped<T, byte>((BTree<byte>)ifi.Index, plan, table, evaluators, tx),
+            KeyType.SByte => CountPKsTyped<T, sbyte>((BTree<sbyte>)ifi.Index, plan, table, evaluators, tx),
+            KeyType.Short => CountPKsTyped<T, short>((BTree<short>)ifi.Index, plan, table, evaluators, tx),
+            KeyType.UShort => CountPKsTyped<T, ushort>((BTree<ushort>)ifi.Index, plan, table, evaluators, tx),
+            KeyType.Int => CountPKsTyped<T, int>((BTree<int>)ifi.Index, plan, table, evaluators, tx),
+            KeyType.UInt => CountPKsTyped<T, uint>((BTree<uint>)ifi.Index, plan, table, evaluators, tx),
+            KeyType.Long => CountPKsTyped<T, long>((BTree<long>)ifi.Index, plan, table, evaluators, tx),
+            KeyType.ULong => CountPKsTyped<T, long>((BTree<long>)ifi.Index, plan, table, evaluators, tx),
+            KeyType.Float => CountPKsTyped<T, float>((BTree<float>)ifi.Index, plan, table, evaluators, tx),
+            KeyType.Double => CountPKsTyped<T, double>((BTree<double>)ifi.Index, plan, table, evaluators, tx),
+            _ => throw new NotSupportedException($"KeyType {plan.PrimaryKeyType} not supported for index scan")
+        };
     }
 
-    private void ExecuteCore<T>(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, HashSet<long> unorderedResult, 
+    private static int CountPKsTyped<T, TKey>(BTree<TKey> index, ExecutionPlan plan, ComponentTable table, FieldEvaluator[] evaluators, Transaction tx)
+        where T : unmanaged where TKey : unmanaged
+    {
+        var minKey = BTree<TKey>.LongToKey(plan.PrimaryScanMin);
+        var maxKey = BTree<TKey>.LongToKey(plan.PrimaryScanMax);
+
+        var hasFilters = evaluators.Length > 0;
+        var count = 0;
+        Span<long> batch = stackalloc long[BatchSize];
+        var batchCount = 0;
+        var compRevAccessor = table.CompRevTableSegment.CreateChunkAccessor();
+
+        if (index.AllowMultiple)
+        {
+            var enumerator = plan.Descending ? index.EnumerateRangeMultipleDescending(minKey, maxKey) : index.EnumerateRangeMultiple(minKey, maxKey);
+            try
+            {
+                while (enumerator.MoveNextKey())
+                {
+                    do
+                    {
+                        var values = enumerator.CurrentValues;
+                        for (var j = 0; j < values.Length; j++)
+                        {
+                            ref var header = ref compRevAccessor.GetChunk<CompRevStorageHeader>(values[j]);
+                            batch[batchCount++] = header.EntityPK;
+                            if (batchCount >= BatchSize)
+                            {
+                                count += CountBatch<T>(batch[..batchCount], evaluators, tx, hasFilters);
+                                batchCount = 0;
+                            }
+                        }
+                    } while (enumerator.NextChunk());
+                }
+            }
+            finally
+            {
+                enumerator.Dispose();
+                compRevAccessor.Dispose();
+            }
+        }
+        else
+        {
+            var enumerator = plan.Descending ? index.EnumerateRangeDescending(minKey, maxKey) : index.EnumerateRange(minKey, maxKey);
+            try
+            {
+                foreach (var kv in enumerator)
+                {
+                    ref var header = ref compRevAccessor.GetChunk<CompRevStorageHeader>(kv.Value);
+                    batch[batchCount++] = header.EntityPK;
+                    if (batchCount >= BatchSize)
+                    {
+                        count += CountBatch<T>(batch[..batchCount], evaluators, tx, hasFilters);
+                        batchCount = 0;
+                    }
+                }
+            }
+            finally
+            {
+                compRevAccessor.Dispose();
+            }
+        }
+
+        if (batchCount > 0)
+        {
+            count += CountBatch<T>(batch[..batchCount], evaluators, tx, hasFilters);
+        }
+
+        return count;
+    }
+
+    private static int CountBatch<T>(Span<long> batch, FieldEvaluator[] evaluators, Transaction tx, bool hasFilters) where T : unmanaged
+    {
+        var count = 0;
+        for (var i = 0; i < batch.Length; i++)
+        {
+            if (!hasFilters || EvaluateFilters<T>(evaluators, tx, batch[i]))
+            {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private void ExecuteCore<T>(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, HashSet<long> unorderedResult,
         List<long> orderedResult, int skip, int take) where T : unmanaged
     {
         if (take == 0)
@@ -91,8 +229,8 @@ internal class PipelineExecutor
     }
 
     /// <summary>
-    /// Secondary index scan path: scans a unique secondary index for matching key values, recovers entity PKs via <see cref="CompRevStorageHeader.EntityPK"/>,
-    /// then evaluates remaining predicates via component reads.
+    /// Secondary index scan path: scans a secondary index (unique or AllowMultiple) for matching key values, recovers entity PKs via
+    /// <see cref="CompRevStorageHeader.EntityPK"/>, then evaluates remaining predicates via component reads.
     /// </summary>
     private void ExecuteCoreSecondaryIndex<T>(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, 
         HashSet<long> unorderedResult, List<long> orderedResult, int skip, int take) where T : unmanaged
@@ -128,7 +266,9 @@ internal class PipelineExecutor
     }
 
     /// <summary>
-    /// Scans the secondary index specified by the plan, resolves each entry's compRevFirstChunkId to an entity PK via <see cref="CompRevStorageHeader.EntityPK"/>.
+    /// Scans the secondary index specified by the plan, resolves each entry to entity PKs via <see cref="CompRevStorageHeader.EntityPK"/>.
+    /// For unique indexes, each leaf entry's Value is a compRevFirstChunkId. For AllowMultiple indexes, each leaf entry's Value is a VSBS buffer root chunk
+    /// ID containing N compRevFirstChunkIds — these are expanded inline.
     /// </summary>
     private static List<long> CollectPKsFromSecondaryIndex(ExecutionPlan plan, ComponentTable table)
     {
@@ -142,7 +282,7 @@ internal class PipelineExecutor
             KeyType.Int => CollectPKsTyped((BTree<int>)ifi.Index, plan, table),
             KeyType.UInt => CollectPKsTyped((BTree<uint>)ifi.Index, plan, table),
             KeyType.Long => CollectPKsTyped((BTree<long>)ifi.Index, plan, table),
-            KeyType.ULong => CollectPKsTyped((BTree<ulong>)ifi.Index, plan, table),
+            KeyType.ULong => CollectPKsTyped((BTree<long>)ifi.Index, plan, table),
             KeyType.Float => CollectPKsTyped((BTree<float>)ifi.Index, plan, table),
             KeyType.Double => CollectPKsTyped((BTree<double>)ifi.Index, plan, table),
             _ => throw new NotSupportedException($"KeyType {plan.PrimaryKeyType} not supported for index scan")
@@ -154,23 +294,49 @@ internal class PipelineExecutor
         var minKey = BTree<TKey>.LongToKey(plan.PrimaryScanMin);
         var maxKey = BTree<TKey>.LongToKey(plan.PrimaryScanMax);
 
-        var enumerator = plan.Descending ? index.EnumerateRangeDescending(minKey, maxKey) : index.EnumerateRange(minKey, maxKey);
-
-        var result = new List<long>();
+        var capacityHint = plan.EstimatedCounts is { Length: > 0 } ? (int)Math.Min(plan.EstimatedCounts[0], 65536) : 16;
+        var result = new List<long>(capacityHint);
         var compRevAccessor = table.CompRevTableSegment.CreateChunkAccessor();
-        try
+
+        if (index.AllowMultiple)
         {
-            foreach (var kv in enumerator)
+            var enumerator = plan.Descending ? index.EnumerateRangeMultipleDescending(minKey, maxKey) : index.EnumerateRangeMultiple(minKey, maxKey);
+            try
             {
-                // kv.Value = compRevFirstChunkId (revision chain start)
-                // Read CompRevStorageHeader to recover entity PK
-                ref var header = ref compRevAccessor.GetChunk<CompRevStorageHeader>(kv.Value);
-                result.Add(header.EntityPK);
+                while (enumerator.MoveNextKey())
+                {
+                    do
+                    {
+                        var values = enumerator.CurrentValues;
+                        for (var j = 0; j < values.Length; j++)
+                        {
+                            ref var header = ref compRevAccessor.GetChunk<CompRevStorageHeader>(values[j]);
+                            result.Add(header.EntityPK);
+                        }
+                    } while (enumerator.NextChunk());
+                }
+            }
+            finally
+            {
+                enumerator.Dispose();
+                compRevAccessor.Dispose();
             }
         }
-        finally
+        else
         {
-            compRevAccessor.Dispose();
+            var enumerator = plan.Descending ? index.EnumerateRangeDescending(minKey, maxKey) : index.EnumerateRange(minKey, maxKey);
+            try
+            {
+                foreach (var kv in enumerator)
+                {
+                    ref var header = ref compRevAccessor.GetChunk<CompRevStorageHeader>(kv.Value);
+                    result.Add(header.EntityPK);
+                }
+            }
+            finally
+            {
+                compRevAccessor.Dispose();
+            }
         }
 
         return result;
@@ -236,28 +402,19 @@ internal class PipelineExecutor
     #region Two-component overloads
 
     /// <summary>
-    /// Executes a two-component query plan and returns matching entity PKs as a <see cref="HashSet{T}"/> (unordered).
+    /// Executes a two-component query plan and adds matching entity PKs to the caller-provided <paramref name="result"/> set (unordered).
     /// Reads both components per entity and dispatches evaluator checks on <see cref="FieldEvaluator.ComponentTag"/>.
     /// </summary>
-    public HashSet<long> Execute<T1, T2>(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx)
-        where T1 : unmanaged where T2 : unmanaged
-    {
-        var result = new HashSet<long>();
-        ExecuteCoreTwo<T1, T2>(plan, evaluators, table, tx, result, null, 0, int.MaxValue);
-        return result;
-    }
+    public void Execute<T1, T2>(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, HashSet<long> result)
+        where T1 : unmanaged where T2 : unmanaged => ExecuteCoreTwo<T1, T2>(plan, evaluators, table, tx, result, null, 0, int.MaxValue);
 
     /// <summary>
-    /// Executes a two-component query plan and returns matching entity PKs as a <see cref="List{T}"/> preserving iteration order.
-    /// Supports Skip/Take with early termination.
+    /// Executes a two-component query plan and adds matching entity PKs to the caller-provided <paramref name="result"/> list preserving
+    /// iteration order. Supports Skip/Take with early termination.
     /// </summary>
-    public List<long> ExecuteOrderedTwo<T1, T2>(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx,
-        int skip = 0, int take = int.MaxValue) where T1 : unmanaged where T2 : unmanaged
-    {
-        var result = new List<long>();
-        ExecuteCoreTwo<T1, T2>(plan, evaluators, table, tx, null, result, skip, take);
-        return result;
-    }
+    public void ExecuteOrderedTwo<T1, T2>(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, List<long> result, 
+        int skip = 0, int take = int.MaxValue) where T1 : unmanaged where T2 : unmanaged 
+        => ExecuteCoreTwo<T1, T2>(plan, evaluators, table, tx, null, result, skip, take);
 
     private void ExecuteCoreTwo<T1, T2>(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx,
         HashSet<long> unorderedResult, List<long> orderedResult, int skip, int take) where T1 : unmanaged where T2 : unmanaged
@@ -336,7 +493,7 @@ internal class PipelineExecutor
         }
     }
 
-    private static unsafe bool ProcessBatchTwo<T1, T2>(Span<long> batch, FieldEvaluator[] evaluators, Transaction tx, bool hasFilters,
+    private static bool ProcessBatchTwo<T1, T2>(Span<long> batch, FieldEvaluator[] evaluators, Transaction tx, bool hasFilters,
         HashSet<long> unorderedResult, List<long> orderedResult, ref int skip, ref int take, ref int collected)
         where T1 : unmanaged where T2 : unmanaged
     {

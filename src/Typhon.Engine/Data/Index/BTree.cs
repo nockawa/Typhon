@@ -666,15 +666,59 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
 
     /// <summary>
     /// Returns an enumerator that yields entries in ascending key order within [<paramref name="minKey"/>, <paramref name="maxKey"/>].
+    /// For unique indexes only — throws on AllowMultiple. Use <see cref="EnumerateRangeMultiple"/> for AllowMultiple indexes.
     /// The caller must be inside an epoch scope. Uses per-leaf OLC validation (lock-free for readers).
     /// </summary>
-    public RangeEnumerator EnumerateRange(TKey minKey, TKey maxKey) => new RangeEnumerator(this, minKey, maxKey);
+    public RangeEnumerator EnumerateRange(TKey minKey, TKey maxKey)
+    {
+        if (AllowMultiple)
+        {
+            ThrowHelper.ThrowEnumerateRangeOnAllowMultiple();
+        }
+        return new RangeEnumerator(this, minKey, maxKey);
+    }
 
     /// <summary>
     /// Returns an enumerator that yields entries in descending key order within [<paramref name="minKey"/>, <paramref name="maxKey"/>].
+    /// For unique indexes only — throws on AllowMultiple. Use <see cref="EnumerateRangeMultipleDescending"/> for AllowMultiple indexes.
     /// The caller must be inside an epoch scope. Uses per-leaf OLC validation (lock-free for readers).
     /// </summary>
-    public RangeEnumerator EnumerateRangeDescending(TKey minKey, TKey maxKey) => new RangeEnumerator(this, minKey, maxKey, true);
+    public RangeEnumerator EnumerateRangeDescending(TKey minKey, TKey maxKey)
+    {
+        if (AllowMultiple)
+        {
+            ThrowHelper.ThrowEnumerateRangeOnAllowMultiple();
+        }
+        return new RangeEnumerator(this, minKey, maxKey, true);
+    }
+
+    /// <summary>
+    /// Returns an enumerator that yields keys with their expanded VSBS values in ascending key order within [<paramref name="minKey"/>, <paramref name="maxKey"/>].
+    /// For AllowMultiple indexes only — throws on unique indexes. Use <see cref="EnumerateRange"/> for unique indexes.
+    /// The caller must be inside an epoch scope.
+    /// </summary>
+    public RangeMultipleEnumerator EnumerateRangeMultiple(TKey minKey, TKey maxKey)
+    {
+        if (!AllowMultiple)
+        {
+            ThrowHelper.ThrowEnumerateRangeMultipleOnUnique();
+        }
+        return new RangeMultipleEnumerator(this, minKey, maxKey);
+    }
+
+    /// <summary>
+    /// Returns an enumerator that yields keys with their expanded VSBS values in descending key order within [<paramref name="minKey"/>, <paramref name="maxKey"/>].
+    /// For AllowMultiple indexes only — throws on unique indexes. Use <see cref="EnumerateRangeDescending"/> for unique indexes.
+    /// The caller must be inside an epoch scope.
+    /// </summary>
+    public RangeMultipleEnumerator EnumerateRangeMultipleDescending(TKey minKey, TKey maxKey)
+    {
+        if (!AllowMultiple)
+        {
+            ThrowHelper.ThrowEnumerateRangeMultipleOnUnique();
+        }
+        return new RangeMultipleEnumerator(this, minKey, maxKey, true);
+    }
 
     /// <summary>
     /// Returns the minimum key in the BTree. Single-threaded use only (engine init / selectivity estimation).
@@ -729,31 +773,31 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
     {
         if (typeof(TKey) == typeof(sbyte))
         {
-            return (long)(sbyte)(object)key;
+            return (sbyte)(object)key;
         }
         if (typeof(TKey) == typeof(byte))
         {
-            return (long)(ulong)(byte)(object)key;
+            return (byte)(object)key;
         }
         if (typeof(TKey) == typeof(short))
         {
-            return (long)(short)(object)key;
+            return (short)(object)key;
         }
         if (typeof(TKey) == typeof(ushort))
         {
-            return (long)(ulong)(ushort)(object)key;
+            return (ushort)(object)key;
         }
         if (typeof(TKey) == typeof(char))
         {
-            return (long)(ulong)(char)(object)key;
+            return (char)(object)key;
         }
         if (typeof(TKey) == typeof(int))
         {
-            return (long)(int)(object)key;
+            return (int)(object)key;
         }
         if (typeof(TKey) == typeof(uint))
         {
-            return (long)(ulong)(uint)(object)key;
+            return (uint)(object)key;
         }
         if (typeof(TKey) == typeof(long))
         {
@@ -766,7 +810,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         if (typeof(TKey) == typeof(float))
         {
             var f = (float)(object)key;
-            return (long)Unsafe.As<float, int>(ref f);
+            return Unsafe.As<float, int>(ref f);
         }
         if (typeof(TKey) == typeof(double))
         {

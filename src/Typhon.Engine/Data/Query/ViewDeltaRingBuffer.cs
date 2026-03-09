@@ -8,13 +8,16 @@ namespace Typhon.Engine;
 /// <summary>
 /// MPSC lock-free ring buffer with SOA layout for batching view delta entries.
 /// Multiple producers append concurrently; a single consumer peeks/advances sequentially.
+/// Memory is allocated as a single cache-line-aligned block via <see cref="IMemoryAllocator"/>,
+/// with each SOA array starting at a 64-byte boundary for optimal prefetch and false-sharing avoidance.
 /// </summary>
 internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
 {
-    public const int DefaultCapacity = 8192;
+    public const int DefaultCapacity = 4096;
+    private const int CacheLineSize = 64;
 
     // Cache-line padded counter to prevent false sharing between producer and consumer
-    [StructLayout(LayoutKind.Explicit, Size = 64)]
+    [StructLayout(LayoutKind.Explicit, Size = CacheLineSize)]
     private struct PaddedLong
     {
         [FieldOffset(0)] public long Value;
@@ -23,11 +26,14 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
     // Immutable configuration
     private readonly int _capacity;
     private readonly int _capacityMask;
-    private readonly long _baseTSN;
+    private long _baseTSN;
 
-    // SOA arrays (unmanaged, cache-line aligned)
+    // Single allocation block holding all SOA arrays
+    private PinnedMemoryBlock _block;
+
+    // SOA array pointers (computed offsets into _block)
     private ViewDeltaEntry* _entries;   // 24B × capacity
-    private int* _deltaTSNs;           // 4B × capacity
+    private long* _deltaTSNs;          // 8B × capacity — long to prevent overflow on long-running low-traffic views
     private byte* _flags;              // 1B × capacity
     private byte* _componentTags;      // 1B × capacity — identifies source ComponentTable (0=T1, 1=T2)
     private byte* _written;            // 1B × capacity
@@ -40,7 +46,7 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
     private int _overflow;             // Sticky flag
     private int _disposed;
 
-    public ViewDeltaRingBuffer(int capacity = DefaultCapacity, long baseTSN = 0)
+    public ViewDeltaRingBuffer(IMemoryAllocator allocator, IResource resourceParent, int capacity = DefaultCapacity, long baseTSN = 0)
     {
         if (capacity <= 0 || (capacity & (capacity - 1)) != 0)
         {
@@ -51,18 +57,26 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
         _capacityMask = capacity - 1;
         _baseTSN = baseTSN;
 
-        _entries = (ViewDeltaEntry*)NativeMemory.AlignedAlloc((nuint)(sizeof(ViewDeltaEntry) * capacity), 64);
-        _deltaTSNs = (int*)NativeMemory.AlignedAlloc((nuint)(sizeof(int) * capacity), 64);
-        _flags = (byte*)NativeMemory.AlignedAlloc((nuint)capacity, 64);
-        _componentTags = (byte*)NativeMemory.AlignedAlloc((nuint)capacity, 64);
-        _written = (byte*)NativeMemory.AlignedAlloc((nuint)capacity, 64);
+        // Compute SOA layout: each sub-buffer starts at a 64-byte boundary
+        var entriesSize = AlignUp(sizeof(ViewDeltaEntry) * capacity);
+        var deltaTSNsSize = AlignUp(sizeof(long) * capacity);
+        var flagsSize = AlignUp(capacity);
+        var componentTagsSize = AlignUp(capacity);
+        var writtenSize = AlignUp(capacity);
+        var totalSize = entriesSize + deltaTSNsSize + flagsSize + componentTagsSize + writtenSize;
 
-        NativeMemory.Clear(_entries, (nuint)(sizeof(ViewDeltaEntry) * capacity));
-        NativeMemory.Clear(_deltaTSNs, (nuint)(sizeof(int) * capacity));
-        NativeMemory.Clear(_flags, (nuint)capacity);
-        NativeMemory.Clear(_componentTags, (nuint)capacity);
-        NativeMemory.Clear(_written, (nuint)capacity);
+        _block = allocator.AllocatePinned("ViewDeltaRingBuffer", resourceParent, totalSize, zeroed: true, alignment: CacheLineSize);
+
+        var basePtr = _block.DataAsPointer;
+        _entries = (ViewDeltaEntry*)basePtr;
+        _deltaTSNs = (long*)(basePtr + entriesSize);
+        _flags = basePtr + entriesSize + deltaTSNsSize;
+        _componentTags = basePtr + entriesSize + deltaTSNsSize + flagsSize;
+        _written = basePtr + entriesSize + deltaTSNsSize + flagsSize + componentTagsSize;
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int AlignUp(int size) => (size + CacheLineSize - 1) & ~(CacheLineSize - 1);
 
     public int Capacity => _capacity;
 
@@ -102,7 +116,7 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
             _entries[index].EntityPK = entityPK;
             _entries[index].BeforeKey = beforeKey;
             _entries[index].AfterKey = afterKey;
-            _deltaTSNs[index] = (int)(tsn - _baseTSN);
+            _deltaTSNs[index] = tsn - _baseTSN;
             _flags[index] = flags;
             _componentTags[index] = componentTag;
 
@@ -122,6 +136,7 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
     /// <param name="entry">The entry data if available.</param>
     /// <param name="flags">The flags byte for the entry.</param>
     /// <param name="tsn">The absolute TSN of the entry.</param>
+    /// <param name="componentTag">The component tag for two-component views.</param>
     /// <returns>True if an entry is available and within the target TSN range.</returns>
     public bool TryPeek(long targetTSN, out ViewDeltaEntry entry, out byte flags, out long tsn, out byte componentTag)
     {
@@ -177,13 +192,18 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
     /// <summary>
     /// Reset the buffer to empty state. Not thread-safe — caller must ensure no concurrent access.
     /// </summary>
-    public void Reset()
+    /// <param name="newBaseTSN">When >= 0, reanchors the base TSN for delta computation.</param>
+    public void Reset(long newBaseTSN = -1)
     {
         NativeMemory.Clear(_written, (nuint)_capacity);
         NativeMemory.Clear(_componentTags, (nuint)_capacity);
         _head.Value = 0;
         _tail.Value = 0;
         _overflow = 0;
+        if (newBaseTSN >= 0)
+        {
+            _baseTSN = newBaseTSN;
+        }
     }
 
     public void Dispose()
@@ -193,34 +213,12 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
             return;
         }
 
-        if (_entries != null)
-        {
-            NativeMemory.AlignedFree(_entries);
-            _entries = null;
-        }
-
-        if (_deltaTSNs != null)
-        {
-            NativeMemory.AlignedFree(_deltaTSNs);
-            _deltaTSNs = null;
-        }
-
-        if (_flags != null)
-        {
-            NativeMemory.AlignedFree(_flags);
-            _flags = null;
-        }
-
-        if (_componentTags != null)
-        {
-            NativeMemory.AlignedFree(_componentTags);
-            _componentTags = null;
-        }
-
-        if (_written != null)
-        {
-            NativeMemory.AlignedFree(_written);
-            _written = null;
-        }
+        _block?.Dispose();
+        _block = null;
+        _entries = null;
+        _deltaTSNs = null;
+        _flags = null;
+        _componentTags = null;
+        _written = null;
     }
 }

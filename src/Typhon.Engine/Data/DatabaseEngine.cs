@@ -137,8 +137,8 @@ public class DatabaseEngineOptions
 /// </summary>
 /// <remarks>
 /// <para>
-/// DatabaseEngine registers itself under the <see cref="ResourceSubsystem.DataEngine"/> subsystem
-/// in the resource tree. ComponentTables are registered as children of this engine.
+/// DatabaseEngine registers itself under the <see cref="ResourceSubsystem.DataEngine"/> subsystem in the resource tree. ComponentTables are registered
+/// as children of this engine.
 /// </para>
 /// </remarks>
 [PublicAPI]
@@ -147,6 +147,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     private readonly DatabaseEngineOptions      _options;
     private readonly ILogger<DatabaseEngine>    _log;
     private readonly IMemoryAllocator           _memoryAllocator;
+    internal IMemoryAllocator                   MemoryAllocator => _memoryAllocator;
     private readonly IWalFileIO                 _walFileIO;
     private readonly IResource                  _durabilityNode;
     private WalRecoveryResult                   _lastRecoveryResult;

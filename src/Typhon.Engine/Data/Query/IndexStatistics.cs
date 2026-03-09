@@ -17,7 +17,29 @@ internal class IndexStatistics
     public IndexStatistics(BTreeBase index)
     {
         _index = index;
+        KeyType = DeriveKeyType(index);
     }
+
+    /// <summary>
+    /// The <see cref="KeyType"/> of the underlying B+Tree, derived from its runtime generic type.
+    /// Used by selectivity estimators to decode float/double bit-pattern encodings correctly.
+    /// </summary>
+    public KeyType KeyType { get; }
+
+    private static KeyType DeriveKeyType(BTreeBase index) => index switch
+    {
+        BTree<byte> => KeyType.Byte,
+        BTree<sbyte> => KeyType.SByte,
+        BTree<short> => KeyType.Short,
+        BTree<ushort> => KeyType.UShort,
+        BTree<char> => KeyType.UShort,
+        BTree<int> => KeyType.Int,
+        BTree<uint> => KeyType.UInt,
+        BTree<float> => KeyType.Float,
+        BTree<double> => KeyType.Double,
+        BTree<long> => KeyType.Long,
+        _ => KeyType.Long
+    };
 
     /// <summary>
     /// Number of leaf entries in the B+Tree, read live. For unique indexes this equals the entity count.

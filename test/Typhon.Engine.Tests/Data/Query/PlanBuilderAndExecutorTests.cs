@@ -39,7 +39,9 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     {
         var ct = dbe.GetComponentTable<CompD>();
         using var tx = dbe.CreateQuickTransaction();
-        return PipelineExecutor.Instance.Execute<CompD>(plan, plan.OrderedEvaluators, ct, tx);
+        var result = new HashSet<long>();
+        PipelineExecutor.Instance.Execute<CompD>(plan, plan.OrderedEvaluators, ct, tx, result);
+        return result;
     }
 
     private static List<long> ExecutePlanOrdered(DatabaseEngine dbe, ExecutionPlan plan,
@@ -47,7 +49,9 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     {
         var ct = dbe.GetComponentTable<CompD>();
         using var tx = dbe.CreateQuickTransaction();
-        return PipelineExecutor.Instance.ExecuteOrdered<CompD>(plan, plan.OrderedEvaluators, ct, tx, skip, take);
+        var result = new List<long>();
+        PipelineExecutor.Instance.ExecuteOrdered<CompD>(plan, plan.OrderedEvaluators, ct, tx, result, skip, take);
+        return result;
     }
 
     #endregion
@@ -445,9 +449,9 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     }
 
     [Test]
-    public void PlanBuilder_AllowMultipleIndex_FallsBackToPKScan()
+    public void PlanBuilder_AllowMultipleIndex_UsedAsPrimaryStream()
     {
-        // A has [Index(AllowMultiple = true)] — should NOT be selected as primary stream
+        // A has [Index(AllowMultiple = true)] — should be selected as primary stream (VSBS expansion supported)
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
 
@@ -456,11 +460,11 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
             CreateEntity(dbe, i * 1.0f, i * 10, i * 2.0);
         }
 
-        // Only predicate is on A (AllowMultiple) — must fall back to PK scan
+        // Only predicate is on A (AllowMultiple) — should use index scan with VSBS expansion
         var (plan, _) = BuildPlanFromExpression(dbe, p => p.A > 5.0f);
 
-        Assert.That(plan.UsesSecondaryIndex, Is.False, "AllowMultiple index should not be used as primary stream");
-        Assert.That(plan.PrimaryFieldIndex, Is.EqualTo(-1));
+        Assert.That(plan.UsesSecondaryIndex, Is.True, "AllowMultiple index should be used as primary stream");
+        Assert.That(plan.PrimaryFieldIndex, Is.GreaterThanOrEqualTo(0));
     }
 
     [Test]
@@ -678,6 +682,133 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         var (plan, _) = BuildPlanFromExpression(dbe, p => p.B > 50, orderBy);
 
         Assert.That(plan.UsesSecondaryIndex, Is.False, "OrderBy PK should force PK scan");
+    }
+
+    #endregion
+
+    #region AllowMultiple Primary Stream Tests
+
+    [Test]
+    public void AllowMultiple_PrimaryStream_EqualityPredicate()
+    {
+        // AllowMultiple index on A — equality predicate should use index scan and return correct results
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        // Create entities with duplicate A values (AllowMultiple)
+        var pk1 = CreateEntity(dbe, 3.0f, 10, 1.0);
+        var pk2 = CreateEntity(dbe, 3.0f, 20, 2.0);
+        var pk3 = CreateEntity(dbe, 5.0f, 30, 3.0);
+        var pk4 = CreateEntity(dbe, 3.0f, 40, 4.0);
+
+        var (plan, _) = BuildPlanFromExpression(dbe, p => p.A == 3.0f);
+        var results = ExecutePlan(dbe, plan);
+
+        Assert.That(plan.UsesSecondaryIndex, Is.True, "AllowMultiple equality should use index scan");
+        Assert.That(results, Has.Count.EqualTo(3));
+        Assert.That(results, Does.Contain(pk1));
+        Assert.That(results, Does.Contain(pk2));
+        Assert.That(results, Does.Contain(pk4));
+        Assert.That(results, Does.Not.Contain(pk3));
+    }
+
+    [Test]
+    public void AllowMultiple_PrimaryStream_RangePredicate()
+    {
+        // AllowMultiple index on A — range predicate should use index scan and return correct results
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        var pk1 = CreateEntity(dbe, 1.0f, 10, 1.0);
+        var pk2 = CreateEntity(dbe, 3.0f, 20, 2.0);
+        var pk3 = CreateEntity(dbe, 3.0f, 30, 3.0);
+        var pk4 = CreateEntity(dbe, 5.0f, 40, 4.0);
+        var pk5 = CreateEntity(dbe, 7.0f, 50, 5.0);
+
+        var (plan, _) = BuildPlanFromExpression(dbe, p => p.A >= 3.0f);
+        var results = ExecutePlan(dbe, plan);
+
+        Assert.That(plan.UsesSecondaryIndex, Is.True, "AllowMultiple range should use index scan");
+        Assert.That(results, Has.Count.EqualTo(4));
+        Assert.That(results, Does.Contain(pk2));
+        Assert.That(results, Does.Contain(pk3));
+        Assert.That(results, Does.Contain(pk4));
+        Assert.That(results, Does.Contain(pk5));
+        Assert.That(results, Does.Not.Contain(pk1));
+    }
+
+    [Test]
+    public void AllowMultiple_PrimaryStream_SelectivityOrdering()
+    {
+        // When both AllowMultiple A and unique B have predicates, PlanBuilder should pick the most selective one
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        for (var i = 0; i < 20; i++)
+        {
+            CreateEntity(dbe, 3.0f, i, i * 1.0); // 20 entities with A=3.0, B=0..19
+        }
+        CreateEntity(dbe, 5.0f, 100, 50.0);
+
+        // A == 3.0 matches 20 entities, B == 100 matches 1 entity — B should be picked as primary
+        var (plan, _) = BuildPlanFromExpression(dbe, p => p.A == 3.0f && p.B == 100);
+        var results = ExecutePlan(dbe, plan);
+
+        Assert.That(results, Has.Count.EqualTo(0), "No entity has both A==3.0 and B==100");
+    }
+
+    [Test]
+    public void AllowMultiple_PrimaryStream_ChainedPredicates_CorrectResults()
+    {
+        // AllowMultiple A as primary + filter on B — verifies VSBS expansion + filter evaluation
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        var pk1 = CreateEntity(dbe, 3.0f, 10, 1.0);
+        var pk2 = CreateEntity(dbe, 3.0f, 20, 2.0);
+        var pk3 = CreateEntity(dbe, 3.0f, 30, 3.0);
+        CreateEntity(dbe, 5.0f, 40, 4.0);
+
+        // A == 3.0 (AllowMultiple primary) + B > 15 (filter)
+        var (plan, _) = BuildPlanFromExpression(dbe, p => p.A == 3.0f && p.B > 15);
+        var results = ExecutePlan(dbe, plan);
+
+        Assert.That(results, Has.Count.EqualTo(2));
+        Assert.That(results, Does.Contain(pk2));
+        Assert.That(results, Does.Contain(pk3));
+    }
+
+    [Test]
+    public void AllowMultiple_PrimaryStream_MatchesBruteForce()
+    {
+        // Verify AllowMultiple index scan matches brute-force PK scan for a variety of data
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        // Insert 50 entities with various A values (duplicates expected)
+        var allPks = new List<long>();
+        for (var i = 0; i < 50; i++)
+        {
+            allPks.Add(CreateEntity(dbe, (i % 5) * 1.0f, i, i * 0.5));
+        }
+
+        // Query via AllowMultiple index
+        var (indexPlan, _) = BuildPlanFromExpression(dbe, p => p.A >= 3.0f);
+        Assert.That(indexPlan.UsesSecondaryIndex, Is.True);
+        var indexResults = ExecutePlan(dbe, indexPlan);
+
+        // Brute-force: read all entities and filter manually
+        using var tx = dbe.CreateQuickTransaction();
+        var expected = new HashSet<long>();
+        foreach (var pk in allPks)
+        {
+            if (tx.ReadEntity<CompD>(pk, out var comp) && comp.A >= 3.0f)
+            {
+                expected.Add(pk);
+            }
+        }
+
+        Assert.That(indexResults, Is.EquivalentTo(expected), "AllowMultiple index scan must match brute-force results");
     }
 
     #endregion
