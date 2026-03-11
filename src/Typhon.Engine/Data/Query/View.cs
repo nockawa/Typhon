@@ -8,20 +8,23 @@ public unsafe class View<T> : ViewBase where T : unmanaged
 {
     private readonly ViewRegistry _registry;
     private readonly ComponentTable _componentTable;
+    private readonly int[] _evaluatorLookup;
 
     internal View(FieldEvaluator[] evaluators, ViewRegistry registry, ComponentTable componentTable, int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity,
         long baseTSN = 0) : base(evaluators, BuildFieldDependencies(evaluators), componentTable.DBE.MemoryAllocator, componentTable, bufferCapacity, baseTSN)
     {
         _registry = registry;
         _componentTable = componentTable;
+        _evaluatorLookup = BuildEvaluatorLookup(evaluators);
     }
 
     internal View(FieldEvaluator[] evaluators, ViewRegistry registry, ComponentTable componentTable, ExecutionPlan plan,
-        int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0) : 
-        base(evaluators, BuildFieldDependencies(evaluators), componentTable.DBE.MemoryAllocator, componentTable, plan, bufferCapacity, baseTSN)
+        int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0) :
+        base(evaluators, BuildFieldDependencies(evaluators), componentTable.DBE.MemoryAllocator, componentTable, [plan], bufferCapacity, baseTSN)
     {
         _registry = registry;
         _componentTable = componentTable;
+        _evaluatorLookup = BuildEvaluatorLookup(evaluators);
     }
 
     protected override void DeregisterFromRegistries() => _registry.DeregisterView(this);
@@ -30,7 +33,7 @@ public unsafe class View<T> : ViewBase where T : unmanaged
     /// Drain the ring buffer up to the transaction's snapshot TSN, evaluate field predicates,
     /// and update the entity set and delta tracking sets.
     /// </summary>
-    public void Refresh(Transaction tx)
+    public override void Refresh(Transaction tx)
     {
         if (IsDisposed)
         {
@@ -184,16 +187,41 @@ public unsafe class View<T> : ViewBase where T : unmanaged
         return true;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private ref FieldEvaluator FindEvaluator(int fieldIndex)
     {
-        for (var i = 0; i < _evaluators.Length; i++)
+        if ((uint)fieldIndex < (uint)_evaluatorLookup.Length)
         {
-            if (_evaluators[i].FieldIndex == fieldIndex)
+            var idx = _evaluatorLookup[fieldIndex];
+            if (idx >= 0)
             {
-                return ref _evaluators[i];
+                return ref _evaluators[idx];
             }
         }
         return ref Unsafe.NullRef<FieldEvaluator>();
+    }
+
+    private static int[] BuildEvaluatorLookup(FieldEvaluator[] evaluators)
+    {
+        var maxField = -1;
+        for (var i = 0; i < evaluators.Length; i++)
+        {
+            if (evaluators[i].FieldIndex > maxField)
+            {
+                maxField = evaluators[i].FieldIndex;
+            }
+        }
+        if (maxField < 0)
+        {
+            return [];
+        }
+        var lookup = new int[maxField + 1];
+        Array.Fill(lookup, -1);
+        for (var i = 0; i < evaluators.Length; i++)
+        {
+            lookup[evaluators[i].FieldIndex] = i;
+        }
+        return lookup;
     }
 
     private static int[] BuildFieldDependencies(FieldEvaluator[] evaluators)

@@ -38,12 +38,15 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
     private byte* _componentTags;      // 1B × capacity — identifies source ComponentTable (0=T1, 1=T2)
     private byte* _written;            // 1B × capacity
 
-    // Producer/consumer on separate cache lines
-    private PaddedLong _tail;          // 64B (producer writes)
+    // Producer hot path — CAS on _tail, write _overflow on full. PaddedLong (64B) ensures _tail and _head occupy separate cache lines regardless of class
+    // field layout, preventing false sharing between concurrent producers and the single consumer.
+    private PaddedLong _tail;          // 64B (producer writes via CAS)
+    private int _overflow;             // Sticky flag — only written when buffer is full (exceptional path)
+
+    // Consumer hot path — plain increment on _head. Isolated from producer by PaddedLong padding.
     private PaddedLong _head;          // 64B (consumer writes)
 
-    // State
-    private int _overflow;             // Sticky flag
+    // Cold path — written only during Dispose
     private int _disposed;
 
     public ViewDeltaRingBuffer(IMemoryAllocator allocator, IResource resourceParent, int capacity = DefaultCapacity, long baseTSN = 0)

@@ -1,4 +1,3 @@
-using System;
 using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine;
@@ -86,7 +85,7 @@ internal class PlanBuilder
             }
 
             // Must reference a valid indexed field
-            if (eval.FieldIndex < 0 || eval.FieldIndex >= indexedFieldInfos.Length)
+            if (eval.FieldIndex >= indexedFieldInfos.Length)
             {
                 continue;
             }
@@ -172,17 +171,17 @@ internal class PlanBuilder
         {
             case KeyType.Bool: return 1L;
             case KeyType.SByte: return sbyte.MaxValue;
-            case KeyType.Byte: return (long)(ulong)byte.MaxValue;
+            case KeyType.Byte: return byte.MaxValue;
             case KeyType.Short: return short.MaxValue;
-            case KeyType.UShort: return (long)(ulong)ushort.MaxValue;
+            case KeyType.UShort: return ushort.MaxValue;
             case KeyType.Int: return int.MaxValue;
-            case KeyType.UInt: return (long)(ulong)uint.MaxValue;
+            case KeyType.UInt: return uint.MaxValue;
             case KeyType.Long: return long.MaxValue;
             case KeyType.ULong: return unchecked((long)ulong.MaxValue);
             case KeyType.Float:
             {
                 var f = float.MaxValue;
-                return (long)Unsafe.As<float, int>(ref f);
+                return Unsafe.As<float, int>(ref f);
             }
             case KeyType.Double:
             {
@@ -209,7 +208,7 @@ internal class PlanBuilder
             case KeyType.Float:
             {
                 var f = float.MinValue;
-                return (long)Unsafe.As<float, int>(ref f);
+                return Unsafe.As<float, int>(ref f);
             }
             case KeyType.Double:
             {

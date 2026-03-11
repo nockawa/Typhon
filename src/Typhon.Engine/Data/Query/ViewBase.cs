@@ -7,7 +7,7 @@ using System.Threading;
 namespace Typhon.Engine;
 
 /// <summary>
-/// Non-generic base class for <see cref="View{T}"/> and <see cref="View{T1,T2}"/>.
+/// Non-generic base class for <see cref="View{T}"/>, <see cref="View{T1,T2}"/>, and <see cref="OrView{T}"/>.
 /// Contains entity set management, delta tracking, disposal, and globally unique ViewId generation.
 /// </summary>
 public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
@@ -15,7 +15,7 @@ public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
     private static int _nextViewId;
 
     protected readonly HashSet<long> _entityIds = new();
-    private readonly Dictionary<long, DeltaKind> _deltas = new();
+    private readonly Dictionary<long, DeltaKind> _deltas = new(16);
     private int _addedCount;
     private int _removedCount;
     private int _modifiedCount;
@@ -23,8 +23,7 @@ public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
     private long _lastRefreshTSN;
     private int _disposed;
     private bool _overflowDetected;
-    private readonly ExecutionPlan _cachedPlan;
-    private readonly bool _hasCachedPlan;
+    private readonly ExecutionPlan[] _cachedPlans;
 
     protected ViewBase(FieldEvaluator[] evaluators, int[] fieldDependencies, IMemoryAllocator allocator, IResource resourceParent, int bufferCapacity,
         long baseTSN)
@@ -35,12 +34,10 @@ public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
         DeltaBuffer = new ViewDeltaRingBuffer(allocator, resourceParent, bufferCapacity, baseTSN);
     }
 
-    protected ViewBase(FieldEvaluator[] evaluators, int[] fieldDependencies, IMemoryAllocator allocator, IResource resourceParent, ExecutionPlan plan,
-        int bufferCapacity, long baseTSN)
-        : this(evaluators, fieldDependencies, allocator, resourceParent, bufferCapacity, baseTSN)
+    protected ViewBase(FieldEvaluator[] evaluators, int[] fieldDependencies, IMemoryAllocator allocator, IResource resourceParent, ExecutionPlan[] plans,
+        int bufferCapacity, long baseTSN) : this(evaluators, fieldDependencies, allocator, resourceParent, bufferCapacity, baseTSN)
     {
-        _cachedPlan = plan;
-        _hasCachedPlan = true;
+        _cachedPlans = plans;
     }
 
     public int ViewId { get; }
@@ -51,8 +48,8 @@ public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
     public int Count => _entityIds.Count;
     public long LastRefreshTSN => _lastRefreshTSN;
     public bool HasOverflow => _overflowDetected;
-    public ExecutionPlan ExecutionPlan => _cachedPlan;
-    public bool HasCachedPlan => _hasCachedPlan;
+    public ExecutionPlan ExecutionPlan => _cachedPlans is { Length: > 0 } ? _cachedPlans[0] : default;
+    public bool HasCachedPlan => _cachedPlans != null;
 
     public bool Contains(long pk) => _entityIds.Contains(pk);
 
@@ -83,9 +80,14 @@ public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
 
     protected bool TryMarkDisposed() => Interlocked.Exchange(ref _disposed, 1) == 0;
 
-    protected ExecutionPlan CachedPlan => _cachedPlan;
+    protected ExecutionPlan CachedPlan => _cachedPlans is { Length: > 0 } ? _cachedPlans[0] : default;
 
-    protected bool HasCachedPlanInternal => _hasCachedPlan;
+    protected ExecutionPlan[] CachedPlans => _cachedPlans;
+
+    protected bool HasCachedPlanInternal => _cachedPlans != null;
+
+    /// <summary>Drain the ring buffer, evaluate predicates, and update entity set and delta tracking.</summary>
+    public abstract void Refresh(Transaction tx);
 
     /// <summary>Deregister from all owning ViewRegistries. Called during disposal.</summary>
     protected abstract void DeregisterFromRegistries();
@@ -175,8 +177,8 @@ public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
     }
 
     /// <summary>
-    /// Drains ring buffer entries that arrived during a RefreshFull re-scan, advancing the consumer position
-    /// without processing entries (the full scan already captured the authoritative entity set).
+    /// Drains ring buffer entries that arrived during a RefreshFull re-scan, advancing the consumer position without processing entries
+    /// (the full scan already captured the authoritative entity set).
     /// </summary>
     protected void DrainBufferAfterRefreshFull(long targetTSN)
     {
@@ -189,9 +191,8 @@ public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
 
     /// <summary>
     /// Computes Added/Removed deltas by diffing old and new entity sets after a full refresh.
-    /// Entities present in both sets are NOT reported as Modified — after overflow, granular
-    /// field-change tracking is lost. Consumers needing field-change tracking after overflow
-    /// should treat the overflow event itself as a full invalidation signal via <see cref="HasOverflow"/>.
+    /// Entities present in both sets are NOT reported as Modified — after overflow, granular field-change tracking is lost. Consumers needing field-change
+    /// tracking after overflow should treat the overflow event itself as a full invalidation signal via <see cref="HasOverflow"/>.
     /// </summary>
     protected void ComputeRefreshFullDeltas(HashSet<long> oldEntities)
     {

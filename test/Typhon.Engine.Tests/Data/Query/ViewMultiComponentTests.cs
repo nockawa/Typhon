@@ -15,8 +15,8 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
         KeyType keyType, CompareOp compareOp, long threshold, byte componentTag = 0) =>
         new()
         {
-            FieldIndex = fieldIndex,
-            FieldOffset = fieldOffset,
+            FieldIndex = (byte)fieldIndex,
+            FieldOffset = (ushort)fieldOffset,
             FieldSize = fieldSize,
             KeyType = keyType,
             CompareOp = compareOp,

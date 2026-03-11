@@ -90,6 +90,9 @@ public class DBComponentDefinition
             
         public int ArrayLength { get; set; }
 
+        public bool IsForeignKey { get; set; }
+        public Type ForeignKeyTargetType { get; set; }
+
         public static void CheckName(string fieldName)
         {
             if (string.IsNullOrWhiteSpace(fieldName) || new Regex("^[A-Za-z]+$").IsMatch(fieldName) == false)

@@ -11,8 +11,8 @@ class FieldEvaluatorTests
     // ──────────────────────────────────────────────
 
     [Test]
-    public unsafe void SizeOf_FieldEvaluator_Is24Bytes() =>
-        Assert.That(sizeof(FieldEvaluator), Is.EqualTo(24));
+    public unsafe void SizeOf_FieldEvaluator_Is16Bytes() =>
+        Assert.That(sizeof(FieldEvaluator), Is.EqualTo(16));
 
     // ──────────────────────────────────────────────
     //  Bool

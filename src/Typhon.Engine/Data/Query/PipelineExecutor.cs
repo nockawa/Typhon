@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Typhon.Engine;
 
@@ -198,13 +199,12 @@ internal class PipelineExecutor
 
         // PK scan path — scan the PK index and evaluate all predicates per entity
         var pkIndex = table.PrimaryKeyIndex;
-        var hasFilters = evaluators.Length > 0;
 
         var collected = 0;
         Span<long> batch = stackalloc long[BatchSize];
         var batchCount = 0;
 
-        var enumerator = plan.Descending ? pkIndex.EnumerateRangeDescending(plan.PrimaryScanMin, plan.PrimaryScanMax) : 
+        var enumerator = plan.Descending ? pkIndex.EnumerateRangeDescending(plan.PrimaryScanMin, plan.PrimaryScanMax) :
             pkIndex.EnumerateRange(plan.PrimaryScanMin, plan.PrimaryScanMax);
 
         foreach (var kv in enumerator)
@@ -215,7 +215,7 @@ internal class PipelineExecutor
                 continue;
             }
 
-            if (ProcessBatch<T>(batch[..batchCount], evaluators, tx, hasFilters, unorderedResult, orderedResult, ref skip, ref take, ref collected))
+            if (FlushBatch<T>(batch[..batchCount], evaluators, tx, unorderedResult, orderedResult, ref skip, ref take, ref collected))
             {
                 return;
             }
@@ -224,7 +224,7 @@ internal class PipelineExecutor
 
         if (batchCount > 0)
         {
-            ProcessBatch<T>(batch[..batchCount], evaluators, tx, hasFilters, unorderedResult, orderedResult, ref skip, ref take, ref collected);
+            FlushBatch<T>(batch[..batchCount], evaluators, tx, unorderedResult, orderedResult, ref skip, ref take, ref collected);
         }
     }
 
@@ -232,27 +232,27 @@ internal class PipelineExecutor
     /// Secondary index scan path: scans a secondary index (unique or AllowMultiple) for matching key values, recovers entity PKs via
     /// <see cref="CompRevStorageHeader.EntityPK"/>, then evaluates remaining predicates via component reads.
     /// </summary>
-    private void ExecuteCoreSecondaryIndex<T>(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, 
+    private void ExecuteCoreSecondaryIndex<T>(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx,
         HashSet<long> unorderedResult, List<long> orderedResult, int skip, int take) where T : unmanaged
     {
         // Step 1: Collect entity PKs from secondary index range scan
         var pks = CollectPKsFromSecondaryIndex(plan, table);
 
-        // Step 2: Process collected PKs in batches with filter evaluation
-        var hasFilters = evaluators.Length > 0;
+        // Step 2: Process collected PKs in batches — use Span over List internals to avoid indexer bounds checks
+        var pkSpan = CollectionsMarshal.AsSpan(pks);
         var collected = 0;
         Span<long> batch = stackalloc long[BatchSize];
         var batchCount = 0;
 
-        for (var i = 0; i < pks.Count; i++)
+        for (var i = 0; i < pkSpan.Length; i++)
         {
-            batch[batchCount++] = pks[i];
+            batch[batchCount++] = pkSpan[i];
             if (batchCount < BatchSize)
             {
                 continue;
             }
 
-            if (ProcessBatch<T>(batch[..batchCount], evaluators, tx, hasFilters, unorderedResult, orderedResult, ref skip, ref take, ref collected))
+            if (FlushBatch<T>(batch[..batchCount], evaluators, tx, unorderedResult, orderedResult, ref skip, ref take, ref collected))
             {
                 return;
             }
@@ -261,7 +261,7 @@ internal class PipelineExecutor
 
         if (batchCount > 0)
         {
-            ProcessBatch<T>(batch[..batchCount], evaluators, tx, hasFilters, unorderedResult, orderedResult, ref skip, ref take, ref collected);
+            FlushBatch<T>(batch[..batchCount], evaluators, tx, unorderedResult, orderedResult, ref skip, ref take, ref collected);
         }
     }
 
@@ -342,14 +342,46 @@ internal class PipelineExecutor
         return result;
     }
 
-    private static bool ProcessBatch<T>(Span<long> batch, FieldEvaluator[] evaluators, Transaction tx, bool hasFilters, HashSet<long> unorderedResult, 
+    /// <summary>Dispatches to set or list variant based on which result collection is provided. Branching is per-batch, not per-item.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool FlushBatch<T>(Span<long> batch, FieldEvaluator[] evaluators, Transaction tx, HashSet<long> unorderedResult,
         List<long> orderedResult, ref int skip, ref int take, ref int collected) where T : unmanaged
+    {
+        if (unorderedResult != null)
+        {
+            ProcessBatchToSet<T>(batch, evaluators, tx, unorderedResult);
+            return false;
+        }
+        return ProcessBatchToList<T>(batch, evaluators, tx, orderedResult, ref skip, ref take, ref collected);
+    }
+
+    private static void ProcessBatchToSet<T>(Span<long> batch, FieldEvaluator[] evaluators, Transaction tx, HashSet<long> result) where T : unmanaged
+    {
+        if (evaluators.Length == 0)
+        {
+            for (var i = 0; i < batch.Length; i++)
+            {
+                result.Add(batch[i]);
+            }
+        }
+        else
+        {
+            for (var i = 0; i < batch.Length; i++)
+            {
+                if (EvaluateFilters<T>(evaluators, tx, batch[i]))
+                {
+                    result.Add(batch[i]);
+                }
+            }
+        }
+    }
+
+    private static bool ProcessBatchToList<T>(Span<long> batch, FieldEvaluator[] evaluators, Transaction tx, List<long> result, ref int skip, ref int take, 
+        ref int collected) where T : unmanaged
     {
         for (var i = 0; i < batch.Length; i++)
         {
-            var pk = batch[i];
-
-            if (hasFilters && !EvaluateFilters<T>(evaluators, tx, pk))
+            if (evaluators.Length > 0 && !EvaluateFilters<T>(evaluators, tx, batch[i]))
             {
                 continue;
             }
@@ -360,14 +392,7 @@ internal class PipelineExecutor
                 continue;
             }
 
-            if (unorderedResult != null)
-            {
-                unorderedResult.Add(pk);
-            }
-            else
-            {
-                orderedResult.Add(pk);
-            }
+            result.Add(batch[i]);
             collected++;
             if (collected >= take)
             {
@@ -432,7 +457,6 @@ internal class PipelineExecutor
 
         // PK scan path
         var pkIndex = table.PrimaryKeyIndex;
-        var hasFilters = evaluators.Length > 0;
 
         var collected = 0;
         Span<long> batch = stackalloc long[BatchSize];
@@ -449,7 +473,7 @@ internal class PipelineExecutor
                 continue;
             }
 
-            if (ProcessBatchTwo<T1, T2>(batch[..batchCount], evaluators, tx, hasFilters, unorderedResult, orderedResult, ref skip, ref take, ref collected))
+            if (FlushBatchTwo<T1, T2>(batch[..batchCount], evaluators, tx, unorderedResult, orderedResult, ref skip, ref take, ref collected))
             {
                 return;
             }
@@ -458,7 +482,7 @@ internal class PipelineExecutor
 
         if (batchCount > 0)
         {
-            ProcessBatchTwo<T1, T2>(batch[..batchCount], evaluators, tx, hasFilters, unorderedResult, orderedResult, ref skip, ref take, ref collected);
+            FlushBatchTwo<T1, T2>(batch[..batchCount], evaluators, tx, unorderedResult, orderedResult, ref skip, ref take, ref collected);
         }
     }
 
@@ -467,20 +491,20 @@ internal class PipelineExecutor
     {
         var pks = CollectPKsFromSecondaryIndex(plan, table);
 
-        var hasFilters = evaluators.Length > 0;
+        var pkSpan = CollectionsMarshal.AsSpan(pks);
         var collected = 0;
         Span<long> batch = stackalloc long[BatchSize];
         var batchCount = 0;
 
-        for (var i = 0; i < pks.Count; i++)
+        for (var i = 0; i < pkSpan.Length; i++)
         {
-            batch[batchCount++] = pks[i];
+            batch[batchCount++] = pkSpan[i];
             if (batchCount < BatchSize)
             {
                 continue;
             }
 
-            if (ProcessBatchTwo<T1, T2>(batch[..batchCount], evaluators, tx, hasFilters, unorderedResult, orderedResult, ref skip, ref take, ref collected))
+            if (FlushBatchTwo<T1, T2>(batch[..batchCount], evaluators, tx, unorderedResult, orderedResult, ref skip, ref take, ref collected))
             {
                 return;
             }
@@ -489,19 +513,50 @@ internal class PipelineExecutor
 
         if (batchCount > 0)
         {
-            ProcessBatchTwo<T1, T2>(batch[..batchCount], evaluators, tx, hasFilters, unorderedResult, orderedResult, ref skip, ref take, ref collected);
+            FlushBatchTwo<T1, T2>(batch[..batchCount], evaluators, tx, unorderedResult, orderedResult, ref skip, ref take, ref collected);
         }
     }
 
-    private static bool ProcessBatchTwo<T1, T2>(Span<long> batch, FieldEvaluator[] evaluators, Transaction tx, bool hasFilters,
-        HashSet<long> unorderedResult, List<long> orderedResult, ref int skip, ref int take, ref int collected)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool FlushBatchTwo<T1, T2>(Span<long> batch, FieldEvaluator[] evaluators, Transaction tx, HashSet<long> unorderedResult,
+        List<long> orderedResult, ref int skip, ref int take, ref int collected) where T1 : unmanaged where T2 : unmanaged
+    {
+        if (unorderedResult != null)
+        {
+            ProcessBatchTwoToSet<T1, T2>(batch, evaluators, tx, unorderedResult);
+            return false;
+        }
+        return ProcessBatchTwoToList<T1, T2>(batch, evaluators, tx, orderedResult, ref skip, ref take, ref collected);
+    }
+
+    private static void ProcessBatchTwoToSet<T1, T2>(Span<long> batch, FieldEvaluator[] evaluators, Transaction tx, HashSet<long> result)
         where T1 : unmanaged where T2 : unmanaged
+    {
+        if (evaluators.Length == 0)
+        {
+            for (var i = 0; i < batch.Length; i++)
+            {
+                result.Add(batch[i]);
+            }
+        }
+        else
+        {
+            for (var i = 0; i < batch.Length; i++)
+            {
+                if (EvaluateFiltersTwo<T1, T2>(evaluators, tx, batch[i]))
+                {
+                    result.Add(batch[i]);
+                }
+            }
+        }
+    }
+
+    private static bool ProcessBatchTwoToList<T1, T2>(Span<long> batch, FieldEvaluator[] evaluators, Transaction tx, List<long> result, ref int skip, 
+        ref int take, ref int collected) where T1 : unmanaged where T2 : unmanaged
     {
         for (var i = 0; i < batch.Length; i++)
         {
-            var pk = batch[i];
-
-            if (hasFilters && !EvaluateFiltersTwo<T1, T2>(evaluators, tx, pk))
+            if (evaluators.Length > 0 && !EvaluateFiltersTwo<T1, T2>(evaluators, tx, batch[i]))
             {
                 continue;
             }
@@ -512,14 +567,7 @@ internal class PipelineExecutor
                 continue;
             }
 
-            if (unorderedResult != null)
-            {
-                unorderedResult.Add(pk);
-            }
-            else
-            {
-                orderedResult.Add(pk);
-            }
+            result.Add(batch[i]);
             collected++;
             if (collected >= take)
             {
@@ -552,6 +600,155 @@ internal class PipelineExecutor
         }
 
         return true;
+    }
+
+    #endregion
+
+    #region Navigation overloads
+
+    /// <summary>
+    /// Target-first navigation: scans the target PK index, evaluates target predicates, then reverse-lookups source entities
+    /// via the FK index (AllowMultiple) and evaluates source predicates.
+    /// </summary>
+    public unsafe void ExecuteNavigationTargetFirst<TSource, TTarget>(FieldEvaluator[] sourceEvals, FieldEvaluator[] targetEvals, ComponentTable sourceCT, 
+        ComponentTable targetCT, int fkFieldOffset, Transaction tx, HashSet<long> result) where TSource : unmanaged where TTarget : unmanaged
+    {
+        // Find the FK index on the source table (long, AllowMultiple)
+        var fkIndexInfo = FindFKIndex(sourceCT, fkFieldOffset);
+        var fkIndex = (BTree<long>)fkIndexInfo.Index;
+        var compRevAccessor = sourceCT.CompRevTableSegment.CreateChunkAccessor();
+
+        try
+        {
+            // Scan target PK index for qualifying targets
+            var targetPKIndex = targetCT.PrimaryKeyIndex;
+            foreach (var kv in targetPKIndex.EnumerateLeaves())
+            {
+                var targetPK = kv.Key;
+
+                // Evaluate target predicates
+                if (targetEvals.Length > 0 && !EvaluateFilters<TTarget>(targetEvals, tx, targetPK))
+                {
+                    continue;
+                }
+
+                // Reverse lookup: find source entities that have FK == targetPK
+                var enumerator = fkIndex.EnumerateRangeMultiple(targetPK, targetPK);
+                try
+                {
+                    while (enumerator.MoveNextKey())
+                    {
+                        do
+                        {
+                            var values = enumerator.CurrentValues;
+                            for (var j = 0; j < values.Length; j++)
+                            {
+                                ref var header = ref compRevAccessor.GetChunk<CompRevStorageHeader>(values[j]);
+                                var sourcePK = header.EntityPK;
+
+                                // Evaluate source predicates
+                                if (sourceEvals.Length > 0 && !EvaluateFilters<TSource>(sourceEvals, tx, sourcePK))
+                                {
+                                    continue;
+                                }
+
+                                result.Add(sourcePK);
+                            }
+                        } while (enumerator.NextChunk());
+                    }
+                }
+                finally
+                {
+                    enumerator.Dispose();
+                }
+            }
+        }
+        finally
+        {
+            compRevAccessor.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Source-first navigation: scans source entities, extracts FK value, reads target, evaluates target predicates.
+    /// </summary>
+    public unsafe void ExecuteNavigationSourceFirst<TSource, TTarget>(FieldEvaluator[] sourceEvals, FieldEvaluator[] targetEvals, ComponentTable sourceCT, 
+        ComponentTable targetCT, int fkFieldOffset, Transaction tx, HashSet<long> result) where TSource : unmanaged where TTarget : unmanaged
+    {
+        var sourcePKIndex = sourceCT.PrimaryKeyIndex;
+
+        foreach (var kv in sourcePKIndex.EnumerateLeaves())
+        {
+            var sourcePK = kv.Key;
+
+            // Read source and evaluate source predicates
+            if (!tx.ReadEntity<TSource>(sourcePK, out var sourceComp))
+            {
+                continue;
+            }
+
+            if (sourceEvals.Length > 0)
+            {
+                var sourcePtr = (byte*)Unsafe.AsPointer(ref sourceComp);
+                var allPass = true;
+                for (var i = 0; i < sourceEvals.Length; i++)
+                {
+                    ref var eval = ref sourceEvals[i];
+                    if (!FieldEvaluator.Evaluate(ref eval, sourcePtr + eval.FieldOffset))
+                    {
+                        allPass = false;
+                        break;
+                    }
+                }
+                if (!allPass)
+                {
+                    continue;
+                }
+            }
+
+            // Extract FK value
+            var fkValue = *(long*)((byte*)Unsafe.AsPointer(ref sourceComp) + fkFieldOffset);
+            if (fkValue == 0)
+            {
+                continue; // No target reference
+            }
+
+            // Read and evaluate target
+            if (targetEvals.Length > 0 && !EvaluateFilters<TTarget>(targetEvals, tx, fkValue))
+            {
+                continue;
+            }
+
+            if (targetEvals.Length == 0)
+            {
+                // No target predicates — just verify the target exists
+                if (!tx.ReadEntity<TTarget>(fkValue, out _))
+                {
+                    continue;
+                }
+            }
+
+            result.Add(sourcePK);
+        }
+    }
+
+    /// <summary>
+    /// Finds the IndexedFieldInfo for the FK field by matching its offset.
+    /// </summary>
+    internal static IndexedFieldInfo FindFKIndex(ComponentTable ct, int fkFieldOffset)
+    {
+        var componentOverhead = ct.Definition.MultipleIndicesCount * sizeof(int);
+        var expectedOffset = componentOverhead + fkFieldOffset;
+
+        for (var i = 0; i < ct.IndexedFieldInfos.Length; i++)
+        {
+            if (ct.IndexedFieldInfos[i].OffsetToField == expectedOffset)
+            {
+                return ct.IndexedFieldInfos[i];
+            }
+        }
+
+        throw new InvalidOperationException("FK field index not found. Ensure the FK field has [Index(AllowMultiple = true)].");
     }
 
     #endregion

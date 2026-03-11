@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using NUnit.Framework;
 using Serilog;
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using Typhon.Schema.Definition;
@@ -275,11 +276,19 @@ abstract class TestBase<T> : TestBase
     protected IMemoryAllocator MemoryAllocator => ServiceProvider.GetRequiredService<IMemoryAllocator>();
     protected IResource AllocationResource => ResourceRegistry.Allocation;
 
+    // Per-fixture temp directory to avoid NTFS MFT contention when 8 fixtures run in parallel.
+    // Each fixture gets its own subdirectory under the system temp path, isolated from other fixtures.
+    private string _testDatabaseDir;
+
     [SetUp]
     public virtual void Setup()
     {
         var o = TestContext.CurrentContext.Test.Properties.ContainsKey("CacheSize");
         var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("CacheSize")! : (int)PagedMMF.MinimumCacheSize;
+
+        // Create a per-fixture temp directory to spread I/O across directories
+        _testDatabaseDir = Path.Combine(Path.GetTempPath(), "Typhon.Tests", typeof(T).Name);
+        Directory.CreateDirectory(_testDatabaseDir);
 
         var serviceCollection = new ServiceCollection();
         ServiceCollection = serviceCollection;
@@ -303,13 +312,14 @@ abstract class TestBase<T> : TestBase
             .AddScopedManagedPagedMemoryMappedFile(options =>
             {
                 options.DatabaseName = CurrentDatabaseName;
+                options.DatabaseDirectory = _testDatabaseDir;
                 options.DatabaseCacheSize = (ulong)dcs;
                 options.PagesDebugPattern = false;
             })
             .AddScopedDatabaseEngine(_ =>
             {
             });
-        
+
         ServiceProvider = ServiceCollection.BuildServiceProvider();
         ServiceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
         Logger = ServiceProvider.GetRequiredService<ILogger<T>>();
@@ -320,5 +330,29 @@ abstract class TestBase<T> : TestBase
     {
         (ServiceProvider as IDisposable)?.Dispose();
         Log.CloseAndFlush();
+
+        // Clean up the database file after each test to prevent accumulation
+        CleanupDatabaseFile();
+    }
+
+    private void CleanupDatabaseFile()
+    {
+        if (_testDatabaseDir == null)
+        {
+            return;
+        }
+
+        try
+        {
+            var dbFile = Path.Combine(_testDatabaseDir, $"{CurrentDatabaseName}.bin");
+            if (File.Exists(dbFile))
+            {
+                File.Delete(dbFile);
+            }
+        }
+        catch
+        {
+            // Best-effort cleanup — don't fail the test if deletion fails
+        }
     }
 }

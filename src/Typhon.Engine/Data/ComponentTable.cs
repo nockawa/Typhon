@@ -195,6 +195,12 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
 
     private ComponentTableFlags _flags;
 
+    /// <summary>
+    /// Approximate mutation count since last statistics rebuild. Non-atomic — intentional races are acceptable since this is only used as a threshold
+    /// trigger by <see cref="StatisticsWorker"/>. Reset to zero by the worker after initiating a rebuild.
+    /// </summary>
+    internal int MutationsSinceRebuild;
+
     // Contention tracking (aggregated from all latches)
     private long _contentionWaitCount;
     private long _contentionTotalWaitUs;
@@ -216,7 +222,9 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
 
         // Plain check-and-write for high-water mark (occasional lost max is acceptable)
         if (waitUs > _contentionMaxWaitUs)
+        {
             _contentionMaxWaitUs = waitUs;
+        }
     }
 
     /// <inheritdoc />

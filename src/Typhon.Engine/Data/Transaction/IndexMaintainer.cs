@@ -80,6 +80,8 @@ internal static unsafe class IndexMaintainer
                     *(int*)&cur[ifi.OffsetToIndexElementId] = *(int*)&prev[ifi.OffsetToIndexElementId];
                 }
             }
+
+            info.ComponentTable.MutationsSinceRebuild++;
         }
 
         // No previous revision, it means we're adding the first component revision, add the indices
@@ -119,6 +121,8 @@ internal static unsafe class IndexMaintainer
                 ref var ifi = ref indexedFieldInfos[i];
                 NotifyViews(info.ComponentTable, i, pk, tsn, null, cur + ifi.OffsetToField, ifi.Size, isCreation: true, isDeletion: false);
             }
+
+            info.ComponentTable.MutationsSinceRebuild++;
         }
     }
 
@@ -170,6 +174,8 @@ internal static unsafe class IndexMaintainer
             }
             accessor.Dispose();
         }
+
+        info.ComponentTable.MutationsSinceRebuild++;
     }
 
     /// <summary>
@@ -234,6 +240,8 @@ internal static unsafe class IndexMaintainer
                     *(int*)&cur[ifi.OffsetToIndexElementId] = *(int*)&prev[ifi.OffsetToIndexElementId];
                 }
             }
+
+            info.ComponentTable.MutationsSinceRebuild++;
         }
         else if ((compRevInfo.Operations & ComponentInfo.OperationType.Created) == ComponentInfo.OperationType.Created)
         {
@@ -261,6 +269,8 @@ internal static unsafe class IndexMaintainer
                 ref var ifi = ref indexedFieldInfos[i];
                 NotifyViews(info.ComponentTable, i, pk, tsn, null, cur + ifi.OffsetToField, ifi.Size, isCreation: true, isDeletion: false);
             }
+
+            info.ComponentTable.MutationsSinceRebuild++;
         }
     }
 
@@ -309,6 +319,8 @@ internal static unsafe class IndexMaintainer
                 ifi.Index.Remove(&prev[ifi.OffsetToField], out _, ref indexAccessors[i]);
             }
         }
+
+        info.ComponentTable.MutationsSinceRebuild++;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

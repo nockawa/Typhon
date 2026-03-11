@@ -112,7 +112,7 @@ public class QueryBuilder<T1, T2> where T1 : unmanaged where T2 : unmanaged
 
     private static (ExecutionPlan Plan, ComponentTable Table) SelectBestPlan(FieldEvaluator[] evals1, ComponentTable ct1, FieldEvaluator[] evals2, ComponentTable ct2)
     {
-        var estimator = BasicSelectivityEstimator.Instance;
+        var estimator = AdvancedSelectivityEstimator.Instance;
 
         ExecutionPlan? plan1 = evals1.Length > 0 ? PlanBuilder.Instance.BuildPlan(evals1, ct1, estimator) : null;
         ExecutionPlan? plan2 = evals2.Length > 0 ? PlanBuilder.Instance.BuildPlan(evals2, ct2, estimator) : null;
