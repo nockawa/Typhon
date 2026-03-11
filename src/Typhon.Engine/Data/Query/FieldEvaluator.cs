@@ -15,7 +15,8 @@ public enum KeyType : byte
     Long = 7,
     ULong = 8,
     Float = 9,
-    Double = 10
+    Double = 10,
+    String64 = 11
 }
 
 public enum CompareOp : byte

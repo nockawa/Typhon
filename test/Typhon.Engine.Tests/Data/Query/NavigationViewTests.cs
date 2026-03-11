@@ -128,9 +128,9 @@ class NavigationViewTests : TestBase<NavigationViewTests>
         RegisterComponents(dbe);
 
         // CompD.B is an indexed int field, NOT a foreign key — validation happens at Execute/ToView time
+        using var tx = dbe.CreateQuickTransaction();
         Assert.Throws<InvalidOperationException>(() =>
         {
-            using var tx = dbe.CreateQuickTransaction();
             dbe.Query<CompD>().Navigate<CompGuild>(p => (long)p.B)
                 .Where((s, t) => t.Level >= 10)
                 .Execute(tx);
@@ -144,11 +144,12 @@ class NavigationViewTests : TestBase<NavigationViewTests>
         RegisterComponents(dbe);
 
         // CompPlayer.GuildId is FK to CompGuild, but we try to navigate to CompD
+        using var tx = dbe.CreateQuickTransaction();
         Assert.Throws<InvalidOperationException>(() =>
         {
             dbe.Query<CompPlayer>().Navigate<CompD>(p => p.GuildId)
                 .Where((s, t) => t.A > 1.0f)
-                .Execute(dbe.CreateQuickTransaction());
+                .Execute(tx);
         });
     }
 
@@ -651,6 +652,106 @@ class NavigationViewTests : TestBase<NavigationViewTests>
 
         Assert.That(view.Count, Is.EqualTo(1));
         Assert.That(view.Contains(pk), Is.True);
+    }
+
+    #endregion
+
+    #region Overflow & Delta
+
+    [Test]
+    public void Navigate_Overflow_Recovery_RebuildsCorrectly()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        var guild = CreateGuild(dbe, 10, 100);
+        var player1 = CreatePlayer(dbe, guild, true);
+        var player2 = CreatePlayer(dbe, guild, true);
+        var player3 = CreatePlayer(dbe, guild, true);
+
+        // Small buffer capacity to trigger overflow easily
+        using var view = dbe.Query<CompPlayer>()
+            .Navigate<CompGuild>(p => p.GuildId)
+            .Where((p, g) => p.Active == 1 && g.Level >= 5)
+            .ToView(bufferCapacity: 4);
+
+        Assert.That(view.Count, Is.EqualTo(3));
+
+        // Generate many updates to overflow the 4-capacity buffer
+        for (int i = 0; i < 12; i++)
+        {
+            UpdatePlayer(dbe, player1, guild, i % 2 == 0);
+        }
+
+        // Refresh — should detect overflow and rebuild from scratch
+        RefreshView(dbe, view);
+
+        // player1 ended with i=11 → i%2==0 is false → Active=0 → not in view
+        // player2 and player3 still active
+        Assert.That(view.Count, Is.EqualTo(2));
+        Assert.That(view.Contains(player2), Is.True);
+        Assert.That(view.Contains(player3), Is.True);
+    }
+
+    [Test]
+    public void Navigate_Delta_AddedRemoved_AfterRefresh()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        var guild = CreateGuild(dbe, 10, 50);
+        var player1 = CreatePlayer(dbe, guild, true);
+        var player2 = CreatePlayer(dbe, guild, true);
+
+        using var view = dbe.Query<CompPlayer>()
+            .Navigate<CompGuild>(p => p.GuildId)
+            .Where((p, g) => p.Active == 1 && g.Level >= 5)
+            .ToView();
+
+        Assert.That(view.Count, Is.EqualTo(2));
+        view.ClearDelta();
+
+        // Deactivate player1
+        UpdatePlayer(dbe, player1, guild, false);
+
+        // Create and activate player3
+        var player3 = CreatePlayer(dbe, guild, true);
+
+        RefreshView(dbe, view);
+
+        var delta = view.GetDelta();
+        Assert.That(delta.Removed.Contains(player1), Is.True);
+        Assert.That(delta.Added.Contains(player3), Is.True);
+        Assert.That(delta.Removed.Count, Is.EqualTo(1));
+        Assert.That(delta.Added.Count, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void Navigate_Dispose_DeregistersFromBothRegistries()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        var guild = CreateGuild(dbe, 10, 50);
+        var player = CreatePlayer(dbe, guild, true);
+
+        var view = dbe.Query<CompPlayer>()
+            .Navigate<CompGuild>(p => p.GuildId)
+            .Where((p, g) => p.Active == 1 && g.Level >= 5)
+            .ToView();
+
+        Assert.That(view.Count, Is.EqualTo(1));
+
+        view.Dispose();
+        Assert.That(view.IsDisposed, Is.True);
+
+        // Updating the guild after dispose should NOT crash —
+        // if deregistration failed, the ViewRegistry would try to append to the disposed view's buffer.
+        UpdateGuild(dbe, guild, 20, 50);
+
+        // Create a new transaction to verify the engine is still healthy
+        using var tx = dbe.CreateQuickTransaction();
+        Assert.That(tx, Is.Not.Null);
     }
 
     #endregion

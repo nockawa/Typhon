@@ -2,9 +2,11 @@
 <RunSettings>
   <NUnit>
     <!-- Default timeout (ms) for tests without explicit [CancelAfter] or [Timeout].
-         Safety net to catch deadlocks and infinite loops quickly (~5s) instead of
+         Safety net to catch deadlocks and infinite loops quickly (~10s) instead of
          waiting 60s. Tests that legitimately need more time should use explicit
-         [CancelAfter(N)] attributes, which override this value. -->
-    <DefaultTimeout>5000</DefaultTimeout>
+         [CancelAfter(N)] attributes, which override this value.
+         Note: 10s accounts for heavyweight DatabaseEngine setup under parallel I/O contention
+         (8 fixtures × file creation + segment allocation + B+Tree init). -->
+    <DefaultTimeout>10000</DefaultTimeout>
   </NUnit>
 </RunSettings>

@@ -47,5 +47,10 @@ public sealed class IndexAttribute : Attribute
 public sealed class ForeignKeyAttribute : Attribute
 {
     public Type TargetComponentType { get; }
-    public ForeignKeyAttribute(Type targetComponentType) => TargetComponentType = targetComponentType;
+
+    public ForeignKeyAttribute(Type targetComponentType)
+    {
+        ArgumentNullException.ThrowIfNull(targetComponentType);
+        TargetComponentType = targetComponentType;
+    }
 }

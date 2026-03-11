@@ -84,12 +84,9 @@ internal sealed class HyperLogLog
             return (long)(RegisterCount * Math.Log((double)RegisterCount / zeroCount));
         }
 
-        // Large range correction: close to 2^32
-        const double twoTo32 = 4294967296.0;
-        if (rawEstimate > twoTo32 / 30.0)
-        {
-            return (long)(-twoTo32 * Math.Log(1.0 - rawEstimate / twoTo32));
-        }
+        // No large-range correction: with 64-bit hashes, the raw harmonic-mean estimate
+        // is accurate for all practical cardinalities. The 2^32 correction from the original
+        // Flajolet et al. paper applies only to 32-bit hash spaces.
 
         return (long)rawEstimate;
     }
@@ -108,8 +105,4 @@ internal sealed class HyperLogLog
         }
     }
 
-    /// <summary>
-    /// Resets all registers to zero.
-    /// </summary>
-    public void Clear() => Array.Clear(_registers);
 }

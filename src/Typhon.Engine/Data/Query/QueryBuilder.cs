@@ -340,6 +340,13 @@ internal static class QueryResolverHelper
             var keyType = MapFieldTypeToKeyType(field.Type);
             var threshold = EncodeThreshold(pred.Value, keyType);
 
+            if (fieldIndex >= 64)
+            {
+                throw new InvalidOperationException(
+                    $"Field '{pred.FieldName}' has index {fieldIndex} which exceeds the maximum of 63. " +
+                    "Ring buffer delta encoding uses 6 bits for field index.");
+            }
+
             evaluators[i] = new FieldEvaluator
             {
                 FieldIndex = (byte)fieldIndex,

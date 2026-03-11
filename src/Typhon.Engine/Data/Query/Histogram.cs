@@ -30,7 +30,10 @@ internal class Histogram
         MaxValue = max;
         BucketCounts = bucketCounts;
         TotalCount = totalCount;
-        BucketWidth = (max == min) ? 0 : Math.Max(1, (max - min) / BucketCount);
+        // Unsigned subtraction handles ranges spanning the signed long boundary
+        // (e.g., order-preserving float/double encoding). Result always fits in long
+        // because max unsigned range / BucketCount ≤ 2^64 / 100 ≈ 1.8e17 < long.MaxValue.
+        BucketWidth = (max == min) ? 0 : Math.Max(1L, (long)(((ulong)max - (ulong)min) / BucketCount));
     }
 
     /// <summary>Returns the 0-based bucket index for <paramref name="value"/>, clamped to [0, BucketCount-1].</summary>
@@ -41,18 +44,21 @@ internal class Histogram
             return 0;
         }
 
-        var offset = value - MinValue;
-        var bucket = offset / BucketWidth;
-        if (bucket < 0)
+        // Bounds check using signed comparison (correct for OP-encoded values).
+        // Strict inequality: values AT the boundary are computed normally.
+        if (value < MinValue)
         {
             return 0;
         }
-        if (bucket >= BucketCount)
+        if (value > MaxValue)
         {
             return BucketCount - 1;
         }
 
-        return (int)bucket;
+        // Unsigned subtraction: correctly computes distance even when min is negative
+        // and value is positive (signed difference would overflow).
+        var bucket = (long)(((ulong)value - (ulong)MinValue) / (ulong)BucketWidth);
+        return (int)Math.Min(bucket, BucketCount - 1);
     }
 
     /// <summary>
@@ -78,9 +84,9 @@ internal class Histogram
         if (loBucket == hiBucket)
         {
             // Both endpoints fall in the same bucket — interpolate the fraction
-            var bucketLo = MinValue + loBucket * BucketWidth;
-            var bucketHi = bucketLo + BucketWidth;
-            var rangeInBucket = Math.Min(hi, bucketHi) - Math.Max(lo, bucketLo);
+            var bucketStart = BucketStartValue(loBucket);
+            var bucketEnd = BucketStartValue(loBucket + 1);
+            var rangeInBucket = SignedDist(SignedMax(lo, bucketStart), SignedMin(hi, bucketEnd));
             return Math.Max(1, BucketCounts[loBucket] * rangeInBucket / BucketWidth);
         }
 
@@ -88,9 +94,9 @@ internal class Histogram
 
         // Partial low bucket
         {
-            var bucketLo = MinValue + loBucket * BucketWidth;
-            var bucketHi = bucketLo + BucketWidth;
-            var overlap = bucketHi - Math.Max(lo, bucketLo);
+            var bucketStart = BucketStartValue(loBucket);
+            var bucketEnd = BucketStartValue(loBucket + 1);
+            var overlap = SignedDist(SignedMax(lo, bucketStart), bucketEnd);
             estimate += BucketCounts[loBucket] * overlap / BucketWidth;
         }
 
@@ -102,13 +108,29 @@ internal class Histogram
 
         // Partial high bucket
         {
-            var bucketLo = MinValue + hiBucket * BucketWidth;
-            var overlap = Math.Min(hi, bucketLo + BucketWidth) - bucketLo;
+            var bucketStart = BucketStartValue(hiBucket);
+            var bucketEnd = BucketStartValue(hiBucket + 1);
+            var overlap = SignedDist(bucketStart, SignedMin(hi, bucketEnd));
             estimate += BucketCounts[hiBucket] * overlap / BucketWidth;
         }
 
         return Math.Max(estimate, 0);
     }
+
+    /// <summary>
+    /// Computes the start value of bucket <paramref name="bucket"/> using unsigned arithmetic.
+    /// Handles ranges that span the signed long boundary without overflow.
+    /// </summary>
+    private long BucketStartValue(int bucket) => (long)((ulong)MinValue + (ulong)bucket * (ulong)BucketWidth);
+
+    /// <summary>
+    /// Computes the unsigned distance between two values (b - a), cast to signed long.
+    /// Safe for within-bucket distances (always ≤ BucketWidth which fits in long).
+    /// </summary>
+    private static long SignedDist(long a, long b) => (long)((ulong)b - (ulong)a);
+
+    private static long SignedMin(long a, long b) => a < b ? a : b;
+    private static long SignedMax(long a, long b) => a > b ? a : b;
 
     /// <summary>
     /// Estimates the number of entries equal to <paramref name="value"/>. Returns the average count per

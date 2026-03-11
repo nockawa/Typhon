@@ -38,8 +38,12 @@ internal class IndexStatistics
         BTree<float> => KeyType.Float,
         BTree<double> => KeyType.Double,
         BTree<long> => KeyType.Long,
+        String64BTree => KeyType.String64,
         _ => KeyType.Long
     };
+
+    /// <summary>Whether this index has a key type supported by statistics (HLL, MCV, Histogram).</summary>
+    internal bool SupportsStatistics => KeyType != KeyType.String64;
 
     /// <summary>
     /// Number of leaf entries in the B+Tree, read live. For unique indexes this equals the entity count.

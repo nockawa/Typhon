@@ -118,17 +118,43 @@ class HyperLogLogTests
     }
 
     [Test]
-    public void Clear_ResetsToZero()
+    public void Merge_OverlappingSets_CorrectEstimate()
+    {
+        var hll1 = new HyperLogLog();
+        var hll2 = new HyperLogLog();
+
+        // Set 1: values 0..7499
+        for (int i = 0; i < 7500; i++)
+        {
+            hll1.Add(i);
+        }
+
+        // Set 2: values 2500..9999 (50% overlap with set 1)
+        for (int i = 2500; i < 10000; i++)
+        {
+            hll2.Add(i);
+        }
+
+        hll1.Merge(hll2);
+        long estimate = hll1.EstimateCardinality();
+
+        // Union should be ~10000 (not 12500 which is the sum of both sets)
+        double errorPct = Math.Abs(estimate - 10000) / 10000.0;
+        Assert.That(errorPct, Is.LessThan(0.10), $"Merged estimate {estimate} for 10K union with 50% overlap, error {errorPct:P2}");
+    }
+
+    [Test]
+    public void LargeCardinality_NoSpuriousCorrection()
     {
         var hll = new HyperLogLog();
-        for (int i = 0; i < 1000; i++)
+        const int count = 1_000_000;
+        for (int i = 0; i < count; i++)
         {
             hll.Add(i);
         }
 
-        Assert.That(hll.EstimateCardinality(), Is.GreaterThan(0));
-
-        hll.Clear();
-        Assert.That(hll.EstimateCardinality(), Is.EqualTo(0));
+        long estimate = hll.EstimateCardinality();
+        double errorPct = Math.Abs(estimate - count) / (double)count;
+        Assert.That(errorPct, Is.LessThan(0.05), $"Estimate {estimate} for {count} unique values, error {errorPct:P2}");
     }
 }

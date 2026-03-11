@@ -32,7 +32,7 @@ internal sealed class StatisticsWorker : ResourceNode
     private volatile bool _shutdown;
     private readonly Lock _lifecycleLock = new();
     private readonly ManualResetEventSlim _wakeEvent = new(false);
-    private volatile Exception _fatalError;
+    private volatile Exception _lastError;
 
     internal StatisticsWorker(DatabaseEngine dbe, StatisticsOptions options, EpochManager epochManager, IResource parent) : 
         base("StatisticsWorker", ResourceType.Node, parent)
@@ -41,6 +41,16 @@ internal sealed class StatisticsWorker : ResourceNode
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(epochManager);
 
+        // Floor-clamp to prevent CPU spin or degenerate rebuild behavior
+        if (options.PollIntervalMs < 100)
+        {
+            options.PollIntervalMs = 100;
+        }
+        if (options.MutationThreshold < 1)
+        {
+            options.MutationThreshold = 1;
+        }
+
         _dbe = dbe;
         _options = options;
         _epochManager = epochManager;
@@ -48,6 +58,9 @@ internal sealed class StatisticsWorker : ResourceNode
 
     /// <summary>Whether the worker thread is currently running.</summary>
     public bool IsRunning => _thread != null && _thread.IsAlive;
+
+    /// <summary>Last exception encountered during statistics rebuild (diagnostic). Null if no error has occurred.</summary>
+    public Exception LastError => _lastError;
 
     /// <summary>
     /// Starts the background worker thread. Idempotent — does nothing if already running.
@@ -96,56 +109,52 @@ internal sealed class StatisticsWorker : ResourceNode
 
     private void WorkerLoop()
     {
-        try
+        while (!_shutdown)
         {
-            while (!_shutdown)
-            {
-                _wakeEvent.Wait(_options.PollIntervalMs);
-                _wakeEvent.Reset();
+            _wakeEvent.Wait(_options.PollIntervalMs);
+            _wakeEvent.Reset();
 
+            if (_shutdown)
+            {
+                break;
+            }
+
+            foreach (var ct in _dbe.GetAllComponentTables())
+            {
                 if (_shutdown)
                 {
                     break;
                 }
 
-                if (_fatalError != null)
+                if (ct.IndexedFieldInfos.Length == 0)
                 {
                     continue;
                 }
 
-                foreach (var ct in _dbe.GetAllComponentTables())
+                if (ct.MutationsSinceRebuild < _options.MutationThreshold)
                 {
-                    if (_shutdown)
-                    {
-                        break;
-                    }
+                    continue;
+                }
 
-                    if (ct.IndexedFieldInfos.Length == 0)
-                    {
-                        continue;
-                    }
+                if (ct.PrimaryKeyIndex.EntryCount < _options.MinEntitiesForRebuild)
+                {
+                    continue;
+                }
 
-                    if (ct.MutationsSinceRebuild < _options.MutationThreshold)
-                    {
-                        continue;
-                    }
-
-                    if (ct.PrimaryKeyIndex.EntryCount < _options.MinEntitiesForRebuild)
-                    {
-                        continue;
-                    }
-
-                    // Reset counter before rebuild (subsequent mutations during rebuild will accumulate for next cycle)
-                    ct.MutationsSinceRebuild = 0;
-
+                try
+                {
                     int pageInterval = ComputeSamplingInterval(ct, _options.SamplingMinEntities);
                     StatisticsRebuilder.RebuildAll(ct, _epochManager, pageInterval);
+
+                    // Reset counter after successful rebuild — if rebuild fails, mutations are preserved for retry
+                    ct.MutationsSinceRebuild = 0;
+                }
+                catch (Exception ex)
+                {
+                    _lastError = ex;
+                    // Continue processing other tables — one table's failure should not block the rest
                 }
             }
-        }
-        catch (Exception ex)
-        {
-            _fatalError = ex;
         }
     }
 

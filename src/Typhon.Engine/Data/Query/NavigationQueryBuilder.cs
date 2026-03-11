@@ -32,6 +32,14 @@ public class NavigationQueryBuilder<TSource, TTarget> where TSource : unmanaged 
             throw new InvalidOperationException("A Where predicate must be specified before calling ToView().");
         }
 
+        if (_targetPredicates.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "Navigation views require at least one target predicate to detect target entity changes. " +
+                "Without target predicates, target deletions would not be detected and the view would become stale. " +
+                "Add a predicate on the target component (e.g., Where((s, t) => s.Active == true && t.Level >= 0)).");
+        }
+
         var (sourceCT, targetCT, fkField, fkFieldIndex) = ValidateAndResolve();
 
         // Resolve evaluators for source (componentTag=0) and target (componentTag=1)

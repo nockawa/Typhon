@@ -303,10 +303,65 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
     }
 
     /// <summary>
+    /// Evaluates target predicates only for the given target PK. Used by fan-out to avoid redundant target reads.
+    /// </summary>
+    private bool EvaluateTargetPredicates(long targetPK, Transaction tx)
+    {
+        if (_targetEvaluators.Length == 0)
+        {
+            return true;
+        }
+
+        if (!tx.ReadEntity<TTarget>(targetPK, out var targetComp))
+        {
+            return false;
+        }
+
+        var targetPtr = (byte*)Unsafe.AsPointer(ref targetComp);
+        for (var i = 0; i < _targetEvaluators.Length; i++)
+        {
+            ref var eval = ref _targetEvaluators[i];
+            if (!FieldEvaluator.Evaluate(ref eval, targetPtr + eval.FieldOffset))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Evaluates source predicates only (no FK/target check). Used by fan-out when target is pre-evaluated.
+    /// </summary>
+    private bool EvaluateSourcePredicates(long sourcePK, Transaction tx)
+    {
+        if (!tx.ReadEntity<TSource>(sourcePK, out var sourceComp))
+        {
+            return false;
+        }
+
+        var sourcePtr = (byte*)Unsafe.AsPointer(ref sourceComp);
+        for (var i = 0; i < _sourceEvaluators.Length; i++)
+        {
+            ref var eval = ref _sourceEvaluators[i];
+            if (!FieldEvaluator.Evaluate(ref eval, sourcePtr + eval.FieldOffset))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Reverse lookup via FK index: finds all source entities that point to the given target PK, then re-evaluates each source entity's full predicate and updates the view.
+    /// The target is read once and its predicates evaluated upfront — all sources in this fan-out share the same target.
     /// </summary>
     private void ReverseLookupAndUpdate(long targetPK, Transaction tx)
     {
+        // Pre-evaluate target predicates once — all sources in this fan-out share the same target
+        bool targetPasses = EvaluateTargetPredicates(targetPK, tx);
+
         var fkIndexInfo = PipelineExecutor.FindFKIndex(_sourceTable, _fkFieldOffset);
         var fkIndex = (BTree<long>)fkIndexInfo.Index;
         var compRevAccessor = _sourceTable.CompRevTableSegment.CreateChunkAccessor();
@@ -327,7 +382,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
                             var sourcePK = header.EntityPK;
 
                             var wasInView = _entityIds.Contains(sourcePK);
-                            var shouldBeInView = EvaluateFullPredicate(sourcePK, tx);
+                            var shouldBeInView = targetPasses && EvaluateSourcePredicates(sourcePK, tx);
                             ApplyDelta(sourcePK, wasInView, shouldBeInView);
                         }
                     } while (enumerator.NextChunk());

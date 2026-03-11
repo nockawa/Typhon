@@ -1,8 +1,26 @@
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using System;
+using Typhon.Schema.Definition;
 
 namespace Typhon.Engine.Tests;
+
+/// <summary>Test component with an indexed String64 field — used to verify statistics gracefully handle unsupported key types.</summary>
+[Component("Typhon.Schema.UnitTest.CompStr64", 1)]
+[StructLayout(LayoutKind.Sequential)]
+public struct CompStr64
+{
+    [Index]
+    public String64 Name;
+    public int Value;
+
+    public CompStr64(string name, int value)
+    {
+        Name.AsString = name;
+        Value = value;
+    }
+}
 
 class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
 {
@@ -66,13 +84,13 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
 
         StatisticsRebuilder.RebuildStatistics(ct, dbe.EpochManager);
 
-        // All 3 indexed fields (A, B, C) should have statistics
+        // All 3 indexed fields (A, B, C) should have HLL, MCV, and Histogram
         for (int f = 0; f < ct.IndexStats.Length; f++)
         {
             Assert.That(ct.IndexStats[f].HyperLogLog, Is.Not.Null, $"Field {f} HLL missing");
             Assert.That(ct.IndexStats[f].MostCommonValues, Is.Not.Null, $"Field {f} MCV missing");
             Assert.That(ct.IndexStats[f].Histogram, Is.Not.Null, $"Field {f} Histogram missing");
-            Assert.That(ct.IndexStats[f].Histogram.TotalCount, Is.EqualTo(100), $"Field {f} total count wrong");
+            Assert.That(ct.IndexStats[f].Histogram.TotalCount, Is.EqualTo(100), $"Field {f} Histogram count wrong");
         }
     }
 
@@ -283,5 +301,269 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
         }
 
         Assert.That(ct.IndexStats[1].HyperLogLog, Is.Not.Null, "ForceRebuild should trigger statistics rebuild");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // C1 regression: String64 indexed fields must not crash the rebuilder
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    public void RebuildAll_String64IndexedField_SkipsGracefully()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        dbe.RegisterComponentFromAccessor<CompStr64>();
+
+        var ct = dbe.GetComponentTable<CompStr64>();
+
+        // Insert some entities with String64 indexed field
+        for (int i = 0; i < 50; i++)
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var c = new CompStr64($"name_{i}", i);
+            t.CreateEntity(ref c);
+            t.Commit();
+        }
+
+        // RebuildAll must NOT throw — it should skip the String64 field
+        Assert.DoesNotThrow(() => StatisticsRebuilder.RebuildStatistics(ct, dbe.EpochManager));
+
+        // String64 field should have no statistics (skipped)
+        Assert.That(ct.IndexStats[0].HyperLogLog, Is.Null);
+        Assert.That(ct.IndexStats[0].MostCommonValues, Is.Null);
+        Assert.That(ct.IndexStats[0].Histogram, Is.Null);
+    }
+
+    [Test]
+    public void Worker_String64Table_DoesNotKillWorker()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        dbe.RegisterComponentFromAccessor<CompStr64>();
+
+        var ctStr = dbe.GetComponentTable<CompStr64>();
+        var ctD = dbe.GetComponentTable<CompD>();
+
+        // Populate both tables
+        for (int i = 0; i < 100; i++)
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var s = new CompStr64($"name_{i}", i);
+            t.CreateEntity(ref s);
+            t.Commit();
+        }
+        for (int i = 0; i < 100; i++)
+        {
+            CreateAndCommitCompD(dbe, 1.0f, i, 1.0);
+        }
+
+        // Set both above threshold
+        ctStr.MutationsSinceRebuild = 2000;
+        ctD.MutationsSinceRebuild = 2000;
+
+        var options = new StatisticsOptions
+        {
+            Enabled = true,
+            PollIntervalMs = 60000,
+            MutationThreshold = 1000,
+            MinEntitiesForRebuild = 50
+        };
+        using var worker = new StatisticsWorker(dbe, options, dbe.EpochManager, dbe);
+        worker.Start();
+        worker.ForceRebuild();
+
+        // Wait for rebuild to complete on CompD (the non-String64 table)
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (ctD.IndexStats[1].HyperLogLog == null && DateTime.UtcNow < deadline)
+        {
+            System.Threading.Thread.Sleep(10);
+        }
+
+        // Worker must still be running (not killed by String64 table)
+        Assert.That(worker.IsRunning, Is.True, "Worker should survive String64 table processing");
+        // CompD statistics should be rebuilt despite CompStr64 being in the same engine
+        Assert.That(ctD.IndexStats[1].HyperLogLog, Is.Not.Null, "CompD stats should be rebuilt");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // C2 regression: Float/double fields get full statistics via order-preserving encoding
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    public void RebuildAll_FloatField_GetsFullStatistics_WithOrderPreservingHistogram()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        var ct = dbe.GetComponentTable<CompD>();
+
+        // Insert entities with float A spanning negative-to-positive range
+        for (int i = 0; i < 100; i++)
+        {
+            CreateAndCommitCompD(dbe, -50.0f + i, i, -25.0 + i * 0.5);
+        }
+
+        StatisticsRebuilder.RebuildStatistics(ct, dbe.EpochManager);
+
+        // Float field (A, index 0): all three statistics should work
+        Assert.That(ct.IndexStats[0].HyperLogLog, Is.Not.Null, "Float field should have HLL");
+        Assert.That(ct.IndexStats[0].MostCommonValues, Is.Not.Null, "Float field should have MCV");
+        Assert.That(ct.IndexStats[0].Histogram, Is.Not.Null, "Float field should have histogram (order-preserving encoding)");
+        Assert.That(ct.IndexStats[0].Histogram.TotalCount, Is.EqualTo(100));
+        Assert.That(ct.IndexStats[0].DistinctValues, Is.InRange(90, 110), "Float HLL should estimate ~100 distinct values");
+
+        // Double field (C, index 2): same — full statistics with order-preserving histogram
+        Assert.That(ct.IndexStats[2].HyperLogLog, Is.Not.Null, "Double field should have HLL");
+        Assert.That(ct.IndexStats[2].MostCommonValues, Is.Not.Null, "Double field should have MCV");
+        Assert.That(ct.IndexStats[2].Histogram, Is.Not.Null, "Double field should have histogram (order-preserving encoding)");
+        Assert.That(ct.IndexStats[2].Histogram.TotalCount, Is.EqualTo(100));
+
+        // Int field (B, index 1): should have all three
+        Assert.That(ct.IndexStats[1].Histogram, Is.Not.Null, "Int field should have histogram");
+        Assert.That(ct.IndexStats[1].Histogram.TotalCount, Is.EqualTo(100));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // C3 regression: NavigationView requires target predicates for ToView
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    public void NavigationView_ToView_NoTargetPredicates_Throws()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        dbe.RegisterComponentFromAccessor<CompGuild>();
+        dbe.RegisterComponentFromAccessor<CompPlayer>();
+
+        // Create a guild and player
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var g = new CompGuild(10, 100);
+            var guildPk = t.CreateEntity(ref g);
+            var p = new CompPlayer(guildPk, true);
+            t.CreateEntity(ref p);
+            t.Commit();
+        }
+
+        // Attempting to create a navigation view with only source predicates should throw
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+        {
+            dbe.Query<CompPlayer>()
+                .Navigate<CompGuild>(p => p.GuildId)
+                .Where((p, g) => p.Active == 1)
+                .ToView();
+        });
+
+        Assert.That(ex.Message, Does.Contain("target predicate"));
+    }
+
+    [Test]
+    public void NavigationQuery_OneShot_NoTargetPredicates_Works()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        dbe.RegisterComponentFromAccessor<CompGuild>();
+        dbe.RegisterComponentFromAccessor<CompPlayer>();
+
+        long guildPk;
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var g = new CompGuild(10, 100);
+            guildPk = t.CreateEntity(ref g);
+            var p = new CompPlayer(guildPk, true);
+            t.CreateEntity(ref p);
+            t.Commit();
+        }
+
+        // One-shot Execute with only source predicates should work (no incremental tracking needed)
+        using var tx = dbe.CreateQuickTransaction();
+        var result = dbe.Query<CompPlayer>()
+            .Navigate<CompGuild>(p => p.GuildId)
+            .Where((p, g) => p.Active == 1)
+            .Execute(tx);
+
+        Assert.That(result.Count, Is.EqualTo(1));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // C4 regression: Worker per-table isolation and counter reset after rebuild
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    public void Worker_CounterResetAfterRebuild_NotBefore()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        var ct = dbe.GetComponentTable<CompD>();
+
+        for (int i = 0; i < 100; i++)
+        {
+            CreateAndCommitCompD(dbe, 1.0f, i, 1.0);
+        }
+
+        ct.MutationsSinceRebuild = 2000;
+
+        var options = new StatisticsOptions
+        {
+            Enabled = true,
+            PollIntervalMs = 60000,
+            MutationThreshold = 1000,
+            MinEntitiesForRebuild = 50
+        };
+        using var worker = new StatisticsWorker(dbe, options, dbe.EpochManager, dbe);
+        worker.Start();
+        worker.ForceRebuild();
+
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (ct.IndexStats[1].HyperLogLog == null && DateTime.UtcNow < deadline)
+        {
+            System.Threading.Thread.Sleep(10);
+        }
+
+        // After successful rebuild, counter should be reset
+        Assert.That(ct.IndexStats[1].HyperLogLog, Is.Not.Null);
+        Assert.That(ct.MutationsSinceRebuild, Is.LessThan(2000), "Counter should be reset after successful rebuild");
+    }
+
+    [Test]
+    public void Worker_LastError_ExposedForDiagnostics()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+
+        var options = new StatisticsOptions { Enabled = true, PollIntervalMs = 100 };
+        using var worker = new StatisticsWorker(dbe, options, dbe.EpochManager, dbe);
+
+        // Before any errors, LastError should be null
+        Assert.That(worker.LastError, Is.Null);
+    }
+
+    [Test]
+    public void RebuildAll_WithSampling_ReasonableEstimate()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        var ct = dbe.GetComponentTable<CompD>();
+
+        // Insert 500 entities with B from 0 to 499
+        for (int i = 0; i < 500; i++)
+        {
+            CreateAndCommitCompD(dbe, i * 1.0f, i, i * 2.0);
+        }
+
+        // Sample every other page (pageInterval: 2)
+        StatisticsRebuilder.RebuildAll(ct, dbe.EpochManager, pageInterval: 2);
+
+        var stats = ct.IndexStats[1]; // B field
+        Assert.That(stats.HyperLogLog, Is.Not.Null, "HLL should be populated even with sampling");
+
+        // HLL only sees sampled pages (~half the entities with pageInterval=2), so its raw estimate is ~250.
+        // The key invariant: HLL is populated and gives a positive estimate.
+        long hllEstimate = stats.DistinctValues;
+        Assert.That(hllEstimate, Is.GreaterThan(100), $"HLL estimate {hllEstimate} should reflect sampled entities");
+        Assert.That(hllEstimate, Is.LessThan(500), $"HLL estimate {hllEstimate} should be less than total (only sampled half)");
+
+        // Histogram should be populated with scaled counts (scaleFactor ~ 2x)
+        Assert.That(stats.Histogram, Is.Not.Null, "Histogram should be populated even with sampling");
+        Assert.That(stats.Histogram.TotalCount, Is.InRange(300, 700), $"Histogram total {stats.Histogram.TotalCount} should be scaled toward 500");
     }
 }

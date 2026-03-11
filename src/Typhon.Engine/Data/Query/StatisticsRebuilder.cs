@@ -37,6 +37,13 @@ internal static class StatisticsRebuilder
             return;
         }
 
+        // Build skip mask for fields that don't support statistics (e.g., String64)
+        var supported = new bool[fieldCount];
+        for (int i = 0; i < fieldCount; i++)
+        {
+            supported[i] = indexStats[i].SupportsStatistics;
+        }
+
         // Allocate per-field accumulators
         var hlls = new HyperLogLog[fieldCount];
         var freqs = new Dictionary<long, int>[fieldCount];
@@ -46,19 +53,33 @@ internal static class StatisticsRebuilder
 
         for (int i = 0; i < fieldCount; i++)
         {
+            if (!supported[i])
+            {
+                continue;
+            }
+
             hlls[i] = new HyperLogLog();
             freqs[i] = new Dictionary<long, int>();
             bucketCounts[i] = new int[Histogram.BucketCount];
-            // Use live min/max from B+Tree for histogram bucketing (always accurate, even with sampling)
-            mins[i] = indexStats[i].MinValue;
-            maxes[i] = indexStats[i].MaxValue;
+            // Use live min/max from B+Tree for histogram bucketing (always accurate, even with sampling).
+            // Convert to order-preserving encoding so integer arithmetic works correctly for float/double.
+            mins[i] = ToOrderPreserving(indexStats[i].MinValue, indexStats[i].KeyType);
+            maxes[i] = ToOrderPreserving(indexStats[i].MaxValue, indexStats[i].KeyType);
         }
 
-        // Pre-compute bucket widths from B+Tree min/max (not sampled data)
+        // Pre-compute bucket widths from B+Tree min/max (not sampled data).
+        // Float/double fields use order-preserving encoding: bit patterns are transformed so
+        // integer arithmetic preserves float ordering (negative → flip all, positive → flip sign).
         var bucketWidths = new long[fieldCount];
         for (int i = 0; i < fieldCount; i++)
         {
-            bucketWidths[i] = (maxes[i] == mins[i]) ? 0 : Math.Max(1, (maxes[i] - mins[i]) / Histogram.BucketCount);
+            if (!supported[i])
+            {
+                continue;
+            }
+
+            // Unsigned subtraction: handles OP-encoded float/double ranges spanning the signed long boundary
+            bucketWidths[i] = (maxes[i] == mins[i]) ? 0 : Math.Max(1L, (long)(((ulong)maxes[i] - (ulong)mins[i]) / (ulong)Histogram.BucketCount));
         }
 
         var segment = table.ComponentSegment;
@@ -115,6 +136,11 @@ internal static class StatisticsRebuilder
                     {
                         for (int f = 0; f < fieldCount; f++)
                         {
+                            if (!supported[f])
+                            {
+                                continue;
+                            }
+
                             long key = ExtractKeyAsLong(ptr, indexedFieldInfos[f].OffsetToField, indexStats[f].KeyType);
 
                             // HLL
@@ -124,19 +150,22 @@ internal static class StatisticsRebuilder
                             ref var count = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(freqs[f], key, out _);
                             count++;
 
-                            // Histogram bucketing using B+Tree min/max
-                            int bucket;
-                            if (bucketWidths[f] == 0)
+                            // Histogram bucketing (order-preserving encoding ensures correct bucket assignment for float/double)
                             {
-                                bucket = 0;
+                                long opKey = ToOrderPreserving(key, indexStats[f].KeyType);
+                                int bucket;
+                                if (bucketWidths[f] == 0)
+                                {
+                                    bucket = 0;
+                                }
+                                else
+                                {
+                                    // Unsigned subtraction for OP-encoded cross-zero ranges
+                                    var b = (long)(((ulong)opKey - (ulong)mins[f]) / (ulong)bucketWidths[f]);
+                                    bucket = (int)Math.Min(b, Histogram.BucketCount - 1);
+                                }
+                                bucketCounts[f][bucket]++;
                             }
-                            else
-                            {
-                                long offset = key - mins[f];
-                                long b = offset / bucketWidths[f];
-                                bucket = (int)Math.Clamp(b, 0, Histogram.BucketCount - 1);
-                            }
-                            bucketCounts[f][bucket]++;
                         }
                     }
                 }
@@ -156,10 +185,15 @@ internal static class StatisticsRebuilder
         // Build final structures and atomic-swap per field
         for (int f = 0; f < fieldCount; f++)
         {
+            if (!supported[f])
+            {
+                continue;
+            }
+
             // MCV: scale individual counts via scaleFactor
             var mcv = MostCommonValues.Build(freqs[f], scaledTotal, scaleFactor);
 
-            // Histogram: scale bucket counts if sampling
+            // Histogram: scale bucket counts if sampling. Min/max are in order-preserving space.
             int[] scaledBuckets;
             int histogramTotal;
             if (scaleFactor > 1.0)
@@ -196,6 +230,33 @@ internal static class StatisticsRebuilder
     /// </summary>
     internal static void RebuildStatistics(ComponentTable table, EpochManager epochManager) =>
         RebuildAll(table, epochManager, pageInterval: 1);
+
+    /// <summary>
+    /// Transforms IEEE 754 float/double bit patterns into order-preserving integer representations.
+    /// Positive floats: flip the sign bit (so they sort above negatives as integers).
+    /// Negative floats: flip ALL bits (reverses their magnitude order and moves them below positives).
+    /// Identity for non-floating-point types.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static long ToOrderPreserving(long rawBits, KeyType keyType)
+    {
+        if (keyType == KeyType.Float)
+        {
+            int bits = (int)rawBits;
+            // Cast through uint to prevent sign extension when widening to long.
+            // Without this, a positive float (sign bit flipped to 1 in int) sign-extends to a negative long, breaking the ordering invariant.
+            return (uint)(bits < 0 ? ~bits : bits ^ unchecked((int)0x80000000));
+        }
+
+        if (keyType == KeyType.Double)
+        {
+            // Negative double: XOR with long.MaxValue flips all bits except sign → maps to [long.MinValue+ε, -1] in signed space, preserving magnitude ordering.
+            // Positive double: already in [0, long.MaxValue], no transform needed.
+            return rawBits < 0 ? rawBits ^ long.MaxValue : rawBits;
+        }
+
+        return rawBits;
+    }
 
     /// <summary>
     /// Extracts the key value from raw chunk bytes at the given offset, encoded as a long

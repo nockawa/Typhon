@@ -49,13 +49,23 @@ internal sealed class AdvancedSelectivityEstimator : ISelectivityEstimator
                 return Math.Max(0, total - EstimateEquality(stats, mcv, threshold));
 
             case CompareOp.GreaterThan:
-                return EstimateRange(histogram, total, min, max, threshold + 1, max, keyType);
+                // Float/double: skip ±1 adjustment (bit-level ±1 can cross NaN boundaries).
+                // The approximation error is at most 1 entity — negligible for selectivity estimation.
+                if (keyType is KeyType.Float or KeyType.Double)
+                {
+                    return EstimateRange(histogram, total, min, max, threshold, max, keyType);
+                }
+                return threshold == long.MaxValue ? 0 : EstimateRange(histogram, total, min, max, threshold + 1, max, keyType);
 
             case CompareOp.GreaterThanOrEqual:
                 return EstimateRange(histogram, total, min, max, threshold, max, keyType);
 
             case CompareOp.LessThan:
-                return EstimateRange(histogram, total, min, max, min, threshold - 1, keyType);
+                if (keyType is KeyType.Float or KeyType.Double)
+                {
+                    return EstimateRange(histogram, total, min, max, min, threshold, keyType);
+                }
+                return threshold == long.MinValue ? 0 : EstimateRange(histogram, total, min, max, min, threshold - 1, keyType);
 
             case CompareOp.LessThanOrEqual:
                 return EstimateRange(histogram, total, min, max, min, threshold, keyType);
@@ -88,9 +98,15 @@ internal sealed class AdvancedSelectivityEstimator : ISelectivityEstimator
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static long EstimateRange(Histogram histogram, int total, long min, long max, long lo, long hi, KeyType keyType)
     {
-        // Priority 1: Histogram
+        // Priority 1: Histogram (float/double histograms use order-preserving encoding internally)
         if (histogram != null)
         {
+            if (keyType is KeyType.Float or KeyType.Double)
+            {
+                lo = StatisticsRebuilder.ToOrderPreserving(lo, keyType);
+                hi = StatisticsRebuilder.ToOrderPreserving(hi, keyType);
+            }
+
             return histogram.EstimateRange(lo, hi);
         }
 

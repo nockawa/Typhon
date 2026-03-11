@@ -16,11 +16,17 @@ public unsafe class OrView<T> : ViewBase where T : unmanaged
     private readonly Dictionary<long, ushort> _branchBitmaps = new();
     private readonly FieldEvaluator[][] _branchEvaluators;
 
-    internal OrView(FieldEvaluator[][] branchEvaluators, ExecutionPlan[] plans, ViewRegistry registry, ComponentTable componentTable, 
-        int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0) : 
+    internal OrView(FieldEvaluator[][] branchEvaluators, ExecutionPlan[] plans, ViewRegistry registry, ComponentTable componentTable,
+        int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0) :
         base(FlattenEvaluators(branchEvaluators), BuildFieldDependencies(branchEvaluators), componentTable.DBE.MemoryAllocator, componentTable, plans,
             bufferCapacity, baseTSN)
     {
+        if (branchEvaluators.Length > 16)
+        {
+            throw new ArgumentOutOfRangeException(nameof(branchEvaluators),
+                $"OrView supports at most 16 branches (got {branchEvaluators.Length}). Branch bitmaps use ushort (16 bits).");
+        }
+
         _branchEvaluators = branchEvaluators;
         _registry = registry;
         _componentTable = componentTable;
@@ -142,6 +148,10 @@ public unsafe class OrView<T> : ViewBase where T : unmanaged
         var wasInView = oldBitmap != 0;
         var newBitmap = oldBitmap;
 
+        // Lazy entity read: shared across branches to avoid redundant ReadEntity calls during OUT→IN checks
+        bool entityRead = false;
+        T comp = default;
+
         // For each branch that references this field, evaluate the boundary crossing
         for (var b = 0; b < _branchEvaluators.Length; b++)
         {
@@ -154,7 +164,6 @@ public unsafe class OrView<T> : ViewBase where T : unmanaged
 
             ref var eval = ref branchEvals[evalIndex];
             var bit = (ushort)(1 << b);
-            var branchWasSet = (oldBitmap & bit) != 0;
 
             var fieldWasIn = !isCreation && EvaluateKey(ref eval, ref entry.BeforeKey);
             var fieldIsIn = !isDeletion && EvaluateKey(ref eval, ref entry.AfterKey);
@@ -168,7 +177,7 @@ public unsafe class OrView<T> : ViewBase where T : unmanaged
             if (!fieldWasIn)
             {
                 // OUT→IN: check all other fields in this branch to confirm the branch is now fully satisfied
-                if (CheckOtherFieldsInBranch(pk, branchEvals, fieldIndex, tx))
+                if (CheckOtherFieldsInBranch(pk, branchEvals, fieldIndex, ref entityRead, ref comp, tx))
                 {
                     newBitmap |= bit;
                 }
@@ -212,16 +221,20 @@ public unsafe class OrView<T> : ViewBase where T : unmanaged
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool EvaluateKey(ref FieldEvaluator eval, ref KeyBytes8 key) => FieldEvaluator.Evaluate(ref eval, (byte*)Unsafe.AsPointer(ref key));
 
-    private bool CheckOtherFieldsInBranch(long pk, FieldEvaluator[] branchEvals, int changedFieldIndex, Transaction tx)
+    private bool CheckOtherFieldsInBranch(long pk, FieldEvaluator[] branchEvals, int changedFieldIndex, ref bool entityRead, ref T comp, Transaction tx)
     {
         if (branchEvals.Length == 1)
         {
             return true; // Only one field in this branch, and it already passed
         }
 
-        if (!tx.ReadEntity<T>(pk, out var comp))
+        if (!entityRead)
         {
-            return false;
+            if (!tx.ReadEntity(pk, out comp))
+            {
+                return false;
+            }
+            entityRead = true;
         }
 
         var compPtr = (byte*)Unsafe.AsPointer(ref comp);
