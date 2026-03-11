@@ -23,8 +23,8 @@ public unsafe class View<T1, T2> : ViewBase where T1 : unmanaged where T2 : unma
     }
 
     internal View(FieldEvaluator[] evaluators, ViewRegistry registry1, ViewRegistry registry2, ComponentTable componentTable1, ComponentTable componentTable2,
-        ExecutionPlan plan, ComponentTable planTable, int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0) : 
-        base(evaluators, [], componentTable1.DBE.MemoryAllocator, componentTable1, plan, bufferCapacity, baseTSN)
+        ExecutionPlan plan, ComponentTable planTable, int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0) :
+        base(evaluators, [], componentTable1.DBE.MemoryAllocator, componentTable1, [plan], bufferCapacity, baseTSN)
     {
         _registry1 = registry1;
         _registry2 = registry2;
@@ -39,7 +39,7 @@ public unsafe class View<T1, T2> : ViewBase where T1 : unmanaged where T2 : unma
         _registry2.DeregisterView(this);
     }
 
-    public void Refresh(Transaction tx)
+    public override void Refresh(Transaction tx)
     {
         if (IsDisposed)
         {

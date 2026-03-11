@@ -17,8 +17,8 @@ public unsafe class View<T> : ViewBase where T : unmanaged
     }
 
     internal View(FieldEvaluator[] evaluators, ViewRegistry registry, ComponentTable componentTable, ExecutionPlan plan,
-        int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0) : 
-        base(evaluators, BuildFieldDependencies(evaluators), componentTable.DBE.MemoryAllocator, componentTable, plan, bufferCapacity, baseTSN)
+        int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0) :
+        base(evaluators, BuildFieldDependencies(evaluators), componentTable.DBE.MemoryAllocator, componentTable, [plan], bufferCapacity, baseTSN)
     {
         _registry = registry;
         _componentTable = componentTable;
@@ -30,7 +30,7 @@ public unsafe class View<T> : ViewBase where T : unmanaged
     /// Drain the ring buffer up to the transaction's snapshot TSN, evaluate field predicates,
     /// and update the entity set and delta tracking sets.
     /// </summary>
-    public void Refresh(Transaction tx)
+    public override void Refresh(Transaction tx)
     {
         if (IsDisposed)
         {

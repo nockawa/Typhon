@@ -15,8 +15,8 @@ class ViewTests : TestBase<ViewTests>
         KeyType keyType, CompareOp compareOp, long threshold) =>
         new()
         {
-            FieldIndex = fieldIndex,
-            FieldOffset = fieldOffset,
+            FieldIndex = (byte)fieldIndex,
+            FieldOffset = (ushort)fieldOffset,
             FieldSize = fieldSize,
             KeyType = keyType,
             CompareOp = compareOp,

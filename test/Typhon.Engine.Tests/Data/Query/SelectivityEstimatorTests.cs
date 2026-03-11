@@ -475,7 +475,7 @@ class SelectivityEstimatorTests : TestBase<SelectivityEstimatorTests>
 
     #endregion
 
-    #region HistogramSelectivityEstimator Tests
+    #region AdvancedSelectivityEstimator Tests (Histogram fallback)
 
     [Test]
     public void HistoEstimator_FallsBackToBasic_WhenNoHistogram()
@@ -483,7 +483,7 @@ class SelectivityEstimatorTests : TestBase<SelectivityEstimatorTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        var estimator = HistogramSelectivityEstimator.Instance;
+        var estimator = AdvancedSelectivityEstimator.Instance;
 
         CreateAndCommit(dbe, 1.0f, 10, 1.0);
         CreateAndCommit(dbe, 2.0f, 20, 2.0);
@@ -500,7 +500,7 @@ class SelectivityEstimatorTests : TestBase<SelectivityEstimatorTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        var estimator = HistogramSelectivityEstimator.Instance;
+        var estimator = AdvancedSelectivityEstimator.Instance;
 
         for (var i = 0; i < 100; i++)
         {
@@ -524,7 +524,7 @@ class SelectivityEstimatorTests : TestBase<SelectivityEstimatorTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        var estimator = HistogramSelectivityEstimator.Instance;
+        var estimator = AdvancedSelectivityEstimator.Instance;
 
         for (var i = 0; i < 1000; i++)
         {
@@ -544,7 +544,7 @@ class SelectivityEstimatorTests : TestBase<SelectivityEstimatorTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         var ct = dbe.GetComponentTable<CompD>();
-        var estimator = HistogramSelectivityEstimator.Instance;
+        var estimator = AdvancedSelectivityEstimator.Instance;
 
         for (var i = 0; i < 100; i++)
         {

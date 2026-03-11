@@ -22,7 +22,7 @@ public class QueryViewBenchmarks : IDisposable
     private string _databaseName;
 
     // Pre-created view for refresh benchmarks
-    private View<ItemData> _view;
+    private ViewBase _view;
 
     // Entities for game-loop update cycling
     private long[] _cyclePKs;

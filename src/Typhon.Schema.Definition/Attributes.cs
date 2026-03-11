@@ -41,3 +41,11 @@ public sealed class IndexAttribute : Attribute
 {
     public bool AllowMultiple { get; set; }
 }
+
+[AttributeUsage(AttributeTargets.Field)]
+[PublicAPI]
+public sealed class ForeignKeyAttribute : Attribute
+{
+    public Type TargetComponentType { get; }
+    public ForeignKeyAttribute(Type targetComponentType) => TargetComponentType = targetComponentType;
+}

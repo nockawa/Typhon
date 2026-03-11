@@ -185,6 +185,18 @@ public class DatabaseDefinitions
 
             var field = compDef.CreateField(resolvedId, fieldName, fieldType, fieldUnderlyingType, fieldOffset, fieldInfo.FieldType);
 
+            // Foreign key processing
+            var fka = fieldInfo.GetCustomAttribute<ForeignKeyAttribute>();
+            if (fka != null)
+            {
+                if (fieldType != FieldType.Long)
+                {
+                    throw new InvalidOperationException($"[ForeignKey] on field '{fieldName}' requires type long, but found {fieldType}.");
+                }
+                field.IsForeignKey = true;
+                field.ForeignKeyTargetType = fka.TargetComponentType;
+            }
+
             // Index related data
             if (ia == null)
             {

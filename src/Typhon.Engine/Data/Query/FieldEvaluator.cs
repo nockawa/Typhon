@@ -29,15 +29,15 @@ public enum CompareOp : byte
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
-public struct FieldEvaluator  // 24 bytes
+public struct FieldEvaluator  // 16 bytes
 {
-    public int FieldIndex;       // 4B — index into IndexedFieldInfos
-    public int FieldOffset;      // 4B — byte offset within component
+    public byte FieldIndex;      // 1B — index into IndexedFieldInfos (max 63, capped by ring buffer flag encoding)
     public byte FieldSize;       // 1B
     public KeyType KeyType;      // 1B
     public CompareOp CompareOp;  // 1B
-    public byte ComponentTag;     // 1B — 0=T1, 1=T2 (for multi-component views)
-    private int _reserved;       // 4B
+    public byte ComponentTag;    // 1B — 0=T1, 1=T2 (for multi-component views)
+    public byte BranchIndex;     // 1B — DNF branch index (0 for AND views, 0..15 for OR views)
+    public ushort FieldOffset;   // 2B — byte offset within component (max ~64KB, components are small structs)
     public long Threshold;       // 8B — widened constant (reinterpret for float/double)
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -555,4 +555,153 @@ internal class PipelineExecutor
     }
 
     #endregion
+
+    #region Navigation overloads
+
+    /// <summary>
+    /// Target-first navigation: scans the target PK index, evaluates target predicates, then reverse-lookups source entities
+    /// via the FK index (AllowMultiple) and evaluates source predicates.
+    /// </summary>
+    public unsafe void ExecuteNavigationTargetFirst<TSource, TTarget>(FieldEvaluator[] sourceEvals, FieldEvaluator[] targetEvals, ComponentTable sourceCT, 
+        ComponentTable targetCT, int fkFieldOffset, Transaction tx, HashSet<long> result) where TSource : unmanaged where TTarget : unmanaged
+    {
+        // Find the FK index on the source table (long, AllowMultiple)
+        var fkIndexInfo = FindFKIndex(sourceCT, fkFieldOffset);
+        var fkIndex = (BTree<long>)fkIndexInfo.Index;
+        var compRevAccessor = sourceCT.CompRevTableSegment.CreateChunkAccessor();
+
+        try
+        {
+            // Scan target PK index for qualifying targets
+            var targetPKIndex = targetCT.PrimaryKeyIndex;
+            foreach (var kv in targetPKIndex.EnumerateLeaves())
+            {
+                var targetPK = kv.Key;
+
+                // Evaluate target predicates
+                if (targetEvals.Length > 0 && !EvaluateFilters<TTarget>(targetEvals, tx, targetPK))
+                {
+                    continue;
+                }
+
+                // Reverse lookup: find source entities that have FK == targetPK
+                var enumerator = fkIndex.EnumerateRangeMultiple(targetPK, targetPK);
+                try
+                {
+                    while (enumerator.MoveNextKey())
+                    {
+                        do
+                        {
+                            var values = enumerator.CurrentValues;
+                            for (var j = 0; j < values.Length; j++)
+                            {
+                                ref var header = ref compRevAccessor.GetChunk<CompRevStorageHeader>(values[j]);
+                                var sourcePK = header.EntityPK;
+
+                                // Evaluate source predicates
+                                if (sourceEvals.Length > 0 && !EvaluateFilters<TSource>(sourceEvals, tx, sourcePK))
+                                {
+                                    continue;
+                                }
+
+                                result.Add(sourcePK);
+                            }
+                        } while (enumerator.NextChunk());
+                    }
+                }
+                finally
+                {
+                    enumerator.Dispose();
+                }
+            }
+        }
+        finally
+        {
+            compRevAccessor.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Source-first navigation: scans source entities, extracts FK value, reads target, evaluates target predicates.
+    /// </summary>
+    public unsafe void ExecuteNavigationSourceFirst<TSource, TTarget>(FieldEvaluator[] sourceEvals, FieldEvaluator[] targetEvals, ComponentTable sourceCT, 
+        ComponentTable targetCT, int fkFieldOffset, Transaction tx, HashSet<long> result) where TSource : unmanaged where TTarget : unmanaged
+    {
+        var sourcePKIndex = sourceCT.PrimaryKeyIndex;
+
+        foreach (var kv in sourcePKIndex.EnumerateLeaves())
+        {
+            var sourcePK = kv.Key;
+
+            // Read source and evaluate source predicates
+            if (!tx.ReadEntity<TSource>(sourcePK, out var sourceComp))
+            {
+                continue;
+            }
+
+            if (sourceEvals.Length > 0)
+            {
+                var sourcePtr = (byte*)Unsafe.AsPointer(ref sourceComp);
+                var allPass = true;
+                for (var i = 0; i < sourceEvals.Length; i++)
+                {
+                    ref var eval = ref sourceEvals[i];
+                    if (!FieldEvaluator.Evaluate(ref eval, sourcePtr + eval.FieldOffset))
+                    {
+                        allPass = false;
+                        break;
+                    }
+                }
+                if (!allPass)
+                {
+                    continue;
+                }
+            }
+
+            // Extract FK value
+            var fkValue = *(long*)((byte*)Unsafe.AsPointer(ref sourceComp) + fkFieldOffset);
+            if (fkValue == 0)
+            {
+                continue; // No target reference
+            }
+
+            // Read and evaluate target
+            if (targetEvals.Length > 0 && !EvaluateFilters<TTarget>(targetEvals, tx, fkValue))
+            {
+                continue;
+            }
+
+            if (targetEvals.Length == 0)
+            {
+                // No target predicates — just verify the target exists
+                if (!tx.ReadEntity<TTarget>(fkValue, out _))
+                {
+                    continue;
+                }
+            }
+
+            result.Add(sourcePK);
+        }
+    }
+
+    /// <summary>
+    /// Finds the IndexedFieldInfo for the FK field by matching its offset.
+    /// </summary>
+    internal static IndexedFieldInfo FindFKIndex(ComponentTable ct, int fkFieldOffset)
+    {
+        var componentOverhead = ct.Definition.MultipleIndicesCount * sizeof(int);
+        var expectedOffset = componentOverhead + fkFieldOffset;
+
+        for (var i = 0; i < ct.IndexedFieldInfos.Length; i++)
+        {
+            if (ct.IndexedFieldInfos[i].OffsetToField == expectedOffset)
+            {
+                return ct.IndexedFieldInfos[i];
+            }
+        }
+
+        throw new InvalidOperationException("FK field index not found. Ensure the FK field has [Index(AllowMultiple = true)].");
+    }
+
+    #endregion
 }

@@ -9,7 +9,7 @@ namespace Typhon.Engine;
 public class QueryBuilder<T> where T : unmanaged
 {
     private readonly DatabaseEngine _dbe;
-    private readonly List<FieldPredicate> _predicates = new();
+    private readonly List<Expression<Func<T, bool>>> _whereExpressions = new();
     private OrderByField? _orderBy;
     private int _skip;
     private int _take = int.MaxValue;
@@ -21,8 +21,18 @@ public class QueryBuilder<T> where T : unmanaged
 
     public QueryBuilder<T> Where(Expression<Func<T, bool>> predicate)
     {
-        _predicates.AddRange(ExpressionParser.Parse(predicate));
+        _whereExpressions.Add(predicate);
         return this;
+    }
+
+    public NavigationQueryBuilder<T, TTarget> Navigate<TTarget>(Expression<Func<T, long>> fkSelector) where TTarget : unmanaged
+    {
+        if (_whereExpressions.Count > 0)
+        {
+            throw new InvalidOperationException("Navigate() must be called before Where(). Place all predicates in Where() after Navigate().");
+        }
+        var fkFieldName = ExpressionParser.ExtractFieldName(fkSelector);
+        return new NavigationQueryBuilder<T, TTarget>(_dbe, fkFieldName);
     }
 
     public QueryBuilder<T> OrderBy<TKey>(Expression<Func<T, TKey>> keySelector)
@@ -63,7 +73,7 @@ public class QueryBuilder<T> where T : unmanaged
         return this;
     }
 
-    public View<T> ToView(int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity)
+    public ViewBase ToView(int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity)
     {
         if (_orderBy.HasValue)
         {
@@ -72,16 +82,41 @@ public class QueryBuilder<T> where T : unmanaged
         ValidatePredicates();
 
         var ct = GetComponentTable();
-        var evaluators = ResolveEvaluators(_predicates.ToArray(), ct);
-        var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, BasicSelectivityEstimator.Instance);
+        var branches = ResolveBranches();
+
+        if (branches.Length > 1)
+        {
+            // OR path: create per-branch evaluators and plans
+            var branchEvaluators = new FieldEvaluator[branches.Length][];
+            var plans = new ExecutionPlan[branches.Length];
+            for (var b = 0; b < branches.Length; b++)
+            {
+                branchEvaluators[b] = QueryResolverHelper.ResolveEvaluators(branches[b], ct, 0, (byte)b);
+                plans[b] = PlanBuilder.Instance.BuildPlan(branchEvaluators[b], ct, AdvancedSelectivityEstimator.Instance);
+            }
+
+            var orView = new OrView<T>(branchEvaluators, plans, ct.ViewRegistry, ct, bufferCapacity);
+            ct.ViewRegistry.RegisterView(orView);
+
+            using var tx = _dbe.CreateQuickTransaction();
+            orView.PopulateInitial(tx);
+            orView.Refresh(tx);
+            orView.ClearDelta();
+
+            return orView;
+        }
+
+        // AND path: single branch
+        var evaluators = ResolveEvaluators(branches[0], ct);
+        var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance);
 
         var view = new View<T>(evaluators, ct.ViewRegistry, ct, plan, bufferCapacity);
         ct.ViewRegistry.RegisterView(view);
 
-        using var tx = _dbe.CreateQuickTransaction();
-        PipelineExecutor.Instance.Execute<T>(plan, plan.OrderedEvaluators, ct, tx, view.EntityIdsInternal);
+        using var andTx = _dbe.CreateQuickTransaction();
+        PipelineExecutor.Instance.Execute<T>(plan, plan.OrderedEvaluators, ct, andTx, view.EntityIdsInternal);
 
-        view.Refresh(tx);
+        view.Refresh(andTx);
         view.ClearDelta();
 
         return view;
@@ -91,8 +126,15 @@ public class QueryBuilder<T> where T : unmanaged
     {
         ValidatePredicates();
         var ct = GetComponentTable();
-        var evaluators = ResolveEvaluators(_predicates.ToArray(), ct);
-        var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, BasicSelectivityEstimator.Instance);
+        var branches = ResolveBranches();
+
+        if (branches.Length > 1)
+        {
+            return ExecuteOrBranches(branches, ct, tx);
+        }
+
+        var evaluators = ResolveEvaluators(branches[0], ct);
+        var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance);
         var result = new HashSet<long>();
         PipelineExecutor.Instance.Execute<T>(plan, plan.OrderedEvaluators, ct, tx, result);
         return result;
@@ -106,8 +148,15 @@ public class QueryBuilder<T> where T : unmanaged
         }
         ValidatePredicates();
         var ct = GetComponentTable();
-        var evaluators = ResolveEvaluators(_predicates.ToArray(), ct);
-        var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, BasicSelectivityEstimator.Instance, _orderBy.Value);
+        var branches = ResolveBranches();
+
+        if (branches.Length > 1)
+        {
+            throw new InvalidOperationException("ExecuteOrdered with OR predicates is not supported. Use Execute(tx) for unordered results.");
+        }
+
+        var evaluators = ResolveEvaluators(branches[0], ct);
+        var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance, _orderBy.Value);
         var result = new List<long>();
         PipelineExecutor.Instance.ExecuteOrdered<T>(plan, plan.OrderedEvaluators, ct, tx, result, _skip, _take);
         return result;
@@ -117,8 +166,15 @@ public class QueryBuilder<T> where T : unmanaged
     {
         ValidatePredicates();
         var ct = GetComponentTable();
-        var evaluators = ResolveEvaluators(_predicates.ToArray(), ct);
-        var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, BasicSelectivityEstimator.Instance);
+        var branches = ResolveBranches();
+
+        if (branches.Length > 1)
+        {
+            return ExecuteOrBranches(branches, ct, tx).Count;
+        }
+
+        var evaluators = ResolveEvaluators(branches[0], ct);
+        var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance);
         return PipelineExecutor.Instance.Count<T>(plan, plan.OrderedEvaluators, ct, tx);
     }
 
@@ -126,8 +182,15 @@ public class QueryBuilder<T> where T : unmanaged
     {
         ValidatePredicates();
         var ct = GetComponentTable();
-        var evaluators = ResolveEvaluators(_predicates.ToArray(), ct);
-        var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, BasicSelectivityEstimator.Instance);
+        var branches = ResolveBranches();
+
+        if (branches.Length > 1)
+        {
+            return ExecuteOrBranches(branches, ct, tx).Count > 0;
+        }
+
+        var evaluators = ResolveEvaluators(branches[0], ct);
+        var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance);
         var result = new List<long>();
         PipelineExecutor.Instance.ExecuteOrdered<T>(plan, plan.OrderedEvaluators, ct, tx, result, 0, 1);
         return result.Count > 0;
@@ -137,17 +200,90 @@ public class QueryBuilder<T> where T : unmanaged
     {
         ValidatePredicates();
         var ct = GetComponentTable();
-        var evaluators = ResolveEvaluators(_predicates.ToArray(), ct);
-        return _orderBy.HasValue ? PlanBuilder.Instance.BuildPlan(evaluators, ct, BasicSelectivityEstimator.Instance, _orderBy.Value) : 
-            PlanBuilder.Instance.BuildPlan(evaluators, ct, BasicSelectivityEstimator.Instance);
+        var branches = ResolveBranches();
+
+        if (branches.Length > 1)
+        {
+            throw new InvalidOperationException("GetExecutionPlan is not supported for OR predicates (multiple plans, one per branch).");
+        }
+
+        var evaluators = ResolveEvaluators(branches[0], ct);
+        return _orderBy.HasValue ? PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance, _orderBy.Value) :
+            PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance);
+    }
+
+    /// <summary>
+    /// Executes an OR query by running each branch independently and unioning results.
+    /// Each branch is planned and executed separately — the union deduplicates naturally via HashSet.
+    /// </summary>
+    private HashSet<long> ExecuteOrBranches(FieldPredicate[][] branches, ComponentTable ct, Transaction tx)
+    {
+        var result = new HashSet<long>();
+        for (var b = 0; b < branches.Length; b++)
+        {
+            var evaluators = QueryResolverHelper.ResolveEvaluators(branches[b], ct, 0, (byte)b);
+            var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance);
+            PipelineExecutor.Instance.Execute<T>(plan, plan.OrderedEvaluators, ct, tx, result);
+        }
+        return result;
     }
 
     private void ValidatePredicates()
     {
-        if (_predicates.Count == 0)
+        if (_whereExpressions.Count == 0)
         {
             throw new InvalidOperationException("A Where predicate must be specified.");
         }
+    }
+
+    /// <summary>
+    /// Resolves all Where expressions into DNF branches.
+    /// Single expression: direct ParseDnf.
+    /// Multiple expressions: ParseDnf each, then cross-product (AND of ORs).
+    /// </summary>
+    private FieldPredicate[][] ResolveBranches()
+    {
+        if (_whereExpressions.Count == 1)
+        {
+            return ExpressionParser.ParseDnf(_whereExpressions[0]);
+        }
+
+        // Multiple Where() calls: cross-product all branch sets (AND combination)
+        FieldPredicate[][] current = ExpressionParser.ParseDnf(_whereExpressions[0]);
+        for (var i = 1; i < _whereExpressions.Count; i++)
+        {
+            var next = ExpressionParser.ParseDnf(_whereExpressions[i]);
+            current = CrossProductBranches(current, next);
+            if (current.Length > ExpressionParser.MaxDnfBranches)
+            {
+                throw new InvalidOperationException(
+                    $"Chained Where() expressions produce {current.Length} DNF clauses (max {ExpressionParser.MaxDnfBranches}). " +
+                    "Each chained Where() with OR multiplies the clause count. " +
+                    "Combine predicates into a single Where() expression or reduce OR pairs.");
+            }
+        }
+        return current;
+    }
+
+    /// <summary>
+    /// Cross-products two branch sets: AND(OR(a1,a2), OR(b1,b2)) → OR(a1∧b1, a1∧b2, a2∧b1, a2∧b2).
+    /// For pure AND chains (each has 1 branch), this reduces to simple predicate concatenation.
+    /// </summary>
+    private static FieldPredicate[][] CrossProductBranches(FieldPredicate[][] left, FieldPredicate[][] right)
+    {
+        var result = new FieldPredicate[left.Length * right.Length][];
+        var idx = 0;
+        for (var l = 0; l < left.Length; l++)
+        {
+            for (var r = 0; r < right.Length; r++)
+            {
+                var combined = new FieldPredicate[left[l].Length + right[r].Length];
+                Array.Copy(left[l], combined, left[l].Length);
+                Array.Copy(right[r], 0, combined, left[l].Length, right[r].Length);
+                result[idx++] = combined;
+            }
+        }
+        return result;
     }
 
     private ComponentTable GetComponentTable()
@@ -181,7 +317,7 @@ public class QueryBuilder<T> where T : unmanaged
 
 internal static class QueryResolverHelper
 {
-    public static FieldEvaluator[] ResolveEvaluators(FieldPredicate[] predicates, ComponentTable ct, byte componentTag)
+    public static FieldEvaluator[] ResolveEvaluators(FieldPredicate[] predicates, ComponentTable ct, byte componentTag, byte branchIndex = 0)
     {
         var definition = ct.Definition;
         var evaluators = new FieldEvaluator[predicates.Length];
@@ -206,13 +342,14 @@ internal static class QueryResolverHelper
 
             evaluators[i] = new FieldEvaluator
             {
-                FieldIndex = fieldIndex,
-                FieldOffset = field.OffsetInComponentStorage,
+                FieldIndex = (byte)fieldIndex,
+                FieldOffset = (ushort)field.OffsetInComponentStorage,
                 FieldSize = (byte)field.FieldSize,
                 KeyType = keyType,
                 CompareOp = pred.Operator,
                 Threshold = threshold,
-                ComponentTag = componentTag
+                ComponentTag = componentTag,
+                BranchIndex = branchIndex
             };
         }
 

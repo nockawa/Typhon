@@ -130,6 +130,12 @@ public class DatabaseEngineOptions
     /// WAL writer configuration. Null disables WAL durability (in-memory only).
     /// </summary>
     public WalWriterOptions Wal { get; set; }
+
+    /// <summary>
+    /// Background statistics rebuild configuration (HyperLogLog, MCV, Histogram).
+    /// Null disables the background statistics worker (statistics can still be rebuilt manually).
+    /// </summary>
+    public StatisticsOptions Statistics { get; set; }
 }
 
 /// <summary>
@@ -232,6 +238,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// and advances CheckpointLSN to enable WAL segment recycling.
     /// </summary>
     internal CheckpointManager CheckpointManager { get; private set; }
+    internal StatisticsWorker StatisticsWorker { get; private set; }
 
     /// <summary>
     /// Creates a new Unit of Work — the durability boundary for user operations. All transactions must be created through a UoW.
@@ -303,6 +310,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
         InitializeWalManager();
         InitializeCheckpointManager();
+        InitializeStatisticsWorker();
     }
 
     public bool IsDisposed { get; private set; }
@@ -316,6 +324,10 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
         if (disposing)
         {
+            // Statistics worker must stop before checkpoint (it holds epoch guards during scans)
+            StatisticsWorker?.Dispose();
+            StatisticsWorker = null;
+
             _log?.LogInformation("Engine disposing: CheckpointManager");
             // Checkpoint must dispose first: runs final cycle, writes pages + advances LSN before WAL shuts down
             CheckpointManager?.Dispose();
@@ -395,6 +407,23 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         // the checkpoint thread instead of waiting for the 30s timer interval.
         MMF.OnBackpressure = () => CheckpointManager?.ForceCheckpoint();
     }
+
+    private void InitializeStatisticsWorker()
+    {
+        var opts = _options.Statistics;
+        if (opts == null || !opts.Enabled)
+        {
+            return;
+        }
+
+        StatisticsWorker = new StatisticsWorker(this, opts, EpochManager, this);
+        StatisticsWorker.Start();
+    }
+
+    /// <summary>
+    /// Returns all registered ComponentTables. Used by <see cref="StatisticsWorker"/> to iterate tables.
+    /// </summary>
+    internal IEnumerable<ComponentTable> GetAllComponentTables() => _componentTableByType.Values;
 
     private void ConstructComponentStore()
     {

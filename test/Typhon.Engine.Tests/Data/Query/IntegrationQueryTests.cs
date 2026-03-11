@@ -27,7 +27,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
         return pk;
     }
 
-    private static void RefreshView(DatabaseEngine dbe, View<CompD> view)
+    private static void RefreshView(DatabaseEngine dbe, ViewBase view)
     {
         using var t = dbe.CreateQuickTransaction();
         view.Refresh(t);

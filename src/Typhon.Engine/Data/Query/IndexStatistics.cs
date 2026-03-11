@@ -54,11 +54,26 @@ internal class IndexStatistics
     /// <summary>Maximum key encoded as long.</summary>
     public long MaxValue => _index.GetMaxKeyAsLong();
 
-    /// <summary>Estimated distinct values. Returns -1 (unknown) until HyperLogLog is implemented in Phase 3.</summary>
-    public long DistinctValues => -1;
+    /// <summary>
+    /// HyperLogLog sketch for approximate distinct value count. Null until statistics are rebuilt.
+    /// Volatile for atomic reference swap by <see cref="StatisticsRebuilder"/>.
+    /// </summary>
+    public volatile HyperLogLog HyperLogLog;
 
-    /// <summary>Optional equi-width histogram. Null until <see cref="RebuildHistogram"/> is called.</summary>
-    public Histogram Histogram { get; internal set; }
+    /// <summary>
+    /// Top-K most common values with frequencies. Null until statistics are rebuilt.
+    /// Volatile for atomic reference swap by <see cref="StatisticsRebuilder"/>.
+    /// </summary>
+    public volatile MostCommonValues MostCommonValues;
+
+    /// <summary>Estimated distinct values from HLL, or -1 if no HLL data available.</summary>
+    public long DistinctValues => HyperLogLog?.EstimateCardinality() ?? -1;
+
+    /// <summary>
+    /// Optional equi-width histogram. Null until statistics are rebuilt.
+    /// Volatile for atomic reference swap by <see cref="StatisticsRebuilder"/>.
+    /// </summary>
+    public volatile Histogram Histogram;
 
     /// <summary>The underlying B+Tree index.</summary>
     internal BTreeBase Index => _index;
