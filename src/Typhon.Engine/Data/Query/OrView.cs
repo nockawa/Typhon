@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Typhon.Engine;
 
@@ -15,6 +16,7 @@ public unsafe class OrView<T> : ViewBase where T : unmanaged
     private readonly ComponentTable _componentTable;
     private readonly Dictionary<long, ushort> _branchBitmaps = new();
     private readonly FieldEvaluator[][] _branchEvaluators;
+    private readonly int[][] _branchEvalLookup;
 
     internal OrView(FieldEvaluator[][] branchEvaluators, ExecutionPlan[] plans, ViewRegistry registry, ComponentTable componentTable,
         int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0) :
@@ -28,6 +30,7 @@ public unsafe class OrView<T> : ViewBase where T : unmanaged
         }
 
         _branchEvaluators = branchEvaluators;
+        _branchEvalLookup = BuildBranchEvalLookup(branchEvaluators);
         _registry = registry;
         _componentTable = componentTable;
     }
@@ -77,8 +80,8 @@ public unsafe class OrView<T> : ViewBase where T : unmanaged
             foreach (var pk in branchResult)
             {
                 _entityIds.Add(pk);
-                _branchBitmaps.TryGetValue(pk, out var existing);
-                _branchBitmaps[pk] = (ushort)(existing | bit);
+                ref var bitmapRef = ref CollectionsMarshal.GetValueRefOrAddDefault(_branchBitmaps, pk, out _);
+                bitmapRef |= bit;
             }
         }
     }
@@ -103,8 +106,8 @@ public unsafe class OrView<T> : ViewBase where T : unmanaged
                 foreach (var pk in branchResult)
                 {
                     _entityIds.Add(pk);
-                    _branchBitmaps.TryGetValue(pk, out var existing);
-                    _branchBitmaps[pk] = (ushort)(existing | bit);
+                    ref var bitmapRef = ref CollectionsMarshal.GetValueRefOrAddDefault(_branchBitmaps, pk, out _);
+                    bitmapRef |= bit;
                 }
             }
         }
@@ -156,7 +159,7 @@ public unsafe class OrView<T> : ViewBase where T : unmanaged
         for (var b = 0; b < _branchEvaluators.Length; b++)
         {
             var branchEvals = _branchEvaluators[b];
-            var evalIndex = FindEvaluatorInBranch(branchEvals, fieldIndex);
+            var evalIndex = FindEvaluatorInBranch(b, fieldIndex);
             if (evalIndex < 0)
             {
                 continue;
@@ -254,14 +257,13 @@ public unsafe class OrView<T> : ViewBase where T : unmanaged
         return true;
     }
 
-    private static int FindEvaluatorInBranch(FieldEvaluator[] branchEvals, int fieldIndex)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int FindEvaluatorInBranch(int branchIndex, int fieldIndex)
     {
-        for (var i = 0; i < branchEvals.Length; i++)
+        var lookup = _branchEvalLookup[branchIndex];
+        if ((uint)fieldIndex < (uint)lookup.Length)
         {
-            if (branchEvals[i].FieldIndex == fieldIndex)
-            {
-                return i;
-            }
+            return lookup[fieldIndex];
         }
         return -1;
     }
@@ -308,6 +310,36 @@ public unsafe class OrView<T> : ViewBase where T : unmanaged
         {
             Array.Copy(branchEvaluators[i], 0, result, offset, branchEvaluators[i].Length);
             offset += branchEvaluators[i].Length;
+        }
+        return result;
+    }
+
+    private static int[][] BuildBranchEvalLookup(FieldEvaluator[][] branchEvaluators)
+    {
+        var result = new int[branchEvaluators.Length][];
+        for (var b = 0; b < branchEvaluators.Length; b++)
+        {
+            var evals = branchEvaluators[b];
+            var maxField = -1;
+            for (var i = 0; i < evals.Length; i++)
+            {
+                if (evals[i].FieldIndex > maxField)
+                {
+                    maxField = evals[i].FieldIndex;
+                }
+            }
+            if (maxField < 0)
+            {
+                result[b] = [];
+                continue;
+            }
+            var lookup = new int[maxField + 1];
+            Array.Fill(lookup, -1);
+            for (var i = 0; i < evals.Length; i++)
+            {
+                lookup[evals[i].FieldIndex] = i;
+            }
+            result[b] = lookup;
         }
         return result;
     }

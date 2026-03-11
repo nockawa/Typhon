@@ -11,15 +11,18 @@ public unsafe class View<T1, T2> : ViewBase where T1 : unmanaged where T2 : unma
     private readonly ComponentTable _componentTable1;
     private readonly ComponentTable _componentTable2;
     private readonly ComponentTable _planTable;
+    private readonly int[] _evalLookupTag0;
+    private readonly int[] _evalLookupTag1;
 
     internal View(FieldEvaluator[] evaluators, ViewRegistry registry1, ViewRegistry registry2, ComponentTable componentTable1, ComponentTable componentTable2,
-        int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0) : 
+        int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0) :
         base(evaluators, [], componentTable1.DBE.MemoryAllocator, componentTable1, bufferCapacity, baseTSN)
     {
         _registry1 = registry1;
         _registry2 = registry2;
         _componentTable1 = componentTable1;
         _componentTable2 = componentTable2;
+        (_evalLookupTag0, _evalLookupTag1) = BuildEvaluatorLookupByTag(evaluators);
     }
 
     internal View(FieldEvaluator[] evaluators, ViewRegistry registry1, ViewRegistry registry2, ComponentTable componentTable1, ComponentTable componentTable2,
@@ -31,6 +34,7 @@ public unsafe class View<T1, T2> : ViewBase where T1 : unmanaged where T2 : unma
         _componentTable1 = componentTable1;
         _componentTable2 = componentTable2;
         _planTable = planTable;
+        (_evalLookupTag0, _evalLookupTag1) = BuildEvaluatorLookupByTag(evaluators);
     }
 
     protected override void DeregisterFromRegistries()
@@ -231,15 +235,63 @@ public unsafe class View<T1, T2> : ViewBase where T1 : unmanaged where T2 : unma
         return true;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private ref FieldEvaluator FindEvaluator(int fieldIndex, byte componentTag)
     {
-        for (var i = 0; i < _evaluators.Length; i++)
+        var lookup = componentTag == 0 ? _evalLookupTag0 : _evalLookupTag1;
+        if ((uint)fieldIndex < (uint)lookup.Length)
         {
-            if (_evaluators[i].FieldIndex == fieldIndex && _evaluators[i].ComponentTag == componentTag)
+            var idx = lookup[fieldIndex];
+            if (idx >= 0)
             {
-                return ref _evaluators[i];
+                return ref _evaluators[idx];
             }
         }
         return ref Unsafe.NullRef<FieldEvaluator>();
+    }
+
+    private static (int[], int[]) BuildEvaluatorLookupByTag(FieldEvaluator[] evaluators)
+    {
+        var maxField0 = -1;
+        var maxField1 = -1;
+        for (var i = 0; i < evaluators.Length; i++)
+        {
+            if (evaluators[i].ComponentTag == 0)
+            {
+                if (evaluators[i].FieldIndex > maxField0)
+                {
+                    maxField0 = evaluators[i].FieldIndex;
+                }
+            }
+            else
+            {
+                if (evaluators[i].FieldIndex > maxField1)
+                {
+                    maxField1 = evaluators[i].FieldIndex;
+                }
+            }
+        }
+        var lookup0 = maxField0 >= 0 ? new int[maxField0 + 1] : [];
+        var lookup1 = maxField1 >= 0 ? new int[maxField1 + 1] : [];
+        if (maxField0 >= 0)
+        {
+            Array.Fill(lookup0, -1);
+        }
+        if (maxField1 >= 0)
+        {
+            Array.Fill(lookup1, -1);
+        }
+        for (var i = 0; i < evaluators.Length; i++)
+        {
+            if (evaluators[i].ComponentTag == 0)
+            {
+                lookup0[evaluators[i].FieldIndex] = i;
+            }
+            else
+            {
+                lookup1[evaluators[i].FieldIndex] = i;
+            }
+        }
+        return (lookup0, lookup1);
     }
 }

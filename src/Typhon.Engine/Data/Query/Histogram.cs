@@ -1,6 +1,7 @@
 // unset
 
 using System;
+using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine;
 
@@ -121,15 +122,19 @@ internal class Histogram
     /// Computes the start value of bucket <paramref name="bucket"/> using unsigned arithmetic.
     /// Handles ranges that span the signed long boundary without overflow.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private long BucketStartValue(int bucket) => (long)((ulong)MinValue + (ulong)bucket * (ulong)BucketWidth);
 
     /// <summary>
     /// Computes the unsigned distance between two values (b - a), cast to signed long.
     /// Safe for within-bucket distances (always ≤ BucketWidth which fits in long).
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static long SignedDist(long a, long b) => (long)((ulong)b - (ulong)a);
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static long SignedMin(long a, long b) => a < b ? a : b;
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static long SignedMax(long a, long b) => a > b ? a : b;
 
     /// <summary>

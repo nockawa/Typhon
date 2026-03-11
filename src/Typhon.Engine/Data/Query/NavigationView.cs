@@ -22,17 +22,21 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
     private readonly ComponentTable _targetTable;
     private readonly FieldEvaluator[] _sourceEvaluators;
     private readonly FieldEvaluator[] _targetEvaluators;
+    private readonly int[] _sourceEvalLookup;
+    private readonly int[] _targetEvalLookup;
     private readonly int _fkFieldIndex;      // Index into source's IndexedFieldInfos for the FK field
     private readonly int _fkFieldOffset;     // Byte offset of FK field within source component struct
 
     internal NavigationView(FieldEvaluator[] sourceEvaluators, FieldEvaluator[] targetEvaluators, ComponentTable sourceTable, ComponentTable targetTable,
-        int fkFieldIndex, int fkFieldOffset, int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0) : 
+        int fkFieldIndex, int fkFieldOffset, int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0) :
         base(CombineEvaluators(sourceEvaluators, targetEvaluators), [], sourceTable.DBE.MemoryAllocator, sourceTable, bufferCapacity, baseTSN)
     {
         _sourceTable = sourceTable;
         _targetTable = targetTable;
         _sourceEvaluators = sourceEvaluators;
         _targetEvaluators = targetEvaluators;
+        _sourceEvalLookup = BuildEvaluatorLookup(sourceEvaluators);
+        _targetEvalLookup = BuildEvaluatorLookup(targetEvaluators);
         _fkFieldIndex = fkFieldIndex;
         _fkFieldOffset = fkFieldOffset;
     }
@@ -464,28 +468,55 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool EvaluateKey(ref FieldEvaluator eval, ref KeyBytes8 key) => FieldEvaluator.Evaluate(ref eval, (byte*)Unsafe.AsPointer(ref key));
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private ref FieldEvaluator FindSourceEvaluator(int fieldIndex)
     {
-        for (var i = 0; i < _sourceEvaluators.Length; i++)
+        if ((uint)fieldIndex < (uint)_sourceEvalLookup.Length)
         {
-            if (_sourceEvaluators[i].FieldIndex == fieldIndex)
+            var idx = _sourceEvalLookup[fieldIndex];
+            if (idx >= 0)
             {
-                return ref _sourceEvaluators[i];
+                return ref _sourceEvaluators[idx];
             }
         }
         return ref Unsafe.NullRef<FieldEvaluator>();
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private ref FieldEvaluator FindTargetEvaluator(int fieldIndex)
     {
-        for (var i = 0; i < _targetEvaluators.Length; i++)
+        if ((uint)fieldIndex < (uint)_targetEvalLookup.Length)
         {
-            if (_targetEvaluators[i].FieldIndex == fieldIndex)
+            var idx = _targetEvalLookup[fieldIndex];
+            if (idx >= 0)
             {
-                return ref _targetEvaluators[i];
+                return ref _targetEvaluators[idx];
             }
         }
         return ref Unsafe.NullRef<FieldEvaluator>();
+    }
+
+    private static int[] BuildEvaluatorLookup(FieldEvaluator[] evaluators)
+    {
+        var maxField = -1;
+        for (var i = 0; i < evaluators.Length; i++)
+        {
+            if (evaluators[i].FieldIndex > maxField)
+            {
+                maxField = evaluators[i].FieldIndex;
+            }
+        }
+        if (maxField < 0)
+        {
+            return [];
+        }
+        var lookup = new int[maxField + 1];
+        Array.Fill(lookup, -1);
+        for (var i = 0; i < evaluators.Length; i++)
+        {
+            lookup[evaluators[i].FieldIndex] = i;
+        }
+        return lookup;
     }
 
     private static FieldEvaluator[] CombineEvaluators(FieldEvaluator[] source, FieldEvaluator[] target)

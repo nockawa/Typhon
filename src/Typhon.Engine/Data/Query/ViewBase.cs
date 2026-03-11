@@ -15,7 +15,7 @@ public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
     private static int _nextViewId;
 
     protected readonly HashSet<long> _entityIds = new();
-    private readonly Dictionary<long, DeltaKind> _deltas = new();
+    private readonly Dictionary<long, DeltaKind> _deltas = new(16);
     private int _addedCount;
     private int _removedCount;
     private int _modifiedCount;
