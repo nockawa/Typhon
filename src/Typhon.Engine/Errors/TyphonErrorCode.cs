@@ -6,35 +6,36 @@ namespace Typhon.Engine;
 /// Codes within a range are assigned sequentially as needed; gaps are intentional
 /// to allow insertion without renumbering.
 /// </summary>
-public enum TyphonErrorCode : int
+public enum TyphonErrorCode
 {
     // 0 — Unspecified / generic
-    Unspecified                 = 0,
+    Unspecified                     = 0,
 
     // 1xxx — Transaction
-    TransactionTimeout          = 1002,
+    TransactionTimeout              = 1002,
 
     // 2xxx — Storage
-    DataCorruption              = 2003,
-    StorageCapacityExceeded     = 2004,
-    PageChecksumMismatch        = 2005,
-    PageCacheBackpressureTimeout = 2006,
+    DataCorruption                  = 2003,
+    StorageCapacityExceeded         = 2004,
+    PageChecksumMismatch            = 2005,
+    PageCacheBackpressureTimeout    = 2006,
+    DatabaseLocked                  = 2007,
 
     // 3xxx — Component
-    SchemaValidation            = 3001,
-    SchemaMigration             = 3002,
+    SchemaValidation                = 3001,
+    SchemaMigration                 = 3002,
 
     // 4xxx — Index
-    UniqueConstraintViolation   = 4001,
+    UniqueConstraintViolation       = 4001,
     // 5xxx — Query (reserved)
 
     // 6xxx — Resource
-    ResourceExhausted           = 6001,
-    LockTimeout                 = 6003,
+    ResourceExhausted               = 6001,
+    LockTimeout                     = 6003,
 
     // 7xxx — Durability
-    WalBackPressureTimeout      = 7001,
-    WalClaimTooLarge            = 7002,
-    WalWriteFailure             = 7003,
-    WalSegmentError             = 7004,
+    WalBackPressureTimeout          = 7001,
+    WalClaimTooLarge                = 7002,
+    WalWriteFailure                 = 7003,
+    WalSegmentError                 = 7004,
 }

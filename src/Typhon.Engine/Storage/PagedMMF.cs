@@ -9,6 +9,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -150,6 +151,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     
     private SafeFileHandle _fileHandle;
     private long _fileSize;
+    private string _lockFilePath;
     private readonly IPageCacheBackpressureStrategy _backpressureStrategy;
 
     /// <summary>
@@ -249,6 +251,10 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
         try
         {
+            // Acquire advisory lock file before opening the database
+            _lockFilePath = BuildLockFilePath();
+            AcquireLockFile();
+
             // Init or load the file
             var filePathName = Options.BuildDatabasePathFileName();
             var fi = new FileInfo(filePathName);
@@ -262,6 +268,12 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                 LoadFile();
             }
             Logger.LogInformation("Virtual Disk Manager service initialized successfully");
+        }
+        catch (DatabaseLockedException)
+        {
+            // Lock violation — propagate without wrapping for clear diagnostics
+            ReleaseLockFile();
+            throw;
         }
         catch (Exception e)
         {
@@ -280,12 +292,136 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         }
     }
 
+    #region Lock File
+
+    private string BuildLockFilePath() => Path.Combine(Options.DatabaseDirectory, $"{Options.DatabaseName}.lock");
+
+    /// <summary>
+    /// Checks for an existing advisory lock file and creates a new one.
+    /// If a stale lock file is found (dead PID), it is deleted with a warning.
+    /// If a live lock file is found, throws <see cref="DatabaseLockedException"/>.
+    /// </summary>
+    private void AcquireLockFile()
+    {
+        if (File.Exists(_lockFilePath))
+        {
+            try
+            {
+                var json = File.ReadAllText(_lockFilePath);
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+                var pid = root.GetProperty("pid").GetInt32();
+                var machineName = root.GetProperty("machineName").GetString() ?? "unknown";
+                var startedAt = root.TryGetProperty("startedAt", out var ts) ? 
+                    DateTimeOffset.Parse(ts.GetString() ?? string.Empty) : DateTimeOffset.MinValue;
+
+                if (!string.Equals(machineName, Environment.MachineName, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Different machine — cannot verify PID remotely, treat as live
+                    ThrowHelper.ThrowDatabaseLocked(Options.BuildDatabasePathFileName(), pid, machineName, startedAt);
+                }
+
+                if (IsProcessAlive(pid))
+                {
+                    ThrowHelper.ThrowDatabaseLocked(Options.BuildDatabasePathFileName(), pid, machineName, startedAt);
+                }
+
+                // Stale lock — process is dead, delete and proceed
+                Logger.LogWarning("Stale lock file detected for PID {Pid} (started {StartedAt:u}). Previous process may have crashed. Removing lock file",
+                    pid, startedAt);
+                DeleteFileAndWait(_lockFilePath);
+            }
+            catch (DatabaseLockedException)
+            {
+                throw; // Re-throw lock exceptions
+            }
+            catch (Exception ex)
+            {
+                // Corrupt or unreadable lock file — delete and proceed with a warning
+                Logger.LogWarning(ex, "Lock file '{LockFilePath}' is corrupt or unreadable. Removing it", _lockFilePath);
+                try { DeleteFileAndWait(_lockFilePath); } catch { /* best effort */ }
+            }
+        }
+
+        // Write new lock file
+        try
+        {
+            var lockContent = JsonSerializer.Serialize(new
+            {
+                pid = Environment.ProcessId,
+                startedAt = DateTimeOffset.UtcNow.ToString("o"),
+                machineName = Environment.MachineName
+            });
+            File.WriteAllText(_lockFilePath, lockContent);
+        }
+        catch (Exception ex)
+        {
+            // Lock file creation failed — log warning but proceed (OS file share is the real protection)
+            Logger.LogWarning(ex, "Failed to create lock file '{LockFilePath}'. OS-level file sharing will still prevent concurrent access", _lockFilePath);
+        }
+    }
+
+    /// <summary>
+    /// Deletes the advisory lock file if it exists.
+    /// </summary>
+    private void ReleaseLockFile()
+    {
+        try
+        {
+            if (_lockFilePath != null)
+            {
+                DeleteFileAndWait(_lockFilePath);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to delete lock file '{LockFilePath}'", _lockFilePath);
+        }
+    }
+
+    private static bool IsProcessAlive(int pid)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            // Process does not exist
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Deletes a file and polls until the NTFS pending-delete completes.
+    /// On Windows, <see cref="File.Delete"/> returns immediately but the directory entry removal is deferred — <see cref="File.Exists"/> can return true
+    /// briefly after deletion.
+    /// Without polling, a subsequent <see cref="File.WriteAllText"/> to the same path can fail with <see cref="IOException"/>.
+    /// </summary>
+    private static void DeleteFileAndWait(string path, int maxWaitMs = 500)
+    {
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        File.Delete(path);
+        var sw = Stopwatch.StartNew();
+        while (File.Exists(path) && sw.ElapsedMilliseconds < maxWaitMs)
+        {
+            Thread.Sleep(1);
+        }
+    }
+
+    #endregion
+
     private void CreateFile()
     {
         // Create the Files
         var filePathName = Options.BuildDatabasePathFileName();
 
-        _fileHandle = File.OpenHandle(filePathName, FileMode.Create, FileAccess.ReadWrite, FileShare.None, FileOptions.Asynchronous | FileOptions.RandomAccess);
+        _fileHandle = File.OpenHandle(filePathName, FileMode.Create, FileAccess.ReadWrite, FileShare.Read, FileOptions.Asynchronous | FileOptions.RandomAccess);
         _fileSize = 0L;
 
         Logger.LogInformation("Create Database '{DatabaseName}' in file '{FilePathName}'", Options.DatabaseName, filePathName);
@@ -303,7 +439,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     {
         // Create the Files
         var filePathName = Options.BuildDatabasePathFileName();
-        _fileHandle = File.OpenHandle(filePathName, FileMode.Open, FileAccess.ReadWrite, FileShare.None, FileOptions.Asynchronous|FileOptions.RandomAccess);
+        _fileHandle = File.OpenHandle(filePathName, FileMode.Open, FileAccess.ReadWrite, FileShare.Read, FileOptions.Asynchronous | FileOptions.RandomAccess);
         {
             var fi = new FileInfo(filePathName);
             _fileSize = fi.Length;
@@ -337,7 +473,9 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                 _fileHandle.Dispose();
                 _fileHandle = null;
             }
-        
+
+            ReleaseLockFile();
+
             _memPagesInfo = null;
             _memPagesAddr = null;
             _backpressureStrategy.Dispose();
@@ -714,28 +852,25 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                         }
                     }
 
-                    if (!found)
+                    ++_metrics.BackpressureWaitCount;
+
+                    Logger.LogWarning(
+                        "Page cache backpressure: wait#{WaitCount} dirty={DirtyCount} epoch={EpochCount} retry={RetryCount} remaining={RemainingMs}ms",
+                        _metrics.BackpressureWaitCount, dirtyCount, epochCount, bpCtx.RetryCount, bpCtx.WaitContext.Remaining.TotalMilliseconds);
+
+                    // Demand-driven flush: wake the checkpoint manager immediately so dirty pages get written to
+                    // disk → DecrementDirty → SignalPageAvailable → waiter wakes.
+                    // Idempotent — safe to call on every retry iteration.
+                    OnBackpressure?.Invoke();
+
+                    if (!_backpressureStrategy.OnPressure(ref bpCtx, dirtyCount, epochCount))
                     {
-                        ++_metrics.BackpressureWaitCount;
-
-                        Logger.LogWarning(
-                            "Page cache backpressure: wait#{WaitCount} dirty={DirtyCount} epoch={EpochCount} retry={RetryCount} remaining={RemainingMs}ms",
-                            _metrics.BackpressureWaitCount, dirtyCount, epochCount, bpCtx.RetryCount, bpCtx.WaitContext.Remaining.TotalMilliseconds);
-
-                        // Demand-driven flush: wake the checkpoint manager immediately so dirty pages get written to
-                        // disk → DecrementDirty → SignalPageAvailable → waiter wakes.
-                        // Idempotent — safe to call on every retry iteration.
-                        OnBackpressure?.Invoke();
-
-                        if (!_backpressureStrategy.OnPressure(ref bpCtx, dirtyCount, epochCount))
-                        {
-                            ThrowHelper.ThrowPageCacheBackpressureTimeout(
-                                dirtyCount, epochCount,
-                                TimeoutOptions.Current.PageCacheBackpressureTimeout - bpCtx.WaitContext.Remaining);
-                        }
-
-                        continue;
+                        ThrowHelper.ThrowPageCacheBackpressureTimeout(
+                            dirtyCount, epochCount,
+                            TimeoutOptions.Current.PageCacheBackpressureTimeout - bpCtx.WaitContext.Remaining);
                     }
+
+                    continue;
                 }
             }
 
@@ -1034,7 +1169,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                     FilePageIndex = filePageIndex,
                     SegmentId = 0,
                     ChangeRevision = headerAddr->ChangeRevision,
-                    UncompressedSize = (ushort)PageSize,
+                    UncompressedSize = PageSize,
                     CompressionAlgo = useCompression ? FpiCompression.AlgoLZ4 : FpiCompression.AlgoNone,
                     Reserved = 0,
                 };

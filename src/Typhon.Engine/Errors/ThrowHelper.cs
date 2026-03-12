@@ -66,6 +66,11 @@ internal static class ThrowHelper
 
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowDatabaseLocked(string databasePath, int ownerPid, string ownerMachine, DateTimeOffset startedAt)
+        => throw new DatabaseLockedException(databasePath, ownerPid, ownerMachine, startedAt);
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static void ThrowPageCacheBackpressureTimeout(int dirtyPageCount, int epochProtectedCount, TimeSpan waitDuration)
         => throw new PageCacheBackpressureTimeoutException(dirtyPageCount, epochProtectedCount, waitDuration);
 

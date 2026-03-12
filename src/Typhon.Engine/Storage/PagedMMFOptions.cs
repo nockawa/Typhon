@@ -3,6 +3,7 @@ using System;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace Typhon.Engine;
 
@@ -39,14 +40,35 @@ public class PagedMMFOptions
         try
         {
             var pfn = BuildDatabasePathFileName();
-            if (File.Exists(pfn))
-            {
-                File.Delete(pfn);
-            }
+            DeleteAndWait(pfn);
+
+            var lockPath = Path.Combine(DatabaseDirectory, $"{DatabaseName}.lock");
+            DeleteAndWait(lockPath);
         }
         catch (Exception)
         {
             // ignored
+        }
+    }
+
+    /// <summary>
+    /// Deletes a file and polls until the NTFS pending-delete completes.
+    /// On Windows, <see cref="File.Delete"/> returns immediately but the directory entry
+    /// removal is deferred — subsequent operations on the same path can fail without this wait.
+    /// </summary>
+    private static void DeleteAndWait(string path, int maxWaitMs = 500)
+    {
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        File.Delete(path);
+        var sw = new System.Diagnostics.Stopwatch();
+        sw.Start();
+        while (File.Exists(path) && sw.ElapsedMilliseconds < maxWaitMs)
+        {
+            Thread.Sleep(1);
         }
     }
     
