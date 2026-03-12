@@ -102,7 +102,36 @@ Use `mcp__GitHub__create_pull_request` with:
 - head: `"<branch_name>"`
 - base: `"main"`
 
-- **Stop here** — report the PR URL and tell the user to merge it, then re-run `/complete-task`
+- Then check the `claude/` documentation repo for a matching branch with changes:
+
+```bash
+cd claude
+# Check if a matching branch exists and has commits ahead of main
+CLAUDE_BRANCH=$(git branch --list "<branch_name>" --format="%(refname:short)")
+if [ -n "$CLAUDE_BRANCH" ]; then
+  CLAUDE_AHEAD=$(git rev-list --count main.."$CLAUDE_BRANCH")
+  echo "claude/ branch: $CLAUDE_BRANCH, commits ahead: $CLAUDE_AHEAD"
+else
+  echo "claude/ has no matching branch"
+fi
+cd ..
+```
+
+If the `claude/` repo has a matching branch with commits ahead of main, also create a PR for it:
+- Push the branch: `cd claude && git push -u origin <branch_name> && cd ..`
+- Create the PR:
+
+Use `mcp__GitHub__create_pull_request` with:
+- owner: `"nockawa"`
+- repo: `"Typhon-docs"` (or the actual `claude/` remote repo name — check with `cd claude && git remote get-url origin && cd ..`)
+- title: `"Docs: <same summary as main PR>"`
+- body: `"Documentation updates for nockawa/Typhon#<issue_number>"`
+- head: `"<branch_name>"`
+- base: `"main"`
+
+Report both PR URLs.
+
+- **Stop here** — report the PR URL(s) and tell the user to merge them, then re-run `/complete-task`
 - Do NOT proceed to close the issue or update status yet
 
 **If "Skip PR":**
@@ -215,7 +244,12 @@ Options:
   - Keep it (description: "Leave the branch for now")
 ```
 
-If "Yes": `git branch -d <branch_name>`
+If "Yes":
+- `git branch -d <branch_name>`
+- Also clean up the `claude/` repo branch if it exists:
+  ```bash
+  cd claude && git checkout main && git branch -d <branch_name> 2>/dev/null; cd ..
+  ```
 
 If no merged PR was found (user chose "Skip PR" in step 2), do **not** offer to delete — the branch may contain the only copy of the work.
 
