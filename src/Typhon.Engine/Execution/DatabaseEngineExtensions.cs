@@ -33,4 +33,12 @@ public static class DatabaseEngineExtensions
         tx.OwnsUnitOfWork = true;
         return tx;
     }
+
+    /// <summary>
+    /// Creates a read-only transaction with no UnitOfWork and no ChangeSet allocation.
+    /// Write operations (Create/Update/Delete) throw <see cref="System.InvalidOperationException"/>.
+    /// Commit is a no-op. Dispose exits the epoch scope and removes from the chain.
+    /// </summary>
+    [return: TransfersOwnership]
+    public static Transaction CreateReadOnlyTransaction(this DatabaseEngine dbe) => dbe.TransactionChain.CreateTransaction(dbe, readOnly: true);
 }
