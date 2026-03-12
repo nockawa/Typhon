@@ -181,8 +181,21 @@ git pull origin main
 git checkout -b feature/<number>-short-name
 ```
 
+Then create a matching branch in the `claude/` documentation repo:
+```bash
+cd claude
+git checkout -b feature/<number>-short-name
+cd ..
+```
+
 **If "Rider Open Task":**
 Report the recommended branch name for reference but don't create it. The user will use Rider's `Tools > Tasks & Contexts > Open Task` (Alt+Shift+N) to select the issue and let Rider create the branch + context switch.
+Also create the matching branch in the `claude/` documentation repo:
+```bash
+cd claude
+git checkout -b feature/<number>-short-name
+cd ..
+```
 
 **If "Skip branch":**
 Just report the recommended name for later use.

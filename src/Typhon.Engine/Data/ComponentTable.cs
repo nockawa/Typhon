@@ -193,6 +193,13 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
 
     internal Dictionary<int, VariableSizedBufferSegmentBase> ComponentCollectionVSBSByOffset { get; private set; }
 
+    /// <summary>
+    /// Monotonically increasing counter incremented each time index layout changes (e.g., schema migration adds/removes indexes).
+    /// Used by <see cref="IndexRef"/> for O(1) staleness detection without touching page 0.
+    /// </summary>
+    private int _indexLayoutVersion;
+    internal int IndexLayoutVersion => _indexLayoutVersion;
+
     private ComponentTableFlags _flags;
 
     /// <summary>
@@ -450,6 +457,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         }
 
         IndexedFieldInfos = l.ToArray();
+        _indexLayoutVersion++;
 
         IndexStats = new IndexStatistics[IndexedFieldInfos.Length];
         for (var i = 0; i < IndexedFieldInfos.Length; i++)

@@ -1,5 +1,6 @@
-﻿using JetBrains.Annotations;
+using JetBrains.Annotations;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
 
@@ -9,12 +10,14 @@ namespace Typhon.Engine;
 internal class TransactionChain : ResourceNode, IDebugPropertiesProvider
 {
     private const int PoolMaxSize = 16;
-            
-    internal Transaction Head { get; private set; }
 
-    internal Transaction Tail { get; private set; }
+    private Transaction _head;
+    private Transaction _tail;
+    private long _minTSN;
 
-    internal long MinTSN { get; private set; }
+    internal Transaction Head => Volatile.Read(ref _head);
+    internal Transaction Tail => Volatile.Read(ref _tail);
+    internal long MinTSN => Volatile.Read(ref _minTSN);
     internal long NextFreeId => _nextFreeId;
 
     /// <summary>
@@ -26,7 +29,7 @@ internal class TransactionChain : ResourceNode, IDebugPropertiesProvider
     internal int ActiveCount => _activeCount;
 
     private AccessControl _control;
-    private readonly Queue<Transaction> _pool;
+    private readonly ConcurrentQueue<Transaction> _pool;
     private readonly int _maxActiveTransactions;
     private long _nextFreeId;
     private int _activeCount;
@@ -35,7 +38,7 @@ internal class TransactionChain : ResourceNode, IDebugPropertiesProvider
     {
         _maxActiveTransactions = maxActiveTransactions;
         _nextFreeId = 1;
-        _pool = new Queue<Transaction>();
+        _pool = new ConcurrentQueue<Transaction>();
         for (int i = 0; i < PoolMaxSize; i++)
         {
             _pool.Enqueue(new Transaction());
@@ -43,30 +46,32 @@ internal class TransactionChain : ResourceNode, IDebugPropertiesProvider
     }
 
     /// <summary>
-    /// Sets the next free TSN to the given value. Used during engine reload to restore the TSN counter
-    /// from the persisted header so that MVCC visibility works for entities created by previous sessions.
+    /// Sets the next free TSN to the given value. Used during engine reload to restore the TSN counter from the persisted header so that MVCC visibility
+    /// works for entities created by previous sessions.
     /// </summary>
     internal void SetNextFreeId(long value) => _nextFreeId = value;
 
     public ref AccessControl Control => ref _control;
 
-    // Under lock of the caller
+    /// <summary>
+    /// Lock-free CAS-based stack push. Concurrent with Remove (which holds exclusive lock) and other PushHead callers (CAS contention only).
+    /// </summary>
     public void PushHead([TransfersOwnership] Transaction transaction)
     {
         Interlocked.Increment(ref _activeCount);
-        var curHead = Head;
-        Head = transaction;
-        transaction.Next = curHead;
-        transaction.Previous = null; // New head has no predecessor (clear stale link from pool recycling)
+        Transaction oldHead;
+        do
+        {
+            oldHead = Volatile.Read(ref _head);
+            transaction.Next = oldHead;
+        } while (Interlocked.CompareExchange(ref _head, transaction, oldHead) != oldHead);
 
-        if (curHead == null)
+        if (oldHead == null)
         {
-            Tail = transaction;
-            MinTSN = transaction.TSN;
-        }
-        else
-        {
-            curHead.Previous = transaction; // Maintain reverse link for Tail→Head traversal
+#pragma warning disable TYPHON004 // CAS on _tail — returned old value is intentionally discarded (conditional write, not a leak)
+            Interlocked.CompareExchange(ref _tail, transaction, null);
+#pragma warning restore TYPHON004
+            Volatile.Write(ref _minTSN, transaction.TSN);
         }
     }
 
@@ -74,7 +79,7 @@ internal class TransactionChain : ResourceNode, IDebugPropertiesProvider
     {
         _control.EnterSharedAccess(ref WaitContext.Null);
 
-        var cur = Head;
+        var cur = Volatile.Read(ref _head);
         while (cur != null)
         {
             if (!predicate(cur))
@@ -88,53 +93,94 @@ internal class TransactionChain : ResourceNode, IDebugPropertiesProvider
         _control.ExitSharedAccess();
     }
 
+    /// <summary>
+    /// Computes the next MinTSN by walking the singly-linked chain to find the second-to-last transaction.
+    /// Caller must hold shared lock on Control.
+    /// </summary>
+    internal long ComputeNextMinTSN()
+    {
+        var cur = Volatile.Read(ref _head);
+        Transaction secondToLast = null;
+        while (cur != null && cur.Next != null)
+        {
+            secondToLast = cur;
+            cur = cur.Next;
+        }
+        return secondToLast?.TSN ?? (_nextFreeId + 1);
+    }
+
+    /// <summary>
+    /// Removes a transaction from the chain. Holds exclusive lock to serialize with other Removes.
+    /// Uses CAS on _head with re-scan fallback to handle concurrent PushHead.
+    /// </summary>
     public void Remove(Transaction transaction)
     {
         _control.EnterExclusiveAccess(ref WaitContext.Null);
         Interlocked.Decrement(ref _activeCount);
 
-        if (transaction.Next != null)
+        // Scan for predecessor (singly-linked)
+        var cur = Volatile.Read(ref _head);
+        Transaction prev = null;
+        while (cur != null && cur != transaction)
         {
-            transaction.Next.Previous = transaction.Previous;
+            prev = cur;
+            cur = cur.Next;
         }
 
-        if (transaction.Previous != null)
+        // Unlink
+        if (prev != null)
         {
-            transaction.Previous.Next = transaction.Next;
+            prev.Next = transaction.Next;
+        }
+        else
+        {
+            if (Interlocked.CompareExchange(ref _head, transaction.Next, transaction) != transaction)
+            {
+                // PushHead prepended nodes between our Volatile.Read and CAS — re-scan for new predecessor
+                var p = Volatile.Read(ref _head);
+                while (p.Next != transaction)
+                {
+                    p = p.Next;
+                }
+                p.Next = transaction.Next;
+            }
         }
 
-        if (Tail == transaction)
+        // Tail maintenance
+        if (Volatile.Read(ref _tail) == transaction)
         {
-            Tail = transaction.Previous;
-            MinTSN = Tail?.TSN ?? 0;
+            var newTail = Volatile.Read(ref _head);
+            if (newTail != null)
+            {
+                while (newTail.Next != null)
+                {
+                    newTail = newTail.Next;
+                }
+            }
+            Volatile.Write(ref _tail, newTail);
+            Volatile.Write(ref _minTSN, newTail?.TSN ?? 0);
         }
 
-        if (Head == transaction)
-        {
-            Head = transaction.Next;
-        }
+        // Capture pool decision under lock; transaction is fully unlinked, so Reset+Enqueue can safely happen outside the critical section to reduce hold time.
+        bool shouldPool = _pool.Count < PoolMaxSize;
 
-        if (_pool.Count < PoolMaxSize)
+        _control.ExitExclusiveAccess();
+
+        if (shouldPool)
         {
             transaction.Reset();
             _pool.Enqueue(transaction);
         }
-
-        _control.ExitExclusiveAccess();
     }
 
+    /// <summary>
+    /// Lock-free transaction creation. No lock acquired — uses ConcurrentQueue for pooling, atomic TSN increment, and CAS-based PushHead.
+    /// </summary>
     [return: TransfersOwnership]
-    public Transaction CreateTransaction(DatabaseEngine dbe, UnitOfWork uow = null)
+    public Transaction CreateTransaction(DatabaseEngine dbe, UnitOfWork uow = null, bool readOnly = false)
     {
-        var wc = WaitContext.FromTimeout(TimeoutOptions.Current.TransactionChainLockTimeout);
-        if (!_control.EnterExclusiveAccess(ref wc))
-        {
-            ThrowHelper.ThrowLockTimeout("TransactionChain/CreateTransaction", TimeoutOptions.Current.TransactionChainLockTimeout);
-        }
-
         if (_activeCount >= _maxActiveTransactions)
         {
-            _control.ExitExclusiveAccess();
             ThrowHelper.ThrowResourceExhausted("Data/TransactionChain/CreateTransaction", ResourceType.Service, _activeCount, _maxActiveTransactions);
         }
 
@@ -143,8 +189,7 @@ internal class TransactionChain : ResourceNode, IDebugPropertiesProvider
             t = new Transaction();
         }
 
-        t.Init(dbe, Interlocked.Increment(ref _nextFreeId), uow);
-        _control.ExitExclusiveAccess();
+        t.Init(dbe, Interlocked.Increment(ref _nextFreeId), uow, readOnly);
 
         // Are we getting short on Ids? The max is 1 << 47
         if (_nextFreeId > (1L << 46))
@@ -166,7 +211,7 @@ internal class TransactionChain : ResourceNode, IDebugPropertiesProvider
         {
             _pool.Clear();
         }
-        
+
         base.Dispose(disposing);
         IsDisposed = true;
     }

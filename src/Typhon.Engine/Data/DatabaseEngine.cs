@@ -9,6 +9,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Reflection;
+using System.Linq.Expressions;
 using Typhon.Schema.Definition;
 
 [assembly: InternalsVisibleTo("Typhon.Engine.Tests")]
@@ -1214,6 +1215,38 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// Returns null if the type ID is unknown.
     /// </summary>
     internal ComponentTable GetComponentTableByWalTypeId(ushort id) => _componentTableByWalTypeId.GetValueOrDefault(id);
+
+    /// <summary>
+    /// Returns an <see cref="IndexRef"/> for the primary key index of component <typeparamref name="T"/>.
+    /// Resolve once (cold path), reuse many times at zero cost (hot path).
+    /// </summary>
+    public IndexRef GetPKIndexRef<T>() where T : unmanaged
+    {
+        var ct = GetComponentTable<T>() ?? throw new InvalidOperationException($"Component '{typeof(T).Name}' is not registered.");
+        return new IndexRef(-1, ct, ct.IndexLayoutVersion);
+    }
+
+    /// <summary>
+    /// Returns an <see cref="IndexRef"/> for a secondary indexed field of component <typeparamref name="T"/>.
+    /// Resolve once (cold path), reuse many times at zero cost (hot path).
+    /// </summary>
+    public IndexRef GetIndexRef<T, TKey>(Expression<Func<T, TKey>> keySelector) where T : unmanaged
+    {
+        var ct = GetComponentTable<T>() ?? throw new InvalidOperationException($"Component '{typeof(T).Name}' is not registered.");
+        var fieldName = ExpressionParser.ExtractFieldName(keySelector);
+        if (!ct.Definition.FieldsByName.TryGetValue(fieldName, out var field))
+        {
+            throw new InvalidOperationException($"Field '{fieldName}' not found on '{ct.Definition.Name}'.");
+        }
+
+        if (!field.HasIndex)
+        {
+            throw new InvalidOperationException($"Field '{fieldName}' is not indexed.");
+        }
+
+        var fieldIndex = QueryResolverHelper.FindFieldIndex(ct.Definition, field);
+        return new IndexRef(fieldIndex, ct, ct.IndexLayoutVersion);
+    }
 
     #region Instrumentation Methods
 

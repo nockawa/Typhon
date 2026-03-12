@@ -66,10 +66,12 @@ public unsafe class Transaction : IDisposable
     /// <summary>When true, <see cref="Dispose"/> also disposes <see cref="OwningUnitOfWork"/>. Set by <c>CreateQuickTransaction()</c>.</summary>
     internal bool OwnsUnitOfWork { get; set; }
 
+    /// <summary>When true, all write operations (Create/Update/Delete/Commit) are forbidden. No ChangeSet or UoW is allocated.</summary>
+    public bool IsReadOnly { get; internal set; }
+
     /// <summary>UoW ID for revision stamping. 0 until UoW Registry (#51) assigns real IDs.</summary>
     internal ushort UowId => OwningUnitOfWork?.UowId ?? 0;
 
-    public Transaction Previous { get; internal set; }
     public Transaction Next { get; internal set; }
 
     public int CommittedOperationCount
@@ -96,7 +98,7 @@ public unsafe class Transaction : IDisposable
         _componentInfos = new Dictionary<Type, ComponentInfo>(ComponentInfosMaxCapacity);
     }
 
-    public void Init(DatabaseEngine dbe, long tsn, UnitOfWork uow = null)
+    public void Init(DatabaseEngine dbe, long tsn, UnitOfWork uow = null, bool readOnly = false)
     {
         _dbe = dbe;
         _epochManager = _dbe.EpochManager;
@@ -104,6 +106,7 @@ public unsafe class Transaction : IDisposable
         _ = _epochManager.EnterScope(); // Depth unused: Transaction uses ExitScopeUnordered (not LIFO)
         _dbe.LogTxInitPhase(tsn, "epoch entered");
         _isDisposed = false;
+        IsReadOnly = readOnly;
         OwningUnitOfWork = uow;
 #if DEBUG
         _debugOwningThreadId = Environment.CurrentManagedThreadId;
@@ -111,7 +114,7 @@ public unsafe class Transaction : IDisposable
         _committedOperationCount = null;
         _deletedComponentCount = 0;
         _entityOperationCount = 0;
-        _changeSet = uow?.ChangeSet ?? _dbe.MMF.CreateChangeSet();
+        _changeSet = readOnly ? null : (uow?.ChangeSet ?? _dbe.MMF.CreateChangeSet());
         State = TransactionState.Created;
         TSN = tsn;
 
@@ -124,6 +127,7 @@ public unsafe class Transaction : IDisposable
         _epochManager = null;
         OwningUnitOfWork = null;
         OwnsUnitOfWork = false;
+        IsReadOnly = false;
 #if DEBUG
         _debugOwningThreadId = 0;
 #endif
@@ -139,7 +143,6 @@ public unsafe class Transaction : IDisposable
 
         TSN = 0;
         Next = null;
-        Previous = null;
         _committedOperationCount = null;
         _deletedComponentCount = 0;
         _changeSet = null;
@@ -157,10 +160,15 @@ public unsafe class Transaction : IDisposable
 #endif
     }
 
-    /// <summary>Throws if the transaction cannot accept new operations.</summary>
+    /// <summary>Throws if the transaction cannot accept new operations (read-only or already finalized).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureMutable()
     {
+        if (IsReadOnly)
+        {
+            ThrowHelper.ThrowInvalidOp("Cannot perform write operations on a read-only transaction");
+        }
+
         if (State > TransactionState.InProgress)
         {
             ThrowHelper.ThrowInvalidOp($"Cannot perform CRUD on a transaction in state {State}");
@@ -200,6 +208,15 @@ public unsafe class Transaction : IDisposable
 
         AssertThreadAffinity();
 
+        // Read-only transactions have no ChangeSet, UoW, or commit/rollback path —
+        // just exit the epoch scope and remove from the chain.
+        if (IsReadOnly)
+        {
+            _isDisposed = true;
+            ExitEpochAndRemove();
+            return;
+        }
+
         // Capture before ExitEpochAndRemove — Remove pools and Reset() nulls _dbe
         var dbe = _dbe;
         var tsn = TSN;
@@ -212,11 +229,12 @@ public unsafe class Transaction : IDisposable
         FlushAccessors();
         dbe.LogTxDispose(tsn, "PersistIfNeeded");
         PersistIfNeeded();
+        // Mark disposed BEFORE ExitEpochAndRemove: Remove() pools the object, and a lock-free
+        // CreateTransaction can immediately dequeue and Init it (_isDisposed = false). If we set _isDisposed = true AFTER Remove returns, we'd overwrite the
+        // new owner's flag, causing their Dispose to skip Remove — leaking the chain node.
+        _isDisposed = true;
         dbe.LogTxDispose(tsn, "ExitEpochAndRemove");
         ExitEpochAndRemove();
-
-        dbe.LogTxDispose(tsn, "Complete");
-        _isDisposed = true;
     }
 
     /// <summary>Auto-rollback if not yet committed.</summary>
@@ -237,7 +255,7 @@ public unsafe class Transaction : IDisposable
             if (_dbe.TransactionChain.Control.EnterSharedAccess(ref wc))
             {
                 var isTail = _dbe.TransactionChain.Tail == this;
-                var nextMinTSN = isTail ? Previous?.TSN ?? (_dbe.TransactionChain.NextFreeId + 1) : 0;
+                var nextMinTSN = isTail ? _dbe.TransactionChain.ComputeNextMinTSN() : 0;
                 _dbe.TransactionChain.Control.ExitSharedAccess();
 
                 if (isTail)
@@ -526,6 +544,334 @@ public unsafe class Transaction : IDisposable
         public void Dispose() => _enumerator.Dispose();
     }
 
+    /// <summary>
+    /// Returns an enumerator that streams all entities with component <typeparamref name="T"/> in primary key order, filtered by MVCC visibility at this
+    /// transaction's snapshot.
+    /// </summary>
+    /// <param name="minPK">Inclusive lower bound of the PK range (default: all).</param>
+    /// <param name="maxPK">Inclusive upper bound of the PK range (default: all).</param>
+    public PKEntityEnumerator<T> EnumeratePK<T>(long minPK = long.MinValue, long maxPK = long.MaxValue) where T : unmanaged
+    {
+        AssertThreadAffinity();
+        var ct = _dbe.GetComponentTable<T>() ?? throw new InvalidOperationException($"Component '{typeof(T).Name}' is not registered.");
+
+        if (ct.Definition.AllowMultiple)
+        {
+            throw new InvalidOperationException("EnumeratePK does not support AllowMultiple components. Use the single-value component API.");
+        }
+
+        return new PKEntityEnumerator<T>(ct, this, minPK, maxPK, _changeSet);
+    }
+
+    /// <summary>
+    /// Returns an enumerator that streams entities via any index (primary or secondary) in key order, filtered by MVCC visibility at this transaction's snapshot.
+    /// For PK indexes, <typeparamref name="TKey"/> must be <c>long</c>.
+    /// </summary>
+    public IndexEntityEnumerator<T, TKey> EnumerateIndex<T, TKey>(IndexRef indexRef, TKey minKey, TKey maxKey) where T : unmanaged where TKey : unmanaged
+    {
+        AssertThreadAffinity();
+        indexRef.Validate();
+
+        var ct = indexRef.Table;
+        BTree<TKey> typedIndex;
+
+        if (indexRef.IsPrimaryKey)
+        {
+            if (ct.PrimaryKeyIndex is not BTree<TKey> pkIndex)
+            {
+                throw new InvalidOperationException($"PK index requires TKey=long, caller specified '{typeof(TKey).Name}'.");
+            }
+
+            typedIndex = pkIndex;
+        }
+        else
+        {
+            var ifi = ct.IndexedFieldInfos[indexRef.FieldIndex];
+            if (ifi.Index is not BTree<TKey> skIndex)
+            {
+                throw new InvalidOperationException(
+                    $"TKey type mismatch: index uses '{ifi.Index.GetType().GenericTypeArguments[0].Name}', caller specified '{typeof(TKey).Name}'.");
+            }
+
+            typedIndex = skIndex;
+        }
+
+        return new IndexEntityEnumerator<T, TKey>(typedIndex, ct, this, minKey, maxKey, _changeSet);
+    }
+
+    /// <summary>
+    /// MVCC-correct streaming enumerator over the primary key B+Tree leaf chain.
+    /// Yields entities in PK order. Use <see cref="CurrentComponent"/> for zero-copy ref access
+    /// into page memory, or <see cref="Current"/> for a convenience copy.
+    /// </summary>
+    [PublicAPI]
+    public ref struct PKEntityEnumerator<T> where T : unmanaged
+    {
+        private BTree<long>.RangeEnumerator _inner;
+        private ChunkAccessor _compRevAccessor;
+        private ChunkAccessor _compContentAccessor;
+        private readonly Transaction _tx;
+        private readonly long _transactionTSN;
+        private readonly int _componentOverhead;
+        private int _entityCount;
+        private long _currentPK;
+        private ReadOnlySpan<byte> _currentComponentSpan;
+        private bool _disposed;
+
+        internal PKEntityEnumerator(ComponentTable ct, Transaction tx, long minPK, long maxPK, ChangeSet changeSet)
+        {
+            _inner = ct.PrimaryKeyIndex.EnumerateRange(minPK, maxPK);
+            _compRevAccessor = ct.CompRevTableSegment.CreateChunkAccessor(changeSet);
+            _compContentAccessor = ct.ComponentSegment.CreateChunkAccessor(changeSet);
+            _tx = tx;
+            _transactionTSN = tx.TSN;
+            _componentOverhead = ct.ComponentOverhead;
+            _entityCount = 0;
+            _currentPK = 0;
+            _currentComponentSpan = default;
+            _disposed = false;
+        }
+
+        public PKEntityEnumerator<T> GetEnumerator() => this;
+
+        /// <summary>Convenience accessor — copies the component into a tuple. Prefer <see cref="CurrentComponent"/> for zero-copy.</summary>
+        public (long EntityPK, T Component) Current => (_currentPK, MemoryMarshal.AsRef<T>(_currentComponentSpan));
+
+        /// <summary>Zero-copy ref into the epoch-protected page memory. Valid until the next <see cref="MoveNext"/> call.</summary>
+        public ref readonly T CurrentComponent => ref MemoryMarshal.AsRef<T>(_currentComponentSpan);
+
+        /// <summary>The primary key of the current entity.</summary>
+        public long CurrentEntityPK => _currentPK;
+
+        public bool MoveNext()
+        {
+            while (_inner.MoveNext())
+            {
+                var kv = _inner.Current;
+                long pk = kv.Key;
+                int compRevFirstChunkId = kv.Value;
+
+                // MVCC visibility check
+                var result = RevisionChainReader.WalkChain(ref _compRevAccessor, compRevFirstChunkId, _transactionTSN);
+                if (result.IsFailure || result.Value.CurCompContentChunkId == 0)
+                {
+                    // SnapshotInvisible or Deleted — skip
+                    continue;
+                }
+
+                // Store span into page memory — no copy
+                _currentPK = pk;
+                var src = _compContentAccessor.GetChunkAsReadOnlySpan(result.Value.CurCompContentChunkId);
+                _currentComponentSpan = src.Slice(_componentOverhead);
+
+                // Epoch refresh cadence
+                if (++_entityCount % EpochRefreshInterval == 0)
+                {
+                    _tx.EnumerateRefreshEpoch();
+                }
+
+                return true;
+            }
+
+            return false;
+        }
+
+        public void Dispose()
+        {
+            if (!_disposed)
+            {
+                _disposed = true;
+                _inner.Dispose();
+                _compRevAccessor.Dispose();
+                _compContentAccessor.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// MVCC-correct streaming enumerator over any index B+Tree leaf chain.
+    /// Use <see cref="CurrentComponent"/> for zero-copy ref access into page memory, or <see cref="Current"/> for a convenience copy.
+    /// Supports both unique and AllowMultiple indexes (including PK).
+    /// </summary>
+    [PublicAPI]
+    public ref struct IndexEntityEnumerator<T, TKey> where T : unmanaged where TKey : unmanaged
+    {
+        // Unique index path
+        private BTree<TKey>.RangeEnumerator _innerUnique;
+        // AllowMultiple index path
+        private BTree<TKey>.RangeMultipleEnumerator _innerMultiple;
+        private ReadOnlySpan<int> _currentValues;
+        private int _currentValueIndex;
+
+        private ChunkAccessor _compRevAccessor;
+        private ChunkAccessor _compContentAccessor;
+        private readonly Transaction _tx;
+        private readonly long _transactionTSN;
+        private readonly int _componentOverhead;
+        private readonly bool _isAllowMultiple;
+        private int _entityCount;
+        private long _currentPK;
+        private TKey _currentKey;
+        private ReadOnlySpan<byte> _currentComponentSpan;
+        private bool _disposed;
+
+        internal IndexEntityEnumerator(BTree<TKey> index, ComponentTable ct, Transaction tx, TKey minKey, TKey maxKey, ChangeSet changeSet)
+        {
+            _isAllowMultiple = index.AllowMultiple;
+            if (_isAllowMultiple)
+            {
+                _innerMultiple = index.EnumerateRangeMultiple(minKey, maxKey);
+                _innerUnique = default;
+            }
+            else
+            {
+                _innerUnique = index.EnumerateRange(minKey, maxKey);
+                _innerMultiple = default;
+            }
+
+            _compRevAccessor = ct.CompRevTableSegment.CreateChunkAccessor(changeSet);
+            _compContentAccessor = ct.ComponentSegment.CreateChunkAccessor(changeSet);
+            _tx = tx;
+            _transactionTSN = tx.TSN;
+            _componentOverhead = ct.ComponentOverhead;
+            _entityCount = 0;
+            _currentPK = 0;
+            _currentKey = default;
+            _currentComponentSpan = default;
+            _currentValues = default;
+            _currentValueIndex = 0;
+            _disposed = false;
+        }
+
+        public IndexEntityEnumerator<T, TKey> GetEnumerator() => this;
+
+        /// <summary>Convenience accessor — copies the component into a tuple. Prefer <see cref="CurrentComponent"/> for zero-copy.</summary>
+        public (long EntityPK, TKey Key, T Component) Current => (_currentPK, _currentKey, MemoryMarshal.AsRef<T>(_currentComponentSpan));
+
+        /// <summary>Zero-copy ref into the epoch-protected page memory. Valid until the next <see cref="MoveNext"/> call.</summary>
+        public ref readonly T CurrentComponent => ref MemoryMarshal.AsRef<T>(_currentComponentSpan);
+
+        /// <summary>The primary key of the current entity.</summary>
+        public long CurrentEntityPK => _currentPK;
+
+        /// <summary>The index key of the current entry.</summary>
+        public TKey CurrentKey => _currentKey;
+
+        public bool MoveNext()
+        {
+            if (_isAllowMultiple)
+            {
+                return MoveNextMultiple();
+            }
+
+            return MoveNextUnique();
+        }
+
+        private bool MoveNextUnique()
+        {
+            while (_innerUnique.MoveNext())
+            {
+                var kv = _innerUnique.Current;
+                int compRevFirstChunkId = kv.Value;
+
+                // MVCC visibility check
+                var result = RevisionChainReader.WalkChain(ref _compRevAccessor, compRevFirstChunkId, _transactionTSN);
+                if (result.IsFailure || result.Value.CurCompContentChunkId == 0)
+                {
+                    continue;
+                }
+
+                // Recover EntityPK from CompRevStorageHeader
+                _currentPK = _compRevAccessor.GetChunk<CompRevStorageHeader>(compRevFirstChunkId).EntityPK;
+                _currentKey = kv.Key;
+
+                // Store span into page memory — no copy
+                var src = _compContentAccessor.GetChunkAsReadOnlySpan(result.Value.CurCompContentChunkId);
+                _currentComponentSpan = src.Slice(_componentOverhead);
+
+                if (++_entityCount % EpochRefreshInterval == 0)
+                {
+                    _tx.EnumerateRefreshEpoch();
+                }
+
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool MoveNextMultiple()
+        {
+            while (true)
+            {
+                // Try to consume remaining values from current key's VSBS buffer
+                while (_currentValueIndex < _currentValues.Length)
+                {
+                    int compRevFirstChunkId = _currentValues[_currentValueIndex++];
+
+                    var result = RevisionChainReader.WalkChain(ref _compRevAccessor, compRevFirstChunkId, _transactionTSN);
+                    if (result.IsFailure || result.Value.CurCompContentChunkId == 0)
+                    {
+                        continue;
+                    }
+
+                    _currentPK = _compRevAccessor.GetChunk<CompRevStorageHeader>(compRevFirstChunkId).EntityPK;
+
+                    // Store span into page memory — no copy
+                    var src = _compContentAccessor.GetChunkAsReadOnlySpan(result.Value.CurCompContentChunkId);
+                    _currentComponentSpan = src.Slice(_componentOverhead);
+
+                    if (++_entityCount % EpochRefreshInterval == 0)
+                    {
+                        _tx.EnumerateRefreshEpoch();
+                    }
+
+                    return true;
+                }
+
+                // Try next chunk of the same key's VSBS buffer (guard: _currentValues.Length > 0 prevents calling NextChunk before the first MoveNextKey,
+                // when no VSBS buffer is open yet)
+                if (_currentValues.Length > 0 && _innerMultiple.NextChunk())
+                {
+                    _currentValues = _innerMultiple.CurrentValues;
+                    _currentValueIndex = 0;
+                    continue;
+                }
+
+                // Advance to the next key
+                if (!_innerMultiple.MoveNextKey())
+                {
+                    return false;
+                }
+
+                _currentKey = _innerMultiple.CurrentKey;
+                _currentValues = _innerMultiple.CurrentValues;
+                _currentValueIndex = 0;
+            }
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            if (_isAllowMultiple)
+            {
+                _innerMultiple.Dispose();
+            }
+            else
+            {
+                _innerUnique.Dispose();
+            }
+
+            _compRevAccessor.Dispose();
+            _compContentAccessor.Dispose();
+        }
+    }
+
     internal ref CompRevStorageHeader GetCompRevStorageHeader<T>(long entity)
     {
         var ci = GetComponentInfo(typeof(T));
@@ -613,6 +959,21 @@ public unsafe class Transaction : IDisposable
             FlushAndRefreshEpoch();
             _entityOperationCount = 0;
         }
+    }
+
+    /// <summary>
+    /// Epoch refresh for bulk enumerators. Read-only transactions just refresh the epoch scope (no dirty state to flush).
+    /// Read-write transactions delegate to <see cref="FlushAndRefreshEpoch"/> which also flushes ChunkAccessor dirty state.
+    /// </summary>
+    internal void EnumerateRefreshEpoch()
+    {
+        if (IsReadOnly)
+        {
+            _epochManager.RefreshScope();
+            return;
+        }
+
+        FlushAndRefreshEpoch();
     }
 
     private void CreateComponent<T>(long pk, ref T comp) where T : unmanaged
@@ -1423,7 +1784,7 @@ public unsafe class Transaction : IDisposable
             ThrowHelper.ThrowLockTimeout("TransactionChain/RollbackTailCheck", TimeoutOptions.Current.TransactionChainLockTimeout);
         }
         context.IsTail = _dbe.TransactionChain.Tail == this;
-        context.NextMinTSN = context.IsTail ? _dbe.TransactionChain.Tail.Previous?.TSN ?? (_dbe.TransactionChain.NextFreeId + 1) : 0;
+        context.NextMinTSN = context.IsTail ? _dbe.TransactionChain.ComputeNextMinTSN() : 0;
         context.TailTSN = _dbe.TransactionChain.MinTSN;
         _dbe.TransactionChain.Control.ExitSharedAccess();
 
@@ -1526,6 +1887,12 @@ public unsafe class Transaction : IDisposable
     {
         AssertThreadAffinity();
 
+        // Read-only transactions have nothing to commit — trivially succeed
+        if (IsReadOnly)
+        {
+            return true;
+        }
+
         // Nothing to commit if the transaction is empty, but still process deferred cleanups
         // in case this transaction (as the tail) is blocking cleanup of entities modified by others.
         if (State is TransactionState.Created)
@@ -1536,7 +1903,7 @@ public unsafe class Transaction : IDisposable
                 if (_dbe.TransactionChain.Control.EnterSharedAccess(ref wcDeferred))
                 {
                     var isTailForDeferred = _dbe.TransactionChain.Tail == this;
-                    var nextMinTSNDeferred = isTailForDeferred ? _dbe.TransactionChain.Tail.Previous?.TSN ?? (_dbe.TransactionChain.NextFreeId + 1) : 0;
+                    var nextMinTSNDeferred = isTailForDeferred ? _dbe.TransactionChain.ComputeNextMinTSN() : 0;
                     _dbe.TransactionChain.Control.ExitSharedAccess();
 
                     if (isTailForDeferred)
@@ -1583,7 +1950,7 @@ public unsafe class Transaction : IDisposable
             ThrowHelper.ThrowLockTimeout("TransactionChain/CommitTailCheck", TimeoutOptions.Current.TransactionChainLockTimeout);
         }
         context.IsTail = _dbe.TransactionChain.Tail == this;
-        context.NextMinTSN = context.IsTail ? _dbe.TransactionChain.Tail.Previous?.TSN ?? (_dbe.TransactionChain.NextFreeId + 1) : 0;
+        context.NextMinTSN = context.IsTail ? _dbe.TransactionChain.ComputeNextMinTSN() : 0;
         context.TailTSN = _dbe.TransactionChain.MinTSN;
         _dbe.TransactionChain.Control.ExitSharedAccess();
 

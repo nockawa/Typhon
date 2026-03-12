@@ -145,7 +145,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     private unsafe byte* _memPagesAddr;
 
     protected readonly int MemPagesCount;
-    private int _clockSweepCurrentIndex;
+    private CacheLinePaddedInt _clockSweepCurrentIndex;
     private PageInfo[] _memPagesInfo;
     
     private SafeFileHandle _fileHandle;
@@ -235,7 +235,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         MemPagesCount = (int)(cacheSize >> PageSizePow2);
         var pageCount = MemPagesCount;
         _memPagesInfo = new PageInfo[pageCount];
-        _clockSweepCurrentIndex = 0;
+        _clockSweepCurrentIndex.Value = 0;
 
         for (int i = 0; i < pageCount; i++)
         {
@@ -555,11 +555,11 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
     private int AdvanceClockHand()
     {
-        var curValue = _clockSweepCurrentIndex;
+        var curValue = _clockSweepCurrentIndex.Value;
         var newValue = (curValue + 1) % MemPagesCount;
-        while (Interlocked.CompareExchange(ref _clockSweepCurrentIndex, newValue, curValue) != curValue)
+        while (Interlocked.CompareExchange(ref _clockSweepCurrentIndex.Value, newValue, curValue) != curValue)
         {
-            curValue = _clockSweepCurrentIndex;
+            curValue = _clockSweepCurrentIndex.Value;
             newValue = (curValue + 1) % MemPagesCount;
         }
 
