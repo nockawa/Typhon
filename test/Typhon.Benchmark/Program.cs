@@ -73,6 +73,12 @@ class Program
                 return;
             }
 
+            if (args.Contains("--bandwidth"))
+            {
+                MemoryBandwidthBenchmark.Run();
+                return;
+            }
+
             if (args.Contains("--profile-delete"))
             {
                 BTreeDeleteProfile.Run();
@@ -139,6 +145,7 @@ class Program
         table.AddRow("[cyan](no args)[/]", "Launch interactive mode with menu selection");
         table.AddRow("[cyan]--list, -l[/]", "List all available benchmarks");
         table.AddRow("[cyan]--filter <pattern>[/]", "Run benchmarks matching the pattern (e.g., --filter *BTree*)");
+        table.AddRow("[cyan]--bandwidth[/]", "Memory bandwidth vs chunk size & indirection (ACLP analysis)");
         table.AddRow("[cyan]--btree-fast[/]", "BTree quick profile: core ops + 2 concurrent (~3 min)");
         table.AddRow("[cyan]--btree-medium[/]", "BTree medium profile: all key types + concurrent scaling (~15 min)");
         table.AddRow("[cyan]--btree-full[/]", "BTree full profile: everything including tree sizes + enumeration (~50 min)");

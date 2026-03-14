@@ -180,7 +180,7 @@ Status option IDs:
 |-------|----------|
 | Project ID | `PVT_kwHOAud1ac4BNdCj` |
 | Status | `PVTSSF_lAHOAud1ac4BNdCjzg8cXYI` |
-| Priority | `PVTSSF_lAHOAud1ac4BNdCjzg8c8uQ` |
-| Phase | `PVTSSF_lAHOAud1ac4BNdCjzg8c8uU` |
-| Area | `PVTSSF_lAHOAud1ac4BNdCjzg8cX_E` |
+| Priority | `PVTSSF_lAHOAud1ac4BNdCjzg8ctaQ` |
+| Phase | `PVTSSF_lAHOAud1ac4BNdCjzg8ctaU` |
+| Area | `PVTSSF_lAHOAud1ac4BNdCjzg8cktA` |
 | Estimate | `PVTSSF_lAHOAud1ac4BNdCjzg8cYEU` |
