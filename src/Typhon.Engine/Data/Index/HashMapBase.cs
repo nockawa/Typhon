@@ -1,0 +1,644 @@
+// unset
+
+using System.Diagnostics;
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Threading;
+
+namespace Typhon.Engine;
+
+/// <summary>
+/// Abstract base class for hash maps. Provides meta management, directory addressing, bucket resolution, split lock, and factory scaffolding.
+/// Concrete class <see cref="HashMap{TKey, TValue}"/> provides JIT-specialized hash functions via sizeof(TKey) branching.
+/// </summary>
+abstract unsafe class HashMapBase
+{
+    // ═══════════════════════════════════════════════════════════════════════
+    // Fields
+    // ═══════════════════════════════════════════════════════════════════════
+
+    protected readonly ChunkBasedSegment _segment;
+
+    /// <summary>Initial bucket count (power of 2). Immutable after construction.</summary>
+    protected readonly int _n0;
+
+    /// <summary>Atomic packed meta: Level(8) | Next(24) | BucketCount(32). Use <see cref="ReadMeta"/> to decode.</summary>
+    protected long _packedMeta;
+
+    /// <summary>Total entry count. Updated via <see cref="Interlocked"/>.</summary>
+    protected long _entryCount;
+
+    /// <summary>CAS spin lock for split serialization: 0=free, 1=held.</summary>
+    protected int _splitLock;
+
+    /// <summary>Diagnostic: total splits performed.</summary>
+    internal long _splitCount;
+
+    /// <summary>Diagnostic: OLC read restarts due to version mismatch.</summary>
+    internal long _olcRestarts;
+
+    /// <summary>Diagnostic: write lock spin contention.</summary>
+    internal long _writeLockFailures;
+
+    /// <summary>Maximum load factor before triggering a split.</summary>
+    protected const double MaxLoadFactor = 0.75;
+
+    /// <summary>Whether this hash map supports multiple values per key via VSBS buffer indirection.</summary>
+    protected readonly bool _allowMultiple;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Constructor
+    // ═══════════════════════════════════════════════════════════════════════
+
+    protected HashMapBase(ChunkBasedSegment segment, int n0, bool allowMultiple = false)
+    {
+        Debug.Assert(segment != null);
+        Debug.Assert(n0 > 0 && BitOperations.IsPow2(n0), "N0 must be a positive power of 2");
+        Debug.Assert(segment.Stride >= 64 && BitOperations.IsPow2(segment.Stride), "LinearHash requires stride >= 64 and power of 2");
+
+        _segment = segment;
+        _n0 = n0;
+        _allowMultiple = allowMultiple;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Properties
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>Initial bucket count (immutable, power of 2).</summary>
+    public int N0 => _n0;
+
+    /// <summary>The backing segment.</summary>
+    public ChunkBasedSegment Segment => _segment;
+
+    /// <summary>Whether this hash map supports multiple values per key via VSBS buffer indirection.</summary>
+    public bool AllowMultiple => _allowMultiple;
+
+    /// <summary>Total entries across all buckets.</summary>
+    public long EntryCount => _entryCount;
+
+    /// <summary>Current bucket count (decoded from packed meta).</summary>
+    public int BucketCount
+    {
+        get
+        {
+            var (_, _, count) = ReadMeta();
+            return count;
+        }
+    }
+
+    /// <summary>Load factor: entries / (bucketCount × bucketCapacity).</summary>
+    public double LoadFactor
+    {
+        get
+        {
+            var (_, _, bucketCount) = ReadMeta();
+            long entries = _entryCount;
+            return (double)entries / ((long)bucketCount * BucketCapacity);
+        }
+    }
+
+    /// <summary>Number of entries a single bucket chunk can hold.</summary>
+    public abstract int BucketCapacity { get; }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Static helpers — PackMeta / UnpackMeta / ResolveBucket
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Pack level, next, and bucketCount into a single 64-bit value.
+    /// Layout: Level(bits 56-63) | Next(bits 32-55) | BucketCount(bits 0-31).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static long PackMeta(int level, int next, int bucketCount) => ((long)(level & 0xFF) << 56) | ((long)(next & 0x00FFFFFF) << 32) | (uint)bucketCount;
+
+    /// <summary>
+    /// Unpack a 64-bit packed meta into (Level, Next, BucketCount).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static (int Level, int Next, int BucketCount) UnpackMeta(long packed)
+    {
+        int level = (int)((packed >> 56) & 0xFF);
+        int next = (int)((packed >> 32) & 0x00FFFFFF);
+        int bucketCount = (int)(packed & 0xFFFFFFFF);
+        return (level, next, bucketCount);
+    }
+
+    /// <summary>
+    /// Resolve a hash to a bucket index using bitmask arithmetic (no modulo).
+    /// If the bucket has already been split this round (bucket &lt; next), the finer modulus is used.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static int ResolveBucket(uint hash, int level, int next, int n0)
+    {
+        int mod = n0 << level;                        // N0 × 2^Level (always power of 2)
+        int bucket = (int)(hash & (uint)(mod - 1));   // bitmask: 1 AND instruction
+
+        if (bucket < next)
+        {
+            // This bucket already split this round — use finer modulus
+            bucket = (int)(hash & (uint)((mod << 1) - 1));
+        }
+
+        return bucket;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Instance methods — Meta read, directory/bucket addressing
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Read the packed meta. On x64, reads of aligned 64-bit fields are naturally atomic.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    protected (int Level, int Next, int BucketCount) ReadMeta()
+    {
+        long packed = _packedMeta;
+        return UnpackMeta(packed);
+    }
+
+    /// <summary>
+    /// Get the directory chunk ID for a given directory index.
+    /// Fast path for index &lt; 57 (inline in meta). Slow path walks the overflow dir-index chain.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int GetDirectoryChunkId(int dirIndex, ref ChunkAccessor accessor)
+    {
+        ref readonly var meta = ref accessor.GetChunkReadOnly<HashMapMeta>(0);
+
+        if (dirIndex < HashMapMeta.MaxInlineDirectoryChunks)
+        {
+            return meta.DirectoryChunkIds[dirIndex];
+        }
+
+        // Overflow path: walk the overflow dir-index chain
+        int overflowChunkId = meta.OverflowDirIndexChunkId;
+        int remaining = dirIndex - HashMapMeta.MaxInlineDirectoryChunks;
+
+        while (remaining >= OverflowDirIndex.EntriesPerChunk)
+        {
+            ref readonly var overflow = ref accessor.GetChunkReadOnly<OverflowDirIndex>(overflowChunkId);
+            overflowChunkId = overflow.NextOverflowChunkId;
+            remaining -= OverflowDirIndex.EntriesPerChunk;
+        }
+
+        ref readonly var target = ref accessor.GetChunkReadOnly<OverflowDirIndex>(overflowChunkId);
+        return target.DirectoryChunkIds[remaining];
+    }
+
+    /// <summary>
+    /// Get the chunk ID of the primary bucket for a given bucket index.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    protected int GetBucketChunkId(int bucketId, ref ChunkAccessor accessor)
+    {
+        int dirIndex = bucketId >> HashMapDirectory.Shift;  // bucketId / 64
+        int dirSlot = bucketId & 0x3F;                         // bucketId % 64
+
+        int dirChunkId = GetDirectoryChunkId(dirIndex, ref accessor);
+
+        ref readonly var dir = ref accessor.GetChunkReadOnly<HashMapDirectory>(dirChunkId);
+        return dir.BucketChunkIds[dirSlot];
+    }
+
+    /// <summary>
+    /// Set the chunk ID of a bucket in the directory. Used during split to register new buckets.
+    /// </summary>
+    protected void SetBucketChunkId(int bucketId, int chunkId, ref ChunkAccessor accessor)
+    {
+        int dirIndex = bucketId >> HashMapDirectory.Shift;
+        int dirSlot = bucketId & 0x3F;
+
+        int dirChunkId = GetDirectoryChunkId(dirIndex, ref accessor);
+
+        ref var dir = ref accessor.GetChunk<HashMapDirectory>(dirChunkId, true);
+        dir.BucketChunkIds[dirSlot] = chunkId;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Split lock
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Try to acquire the split lock (non-blocking). Returns false if another thread is splitting.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool TryAcquireSplitLock() => Interlocked.CompareExchange(ref _splitLock, 1, 0) == 0;
+
+    /// <summary>
+    /// Release the split lock.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ReleaseSplitLock() => _splitLock = 0;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Write support
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Spin-waits until write lock is acquired on the given OLC version field.
+    /// Two-phase spin policy matching BTree: 64 tight PAUSE spins, then yield-capped SpinWait.
+    /// </summary>
+    protected void SpinUntilWriteLock(ref int olcVersion)
+    {
+        var latch = new OlcLatch(ref olcVersion);
+        if (latch.TryWriteLock())
+        {
+            return;
+        }
+
+        // Phase 1: tight PAUSE spin — covers typical latch hold time
+        for (int i = 0; i < 64; i++)
+        {
+            Interlocked.Increment(ref _writeLockFailures);
+            Thread.SpinWait(1);
+            if (latch.TryWriteLock())
+            {
+                return;
+            }
+        }
+
+        // Phase 2: yield-capped SpinWait — sleep1Threshold: -1 avoids 15 ms Windows timer-tick
+        SpinWait spin = default;
+        do
+        {
+            Interlocked.Increment(ref _writeLockFailures);
+            spin.SpinOnce(sleep1Threshold: -1);
+        }
+        while (!latch.TryWriteLock());
+    }
+
+    /// <summary>
+    /// Heuristic check: is the load factor above the split threshold?
+    /// Non-atomic read of entry count and meta — harmless: at worst one unnecessary or skipped split.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool ShouldSplit()
+    {
+        var (_, _, bucketCount) = ReadMeta();
+        long entries = _entryCount;
+        return (double)entries / ((long)bucketCount * BucketCapacity) > MaxLoadFactor;
+    }
+
+    /// <summary>
+    /// If load factor exceeds threshold, try to acquire split lock and execute a split.
+    /// Double-checks after acquiring lock to avoid unnecessary splits.
+    /// </summary>
+    protected void TrySplitIfNeeded(ref ChunkAccessor accessor, ChangeSet changeSet)
+    {
+        if (!ShouldSplit())
+        {
+            return;
+        }
+
+        if (!TryAcquireSplitLock())
+        {
+            return;
+        }
+
+        try
+        {
+            if (!ShouldSplit())
+            {
+                return;
+            }
+
+            ExecuteSplit(ref accessor, changeSet);
+            Interlocked.Increment(ref _splitCount);
+        }
+        finally
+        {
+            ReleaseSplitLock();
+        }
+    }
+
+    /// <summary>
+    /// Ensure the directory has enough chunks to address bucket <paramref name="maxBucketId"/>.
+    /// Allocates new directory chunks (inline or overflow dir-index) as needed.
+    /// </summary>
+    protected void EnsureDirectoryCapacity(int maxBucketId, ref ChunkAccessor accessor, ChangeSet changeSet)
+    {
+        int requiredDirChunks = (maxBucketId >> HashMapDirectory.Shift) + 1;
+
+        ref var meta = ref accessor.GetChunk<HashMapMeta>(0, true);
+        int currentCount = meta.DirectoryChunkCount;
+
+        if (currentCount >= requiredDirChunks)
+        {
+            return;
+        }
+
+        for (int i = currentCount; i < requiredDirChunks; i++)
+        {
+            int newDirChunkId = _segment.AllocateChunk(true, changeSet);
+            meta = ref accessor.GetChunk<HashMapMeta>(0, true);
+
+            if (i < HashMapMeta.MaxInlineDirectoryChunks)
+            {
+                meta.DirectoryChunkIds[i] = newDirChunkId;
+                meta.DirectoryChunkCount = (ushort)(i + 1);
+            }
+            else
+            {
+                int overflowOffset = i - HashMapMeta.MaxInlineDirectoryChunks;
+                int targetIdx = overflowOffset / OverflowDirIndex.EntriesPerChunk;
+                int targetSlot = overflowOffset % OverflowDirIndex.EntriesPerChunk;
+
+                if (meta.OverflowDirIndexChunkId == -1)
+                {
+                    int ovId = _segment.AllocateChunk(true, changeSet);
+                    meta = ref accessor.GetChunk<HashMapMeta>(0, true);
+                    meta.OverflowDirIndexChunkId = ovId;
+
+                    ref var ov = ref accessor.GetChunk<OverflowDirIndex>(ovId, true);
+                    ov.NextOverflowChunkId = -1;
+                    ov.DirectoryChunkIds[targetSlot] = newDirChunkId;
+                }
+                else
+                {
+                    int ovId = meta.OverflowDirIndexChunkId;
+                    for (int j = 0; j < targetIdx; j++)
+                    {
+                        ref var ovChunk = ref accessor.GetChunk<OverflowDirIndex>(ovId, true);
+                        if (ovChunk.NextOverflowChunkId == -1)
+                        {
+                            int newOvId = _segment.AllocateChunk(true, changeSet);
+                            ovChunk = ref accessor.GetChunk<OverflowDirIndex>(ovId, true);
+                            ovChunk.NextOverflowChunkId = newOvId;
+
+                            ref var newOv = ref accessor.GetChunk<OverflowDirIndex>(newOvId, true);
+                            newOv.NextOverflowChunkId = -1;
+                            ovId = newOvId;
+                        }
+                        else
+                        {
+                            ovId = ovChunk.NextOverflowChunkId;
+                        }
+                    }
+
+                    ref var target = ref accessor.GetChunk<OverflowDirIndex>(ovId, true);
+                    target.DirectoryChunkIds[targetSlot] = newDirChunkId;
+                }
+
+                meta = ref accessor.GetChunk<HashMapMeta>(0, true);
+                meta.DirectoryChunkCount = (ushort)(i + 1);
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Test helpers (internal for InternalsVisibleTo)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>Test-accessible wrapper for <see cref="GetBucketChunkId"/>.</summary>
+    internal int GetBucketChunkIdForTest(int bucketId, ref ChunkAccessor accessor) => GetBucketChunkId(bucketId, ref accessor);
+
+    /// <summary>Test-accessible wrapper for <see cref="FlushMetaToChunk"/>.</summary>
+    internal void FlushMetaForTest(ref ChunkAccessor accessor) => FlushMetaToChunk(ref accessor);
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Meta persistence
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Persist in-memory <see cref="_packedMeta"/> and <see cref="_entryCount"/> to chunk 0.
+    /// Called after split or during flush.
+    /// </summary>
+    protected void FlushMetaToChunk(ref ChunkAccessor accessor)
+    {
+        ref var meta = ref accessor.GetChunk<HashMapMeta>(0, true);
+        meta.PackedMeta = _packedMeta;
+        meta.EntryCount = _entryCount;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Create / Open scaffolding (called by concrete factory methods)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Initialize a new linear hash map: reserve chunk 0 (meta), allocate directory chunks and initial bucket chunks, and write the initial meta state.
+    /// </summary>
+    protected void InitializeCreate(int initialBuckets, ChangeSet changeSet)
+    {
+        Debug.Assert(initialBuckets > 0 && BitOperations.IsPow2(initialBuckets));
+
+        // Reserve chunk 0 for the meta and clear it
+        _segment.ReserveChunk(0, true, changeSet);
+
+        var accessor = _segment.CreateChunkAccessor(changeSet);
+        try
+        {
+            ref var meta = ref accessor.GetChunk<HashMapMeta>(0, true);
+
+            // Write immutable fields
+            meta.N0 = _n0;
+            meta.OverflowDirIndexChunkId = -1;
+            meta.Flags = (byte)(_allowMultiple ? 1 : 0);
+
+            // Compute how many directory chunks we need: ceil(initialBuckets / 64)
+            int dirChunkCount = (initialBuckets + HashMapDirectory.EntriesPerChunk - 1) / HashMapDirectory.EntriesPerChunk;
+
+            // Allocate directory chunks and store their IDs in meta
+            for (int i = 0; i < dirChunkCount; i++)
+            {
+                int dirChunkId = _segment.AllocateChunk(true, changeSet);
+
+                // Re-obtain meta ref after allocation — AllocateChunk may trigger page eviction
+                meta = ref accessor.GetChunk<HashMapMeta>(0, true);
+                meta.DirectoryChunkIds[i] = dirChunkId;
+            }
+
+            meta.DirectoryChunkCount = (ushort)dirChunkCount;
+
+            // Allocate bucket chunks and register them in the directory
+            for (int b = 0; b < initialBuckets; b++)
+            {
+                int bucketChunkId = _segment.AllocateChunk(true, changeSet);
+
+                // Re-obtain meta ref after allocation
+                meta = ref accessor.GetChunk<HashMapMeta>(0, true);
+
+                // Initialize the bucket
+                InitializeBucket(bucketChunkId, ref accessor);
+
+                // Register bucket in directory
+                int dirIndex = b >> HashMapDirectory.Shift;
+                int dirSlot = b & 0x3F;
+                int dirChunkId = meta.DirectoryChunkIds[dirIndex];
+                ref var dir = ref accessor.GetChunk<HashMapDirectory>(dirChunkId, true);
+                dir.BucketChunkIds[dirSlot] = bucketChunkId;
+            }
+
+            // Write initial packed meta: level=0, next=0, bucketCount=initialBuckets
+            _packedMeta = PackMeta(0, 0, initialBuckets);
+            _entryCount = 0;
+
+            // Persist to chunk 0
+            meta = ref accessor.GetChunk<HashMapMeta>(0, true);
+            meta.PackedMeta = _packedMeta;
+            meta.EntryCount = 0;
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Reconnect to an existing linear hash map by reading <see cref="_packedMeta"/> and <see cref="_entryCount"/> from chunk 0.
+    /// </summary>
+    protected void InitializeOpen()
+    {
+        var accessor = _segment.CreateChunkAccessor();
+        try
+        {
+            ref readonly var meta = ref accessor.GetChunkReadOnly<HashMapMeta>(0);
+
+            Debug.Assert(meta.N0 == _n0, "N0 mismatch between meta chunk and constructor parameter");
+            Debug.Assert(((meta.Flags & 1) != 0) == _allowMultiple, "AllowMultiple mismatch between meta chunk and constructor parameter");
+
+            _packedMeta = meta.PackedMeta;
+            _entryCount = meta.EntryCount;
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Diagnostics
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Validate structural integrity of the hash map. Walks all bucket chains, checks header invariants, and verifies the total entry count
+    /// matches <see cref="_entryCount"/>.
+    /// </summary>
+    public bool VerifyIntegrity(ref ChunkAccessor accessor)
+    {
+        ref readonly var meta = ref accessor.GetChunkReadOnly<HashMapMeta>(0);
+        if (meta.N0 != _n0 || meta.N0 <= 0 || !BitOperations.IsPow2(meta.N0))
+        {
+            return false;
+        }
+
+        var (_, _, bucketCount) = ReadMeta();
+        long totalEntries = 0;
+
+        for (int b = 0; b < bucketCount; b++)
+        {
+            int chunkId = GetBucketChunkId(b, ref accessor);
+            int visited = 0;
+
+            while (chunkId != -1)
+            {
+                visited++;
+                if (visited > 100)
+                {
+                    return false; // cycle detection
+                }
+
+                ref readonly var header = ref Unsafe.AsRef<HashMapBucketHeader>(accessor.GetChunkAddress(chunkId));
+                if (header.EntryCount > BucketCapacity)
+                {
+                    return false;
+                }
+
+                totalEntries += header.EntryCount;
+                chunkId = header.OverflowChunkId;
+            }
+        }
+
+        return totalEntries == _entryCount;
+    }
+
+    /// <summary>
+    /// Collect diagnostic statistics: bucket count, entry distribution, overflow chain depths, fill histogram.
+    /// </summary>
+    public HashMapStats GetStats(ref ChunkAccessor accessor)
+    {
+        var (_, _, bucketCount) = ReadMeta();
+        var stats = new HashMapStats
+        {
+            BucketCount = bucketCount,
+            EntryCount = _entryCount
+        };
+
+        for (int b = 0; b < bucketCount; b++)
+        {
+            int chunkId = GetBucketChunkId(b, ref accessor);
+            ref readonly var primary = ref Unsafe.AsRef<HashMapBucketHeader>(accessor.GetChunkAddress(chunkId));
+            int primaryEntryCount = primary.EntryCount;
+
+            // Fill histogram (primary bucket only)
+            if (primaryEntryCount == 0)
+            {
+                stats.FillEmpty++;
+            }
+            else
+            {
+                double fill = (double)primaryEntryCount / BucketCapacity;
+                if (fill <= 0.25)
+                {
+                    stats.FillQuarter++;
+                }
+                else if (fill <= 0.50)
+                {
+                    stats.FillHalf++;
+                }
+                else if (fill <= 0.75)
+                {
+                    stats.FillThreeQuarter++;
+                }
+                else
+                {
+                    stats.FillFull++;
+                }
+            }
+
+            // Chain walk (with cycle detection matching VerifyIntegrity)
+            int chainLength = 1;
+            if (primary.OverflowChunkId != -1)
+            {
+                stats.OverflowBucketCount++;
+                int overflowId = primary.OverflowChunkId;
+                while (overflowId != -1)
+                {
+                    chainLength++;
+                    if (chainLength > 100)
+                    {
+                        break; // cycle detection
+                    }
+                    ref readonly var overflow = ref Unsafe.AsRef<HashMapBucketHeader>(accessor.GetChunkAddress(overflowId));
+                    overflowId = overflow.OverflowChunkId;
+                }
+            }
+
+            if (chainLength > stats.MaxChainLength)
+            {
+                stats.MaxChainLength = chainLength;
+            }
+        }
+
+        stats.LoadFactor = bucketCount > 0
+            ? (double)stats.EntryCount / ((long)bucketCount * BucketCapacity)
+            : 0;
+
+        return stats;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Abstract methods — implemented by concrete classes
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Initialize a freshly allocated bucket chunk (set OlcVersion, EntryCount, OverflowChunkId sentinel).
+    /// </summary>
+    protected abstract void InitializeBucket(int chunkId, ref ChunkAccessor accessor);
+
+    /// <summary>
+    /// Execute a split: redistribute entries from the current split-pointer bucket to old and new buckets.
+    /// Called while holding the split lock.
+    /// </summary>
+    protected abstract void ExecuteSplit(ref ChunkAccessor accessor, ChangeSet changeSet);
+}
