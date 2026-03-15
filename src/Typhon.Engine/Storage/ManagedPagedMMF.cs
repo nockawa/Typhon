@@ -45,9 +45,6 @@ unsafe internal struct RootFileHeader
     /// <summary>Root page index of the <see cref="ComponentTable"/> segment.</summary>
     public int ComponentTableSPI;
 
-    /// <summary>Root page index of the field-table segment (component field metadata).</summary>
-    public int FieldTableSPI;
-
     /// <summary>Root page index of the <see cref="UowRegistry"/> segment (Unit of Work tracking).</summary>
     public int UowRegistrySPI;
 
@@ -60,16 +57,7 @@ unsafe internal struct RootFileHeader
     /// <summary>Pre-allocated page index for the next occupancy map data page.</summary>
     public int OccupancyNextReservedMapPageIndex;
 
-    // ── Additional system table SPIs (appended to preserve existing offsets) ──
-
-    /// <summary>Root page index of the CompRevTable segment for the FieldR1 system table.</summary>
-    public int FieldTableVersionSPI;
-
-    /// <summary>Root page index of the DefaultIndex segment for the FieldR1 system table.</summary>
-    public int FieldTableDefaultIndexSPI;
-
-    /// <summary>Root page index of the String64Index segment for the FieldR1 system table.</summary>
-    public int FieldTableString64IndexSPI;
+    // ── Additional system table SPIs ──
 
     /// <summary>Root page index of the CompRevTable segment for the ComponentR1 system table.</summary>
     public int ComponentTableVersionSPI;

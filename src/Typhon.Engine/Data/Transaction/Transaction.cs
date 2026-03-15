@@ -12,7 +12,7 @@ namespace Typhon.Engine;
 
 [PublicAPI]
 [DebuggerDisplay("TSN {TSN}, State: {State}")]
-public unsafe class Transaction : IDisposable
+public unsafe partial class Transaction : IDisposable
 {
     private const int RandomAccessCachedPagesCount = 8;
     private const int ComponentInfosMaxCapacity = 131;
@@ -147,6 +147,9 @@ public unsafe class Transaction : IDisposable
         _deletedComponentCount = 0;
         _changeSet = null;
         _deferredEnqueueBatch?.Clear();
+
+        // Clean up ECS state
+        CleanupEcsState();
     }
 
     [Conditional("DEBUG")]
@@ -2017,6 +2020,10 @@ public unsafe class Transaction : IDisposable
             _dbe.DeferredCleanupManager.EnqueueBatch(context.TailTSN, _deferredEnqueueBatch);
             _deferredEnqueueBatch.Clear();
         }
+
+        // Flush ECS pending operations (spawns, destroys, enable/disable)
+        _dbe.LogCommitPhase(TSN, "EcsFlush");
+        FlushEcsPendingOperations();
 
         // Check if any conflicts were detected during the commit loop
         if (conflictSolver is { HasConflict: true })

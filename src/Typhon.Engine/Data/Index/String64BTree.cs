@@ -11,7 +11,7 @@ using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
 
-[DebuggerTypeProxy(typeof(IndexString64Chunk.DebugView))]
+[DebuggerTypeProxy(typeof(DebugView))]
 [DebuggerDisplay("Count: {Count}, Start: {Start}, Flags: {StateFlags}")]
 [StructLayout(LayoutKind.Sequential)]
 unsafe public struct IndexString64Chunk
@@ -66,7 +66,7 @@ unsafe public struct IndexString64Chunk
         Debug.Assert(index < Capacity);
         fixed (byte* k = Keys)
         {
-            return (new String64(k + 64 * index, 64));
+            return (new String64(k + 64 * index));
         }
     }
 
@@ -201,7 +201,7 @@ unsafe public struct IndexString64Chunk
 
 public abstract class String64BTree<TStore> : BTree<String64, TStore> where TStore : struct, IPageStore
 {
-    unsafe public class String64NodeStorage : BaseNodeStorage
+    protected unsafe class String64NodeStorage : BaseNodeStorage
     {
         internal override void Initialize(BTree<String64, TStore> owner, ChunkBasedSegment<TStore> segment)
         {
@@ -225,7 +225,7 @@ public abstract class String64BTree<TStore> : BTree<String64, TStore> where TSto
 
         public override ref int GetOlcVersionRef(int chunkId, ref ChunkAccessor<TStore> accessor)
         {
-            ref var chunk = ref accessor.GetChunk<IndexString64Chunk>(chunkId, false);
+            ref var chunk = ref accessor.GetChunk<IndexString64Chunk>(chunkId);
             return ref chunk.OlcVersion;
         }
 
@@ -374,11 +374,11 @@ public abstract class String64BTree<TStore> : BTree<String64, TStore> where TSto
             chunk.Count++;
         }
 
-        public override int CreateBuffer(ref ChunkAccessor<TStore> bufferAccessor) => default;
+        public override int CreateBuffer(ref ChunkAccessor<TStore> bufferAccessor) => 0;
 
         public override VariableSizedBufferAccessor<int, TStore> GetBufferReadOnlyAccessor(int bufferId, ref ChunkAccessor<TStore> accessor) => default;
         public override VariableSizedBufferAccessor<int, TStore> GetBufferReadOnlyAccessor(int bufferId) => default;
-        public override int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor<TStore> bufferAccessor) => default;
+        public override int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor<TStore> bufferAccessor) => 0;
         public override void DeleteBuffer(int bufferId, ref ChunkAccessor<TStore> bufferAccessor) { }
 
         public override NodeWrapper GetFirstChild(NodeWrapper node, ref ChunkAccessor<TStore> accessor)
@@ -419,10 +419,8 @@ public abstract class String64BTree<TStore> : BTree<String64, TStore> where TSto
             }
         }
 
-        public override NodeWrapper SplitRight(NodeWrapper node, NodeStates states, ref ChunkAccessor<TStore> accessor)
-        {
-            return SplitRight(node.ChunkId, states, ref accessor);
-        }
+        public override NodeWrapper SplitRight(NodeWrapper node, NodeStates states, ref ChunkAccessor<TStore> accessor) => 
+            SplitRight(node.ChunkId, states, ref accessor);
 
         public override KeyValueItem RemoveAt(NodeWrapper node, int index, ref ChunkAccessor<TStore> accessor)
         {
@@ -707,7 +705,7 @@ public abstract class String64BTree<TStore> : BTree<String64, TStore> where TSto
             }
         }
 
-        public NodeWrapper SplitRight(int leftChunkId, NodeStates states, ref ChunkAccessor<TStore> accessor)
+        private NodeWrapper SplitRight(int leftChunkId, NodeStates states, ref ChunkAccessor<TStore> accessor)
         {
             ref var left = ref accessor.GetChunk<IndexString64Chunk>(leftChunkId, true);
 
@@ -778,7 +776,7 @@ public class String64MultipleBTree<TStore> : String64BTree<TStore> where TStore 
     public override bool AllowMultiple => true;
     protected override BaseNodeStorage GetStorage() => new String64MultipleNodeStorage();
 
-    public sealed class String64MultipleNodeStorage : String64NodeStorage
+    private sealed class String64MultipleNodeStorage : String64NodeStorage
     {
         private VariableSizedBufferSegment<int, TStore> _valueStore;
 

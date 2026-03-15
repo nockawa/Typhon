@@ -18,7 +18,6 @@ using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
 
-[Component(SchemaName, 1, true)]
 [StructLayout(LayoutKind.Sequential)]
 [PublicAPI]
 public struct FieldR1
@@ -62,6 +61,40 @@ public struct ComponentR1
 
     public int SchemaRevision;
     public int FieldCount;
+}
+
+/// <summary>
+/// Persisted archetype schema. One entity per registered archetype.
+/// Enables load-time validation: mismatch between persisted and runtime archetype definitions → hard error.
+/// </summary>
+[Component(SchemaName, 1)]
+[StructLayout(LayoutKind.Sequential)]
+[PublicAPI]
+public struct ArchetypeR1
+{
+    public const string SchemaName = "Typhon.Schema.Archetype";
+
+    /// <summary>Archetype CLR type name (e.g., "Building").</summary>
+    public String64 Name;
+
+    /// <summary>Globally unique archetype ID from [Archetype(Id = N)].</summary>
+    public ushort ArchetypeId;
+
+    /// <summary>Parent archetype ID (0xFFFF = no parent).</summary>
+    public ushort ParentArchetypeId;
+
+    /// <summary>Total component count (own + inherited).</summary>
+    public byte ComponentCount;
+
+    public byte _pad0, _pad1, _pad2;
+
+    /// <summary>Schema revision from [Archetype(Id, Revision)].</summary>
+    public int Revision;
+
+    /// <summary>Component schema names in slot order, stored in VSBS.</summary>
+    public ComponentCollection<String64> ComponentNames;
+
+    public const ushort NoParent = 0xFFFF;
 }
 
 /// <summary>
@@ -173,13 +206,14 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     private long _commitCount;
     private long _commitMaxUs;
 
-    private ComponentTable _fieldsTable;
     private ComponentTable _componentsTable;
     private ComponentTable _schemaHistoryTable;
+    private ComponentTable _archetypesTable;
     private ConcurrentDictionary<Type, ComponentTable> _componentTableByType;
     private ConcurrentDictionary<ushort, ComponentTable> _componentTableByWalTypeId;
     private long _curPrimaryKey;
     private Dictionary<string, (long PK, ComponentR1 Comp)> _persistedComponents;
+    private Dictionary<ushort, (long PK, ArchetypeR1 Arch)> _persistedArchetypes;
     private Dictionary<string, FieldR1[]> _persistedFieldsByComponent;
     private ConcurrentDictionary<int, ChunkBasedSegment<PersistentStore>> _componentCollectionSegmentByStride;
     private ConcurrentDictionary<Type, VariableSizedBufferSegmentBase<PersistentStore>> _componentCollectionVSBSByType;
@@ -207,6 +241,9 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
     internal TransactionChain TransactionChain { get; }
     internal DeferredCleanupManager DeferredCleanupManager { get; }
+
+    /// <summary>Engine-level MVCC exception dictionary for ECS EnabledBits.</summary>
+    internal EnabledBitsOverrides EnabledBitsOverrides { get; } = new();
 
     /// <summary>
     /// Process all pending deferred cleanups. Intended for test/diagnostic use.
@@ -544,14 +581,14 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         var cs = MMF.CreateChangeSet();
 
         // Register the system components, passing the ChangeSet so all structural mutations are tracked
-        RegisterComponentFromAccessor<FieldR1>(cs);
         RegisterComponentFromAccessor<ComponentR1>(cs);
         RegisterComponentFromAccessor<SchemaHistoryR1>(cs);
+        RegisterComponentFromAccessor<ArchetypeR1>(cs);
 
         // Get their tables
-        _fieldsTable = GetComponentTable<FieldR1>();
         _componentsTable = GetComponentTable<ComponentR1>();
         _schemaHistoryTable = GetComponentTable<SchemaHistoryR1>();
+        _archetypesTable = GetComponentTable<ArchetypeR1>();
 
         using var guard = EpochGuard.Enter(EpochManager);
         var epoch = guard.Epoch;
@@ -566,12 +603,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         ref var rootFileHeader = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
 
         rootFileHeader.SystemSchemaRevision = 1;
-        rootFileHeader.FieldTableSPI = _fieldsTable.ComponentSegment.RootPageIndex;
         rootFileHeader.ComponentTableSPI = _componentsTable.ComponentSegment.RootPageIndex;
 
-        rootFileHeader.FieldTableVersionSPI            = _fieldsTable.CompRevTableSegment.RootPageIndex;
-        rootFileHeader.FieldTableDefaultIndexSPI       = _fieldsTable.DefaultIndexSegment.RootPageIndex;
-        rootFileHeader.FieldTableString64IndexSPI      = _fieldsTable.String64IndexSegment.RootPageIndex;
         rootFileHeader.ComponentTableVersionSPI        = _componentsTable.CompRevTableSegment.RootPageIndex;
         rootFileHeader.ComponentTableDefaultIndexSPI   = _componentsTable.DefaultIndexSegment.RootPageIndex;
         rootFileHeader.ComponentTableString64IndexSPI  = _componentsTable.String64IndexSegment.RootPageIndex;
@@ -583,18 +616,16 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
         MMF.UnlatchPageExclusive(memPageIdx);
 
-        // Pre-allocate the FieldR1 ComponentCollection segment with the structural ChangeSet so its pages// are tracked and flushed to disk. Without this,
-        // the segment would be lazily allocated in SaveInSystemSchema without change tracking, leaving its root page dirty-but-untracked in the page cache.
+        // Pre-allocate the FieldR1 ComponentCollection segment with the structural ChangeSet so its pages
+        // are tracked and flushed to disk. FieldR1 data lives in ComponentCollection<FieldR1> on ComponentR1,
+        // not in a standalone ComponentTable.
         GetComponentCollectionSegment(sizeof(FieldR1), cs);
 
-        // Now save the system components schema in the database (to load them next time we open the database)
-        // These use transactions internally which have their own ChangeSets
-        SaveInSystemSchema(_fieldsTable);
+        // Now save the system components schema in the database
         SaveInSystemSchema(_componentsTable);
         SaveInSystemSchema(_schemaHistoryTable);
 
         // Persist the ComponentCollection segment SPI for FieldR1 so we can reload it on reopen.
-        // The segment was lazily allocated during SaveInSystemSchema when FieldR1 entries were written.
         {
             MMF.RequestPageEpoch(0, epoch, out var rootMemPageIdx2);
             var latched2 = MMF.TryLatchPageExclusive(rootMemPageIdx2);
@@ -762,26 +793,18 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         }
 
         // Register system type definitions in DBD
-        DBD.CreateFromAccessor<FieldR1>();
         DBD.CreateFromAccessor<ComponentR1>();
         DBD.CreateFromAccessor<SchemaHistoryR1>();
 
-        var fieldDef   = DBD.GetComponent(FieldR1.SchemaName, 1);
         var compDef    = DBD.GetComponent(ComponentR1.SchemaName, 1);
         var historyDef = DBD.GetComponent(SchemaHistoryR1.SchemaName, 1);
 
         // Load system tables using the persisted SPIs
-        _fieldsTable = new ComponentTable(this, fieldDef, this, h.FieldTableSPI, h.FieldTableVersionSPI, h.FieldTableDefaultIndexSPI, h.FieldTableString64IndexSPI);
         _componentsTable = new ComponentTable(this, compDef, this, h.ComponentTableSPI, h.ComponentTableVersionSPI, h.ComponentTableDefaultIndexSPI, h.ComponentTableString64IndexSPI);
         _schemaHistoryTable = new ComponentTable(this, historyDef, this, h.SchemaHistoryTableSPI, h.SchemaHistoryVersionSPI, h.SchemaHistoryDefaultIndexSPI, h.SchemaHistoryString64IndexSPI);
 
-        _componentTableByType.TryAdd(typeof(FieldR1), _fieldsTable);
         _componentTableByType.TryAdd(typeof(ComponentR1), _componentsTable);
         _componentTableByType.TryAdd(typeof(SchemaHistoryR1), _schemaHistoryTable);
-
-        var fieldsWalTypeId = (ushort)_fieldsTable.ComponentSegment.RootPageIndex;
-        _fieldsTable.WalTypeId = fieldsWalTypeId;
-        _componentTableByWalTypeId.TryAdd(fieldsWalTypeId, _fieldsTable);
 
         var compsWalTypeId = (ushort)_componentsTable.ComponentSegment.RootPageIndex;
         _componentsTable.WalTypeId = compsWalTypeId;
@@ -840,14 +863,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 }
             }
 
-            // Update _curPrimaryKey from both system tables
+            // Update _curPrimaryKey from system table
             UpdateCurPrimaryKey(pkIndex.GetMaxKey());
-
-            if (_fieldsTable.PrimaryKeyIndex.EntryCount > 0)
-            {
-                var fieldsMaxPk = _fieldsTable.PrimaryKeyIndex.GetMaxKey();
-                UpdateCurPrimaryKey(fieldsMaxPk);
-            }
         }
     }
 
@@ -1217,6 +1234,220 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     internal ComponentTable GetComponentTableByWalTypeId(ushort id) => _componentTableByWalTypeId.GetValueOrDefault(id);
 
     /// <summary>
+    /// Initialize ECS archetype storage. For each registered archetype, allocates a per-archetype RawValueHashMap and connects component slots to their
+    /// ComponentTables. Must be called after all components are registered.
+    /// </summary>
+    public void InitializeArchetypes()
+    {
+        ArchetypeRegistry.Freeze();
+
+        // Ensure ArchetypeR1 system component is registered (may not be if this is a database reopen
+        // — CreateSystemSchemaR1 only runs on new databases, LoadSystemSchemaR1 doesn't restore ArchetypeR1)
+        if (GetComponentTable<ArchetypeR1>() == null)
+        {
+            RegisterComponentFromAccessor<ArchetypeR1>();
+        }
+
+        // Load persisted archetype schemas for validation
+        _persistedArchetypes ??= new Dictionary<ushort, (long, ArchetypeR1)>();
+        LoadPersistedArchetypes();
+
+        foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
+        {
+            // Connect slots to ComponentTables — skip archetypes with unregistered component types
+            if (meta._slotToComponentType == null || meta.ComponentCount == 0)
+            {
+                continue;
+            }
+
+            meta._slotToComponentTable = new ComponentTable[meta.ComponentCount];
+            bool allComponentsRegistered = true;
+            for (int slot = 0; slot < meta.ComponentCount; slot++)
+            {
+                var compType = meta._slotToComponentType[slot];
+                if (compType == null)
+                {
+                    allComponentsRegistered = false;
+                    break;
+                }
+                var table = GetComponentTable(compType);
+                if (table == null)
+                {
+                    allComponentsRegistered = false;
+                    break;
+                }
+                meta._slotToComponentTable[slot] = table;
+            }
+
+            if (!allComponentsRegistered)
+            {
+                meta._slotToComponentTable = null;
+                continue;
+            }
+
+            // Schema validation: compare runtime archetype against persisted schema
+            ValidateArchetypeSchema(meta);
+
+            // Allocate per-archetype entity storage (RawValueHashMap)
+            {
+                int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(meta._entityRecordSize);
+                var segment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 10, stride);
+                meta._entityMap = RawValueHashMap<long, PersistentStore>.Create(segment, 16, meta._entityRecordSize);
+                meta._nextEntityKey = 0;
+            }
+        }
+
+        // Build and validate cascade delete graph (after all slots connected)
+        ArchetypeRegistry.BuildAndValidateCascadeGraph();
+
+        // Persist any new archetypes not yet in the database
+        PersistNewArchetypes();
+    }
+
+    private void LoadPersistedArchetypes()
+    {
+        var archetypesTable = GetComponentTable<ArchetypeR1>();
+        if (archetypesTable == null)
+        {
+            return;
+        }
+
+        var pkIndex = archetypesTable.PrimaryKeyIndex;
+        if (pkIndex.EntryCount == 0)
+        {
+            return;
+        }
+
+        using var tx = this.CreateQuickTransaction();
+        foreach (var kv in pkIndex.EnumerateLeaves())
+        {
+            if (tx.ReadEntity<ArchetypeR1>(kv.Key, out var arch))
+            {
+                _persistedArchetypes[arch.ArchetypeId] = (kv.Key, arch);
+            }
+        }
+    }
+
+    private void ValidateArchetypeSchema(ArchetypeMetadata meta)
+    {
+        if (!_persistedArchetypes.TryGetValue(meta.ArchetypeId, out var persisted))
+        {
+            return; // new archetype, not persisted yet — OK
+        }
+
+        var arch = persisted.Arch;
+
+        // Component count mismatch
+        if (arch.ComponentCount != meta.ComponentCount)
+        {
+            throw new InvalidOperationException(
+                $"Schema mismatch for archetype '{meta.ArchetypeType.Name}' (Id={meta.ArchetypeId}): " +
+                $"persisted with {arch.ComponentCount} components, runtime has {meta.ComponentCount}. " +
+                $"Run 'tsh migrate <dbpath>' to upgrade.");
+        }
+
+        // Revision mismatch
+        if (arch.Revision != meta.Revision)
+        {
+            throw new InvalidOperationException(
+                $"Schema mismatch for archetype '{meta.ArchetypeType.Name}' (Id={meta.ArchetypeId}): " +
+                $"persisted revision {arch.Revision}, runtime revision {meta.Revision}. " +
+                $"Run 'tsh migrate <dbpath>' to upgrade.");
+        }
+
+        // Component name mismatch (per slot)
+        if (arch.ComponentNames._bufferId != 0)
+        {
+            var vsbs = GetComponentCollectionVSBS<String64>();
+            var persistedNames = new List<String64>();
+            foreach (var name in vsbs.EnumerateBuffer(arch.ComponentNames._bufferId))
+            {
+                persistedNames.Add(name);
+            }
+
+            var runtimeNames = GetArchetypeComponentNames(meta);
+            for (int slot = 0; slot < Math.Min(persistedNames.Count, runtimeNames.Length); slot++)
+            {
+                if (!persistedNames[slot].Equals(runtimeNames[slot]))
+                {
+                    throw new InvalidOperationException(
+                        $"Schema mismatch for archetype '{meta.ArchetypeType.Name}' (Id={meta.ArchetypeId}), slot {slot}: " +
+                        $"persisted component '{persistedNames[slot].AsString}', runtime component '{runtimeNames[slot].AsString}'. " +
+                        $"Run 'tsh migrate <dbpath>' to upgrade.");
+                }
+            }
+        }
+    }
+
+    private unsafe void PersistNewArchetypes()
+    {
+        bool anyNew = false;
+
+        using var t = this.CreateQuickTransaction(DurabilityMode.Immediate);
+
+        foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
+        {
+            if (meta._slotToComponentTable == null)
+            {
+                continue;
+            }
+
+            if (_persistedArchetypes.ContainsKey(meta.ArchetypeId))
+            {
+                continue;
+            }
+
+            // Build and persist the ArchetypeR1 entity
+            var arch = BuildArchetypeR1(meta);
+
+            // Populate ComponentNames collection via VSBS
+            var names = GetArchetypeComponentNames(meta);
+            var cs = MMF.CreateChangeSet();
+            var vsbs = GetComponentCollectionVSBS<String64>();
+            using (var cca = new ComponentCollectionAccessor<String64>(cs, vsbs, ref arch.ComponentNames))
+            {
+                foreach (var name in names)
+                {
+                    cca.Add(name);
+                }
+            }
+            cs.SaveChanges();
+
+            t.CreateEntity(ref arch);
+            _persistedArchetypes[meta.ArchetypeId] = (0, arch); // PK not tracked, just mark as persisted
+            anyNew = true;
+        }
+
+        if (anyNew)
+        {
+            t.Commit();
+        }
+    }
+
+    /// <summary>Build an ArchetypeR1 header from runtime metadata. ComponentNames must be populated separately via VSBS.</summary>
+    internal static ArchetypeR1 BuildArchetypeR1(ArchetypeMetadata meta) => new()
+    {
+        Name = meta.ArchetypeType.Name,
+        ArchetypeId = meta.ArchetypeId,
+        ParentArchetypeId = meta.ParentArchetypeId,
+        ComponentCount = meta.ComponentCount,
+        Revision = meta.Revision,
+    };
+
+    /// <summary>Get the component schema names for an archetype's slots (for validation/persistence).</summary>
+    internal static String64[] GetArchetypeComponentNames(ArchetypeMetadata meta)
+    {
+        var names = new String64[meta.ComponentCount];
+        for (int slot = 0; slot < meta.ComponentCount; slot++)
+        {
+            var compType = meta._slotToComponentType[slot];
+            var compAttr = compType.GetCustomAttribute<ComponentAttribute>();
+            names[slot] = compAttr != null ? compAttr.Name : compType.Name;
+        }
+        return names;
+    }
+
+    /// <summary>
     /// Returns an <see cref="IndexRef"/> for the primary key index of component <typeparamref name="T"/>.
     /// Resolve once (cold path), reuse many times at zero cost (hot path).
     /// </summary>
@@ -1306,6 +1537,12 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
     [LoggerMessage(LogLevel.Debug, "Tx #{tsn} commit: CommitComponent {componentName} done")]
     internal partial void LogCommitComponentDone(long tsn, string componentName);
+
+    [LoggerMessage(LogLevel.Debug, "Cascade delete: following FK on child archetype {childArchetype} slot {slotIndex} from parent {parentId}")]
+    internal partial void LogCascadeStep(string childArchetype, int slotIndex, EntityId parentId);
+
+    [LoggerMessage(LogLevel.Information, "Cascade delete complete: root {rootId}, total destroyed {totalDestroyed}")]
+    internal partial void LogCascadeSummary(EntityId rootId, int totalDestroyed);
 
     #endregion
 

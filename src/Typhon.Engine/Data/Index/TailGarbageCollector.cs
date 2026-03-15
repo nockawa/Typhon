@@ -38,8 +38,8 @@ internal static class TailGarbageCollector
     /// <param name="accessor">ChunkAccessor<PersistentStore> for the TailIndexSegment.</param>
     /// <param name="newTailBufferId">Return the ID of the new TAIL VSBS buffer</param>
     /// <returns>Number of entries removed.</returns>
-    internal static int Prune(VariableSizedBufferSegment<VersionedIndexEntry, PersistentStore> tailVSBS, int tailBufferId, long retentionTSN, ref ChunkAccessor<PersistentStore> accessor, 
-        out int newTailBufferId)
+    internal static int Prune(VariableSizedBufferSegment<VersionedIndexEntry, PersistentStore> tailVSBS, int tailBufferId, long retentionTSN, 
+        ref ChunkAccessor<PersistentStore> accessor, out int newTailBufferId)
     {
         // Phase 1: Scan all entries and group by ChainId
         // For each ChainId, track: boundary sentinel (highest TSN <= retentionTSN),
