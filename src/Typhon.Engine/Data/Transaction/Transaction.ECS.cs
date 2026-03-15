@@ -78,7 +78,10 @@ public unsafe partial class Transaction
                         var info = GetComponentInfo(compType);
                         var dst = info.CompContentAccessor.GetChunkAsSpan(chunkId, true);
                         int overhead = table.ComponentOverhead;
-                        new ReadOnlySpan<byte>((byte*)Unsafe.AsPointer(ref Unsafe.AsRef(in values[v])) + 12, values[v].DataSize)
+                        // Copy min(DataSize, available chunk space) — sizeof(T) may exceed ComponentStorageSize
+                        // due to struct alignment padding (e.g., 8-byte aligned struct with 12B fields → sizeof = 16)
+                        int copySize = Math.Min(values[v].DataSize, dst.Length - overhead);
+                        new ReadOnlySpan<byte>((byte*)Unsafe.AsPointer(ref Unsafe.AsRef(in values[v])) + 12, copySize)
                             .CopyTo(dst.Slice(overhead));
                         enabledBits |= (ushort)(1 << slot);
                         hasValue = true;
@@ -449,9 +452,46 @@ public unsafe partial class Transaction
                 EntityRecordAccessor.GetHeader(recordPtr).BornTSN = TSN;
 
                 // Insert into per-archetype LinearHash
-                var accessor = meta._entityMap.Segment.CreateChunkAccessor(_changeSet);
-                meta._entityMap.Insert(entityId.EntityKey, recordPtr, ref accessor, _changeSet);
-                accessor.Dispose();
+                var hashAccessor = meta._entityMap.Segment.CreateChunkAccessor(_changeSet);
+                meta._entityMap.Insert(entityId.EntityKey, recordPtr, ref hashAccessor, _changeSet);
+                hashAccessor.Dispose();
+
+                // Insert into secondary indexes for each component slot
+                for (int slot = 0; slot < meta.ComponentCount; slot++)
+                {
+                    var table = meta._slotToComponentTable[slot];
+                    var indexedFieldInfos = table.IndexedFieldInfos;
+                    if (indexedFieldInfos == null || indexedFieldInfos.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    int chunkId = EntityRecordAccessor.GetLocation(recordPtr, slot);
+                    if (chunkId == 0)
+                    {
+                        continue;
+                    }
+
+                    var compAccessor = table.ComponentSegment.CreateChunkAccessor(_changeSet);
+                    byte* chunkAddr = compAccessor.GetChunkAddress(chunkId, true);
+
+                    for (int i = 0; i < indexedFieldInfos.Length; i++)
+                    {
+                        ref var ifi = ref indexedFieldInfos[i];
+                        var idxAccessor = ifi.Index.Segment.CreateChunkAccessor(_changeSet);
+                        if (ifi.Index.AllowMultiple)
+                        {
+                            *(int*)&chunkAddr[ifi.OffsetToIndexElementId] = ifi.Index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref idxAccessor, out _);
+                        }
+                        else
+                        {
+                            ifi.Index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref idxAccessor);
+                        }
+                        idxAccessor.Dispose();
+                    }
+
+                    compAccessor.Dispose();
+                }
             }
         }
     }
@@ -482,6 +522,9 @@ public unsafe partial class Transaction
                 // Set DiedTSN
                 EntityRecordAccessor.GetHeader(readBuf).DiedTSN = TSN;
                 meta._entityMap.Upsert(entityId.EntityKey, readBuf, ref accessor, _changeSet);
+
+                // Enqueue for deferred GC (LinearHash removal + chunk freeing when MinTSN advances past DiedTSN)
+                _dbe.EnqueueEcsCleanup(entityId, meta, TSN);
             }
             accessor.Dispose();
         }
@@ -543,9 +586,34 @@ public unsafe partial class Transaction
         }
     }
 
-    /// <summary>Clean up ECS-specific state on transaction reset/dispose.</summary>
+    /// <summary>Clean up ECS-specific state on transaction reset/dispose. Frees orphaned chunks on rollback.</summary>
     internal void CleanupEcsState()
     {
+        // If transaction was NOT committed, free component chunks allocated by pending spawns
+        if (_pendingSpawns is { Count: > 0 } && State != TransactionState.Committed)
+        {
+            foreach (var kvp in _pendingSpawns)
+            {
+                var meta = kvp.Value.Archetype;
+                if (meta._slotToComponentTable == null)
+                {
+                    continue;
+                }
+
+                fixed (byte* recordPtr = kvp.Value.RecordBytes)
+                {
+                    for (int slot = 0; slot < meta.ComponentCount; slot++)
+                    {
+                        int chunkId = EntityRecordAccessor.GetLocation(recordPtr, slot);
+                        if (chunkId != 0)
+                        {
+                            meta._slotToComponentTable[slot].ComponentSegment.FreeChunk(chunkId);
+                        }
+                    }
+                }
+            }
+        }
+
         _pendingSpawns?.Clear();
         _pendingDestroys?.Clear();
         _pendingEnableDisable?.Clear();

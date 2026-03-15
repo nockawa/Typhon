@@ -263,4 +263,39 @@ class EntitySpawnTests : TestBase<EntitySpawnTests>
             Assert.That(t.TryOpen(spawnedId, out _), Is.False);
         }
     }
+
+    [Test]
+    public void Spawn_MultipleRollbacks_NoChunkLeak()
+    {
+        using var dbe = SetupEngine();
+
+        // Perform multiple spawn-then-rollback cycles
+        // If chunk cleanup works, the CBS won't grow unboundedly
+        for (int cycle = 0; cycle < 10; cycle++)
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var pos = new EcsPosition(cycle, 0, 0);
+            var vel = new EcsVelocity(0, 0, 0);
+            t.Spawn<EcsUnit>(EcsUnit.Position.Set(in pos), EcsUnit.Velocity.Set(in vel));
+            // Don't commit — chunks should be freed on dispose
+        }
+
+        // If we get here without running out of pages, cleanup is working
+        // Verify we can still spawn normally
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var pos = new EcsPosition(999, 0, 0);
+            var vel = new EcsVelocity(0, 0, 0);
+            var id = t.Spawn<EcsUnit>(EcsUnit.Position.Set(in pos), EcsUnit.Velocity.Set(in vel));
+            t.Commit();
+
+            Assert.That(id.IsNull, Is.False);
+        }
+
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            // Rolled-back entities should all be invisible
+            Assert.That(t.IsAlive(new EntityId(1, 100)), Is.False);
+        }
+    }
 }

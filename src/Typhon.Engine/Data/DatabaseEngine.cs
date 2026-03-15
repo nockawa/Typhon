@@ -14,6 +14,8 @@ using Typhon.Schema.Definition;
 
 [assembly: InternalsVisibleTo("Typhon.Engine.Tests")]
 [assembly: InternalsVisibleTo("Typhon.Benchmark")]
+[assembly: InternalsVisibleTo("Typhon.MonitoringDemo")]
+[assembly: InternalsVisibleTo("Typhon.ARPG.Shell")]
 [assembly: InternalsVisibleTo("tsh")]
 
 namespace Typhon.Engine;
@@ -255,6 +257,86 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
     /// <summary>Engine-level MVCC exception dictionary for ECS EnabledBits.</summary>
     internal EnabledBitsOverrides EnabledBitsOverrides { get; } = new();
+
+    // ── ECS Deferred Cleanup ──
+
+    internal struct EcsCleanupEntry
+    {
+        public EntityId Id;
+        public ArchetypeMetadata Meta;
+        public long DiedTSN;
+    }
+
+    private readonly List<EcsCleanupEntry> _ecsCleanupQueue = [];
+    private readonly object _ecsCleanupLock = new();
+
+    /// <summary>Enqueue an ECS entity for deferred cleanup (LinearHash removal + chunk freeing).</summary>
+    internal void EnqueueEcsCleanup(EntityId id, ArchetypeMetadata meta, long diedTSN)
+    {
+        lock (_ecsCleanupLock)
+        {
+            _ecsCleanupQueue.Add(new EcsCleanupEntry { Id = id, Meta = meta, DiedTSN = diedTSN });
+        }
+    }
+
+    /// <summary>
+    /// Process ECS deferred cleanups: remove LinearHash entries and free component chunks
+    /// for entities whose DiedTSN is below minTSN (no active transaction can see them).
+    /// </summary>
+    internal unsafe int ProcessEcsCleanups(long minTSN)
+    {
+        List<EcsCleanupEntry> toProcess;
+        lock (_ecsCleanupLock)
+        {
+            toProcess = _ecsCleanupQueue.FindAll(e => e.DiedTSN < minTSN);
+            _ecsCleanupQueue.RemoveAll(e => e.DiedTSN < minTSN);
+        }
+
+        if (toProcess.Count == 0)
+        {
+            return 0;
+        }
+
+        using var guard = EpochGuard.Enter(EpochManager);
+
+        foreach (var entry in toProcess)
+        {
+            var meta = entry.Meta;
+            if (meta._entityMap == null)
+            {
+                continue;
+            }
+
+            // Read entity record to get chunk IDs before removal
+            int recordSize = meta._entityRecordSize;
+            byte* readBuf = stackalloc byte[recordSize];
+            var accessor = meta._entityMap.Segment.CreateChunkAccessor();
+            bool found = meta._entityMap.TryGet(entry.Id.EntityKey, readBuf, ref accessor);
+
+            if (found)
+            {
+                // Free component chunks
+                for (int slot = 0; slot < meta.ComponentCount; slot++)
+                {
+                    int chunkId = EntityRecordAccessor.GetLocation(readBuf, slot);
+                    if (chunkId != 0 && meta._slotToComponentTable != null)
+                    {
+                        meta._slotToComponentTable[slot].ComponentSegment.FreeChunk(chunkId);
+                    }
+                }
+
+                // Remove from LinearHash
+                meta._entityMap.Remove(entry.Id.EntityKey, ref accessor, null);
+            }
+
+            accessor.Dispose();
+        }
+
+        // Also prune EnabledBits overrides
+        EnabledBitsOverrides.Prune(minTSN);
+
+        return toProcess.Count;
+    }
 
     /// <summary>
     /// Process all pending deferred cleanups. Intended for test/diagnostic use.
@@ -637,7 +719,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     private (long PK, ComponentR1 Comp, FieldR1[] Fields) SaveInSystemSchema(ComponentTable table)
     {
         var definition = table.Definition;
-        using var t = this.CreateQuickTransaction(DurabilityMode.Immediate);
+        var cs = MMF.CreateChangeSet();
 
         var nonStaticCount = 0;
         foreach (var kvp in definition.FieldsByName)
@@ -665,7 +747,9 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
         var fieldList = new List<FieldR1>();
         {
-            using var a = t.CreateComponentCollectionAccessor(ref comp.Fields);
+            using var guard = EpochGuard.Enter(EpochManager);
+            var vsbs = GetComponentCollectionVSBS<FieldR1>();
+            using var a = new ComponentCollectionAccessor<FieldR1>(cs, vsbs, ref comp.Fields);
 
             foreach (var kvp in table.Definition.FieldsByName)
             {
@@ -689,8 +773,9 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             }
         }
 
-        var pk = t.CreateEntity(ref comp);
-        t.Commit();
+        var pk = GetNewPrimaryKey();
+        SystemCrud.Create(_componentsTable, pk, ref comp, EpochManager, cs);
+        cs.SaveChanges();
         return (pk, comp, fieldList.ToArray());
     }
 
@@ -703,12 +788,11 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// <param name="migrationResult">Optional migration result containing new segment SPIs.</param>
     private void PersistSchemaChanges(long pk, DBComponentDefinition definition, MigrationResult? migrationResult = null)
     {
-        using var t = this.CreateQuickTransaction(DurabilityMode.Immediate);
+        var cs = MMF.CreateChangeSet();
 
-        t.ReadEntity<ComponentR1>(pk, out var comp);
+        SystemCrud.Read(_componentsTable, pk, out ComponentR1 comp, EpochManager);
 
         // Reset the Fields collection — we rebuild it entirely with the resolved definitions.
-        // The old buffer's chunks become orphaned (acceptable for schema-change frequency).
         comp.Fields = default;
 
         var nonStaticCount = 0;
@@ -733,7 +817,9 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         }
 
         {
-            using var a = t.CreateComponentCollectionAccessor(ref comp.Fields);
+            using var guard = EpochGuard.Enter(EpochManager);
+            var vsbs = GetComponentCollectionVSBS<FieldR1>();
+            using var a = new ComponentCollectionAccessor<FieldR1>(cs, vsbs, ref comp.Fields);
 
             foreach (var kvp in definition.FieldsByName)
             {
@@ -756,8 +842,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             }
         }
 
-        t.UpdateEntity(pk, ref comp);
-        t.Commit();
+        SystemCrud.Update(_componentsTable, pk, ref comp, EpochManager, cs);
+        cs.SaveChanges();
     }
 
     /// <summary>
@@ -829,11 +915,9 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         var pkIndex = _componentsTable.PrimaryKeyIndex;
         if (pkIndex.EntryCount > 0)
         {
-            using var tx = this.CreateQuickTransaction();
-
             foreach (var kv in pkIndex.EnumerateLeaves())
             {
-                if (tx.ReadEntity<ComponentR1>(kv.Key, out var comp))
+                if (SystemCrud.Read(_componentsTable, kv.Key, out ComponentR1 comp, EpochManager))
                 {
                     var schemaName = comp.Name.AsString;
                     _persistedComponents[schemaName] = (kv.Key, comp);
@@ -1365,11 +1449,16 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         }
     }
 
-    private unsafe void PersistNewArchetypes()
+    private void PersistNewArchetypes()
     {
-        bool anyNew = false;
+        var archetypesTable = GetComponentTable<ArchetypeR1>();
+        if (archetypesTable == null)
+        {
+            return;
+        }
 
-        using var t = this.CreateQuickTransaction(DurabilityMode.Immediate);
+        var cs = MMF.CreateChangeSet();
+        bool anyNew = false;
 
         foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
         {
@@ -1388,25 +1477,25 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
             // Populate ComponentNames collection via VSBS
             var names = GetArchetypeComponentNames(meta);
-            var cs = MMF.CreateChangeSet();
-            var vsbs = GetComponentCollectionVSBS<String64>();
-            using (var cca = new ComponentCollectionAccessor<String64>(cs, vsbs, ref arch.ComponentNames))
+            using (var guard = EpochGuard.Enter(EpochManager))
             {
+                var vsbs = GetComponentCollectionVSBS<String64>();
+                using var cca = new ComponentCollectionAccessor<String64>(cs, vsbs, ref arch.ComponentNames);
                 foreach (var name in names)
                 {
                     cca.Add(name);
                 }
             }
-            cs.SaveChanges();
 
-            t.CreateEntity(ref arch);
-            _persistedArchetypes[meta.ArchetypeId] = (0, arch); // PK not tracked, just mark as persisted
+            var pk = GetNewPrimaryKey();
+            SystemCrud.Create(archetypesTable, pk, ref arch, EpochManager, cs);
+            _persistedArchetypes[meta.ArchetypeId] = (pk, arch);
             anyNew = true;
         }
 
         if (anyNew)
         {
-            t.Commit();
+            cs.SaveChanges();
         }
     }
 

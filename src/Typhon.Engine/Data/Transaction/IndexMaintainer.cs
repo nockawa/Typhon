@@ -1,4 +1,5 @@
-// unset
+// LEGACY — will be removed after #168. Kept as reference for index maintenance patterns.
+// ECS path inserts indexes directly in FlushPendingSpawns (Transaction.ECS.cs).
 
 using System;
 using System.Runtime.CompilerServices;

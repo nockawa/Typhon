@@ -95,7 +95,6 @@ class CascadeDeleteTests : TestBase<CascadeDeleteTests>
     // ═══════════════════════════════════════════════════════════════════════
 
     [Test]
-    [Ignore("Cascade execution requires FK index integration — deferred to separate sub-issue")]
     public void Destroy_BagWithPendingItems_CascadeDeletesItems()
     {
         using var dbe = SetupEngine();

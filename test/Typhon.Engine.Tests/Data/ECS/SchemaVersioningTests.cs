@@ -234,13 +234,13 @@ unsafe class SchemaVersioningTests : TestBase<SchemaVersioningTests>
             dbe.InitializeArchetypes();
 
             // Read back persisted ArchetypeR1 and verify ComponentNames collection is populated
-            using var tx = dbe.CreateQuickTransaction();
+            using var epochGuard = EpochGuard.Enter(dbe.EpochManager);
             var pkIndex = dbe.GetComponentTable<ArchetypeR1>().PrimaryKeyIndex;
 
             bool foundUnit = false;
             foreach (var kv in pkIndex.EnumerateLeaves())
             {
-                if (!tx.ReadEntity<ArchetypeR1>(kv.Key, out var arch))
+                if (!SystemCrud.Read(dbe.GetComponentTable<ArchetypeR1>(), kv.Key, out ArchetypeR1 arch, dbe.EpochManager))
                 {
                     continue;
                 }

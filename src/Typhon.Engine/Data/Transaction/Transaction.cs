@@ -308,7 +308,13 @@ public unsafe partial class Transaction : IDisposable
         dbe.LogTxDispose(tsn, "ExitEpochAndRemoveDone");
     }
 
-    public long CreateEntity<T>(ref T t) where T : unmanaged
+    // ═══════════════════════════════════════════════════════════════════════
+    // LEGACY CRUD API — internal only, will be removed after #168
+    // Kept as reference implementation for: revision chains, conflict detection,
+    // WAL serialization, deferred cleanup. New code should use ECS API (Spawn/Open/Destroy).
+    // ═══════════════════════════════════════════════════════════════════════
+
+    internal long CreateEntity<T>(ref T t) where T : unmanaged
     {
         EnsureMutable();
         State = TransactionState.InProgress;
@@ -323,7 +329,7 @@ public unsafe partial class Transaction : IDisposable
         return pk;
     }
 
-    public long CreateEntity<TC1, TC2>(ref TC1 t, ref TC2 u) where TC1 : unmanaged where TC2 : unmanaged
+    internal long CreateEntity<TC1, TC2>(ref TC1 t, ref TC2 u) where TC1 : unmanaged where TC2 : unmanaged
     {
         EnsureMutable();
         State = TransactionState.InProgress;
@@ -334,7 +340,7 @@ public unsafe partial class Transaction : IDisposable
         return pk;
     }
 
-    public long CreateEntity<TC1, TC2, TC3>(ref TC1 t, ref TC2 u, ref TC3 v) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
+    internal long CreateEntity<TC1, TC2, TC3>(ref TC1 t, ref TC2 u, ref TC3 v) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
     {
         EnsureMutable();
         State = TransactionState.InProgress;
@@ -346,7 +352,7 @@ public unsafe partial class Transaction : IDisposable
         return pk;
     }
 
-    public long CreateEntity<TC1, TC2>(ref TC1 t, Span<TC2> u) where TC1 : unmanaged where TC2 : unmanaged
+    internal long CreateEntity<TC1, TC2>(ref TC1 t, Span<TC2> u) where TC1 : unmanaged where TC2 : unmanaged
     {
         EnsureMutable();
         State = TransactionState.InProgress;
@@ -357,7 +363,7 @@ public unsafe partial class Transaction : IDisposable
         return pk;
     }
 
-    public bool ReadEntity<T>(long pk, out T t) where T : unmanaged
+    internal bool ReadEntity<T>(long pk, out T t) where T : unmanaged
     {
         using var activity = TyphonActivitySource.StartActivity("Transaction.ReadEntity");
         activity?.SetTag(TyphonSpanAttributes.EntityId, pk);
@@ -368,14 +374,14 @@ public unsafe partial class Transaction : IDisposable
         return result;
     }
 
-    public bool ReadEntity<TC1, TC2>(long pk, out TC1 t, out TC2 u) where TC1 : unmanaged where TC2 : unmanaged
+    internal bool ReadEntity<TC1, TC2>(long pk, out TC1 t, out TC2 u) where TC1 : unmanaged where TC2 : unmanaged
     {
         var res = ReadComponent(pk, out t);
         res &= ReadComponent(pk, out u);
         return res;
     }
 
-    public bool ReadEntity<TC1, TC2, TC3>(long pk, out TC1 t, out TC2 u, out TC3 v) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
+    internal bool ReadEntity<TC1, TC2, TC3>(long pk, out TC1 t, out TC2 u, out TC3 v) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
     {
         var res = ReadComponent(pk, out t);
         res &= ReadComponent(pk, out u);
@@ -383,14 +389,14 @@ public unsafe partial class Transaction : IDisposable
         return res;
     }
 
-    public bool ReadEntity<TC1, TC2>(long pk, out TC1 t, out TC2[] u) where TC1 : unmanaged where TC2 : unmanaged
+    internal bool ReadEntity<TC1, TC2>(long pk, out TC1 t, out TC2[] u) where TC1 : unmanaged where TC2 : unmanaged
     {
         var res = ReadComponent(pk, out t);
         res &= ReadComponents(pk, out u);
         return res;
     }
 
-    public bool UpdateEntity<T>(long pk, ref T t) where T : unmanaged
+    internal bool UpdateEntity<T>(long pk, ref T t) where T : unmanaged
     {
         EnsureMutable();
         State = TransactionState.InProgress;
@@ -402,7 +408,7 @@ public unsafe partial class Transaction : IDisposable
         return UpdateComponent(pk, ref t);
     }
 
-    public bool UpdateEntity<TC1, TC2>(long pk, ref TC1 t, ref TC2 u) where TC1 : unmanaged where TC2 : unmanaged
+    internal bool UpdateEntity<TC1, TC2>(long pk, ref TC1 t, ref TC2 u) where TC1 : unmanaged where TC2 : unmanaged
     {
         EnsureMutable();
         State = TransactionState.InProgress;
@@ -412,7 +418,7 @@ public unsafe partial class Transaction : IDisposable
         return res;
     }
 
-    public bool UpdateEntity<TC1, TC2, TC3>(long pk, ref TC1 t, ref TC2 u, ref TC3 v) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
+    internal bool UpdateEntity<TC1, TC2, TC3>(long pk, ref TC1 t, ref TC2 u, ref TC3 v) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
     {
         EnsureMutable();
         State = TransactionState.InProgress;
@@ -423,7 +429,7 @@ public unsafe partial class Transaction : IDisposable
         return res;
     }
 
-    public bool UpdateEntity<TC1, TC2>(long pk, ref TC1 t, ReadOnlySpan<TC2> u) where TC1 : unmanaged where TC2 : unmanaged
+    internal bool UpdateEntity<TC1, TC2>(long pk, ref TC1 t, ReadOnlySpan<TC2> u) where TC1 : unmanaged where TC2 : unmanaged
     {
         EnsureMutable();
         State = TransactionState.InProgress;
@@ -433,7 +439,7 @@ public unsafe partial class Transaction : IDisposable
         return res;
     }
 
-    public bool DeleteEntity<T>(long pk) where T : unmanaged
+    internal bool DeleteEntity<T>(long pk) where T : unmanaged
     {
         EnsureMutable();
         State = TransactionState.InProgress;
@@ -445,7 +451,7 @@ public unsafe partial class Transaction : IDisposable
         return DeleteComponent<T>(pk);
     }
 
-    public bool DeleteEntity<TC1, TC2>(long pk) where TC1 : unmanaged where TC2 : unmanaged
+    internal bool DeleteEntity<TC1, TC2>(long pk) where TC1 : unmanaged where TC2 : unmanaged
     {
         EnsureMutable();
         State = TransactionState.InProgress;
@@ -455,7 +461,7 @@ public unsafe partial class Transaction : IDisposable
         return res;
     }
 
-    public bool DeleteEntity<TC1, TC2, TC3>(long pk) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
+    internal bool DeleteEntity<TC1, TC2, TC3>(long pk) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
     {
         EnsureMutable();
         State = TransactionState.InProgress;
@@ -466,7 +472,7 @@ public unsafe partial class Transaction : IDisposable
         return res;
     }
 
-    public bool DeleteEntities<T>(long pk) where T : unmanaged
+    internal bool DeleteEntities<T>(long pk) where T : unmanaged
     {
         EnsureMutable();
         State = TransactionState.InProgress;
@@ -474,7 +480,7 @@ public unsafe partial class Transaction : IDisposable
         return UpdateComponents(pk, ReadOnlySpan<T>.Empty);
     }
     
-    public int GetComponentRevision<T>(long pk) where T : unmanaged
+    internal int GetComponentRevision<T>(long pk) where T : unmanaged
     {
         AssertThreadAffinity();
         var info = GetComponentInfo(typeof(T));

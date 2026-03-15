@@ -227,10 +227,11 @@ class SchemaValidationIntegrationTests : TestBase<SchemaValidationIntegrationTes
             dbe.RegisterComponentFromAccessor<CompFieldAddV2>();
 
             // Read back ComponentR1 to check SchemaRevision
-            using var tx = dbe.CreateQuickTransaction();
-            for (long pk = 1; pk <= 20; pk++)
+            using var epochGuard = EpochGuard.Enter(dbe.EpochManager);
+            var compTable = dbe.GetComponentTable<ComponentR1>();
+            foreach (var kv in compTable.PrimaryKeyIndex.EnumerateLeaves())
             {
-                if (!tx.ReadEntity<ComponentR1>(pk, out var comp))
+                if (!SystemCrud.Read(compTable, kv.Key, out ComponentR1 comp, dbe.EpochManager))
                 {
                     continue;
                 }
