@@ -21,6 +21,11 @@ namespace Typhon.Engine;
 /// after, at offset <see cref="PagedMMF.PageBaseHeaderSize"/> (64), using
 /// <c>page.StructAt&lt;RootFileHeader&gt;(PagedMMF.PageBaseHeaderSize)</c>.
 /// </remarks>
+/// <summary>
+/// Minimal identity header at the start of page 0. Only fields needed for file validation
+/// before the <see cref="BootstrapDictionary"/> can be loaded.
+/// All dynamic metadata (SPIs, counters, config) lives in the bootstrap stream that follows.
+/// </summary>
 [StructLayout(LayoutKind.Sequential)]
 unsafe internal struct RootFileHeader
 {
@@ -35,61 +40,6 @@ unsafe internal struct RootFileHeader
 
     /// <summary>UTF-8 database name (max 64 bytes). Verified on load to prevent opening the wrong file.</summary>
     public fixed byte DatabaseName[64];
-
-    /// <summary>Root page index of the occupancy-map segment (page allocation bitmap).</summary>
-    public int OccupancyMapSPI;
-
-    /// <summary>Revision counter for the built-in system schema (component/field table layout).</summary>
-    public int SystemSchemaRevision;
-
-    /// <summary>Root page index of the <see cref="ComponentTable"/> segment.</summary>
-    public int ComponentTableSPI;
-
-    /// <summary>Root page index of the <see cref="UowRegistry"/> segment (Unit of Work tracking).</summary>
-    public int UowRegistrySPI;
-
-    /// <summary>LSN up to which all WAL records have been checkpointed. Default 0 = scan all WAL segments on recovery.</summary>
-    public long CheckpointLSN;
-
-    /// <summary>Pre-allocated page index for the next occupancy map growth.</summary>
-    public int OccupancyNextReservedPageIndex;
-
-    /// <summary>Pre-allocated page index for the next occupancy map data page.</summary>
-    public int OccupancyNextReservedMapPageIndex;
-
-    // ── Additional system table SPIs ──
-
-    /// <summary>Root page index of the CompRevTable segment for the ComponentR1 system table.</summary>
-    public int ComponentTableVersionSPI;
-
-    /// <summary>Root page index of the DefaultIndex segment for the ComponentR1 system table.</summary>
-    public int ComponentTableDefaultIndexSPI;
-
-    /// <summary>Root page index of the String64Index segment for the ComponentR1 system table.</summary>
-    public int ComponentTableString64IndexSPI;
-
-    /// <summary>Next free Transaction Sequence Number. Restored on reopen so MVCC visibility works across engine restarts.</summary>
-    public long NextFreeTSN;
-
-    /// <summary>Root page index of the <see cref="ChunkBasedSegment<PersistentStore>"/> backing <see cref="ComponentCollection{T}"/> storage for FieldR1 entries.</summary>
-    public int FieldCollectionSegmentSPI;
-
-    /// <summary>Monotonic counter bumped on any user component schema change. Used for quick mismatch pre-check.</summary>
-    public int UserSchemaVersion;
-
-    // ── Schema History system table SPIs (Phase 5, appended to preserve existing offsets) ──
-
-    /// <summary>Root page index of the SchemaHistoryR1 component segment.</summary>
-    public int SchemaHistoryTableSPI;
-
-    /// <summary>Root page index of the CompRevTable segment for SchemaHistoryR1.</summary>
-    public int SchemaHistoryVersionSPI;
-
-    /// <summary>Root page index of the DefaultIndex segment for SchemaHistoryR1.</summary>
-    public int SchemaHistoryDefaultIndexSPI;
-
-    /// <summary>Root page index of the String64Index segment for SchemaHistoryR1.</summary>
-    public int SchemaHistoryString64IndexSPI;
 
     /// <summary>Returns <see cref="HeaderSignature"/> decoded as a managed string.</summary>
     public string HeaderSignatureString
@@ -148,6 +98,13 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
     private const int OccupancySegmentRootPageIndex = 1;
     internal const string HeaderSignature = "TyphonDatabase";
 
+    // Bootstrap dictionary keys (storage layer)
+    // ReSharper disable InconsistentNaming
+    internal const string BK_OccupancyMapSPI = "OccupancyMapSPI";
+    internal const string BK_OccupancyReserved = "OccupancyReserved";
+    internal const string BK_CheckpointLSN = "CheckpointLSN";
+    // ReSharper restore InconsistentNaming
+
     #endregion
 
     private ConcurrentDictionary<int, LogicalSegment<PersistentStore>> _segments;
@@ -155,6 +112,15 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
     private BitmapL3 _occupancyMap;
     private int _occupancyNextReservedPageIndex;
     private int _occupancyNextReservedMapPageIndex;
+
+    /// <summary>
+    /// Bootstrap dictionary: key-value metadata stored as a compact byte stream on page 0.
+    /// Replaces the hard-coded SPI fields in RootFileHeader. Loaded on open, saved on create/shutdown.
+    /// </summary>
+    public BootstrapDictionary Bootstrap { get; } = new();
+
+    /// <summary>Byte offset within page 0 where the bootstrap stream starts (after the slim identity header).</summary>
+    internal static unsafe int BootstrapStreamOffset => PageBaseHeaderSize + sizeof(RootFileHeader);
 
     // Synchronization for occupancy map operations (replaces lock(_occupancyMap))
     private AccessControl _occupancyMapAccess;
@@ -286,7 +252,6 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
             StringExtensions.StoreString(Options.DatabaseName, databaseName, 64);
         }
 
-        rootFileHeader.OccupancyMapSPI = OccupancySegmentRootPageIndex;
         Logger.LogInformation("Initialize DiskPageAllocator service with root at page {PageId}", OccupancySegmentRootPageIndex);
 
         // Initialize the occupancy segment and map
@@ -308,8 +273,14 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         _occupancyMap.SetL0(_occupancyNextReservedMapPageIndex);
         // ReSharper restore InconsistentlySynchronizedField
 
-        rootFileHeader.OccupancyNextReservedPageIndex = _occupancyNextReservedPageIndex;
-        rootFileHeader.OccupancyNextReservedMapPageIndex = _occupancyNextReservedMapPageIndex;
+        // Initialize bootstrap dictionary with core occupancy SPIs
+        Bootstrap.SetInt(BK_OccupancyMapSPI, OccupancySegmentRootPageIndex);
+        Bootstrap.Set(BK_OccupancyReserved, BootstrapDictionary.Value.FromInt2(_occupancyNextReservedPageIndex, _occupancyNextReservedMapPageIndex));
+
+        // Serialize bootstrap stream to page 0
+        byte* bootstrapAddr = GetMemPageAddress(memPageIdx) + BootstrapStreamOffset;
+        int maxBootstrapBytes = PageSize - BootstrapStreamOffset;
+        Bootstrap.WriteTo(bootstrapAddr, maxBootstrapBytes);
 
         UnlatchPageExclusive(memPageIdx);
         cs.SaveChanges();
@@ -347,16 +318,21 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
 
         Logger.LogInformation("Load Database '{DatabaseName}' from file '{FilePathName}'", h.DatabaseNameString, Options.BuildDatabasePathFileName());
 
-        // Initialize the occupancy segment and map
+        // Load bootstrap dictionary from page 0
+        LoadBootstrap();
+
+        // Initialize the occupancy segment and map from bootstrap
         _segments = new ConcurrentDictionary<int, LogicalSegment<PersistentStore>>();
 
-        _occupancySegment = LoadOccupancySegment(h.OccupancyMapSPI, PageBlockType.OccupancyMap);
+        var occupancyMapSPI = Bootstrap.GetInt(BK_OccupancyMapSPI);
+        _occupancySegment = LoadOccupancySegment(occupancyMapSPI, PageBlockType.OccupancyMap);
 
         // ReSharper disable InconsistentlySynchronizedField
         _occupancyMap = new BitmapL3(_occupancySegment);
 
-        _occupancyNextReservedPageIndex = h.OccupancyNextReservedPageIndex;
-        _occupancyNextReservedMapPageIndex = h.OccupancyNextReservedMapPageIndex;
+        var occupancyReserved = Bootstrap.Get(BK_OccupancyReserved);
+        _occupancyNextReservedPageIndex = occupancyReserved.GetInt(0);
+        _occupancyNextReservedMapPageIndex = occupancyReserved.GetInt(1);
         // ReSharper restore InconsistentlySynchronizedField
     }
     public LogicalSegment<PersistentStore> GetSegment(int filePageIndex)
@@ -552,6 +528,54 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
     public bool DeleteSegment(LogicalSegment<PersistentStore> segment, ChangeSet changeSet = null) => DeleteSegment(segment.RootPageIndex, changeSet);
 
     // ═══════════════════════════════════════════════════════════════
+    // Bootstrap Dictionary Persistence
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Serialize the bootstrap dictionary to page 0 at <see cref="BootstrapStreamOffset"/>.
+    /// Latches page 0 exclusively during write.
+    /// </summary>
+    internal unsafe void SaveBootstrap(ChangeSet changeSet = null)
+    {
+        using var guard = EpochGuard.Enter(EpochManager);
+        var epoch = guard.Epoch;
+
+        RequestPageEpoch(0, epoch, out var memPageIdx);
+        var latched = TryLatchPageExclusive(memPageIdx);
+        Debug.Assert(latched, "TryLatchPageExclusive failed on root page during bootstrap save");
+
+        var cs = changeSet ?? CreateChangeSet();
+        cs.AddByMemPageIndex(memPageIdx);
+
+        byte* pageAddr = GetMemPageAddress(memPageIdx);
+        byte* streamAddr = pageAddr + BootstrapStreamOffset;
+        int maxBytes = PageSize - BootstrapStreamOffset;
+        Bootstrap.WriteTo(streamAddr, maxBytes);
+
+        UnlatchPageExclusive(memPageIdx);
+        if (changeSet == null)
+        {
+            cs.SaveChanges();
+        }
+    }
+
+    /// <summary>
+    /// Deserialize the bootstrap dictionary from page 0 at <see cref="BootstrapStreamOffset"/>.
+    /// Called during <see cref="OnFileLoading"/> after identity validation.
+    /// </summary>
+    private unsafe void LoadBootstrap()
+    {
+        using var guard = EpochGuard.Enter(EpochManager);
+        var epoch = guard.Epoch;
+
+        RequestPageEpoch(0, epoch, out var memPageIdx);
+        byte* pageAddr = GetMemPageAddress(memPageIdx);
+        byte* streamAddr = pageAddr + BootstrapStreamOffset;
+        int maxBytes = PageSize - BootstrapStreamOffset;
+        Bootstrap.ReadFrom(streamAddr, maxBytes);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
     // Checkpoint Support
     // ═══════════════════════════════════════════════════════════════
 
@@ -560,7 +584,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
     /// to the <see cref="RootFileHeader"/> on page 0. Called after the occupancy map grows and new reserved pages are allocated.
     /// </summary>
     /// <remarks>Caller must hold <see cref="_occupancyMapAccess"/> exclusive lock.</remarks>
-    private void UpdateOccupancyReservedPages()
+    private unsafe void UpdateOccupancyReservedPages()
     {
         using var guard = EpochGuard.Enter(EpochManager);
         var epoch = guard.Epoch;
@@ -573,9 +597,9 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         var cs = CreateChangeSet();
         cs.AddByMemPageIndex(memPageIdx);
 
-        ref var header = ref page.StructAt<RootFileHeader>(PageBaseHeaderSize);
-        header.OccupancyNextReservedPageIndex = _occupancyNextReservedPageIndex;
-        header.OccupancyNextReservedMapPageIndex = _occupancyNextReservedMapPageIndex;
+        Bootstrap.Set(BK_OccupancyReserved, BootstrapDictionary.Value.FromInt2(_occupancyNextReservedPageIndex, _occupancyNextReservedMapPageIndex));
+        byte* bootstrapAddr = GetMemPageAddress(memPageIdx) + BootstrapStreamOffset;
+        Bootstrap.WriteTo(bootstrapAddr, PageSize - BootstrapStreamOffset);
 
         UnlatchPageExclusive(memPageIdx);
         cs.SaveChanges();
@@ -587,7 +611,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
     /// </summary>
     /// <param name="checkpointLSN">The new checkpoint LSN to persist.</param>
     /// <param name="epochManager">Epoch manager for page access.</param>
-    internal void UpdateCheckpointLSN(long checkpointLSN, EpochManager epochManager)
+    internal unsafe void UpdateCheckpointLSN(long checkpointLSN, EpochManager epochManager)
     {
         using var guard = EpochGuard.Enter(epochManager);
         var epoch = guard.Epoch;
@@ -600,8 +624,9 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         var cs = CreateChangeSet();
         cs.AddByMemPageIndex(memPageIdx);
 
-        ref var header = ref page.StructAt<RootFileHeader>(PageBaseHeaderSize);
-        header.CheckpointLSN = checkpointLSN;
+        Bootstrap.SetLong(BK_CheckpointLSN, checkpointLSN);
+        byte* bootstrapAddr = GetMemPageAddress(memPageIdx) + BootstrapStreamOffset;
+        Bootstrap.WriteTo(bootstrapAddr, PageSize - BootstrapStreamOffset);
 
         UnlatchPageExclusive(memPageIdx);
         cs.SaveChanges();

@@ -194,6 +194,17 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     internal WalRecoveryResult                  LastRecoveryResult => _lastRecoveryResult;
     private StagingBufferPool                   _stagingBufferPool;
 
+    // Bootstrap dictionary keys (engine layer)
+    // ReSharper disable InconsistentNaming
+    internal const string BK_SystemSchemaRevision   = "SystemSchemaRevision";
+    internal const string BK_SysComponentR1         = "sys.ComponentR1";
+    internal const string BK_SysSchemaHistory       = "sys.SchemaHistory";
+    internal const string BK_NextFreeTSN            = "NextFreeTSN";
+    internal const string BK_UowRegistrySPI         = "UowRegistrySPI";
+    internal const string BK_CollectionFieldR1      = "collection.FieldR1";
+    internal const string BK_UserSchemaVersion      = "UserSchemaVersion";
+    // ReSharper restore InconsistentNaming
+
     // Transaction counters for observability
     private long _transactionsCreated;
     private long _transactionsCommitted;
@@ -423,10 +434,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         long initialCheckpointLsn;
         using (var guard = EpochGuard.Enter(EpochManager))
         {
-            MMF.RequestPageEpoch(0, guard.Epoch, out var memPageIdx);
-            var page = MMF.GetPage(memPageIdx);
-            ref var header = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
-            initialCheckpointLsn = header.CheckpointLSN;
+            initialCheckpointLsn = MMF.Bootstrap.GetLong(ManagedPagedMMF.BK_CheckpointLSN);
         }
 
         _stagingBufferPool = new StagingBufferPool(_memoryAllocator, _durabilityNode);
@@ -490,13 +498,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
             // Write SPI to root header
             MMF.RequestPageEpoch(0, epoch, out var rootMemPageIdx);
-            var rootLatched = MMF.TryLatchPageExclusive(rootMemPageIdx);
-            Debug.Assert(rootLatched, "TryLatchPageExclusive failed on root page during registry init");
-            var rootPage = MMF.GetPage(rootMemPageIdx);
-            cs.AddByMemPageIndex(rootMemPageIdx);
-            ref var header = ref rootPage.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
-            header.UowRegistrySPI = segment.RootPageIndex;
-            MMF.UnlatchPageExclusive(rootMemPageIdx);
+            MMF.Bootstrap.SetInt(BK_UowRegistrySPI, segment.RootPageIndex);
+            MMF.SaveBootstrap(cs);
 
             cs.SaveChanges();
 
@@ -505,12 +508,9 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         }
         else
         {
-            // Loading path: read SPI from root header
-            MMF.RequestPageEpoch(0, epoch, out var rootMemPageIdx);
-            var rootPage = MMF.GetPage(rootMemPageIdx);
-            ref var header = ref rootPage.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
-            var spi = header.UowRegistrySPI;
-            var checkpointLSN = header.CheckpointLSN;
+            // Loading path: read SPIs from bootstrap
+            var spi = MMF.Bootstrap.GetInt(BK_UowRegistrySPI);
+            var checkpointLSN = MMF.Bootstrap.GetLong(ManagedPagedMMF.BK_CheckpointLSN);
             var segment = MMF.GetSegment(spi);
             UowRegistry = new UowRegistry(segment, MMF, EpochManager, _memoryAllocator, this);
 
@@ -598,44 +598,37 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         Debug.Assert(latched, "TryLatchPageExclusive failed on root page during schema save");
         var page = MMF.GetPage(memPageIdx);
 
-        // Save the entry points in the file header
+        // Save the entry points in the bootstrap dictionary
         cs.AddByMemPageIndex(memPageIdx);
-        ref var rootFileHeader = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
 
-        rootFileHeader.SystemSchemaRevision = 1;
-        rootFileHeader.ComponentTableSPI = _componentsTable.ComponentSegment.RootPageIndex;
-
-        rootFileHeader.ComponentTableVersionSPI        = _componentsTable.CompRevTableSegment.RootPageIndex;
-        rootFileHeader.ComponentTableDefaultIndexSPI   = _componentsTable.DefaultIndexSegment.RootPageIndex;
-        rootFileHeader.ComponentTableString64IndexSPI  = _componentsTable.String64IndexSegment.RootPageIndex;
-        rootFileHeader.SchemaHistoryTableSPI           = _schemaHistoryTable.ComponentSegment.RootPageIndex;
-        rootFileHeader.SchemaHistoryVersionSPI         = _schemaHistoryTable.CompRevTableSegment.RootPageIndex;
-        rootFileHeader.SchemaHistoryDefaultIndexSPI    = _schemaHistoryTable.DefaultIndexSegment.RootPageIndex;
-        rootFileHeader.SchemaHistoryString64IndexSPI   = _schemaHistoryTable.String64IndexSegment.RootPageIndex;
-        rootFileHeader.NextFreeTSN = TransactionChain.NextFreeId;
+        var bootstrap = MMF.Bootstrap;
+        bootstrap.SetInt(BK_SystemSchemaRevision, 1);
+        bootstrap.Set(BK_SysComponentR1, BootstrapDictionary.Value.FromInt4(
+            _componentsTable.ComponentSegment.RootPageIndex,
+            _componentsTable.CompRevTableSegment.RootPageIndex,
+            _componentsTable.DefaultIndexSegment.RootPageIndex,
+            _componentsTable.String64IndexSegment.RootPageIndex));
+        bootstrap.Set(BK_SysSchemaHistory, BootstrapDictionary.Value.FromInt4(
+            _schemaHistoryTable.ComponentSegment.RootPageIndex,
+            _schemaHistoryTable.CompRevTableSegment.RootPageIndex,
+            _schemaHistoryTable.DefaultIndexSegment.RootPageIndex,
+            _schemaHistoryTable.String64IndexSegment.RootPageIndex));
+        bootstrap.SetLong(BK_NextFreeTSN, TransactionChain.NextFreeId);
 
         MMF.UnlatchPageExclusive(memPageIdx);
 
-        // Pre-allocate the FieldR1 ComponentCollection segment with the structural ChangeSet so its pages
-        // are tracked and flushed to disk. FieldR1 data lives in ComponentCollection<FieldR1> on ComponentR1,
-        // not in a standalone ComponentTable.
+        // Pre-allocate the FieldR1 ComponentCollection segment
         GetComponentCollectionSegment(sizeof(FieldR1), cs);
 
-        // Now save the system components schema in the database
+        // Save the system components schema in the database
         SaveInSystemSchema(_componentsTable);
         SaveInSystemSchema(_schemaHistoryTable);
 
-        // Persist the ComponentCollection segment SPI for FieldR1 so we can reload it on reopen.
-        {
-            MMF.RequestPageEpoch(0, epoch, out var rootMemPageIdx2);
-            var latched2 = MMF.TryLatchPageExclusive(rootMemPageIdx2);
-            Debug.Assert(latched2, "TryLatchPageExclusive failed on root page during FieldCollection SPI save");
-            var page2 = MMF.GetPage(rootMemPageIdx2);
-            cs.AddByMemPageIndex(rootMemPageIdx2);
-            ref var h2 = ref page2.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
-            h2.FieldCollectionSegmentSPI = GetComponentCollectionSegment<FieldR1>().RootPageIndex;
-            MMF.UnlatchPageExclusive(rootMemPageIdx2);
-        }
+        // Persist the FieldCollection SPI in bootstrap
+        bootstrap.SetInt(BK_CollectionFieldR1, GetComponentCollectionSegment<FieldR1>().RootPageIndex);
+
+        // Save bootstrap to page 0
+        MMF.SaveBootstrap(cs);
 
         cs.SaveChanges();
         MMF.FlushToDisk();
@@ -777,17 +770,17 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         using var guard = EpochGuard.Enter(EpochManager);
         var epoch = guard.Epoch;
 
-        MMF.RequestPageEpoch(0, epoch, out var memPageIdx);
-        var page = MMF.GetPage(memPageIdx);
-        ref var h = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
+        // Read bootstrap dictionary (already loaded by MMF.OnFileLoading)
+        var bootstrap = MMF.Bootstrap;
 
         // Restore the TSN counter so MVCC visibility works for entities from previous sessions
-        if (h.NextFreeTSN > 0)
+        var nextFreeTSN = bootstrap.GetLong(BK_NextFreeTSN);
+        if (nextFreeTSN > 0)
         {
-            TransactionChain.SetNextFreeId(h.NextFreeTSN);
+            TransactionChain.SetNextFreeId(nextFreeTSN);
         }
 
-        if (h.SystemSchemaRevision == 0)
+        if (bootstrap.GetInt(BK_SystemSchemaRevision) == 0)
         {
             return;
         }
@@ -799,9 +792,12 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         var compDef    = DBD.GetComponent(ComponentR1.SchemaName, 1);
         var historyDef = DBD.GetComponent(SchemaHistoryR1.SchemaName, 1);
 
-        // Load system tables using the persisted SPIs
-        _componentsTable = new ComponentTable(this, compDef, this, h.ComponentTableSPI, h.ComponentTableVersionSPI, h.ComponentTableDefaultIndexSPI, h.ComponentTableString64IndexSPI);
-        _schemaHistoryTable = new ComponentTable(this, historyDef, this, h.SchemaHistoryTableSPI, h.SchemaHistoryVersionSPI, h.SchemaHistoryDefaultIndexSPI, h.SchemaHistoryString64IndexSPI);
+        // Load system tables using SPIs from bootstrap
+        var compSPIs = bootstrap.Get(BK_SysComponentR1);
+        var historySPIs = bootstrap.Get(BK_SysSchemaHistory);
+
+        _componentsTable = new ComponentTable(this, compDef, this, compSPIs.GetInt(0), compSPIs.GetInt(1), compSPIs.GetInt(2), compSPIs.GetInt(3));
+        _schemaHistoryTable = new ComponentTable(this, historyDef, this, historySPIs.GetInt(0), historySPIs.GetInt(1), historySPIs.GetInt(2), historySPIs.GetInt(3));
 
         _componentTableByType.TryAdd(typeof(ComponentR1), _componentsTable);
         _componentTableByType.TryAdd(typeof(SchemaHistoryR1), _schemaHistoryTable);
@@ -814,15 +810,15 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         _schemaHistoryTable.WalTypeId = historyWalTypeId;
         _componentTableByWalTypeId.TryAdd(historyWalTypeId, _schemaHistoryTable);
 
-        // Load the ComponentCollection segment for FieldR1 so we can read persisted field definitions.
-        // This segment was persisted as FieldCollectionSegmentSPI in the root header during creation.
-        if (h.FieldCollectionSegmentSPI != 0)
+        // Load the ComponentCollection segment for FieldR1
+        int fieldCollectionSPI = bootstrap.GetInt(BK_CollectionFieldR1);
+        if (fieldCollectionSPI != 0)
         {
             unsafe
             {
                 var stride = RoundToStandardStride(
                     Math.Max(sizeof(FieldR1) * ComponentCollectionItemCountPerChunk, sizeof(VariableSizedBufferRootHeader)));
-                var segment = MMF.LoadChunkBasedSegment(h.FieldCollectionSegmentSPI, stride);
+                var segment = MMF.LoadChunkBasedSegment(fieldCollectionSPI, stride);
                 _componentCollectionSegmentByStride.TryAdd(stride, segment);
             }
         }
@@ -845,7 +841,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             }
 
             // Read FieldR1 entries from each persisted component's Fields collection
-            if (h.FieldCollectionSegmentSPI != 0)
+            if (fieldCollectionSPI != 0)
             {
                 var vsbs = GetComponentCollectionVSBS<FieldR1>();
                 foreach (var kvp in _persistedComponents)
@@ -900,8 +896,10 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         var page = MMF.GetPage(memPageIdx);
 
         cs.AddByMemPageIndex(memPageIdx);
-        ref var header = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
-        header.NextFreeTSN = TransactionChain.NextFreeId;
+
+        // Update bootstrap with current TSN
+        MMF.Bootstrap.SetLong(BK_NextFreeTSN, TransactionChain.NextFreeId);
+        MMF.SaveBootstrap(cs);
 
         MMF.UnlatchPageExclusive(memPageIdx);
 
@@ -910,26 +908,14 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     }
 
     /// <summary>
-    /// Increments the <see cref="RootFileHeader.UserSchemaVersion"/> counter on page 0.
+    /// Increments the UserSchemaVersion counter in the bootstrap dictionary.
     /// Called after any user component schema change is persisted.
     /// </summary>
     private void IncrementUserSchemaVersion()
     {
-        using var guard = EpochGuard.Enter(EpochManager);
-        var epoch = guard.Epoch;
-
-        var cs = MMF.CreateChangeSet();
-        MMF.RequestPageEpoch(0, epoch, out var memPageIdx);
-        var latched = MMF.TryLatchPageExclusive(memPageIdx);
-        Debug.Assert(latched, "TryLatchPageExclusive failed on root page during UserSchemaVersion increment");
-        var page = MMF.GetPage(memPageIdx);
-
-        cs.AddByMemPageIndex(memPageIdx);
-        ref var header = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
-        header.UserSchemaVersion++;
-
-        MMF.UnlatchPageExclusive(memPageIdx);
-        cs.SaveChanges();
+        var currentVersion = MMF.Bootstrap.GetInt(BK_UserSchemaVersion);
+        MMF.Bootstrap.SetInt(BK_UserSchemaVersion, currentVersion + 1);
+        MMF.SaveBootstrap();
     }
 
     /// <summary>
