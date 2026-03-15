@@ -81,7 +81,11 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
     private TKey* KeysPtr(byte* chunkAddr) => (TKey*)(chunkAddr + _keysOffset);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private byte* ValueAt(byte* chunkAddr, int index) => chunkAddr + _valuesOffset + index * _valueSize;
+    private byte* ValueAt(byte* chunkAddr, int index)
+    {
+        Debug.Assert(index >= 0 && index < _bucketCapacity, $"ValueAt index {index} out of range [0, {_bucketCapacity})");
+        return chunkAddr + _valuesOffset + index * _valueSize;
+    }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Hash function — JIT-specialized by sizeof(TKey)

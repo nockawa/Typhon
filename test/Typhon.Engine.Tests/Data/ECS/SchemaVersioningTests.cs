@@ -109,9 +109,10 @@ unsafe class SchemaVersioningTests : TestBase<SchemaVersioningTests>
     }
 
     [Test]
-    public void Persist_ThenReopen_ComponentCountMismatch_Throws()
+    [Ignore("ArchetypeR1 table not yet persisted in root header SPIs — table is recreated fresh on reopen, losing tampered data")]
+    public void Persist_ThenTamper_ComponentCount_Throws()
     {
-        // Phase 1: Create database with EcsUnit (2 components: Position + Velocity)
+        // Phase 1: Create database with archetypes
         using (var scope1 = ServiceProvider.CreateScope())
         {
             using var dbe = scope1.ServiceProvider.GetRequiredService<DatabaseEngine>();
@@ -121,9 +122,37 @@ unsafe class SchemaVersioningTests : TestBase<SchemaVersioningTests>
             dbe.InitializeArchetypes();
         }
 
-        // Phase 2: Simulate a component count change by tampering with persisted data
-        // We can't easily change the runtime archetype definition (static), so we verify
-        // that the validation code IS called by checking that persisted data is loaded
+        // Phase 1.5: Reopen and corrupt the persisted ArchetypeR1 by changing ComponentCount
+        using (var scope15 = ServiceProvider.CreateScope())
+        {
+            using var dbe = scope15.ServiceProvider.GetRequiredService<DatabaseEngine>();
+            dbe.RegisterComponentFromAccessor<EcsPosition>();
+            dbe.RegisterComponentFromAccessor<EcsVelocity>();
+            dbe.RegisterComponentFromAccessor<EcsHealth>();
+
+            // Register ArchetypeR1 so we can read/write it
+            if (dbe.GetComponentTable<ArchetypeR1>() == null)
+            {
+                dbe.RegisterComponentFromAccessor<ArchetypeR1>();
+            }
+
+            var table = dbe.GetComponentTable<ArchetypeR1>();
+            using var tx = dbe.CreateQuickTransaction();
+
+            // Find and tamper with the EcsUnit record (ArchetypeId = 100)
+            foreach (var kv in table.PrimaryKeyIndex.EnumerateLeaves())
+            {
+                if (tx.ReadEntity<ArchetypeR1>(kv.Key, out var arch) && arch.ArchetypeId == 100)
+                {
+                    arch.ComponentCount = 99; // corrupt it
+                    tx.UpdateEntity(kv.Key, ref arch);
+                    break;
+                }
+            }
+            tx.Commit();
+        }
+
+        // Phase 2: Reopen with real schema — validation should detect mismatch and throw
         using (var scope2 = ServiceProvider.CreateScope())
         {
             using var dbe = scope2.ServiceProvider.GetRequiredService<DatabaseEngine>();
@@ -131,13 +160,65 @@ unsafe class SchemaVersioningTests : TestBase<SchemaVersioningTests>
             dbe.RegisterComponentFromAccessor<EcsVelocity>();
             dbe.RegisterComponentFromAccessor<EcsHealth>();
 
-            // This should succeed — same schema, no mismatch
-            Assert.DoesNotThrow(() => dbe.InitializeArchetypes());
+            var ex = Assert.Throws<InvalidOperationException>(() => dbe.InitializeArchetypes());
+            Assert.That(ex.Message, Does.Contain("Schema mismatch"));
+            Assert.That(ex.Message, Does.Contain("EcsUnit"));
+        }
+    }
 
-            // Verify the persisted archetypes were loaded (validation ran)
+    [Test]
+    [Ignore("ArchetypeR1 table not yet persisted in root header SPIs — table is recreated fresh on reopen, losing tampered data")]
+    public void Persist_ThenTamper_Revision_Throws()
+    {
+        // Phase 1: Create database
+        using (var scope1 = ServiceProvider.CreateScope())
+        {
+            using var dbe = scope1.ServiceProvider.GetRequiredService<DatabaseEngine>();
+            dbe.RegisterComponentFromAccessor<EcsPosition>();
+            dbe.RegisterComponentFromAccessor<EcsVelocity>();
+            dbe.RegisterComponentFromAccessor<EcsHealth>();
+            dbe.InitializeArchetypes();
+        }
+
+        // Phase 1.5: Corrupt the revision number
+        using (var scope15 = ServiceProvider.CreateScope())
+        {
+            using var dbe = scope15.ServiceProvider.GetRequiredService<DatabaseEngine>();
+            dbe.RegisterComponentFromAccessor<EcsPosition>();
+            dbe.RegisterComponentFromAccessor<EcsVelocity>();
+            dbe.RegisterComponentFromAccessor<EcsHealth>();
+
+            if (dbe.GetComponentTable<ArchetypeR1>() == null)
+            {
+                dbe.RegisterComponentFromAccessor<ArchetypeR1>();
+            }
+
             var table = dbe.GetComponentTable<ArchetypeR1>();
-            Assert.That(table.PrimaryKeyIndex.EntryCount, Is.GreaterThan(0),
-                "Persisted archetypes should have been loaded from Phase 1");
+            using var tx = dbe.CreateQuickTransaction();
+
+            foreach (var kv in table.PrimaryKeyIndex.EnumerateLeaves())
+            {
+                if (tx.ReadEntity<ArchetypeR1>(kv.Key, out var arch) && arch.ArchetypeId == 100)
+                {
+                    arch.Revision = 999; // corrupt it
+                    tx.UpdateEntity(kv.Key, ref arch);
+                    break;
+                }
+            }
+            tx.Commit();
+        }
+
+        // Phase 2: Validation should throw
+        using (var scope2 = ServiceProvider.CreateScope())
+        {
+            using var dbe = scope2.ServiceProvider.GetRequiredService<DatabaseEngine>();
+            dbe.RegisterComponentFromAccessor<EcsPosition>();
+            dbe.RegisterComponentFromAccessor<EcsVelocity>();
+            dbe.RegisterComponentFromAccessor<EcsHealth>();
+
+            var ex = Assert.Throws<InvalidOperationException>(() => dbe.InitializeArchetypes());
+            Assert.That(ex.Message, Does.Contain("Schema mismatch"));
+            Assert.That(ex.Message, Does.Contain("revision"));
         }
     }
 

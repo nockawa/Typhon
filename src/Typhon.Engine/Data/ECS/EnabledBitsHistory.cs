@@ -24,7 +24,8 @@ internal class EnabledBitsHistory
     /// <returns>The EnabledBits visible at txTsn.</returns>
     public ushort ResolveAt(long txTsn, ushort currentBits)
     {
-        // Walk from newest to oldest. If any changeTSN > txTsn, the old bits// were what the entity had before that change — that's what this tx sees.
+        // Walk from newest to oldest. If any changeTSN > txTsn, the old bits
+        // were what the entity had before that change — that's what this tx sees.
         for (int i = _entries.Count - 1; i >= 0; i--)
         {
             var (changeTsn, oldBits) = _entries[i];

@@ -237,4 +237,30 @@ class EntitySpawnTests : TestBase<EntitySpawnTests>
         using var t = dbe.CreateQuickTransaction();
         Assert.That(t.IsAlive(EntityId.Null), Is.False);
     }
+
+    [Test]
+    public void Spawn_ThenRollback_EntityNotVisible()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId spawnedId;
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var pos = new EcsPosition(1, 2, 3);
+            var vel = new EcsVelocity(0, 0, 0);
+            spawnedId = t.Spawn<EcsUnit>(EcsUnit.Position.Set(in pos), EcsUnit.Velocity.Set(in vel));
+
+            // Verify visible within the creating transaction
+            Assert.That(t.IsAlive(spawnedId), Is.True);
+
+            // Don't commit — implicit rollback on dispose
+        }
+
+        // New transaction should NOT see the rolled-back entity
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            Assert.That(t.IsAlive(spawnedId), Is.False, "Rolled-back entity should be invisible");
+            Assert.That(t.TryOpen(spawnedId, out _), Is.False);
+        }
+    }
 }

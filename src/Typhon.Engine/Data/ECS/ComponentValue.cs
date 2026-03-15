@@ -23,7 +23,7 @@ public unsafe struct ComponentValue
 
     internal readonly int ComponentTypeId;
     internal readonly int DataSize;
-    private readonly int _reserved;
+    private readonly int _headerPad; // aligns _data to 12-byte offset, ensures 128B total with 112B payload
 
     // 12 bytes header above, 112 bytes payload below, 4 bytes implicit tail padding = 128B total
     private fixed byte _data[MaxPayloadSize];
@@ -42,7 +42,7 @@ public unsafe struct ComponentValue
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal T Read<T>() where T : unmanaged
     {
-        Debug.Assert(sizeof(T) <= MaxPayloadSize);
+        Debug.Assert(sizeof(T) == DataSize, $"Read<{typeof(T).Name}> size {sizeof(T)} != stored DataSize {DataSize}");
         return Unsafe.ReadUnaligned<T>(ref _data[0]);
     }
 }

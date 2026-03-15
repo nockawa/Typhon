@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine;
 
@@ -76,11 +77,29 @@ internal class ArchetypeMetadata
     /// </summary>
     internal List<CascadeTarget> _cascadeTargets;
 
-    /// <summary>Get the slot index for a component type ID. Returns the slot index (0..ComponentCount-1).</summary>
-    public byte GetSlot(int componentTypeId) => _typeIdToSlot[componentTypeId];
+    /// <summary>Get the slot index for a component type ID. Throws if the component is not part of this archetype.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public byte GetSlot(int componentTypeId)
+    {
+        if (!_typeIdToSlot.TryGetValue(componentTypeId, out byte slot))
+        {
+            ThrowComponentNotInArchetype(componentTypeId);
+        }
+        return slot;
+    }
+
+    /// <summary>Try to get the slot index for a component type ID. Returns false if not found.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool TryGetSlot(int componentTypeId, out byte slot) => _typeIdToSlot.TryGetValue(componentTypeId, out slot);
 
     /// <summary>Check whether this archetype has a component with the given type ID.</summary>
     public bool HasComponent(int componentTypeId) => _typeIdToSlot.ContainsKey(componentTypeId);
+
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
+    private void ThrowComponentNotInArchetype(int componentTypeId) =>
+        throw new InvalidOperationException(
+            $"Component type ID {componentTypeId} is not part of archetype '{ArchetypeType?.Name}' (Id={ArchetypeId}). " +
+            $"Ensure you are using a Comp<T> handle declared on this archetype.");
 }
 
 /// <summary>

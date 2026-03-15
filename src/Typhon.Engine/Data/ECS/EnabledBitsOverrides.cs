@@ -74,7 +74,16 @@ internal class EnabledBitsOverrides
         {
             if (_overrides.TryRemove(key, out _))
             {
-                Interlocked.Decrement(ref _overrideCount);
+                // Clamp to 0 — concurrent Record() may have incremented between our TryPrune and TryRemove
+                int prev;
+                do
+                {
+                    prev = _overrideCount;
+                    if (prev <= 0)
+                    {
+                        break;
+                    }
+                } while (Interlocked.CompareExchange(ref _overrideCount, prev - 1, prev) != prev);
             }
         }
     }

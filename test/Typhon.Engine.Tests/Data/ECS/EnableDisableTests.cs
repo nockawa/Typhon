@@ -164,4 +164,45 @@ class EnableDisableTests : TestBase<EnableDisableTests>
         fullyPruned = history.TryPrune(20);
         Assert.That(fullyPruned, Is.True);
     }
+
+    [Test]
+    public void EnableDisable_MVCC_OlderTxSeesOriginalBits()
+    {
+        using var dbe = SetupEngine();
+
+        // Phase 1: Spawn entity with both components enabled
+        EntityId id;
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var pos = new EcsPosition(1, 2, 3);
+            var vel = new EcsVelocity(4, 5, 6);
+            id = t.Spawn<EcsUnit>(EcsUnit.Position.Set(in pos), EcsUnit.Velocity.Set(in vel));
+            t.Commit();
+        }
+
+        // Phase 2: Open tx1 (older snapshot) — keeps its TSN
+        using var tx1 = dbe.CreateQuickTransaction();
+
+        // Phase 3: tx2 disables Velocity and commits (newer TSN)
+        using (var tx2 = dbe.CreateQuickTransaction())
+        {
+            var entity = tx2.OpenMut(id);
+            Assert.That(entity.IsEnabled(EcsUnit.Velocity), Is.True);
+            entity.Disable(EcsUnit.Velocity);
+            tx2.Commit();
+        }
+
+        // Phase 4: tx1 (older snapshot) should still see Velocity as ENABLED
+        // because the disable happened at a TSN > tx1.TSN
+        var entityFromTx1 = tx1.Open(id);
+        Assert.That(entityFromTx1.IsEnabled(EcsUnit.Position), Is.True, "Position should be enabled for old tx");
+        Assert.That(entityFromTx1.IsEnabled(EcsUnit.Velocity), Is.True, "Velocity should still be enabled for old tx (MVCC)");
+
+        // Phase 5: New tx (newest snapshot) should see Velocity as DISABLED
+        using (var tx3 = dbe.CreateQuickTransaction())
+        {
+            var entityFromTx3 = tx3.Open(id);
+            Assert.That(entityFromTx3.IsEnabled(EcsUnit.Velocity), Is.False, "Velocity should be disabled for new tx");
+        }
+    }
 }
