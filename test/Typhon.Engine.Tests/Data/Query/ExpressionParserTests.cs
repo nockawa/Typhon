@@ -1,3 +1,5 @@
+#pragma warning disable CS1718 
+
 using NUnit.Framework;
 using System;
 using System.Linq.Expressions;
@@ -269,6 +271,7 @@ class ExpressionParserTests
     public void Parse_FieldToField_Throws()
     {
         Assert.Throws<NotSupportedException>(() =>
+            // ReSharper disable once EqualExpressionComparison
             ExpressionParser.Parse<CompD>(p => p.B > p.B));
     }
 

@@ -214,8 +214,6 @@ public static class ServiceCollectionExtensions
         Action<TO> configure = null) where TS : PagedMMF where TO : PagedMMFOptions
     {
         // services.AddOptions<TO>();
-        services.TryAddSingleton<TimeManager>();
-
         if (configure != null)
         {
             var optionsBuilder = services.AddOptions<TO>();

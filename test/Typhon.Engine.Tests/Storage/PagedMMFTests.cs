@@ -31,8 +31,6 @@ class PagedMMFTests
             .MinimumLevel.Verbose()
             .Enrich.FromLogContext()
             .Enrich.WithThreadId()
-            .Enrich.WithCurrentFrame()
-            .WriteTo.Seq("http://localhost:5341")
             .CreateLogger();
 #endif
 
@@ -382,7 +380,6 @@ class PagedMMFTests
         {
             using var scope = _serviceProvider.CreateScope();
             var pmmf = scope.ServiceProvider.GetService<PagedMMF>();
-            var tm = scope.ServiceProvider.GetRequiredService<TimeManager>();
 
             // Check the initial page of each page
             {
@@ -402,7 +399,7 @@ class PagedMMFTests
             // Simulate accesses
             for (int curF = 0; curF < frameCount; curF++)
             {
-                var curFrame = tm.ExecutionFrame;
+                var curFrame = curF;
 
                 // Console.WriteLine($"\r\n************** Simulating Frame {curFrame} ************** \r\n");
                 var frameInfo = frames[curF];
@@ -445,8 +442,6 @@ class PagedMMFTests
                         cs.SaveChanges();
                     }
                 });
-
-                tm.BumpFrame();
             }
         }
     }

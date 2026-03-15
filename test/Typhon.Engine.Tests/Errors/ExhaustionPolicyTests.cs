@@ -188,8 +188,7 @@ class ExhaustionPolicyTests : TestBase<ExhaustionPolicyTests>
         var config = new LoggerConfiguration()
             .MinimumLevel.Verbose()
             .Enrich.FromLogContext()
-            .Enrich.WithThreadId()
-            .Enrich.WithCurrentFrame();
+            .Enrich.WithThreadId();
 
         Log.Logger = config.CreateLogger();
 

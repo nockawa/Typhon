@@ -24,24 +24,11 @@ class BtreeTests
         var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("MemPageCount")! : PagedMMF.DefaultMemPageCount;
         dcs *= PagedMMF.PageSize;
 
-#if DEBUG
-        Log.Logger = new LoggerConfiguration()
-            .MinimumLevel.Verbose()
-            .Enrich.FromLogContext()
-            .Enrich.WithThreadId()
-            .Enrich.WithCurrentFrame()
-            .WriteTo.Seq("http://localhost:5341")
-            .CreateLogger();
-#endif
-
         var serviceCollection = new ServiceCollection();
         _serviceCollection = serviceCollection;
         _serviceCollection
             .AddLogging(builder =>
             {
-#if DEBUG
-                // builder.AddSerilog(dispose: true);
-#endif
                 builder.AddSimpleConsole(options =>
                 {
                     options.SingleLine = true;
