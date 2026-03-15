@@ -43,6 +43,7 @@ internal sealed class CheckpointManager : ResourceNode, IMetricSource
     private readonly ResourceOptions _resourceOptions;
     private readonly EpochManager _epochManager;
     private readonly StagingBufferPool _stagingPool;
+    private readonly Func<long> _lastTickFenceLsnProvider;
 
     // ═══════════════════════════════════════════════════════════════
     // Thread lifecycle
@@ -88,7 +89,8 @@ internal sealed class CheckpointManager : ResourceNode, IMetricSource
     /// <param name="parent">Parent resource node.</param>
     /// <param name="initialCheckpointLsn">Initial checkpoint LSN from file header (0 for fresh database).</param>
     internal CheckpointManager(ManagedPagedMMF mmf, UowRegistry uowRegistry, WalManager walManager, ResourceOptions resourceOptions, EpochManager epochManager,
-        StagingBufferPool stagingPool, IResource parent, long initialCheckpointLsn = 0) : base("CheckpointManager", ResourceType.WAL, parent)
+        StagingBufferPool stagingPool, IResource parent, long initialCheckpointLsn = 0, Func<long> lastTickFenceLsnProvider = null) :
+        base("CheckpointManager", ResourceType.WAL, parent)
     {
         ArgumentNullException.ThrowIfNull(mmf);
         ArgumentNullException.ThrowIfNull(uowRegistry);
@@ -103,6 +105,7 @@ internal sealed class CheckpointManager : ResourceNode, IMetricSource
         _resourceOptions = resourceOptions;
         _epochManager = epochManager;
         _stagingPool = stagingPool;
+        _lastTickFenceLsnProvider = lastTickFenceLsnProvider;
         _checkpointLsn = initialCheckpointLsn;
     }
 
@@ -302,7 +305,11 @@ internal sealed class CheckpointManager : ResourceNode, IMetricSource
             var segmentManager = _walManager.SegmentManager;
             if (segmentManager != null)
             {
-                var recycled = segmentManager.MarkReclaimable(targetLsn);
+                // WAL segments must be retained if they contain TickFence data needed for SV crash recovery.
+                // Only reclaim segments with LSN below both CheckpointLSN and LastTickFenceLSN.
+                var tickFenceLsn = _lastTickFenceLsnProvider?.Invoke() ?? 0;
+                var trimLsn = tickFenceLsn > 0 ? Math.Min(targetLsn, tickFenceLsn) : targetLsn;
+                var recycled = segmentManager.MarkReclaimable(trimLsn);
                 Interlocked.Add(ref _totalSegmentsRecycled, recycled);
             }
 

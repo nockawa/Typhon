@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
 
@@ -72,6 +73,7 @@ internal sealed class ComponentInfo
     public BTree<long, PersistentStore> PrimaryKeyIndex;
     public ChunkAccessor<PersistentStore> CompContentAccessor;
     public ChunkAccessor<PersistentStore> CompRevTableAccessor;
+    public ChunkAccessor<TransientStore> TransientCompContentAccessor;
 
     // Dual caches (one is always null)
     // ReSharper disable InconsistentNaming
@@ -106,8 +108,18 @@ internal sealed class ComponentInfo
     /// </summary>
     public void DisposeAccessors()
     {
-        CompContentAccessor.Dispose();
-        CompRevTableAccessor.Dispose();
+        if (ComponentTable.StorageMode == StorageMode.Transient)
+        {
+            TransientCompContentAccessor.Dispose();
+        }
+        else
+        {
+            CompContentAccessor.Dispose();
+            if (ComponentTable.StorageMode == StorageMode.Versioned)
+            {
+                CompRevTableAccessor.Dispose();
+            }
+        }
     }
 
     /// <summary>

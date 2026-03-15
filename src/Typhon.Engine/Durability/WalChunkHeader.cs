@@ -14,6 +14,9 @@ public enum WalChunkType : ushort
 
     /// <summary>Full-Page Image for torn-page repair.</summary>
     FullPageImage = 2,
+
+    /// <summary>Tick fence: snapshot of dirty SingleVersion component data at tick boundary.</summary>
+    TickFence = 3,
 }
 
 /// <summary>
@@ -63,4 +66,38 @@ public struct WalChunkFooter
 
     /// <summary>Expected size of this struct in bytes.</summary>
     public const int SizeInBytes = 4;
+}
+
+/// <summary>
+/// 24-byte header for a TickFence WAL chunk. One chunk per SingleVersion ComponentTable per tick.
+/// Followed by <see cref="EntryCount"/> entries of (ChunkId:4B + ComponentData:PayloadStride bytes).
+/// </summary>
+/// <remarks>
+/// <para>ChunkId (not EntityPK) is stored per entry: SV uses PersistentStore with stable file positions, so recovery can write directly to chunks without
+/// PK lookup.</para>
+/// </remarks>
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+[PublicAPI]
+public struct TickFenceHeader
+{
+    /// <summary>Monotonic tick number identifying this tick boundary.</summary>
+    public long TickNumber;
+
+    /// <summary>WAL log sequence number assigned to this chunk.</summary>
+    public long LSN;
+
+    /// <summary>Identifies the ComponentTable via <see cref="ComponentTable.WalTypeId"/>.</summary>
+    public ushort ComponentTypeId;
+
+    /// <summary>Number of dirty entity entries in this chunk.</summary>
+    public ushort EntryCount;
+
+    /// <summary>Component data size per entry (ComponentStorageSize).</summary>
+    public ushort PayloadStride;
+
+    /// <summary>Reserved for future use.</summary>
+    public ushort Reserved;
+
+    /// <summary>Expected size of this struct in bytes.</summary>
+    public const int SizeInBytes = 24;
 }

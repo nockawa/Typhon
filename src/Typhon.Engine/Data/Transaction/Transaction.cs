@@ -911,21 +911,35 @@ public unsafe partial class Transaction : IDisposable
             return info;
         }
 
-        var ct = _dbe.GetComponentTable(componentType) ?? 
+        var ct = _dbe.GetComponentTable(componentType) ??
                  throw new InvalidOperationException($"The type {componentType} doesn't have a registered Component Table");
 
         var isMultiple = ct.Definition.AllowMultiple;
         info = new ComponentInfo(isMultiple)
         {
-            ComponentTable       = ct,
-            CompContentSegment   = ct.ComponentSegment,
-            CompRevTableSegment  = ct.CompRevTableSegment,
-            PrimaryKeyIndex      = ct.PrimaryKeyIndex,
-            CompContentAccessor  = ct.ComponentSegment.CreateChunkAccessor(_changeSet),
-            CompRevTableAccessor = ct.CompRevTableSegment.CreateChunkAccessor(_changeSet),
-            SingleCache          = isMultiple ? null : new Dictionary<long, ComponentInfo.CompRevInfo>(),
-            MultipleCache        = isMultiple ? new Dictionary<long, List<ComponentInfo.CompRevInfo>>() : null,
+            ComponentTable = ct,
+            SingleCache    = isMultiple ? null : new Dictionary<long, ComponentInfo.CompRevInfo>(),
+            MultipleCache  = isMultiple ? new Dictionary<long, List<ComponentInfo.CompRevInfo>>() : null,
         };
+
+        switch (ct.StorageMode)
+        {
+            case StorageMode.Transient:
+                info.TransientCompContentAccessor = ct.TransientComponentSegment.CreateChunkAccessor();
+                break;
+            case StorageMode.SingleVersion:
+                info.CompContentSegment  = ct.ComponentSegment;
+                info.PrimaryKeyIndex     = ct.PrimaryKeyIndex;
+                info.CompContentAccessor = ct.ComponentSegment.CreateChunkAccessor(_changeSet);
+                break;
+            default: // Versioned
+                info.CompContentSegment   = ct.ComponentSegment;
+                info.CompRevTableSegment  = ct.CompRevTableSegment;
+                info.PrimaryKeyIndex      = ct.PrimaryKeyIndex;
+                info.CompContentAccessor  = ct.ComponentSegment.CreateChunkAccessor(_changeSet);
+                info.CompRevTableAccessor = ct.CompRevTableSegment.CreateChunkAccessor(_changeSet);
+                break;
+        }
 
         _componentInfos.Add(componentType, info);
         return info;
@@ -938,11 +952,24 @@ public unsafe partial class Transaction : IDisposable
     /// </summary>
     private void FlushAndRefreshEpoch()
     {
-        // 1. Flush dirty state on all live per-transaction ChunkAccessors
+        // 1. Flush dirty state on all live per-transaction ChunkAccessors.
+        //    SV/Transient components only have their mode-specific accessor initialized;
+        //    calling CommitChanges on a default struct is safe (no-op via _dirtyFlags==0 guard)
+        //    but we skip explicitly for clarity.
         foreach (var ci in _componentInfos.Values)
         {
-            ci.CompContentAccessor.CommitChanges();
-            ci.CompRevTableAccessor.CommitChanges();
+            if (ci.ComponentTable.StorageMode == StorageMode.Transient)
+            {
+                ci.TransientCompContentAccessor.CommitChanges();
+            }
+            else
+            {
+                ci.CompContentAccessor.CommitChanges();
+                if (ci.ComponentTable.StorageMode == StorageMode.Versioned)
+                {
+                    ci.CompRevTableAccessor.CommitChanges();
+                }
+            }
         }
 
         // 2. Cap DirtyCounter at 1 for all tracked pages, clear ChangeSet.
@@ -1876,8 +1903,19 @@ public unsafe partial class Transaction : IDisposable
             // disposed inline during CommitComponentCore, so their pages are already tracked).
             foreach (var kvp in _componentInfos)
             {
-                kvp.Value.CompContentAccessor.CommitChanges();
-                kvp.Value.CompRevTableAccessor.CommitChanges();
+                var ci = kvp.Value;
+                if (ci.ComponentTable.StorageMode == StorageMode.Transient)
+                {
+                    ci.TransientCompContentAccessor.CommitChanges();
+                }
+                else
+                {
+                    ci.CompContentAccessor.CommitChanges();
+                    if (ci.ComponentTable.StorageMode == StorageMode.Versioned)
+                    {
+                        ci.CompRevTableAccessor.CommitChanges();
+                    }
+                }
             }
 
             _changeSet.SaveChanges();
@@ -1965,12 +2003,21 @@ public unsafe partial class Transaction : IDisposable
 
         _dbe.LogCommitPhase(TSN, "CommitComponentCore");
 
-        // Process every Component Type and their components
+        // Process every Component Type and their components (old CRUD path — Versioned only)
         var commitAction = new CommitAction { Tx = this };
         foreach (var kvp in _componentInfos)
         {
-            context.Info = kvp.Value;
             var info = kvp.Value;
+
+            // Skip non-Versioned components — the old CRUD commit path only applies to Versioned.
+            // SV/Transient components in _componentInfos were added by the ECS path (Spawn/Read/Write)
+            // and don't have old CRUD mutations to commit.
+            if (info.ComponentTable.StorageMode != StorageMode.Versioned)
+            {
+                continue;
+            }
+
+            context.Info = info;
             _dbe.LogCommitComponentEntries(TSN, kvp.Key.Name, info.EntryCount);
 
             // Start a sub-span for this component type

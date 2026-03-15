@@ -63,6 +63,7 @@ public struct ComponentR1
 
     public int SchemaRevision;
     public int FieldCount;
+    public byte StorageMode;
 }
 
 /// <summary>
@@ -168,6 +169,11 @@ public class DatabaseEngineOptions
     public WalWriterOptions Wal { get; set; }
 
     /// <summary>
+    /// Transient storage configuration (heap-backed pages for <see cref="StorageMode.Transient"/> components).
+    /// </summary>
+    public TransientOptions Transient { get; set; } = new();
+
+    /// <summary>
     /// Background statistics rebuild configuration (HyperLogLog, MCV, Histogram).
     /// Null disables the background statistics worker (statistics can still be rebuilt manually).
     /// </summary>
@@ -190,6 +196,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     private readonly ILogger<DatabaseEngine>    _log;
     private readonly IMemoryAllocator           _memoryAllocator;
     internal IMemoryAllocator                   MemoryAllocator => _memoryAllocator;
+    internal TransientOptions                   TransientOptions => _options.Transient;
     private readonly IWalFileIO                 _walFileIO;
     private readonly IResource                  _durabilityNode;
     private WalRecoveryResult                   _lastRecoveryResult;
@@ -205,6 +212,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     internal const string BK_UowRegistrySPI         = "UowRegistrySPI";
     internal const string BK_CollectionFieldR1      = "collection.FieldR1";
     internal const string BK_UserSchemaVersion      = "UserSchemaVersion";
+    internal const string BK_LastTickFenceLSN       = "LastTickFenceLSN";
     // ReSharper restore InconsistentNaming
 
     // Transaction counters for observability
@@ -225,6 +233,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     private ConcurrentDictionary<Type, ComponentTable> _componentTableByType;
     private ConcurrentDictionary<ushort, ComponentTable> _componentTableByWalTypeId;
     private long _curPrimaryKey;
+    private long _lastTickFenceLSN;
+    internal long LastTickFenceLSN => _lastTickFenceLSN;
     private Dictionary<string, (long PK, ComponentR1 Comp)> _persistedComponents;
     private Dictionary<ushort, (long PK, ArchetypeR1 Arch)> _persistedArchetypes;
     private Dictionary<string, FieldR1[]> _persistedFieldsByComponent;
@@ -299,6 +309,9 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
         using var guard = EpochGuard.Enter(EpochManager);
 
+        // Hoist stackalloc out of loop — max record size is 78B (14B header + 16 components × 4B)
+        byte* readBuf = stackalloc byte[EntityRecordAccessor.MaxRecordSize];
+
         foreach (var entry in toProcess)
         {
             var meta = entry.Meta;
@@ -306,10 +319,6 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             {
                 continue;
             }
-
-            // Read entity record to get chunk IDs before removal
-            int recordSize = meta._entityRecordSize;
-            byte* readBuf = stackalloc byte[recordSize];
             var accessor = meta._entityMap.Segment.CreateChunkAccessor();
             bool found = meta._entityMap.TryGet(entry.Id.EntityKey, readBuf, ref accessor);
 
@@ -514,7 +523,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
         // Read initial CheckpointLSN from file header
         long initialCheckpointLsn;
-        using (var guard = EpochGuard.Enter(EpochManager))
+        using (EpochGuard.Enter(EpochManager))
         {
             initialCheckpointLsn = MMF.Bootstrap.GetLong(ManagedPagedMMF.BK_CheckpointLSN);
         }
@@ -528,7 +537,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         MMF.SetPageChecksumVerification(_options.Resources.PageChecksumVerification);
 
         CheckpointManager = new CheckpointManager(MMF, UowRegistry, WalManager, _options.Resources, EpochManager, _stagingBufferPool, _durabilityNode,
-            initialCheckpointLsn);
+            initialCheckpointLsn, () => _lastTickFenceLSN);
         CheckpointManager.Start();
 
         // Wire demand-driven flush: when page cache backpressure fires, immediately wake
@@ -552,6 +561,164 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// Returns all registered ComponentTables. Used by <see cref="StatisticsWorker"/> to iterate tables.
     /// </summary>
     internal IEnumerable<ComponentTable> GetAllComponentTables() => _componentTableByType.Values;
+
+    /// <summary>
+    /// Serializes dirty SingleVersion component data to WAL at tick boundary. One TickFence chunk per SV ComponentTable.
+    /// Called by the game loop at each tick boundary.
+    /// </summary>
+    /// <param name="tickNumber">Monotonic tick identifier.</param>
+    /// <returns>Highest LSN written, or 0 if nothing was serialized.</returns>
+    public long WriteTickFence(long tickNumber)
+    {
+        long highestLSN = 0;
+        using var epochGuard = EpochGuard.Enter(EpochManager);
+
+        foreach (var table in _componentTableByType.Values)
+        {
+            if (table.StorageMode != StorageMode.SingleVersion || !table.DirtyBitmap.HasDirty)
+            {
+                continue;
+            }
+
+            // Snapshot DirtyBitmap — atomic swap, clears bitmap for next tick
+            var dirtyBits = table.DirtyBitmap.Snapshot();
+
+            // Count dirty entries via PopCount
+            int entryCount = 0;
+            for (int i = 0; i < dirtyBits.Length; i++)
+            {
+                entryCount += BitOperations.PopCount((ulong)dirtyBits[i]);
+            }
+
+            if (entryCount == 0)
+            {
+                continue;
+            }
+
+            // No WAL configured — bitmap was snapshot'd (cleared), but nothing to serialize
+            if (WalManager == null)
+            {
+                continue;
+            }
+
+            int stride = table.ComponentStorageSize;
+            int overhead = table.ComponentOverhead;
+            int entrySize = 4 + stride; // ChunkId(4B) + ComponentData(stride)
+
+            // ChunkSize is ushort (max 65535). Split into multiple chunks if needed.
+            int maxEntriesPerChunk = (ushort.MaxValue - WalChunkHeader.SizeInBytes - TickFenceHeader.SizeInBytes - WalChunkFooter.SizeInBytes) / entrySize;
+
+            var accessor = table.ComponentSegment.CreateChunkAccessor();
+            try
+            {
+                int entriesRemaining = entryCount;
+                int wordIndex = 0;
+                long currentWord = wordIndex < dirtyBits.Length ? dirtyBits[wordIndex] : 0;
+
+                while (entriesRemaining > 0)
+                {
+                    int batchCount = Math.Min(entriesRemaining, maxEntriesPerChunk);
+                    int bodySize = TickFenceHeader.SizeInBytes + batchCount * entrySize;
+                    int chunkSize = WalChunkHeader.SizeInBytes + bodySize + WalChunkFooter.SizeInBytes;
+
+                    var wc = WaitContext.FromDeadline(Deadline.FromTimeout(TimeoutOptions.Current.DefaultCommitTimeout));
+                    var claim = WalManager.CommitBuffer.TryClaim(chunkSize, 1, ref wc);
+                    if (!claim.IsValid)
+                    {
+                        break; // back-pressure — skip remaining entries for this table
+                    }
+
+                    try
+                    {
+                        int offset = 0;
+
+                        // WalChunkHeader
+                        var chunkHeader = new WalChunkHeader
+                        {
+                            ChunkType = (ushort)WalChunkType.TickFence,
+                            ChunkSize = (ushort)chunkSize,
+                            PrevCRC = 0,
+                        };
+                        MemoryMarshal.Write(claim.DataSpan[offset..], in chunkHeader);
+                        offset += WalChunkHeader.SizeInBytes;
+
+                        // TickFenceHeader
+                        var tfHeader = new TickFenceHeader
+                        {
+                            TickNumber = tickNumber,
+                            LSN = claim.FirstLSN,
+                            ComponentTypeId = table.WalTypeId,
+                            EntryCount = (ushort)batchCount,
+                            PayloadStride = (ushort)stride,
+                            Reserved = 0,
+                        };
+                        MemoryMarshal.Write(claim.DataSpan[offset..], in tfHeader);
+                        offset += TickFenceHeader.SizeInBytes;
+
+                        // Write entries by iterating dirty bits
+                        int written = 0;
+                        while (written < batchCount)
+                        {
+                            // Advance to next word if current is exhausted
+                            while (currentWord == 0 && wordIndex < dirtyBits.Length - 1)
+                            {
+                                wordIndex++;
+                                currentWord = dirtyBits[wordIndex];
+                            }
+
+                            if (currentWord == 0)
+                            {
+                                break;
+                            }
+
+                            int bit = BitOperations.TrailingZeroCount((ulong)currentWord);
+                            int chunkId = wordIndex * 64 + bit;
+                            currentWord &= currentWord - 1; // clear lowest set bit
+
+                            // Write ChunkId (4B)
+                            MemoryMarshal.Write(claim.DataSpan[offset..], in chunkId);
+                            offset += 4;
+
+                            // Write component data (stride bytes)
+                            var src = accessor.GetChunkAsReadOnlySpan(chunkId);
+                            src.Slice(overhead, stride).CopyTo(claim.DataSpan[offset..]);
+                            offset += stride;
+
+                            written++;
+                        }
+
+                        // WalChunkFooter
+                        var footer = new WalChunkFooter { CRC = 0 };
+                        MemoryMarshal.Write(claim.DataSpan[offset..], in footer);
+
+                        WalManager.CommitBuffer.Publish(ref claim);
+                        if (claim.FirstLSN > highestLSN)
+                        {
+                            highestLSN = claim.FirstLSN;
+                        }
+                    }
+                    catch
+                    {
+                        WalManager.CommitBuffer.AbandonClaim(ref claim);
+                        throw;
+                    }
+
+                    entriesRemaining -= batchCount;
+                }
+            }
+            finally
+            {
+                accessor.Dispose();
+            }
+        }
+
+        if (highestLSN > 0)
+        {
+            Interlocked.Exchange(ref _lastTickFenceLSN, highestLSN);
+        }
+
+        return highestLSN;
+    }
 
     private void ConstructComponentStore()
     {
@@ -579,7 +746,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             MMF.UnlatchPageExclusive(memPageIdx);
 
             // Write SPI to root header
-            MMF.RequestPageEpoch(0, epoch, out var rootMemPageIdx);
+            MMF.RequestPageEpoch(0, epoch, out int _);
             MMF.Bootstrap.SetInt(BK_UowRegistrySPI, segment.RootPageIndex);
             MMF.SaveBootstrap(cs);
 
@@ -678,7 +845,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         MMF.RequestPageEpoch(0, epoch, out var memPageIdx);
         var latched = MMF.TryLatchPageExclusive(memPageIdx);
         Debug.Assert(latched, "TryLatchPageExclusive failed on root page during schema save");
-        var page = MMF.GetPage(memPageIdx);
+        MMF.GetPage(memPageIdx);
 
         // Save the entry points in the bootstrap dictionary
         cs.AddByMemPageIndex(memPageIdx);
@@ -736,13 +903,14 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             POCOType            = (String64)definition.POCOType.FullName,
             CompSize             = definition.ComponentStorageSize,
             CompOverhead         = definition.ComponentStorageOverhead,
-            ComponentSPI        = table.ComponentSegment.RootPageIndex,
-            VersionSPI          = table.CompRevTableSegment.RootPageIndex,
-            DefaultIndexSPI     = table.DefaultIndexSegment.RootPageIndex,
-            String64IndexSPI    = table.String64IndexSegment.RootPageIndex,
+            ComponentSPI        = table.ComponentSegment?.RootPageIndex ?? 0,
+            VersionSPI          = table.CompRevTableSegment?.RootPageIndex ?? 0,
+            DefaultIndexSPI     = table.DefaultIndexSegment?.RootPageIndex ?? 0,
+            String64IndexSPI    = table.String64IndexSegment?.RootPageIndex ?? 0,
             TailIndexSPI        = table.TailIndexSegment?.RootPageIndex ?? 0,
             SchemaRevision      = definition.Revision,
             FieldCount          = nonStaticCount,
+            StorageMode         = (byte)table.StorageMode,
         };
 
         var fieldList = new List<FieldR1>();
@@ -854,7 +1022,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     private void LoadSystemSchemaR1()
     {
         using var guard = EpochGuard.Enter(EpochManager);
-        var epoch = guard.Epoch;
+        var unused = guard.Epoch;
 
         // Read bootstrap dictionary (already loaded by MMF.OnFileLoading)
         var bootstrap = MMF.Bootstrap;
@@ -865,6 +1033,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         {
             TransactionChain.SetNextFreeId(nextFreeTSN);
         }
+
+        _lastTickFenceLSN = bootstrap.GetLong(BK_LastTickFenceLSN);
 
         if (bootstrap.GetInt(BK_SystemSchemaRevision) == 0)
         {
@@ -882,8 +1052,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         var compSPIs = bootstrap.Get(BK_SysComponentR1);
         var historySPIs = bootstrap.Get(BK_SysSchemaHistory);
 
-        _componentsTable = new ComponentTable(this, compDef, this, compSPIs.GetInt(0), compSPIs.GetInt(1), compSPIs.GetInt(2), compSPIs.GetInt(3));
-        _schemaHistoryTable = new ComponentTable(this, historyDef, this, historySPIs.GetInt(0), historySPIs.GetInt(1), historySPIs.GetInt(2), historySPIs.GetInt(3));
+        _componentsTable = new ComponentTable(this, compDef, this, compSPIs.GetInt(), compSPIs.GetInt(1), compSPIs.GetInt(2), compSPIs.GetInt(3));
+        _schemaHistoryTable = new ComponentTable(this, historyDef, this, historySPIs.GetInt(), historySPIs.GetInt(1), historySPIs.GetInt(2), historySPIs.GetInt(3));
 
         _componentTableByType.TryAdd(typeof(ComponentR1), _componentsTable);
         _componentTableByType.TryAdd(typeof(SchemaHistoryR1), _schemaHistoryTable);
@@ -977,12 +1147,16 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         MMF.RequestPageEpoch(0, epoch, out var memPageIdx);
         var latched = MMF.TryLatchPageExclusive(memPageIdx);
         Debug.Assert(latched, "TryLatchPageExclusive failed on root page during engine state save");
-        var page = MMF.GetPage(memPageIdx);
+        var unused = MMF.GetPage(memPageIdx);
 
         cs.AddByMemPageIndex(memPageIdx);
 
-        // Update bootstrap with current TSN
+        // Update bootstrap with current TSN and tick fence LSN
         MMF.Bootstrap.SetLong(BK_NextFreeTSN, TransactionChain.NextFreeId);
+        if (_lastTickFenceLSN > 0)
+        {
+            MMF.Bootstrap.SetLong(BK_LastTickFenceLSN, _lastTickFenceLSN);
+        }
         MMF.SaveBootstrap(cs);
 
         MMF.UnlatchPageExclusive(memPageIdx);
@@ -1099,8 +1273,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         while (pk > current && Interlocked.CompareExchange(ref _curPrimaryKey, pk, current) != current);
     }
 
-    public bool RegisterComponentFromAccessor<T>(ChangeSet changeSet = null, SchemaValidationMode schemaValidation = SchemaValidationMode.Enforce)
-        where T : unmanaged
+    public bool RegisterComponentFromAccessor<T>(ChangeSet changeSet = null, SchemaValidationMode schemaValidation = SchemaValidationMode.Enforce,
+        StorageMode? storageModeOverride = null) where T : unmanaged
     {
         // Look up persisted fields for the resolver (keyed by component schema name)
         FieldIdResolver resolver = null;
@@ -1118,6 +1292,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         {
             return false;
         }
+
+        var storageMode = storageModeOverride ?? definition.StorageMode;
 
         ComponentTable componentTable;
 
@@ -1197,34 +1373,50 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 }
             }
 
-            // Load path: use migration constructor if migration ran (segments already in MMF registry), otherwise standard load constructor from persisted SPIs
-            var migrationChangeSet = (migrationResult.HasValue || newIndexFieldIds != null) ? MMF.CreateChangeSet() : null;
-
-            if (migrationResult.HasValue)
+            // Transient: data doesn't survive restart — create fresh empty table, skip schema evolution
+            var persistedModeByte = persisted.Comp.StorageMode;
+            if (persistedModeByte > (byte)StorageMode.Transient)
             {
-                componentTable = new ComponentTable(this, definition, this, migrationResult.Value.NewComponentSegment, migrationResult.Value.NewRevisionSegment,
-                    persisted.Comp.DefaultIndexSPI, persisted.Comp.String64IndexSPI, persisted.Comp.TailIndexSPI, newIndexFieldIds: newIndexFieldIds, 
-                    changeSet: migrationChangeSet);
+                throw new InvalidOperationException(
+                    $"Invalid StorageMode byte {persistedModeByte} for component '{schemaName}'. Expected 0 (Versioned), 1 (SingleVersion), or 2 (Transient).");
+            }
+            var persistedMode = (StorageMode)persistedModeByte;
+            if (persistedMode == StorageMode.Transient)
+            {
+                componentTable = new ComponentTable(this, definition, this, StorageMode.Transient);
             }
             else
             {
-                componentTable = new ComponentTable(this, definition, this, persisted.Comp.ComponentSPI, persisted.Comp.VersionSPI, persisted.Comp.DefaultIndexSPI,
-                    persisted.Comp.String64IndexSPI, persisted.Comp.TailIndexSPI, newIndexFieldIds: newIndexFieldIds, changeSet: migrationChangeSet);
-            }
+                // Load path: use migration constructor if migration ran, otherwise standard load from persisted SPIs
+                var migrationChangeSet = (migrationResult.HasValue || newIndexFieldIds != null) ? MMF.CreateChangeSet() : null;
 
-            // Populate newly created indexes by scanning entities
-            if (newIndexFieldIds != null)
-            {
-                componentTable.PopulateNewIndexes(newIndexFieldIds, migrationChangeSet);
-                migrationChangeSet?.SaveChanges();
-                MMF.FlushToDisk();
-            }
+                if (migrationResult.HasValue)
+                {
+                    componentTable = new ComponentTable(this, definition, this, migrationResult.Value.NewComponentSegment, migrationResult.Value.NewRevisionSegment,
+                        persisted.Comp.DefaultIndexSPI, persisted.Comp.String64IndexSPI, persisted.Comp.TailIndexSPI, newIndexFieldIds: newIndexFieldIds,
+                        changeSet: migrationChangeSet);
+                }
+                else
+                {
+                    componentTable = new ComponentTable(this, definition, this, persisted.Comp.ComponentSPI, persisted.Comp.VersionSPI, persisted.Comp.DefaultIndexSPI,
+                        persisted.Comp.String64IndexSPI, persisted.Comp.TailIndexSPI, storageMode: persistedMode, newIndexFieldIds: newIndexFieldIds,
+                        changeSet: migrationChangeSet);
+                }
 
-            // Update _curPrimaryKey from loaded PK index
-            if (componentTable.PrimaryKeyIndex.EntryCount > 0)
-            {
-                var maxPk = componentTable.PrimaryKeyIndex.GetMaxKey();
-                UpdateCurPrimaryKey(maxPk);
+                // Populate newly created indexes by scanning entities
+                if (newIndexFieldIds != null)
+                {
+                    componentTable.PopulateNewIndexes(newIndexFieldIds, migrationChangeSet);
+                    migrationChangeSet?.SaveChanges();
+                    MMF.FlushToDisk();
+                }
+
+                // Update _curPrimaryKey from loaded PK index
+                if (componentTable.PrimaryKeyIndex != null && componentTable.PrimaryKeyIndex.EntryCount > 0)
+                {
+                    var maxPk = componentTable.PrimaryKeyIndex.GetMaxKey();
+                    UpdateCurPrimaryKey(maxPk);
+                }
             }
 
             // Persist schema changes if the resolver detected changes or migration ran
@@ -1241,7 +1433,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         {
             // Create path: use the provided ChangeSet, or create a new one for standalone registration
             var cs = changeSet ?? MMF.CreateChangeSet();
-            componentTable = new ComponentTable(this, definition, this, changeSet: cs);
+            componentTable = new ComponentTable(this, definition, this, storageMode, changeSet: cs);
 
             // Save metadata for future reload (skip during initial CreateSystemSchemaR1)
             if (_componentsTable != null)
@@ -1260,10 +1452,14 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
         _componentTableByType.TryAdd(typeof(T), componentTable);
 
-        // Assign a stable WAL type ID derived from the component segment's persistent root page index
-        var walTypeId = (ushort)componentTable.ComponentSegment.RootPageIndex;
-        componentTable.WalTypeId = walTypeId;
-        _componentTableByWalTypeId.TryAdd(walTypeId, componentTable);
+        // Assign a stable WAL type ID derived from the component segment's persistent root page index.
+        // Transient components have no persistent segments and no WAL involvement.
+        if (storageMode != StorageMode.Transient)
+        {
+            var walTypeId = (ushort)componentTable.ComponentSegment.RootPageIndex;
+            componentTable.WalTypeId = walTypeId;
+            _componentTableByWalTypeId.TryAdd(walTypeId, componentTable);
+        }
 
         return true;
     }
@@ -1477,7 +1673,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
             // Populate ComponentNames collection via VSBS
             var names = GetArchetypeComponentNames(meta);
-            using (var guard = EpochGuard.Enter(EpochManager))
+            using (EpochGuard.Enter(EpochManager))
             {
                 var vsbs = GetComponentCollectionVSBS<String64>();
                 using var cca = new ComponentCollectionAccessor<String64>(cs, vsbs, ref arch.ComponentNames);

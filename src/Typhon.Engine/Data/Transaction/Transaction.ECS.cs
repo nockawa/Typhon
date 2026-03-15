@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
 
@@ -64,7 +65,8 @@ public unsafe partial class Transaction
             for (int slot = 0; slot < meta.ComponentCount; slot++)
             {
                 var table = meta._slotToComponentTable[slot];
-                int chunkId = table.ComponentSegment.AllocateChunk(false, _changeSet);
+                int chunkId = table.StorageMode == StorageMode.Transient ? 
+                    table.TransientComponentSegment.AllocateChunk(false) : table.ComponentSegment.AllocateChunk(false, _changeSet);
 
                 // Check if a ComponentValue was provided for this slot
                 bool hasValue = false;
@@ -76,7 +78,8 @@ public unsafe partial class Transaction
                         // Copy component data into chunk using existing ComponentInfo accessor
                         var compType = meta._slotToComponentType[slot];
                         var info = GetComponentInfo(compType);
-                        var dst = info.CompContentAccessor.GetChunkAsSpan(chunkId, true);
+                        var dst = table.StorageMode == StorageMode.Transient ? 
+                            info.TransientCompContentAccessor.GetChunkAsSpan(chunkId, true) : info.CompContentAccessor.GetChunkAsSpan(chunkId, true);
                         int overhead = table.ComponentOverhead;
                         // Copy min(DataSize, available chunk space) — sizeof(T) may exceed ComponentStorageSize
                         // due to struct alignment padding (e.g., 8-byte aligned struct with 12B fields → sizeof = 16)
@@ -404,18 +407,28 @@ public unsafe partial class Transaction
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ref readonly T ReadEcsComponentData<T>(ComponentTable table, int chunkId) where T : unmanaged
     {
-        // Reuse existing ComponentInfo infrastructure — it manages ChunkAccessor lifecycle
         var info = GetComponentInfo(typeof(T));
-        byte* ptr = info.CompContentAccessor.GetChunkAddress(chunkId);
+        byte* ptr = table.StorageMode == StorageMode.Transient ? 
+            info.TransientCompContentAccessor.GetChunkAddress(chunkId) : info.CompContentAccessor.GetChunkAddress(chunkId);
         return ref Unsafe.AsRef<T>(ptr + table.ComponentOverhead);
     }
 
-    /// <summary>Write component data via the existing ComponentInfo accessor cache. Returns mutable ref.</summary>
+    /// <summary>Write component data via the existing ComponentInfo accessor cache. Returns mutable ref.
+    /// For SingleVersion: atomically marks chunkId in DirtyBitmap for tick fence serialization.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ref T WriteEcsComponentData<T>(ComponentTable table, int chunkId) where T : unmanaged
     {
         var info = GetComponentInfo(typeof(T));
-        byte* ptr = info.CompContentAccessor.GetChunkAddress(chunkId, true);
+        byte* ptr;
+        if (table.StorageMode == StorageMode.Transient)
+        {
+            ptr = info.TransientCompContentAccessor.GetChunkAddress(chunkId, true);
+        }
+        else
+        {
+            ptr = info.CompContentAccessor.GetChunkAddress(chunkId, true);
+            table.DirtyBitmap?.Set(chunkId);
+        }
         return ref Unsafe.AsRef<T>(ptr + table.ComponentOverhead);
     }
 
@@ -456,7 +469,8 @@ public unsafe partial class Transaction
                 meta._entityMap.Insert(entityId.EntityKey, recordPtr, ref hashAccessor, _changeSet);
                 hashAccessor.Dispose();
 
-                // Insert into secondary indexes for each component slot
+                // Insert into secondary indexes for each component slot (Transient tables currently have IndexedFieldInfos = [], so this block is skipped
+                // for them. When transient secondary indexes are added, the accessor branch below handles it.)
                 for (int slot = 0; slot < meta.ComponentCount; slot++)
                 {
                     var table = meta._slotToComponentTable[slot];
@@ -472,6 +486,9 @@ public unsafe partial class Transaction
                         continue;
                     }
 
+                    // Transient secondary indexes require ChunkAccessor<TransientStore> — not yet implemented (IndexedFieldInfos = [] for Transient).
+                    // Guard defensively.
+                    Debug.Assert(table.StorageMode != StorageMode.Transient, "Transient secondary indexes not yet implemented — IndexedFieldInfos should be empty");
                     var compAccessor = table.ComponentSegment.CreateChunkAccessor(_changeSet);
                     byte* chunkAddr = compAccessor.GetChunkAddress(chunkId, true);
 
@@ -505,6 +522,9 @@ public unsafe partial class Transaction
 
         using var guard = EpochGuard.Enter(_epochManager);
 
+        // Hoist stackalloc out of loop — max record size is 78B (14B header + 16 components × 4B)
+        byte* readBuf = stackalloc byte[EntityRecordAccessor.MaxRecordSize];
+
         foreach (var entityId in _pendingDestroys)
         {
             var meta = ArchetypeRegistry.GetMetadata(entityId.ArchetypeId);
@@ -512,9 +532,6 @@ public unsafe partial class Transaction
             {
                 continue;
             }
-
-            int recordSize = meta._entityRecordSize;
-            byte* readBuf = stackalloc byte[recordSize];
 
             var accessor = meta._entityMap.Segment.CreateChunkAccessor(_changeSet);
             if (meta._entityMap.TryGet(entityId.EntityKey, readBuf, ref accessor))
@@ -538,6 +555,9 @@ public unsafe partial class Transaction
         }
 
         using var guard = EpochGuard.Enter(_epochManager);
+
+        // Hoist stackalloc out of loop — max record size is 78B (14B header + 16 components × 4B)
+        byte* readBuf = stackalloc byte[EntityRecordAccessor.MaxRecordSize];
 
         foreach (var kvp in _pendingEnableDisable)
         {
@@ -563,9 +583,6 @@ public unsafe partial class Transaction
             {
                 continue;
             }
-
-            int recordSize = meta._entityRecordSize;
-            byte* readBuf = stackalloc byte[recordSize];
 
             var accessor = meta._entityMap.Segment.CreateChunkAccessor(_changeSet);
             if (meta._entityMap.TryGet(entityId.EntityKey, readBuf, ref accessor))
@@ -607,7 +624,15 @@ public unsafe partial class Transaction
                         int chunkId = EntityRecordAccessor.GetLocation(recordPtr, slot);
                         if (chunkId != 0)
                         {
-                            meta._slotToComponentTable[slot].ComponentSegment.FreeChunk(chunkId);
+                            var table = meta._slotToComponentTable[slot];
+                            if (table.StorageMode == StorageMode.Transient)
+                            {
+                                table.TransientComponentSegment.FreeChunk(chunkId);
+                            }
+                            else
+                            {
+                                table.ComponentSegment.FreeChunk(chunkId);
+                            }
                         }
                     }
                 }

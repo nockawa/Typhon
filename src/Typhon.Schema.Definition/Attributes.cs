@@ -18,6 +18,9 @@ public sealed class ComponentAttribute : Attribute
 
     public string PreviousName { get; set; }
 
+    /// <summary>Storage mode for this component. Default is <see cref="StorageMode.Versioned"/> (full MVCC).</summary>
+    public StorageMode StorageMode { get; set; } = StorageMode.Versioned;
+
     public ComponentAttribute(string name, int revision, bool allowMultiple = false)
     {
         Name = name;

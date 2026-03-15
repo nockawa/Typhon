@@ -610,7 +610,7 @@ internal class PipelineExecutor
     /// Target-first navigation: scans the target PK index, evaluates target predicates, then reverse-lookups source entities
     /// via the FK index (AllowMultiple) and evaluates source predicates.
     /// </summary>
-    public unsafe void ExecuteNavigationTargetFirst<TSource, TTarget>(FieldEvaluator[] sourceEvals, FieldEvaluator[] targetEvals, ComponentTable sourceCT, 
+    public void ExecuteNavigationTargetFirst<TSource, TTarget>(FieldEvaluator[] sourceEvals, FieldEvaluator[] targetEvals, ComponentTable sourceCT, 
         ComponentTable targetCT, int fkFieldOffset, Transaction tx, HashSet<long> result) where TSource : unmanaged where TTarget : unmanaged
     {
         // Find the FK index on the source table (long, AllowMultiple)

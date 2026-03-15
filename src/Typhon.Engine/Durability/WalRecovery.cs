@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
 
@@ -31,6 +32,12 @@ public struct WalRecoveryResult
 
     /// <summary>Number of FPI records applied for torn-page repair.</summary>
     public int FpiRecordsApplied;
+
+    /// <summary>Number of TickFence chunks processed during recovery.</summary>
+    public int TickFenceChunksProcessed;
+
+    /// <summary>Number of individual component entries overwritten from TickFence data.</summary>
+    public int TickFenceEntriesReplayed;
 
     /// <summary>LSN of the last valid record found during scan.</summary>
     public long LastValidLSN;
@@ -60,6 +67,18 @@ internal class FpiScanEntry
 }
 
 /// <summary>
+/// Collected TickFence chunk data during WAL scan. One entry per chunk (one chunk per SV ComponentTable per tick).
+/// </summary>
+internal class TickFenceScanEntry
+{
+    public long LSN;
+    public long TickNumber;
+    public ushort ComponentTypeId;
+    public ushort PayloadStride;
+    public List<(int ChunkId, byte[] ComponentData)> Entries;
+}
+
+/// <summary>
 /// Orchestrates WAL crash recovery: scans WAL segments, identifies committed UoWs,
 /// voids pending ones, and replays committed records to restore data consistency.
 /// </summary>
@@ -79,9 +98,11 @@ internal sealed class WalRecovery : IDisposable
     }
 
     /// <summary>
-    /// Runs the full 6-phase recovery algorithm:
-    /// Phase 1 — Discover segments, Phase 2 — Scan records + collect FPIs, Phase 3 — Cross-reference with registry, Phase 4 — FPI torn-page repair,
-    /// Phase 5 — Replay committed records, Phase 6 — Finalize.
+    /// Runs the full 7-phase recovery algorithm:
+    /// Phase 1 — Discover segments, Phase 2 — Scan records + collect FPIs + collect TickFences,
+    /// Phase 3 — Cross-reference with registry, Phase 4 — FPI torn-page repair,
+    /// Phase 5 — Replay committed transaction records, Phase 6 — Replay TickFence entries (SV recovery),
+    /// Phase 7 — Finalize.
     /// </summary>
     /// <param name="registry">The UoW registry (loaded via <see cref="UowRegistry.LoadFromDiskRaw"/>).</param>
     /// <param name="checkpointLSN">LSN up to which data is already checkpointed. 0 = scan all.</param>
@@ -107,11 +128,12 @@ internal sealed class WalRecovery : IDisposable
         }
 
         // ═══════════════════════════════════════════════════════════
-        // Phase 2: Scan records, build committed set + collect FPIs
+        // Phase 2: Scan records, build committed set + collect FPIs + collect TickFences
         // ═══════════════════════════════════════════════════════════
 
         var uowStates = new Dictionary<ushort, UowScanState>();
         var fpiMap = new Dictionary<int, FpiScanEntry>();
+        var tickFenceEntries = new List<TickFenceScanEntry>();
 
         using var reader = new WalSegmentReader(_fileIO);
 
@@ -138,8 +160,8 @@ internal sealed class WalRecovery : IDisposable
                         ProcessTransactionChunk(uowStates, body, checkpointLSN);
                         break;
 
-                    default:
-                        // Unknown chunk type — skip (forward compatibility via ChunkSize)
+                    case WalChunkType.TickFence:
+                        CollectTickFenceChunk(tickFenceEntries, body);
                         break;
                 }
             }
@@ -211,7 +233,7 @@ internal sealed class WalRecovery : IDisposable
         }
 
         // ═══════════════════════════════════════════════════════════
-        // Phase 5: Replay committed records
+        // Phase 5: Replay committed transaction records
         // ═══════════════════════════════════════════════════════════
 
         if (dbe != null)
@@ -234,7 +256,16 @@ internal sealed class WalRecovery : IDisposable
         }
 
         // ═══════════════════════════════════════════════════════════
-        // Phase 6: Finalize
+        // Phase 6: Replay TickFence entries (SV crash recovery)
+        // ═══════════════════════════════════════════════════════════
+
+        if (dbe != null && tickFenceEntries.Count > 0)
+        {
+            ReplayTickFences(dbe, tickFenceEntries, ref result);
+        }
+
+        // ═══════════════════════════════════════════════════════════
+        // Phase 7: Finalize
         // ═══════════════════════════════════════════════════════════
 
         result.ElapsedMicroseconds = ElapsedUs(startTicks);
@@ -253,7 +284,7 @@ internal sealed class WalRecovery : IDisposable
         }
 
         var header = MemoryMarshal.Read<WalRecordHeader>(body);
-        var payload = body.Length > WalRecordHeader.SizeInBytes ? 
+        var payload = body.Length > WalRecordHeader.SizeInBytes ?
             body.Slice(WalRecordHeader.SizeInBytes, Math.Min(header.PayloadLength, body.Length - WalRecordHeader.SizeInBytes)) : ReadOnlySpan<byte>.Empty;
 
         var uowId = header.UowEpoch;
@@ -351,6 +382,89 @@ internal sealed class WalRecovery : IDisposable
                 Metadata = meta,
             };
         }
+    }
+
+    /// <summary>
+    /// Collects a TickFence chunk body into the entry list.
+    /// TickFence body layout: [TickFenceHeader (24B)] [entries: ChunkId (4B) + ComponentData (stride B) × EntryCount].
+    /// </summary>
+    private static void CollectTickFenceChunk(List<TickFenceScanEntry> entries, ReadOnlySpan<byte> body)
+    {
+        if (body.Length < TickFenceHeader.SizeInBytes)
+        {
+            return; // Malformed tick fence chunk — skip
+        }
+
+        var header = MemoryMarshal.Read<TickFenceHeader>(body);
+        var entryData = body.Slice(TickFenceHeader.SizeInBytes);
+        int entrySize = 4 + header.PayloadStride;
+
+        if (entryData.Length < header.EntryCount * entrySize)
+        {
+            return; // Truncated tick fence data — skip
+        }
+
+        var scanEntry = new TickFenceScanEntry
+        {
+            LSN = header.LSN,
+            TickNumber = header.TickNumber,
+            ComponentTypeId = header.ComponentTypeId,
+            PayloadStride = header.PayloadStride,
+            Entries = new List<(int, byte[])>(header.EntryCount),
+        };
+
+        int offset = 0;
+        for (int i = 0; i < header.EntryCount; i++)
+        {
+            int chunkId = MemoryMarshal.Read<int>(entryData.Slice(offset));
+            offset += 4;
+
+            var componentData = entryData.Slice(offset, header.PayloadStride).ToArray();
+            offset += header.PayloadStride;
+
+            scanEntry.Entries.Add((chunkId, componentData));
+        }
+
+        entries.Add(scanEntry);
+    }
+
+    /// <summary>
+    /// Replays collected TickFence entries by overwriting component data in the appropriate ComponentSegment chunks.
+    /// Entries are applied in LSN order — later writes to the same ChunkId naturally overwrite earlier ones (last-writer-wins).
+    /// Only applies to SingleVersion ComponentTables; Versioned/Transient are skipped.
+    /// </summary>
+    private void ReplayTickFences(DatabaseEngine dbe, List<TickFenceScanEntry> entries, ref WalRecoveryResult result)
+    {
+        // Sort by LSN to ensure last-writer-wins ordering
+        entries.Sort((a, b) => a.LSN.CompareTo(b.LSN));
+
+        using var epochGuard = EpochGuard.Enter(dbe.EpochManager);
+        var cs = dbe.MMF.CreateChangeSet();
+
+        foreach (var scanEntry in entries)
+        {
+            var table = dbe.GetComponentTableByWalTypeId(scanEntry.ComponentTypeId);
+            if (table == null || table.StorageMode != StorageMode.SingleVersion)
+            {
+                continue; // Unknown or non-SV table — skip
+            }
+
+            var accessor = table.ComponentSegment.CreateChunkAccessor(cs);
+            int overhead = table.ComponentOverhead;
+
+            foreach (var (chunkId, componentData) in scanEntry.Entries)
+            {
+                var dst = accessor.GetChunkAsSpan(chunkId, true);
+                componentData.AsSpan().CopyTo(dst.Slice(overhead));
+                result.TickFenceEntriesReplayed++;
+            }
+
+            accessor.Dispose();
+            result.TickFenceChunksProcessed++;
+        }
+
+        cs.SaveChanges();
+        dbe.MMF.FlushToDisk();
     }
 
     /// <summary>

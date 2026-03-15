@@ -104,6 +104,12 @@ public static unsafe class EntityRecordAccessor
     /// <summary>Size of the <see cref="EntityRecordHeader"/> in bytes.</summary>
     public const int HeaderSize = 14;
 
+    /// <summary>Maximum component count per archetype (16-bit EnabledBits).</summary>
+    public const int MaxComponentCount = 16;
+
+    /// <summary>Maximum entity record size in bytes: HeaderSize + MaxComponentCount × 4 = 78.</summary>
+    public const int MaxRecordSize = HeaderSize + MaxComponentCount * sizeof(int);
+
     /// <summary>Total entity record size for an archetype with <paramref name="componentCount"/> components.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int RecordSize(int componentCount) => HeaderSize + componentCount * sizeof(int);

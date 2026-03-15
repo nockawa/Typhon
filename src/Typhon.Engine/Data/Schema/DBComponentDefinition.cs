@@ -40,6 +40,8 @@ public class DBComponentDefinition
         return field.FieldId;
     }
 
+    public StorageMode StorageMode { get; internal set; }
+
     public int ComponentStorageSize { get; private set; }
     public int ComponentStorageOverhead => MultipleIndicesCount * sizeof(int);
     public int ComponentStorageTotalSize => ComponentStorageSize + ComponentStorageOverhead;
@@ -117,11 +119,12 @@ public class DBComponentDefinition
         public bool DoesFieldTypeSupportIndex() => (Type >= FieldType.Byte) && ((FieldType)((int)Type&0xFF) <= FieldType.String64);
     }
 
-    internal DBComponentDefinition(string name, int revision, bool allowMultiple)
+    internal DBComponentDefinition(string name, int revision, bool allowMultiple, StorageMode storageMode = StorageMode.Versioned)
     {
         Name = name;
         Revision = revision;
         AllowMultiple = allowMultiple;
+        StorageMode = storageMode;
         _fieldsByName = new Dictionary<string, Field>();
     }
 
