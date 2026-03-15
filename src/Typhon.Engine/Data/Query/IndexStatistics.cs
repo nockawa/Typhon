@@ -12,9 +12,9 @@ namespace Typhon.Engine;
 /// </summary>
 internal class IndexStatistics
 {
-    private readonly BTreeBase _index;
+    private readonly BTreeBase<PersistentStore> _index;
 
-    public IndexStatistics(BTreeBase index)
+    public IndexStatistics(BTreeBase<PersistentStore> index)
     {
         _index = index;
         KeyType = DeriveKeyType(index);
@@ -26,19 +26,19 @@ internal class IndexStatistics
     /// </summary>
     public KeyType KeyType { get; }
 
-    private static KeyType DeriveKeyType(BTreeBase index) => index switch
+    private static KeyType DeriveKeyType(BTreeBase<PersistentStore> index) => index switch
     {
-        BTree<byte> => KeyType.Byte,
-        BTree<sbyte> => KeyType.SByte,
-        BTree<short> => KeyType.Short,
-        BTree<ushort> => KeyType.UShort,
-        BTree<char> => KeyType.UShort,
-        BTree<int> => KeyType.Int,
-        BTree<uint> => KeyType.UInt,
-        BTree<float> => KeyType.Float,
-        BTree<double> => KeyType.Double,
-        BTree<long> => KeyType.Long,
-        String64BTree => KeyType.String64,
+        BTree<byte, PersistentStore> => KeyType.Byte,
+        BTree<sbyte, PersistentStore> => KeyType.SByte,
+        BTree<short, PersistentStore> => KeyType.Short,
+        BTree<ushort, PersistentStore> => KeyType.UShort,
+        BTree<char, PersistentStore> => KeyType.UShort,
+        BTree<int, PersistentStore> => KeyType.Int,
+        BTree<uint, PersistentStore> => KeyType.UInt,
+        BTree<float, PersistentStore> => KeyType.Float,
+        BTree<double, PersistentStore> => KeyType.Double,
+        BTree<long, PersistentStore> => KeyType.Long,
+        String64BTree<PersistentStore> => KeyType.String64,
         _ => KeyType.Long
     };
 
@@ -80,7 +80,7 @@ internal class IndexStatistics
     public volatile Histogram Histogram;
 
     /// <summary>The underlying B+Tree index.</summary>
-    internal BTreeBase Index => _index;
+    internal BTreeBase<PersistentStore> Index => _index;
 
     /// <summary>
     /// Rebuilds the histogram by scanning all leaf entries in the B+Tree.
@@ -105,37 +105,37 @@ internal class IndexStatistics
         var bucketCounts = new int[Histogram.BucketCount];
         int totalCount = 0;
 
-        // Type-switch to dispatch into the generic BTree<TKey>.EnumerateLeaves()
+        // Type-switch to dispatch into the generic BTree<TKey, PersistentStore>.EnumerateLeaves()
         switch (_index)
         {
-            case BTree<sbyte> tree:
+            case BTree<sbyte, PersistentStore> tree:
                 ScanAndBucket(tree, min, max, bucketCounts, ref totalCount);
                 break;
-            case BTree<byte> tree:
+            case BTree<byte, PersistentStore> tree:
                 ScanAndBucket(tree, min, max, bucketCounts, ref totalCount);
                 break;
-            case BTree<short> tree:
+            case BTree<short, PersistentStore> tree:
                 ScanAndBucket(tree, min, max, bucketCounts, ref totalCount);
                 break;
-            case BTree<ushort> tree:
+            case BTree<ushort, PersistentStore> tree:
                 ScanAndBucket(tree, min, max, bucketCounts, ref totalCount);
                 break;
-            case BTree<char> tree:
+            case BTree<char, PersistentStore> tree:
                 ScanAndBucket(tree, min, max, bucketCounts, ref totalCount);
                 break;
-            case BTree<int> tree:
+            case BTree<int, PersistentStore> tree:
                 ScanAndBucket(tree, min, max, bucketCounts, ref totalCount);
                 break;
-            case BTree<uint> tree:
+            case BTree<uint, PersistentStore> tree:
                 ScanAndBucket(tree, min, max, bucketCounts, ref totalCount);
                 break;
-            case BTree<long> tree:
+            case BTree<long, PersistentStore> tree:
                 ScanAndBucket(tree, min, max, bucketCounts, ref totalCount);
                 break;
-            case BTree<float> tree:
+            case BTree<float, PersistentStore> tree:
                 ScanAndBucket(tree, min, max, bucketCounts, ref totalCount);
                 break;
-            case BTree<double> tree:
+            case BTree<double, PersistentStore> tree:
                 ScanAndBucket(tree, min, max, bucketCounts, ref totalCount);
                 break;
             default:
@@ -145,19 +145,19 @@ internal class IndexStatistics
         Histogram = new Histogram(min, max, bucketCounts, totalCount);
     }
 
-    private static unsafe void ScanAndBucket<TKey>(BTree<TKey> tree, long min, long max, int[] bucketCounts, ref int totalCount)
+    private static unsafe void ScanAndBucket<TKey>(BTree<TKey, PersistentStore> tree, long min, long max, int[] bucketCounts, ref int totalCount)
         where TKey : unmanaged
     {
         long bucketWidth = (max == min) ? 0 : Math.Max(1, (max - min) / Histogram.BucketCount);
         bool allowMultiple = tree.AllowMultiple;
 
-        using var guard = EpochGuard.Enter(tree.Segment.Manager.EpochManager);
+        using var guard = EpochGuard.Enter(tree.Segment.Store.EpochManager);
         var accessor = allowMultiple ? tree.Segment.CreateChunkAccessor() : default;
         try
         {
             foreach (var kv in tree.EnumerateLeaves())
             {
-                long encoded = BTree<TKey>.KeyToLong(kv.Key);
+                long encoded = BTree<TKey, PersistentStore>.KeyToLong(kv.Key);
                 int bucket;
                 if (bucketWidth == 0)
                 {

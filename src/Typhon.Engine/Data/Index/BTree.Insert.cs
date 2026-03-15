@@ -6,7 +6,7 @@ using System.Threading;
 
 namespace Typhon.Engine;
 
-public abstract partial class BTree<TKey>
+public abstract partial class BTree<TKey, TStore>
 {
     /// <summary>Result of an OLC insert attempt.</summary>
     private enum OlcInsertResult
@@ -20,7 +20,7 @@ public abstract partial class BTree<TKey>
     }
     /// <summary>Creates the insert value, handling AllowMultiple buffer creation.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int CreateInsertValue(ref InsertArguments args, ref ChunkAccessor accessor)
+    private int CreateInsertValue(ref InsertArguments args, ref ChunkAccessor<TStore> accessor)
     {
         if (AllowMultiple)
         {
@@ -471,7 +471,7 @@ public abstract partial class BTree<TKey>
     /// Returns null if no root split, non-null promoted key if root split needed.
     /// Sets <paramref name="completed"/> to false when lock acquisition fails and caller must retry.
     /// </summary>
-    private void InsertIterative(ref InsertArguments args, ref ChunkAccessor accessor, out bool completed)
+    private void InsertIterative(ref InsertArguments args, ref ChunkAccessor<TStore> accessor, out bool completed)
     {
         completed = false;
         MutationContext ctx = default;

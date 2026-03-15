@@ -367,7 +367,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
         bool targetPasses = EvaluateTargetPredicates(targetPK, tx);
 
         var fkIndexInfo = PipelineExecutor.FindFKIndex(_sourceTable, _fkFieldOffset);
-        var fkIndex = (BTree<long>)fkIndexInfo.Index;
+        var fkIndex = (BTree<long, PersistentStore>)fkIndexInfo.Index;
         var compRevAccessor = _sourceTable.CompRevTableSegment.CreateChunkAccessor();
 
         try
@@ -409,7 +409,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
     private void MarkSourcesModified(long targetPK, Transaction tx)
     {
         var fkIndexInfo = PipelineExecutor.FindFKIndex(_sourceTable, _fkFieldOffset);
-        var fkIndex = (BTree<long>)fkIndexInfo.Index;
+        var fkIndex = (BTree<long, PersistentStore>)fkIndexInfo.Index;
         var compRevAccessor = _sourceTable.CompRevTableSegment.CreateChunkAccessor();
 
         try

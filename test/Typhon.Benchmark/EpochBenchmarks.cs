@@ -87,17 +87,17 @@ public class EpochGuardBenchmarks
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Phase 2: ChunkAccessor Microbenchmarks
+// Phase 2: ChunkAccessor<PersistentStore> Microbenchmarks
 // ═══════════════════════════════════════════════════════════════════════
 
 [SimpleJob(warmupCount: 3, iterationCount: 5)]
-[BenchmarkCategory("ChunkAccessor", "Regression")]
+[BenchmarkCategory("ChunkAccessor<PersistentStore>", "Regression")]
 public class ChunkAccessorBenchmarks
 {
     private ServiceProvider _serviceProvider;
     private ManagedPagedMMF _pmmf;
     private EpochManager _epochManager;
-    private ChunkBasedSegment _segment;
+    private ChunkBasedSegment<PersistentStore> _segment;
     private string _databaseName;
 
     // Pre-allocated chunk IDs for various access patterns

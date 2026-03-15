@@ -376,7 +376,7 @@ internal sealed class DiagnosticCommandExecutor
         return CommandResult.Markup(sb.ToString().TrimEnd());
     }
 
-    private static void AppendDbStatsSegmentRow(StringBuilder sb, string name, ChunkBasedSegment seg,
+    private static void AppendDbStatsSegmentRow(StringBuilder sb, string name, ChunkBasedSegment<PersistentStore> seg,
         ref long totalChunksUsed, ref long totalChunksCap, ref long totalDataBytes, ref int totalPages)
     {
         if (seg == null)
@@ -438,7 +438,7 @@ internal sealed class DiagnosticCommandExecutor
         return CommandResult.Markup(sb.ToString().TrimEnd());
     }
 
-    private static void AppendSegmentRow(StringBuilder sb, string name, ChunkBasedSegment seg)
+    private static void AppendSegmentRow(StringBuilder sb, string name, ChunkBasedSegment<PersistentStore> seg)
     {
         if (seg == null)
         {
@@ -471,7 +471,7 @@ internal sealed class DiagnosticCommandExecutor
         }
 
         var sb = new StringBuilder();
-        sb.AppendLine($"  [white]{Markup.Escape(segName)} — ChunkBasedSegment[/]");
+        sb.AppendLine($"  [white]{Markup.Escape(segName)} — ChunkBasedSegment<PersistentStore>[/]");
         sb.AppendLine("  [grey]──────────────────────────────────────[/]");
         sb.AppendLine($"  [grey]Chunk size:[/]      [white]{seg.Stride} bytes[/]");
 
@@ -993,7 +993,7 @@ internal sealed class DiagnosticCommandExecutor
         return result;
     }
 
-    private ChunkBasedSegment ResolveSegment(string name)
+    private ChunkBasedSegment<PersistentStore> ResolveSegment(string name)
     {
         // Format: ComponentName.SegmentSuffix (e.g., ARPG.Position.Data, ARPG.Position.PK_Index)
         var dotPos = name.LastIndexOf('.');
@@ -1026,7 +1026,7 @@ internal sealed class DiagnosticCommandExecutor
         };
     }
 
-    private (BTreeBase Tree, string Error) ResolveIndex(string name)
+    private (BTreeBase<PersistentStore> Tree, string Error) ResolveIndex(string name)
     {
         // Format: ComponentName.FieldName (e.g., ARPG.Position.PK or ARPG.Position.PlayerId)
         var dotPos = name.LastIndexOf('.');
@@ -1265,7 +1265,7 @@ internal sealed class DiagnosticCommandExecutor
         sb.AppendLine();
     }
 
-    private static void AppendSingleIndexStats(StringBuilder sb, string qualifiedName, IndexStatistics stats, BTreeBase index)
+    private static void AppendSingleIndexStats(StringBuilder sb, string qualifiedName, IndexStatistics stats, BTreeBase<PersistentStore> index)
     {
         var multiStr = index.AllowMultiple ? " [yellow]AllowMultiple[/]" : " [dim]Unique[/]";
         sb.AppendLine($"  [cyan]{Markup.Escape(qualifiedName)}[/]{multiStr}");
@@ -1392,7 +1392,7 @@ internal sealed class DiagnosticCommandExecutor
         return count;
     }
 
-    private (IndexStatistics Stats, BTreeBase Index, string Error) ResolveIndexStats(string name)
+    private (IndexStatistics Stats, BTreeBase<PersistentStore> Index, string Error) ResolveIndexStats(string name)
     {
         var dotPos = name.LastIndexOf('.');
         if (dotPos < 0)

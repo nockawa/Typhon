@@ -66,19 +66,19 @@ unsafe class HashMapTests
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
 
         var segment32 = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map32 = HashMap<int, int>.Create(segment32, 4);
+        var map32 = HashMap<int, int, PersistentStore>.Create(segment32, 4);
         Assert.That(map32.BucketCapacity, Is.EqualTo(30), "L32: (256-12)/(4+4) = 30");
 
         var segment64 = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map64 = HashMap<long, int>.Create(segment64, 4);
+        var map64 = HashMap<long, int, PersistentStore>.Create(segment64, 4);
         Assert.That(map64.BucketCapacity, Is.EqualTo(20), "L64: (256-12)/(8+4) = 20");
     }
 
     [Test]
     public void RecommendedStride_ReturnsCorrectStride()
     {
-        Assert.That(HashMap<int, int>.RecommendedStride(), Is.EqualTo(256));
-        Assert.That(HashMap<long, int>.RecommendedStride(), Is.EqualTo(256));
+        Assert.That(HashMap<int, int, PersistentStore>.RecommendedStride(), Is.EqualTo(256));
+        Assert.That(HashMap<long, int, PersistentStore>.RecommendedStride(), Is.EqualTo(256));
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -88,8 +88,8 @@ unsafe class HashMapTests
     [Test]
     public void PackUnpackMeta_Roundtrip()
     {
-        long packed = HashMapBase.PackMeta(3, 100, 256);
-        var (level, next, bucketCount) = HashMapBase.UnpackMeta(packed);
+        long packed = HashMapBase<PersistentStore>.PackMeta(3, 100, 256);
+        var (level, next, bucketCount) = HashMapBase<PersistentStore>.UnpackMeta(packed);
 
         Assert.That(level, Is.EqualTo(3));
         Assert.That(next, Is.EqualTo(100));
@@ -100,8 +100,8 @@ unsafe class HashMapTests
     public void PackUnpackMeta_MaxValues()
     {
         // Level max: 255, Next max: 16,777,215 (24 bits), BucketCount max: int.MaxValue
-        long packed = HashMapBase.PackMeta(255, 0x00FFFFFF, int.MaxValue);
-        var (level, next, bucketCount) = HashMapBase.UnpackMeta(packed);
+        long packed = HashMapBase<PersistentStore>.PackMeta(255, 0x00FFFFFF, int.MaxValue);
+        var (level, next, bucketCount) = HashMapBase<PersistentStore>.UnpackMeta(packed);
 
         Assert.That(level, Is.EqualTo(255));
         Assert.That(next, Is.EqualTo(0x00FFFFFF));
@@ -119,7 +119,7 @@ unsafe class HashMapTests
         int n0 = 64;
         for (uint hash = 0; hash < 1000; hash++)
         {
-            int bucket = HashMapBase.ResolveBucket(hash, 0, 0, n0);
+            int bucket = HashMapBase<PersistentStore>.ResolveBucket(hash, 0, 0, n0);
             Assert.That(bucket, Is.GreaterThanOrEqualTo(0).And.LessThan(n0));
         }
     }
@@ -136,7 +136,7 @@ unsafe class HashMapTests
 
         for (uint hash = 0; hash < 10000; hash++)
         {
-            int bucket = HashMapBase.ResolveBucket(hash, level, next, n0);
+            int bucket = HashMapBase<PersistentStore>.ResolveBucket(hash, level, next, n0);
             int baseBucket = (int)(hash & (uint)(mod - 1));
 
             if (baseBucket < next)
@@ -163,7 +163,7 @@ unsafe class HashMapTests
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment);
+        var map = HashMap<int, int, PersistentStore>.Create(segment);
 
         Assert.That(map.N0, Is.EqualTo(64));
         Assert.That(map.BucketCount, Is.EqualTo(64));
@@ -179,7 +179,7 @@ unsafe class HashMapTests
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<long, int>.Create(segment);
+        var map = HashMap<long, int, PersistentStore>.Create(segment);
 
         Assert.That(map.N0, Is.EqualTo(64));
         Assert.That(map.BucketCount, Is.EqualTo(64));
@@ -194,12 +194,12 @@ unsafe class HashMapTests
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var created = HashMap<int, int>.Create(segment, 32);
+        var created = HashMap<int, int, PersistentStore>.Create(segment, 32);
 
         Assert.That(created.N0, Is.EqualTo(32));
         Assert.That(created.BucketCount, Is.EqualTo(32));
 
-        var opened = HashMap<int, int>.Open(segment);
+        var opened = HashMap<int, int, PersistentStore>.Open(segment);
 
         Assert.That(opened.N0, Is.EqualTo(32));
         Assert.That(opened.BucketCount, Is.EqualTo(32));
@@ -212,12 +212,12 @@ unsafe class HashMapTests
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var created = HashMap<long, int>.Create(segment, 16);
+        var created = HashMap<long, int, PersistentStore>.Create(segment, 16);
 
         Assert.That(created.N0, Is.EqualTo(16));
         Assert.That(created.BucketCount, Is.EqualTo(16));
 
-        var opened = HashMap<long, int>.Open(segment);
+        var opened = HashMap<long, int, PersistentStore>.Open(segment);
 
         Assert.That(opened.N0, Is.EqualTo(16));
         Assert.That(opened.BucketCount, Is.EqualTo(16));
@@ -236,8 +236,8 @@ unsafe class HashMapTests
 
         for (int key = 0; key < 1000; key++)
         {
-            uint hash = HashMap<int, int>.ComputeHashForTest(key);
-            int bucket = HashMapBase.ResolveBucket(hash, 0, 0, bucketCount);
+            uint hash = HashMap<int, int, PersistentStore>.ComputeHashForTest(key);
+            int bucket = HashMapBase<PersistentStore>.ResolveBucket(hash, 0, 0, bucketCount);
             counts[bucket]++;
         }
 
@@ -265,8 +265,8 @@ unsafe class HashMapTests
 
         for (long key = 0; key < 1000; key++)
         {
-            uint hash = HashMap<long, int>.ComputeHashForTest(key);
-            int bucket = HashMapBase.ResolveBucket(hash, 0, 0, bucketCount);
+            uint hash = HashMap<long, int, PersistentStore>.ComputeHashForTest(key);
+            int bucket = HashMapBase<PersistentStore>.ResolveBucket(hash, 0, 0, bucketCount);
             counts[bucket]++;
         }
 
@@ -295,7 +295,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -332,7 +332,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -357,7 +357,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -385,7 +385,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -412,7 +412,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -462,7 +462,7 @@ unsafe class HashMapTests
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
         int n0 = 8;
-        var map = HashMap<int, int>.Create(segment, n0);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, n0);
 
         var depth = epochManager.EnterScope();
         try
@@ -506,7 +506,7 @@ unsafe class HashMapTests
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
         int n0 = 8;
-        var map = HashMap<int, int>.Create(segment, n0);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, n0);
 
         var depth = epochManager.EnterScope();
         try
@@ -568,7 +568,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<long, int>.Create(segment, 8);
+        var map = HashMap<long, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -600,7 +600,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<long, int>.Create(segment, 8);
+        var map = HashMap<long, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -644,7 +644,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -688,7 +688,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -718,7 +718,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -747,7 +747,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -782,7 +782,7 @@ unsafe class HashMapTests
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
         int n0 = 8;
-        var map = HashMap<int, int>.Create(segment, n0);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, n0);
 
         var depth = epochManager.EnterScope();
         try
@@ -824,7 +824,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -854,7 +854,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -881,7 +881,7 @@ unsafe class HashMapTests
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
         int n0 = 8;
-        var map = HashMap<int, int>.Create(segment, n0);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, n0);
 
         var depth = epochManager.EnterScope();
         try
@@ -926,7 +926,7 @@ unsafe class HashMapTests
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
         int n0 = 8;
-        var map = HashMap<int, int>.Create(segment, n0);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, n0);
 
         var depth = epochManager.EnterScope();
         try
@@ -967,7 +967,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -996,7 +996,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -1027,7 +1027,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<long, int>.Create(segment, 8);
+        var map = HashMap<long, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -1059,7 +1059,7 @@ unsafe class HashMapTests
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
         int n0 = 8;
-        var map = HashMap<long, int>.Create(segment, n0);
+        var map = HashMap<long, int, PersistentStore>.Create(segment, n0);
 
         var depth = epochManager.EnterScope();
         try
@@ -1094,7 +1094,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<long, int>.Create(segment, 8);
+        var map = HashMap<long, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -1127,7 +1127,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<long, int>.Create(segment, 8);
+        var map = HashMap<long, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -1162,7 +1162,7 @@ unsafe class HashMapTests
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
         int n0 = 4;
-        var map = HashMap<int, int>.Create(segment, n0);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, n0);
 
         var depth = epochManager.EnterScope();
         try
@@ -1194,7 +1194,7 @@ unsafe class HashMapTests
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
         int n0 = 4;
-        var map = HashMap<int, int>.Create(segment, n0);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, n0);
 
         var depth = epochManager.EnterScope();
         try
@@ -1231,7 +1231,7 @@ unsafe class HashMapTests
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
         int n0 = 4;
-        var map = HashMap<int, int>.Create(segment, n0);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, n0);
 
         var depth = epochManager.EnterScope();
         try
@@ -1262,7 +1262,7 @@ unsafe class HashMapTests
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
         int n0 = 4;
-        var map = HashMap<int, int>.Create(segment, n0);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, n0);
 
         var depth = epochManager.EnterScope();
         try
@@ -1301,7 +1301,7 @@ unsafe class HashMapTests
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
         int n0 = 4;
-        var map = HashMap<int, int>.Create(segment, n0);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, n0);
 
         var depth = epochManager.EnterScope();
         try
@@ -1324,8 +1324,8 @@ unsafe class HashMapTests
             int inserted = 0;
             for (int candidate = 10000; inserted < 60; candidate++)
             {
-                uint hash = HashMap<int, int>.ComputeHashForTest(candidate);
-                int b = HashMapBase.ResolveBucket(hash, 0, 0, n0);
+                uint hash = HashMap<int, int, PersistentStore>.ComputeHashForTest(candidate);
+                int b = HashMapBase<PersistentStore>.ResolveBucket(hash, 0, 0, n0);
                 if (b != 0)
                 {
                     map.Insert(candidate, candidate, ref accessor, null);
@@ -1359,7 +1359,7 @@ unsafe class HashMapTests
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 20, 256);
         int n0 = 4;
-        var map = HashMap<int, int>.Create(segment, n0);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, n0);
 
         var depth = epochManager.EnterScope();
         try
@@ -1399,7 +1399,7 @@ unsafe class HashMapTests
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
         int n0 = 4;
-        var map = HashMap<long, int>.Create(segment, n0);
+        var map = HashMap<long, int, PersistentStore>.Create(segment, n0);
 
         var depth = epochManager.EnterScope();
         try
@@ -1437,7 +1437,7 @@ unsafe class HashMapTests
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 20, 256);
         int n0 = 4;
-        var map = HashMap<int, int>.Create(segment, n0);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, n0);
 
         var depth = epochManager.EnterScope();
         try
@@ -1473,7 +1473,7 @@ unsafe class HashMapTests
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 20, 256);
         int n0 = 4;
-        var map = HashMap<int, int>.Create(segment, n0);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, n0);
 
         var depth = epochManager.EnterScope();
         try
@@ -1511,8 +1511,8 @@ unsafe class HashMapTests
 
         for (int candidate = 0; found < count; candidate++)
         {
-            uint hash = HashMap<int, int>.ComputeHashForTest(candidate);
-            int bucket = HashMapBase.ResolveBucket(hash, 0, 0, n0);
+            uint hash = HashMap<int, int, PersistentStore>.ComputeHashForTest(candidate);
+            int bucket = HashMapBase<PersistentStore>.ResolveBucket(hash, 0, 0, n0);
             if (bucket == targetBucket)
             {
                 result[found++] = candidate;
@@ -1532,8 +1532,8 @@ unsafe class HashMapTests
 
         for (long candidate = 0; found < count; candidate++)
         {
-            uint hash = HashMap<long, int>.ComputeHashForTest(candidate);
-            int bucket = HashMapBase.ResolveBucket(hash, 0, 0, n0);
+            uint hash = HashMap<long, int, PersistentStore>.ComputeHashForTest(candidate);
+            int bucket = HashMapBase<PersistentStore>.ResolveBucket(hash, 0, 0, n0);
             if (bucket == targetBucket)
             {
                 result[found++] = candidate;
@@ -1543,7 +1543,7 @@ unsafe class HashMapTests
         return result;
     }
 
-    private void LogDiagnostics(HashMapBase map)
+    private void LogDiagnostics(HashMapBase<PersistentStore> map)
     {
         TestContext.Out.WriteLine(
             $"Splits={map._splitCount} OlcRestarts={map._olcRestarts} WriteLockFails={map._writeLockFailures} " +
@@ -1561,7 +1561,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 64);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 64);
 
         var depth = epochManager.EnterScope();
         try
@@ -1583,7 +1583,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -1612,7 +1612,7 @@ unsafe class HashMapTests
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
         int n0 = 4;
-        var map = HashMap<int, int>.Create(segment, n0);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, n0);
 
         var depth = epochManager.EnterScope();
         try
@@ -1641,7 +1641,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 64);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 64);
 
         var depth = epochManager.EnterScope();
         try
@@ -1671,7 +1671,7 @@ unsafe class HashMapTests
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
         int n0 = 4;
-        var map = HashMap<int, int>.Create(segment, n0);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, n0);
 
         var depth = epochManager.EnterScope();
         try
@@ -1714,7 +1714,7 @@ unsafe class HashMapTests
             sourceData[i] = (i + 1, (i + 1) * 7);
         }
 
-        var map = HashMap<int, int>.CreateAndPopulate(segment, sourceData, 16);
+        var map = HashMap<int, int, PersistentStore>.CreateAndPopulate(segment, sourceData, 16);
 
         var depth = epochManager.EnterScope();
         try
@@ -1751,7 +1751,7 @@ unsafe class HashMapTests
             sourceData[i] = ((long)(i + 1), (i + 1) * 7);
         }
 
-        var map = HashMap<long, int>.CreateAndPopulate(segment, sourceData, 16);
+        var map = HashMap<long, int, PersistentStore>.CreateAndPopulate(segment, sourceData, 16);
 
         var depth = epochManager.EnterScope();
         try
@@ -1781,7 +1781,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -1822,7 +1822,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -1847,7 +1847,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<long, int>.Create(segment, 8);
+        var map = HashMap<long, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -1893,7 +1893,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 200, 256);
-        var map = HashMap<int, int>.Create(segment, 64);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 64);
 
         // Pre-populate 500 entries
         var setupDepth = epochManager.EnterScope();
@@ -1960,7 +1960,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 200, 256);
-        var map = HashMap<int, int>.Create(segment, 64);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 64);
 
         const int threadCount = 16;
         const int keysPerThread = 100;
@@ -2021,7 +2021,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 200, 256);
-        var map = HashMap<int, int>.Create(segment, 64);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 64);
 
         // Pre-populate keys 1-500
         var setupDepth = epochManager.EnterScope();
@@ -2161,7 +2161,7 @@ unsafe class HashMapTests
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 200, 256);
         int n0 = 4; // small N0 forces many splits
-        var map = HashMap<int, int>.Create(segment, n0);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, n0);
 
         const int threadCount = 8;
         const int keysPerThread = 200;
@@ -2233,7 +2233,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 200, 256);
-        var map = HashMap<int, int>.Create(segment, 64);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 64);
 
         // Pre-populate keys 1-400 for removers to target
         var setupDepth = epochManager.EnterScope();
@@ -2352,7 +2352,7 @@ unsafe class HashMapTests
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 200, 256);
         int n0 = 4; // small N0 → aggressive splits throughout the test
-        var map = HashMap<int, int>.Create(segment, n0);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, n0);
 
         // Pre-populate: keys 1-1000
         //   Safe range      1-200: read only, value = key (never modified/removed)
@@ -2495,7 +2495,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -2535,7 +2535,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8);
 
         var depth = epochManager.EnterScope();
         try
@@ -2561,7 +2561,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 50, 256);
-        var map = HashMap<int, int>.Create(segment, 16);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 16);
 
         // Pre-populate with some data
         var preDepth = epochManager.EnterScope();
@@ -2653,7 +2653,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8, allowMultiple: true);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8, allowMultiple: true);
 
         Assert.That(map.AllowMultiple, Is.True);
 
@@ -2700,7 +2700,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8, allowMultiple: true);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8, allowMultiple: true);
 
         var depth = epochManager.EnterScope();
         try
@@ -2750,7 +2750,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8, allowMultiple: true);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8, allowMultiple: true);
 
         var depth = epochManager.EnterScope();
         try
@@ -2781,7 +2781,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<int, int>.Create(segment, 8, allowMultiple: true);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 8, allowMultiple: true);
 
         var depth = epochManager.EnterScope();
         try
@@ -2814,7 +2814,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 50, 256);
-        var map = HashMap<int, int>.Create(segment, 4, allowMultiple: true);
+        var map = HashMap<int, int, PersistentStore>.Create(segment, 4, allowMultiple: true);
 
         var depth = epochManager.EnterScope();
         try
@@ -2853,7 +2853,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var created = HashMap<int, int>.Create(segment, 8, allowMultiple: true);
+        var created = HashMap<int, int, PersistentStore>.Create(segment, 8, allowMultiple: true);
 
         var depth = epochManager.EnterScope();
         try
@@ -2870,7 +2870,7 @@ unsafe class HashMapTests
         }
 
         // Reopen
-        var opened = HashMap<int, int>.Open(segment);
+        var opened = HashMap<int, int, PersistentStore>.Open(segment);
         Assert.That(opened.AllowMultiple, Is.True);
         Assert.That(opened.EntryCount, Is.EqualTo(1));
 
@@ -2895,7 +2895,7 @@ unsafe class HashMapTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, 256);
-        var map = HashMap<long, int>.Create(segment, 8, allowMultiple: true);
+        var map = HashMap<long, int, PersistentStore>.Create(segment, 8, allowMultiple: true);
 
         Assert.That(map.AllowMultiple, Is.True);
 

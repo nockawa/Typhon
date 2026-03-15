@@ -29,7 +29,7 @@ internal static unsafe class TemporalIndexQuery
     /// <param name="tailVSBS">The TAIL VSBS containing version history entries.</param>
     /// <param name="changeSet">ChangeSet for page tracking.</param>
     /// <returns>List of chain IDs active at the target TSN (empty if none or key not found).</returns>
-    internal static List<int> Query(IndexedFieldInfo ifi, byte* fieldValueAddr, long targetTSN, VariableSizedBufferSegment<VersionedIndexEntry> tailVSBS, 
+    internal static List<int> Query(IndexedFieldInfo ifi, byte* fieldValueAddr, long targetTSN, VariableSizedBufferSegment<VersionedIndexEntry, PersistentStore> tailVSBS, 
         ChangeSet changeSet)
     {
         var result = new List<int>(4);

@@ -119,9 +119,9 @@ internal sealed class AdvancedSelectivityEstimator : ISelectivityEstimator
     /// For unique indexes: 0 or 1. For multi-value indexes: the buffer's TotalCount.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static unsafe long ExactEqualityCount(BTreeBase index, long key)
+    private static unsafe long ExactEqualityCount(BTreeBase<PersistentStore> index, long key)
     {
-        using var guard = EpochGuard.Enter(index.Segment.Manager.EpochManager);
+        using var guard = EpochGuard.Enter(index.Segment.Store.EpochManager);
         var accessor = index.Segment.CreateChunkAccessor();
         try
         {

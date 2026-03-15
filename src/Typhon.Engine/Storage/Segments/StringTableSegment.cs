@@ -7,7 +7,7 @@ using System.Text;
 
 namespace Typhon.Engine;
 
-public class StringTableSegment
+public class StringTableSegment<TStore> where TStore : struct, IPageStore
 {
     private struct ChunkHeader
     {
@@ -18,9 +18,9 @@ public class StringTableSegment
     public int Stride { get; }
 
     private readonly EpochManager _epochManager;
-    private readonly ChunkBasedSegment _segment;
+    private readonly ChunkBasedSegment<TStore> _segment;
 
-    public StringTableSegment(ChunkBasedSegment segment, EpochManager epochManager)
+    public StringTableSegment(ChunkBasedSegment<TStore> segment, EpochManager epochManager)
     {
         _segment = segment;
         _epochManager = epochManager;

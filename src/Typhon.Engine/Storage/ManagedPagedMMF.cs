@@ -83,7 +83,7 @@ unsafe internal struct RootFileHeader
     /// <summary>Next free Transaction Sequence Number. Restored on reopen so MVCC visibility works across engine restarts.</summary>
     public long NextFreeTSN;
 
-    /// <summary>Root page index of the <see cref="ChunkBasedSegment"/> backing <see cref="ComponentCollection{T}"/> storage for FieldR1 entries.</summary>
+    /// <summary>Root page index of the <see cref="ChunkBasedSegment<PersistentStore>"/> backing <see cref="ComponentCollection{T}"/> storage for FieldR1 entries.</summary>
     public int FieldCollectionSegmentSPI;
 
     /// <summary>Monotonic counter bumped on any user component schema change. Used for quick mismatch pre-check.</summary>
@@ -162,8 +162,8 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
 
     #endregion
 
-    private ConcurrentDictionary<int, LogicalSegment> _segments;
-    private LogicalSegment _occupancySegment;
+    private ConcurrentDictionary<int, LogicalSegment<PersistentStore>> _segments;
+    private LogicalSegment<PersistentStore> _occupancySegment;
     private BitmapL3 _occupancyMap;
     private int _occupancyNextReservedPageIndex;
     private int _occupancyNextReservedMapPageIndex;
@@ -302,7 +302,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         Logger.LogInformation("Initialize DiskPageAllocator service with root at page {PageId}", OccupancySegmentRootPageIndex);
 
         // Initialize the occupancy segment and map
-        _segments = new ConcurrentDictionary<int, LogicalSegment>();
+        _segments = new ConcurrentDictionary<int, LogicalSegment<PersistentStore>>();
 
         _occupancySegment = CreateOccupancySegment(OccupancySegmentRootPageIndex, PageBlockType.OccupancyMap, 1, cs);
 
@@ -360,7 +360,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         Logger.LogInformation("Load Database '{DatabaseName}' from file '{FilePathName}'", h.DatabaseNameString, Options.BuildDatabasePathFileName());
 
         // Initialize the occupancy segment and map
-        _segments = new ConcurrentDictionary<int, LogicalSegment>();
+        _segments = new ConcurrentDictionary<int, LogicalSegment<PersistentStore>>();
 
         _occupancySegment = LoadOccupancySegment(h.OccupancyMapSPI, PageBlockType.OccupancyMap);
 
@@ -371,18 +371,18 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         _occupancyNextReservedMapPageIndex = h.OccupancyNextReservedMapPageIndex;
         // ReSharper restore InconsistentlySynchronizedField
     }
-    public LogicalSegment GetSegment(int filePageIndex)
+    public LogicalSegment<PersistentStore> GetSegment(int filePageIndex)
     {
         var dic = _segments;
         return dic?.GetOrAdd(filePageIndex, fpid =>
         {
-            var segment = new LogicalSegment(this);
+            var segment = new LogicalSegment<PersistentStore>(new PersistentStore(this));
             segment.Load(fpid);
             return segment;
         });
     }
 
-    internal LogicalSegment CreateOccupancySegment(int filePageIndex, PageBlockType type, int length, ChangeSet cs)
+    internal LogicalSegment<PersistentStore> CreateOccupancySegment(int filePageIndex, PageBlockType type, int length, ChangeSet cs)
     {
         var dic = _segments;
         if (dic == null)
@@ -390,7 +390,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
             return null;
         }
 
-        var segment = new LogicalSegment(this);
+        var segment = new LogicalSegment<PersistentStore>(new PersistentStore(this));
         if (dic.TryAdd(filePageIndex, segment) == false)
         {
             return null;
@@ -405,7 +405,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         return segment;
     }
 
-    internal LogicalSegment LoadOccupancySegment(int filePageIndex, PageBlockType type)
+    internal LogicalSegment<PersistentStore> LoadOccupancySegment(int filePageIndex, PageBlockType type)
     {
         var dic = _segments;
         if (dic == null)
@@ -413,7 +413,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
             return null;
         }
 
-        var segment = new LogicalSegment(this);
+        var segment = new LogicalSegment<PersistentStore>(new PersistentStore(this));
         if (dic.TryAdd(filePageIndex, segment) == false)
         {
             return null;
@@ -428,7 +428,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         return segment;
     }
 
-    public LogicalSegment AllocateSegment(PageBlockType type, int length, ChangeSet changeSet = null)
+    public LogicalSegment<PersistentStore> AllocateSegment(PageBlockType type, int length, ChangeSet changeSet = null)
     {
         var dic = _segments;
         if (dic == null)
@@ -439,7 +439,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         var pages = (length < 64) ? stackalloc int[length] : new int[length];
         AllocatePages(ref pages, 0, changeSet);
 
-        var segment = new LogicalSegment(this);
+        var segment = new LogicalSegment<PersistentStore>(new PersistentStore(this));
         if (!dic.TryAdd(pages[0], segment))
         {
             Debug.Fail("Segment root page already registered in dictionary — duplicate allocation");
@@ -475,7 +475,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         base.Dispose(disposing);
     }
 
-    public ChunkBasedSegment AllocateChunkBasedSegment(PageBlockType type, int length, int stride, ChangeSet changeSet = null)
+    public ChunkBasedSegment<PersistentStore> AllocateChunkBasedSegment(PageBlockType type, int length, int stride, ChangeSet changeSet = null)
     {
         var dic = _segments;
         if (dic == null)
@@ -486,7 +486,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         Span<int> pages = stackalloc int[length];
         AllocatePages(ref pages, 0, changeSet);
 
-        var segment = new ChunkBasedSegment(EpochManager, this, stride);
+        var segment = new ChunkBasedSegment<PersistentStore>(EpochManager, new PersistentStore(this), stride);
         if (!dic.TryAdd(pages[0], segment))
         {
             Debug.Fail("Segment root page already registered in dictionary — duplicate allocation");
@@ -501,7 +501,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         return segment;
     }
     
-    public ChunkBasedSegment LoadChunkBasedSegment(int filePageIndex, int stride)
+    public ChunkBasedSegment<PersistentStore> LoadChunkBasedSegment(int filePageIndex, int stride)
     {
         var dic = _segments;
         if (dic == null)
@@ -509,7 +509,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
             return null;
         }
 
-        var segment = new ChunkBasedSegment(EpochManager, this, stride);
+        var segment = new ChunkBasedSegment<PersistentStore>(EpochManager, new PersistentStore(this), stride);
         if (dic.TryAdd(filePageIndex, segment) == false)
         {
             Debug.Fail("Segment root page already registered in dictionary — duplicate allocation");
@@ -528,7 +528,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
     /// Returns a previously loaded segment for the given page index, or loads it if not yet present.
     /// Safe to call when the segment may already be in the registry (e.g., system component segments loaded by the engine constructor).
     /// </summary>
-    public ChunkBasedSegment GetOrLoadChunkBasedSegment(int filePageIndex, int stride)
+    public ChunkBasedSegment<PersistentStore> GetOrLoadChunkBasedSegment(int filePageIndex, int stride)
     {
         var dic = _segments;
         if (dic == null)
@@ -538,7 +538,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
 
         if (dic.TryGetValue(filePageIndex, out var existing))
         {
-            return existing as ChunkBasedSegment;
+            return existing as ChunkBasedSegment<PersistentStore>;
         }
 
         return LoadChunkBasedSegment(filePageIndex, stride);
@@ -561,7 +561,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         return true;
     }
 
-    public bool DeleteSegment(LogicalSegment segment, ChangeSet changeSet = null) => DeleteSegment(segment.RootPageIndex, changeSet);
+    public bool DeleteSegment(LogicalSegment<PersistentStore> segment, ChangeSet changeSet = null) => DeleteSegment(segment.RootPageIndex, changeSet);
 
     // ═══════════════════════════════════════════════════════════════
     // Checkpoint Support

@@ -54,9 +54,9 @@ public unsafe class Transaction : IDisposable
     private List<DeferredCleanupManager.CleanupEntry> _deferredEnqueueBatch;
 
     // Hoisted accessors for batch index maintenance (set per component type during Commit)
-    private ChunkAccessor[] _batchIndexAccessors;
-    private ChunkAccessor _batchPkAccessor;
-    private ChunkAccessor _batchTailAccessor;
+    private ChunkAccessor<PersistentStore>[] _batchIndexAccessors;
+    private ChunkAccessor<PersistentStore> _batchPkAccessor;
+    private ChunkAccessor<PersistentStore> _batchTailAccessor;
     private bool _batchIndexActive;
     private int _batchEntityCount;
 
@@ -197,7 +197,7 @@ public unsafe class Transaction : IDisposable
     public void Dispose()
     {
         // Dispose transient batch accessors first — safe even on double-dispose or if never created
-        // (ChunkAccessor.Dispose() is idempotent: no-op when _segment==null).
+        // (ChunkAccessor<PersistentStore>.Dispose() is idempotent: no-op when _segment==null).
         _batchPkAccessor.Dispose();
         _batchTailAccessor.Dispose();
 
@@ -517,7 +517,7 @@ public unsafe class Transaction : IDisposable
     {
         AssertThreadAffinity();
         var vsbs = _dbe.GetComponentCollectionVSBS<T>();
-        using var a = new VariableSizedBufferAccessor<T>(vsbs, field._bufferId);
+        using var a = new VariableSizedBufferAccessor<T, PersistentStore>(vsbs, field._bufferId);
 
         return a.RefCounter;
     }
@@ -525,9 +525,9 @@ public unsafe class Transaction : IDisposable
     [PublicAPI]
     public ref struct ReadOnlyCollectionEnumerator<T> where T : unmanaged
     {
-        private BufferEnumerator<T> _enumerator;
+        private BufferEnumerator<T, PersistentStore> _enumerator;
 
-        public ReadOnlyCollectionEnumerator(VariableSizedBufferSegment<T> vsbs, int bufferId)
+        public ReadOnlyCollectionEnumerator(VariableSizedBufferSegment<T, PersistentStore> vsbs, int bufferId)
         {
             _enumerator = vsbs.EnumerateBuffer(bufferId);
         }
@@ -573,11 +573,11 @@ public unsafe class Transaction : IDisposable
         indexRef.Validate();
 
         var ct = indexRef.Table;
-        BTree<TKey> typedIndex;
+        BTree<TKey, PersistentStore> typedIndex;
 
         if (indexRef.IsPrimaryKey)
         {
-            if (ct.PrimaryKeyIndex is not BTree<TKey> pkIndex)
+            if (ct.PrimaryKeyIndex is not BTree<TKey, PersistentStore> pkIndex)
             {
                 throw new InvalidOperationException($"PK index requires TKey=long, caller specified '{typeof(TKey).Name}'.");
             }
@@ -587,7 +587,7 @@ public unsafe class Transaction : IDisposable
         else
         {
             var ifi = ct.IndexedFieldInfos[indexRef.FieldIndex];
-            if (ifi.Index is not BTree<TKey> skIndex)
+            if (ifi.Index is not BTree<TKey, PersistentStore> skIndex)
             {
                 throw new InvalidOperationException(
                     $"TKey type mismatch: index uses '{ifi.Index.GetType().GenericTypeArguments[0].Name}', caller specified '{typeof(TKey).Name}'.");
@@ -607,9 +607,9 @@ public unsafe class Transaction : IDisposable
     [PublicAPI]
     public ref struct PKEntityEnumerator<T> where T : unmanaged
     {
-        private BTree<long>.RangeEnumerator _inner;
-        private ChunkAccessor _compRevAccessor;
-        private ChunkAccessor _compContentAccessor;
+        private BTree<long, PersistentStore>.RangeEnumerator _inner;
+        private ChunkAccessor<PersistentStore> _compRevAccessor;
+        private ChunkAccessor<PersistentStore> _compContentAccessor;
         private readonly Transaction _tx;
         private readonly long _transactionTSN;
         private readonly int _componentOverhead;
@@ -697,14 +697,14 @@ public unsafe class Transaction : IDisposable
     public ref struct IndexEntityEnumerator<T, TKey> where T : unmanaged where TKey : unmanaged
     {
         // Unique index path
-        private BTree<TKey>.RangeEnumerator _innerUnique;
+        private BTree<TKey, PersistentStore>.RangeEnumerator _innerUnique;
         // AllowMultiple index path
-        private BTree<TKey>.RangeMultipleEnumerator _innerMultiple;
+        private BTree<TKey, PersistentStore>.RangeMultipleEnumerator _innerMultiple;
         private ReadOnlySpan<int> _currentValues;
         private int _currentValueIndex;
 
-        private ChunkAccessor _compRevAccessor;
-        private ChunkAccessor _compContentAccessor;
+        private ChunkAccessor<PersistentStore> _compRevAccessor;
+        private ChunkAccessor<PersistentStore> _compContentAccessor;
         private readonly Transaction _tx;
         private readonly long _transactionTSN;
         private readonly int _componentOverhead;
@@ -715,7 +715,7 @@ public unsafe class Transaction : IDisposable
         private ReadOnlySpan<byte> _currentComponentSpan;
         private bool _disposed;
 
-        internal IndexEntityEnumerator(BTree<TKey> index, ComponentTable ct, Transaction tx, TKey minKey, TKey maxKey, ChangeSet changeSet)
+        internal IndexEntityEnumerator(BTree<TKey, PersistentStore> index, ComponentTable ct, Transaction tx, TKey minKey, TKey maxKey, ChangeSet changeSet)
         {
             _isAllowMultiple = index.AllowMultiple;
             if (_isAllowMultiple)
@@ -925,7 +925,7 @@ public unsafe class Transaction : IDisposable
     /// <summary>
     /// Flush all pending dirty state and advance the epoch within this transaction.
     /// Must only be called at a quiescent point — no B+Tree OLC write locks held,
-    /// no ChunkAccessor mid-operation.
+    /// no ChunkAccessor<PersistentStore> mid-operation.
     /// </summary>
     private void FlushAndRefreshEpoch()
     {
@@ -948,7 +948,7 @@ public unsafe class Transaction : IDisposable
         //    Without this, the next RentWarmAccessor creates a new accessor with empty slot cache,
         //    forcing all hot pages through RequestPageEpoch which re-stamps their AccessEpoch,
         //    making them permanently epoch-protected and causing unbounded cache pressure.
-        ChunkBasedSegment.RefreshWarmCacheEpoch(newEpoch);
+        ChunkBasedSegment<PersistentStore>.RefreshWarmCacheEpoch(newEpoch);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -963,7 +963,7 @@ public unsafe class Transaction : IDisposable
 
     /// <summary>
     /// Epoch refresh for bulk enumerators. Read-only transactions just refresh the epoch scope (no dirty state to flush).
-    /// Read-write transactions delegate to <see cref="FlushAndRefreshEpoch"/> which also flushes ChunkAccessor dirty state.
+    /// Read-write transactions delegate to <see cref="FlushAndRefreshEpoch"/> which also flushes ChunkAccessor<PersistentStore> dirty state.
     /// </summary>
     internal void EnumerateRefreshEpoch()
     {
@@ -1714,8 +1714,8 @@ public unsafe class Transaction : IDisposable
                 }
 
                 // Flush warm accessors: exit+enter cycle performs a single CommitChanges per cache
-                ChunkBasedSegment.ExitBatchMode();
-                ChunkBasedSegment.EnterBatchMode();
+                ChunkBasedSegment<PersistentStore>.ExitBatchMode();
+                ChunkBasedSegment<PersistentStore>.EnterBatchMode();
 
                 _changeSet.ReleaseExcessDirtyMarks();
             }
@@ -1970,7 +1970,7 @@ public unsafe class Transaction : IDisposable
 
             // Hoist accessor creation for batch index maintenance
             var indexedFieldInfos = info.ComponentTable.IndexedFieldInfos;
-            _batchIndexAccessors = new ChunkAccessor[indexedFieldInfos.Length];
+            _batchIndexAccessors = new ChunkAccessor<PersistentStore>[indexedFieldInfos.Length];
             for (int i = 0; i < indexedFieldInfos.Length; i++)
             {
                 _batchIndexAccessors[i] = indexedFieldInfos[i].Index.Segment.CreateChunkAccessor(_changeSet);
@@ -1982,7 +1982,7 @@ public unsafe class Transaction : IDisposable
                 : default;
             _batchIndexActive = true;
             _batchEntityCount = 0;
-            ChunkBasedSegment.EnterBatchMode();
+            ChunkBasedSegment<PersistentStore>.EnterBatchMode();
 
             try
             {
@@ -1991,7 +1991,7 @@ public unsafe class Transaction : IDisposable
             finally
             {
                 // Exit batch mode + dispose hoisted accessors
-                ChunkBasedSegment.ExitBatchMode();
+                ChunkBasedSegment<PersistentStore>.ExitBatchMode();
                 _batchIndexActive = false;
                 for (int i = 0; i < _batchIndexAccessors.Length; i++)
                 {

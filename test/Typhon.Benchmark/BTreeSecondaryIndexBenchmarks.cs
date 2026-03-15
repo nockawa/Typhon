@@ -28,12 +28,12 @@ public class BTreeSecondaryIndexBenchmarks
     private BTreeBenchmarkHelper _helper;
 
     // Single-value index (unique secondary index like entity.Name)
-    private ChunkBasedSegment _segSingle;
-    private IntSingleBTree _treeSingle;
+    private ChunkBasedSegment<PersistentStore> _segSingle;
+    private IntSingleBTree<PersistentStore> _treeSingle;
 
     // Multi-value index (non-unique like entity.TeamId)
-    private ChunkBasedSegment _segMulti;
-    private IntMultipleBTree _treeMulti;
+    private ChunkBasedSegment<PersistentStore> _segMulti;
+    private IntMultipleBTree<PersistentStore> _treeMulti;
 
     // Element IDs returned by Add for multi-value benchmarks
     private int[] _multiElementIds;
@@ -53,8 +53,8 @@ public class BTreeSecondaryIndexBenchmarks
         _segSingle = _helper.AllocateSegment<Index32Chunk>(500);
         _segMulti = _helper.AllocateSegment<Index32Chunk>(500);
 
-        _treeSingle = new IntSingleBTree(_segSingle);
-        _treeMulti = new IntMultipleBTree(_segMulti);
+        _treeSingle = new IntSingleBTree<PersistentStore>(_segSingle);
+        _treeMulti = new IntMultipleBTree<PersistentStore>(_segMulti);
 
         BTreeBenchmarkHelper.PreFillInt(_treeSingle, _segSingle, PreFillCount);
 

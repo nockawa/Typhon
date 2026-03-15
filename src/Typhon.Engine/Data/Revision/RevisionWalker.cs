@@ -8,7 +8,7 @@ namespace Typhon.Engine;
 [ExcludeFromCodeCoverage]
 internal ref struct RevisionWalker
 {
-    private ref ChunkAccessor _accessor;
+    private ref ChunkAccessor<PersistentStore> _accessor;
     private readonly int _firstChunkId;
     private readonly ref CompRevStorageHeader _header;
     private Span<CompRevStorageElement> _elements;
@@ -20,7 +20,7 @@ internal ref struct RevisionWalker
     public ref int NextChunkId => ref _nextChunkId;
     public Span<CompRevStorageElement> Elements => _elements;
 
-    public unsafe RevisionWalker(ref ChunkAccessor accessor, int firstChunkId)
+    public unsafe RevisionWalker(ref ChunkAccessor<PersistentStore> accessor, int firstChunkId)
     {
         _accessor = ref accessor;
         _firstChunkId = firstChunkId;

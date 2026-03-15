@@ -28,8 +28,8 @@ public class BTreeConcurrentMixedBenchmarks
 {
     private BTreeBenchmarkHelper _helper;
     private EpochManager _epochManager;
-    private ChunkBasedSegment _segment;
-    private LongSingleBTree _tree;
+    private ChunkBasedSegment<PersistentStore> _segment;
+    private LongSingleBTree<PersistentStore> _tree;
     private long[][] _perThreadReadKeys;
     private long[][] _perThreadWriteKeys;
 
@@ -48,7 +48,7 @@ public class BTreeConcurrentMixedBenchmarks
         _epochManager = _helper.EpochManager;
 
         _segment = _helper.AllocateSegment<Index64Chunk>(2000);
-        _tree = new LongSingleBTree(_segment);
+        _tree = new LongSingleBTree<PersistentStore>(_segment);
         BTreeBenchmarkHelper.PreFillLong(_tree, _segment, PreFillCount);
 
         // Pre-generate keys for each thread

@@ -41,7 +41,7 @@ public static class BTreeScanProfile
 
         var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 500, sizeof(Index64Chunk));
         var epochDepth = epochManager.EnterScope();
-        var tree = new LongSingleBTree(segment);
+        var tree = new LongSingleBTree<PersistentStore>(segment);
 
         // Pre-fill with keys 1..preFillCount (same as BDN benchmark)
         var accessor = segment.CreateChunkAccessor();

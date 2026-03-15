@@ -67,11 +67,11 @@ internal sealed class ComponentInfo
 
     // Common fields
     public ComponentTable ComponentTable;
-    public ChunkBasedSegment CompContentSegment;
-    public ChunkBasedSegment CompRevTableSegment;
-    public BTree<long> PrimaryKeyIndex;
-    public ChunkAccessor CompContentAccessor;
-    public ChunkAccessor CompRevTableAccessor;
+    public ChunkBasedSegment<PersistentStore> CompContentSegment;
+    public ChunkBasedSegment<PersistentStore> CompRevTableSegment;
+    public BTree<long, PersistentStore> PrimaryKeyIndex;
+    public ChunkAccessor<PersistentStore> CompContentAccessor;
+    public ChunkAccessor<PersistentStore> CompRevTableAccessor;
 
     // Dual caches (one is always null)
     // ReSharper disable InconsistentNaming
@@ -102,7 +102,7 @@ internal sealed class ComponentInfo
     }
 
     /// <summary>
-    /// Disposes the ChunkAccessor fields to flush dirty pages.
+    /// Disposes the ChunkAccessor<PersistentStore> fields to flush dirty pages.
     /// </summary>
     public void DisposeAccessors()
     {

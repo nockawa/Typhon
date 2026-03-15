@@ -66,7 +66,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             tree.Add(10, 10, ref accessor);
             Assert.That(tree[10], Is.EqualTo(10));
@@ -104,7 +104,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new FloatSingleBTree(segment);
+            var tree = new FloatSingleBTree<PersistentStore>(segment);
 
             tree.Add(-0.10f, 10, ref accessor);
             Assert.That(tree[-0.10f], Is.EqualTo(10));
@@ -142,7 +142,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             tree.Add(140, 140, ref accessor);
             Assert.That(tree[140], Is.EqualTo(140));
@@ -183,7 +183,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new String64SingleBTree(segment);
+            var tree = new String64SingleBTree<PersistentStore>(segment);
 
             tree.Add("140", 140, ref accessor);
             Assert.That(tree["140"], Is.EqualTo(140));
@@ -232,7 +232,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             foreach (var v in values)
             {
@@ -277,7 +277,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             for (int loopC = 0; loopC < 2; loopC++)
             {
@@ -341,7 +341,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new ShortSingleBTree(segment);
+            var tree = new ShortSingleBTree<PersistentStore>(segment);
 
             for (int loopC = 0; loopC < 2; loopC++)
             {
@@ -405,7 +405,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new LongSingleBTree(segment);
+            var tree = new LongSingleBTree<PersistentStore>(segment);
 
             for (int loopC = 0; loopC < 2; loopC++)
             {
@@ -469,7 +469,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new String64SingleBTree(segment);
+            var tree = new String64SingleBTree<PersistentStore>(segment);
 
             for (int loopC = 0; loopC < 2; loopC++)
             {
@@ -518,7 +518,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntMultipleBTree(segment);
+            var tree = new IntMultipleBTree<PersistentStore>(segment);
 
             var eid0 = tree.Add(1, 10, ref accessor);
             var eid1 = tree.Add(3, 30, ref accessor);
@@ -577,7 +577,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new ByteMultipleBTree(segment);
+            var tree = new ByteMultipleBTree<PersistentStore>(segment);
 
             var eid0 = tree.Add(1, 10, ref accessor);
             var eid1 = tree.Add(3, 30, ref accessor);
@@ -636,7 +636,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new FloatMultipleBTree(segment);
+            var tree = new FloatMultipleBTree<PersistentStore>(segment);
 
             var eid0 = tree.Add(1.1f, 10, ref accessor);
             var eid1 = tree.Add(3.1f, 30, ref accessor);
@@ -705,7 +705,7 @@ class BtreeTests
             try
             {
                 var accessor = segment.CreateChunkAccessor(changeSet);
-                var tree = new FloatSingleBTree(segment);
+                var tree = new FloatSingleBTree<PersistentStore>(segment);
 
                 var rand = new Random(1234);
                 var curValue = 12;
@@ -746,7 +746,7 @@ class BtreeTests
             try
             {
                 var accessor = segment.CreateChunkAccessor();
-                var tree = new FloatSingleBTree(segment, true);
+                var tree = new FloatSingleBTree<PersistentStore>(segment, true);
 
                 foreach (var kvp in items)
                 {
@@ -784,7 +784,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new FloatSingleBTree(segment);
+            var tree = new FloatSingleBTree<PersistentStore>(segment);
 
             var rand = new Random(1234);
             var hashset = new HashSet<float>();
@@ -833,7 +833,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntMultipleBTree(segment);
+            var tree = new IntMultipleBTree<PersistentStore>(segment);
 
             var chunkCapacity = segment.ChunkCapacity;
             var freeChunkCount = segment.FreeChunkCount;
@@ -946,7 +946,7 @@ class BtreeTests
         var depth = epochManager.EnterScope();
         try
         {
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             int count = 0;
             foreach (var kv in tree.EnumerateLeaves())
@@ -972,7 +972,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             // Insert few items (stays within a single leaf)
             tree.Add(30, 300, ref accessor);
@@ -1009,7 +1009,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             // Insert enough items to force multiple leaf splits
             const int itemCount = 500;
@@ -1058,7 +1058,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             var allKeys = new[] { 1, 2, 3, 10, 20, 33, 5, 50, 70, 35, 9, 99, 101 };
             foreach (var k in allKeys)
@@ -1106,7 +1106,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             tree.Add(30, 30, ref accessor);
             tree.Add(10, 10, ref accessor);
@@ -1131,7 +1131,7 @@ class BtreeTests
         var depth = epochManager.EnterScope();
         try
         {
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             Assert.That(tree.GetMinKey(), Is.EqualTo(0));
         }
@@ -1150,7 +1150,7 @@ class BtreeTests
         var depth = epochManager.EnterScope();
         try
         {
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             var count = 0;
             foreach (var kv in tree.EnumerateRange(1, 100))
@@ -1176,7 +1176,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             var keys = new[] { 5, 50, 10, 30, 20, 40, 1, 100 };
             foreach (var k in keys)
@@ -1216,7 +1216,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             foreach (var k in new[] { 1, 5, 10, 15, 20, 25, 30, 35, 40 })
             {
@@ -1249,7 +1249,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             foreach (var k in new[] { 5, 10, 15, 20 })
             {
@@ -1290,7 +1290,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             foreach (var k in new[] { 5, 10, 15, 20 })
             {
@@ -1324,7 +1324,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             for (int i = 1; i <= 500; i++)
             {
@@ -1365,7 +1365,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             foreach (var k in new[] { 1, 5, 10, 15, 20, 25, 30 })
             {
@@ -1399,7 +1399,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             for (int i = 1; i <= 500; i++)
             {
@@ -1439,7 +1439,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             foreach (var k in new[] { 1, 5, 10, 15, 20, 25, 30, 35, 40 })
             {
@@ -1472,7 +1472,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             var allKeys = new[] { 1, 2, 3, 10, 20, 33, 5, 50, 70, 35, 9, 99, 101 };
             foreach (var k in allKeys)

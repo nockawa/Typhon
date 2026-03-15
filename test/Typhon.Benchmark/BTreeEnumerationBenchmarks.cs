@@ -38,8 +38,8 @@ public class BTreeEnumerationBenchmarks
 {
     private BTreeBenchmarkHelper _helper;
     private EpochManager _epochManager;
-    private ChunkBasedSegment _segment;
-    private LongSingleBTree _tree;
+    private ChunkBasedSegment<PersistentStore> _segment;
+    private LongSingleBTree<PersistentStore> _tree;
 
     // Writer coordination: writers loop continuously but check a pause flag.
     // When paused, they signal a CountdownEvent and block on a gate.
@@ -63,7 +63,7 @@ public class BTreeEnumerationBenchmarks
         _epochManager = _helper.EpochManager;
 
         _segment = _helper.AllocateSegment<Index64Chunk>(1000);
-        _tree = new LongSingleBTree(_segment);
+        _tree = new LongSingleBTree<PersistentStore>(_segment);
         BTreeBenchmarkHelper.PreFillLong(_tree, _segment, PreFillCount);
 
         if (WriterCount > 0)

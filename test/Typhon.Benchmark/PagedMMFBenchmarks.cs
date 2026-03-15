@@ -19,7 +19,7 @@ public class PagedMMFBenchmarks
     private ServiceProvider _serviceProvider;
     private ManagedPagedMMF _pmmf;
     private EpochManager _epochManager;
-    private LogicalSegment _segment;
+    private LogicalSegment<PersistentStore> _segment;
     private string _databaseName;
     private int _epochDepth;
 

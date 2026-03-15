@@ -204,7 +204,7 @@ class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
         // Create a VariableSizedBufferSegment and allocate a buffer to get a valid rootChunkId
         var ct = _dbe.GetComponentTable<CompA>();
         var segment = ct.CompRevTableSegment;
-        var vsbs = new VariableSizedBufferSegment<int>(segment);
+        var vsbs = new VariableSizedBufferSegment<int, PersistentStore>(segment);
 
         int rootChunkId;
         {
@@ -268,7 +268,7 @@ class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
         var mmfSnapshot = _dbe.MMF.SnapshotInternalState();
 
         // Attempt to create a read-only accessor — should throw due to lock contention.
-        // Must be inside an epoch scope because GetReadOnlyAccessor creates an ChunkAccessor internally.
+        // Must be inside an epoch scope because GetReadOnlyAccessor creates an ChunkAccessor<PersistentStore> internally.
         var mainDepth = _dbe.EpochManager.EnterScope();
         try
         {

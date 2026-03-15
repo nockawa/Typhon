@@ -85,25 +85,25 @@ internal class PipelineExecutor
         var ifi = table.IndexedFieldInfos[plan.PrimaryFieldIndex];
         return plan.PrimaryKeyType switch
         {
-            KeyType.Byte => CountPKsTyped<T, byte>((BTree<byte>)ifi.Index, plan, table, evaluators, tx),
-            KeyType.SByte => CountPKsTyped<T, sbyte>((BTree<sbyte>)ifi.Index, plan, table, evaluators, tx),
-            KeyType.Short => CountPKsTyped<T, short>((BTree<short>)ifi.Index, plan, table, evaluators, tx),
-            KeyType.UShort => CountPKsTyped<T, ushort>((BTree<ushort>)ifi.Index, plan, table, evaluators, tx),
-            KeyType.Int => CountPKsTyped<T, int>((BTree<int>)ifi.Index, plan, table, evaluators, tx),
-            KeyType.UInt => CountPKsTyped<T, uint>((BTree<uint>)ifi.Index, plan, table, evaluators, tx),
-            KeyType.Long => CountPKsTyped<T, long>((BTree<long>)ifi.Index, plan, table, evaluators, tx),
-            KeyType.ULong => CountPKsTyped<T, long>((BTree<long>)ifi.Index, plan, table, evaluators, tx),
-            KeyType.Float => CountPKsTyped<T, float>((BTree<float>)ifi.Index, plan, table, evaluators, tx),
-            KeyType.Double => CountPKsTyped<T, double>((BTree<double>)ifi.Index, plan, table, evaluators, tx),
+            KeyType.Byte => CountPKsTyped<T, byte>((BTree<byte, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
+            KeyType.SByte => CountPKsTyped<T, sbyte>((BTree<sbyte, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
+            KeyType.Short => CountPKsTyped<T, short>((BTree<short, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
+            KeyType.UShort => CountPKsTyped<T, ushort>((BTree<ushort, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
+            KeyType.Int => CountPKsTyped<T, int>((BTree<int, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
+            KeyType.UInt => CountPKsTyped<T, uint>((BTree<uint, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
+            KeyType.Long => CountPKsTyped<T, long>((BTree<long, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
+            KeyType.ULong => CountPKsTyped<T, long>((BTree<long, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
+            KeyType.Float => CountPKsTyped<T, float>((BTree<float, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
+            KeyType.Double => CountPKsTyped<T, double>((BTree<double, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
             _ => throw new NotSupportedException($"KeyType {plan.PrimaryKeyType} not supported for index scan")
         };
     }
 
-    private static int CountPKsTyped<T, TKey>(BTree<TKey> index, ExecutionPlan plan, ComponentTable table, FieldEvaluator[] evaluators, Transaction tx)
+    private static int CountPKsTyped<T, TKey>(BTree<TKey, PersistentStore> index, ExecutionPlan plan, ComponentTable table, FieldEvaluator[] evaluators, Transaction tx)
         where T : unmanaged where TKey : unmanaged
     {
-        var minKey = BTree<TKey>.LongToKey(plan.PrimaryScanMin);
-        var maxKey = BTree<TKey>.LongToKey(plan.PrimaryScanMax);
+        var minKey = BTree<TKey, PersistentStore>.LongToKey(plan.PrimaryScanMin);
+        var maxKey = BTree<TKey, PersistentStore>.LongToKey(plan.PrimaryScanMax);
 
         var hasFilters = evaluators.Length > 0;
         var count = 0;
@@ -275,24 +275,24 @@ internal class PipelineExecutor
         var ifi = table.IndexedFieldInfos[plan.PrimaryFieldIndex];
         return plan.PrimaryKeyType switch
         {
-            KeyType.Byte => CollectPKsTyped((BTree<byte>)ifi.Index, plan, table),
-            KeyType.SByte => CollectPKsTyped((BTree<sbyte>)ifi.Index, plan, table),
-            KeyType.Short => CollectPKsTyped((BTree<short>)ifi.Index, plan, table),
-            KeyType.UShort => CollectPKsTyped((BTree<ushort>)ifi.Index, plan, table),
-            KeyType.Int => CollectPKsTyped((BTree<int>)ifi.Index, plan, table),
-            KeyType.UInt => CollectPKsTyped((BTree<uint>)ifi.Index, plan, table),
-            KeyType.Long => CollectPKsTyped((BTree<long>)ifi.Index, plan, table),
-            KeyType.ULong => CollectPKsTyped((BTree<long>)ifi.Index, plan, table),
-            KeyType.Float => CollectPKsTyped((BTree<float>)ifi.Index, plan, table),
-            KeyType.Double => CollectPKsTyped((BTree<double>)ifi.Index, plan, table),
+            KeyType.Byte => CollectPKsTyped((BTree<byte, PersistentStore>)ifi.Index, plan, table),
+            KeyType.SByte => CollectPKsTyped((BTree<sbyte, PersistentStore>)ifi.Index, plan, table),
+            KeyType.Short => CollectPKsTyped((BTree<short, PersistentStore>)ifi.Index, plan, table),
+            KeyType.UShort => CollectPKsTyped((BTree<ushort, PersistentStore>)ifi.Index, plan, table),
+            KeyType.Int => CollectPKsTyped((BTree<int, PersistentStore>)ifi.Index, plan, table),
+            KeyType.UInt => CollectPKsTyped((BTree<uint, PersistentStore>)ifi.Index, plan, table),
+            KeyType.Long => CollectPKsTyped((BTree<long, PersistentStore>)ifi.Index, plan, table),
+            KeyType.ULong => CollectPKsTyped((BTree<long, PersistentStore>)ifi.Index, plan, table),
+            KeyType.Float => CollectPKsTyped((BTree<float, PersistentStore>)ifi.Index, plan, table),
+            KeyType.Double => CollectPKsTyped((BTree<double, PersistentStore>)ifi.Index, plan, table),
             _ => throw new NotSupportedException($"KeyType {plan.PrimaryKeyType} not supported for index scan")
         };
     }
 
-    private static List<long> CollectPKsTyped<TKey>(BTree<TKey> index, ExecutionPlan plan, ComponentTable table) where TKey : unmanaged
+    private static List<long> CollectPKsTyped<TKey>(BTree<TKey, PersistentStore> index, ExecutionPlan plan, ComponentTable table) where TKey : unmanaged
     {
-        var minKey = BTree<TKey>.LongToKey(plan.PrimaryScanMin);
-        var maxKey = BTree<TKey>.LongToKey(plan.PrimaryScanMax);
+        var minKey = BTree<TKey, PersistentStore>.LongToKey(plan.PrimaryScanMin);
+        var maxKey = BTree<TKey, PersistentStore>.LongToKey(plan.PrimaryScanMax);
 
         var capacityHint = plan.EstimatedCounts is { Length: > 0 } ? (int)Math.Min(plan.EstimatedCounts[0], 65536) : 16;
         var result = new List<long>(capacityHint);
@@ -615,7 +615,7 @@ internal class PipelineExecutor
     {
         // Find the FK index on the source table (long, AllowMultiple)
         var fkIndexInfo = FindFKIndex(sourceCT, fkFieldOffset);
-        var fkIndex = (BTree<long>)fkIndexInfo.Index;
+        var fkIndex = (BTree<long, PersistentStore>)fkIndexInfo.Index;
         var compRevAccessor = sourceCT.CompRevTableSegment.CreateChunkAccessor();
 
         try

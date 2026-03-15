@@ -6,7 +6,7 @@ using System.Threading;
 
 namespace Typhon.Engine;
 
-public abstract partial class BTree<TKey>
+public abstract partial class BTree<TKey, TStore>
 {
     /// <summary>
     /// Enumerates key-value entries in the BTree, optionally bounded by [minKey, maxKey], in ascending or descending order.
@@ -23,7 +23,7 @@ public abstract partial class BTree<TKey>
     /// </remarks>
     public ref struct RangeEnumerator
     {
-        private ChunkAccessor _accessor;
+        private ChunkAccessor<TStore> _accessor;
         private NodeWrapper _currentNode;
         private int _currentIndex;
         private int _nodeItemCount;
@@ -35,7 +35,7 @@ public abstract partial class BTree<TKey>
         private readonly bool _reverse;
 
         /// <summary>Unbounded forward constructor — walks the entire leaf chain (used by <see cref="EnumerateLeaves"/>).</summary>
-        internal RangeEnumerator(BTree<TKey> tree)
+        internal RangeEnumerator(BTree<TKey, TStore> tree)
         {
             _accessor = tree._segment.CreateChunkAccessor();
             _comparer = tree.Comparer;
@@ -62,7 +62,7 @@ public abstract partial class BTree<TKey>
         /// Forward (<paramref name="reverse"/>=false): seeks to <paramref name="minKey"/>, stops at <paramref name="maxKey"/>.
         /// Reverse (<paramref name="reverse"/>=true): seeks to <paramref name="maxKey"/>, stops at <paramref name="minKey"/>.
         /// </summary>
-        internal RangeEnumerator(BTree<TKey> tree, TKey minKey, TKey maxKey, bool reverse = false)
+        internal RangeEnumerator(BTree<TKey, TStore> tree, TKey minKey, TKey maxKey, bool reverse = false)
         {
             _accessor = tree._segment.CreateChunkAccessor();
             _comparer = tree.Comparer;
@@ -320,11 +320,11 @@ public abstract partial class BTree<TKey>
     {
         private RangeEnumerator _inner;
         private readonly BaseNodeStorage _storage;
-        private VariableSizedBufferAccessor<int> _currentBuffer;
+        private VariableSizedBufferAccessor<int, TStore> _currentBuffer;
         private bool _hasCurrentBuffer;
         private bool _disposed;
 
-        internal RangeMultipleEnumerator(BTree<TKey> tree, TKey minKey, TKey maxKey, bool reverse = false)
+        internal RangeMultipleEnumerator(BTree<TKey, TStore> tree, TKey minKey, TKey maxKey, bool reverse = false)
         {
             _inner = reverse ? new RangeEnumerator(tree, minKey, maxKey, true) : new RangeEnumerator(tree, minKey, maxKey);
             _storage = tree._storage;

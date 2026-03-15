@@ -5,7 +5,7 @@ using System.Threading;
 
 namespace Typhon.Engine;
 
-public abstract partial class BTree<TKey>
+public abstract partial class BTree<TKey, TStore>
 {
     /// <summary>
     /// Compound move for unique indexes: atomically removes the entry at <paramref name="oldKey"/> and inserts it under <paramref name="newKey"/>.
@@ -13,7 +13,7 @@ public abstract partial class BTree<TKey>
     /// Falls back to pessimistic after <see cref="MaxOptimisticRestarts"/>.
     /// </summary>
     /// <returns>True if the old key was found and moved; false if old key not found.</returns>
-    public bool Move(TKey oldKey, TKey newKey, int value, ref ChunkAccessor accessor)
+    public bool Move(TKey oldKey, TKey newKey, int value, ref ChunkAccessor<TStore> accessor)
     {
         // Per-operation accessor for thread safety under OLC (thread-local warm cache)
         ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
@@ -192,7 +192,7 @@ public abstract partial class BTree<TKey>
     /// Pessimistic fallback for Move: traverses, removes oldKey, inserts newKey.
     /// No global lock — concurrency is handled by per-node OLC latches in Remove/Insert.
     /// </summary>
-    private bool MovePessimistic(TKey oldKey, TKey newKey, int value, ref ChunkAccessor accessor)
+    private bool MovePessimistic(TKey oldKey, TKey newKey, int value, ref ChunkAccessor<TStore> accessor)
     {
         ref var sibAccessor = ref _segment.RentWarmSiblingAccessor(accessor.ChangeSet);
         try
@@ -241,7 +241,7 @@ public abstract partial class BTree<TKey>
     /// Returns the new element ID and both HEAD buffer IDs for inline TAIL tracking.
     /// </summary>
     public int MoveValue(TKey oldKey, TKey newKey, int elementId, int value,
-        ref ChunkAccessor accessor, out int oldHeadBufferId, out int newHeadBufferId, bool preserveEmptyBuffer = false)
+        ref ChunkAccessor<TStore> accessor, out int oldHeadBufferId, out int newHeadBufferId, bool preserveEmptyBuffer = false)
     {
         // Per-operation accessor for thread safety under OLC (thread-local warm cache)
         ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
@@ -512,7 +512,7 @@ public abstract partial class BTree<TKey>
     /// appends to new buffer, handles empty-buffer cleanup.
     /// No global lock — concurrency is handled by per-node OLC latches in Remove/Insert.
     /// </summary>
-    private int MoveValuePessimistic(TKey oldKey, TKey newKey, int elementId, int value, ref ChunkAccessor accessor, ref ChunkAccessor sibAccessor,
+    private int MoveValuePessimistic(TKey oldKey, TKey newKey, int elementId, int value, ref ChunkAccessor<TStore> accessor, ref ChunkAccessor<TStore> sibAccessor,
         out int oldHeadBufferId, out int newHeadBufferId, bool preserveEmptyBuffer = false)
     {
         try

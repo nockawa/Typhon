@@ -14,12 +14,12 @@ internal ref struct ComponentRevisionManager
 
     internal ref struct ElementRevisionHandle
     {
-        private ref ChunkAccessor _accessor;
+        private ref ChunkAccessor<PersistentStore> _accessor;
         private readonly int _chunkId;
         private readonly bool _isFirst;
         private readonly short _elementIndex;
 
-        public ElementRevisionHandle(ref ChunkAccessor accessor, int chunkId, bool isFirst, short elementIndex)
+        public ElementRevisionHandle(ref ChunkAccessor<PersistentStore> accessor, int chunkId, bool isFirst, short elementIndex)
         {
             _accessor = ref accessor;
             _chunkId = chunkId;
@@ -45,7 +45,7 @@ internal ref struct ComponentRevisionManager
 
     }
 
-    internal static ElementRevisionHandle GetRevisionElement(ref ChunkAccessor accessor, int firstChunkId, short revisionIndex)
+    internal static ElementRevisionHandle GetRevisionElement(ref ChunkAccessor<PersistentStore> accessor, int firstChunkId, short revisionIndex)
     {
         ref var firstHeader = ref accessor.GetChunk<CompRevStorageHeader>(firstChunkId);
         if (revisionIndex < CompRevCountInRoot)
@@ -197,7 +197,7 @@ internal ref struct ComponentRevisionManager
     /// revision before the cutoff, needed because active transactions at MinTSN may have cached its content chunk ID.</para>
     /// </remarks>
     internal static unsafe bool CleanUpUnusedEntriesCore(ComponentTable ct, int firstChunkId, long nextMinTSN,
-        ref ChunkAccessor compRevTableAccessor, ref ChunkAccessor compContentAccessor,
+        ref ChunkAccessor<PersistentStore> compRevTableAccessor, ref ChunkAccessor<PersistentStore> compContentAccessor,
         List<DeferredCleanupManager.DeferredChunkFreeEntry> deferredChunkFrees = null)
     {
         ref var firstChunkHeader = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(firstChunkId);
@@ -375,7 +375,7 @@ internal ref struct ComponentRevisionManager
     /// The deferred path collects entries for later freeing when all referencing transactions have departed.
     /// The immediate path is used during the transaction commit path where the caller is the tail.
     /// </summary>
-    private static void DeferOrFreeContentChunk(ComponentTable ct, ref ChunkAccessor compContentAccessor, int chunkId, bool hasCollections,
+    private static void DeferOrFreeContentChunk(ComponentTable ct, ref ChunkAccessor<PersistentStore> compContentAccessor, int chunkId, bool hasCollections,
         List<DeferredCleanupManager.DeferredChunkFreeEntry> deferredChunkFrees)
     {
         if (chunkId == 0)
@@ -401,7 +401,7 @@ internal ref struct ComponentRevisionManager
     /// <param name="componentChunkId">Content chunk ID to match (unique for non-delete entries)</param>
     /// <param name="tsn">Transaction TSN — used as discriminator for delete entries (ComponentChunkId = 0)</param>
     /// <returns>The absolute revision index if found; -1 otherwise.</returns>
-    internal static short FindRevisionIndexByChunkId(ref ChunkAccessor compRevTableAccessor, int firstChunkId, int componentChunkId, long tsn = 0)
+    internal static short FindRevisionIndexByChunkId(ref ChunkAccessor<PersistentStore> compRevTableAccessor, int firstChunkId, int componentChunkId, long tsn = 0)
     {
         using var enumerator = new RevisionEnumerator(ref compRevTableAccessor, firstChunkId, false, true);
         while (enumerator.MoveNext())
@@ -426,7 +426,7 @@ internal ref struct ComponentRevisionManager
     /// <summary>
     /// Releases a component content chunk and its associated collection buffers.
     /// </summary>
-    private static void FreeCompContentChunk(ComponentTable ct, ref ChunkAccessor compContentAccessor, int chunkId, bool hasCollections)
+    private static void FreeCompContentChunk(ComponentTable ct, ref ChunkAccessor<PersistentStore> compContentAccessor, int chunkId, bool hasCollections)
     {
         if (chunkId == 0)
         {
@@ -490,7 +490,7 @@ internal ref struct ComponentRevisionManager
     private static int ComputeRevElementCount(int chainLength) => CompRevCountInRoot + ((chainLength - 1) * CompRevCountInNext);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    private static unsafe short GetRevisionLocation(ref ChunkAccessor accessor, int firstChunkId, short revisionIndex, out int resChunkId)
+    private static unsafe short GetRevisionLocation(ref ChunkAccessor<PersistentStore> accessor, int firstChunkId, short revisionIndex, out int resChunkId)
     {
         if (revisionIndex < CompRevCountInRoot)
         {

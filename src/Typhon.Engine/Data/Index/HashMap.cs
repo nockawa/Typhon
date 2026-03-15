@@ -20,7 +20,7 @@ namespace Typhon.Engine;
 /// 4 bytes → Wang/Jenkins (~3-4 cycles), 8 bytes → xxHash32 (~8-10 cycles), other sizes → xxHash32 over raw bytes.
 /// </para>
 /// </summary>
-unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquatable<TKey> where TValue : unmanaged
+unsafe class HashMap<TKey, TValue, TStore> : HashMapBase<TStore> where TKey : unmanaged, IEquatable<TKey> where TValue : unmanaged where TStore : struct, IPageStore
 {
     // ═══════════════════════════════════════════════════════════════════════
     // Layout fields (computed once at construction)
@@ -36,13 +36,13 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     private readonly int _valuesOffset;
 
     /// <summary>VSBS for multi-value storage. Null when <see cref="HashMapBase._allowMultiple"/> is false.</summary>
-    private readonly VariableSizedBufferSegment<TValue> _vsbs;
+    private readonly VariableSizedBufferSegment<TValue, TStore> _vsbs;
 
     // ═══════════════════════════════════════════════════════════════════════
     // Constructor
     // ═══════════════════════════════════════════════════════════════════════
 
-    private HashMap(ChunkBasedSegment segment, int n0, bool allowMultiple = false) : base(segment, n0, allowMultiple)
+    private HashMap(ChunkBasedSegment<TStore> segment, int n0, bool allowMultiple = false) : base(segment, n0, allowMultiple)
     {
         _bucketCapacity = (segment.Stride - sizeof(HashMapBucketHeader)) / (sizeof(TKey) + sizeof(TValue));
         Debug.Assert(_bucketCapacity >= 1, $"Stride {segment.Stride} too small for entry size {sizeof(TKey) + sizeof(TValue)}");
@@ -52,7 +52,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
 
         if (allowMultiple)
         {
-            _vsbs = new VariableSizedBufferSegment<TValue>(segment);
+            _vsbs = new VariableSizedBufferSegment<TValue, TStore>(segment);
         }
     }
 
@@ -205,7 +205,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     // Bucket initialization
     // ═══════════════════════════════════════════════════════════════════════
 
-    protected override void InitializeBucket(int chunkId, ref ChunkAccessor accessor)
+    protected override void InitializeBucket(int chunkId, ref ChunkAccessor<TStore> accessor)
     {
         byte* addr = accessor.GetChunkAddress(chunkId, true);
         ref var header = ref GetHeader(addr);
@@ -224,7 +224,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// Linear scan of the key array across a bucket chain (primary + overflow).
     /// Returns true if <paramref name="key"/> is found, with <paramref name="value"/> set.
     /// </summary>
-    private bool ScanChain(int startChunkId, TKey key, out TValue value, ref ChunkAccessor accessor)
+    private bool ScanChain(int startChunkId, TKey key, out TValue value, ref ChunkAccessor<TStore> accessor)
     {
         int chunkId = startChunkId;
 
@@ -255,7 +255,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// Look up a key using the OLC read protocol.
     /// Lock-free: reads version, scans chain, validates version. Retries on contention or split.
     /// </summary>
-    public bool TryGet(TKey key, out TValue value, ref ChunkAccessor accessor)
+    public bool TryGet(TKey key, out TValue value, ref ChunkAccessor<TStore> accessor)
     {
         uint hash = ComputeHash(key);
 
@@ -299,7 +299,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// Look up all values for a key in an AllowMultiple hash map. Returns a VSBS accessor for iterating the buffer. Returns default (empty) if key not found.
     /// Caller must dispose the returned accessor (ref struct, use <c>using</c>).
     /// </summary>
-    public VariableSizedBufferAccessor<TValue> TryGetMultiple(TKey key, ref ChunkAccessor accessor)
+    public VariableSizedBufferAccessor<TValue, TStore> TryGetMultiple(TKey key, ref ChunkAccessor<TStore> accessor)
     {
         Debug.Assert(_allowMultiple, "TryGetMultiple requires AllowMultiple");
         uint hash = ComputeHash(key);
@@ -354,7 +354,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// Append an entry to the bucket chain. Walks from <paramref name="startChunkId"/> looking for space.
     /// Allocates a new overflow chunk if the chain is full.
     /// </summary>
-    private void AppendEntry(int startChunkId, TKey key, TValue value, ref ChunkAccessor accessor, ChangeSet changeSet)
+    private void AppendEntry(int startChunkId, TKey key, TValue value, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
         int chunkId = startChunkId;
 
@@ -400,7 +400,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// Remove a key from the bucket chain using swap-with-last within the same chunk.
     /// Frees empty overflow chunks. Returns true if key was found and removed.
     /// </summary>
-    private bool RemoveFromChain(int startChunkId, TKey key, out TValue value, ref ChunkAccessor accessor)
+    private bool RemoveFromChain(int startChunkId, TKey key, out TValue value, ref ChunkAccessor<TStore> accessor)
     {
         int chunkId = startChunkId;
         int prevChunkId = -1;
@@ -452,7 +452,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// <summary>
     /// Update the value of an existing key in the bucket chain. Returns true if found and updated.
     /// </summary>
-    private bool UpdateInChain(int startChunkId, TKey key, TValue newValue, ref ChunkAccessor accessor)
+    private bool UpdateInChain(int startChunkId, TKey key, TValue newValue, ref ChunkAccessor<TStore> accessor)
     {
         int chunkId = startChunkId;
 
@@ -486,7 +486,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// Insert a key-value pair. Returns true if inserted, false if key already exists (duplicate rejected).
     /// Uses OLC write protocol: acquire bucket latch -> verify meta -> scan for duplicate -> append -> unlock.
     /// </summary>
-    public bool Insert(TKey key, TValue value, ref ChunkAccessor accessor, ChangeSet changeSet)
+    public bool Insert(TKey key, TValue value, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
         uint hash = ComputeHash(key);
 
@@ -558,7 +558,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// <summary>
     /// Insert or update a key-value pair. Returns true if inserted (new key), false if updated (existing key).
     /// </summary>
-    public bool Upsert(TKey key, TValue value, ref ChunkAccessor accessor, ChangeSet changeSet)
+    public bool Upsert(TKey key, TValue value, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
         Debug.Assert(!_allowMultiple, "Upsert is not supported with AllowMultiple");
         uint hash = ComputeHash(key);
@@ -606,7 +606,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// <summary>
     /// Remove a key. Returns true if found and removed, with the removed value in <paramref name="value"/>.
     /// </summary>
-    public bool Remove(TKey key, out TValue value, ref ChunkAccessor accessor, ChangeSet changeSet)
+    public bool Remove(TKey key, out TValue value, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
         uint hash = ComputeHash(key);
 
@@ -662,7 +662,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// Remove one specific value from a key's VSBS buffer. If the buffer becomes empty,
     /// the key is removed entirely from the hash map. AllowMultiple only.
     /// </summary>
-    public bool RemoveValue(TKey key, TValue valueToRemove, ref ChunkAccessor accessor, ChangeSet changeSet)
+    public bool RemoveValue(TKey key, TValue valueToRemove, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
         Debug.Assert(_allowMultiple, "RemoveValue requires AllowMultiple");
         uint hash = ComputeHash(key);
@@ -745,7 +745,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// Execute a split: redistribute entries from bucket <c>next</c> into old and new buckets
     /// using the finer modulus. Critical ordering: meta update BEFORE unlock.
     /// </summary>
-    protected override void ExecuteSplit(ref ChunkAccessor accessor, ChangeSet changeSet)
+    protected override void ExecuteSplit(ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
         var (level, next, bucketCount) = ReadMeta();
         int mod = _n0 << level;
@@ -867,7 +867,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// Does NOT touch OlcVersion (still locked by caller).
     /// Creates new overflow if entries exceed capacity.
     /// </summary>
-    private void RewriteBucket(int chunkId, TKey* keys, TValue* values, int entryCount, ref ChunkAccessor accessor, ChangeSet changeSet)
+    private void RewriteBucket(int chunkId, TKey* keys, TValue* values, int entryCount, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
         byte* addr = accessor.GetChunkAddress(chunkId, true);
         ref var header = ref GetHeader(addr);
@@ -893,7 +893,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// Initialize a new bucket chunk with the given entries. Sets OlcVersion=4 (version=1, unlocked).
     /// Creates overflow if entries exceed capacity.
     /// </summary>
-    private void WriteBucket(int chunkId, TKey* keys, TValue* values, int entryCount, ref ChunkAccessor accessor, ChangeSet changeSet)
+    private void WriteBucket(int chunkId, TKey* keys, TValue* values, int entryCount, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
         byte* addr = accessor.GetChunkAddress(chunkId, true);
         ref var header = ref GetHeader(addr);
@@ -921,7 +921,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// <summary>
     /// Write remaining entries as a chain of overflow chunks linked from <paramref name="parentChunkId"/>.
     /// </summary>
-    private void WriteOverflowChain(int parentChunkId, TKey* keys, TValue* values, int entryCount, ref ChunkAccessor accessor, ChangeSet changeSet)
+    private void WriteOverflowChain(int parentChunkId, TKey* keys, TValue* values, int entryCount, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
         if (entryCount == 0)
         {
@@ -967,7 +967,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// <summary>
     /// Insert a key-value pair without OLC and without duplicate check. For single-threaded rebuild/recovery contexts only. Still triggers splits.
     /// </summary>
-    private void InsertDuringRebuild(TKey key, TValue value, ref ChunkAccessor accessor, ChangeSet changeSet)
+    private void InsertDuringRebuild(TKey key, TValue value, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
         uint hash = ComputeHash(key);
         var (level, next, _) = UnpackMeta(_packedMeta);
@@ -987,7 +987,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// Get a best-effort enumerator over all entries. For diagnostics and single-threaded rebuild.
     /// Not snapshot-safe — concurrent mutations may cause missed or duplicate entries.
     /// </summary>
-    public Enumerator GetEnumerator(ref ChunkAccessor accessor) => new(this, ref accessor);
+    public Enumerator GetEnumerator(ref ChunkAccessor<TStore> accessor) => new(this, ref accessor);
 
     /// <summary>
     /// Sequential enumerator over all (Key, Value) pairs in the hash map.
@@ -995,8 +995,8 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// </summary>
     public ref struct Enumerator
     {
-        private readonly HashMap<TKey, TValue> _map;
-        private ref ChunkAccessor _accessor;
+        private readonly HashMap<TKey, TValue, TStore> _map;
+        private ref ChunkAccessor<TStore> _accessor;
         private int _bucketIndex;
         private readonly int _bucketCount;
         private int _currentChunkId;
@@ -1004,7 +1004,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
 
         public (TKey Key, TValue Value) Current { get; private set; }
 
-        internal Enumerator(HashMap<TKey, TValue> map, ref ChunkAccessor accessor)
+        internal Enumerator(HashMap<TKey, TValue, TStore> map, ref ChunkAccessor<TStore> accessor)
         {
             _map = map;
             _accessor = ref accessor;
@@ -1063,7 +1063,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// Duplicates are possible when splits occur during enumeration — callers using <c>HashSet</c>
     /// absorb them naturally. Caller must call <see cref="ConcurrentEnumerator.Dispose"/>.
     /// </summary>
-    public ConcurrentEnumerator GetConcurrentEnumerator(ref ChunkAccessor accessor) => new(this, ref accessor);
+    public ConcurrentEnumerator GetConcurrentEnumerator(ref ChunkAccessor<TStore> accessor) => new(this, ref accessor);
 
     /// <summary>
     /// Concurrent-safe enumerator: per-bucket OLC read protocol with collect-then-yield.
@@ -1072,8 +1072,8 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// </summary>
     public ref struct ConcurrentEnumerator : IDisposable
     {
-        private readonly HashMap<TKey, TValue> _map;
-        private ref ChunkAccessor _accessor;
+        private readonly HashMap<TKey, TValue, TStore> _map;
+        private ref ChunkAccessor<TStore> _accessor;
         private int _bucketIndex;
         private readonly int _keysOffset;
         private readonly int _valuesOffset;
@@ -1088,7 +1088,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
 
         public (TKey Key, TValue Value) Current { get; private set; }
 
-        internal ConcurrentEnumerator(HashMap<TKey, TValue> map, ref ChunkAccessor accessor)
+        internal ConcurrentEnumerator(HashMap<TKey, TValue, TStore> map, ref ChunkAccessor<TStore> accessor)
         {
             _map = map;
             _accessor = ref accessor;
@@ -1213,7 +1213,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// Seed an entry directly into a bucket's primary chunk. Test-only: no overflow handling,
     /// asserts bucket is not full.
     /// </summary>
-    internal void SeedEntryForTest(TKey key, TValue value, ref ChunkAccessor accessor)
+    internal void SeedEntryForTest(TKey key, TValue value, ref ChunkAccessor<TStore> accessor)
     {
         uint hash = ComputeHash(key);
         var (level, next, _) = ReadMeta();
@@ -1238,13 +1238,13 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// <summary>
     /// Create a new hash map on a fresh segment.
     /// </summary>
-    public static HashMap<TKey, TValue> Create(ChunkBasedSegment segment, int initialBuckets = 64, bool allowMultiple = false, ChangeSet changeSet = null)
+    public static HashMap<TKey, TValue, TStore> Create(ChunkBasedSegment<TStore> segment, int initialBuckets = 64, bool allowMultiple = false, ChangeSet changeSet = null)
     {
         Debug.Assert(initialBuckets > 0 && BitOperations.IsPow2(initialBuckets), "initialBuckets must be a positive power of 2");
 
-        using var guard = EpochGuard.Enter(segment.Manager.EpochManager);
+        using var guard = EpochGuard.Enter(segment.Store.EpochManager);
 
-        var map = new HashMap<TKey, TValue>(segment, initialBuckets, allowMultiple);
+        var map = new HashMap<TKey, TValue, TStore>(segment, initialBuckets, allowMultiple);
         map.InitializeCreate(initialBuckets, changeSet);
         return map;
     }
@@ -1252,9 +1252,9 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// <summary>
     /// Open an existing hash map from a persisted segment.
     /// </summary>
-    public static HashMap<TKey, TValue> Open(ChunkBasedSegment segment)
+    public static HashMap<TKey, TValue, TStore> Open(ChunkBasedSegment<TStore> segment)
     {
-        using var guard = EpochGuard.Enter(segment.Manager.EpochManager);
+        using var guard = EpochGuard.Enter(segment.Store.EpochManager);
 
         int n0;
         bool allowMultiple;
@@ -1270,7 +1270,7 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
             accessor.Dispose();
         }
 
-        var map = new HashMap<TKey, TValue>(segment, n0, allowMultiple);
+        var map = new HashMap<TKey, TValue, TStore>(segment, n0, allowMultiple);
         map.InitializeOpen();
         return map;
     }
@@ -1279,12 +1279,12 @@ unsafe class HashMap<TKey, TValue> : HashMapBase where TKey : unmanaged, IEquata
     /// Create a new hash map and bulk-populate it from <paramref name="sourceData"/>.
     /// Single-threaded factory: no OLC, no duplicate check.
     /// </summary>
-    public static HashMap<TKey, TValue> CreateAndPopulate(ChunkBasedSegment segment, IEnumerable<(TKey Key, TValue Value)> sourceData, int initialBuckets = 64,
+    public static HashMap<TKey, TValue, TStore> CreateAndPopulate(ChunkBasedSegment<TStore> segment, IEnumerable<(TKey Key, TValue Value)> sourceData, int initialBuckets = 64,
         ChangeSet changeSet = null)
     {
         var map = Create(segment, initialBuckets, changeSet: changeSet);
 
-        using var guard = EpochGuard.Enter(segment.Manager.EpochManager);
+        using var guard = EpochGuard.Enter(segment.Store.EpochManager);
         var accessor = segment.CreateChunkAccessor(changeSet);
         try
         {

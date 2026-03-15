@@ -183,11 +183,11 @@ unsafe public struct Index64Chunk
     }
 }
 
-public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
+public abstract class L64BTree<TKey, TStore> : BTree<TKey, TStore> where TStore : struct, IPageStore where TKey : unmanaged
 {
     unsafe public class L64NodeStorage : BaseNodeStorage
     {
-        internal override void Initialize(BTree<TKey> owner, ChunkBasedSegment segment)
+        internal override void Initialize(BTree<TKey, TStore> owner, ChunkBasedSegment<TStore> segment)
         {
             base.Initialize(owner, segment);
             Debug.Assert(sizeof(Index64Chunk) == 256);
@@ -196,7 +196,7 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
         #region Chunk Properties Access
 
-        public override void InitializeNode(NodeWrapper node, NodeStates states, ref ChunkAccessor accessor)
+        public override void InitializeNode(NodeWrapper node, NodeStates states, ref ChunkAccessor<TStore> accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index64Chunk>(node.ChunkId, true);
             chunk.Control = (int)states;  // Atomically sets StateFlags + Start=0 + Count=0
@@ -209,49 +209,49 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
         public override int GetNodeCapacity() => Index64Chunk.Capacity;
 
-        public override ref int GetOlcVersionRef(int chunkId, ref ChunkAccessor accessor)
+        public override ref int GetOlcVersionRef(int chunkId, ref ChunkAccessor<TStore> accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index64Chunk>(chunkId, false);
             return ref chunk.OlcVersion;
         }
 
-        public override NodeWrapper GetLeftNode(NodeWrapper node, ref ChunkAccessor accessor)
+        public override NodeWrapper GetLeftNode(NodeWrapper node, ref ChunkAccessor<TStore> accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
             return new NodeWrapper(this, chunk.LeftValue);
         }
 
-        public override void SetLeftNode(NodeWrapper node, int previousNodeId, ref ChunkAccessor accessor)
+        public override void SetLeftNode(NodeWrapper node, int previousNodeId, ref ChunkAccessor<TStore> accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index64Chunk>(node.ChunkId, true);
             chunk.LeftValue = previousNodeId;
         }
 
-        public override NodeWrapper GetPreviousNode(NodeWrapper node, ref ChunkAccessor accessor)
+        public override NodeWrapper GetPreviousNode(NodeWrapper node, ref ChunkAccessor<TStore> accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
             return new NodeWrapper(this, chunk.PrevChunk);
         }
 
-        public override void SetPreviousNode(NodeWrapper node, int previousNodeId, ref ChunkAccessor accessor)
+        public override void SetPreviousNode(NodeWrapper node, int previousNodeId, ref ChunkAccessor<TStore> accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index64Chunk>(node.ChunkId, true);
             chunk.PrevChunk = previousNodeId;
         }
 
-        public override NodeWrapper GetNextNode(NodeWrapper node, ref ChunkAccessor accessor)
+        public override NodeWrapper GetNextNode(NodeWrapper node, ref ChunkAccessor<TStore> accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
             return new NodeWrapper(this, chunk.NextChunk);
         }
 
-        public override void SetNextNode(NodeWrapper node, int nextNodeId, ref ChunkAccessor accessor)
+        public override void SetNextNode(NodeWrapper node, int nextNodeId, ref ChunkAccessor<TStore> accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index64Chunk>(node.ChunkId, true);
             chunk.NextChunk = nextNodeId;
         }
 
-        public override KeyValueItem GetItem(NodeWrapper node, int index, bool adjust, ref ChunkAccessor accessor)
+        public override KeyValueItem GetItem(NodeWrapper node, int index, bool adjust, ref ChunkAccessor<TStore> accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
             var i = adjust ? Index64Chunk.Adjust(chunk.Start + index) : index;
@@ -259,68 +259,68 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
             return new KeyValueItem(*(TKey*)&chunkKey, chunk.Values[i]);
         }
 
-        public override void SetItem(NodeWrapper node, int index, KeyValueItem value, bool adjust, ref ChunkAccessor accessor)
+        public override void SetItem(NodeWrapper node, int index, KeyValueItem value, bool adjust, ref ChunkAccessor<TStore> accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index64Chunk>(node.ChunkId, true);
             Set(ref chunk, index, value, adjust);
         }
 
-        public override int GetCount(NodeWrapper node, ref ChunkAccessor accessor)
+        public override int GetCount(NodeWrapper node, ref ChunkAccessor<TStore> accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
             return chunk.Count;
         }
 
-        public override void SetCount(NodeWrapper node, int value, ref ChunkAccessor accessor)
+        public override void SetCount(NodeWrapper node, int value, ref ChunkAccessor<TStore> accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index64Chunk>(node.ChunkId, true);
             chunk.Count = value;
         }
 
-        public override int GetStart(NodeWrapper node, ref ChunkAccessor accessor)
+        public override int GetStart(NodeWrapper node, ref ChunkAccessor<TStore> accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
             return chunk.Start;
         }
 
-        public override void SetStart(NodeWrapper node, int value, ref ChunkAccessor accessor)
+        public override void SetStart(NodeWrapper node, int value, ref ChunkAccessor<TStore> accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index64Chunk>(node.ChunkId, true);
             chunk.Start = value;
         }
 
-        public override int GetEnd(NodeWrapper node, ref ChunkAccessor accessor)
+        public override int GetEnd(NodeWrapper node, ref ChunkAccessor<TStore> accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
             return Index64Chunk.Adjust(chunk.Start + chunk.Count);
         }
 
-        public override NodeStates GetNodeStates(NodeWrapper node, ref ChunkAccessor accessor)
+        public override NodeStates GetNodeStates(NodeWrapper node, ref ChunkAccessor<TStore> accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
             return chunk.StateFlags;
         }
 
-        public override int GetContentionHint(NodeWrapper node, ref ChunkAccessor accessor)
+        public override int GetContentionHint(NodeWrapper node, ref ChunkAccessor<TStore> accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
             return chunk.ContentionHint;
         }
 
-        public override void SetContentionHint(NodeWrapper node, int value, ref ChunkAccessor accessor)
+        public override void SetContentionHint(NodeWrapper node, int value, ref ChunkAccessor<TStore> accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index64Chunk>(node.ChunkId, true);
             chunk.ContentionHint = value;
         }
 
-        public override TKey GetHighKey(NodeWrapper node, ref ChunkAccessor accessor)
+        public override TKey GetHighKey(NodeWrapper node, ref ChunkAccessor<TStore> accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
             long hk = chunk.HighKey;
             return *(TKey*)&hk;
         }
 
-        public override void SetHighKey(NodeWrapper node, TKey key, ref ChunkAccessor accessor)
+        public override void SetHighKey(NodeWrapper node, TKey key, ref ChunkAccessor<TStore> accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index64Chunk>(node.ChunkId, true);
             chunk.HighKey = *(long*)&key;
@@ -330,7 +330,7 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
         #region Chunk Operations
 
-        public override void PushFirst(NodeWrapper node, KeyValueItem item, ref ChunkAccessor accessor)
+        public override void PushFirst(NodeWrapper node, KeyValueItem item, ref ChunkAccessor<TStore> accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index64Chunk>(node.ChunkId, true);
 
@@ -343,16 +343,16 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
             ++chunk.Count;
         }
 
-        public override void PushLast(NodeWrapper node, KeyValueItem item, ref ChunkAccessor accessor)
+        public override void PushLast(NodeWrapper node, KeyValueItem item, ref ChunkAccessor<TStore> accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index64Chunk>(node.ChunkId, true);
             var c = chunk.Count++;
             Set(ref chunk, c, item, true);
         }
 
-        public override int Append(int bufferId, int value, ref ChunkAccessor bufferAccessor) => throw new Exception("Shouldn't be called as key replace is not supported and multi-value neither");
+        public override int Append(int bufferId, int value, ref ChunkAccessor<TStore> bufferAccessor) => throw new Exception("Shouldn't be called as key replace is not supported and multi-value neither");
 
-        public override void Insert(NodeWrapper node, int index, KeyValueItem item, ref ChunkAccessor accessor)
+        public override void Insert(NodeWrapper node, int index, KeyValueItem item, ref ChunkAccessor<TStore> accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index64Chunk>(node.ChunkId, true);
             var lsh = index; // length of left shift
@@ -373,26 +373,26 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
             chunk.Count++;
         }
 
-        public override int CreateBuffer(ref ChunkAccessor bufferAccessor) => default;
+        public override int CreateBuffer(ref ChunkAccessor<TStore> bufferAccessor) => default;
 
-        public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId, ref ChunkAccessor accessor) => default;
-        public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId) => default;
-        public override int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor bufferAccessor) => default;
-        public override void DeleteBuffer(int bufferId, ref ChunkAccessor bufferAccessor) { }
+        public override VariableSizedBufferAccessor<int, TStore> GetBufferReadOnlyAccessor(int bufferId, ref ChunkAccessor<TStore> accessor) => default;
+        public override VariableSizedBufferAccessor<int, TStore> GetBufferReadOnlyAccessor(int bufferId) => default;
+        public override int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor<TStore> bufferAccessor) => default;
+        public override void DeleteBuffer(int bufferId, ref ChunkAccessor<TStore> bufferAccessor) { }
 
-        public override NodeWrapper GetFirstChild(NodeWrapper node, ref ChunkAccessor accessor)
+        public override NodeWrapper GetFirstChild(NodeWrapper node, ref ChunkAccessor<TStore> accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
             return new NodeWrapper(this, chunk.LeftValue);
         }
 
-        public override bool IsRotated(NodeWrapper node, ref ChunkAccessor accessor)
+        public override bool IsRotated(NodeWrapper node, ref ChunkAccessor<TStore> accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
             return (chunk.Start + chunk.Count) > Index64Chunk.Capacity;
         }
 
-        public override int BinarySearch(NodeWrapper node, TKey key, IComparer<TKey> comparer, ref ChunkAccessor accessor)
+        public override int BinarySearch(NodeWrapper node, TKey key, IComparer<TKey> comparer, ref ChunkAccessor<TStore> accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
             fixed (long* keys = chunk.Keys)
@@ -490,12 +490,12 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
             return pos;
         }
 
-        public override NodeWrapper SplitRight(NodeWrapper node, NodeStates states, ref ChunkAccessor accessor)
+        public override NodeWrapper SplitRight(NodeWrapper node, NodeStates states, ref ChunkAccessor<TStore> accessor)
         {
             return SplitRight(node.ChunkId, states, ref accessor);
         }
 
-        public override KeyValueItem RemoveAt(NodeWrapper node, int index, ref ChunkAccessor accessor)
+        public override KeyValueItem RemoveAt(NodeWrapper node, int index, ref ChunkAccessor<TStore> accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index64Chunk>(node.ChunkId, true);
             var item = GetItem(node, index, true, ref accessor);
@@ -519,7 +519,7 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
             return item;
         }
 
-        public override void MergeLeft(NodeWrapper left, NodeWrapper right, ref ChunkAccessor accessor)
+        public override void MergeLeft(NodeWrapper left, NodeWrapper right, ref ChunkAccessor<TStore> accessor)
         {
             ref var leftChunk = ref accessor.GetChunk<Index64Chunk>(left.ChunkId, true);
             ref var rightChunk = ref accessor.GetChunk<Index64Chunk>(right.ChunkId, true);
@@ -632,20 +632,20 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
             leftChunk.HighKey = rightChunk.HighKey; // merged node inherits right's upper bound
         }
 
-        public override NodeWrapper GetLastChild(NodeWrapper node, ref ChunkAccessor accessor)
+        public override NodeWrapper GetLastChild(NodeWrapper node, ref ChunkAccessor<TStore> accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
             var index = Index64Chunk.Adjust(chunk.Start + chunk.Count - 1);
             return new NodeWrapper(this, chunk.Values[index]);
         }
 
-        public override void IncrementStart(NodeWrapper node, ref ChunkAccessor accessor)
+        public override void IncrementStart(NodeWrapper node, ref ChunkAccessor<TStore> accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index64Chunk>(node.ChunkId, true);
             IncrementStart(ref chunk);
         }
 
-        public override void DecrementStart(NodeWrapper node, ref ChunkAccessor accessor)
+        public override void DecrementStart(NodeWrapper node, ref ChunkAccessor<TStore> accessor)
         {
             ref var chunk = ref accessor.GetChunk<Index64Chunk>(node.ChunkId, true);
             DecrementStart(ref chunk);
@@ -783,7 +783,7 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
             }
         }
 
-        public NodeWrapper SplitRight(int leftChunkId, NodeStates states, ref ChunkAccessor accessor)
+        public NodeWrapper SplitRight(int leftChunkId, NodeStates states, ref ChunkAccessor<TStore> accessor)
         {
             ref var left = ref accessor.GetChunk<Index64Chunk>(leftChunkId, true);
             var oldHighKey = left.HighKey; // save before split — right inherits original upper bound
@@ -791,7 +791,7 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
             var rightNode = Owner.AllocNode(states, ref accessor);
 
             // Re-obtain refs after allocation — AllocNode may trigger page cache eviction
-            // (slot eviction in ChunkAccessor or page eviction in PagedMMF), invalidating
+            // (slot eviction in ChunkAccessor<TStore> or page eviction in PagedMMF), invalidating
             // previously cached pointers held as managed refs.
             ref var right = ref accessor.GetChunk<Index64Chunk>(rightNode.ChunkId, true);
             left = ref accessor.GetChunk<Index64Chunk>(leftChunkId, true);
@@ -845,14 +845,14 @@ public abstract class L64BTree<TKey> : BTree<TKey> where TKey : unmanaged
 
     protected override BaseNodeStorage GetStorage() => new L64NodeStorage();
     public override bool AllowMultiple => false;
-    protected L64BTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
+    protected L64BTree(ChunkBasedSegment<TStore> segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }
 
-public class L64MultipleBTree<TKey> : L64BTree<TKey> where TKey : unmanaged
+public class L64MultipleBTree<TKey, TStore> : L64BTree<TKey, TStore> where TStore : struct, IPageStore where TKey : unmanaged
 {
-    public L64MultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
+    public L64MultipleBTree(ChunkBasedSegment<TStore> segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 
@@ -861,64 +861,64 @@ public class L64MultipleBTree<TKey> : L64BTree<TKey> where TKey : unmanaged
 
     public sealed class L64MultipleNodeStorage : L64NodeStorage
     {
-        private VariableSizedBufferSegment<int> _valueStore;
+        private VariableSizedBufferSegment<int, TStore> _valueStore;
 
-        internal override void Initialize(BTree<TKey> owner, ChunkBasedSegment segment)
+        internal override void Initialize(BTree<TKey, TStore> owner, ChunkBasedSegment<TStore> segment)
         {
             base.Initialize(owner, segment);
-            _valueStore = new VariableSizedBufferSegment<int, IndexBufferExtraHeader>(segment);
+            _valueStore = new VariableSizedBufferSegment<int, IndexBufferExtraHeader, TStore>(segment);
 
         }
 
-        public override int Append(int bufferId, int value, ref ChunkAccessor bufferAccessor) => _valueStore.AddElement(bufferId, value, ref bufferAccessor);
-        public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId, ref ChunkAccessor accessor) => _valueStore.GetReadOnlyAccessor(bufferId);
-        public override VariableSizedBufferAccessor<int> GetBufferReadOnlyAccessor(int bufferId) => _valueStore.GetReadOnlyAccessor(bufferId);
+        public override int Append(int bufferId, int value, ref ChunkAccessor<TStore> bufferAccessor) => _valueStore.AddElement(bufferId, value, ref bufferAccessor);
+        public override VariableSizedBufferAccessor<int, TStore> GetBufferReadOnlyAccessor(int bufferId, ref ChunkAccessor<TStore> accessor) => _valueStore.GetReadOnlyAccessor(bufferId);
+        public override VariableSizedBufferAccessor<int, TStore> GetBufferReadOnlyAccessor(int bufferId) => _valueStore.GetReadOnlyAccessor(bufferId);
 
-        public override int CreateBuffer(ref ChunkAccessor bufferAccessor) => _valueStore.AllocateBuffer(ref bufferAccessor);
+        public override int CreateBuffer(ref ChunkAccessor<TStore> bufferAccessor) => _valueStore.AllocateBuffer(ref bufferAccessor);
 
-        public override int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor bufferAccessor)
+        public override int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor<TStore> bufferAccessor)
             => _valueStore.DeleteElement(bufferId, elementId, value, ref bufferAccessor);
-        public override void DeleteBuffer(int bufferId, ref ChunkAccessor bufferAccessor) => _valueStore.DeleteBuffer(bufferId, ref bufferAccessor);
+        public override void DeleteBuffer(int bufferId, ref ChunkAccessor<TStore> bufferAccessor) => _valueStore.DeleteBuffer(bufferId, ref bufferAccessor);
     }
 }
 
-public class LongSingleBTree : L64BTree<long>
+public class LongSingleBTree<TStore> : L64BTree<long, TStore> where TStore : struct, IPageStore
 {
-    public LongSingleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
+    public LongSingleBTree(ChunkBasedSegment<TStore> segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }
 
-public class LongMultipleBTree : L64MultipleBTree<long>
+public class LongMultipleBTree<TStore> : L64MultipleBTree<long, TStore> where TStore : struct, IPageStore
 {
-    public LongMultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
+    public LongMultipleBTree(ChunkBasedSegment<TStore> segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }
-public class ULongSingleBTree : L64BTree<long>
+public class ULongSingleBTree<TStore> : L64BTree<long, TStore> where TStore : struct, IPageStore
 {
-    public ULongSingleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
-    {
-    }
-}
-
-public class ULongMultipleBTree : L64MultipleBTree<long>
-{
-    public ULongMultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
+    public ULongSingleBTree(ChunkBasedSegment<TStore> segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }
 
-public class DoubleSingleBTree : L64BTree<double>
+public class ULongMultipleBTree<TStore> : L64MultipleBTree<long, TStore> where TStore : struct, IPageStore
 {
-    public DoubleSingleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
+    public ULongMultipleBTree(ChunkBasedSegment<TStore> segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }
 
-public class DoubleMultipleBTree : L64MultipleBTree<double>
+public class DoubleSingleBTree<TStore> : L64BTree<double, TStore> where TStore : struct, IPageStore
 {
-    public DoubleMultipleBTree(ChunkBasedSegment segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
+    public DoubleSingleBTree(ChunkBasedSegment<TStore> segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
+    {
+    }
+}
+
+public class DoubleMultipleBTree<TStore> : L64MultipleBTree<double, TStore> where TStore : struct, IPageStore
+{
+    public DoubleMultipleBTree(ChunkBasedSegment<TStore> segment, bool load = false, short stableId = 0, ChangeSet changeSet = null) : base(segment, load, stableId, changeSet)
     {
     }
 }

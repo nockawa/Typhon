@@ -32,19 +32,19 @@ internal struct VariableSizedBufferChunkHeader
 }
 
 [PublicAPI]
-public unsafe class VariableSizedBufferSegmentBase
+public unsafe class VariableSizedBufferSegmentBase<TStore> where TStore : struct, IPageStore
 {
     private readonly int _elementSize;
     protected internal readonly int ElementCountRootChunk;
     protected readonly int ElementCountPerChunk;
     protected internal readonly int RootHeaderTotalSize;
-    public readonly ChunkBasedSegment Segment;
+    public readonly ChunkBasedSegment<TStore> Segment;
 
-    protected VariableSizedBufferSegmentBase(ChunkBasedSegment segment, int elementSize) : this(segment, elementSize, sizeof(VariableSizedBufferRootHeader))
+    protected VariableSizedBufferSegmentBase(ChunkBasedSegment<TStore> segment, int elementSize) : this(segment, elementSize, sizeof(VariableSizedBufferRootHeader))
     {
     }
 
-    protected VariableSizedBufferSegmentBase(ChunkBasedSegment segment, int elementSize, int rootHeaderTotalSize)
+    protected VariableSizedBufferSegmentBase(ChunkBasedSegment<TStore> segment, int elementSize, int rootHeaderTotalSize)
     {
         _elementSize = elementSize;
         RootHeaderTotalSize = rootHeaderTotalSize;
@@ -56,7 +56,7 @@ public unsafe class VariableSizedBufferSegmentBase
         Segment = segment;
     }
 
-    public int AllocateBuffer(ref ChunkAccessor accessor)
+    public int AllocateBuffer(ref ChunkAccessor<TStore> accessor)
     {
         // Allocate and initialize the first chunk of the Buffer
         var segment = accessor.Segment;
@@ -82,7 +82,7 @@ public unsafe class VariableSizedBufferSegmentBase
         return chunkId;
     }
 
-    public int BufferAddRef(int bufferId, ref ChunkAccessor accessor)
+    public int BufferAddRef(int bufferId, ref ChunkAccessor<TStore> accessor)
     {
         ref var rh = ref accessor.GetChunk<VariableSizedBufferRootHeader>(bufferId, true);
         try
@@ -100,7 +100,7 @@ public unsafe class VariableSizedBufferSegmentBase
         }
     }
 
-    public int BufferRelease(int bufferId, ref ChunkAccessor accessor)
+    public int BufferRelease(int bufferId, ref ChunkAccessor<TStore> accessor)
     {
         ref var rh = ref accessor.GetChunk<VariableSizedBufferRootHeader>(bufferId, true);
         var deleted = false;
@@ -141,7 +141,7 @@ public unsafe class VariableSizedBufferSegmentBase
         }
     }
 
-    public void DeleteBuffer(int bufferId, ref ChunkAccessor accessor)
+    public void DeleteBuffer(int bufferId, ref ChunkAccessor<TStore> accessor)
     {
         // Fetch the root chunk — epoch protects page lifetime
         var unlock = false;
@@ -219,7 +219,7 @@ public unsafe class VariableSizedBufferSegmentBase
 /// <remarks>
 /// The segment stores multiple buffers containing a variable size of a uniform element type.
 /// The internal structure is simple:
-///  - The segment is based from <see cref="ChunkBasedSegment"/>, each chunk stores a given number of elements (may be variable because we also use
+///  - The segment is based from <see cref="ChunkBasedSegment<TStore>"/>, each chunk stores a given number of elements (may be variable because we also use
 ///    the chunk's data for internal data storage).
 ///  - Chunks are linked together to form a forward linked list allowing a sequential processing of the buffer (we maintain two linked-list, one for enumeration
 ///    using the Accessor and the other one to locate free chunks).
@@ -232,19 +232,19 @@ public unsafe class VariableSizedBufferSegmentBase
 ///  - There is no API for Random access of an element inside a given buffer, it could be done but would be slow.
 /// </remarks>
 [PublicAPI]
-public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase where T : unmanaged
+public class VariableSizedBufferSegment<T, TStore> : VariableSizedBufferSegmentBase<TStore> where T : unmanaged where TStore : struct, IPageStore
 {
-    // protected ChunkRandomAccessor ChunkAccessor;
+    // protected ChunkRandomAccessor ChunkAccessor<TStore>;
 
-    unsafe public VariableSizedBufferSegment(ChunkBasedSegment segment) : base(segment, sizeof(T))
+    unsafe public VariableSizedBufferSegment(ChunkBasedSegment<TStore> segment) : base(segment, sizeof(T))
     {
     }
 
-    unsafe protected VariableSizedBufferSegment(ChunkBasedSegment segment, int rootHeaderTotalSize) : base(segment, sizeof(T), rootHeaderTotalSize)
+    unsafe protected VariableSizedBufferSegment(ChunkBasedSegment<TStore> segment, int rootHeaderTotalSize) : base(segment, sizeof(T), rootHeaderTotalSize)
     {
     }
 
-    unsafe public int AddElement(int bufferId, T value, ref ChunkAccessor accessor)
+    unsafe public int AddElement(int bufferId, T value, ref ChunkAccessor<TStore> accessor)
     {
         // Fetch the root chunk — epoch protects page lifetime
         ref var rh = ref accessor.GetChunk<VariableSizedBufferRootHeader>(bufferId, true);
@@ -338,7 +338,7 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
         }
     }
 
-    unsafe public void AddElements(int bufferId, ReadOnlySpan<T> items, ref ChunkAccessor accessor)
+    unsafe public void AddElements(int bufferId, ReadOnlySpan<T> items, ref ChunkAccessor<TStore> accessor)
     {
         // Fetch the root chunk — epoch protects page lifetime
         ref var rh = ref accessor.GetChunk<VariableSizedBufferRootHeader>(bufferId, true);
@@ -419,7 +419,7 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
         }
     }
 
-    unsafe public int DeleteElement(int bufferId, int elementId, T element, ref ChunkAccessor accessor)
+    unsafe public int DeleteElement(int bufferId, int elementId, T element, ref ChunkAccessor<TStore> accessor)
     {
         // Fetch the root chunk — epoch protects page lifetime
         ref var rh = ref accessor.GetChunk<VariableSizedBufferRootHeader>(bufferId, true);
@@ -468,17 +468,17 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
         }
     }
 
-    public VariableSizedBufferAccessor<T> GetReadOnlyAccessor(int bufferId) => new(this, bufferId);
-    public VariableSizedBufferAccessor<T> GetAccessor(int bufferId, ChangeSet changeSet) => new(this, bufferId, changeSet);
+    public VariableSizedBufferAccessor<T, TStore> GetReadOnlyAccessor(int bufferId) => new(this, bufferId);
+    public VariableSizedBufferAccessor<T, TStore> GetAccessor(int bufferId, ChangeSet changeSet) => new(this, bufferId, changeSet);
 
     /// <summary>
     /// Returns a zero-allocation enumerator for iterating over all elements in the buffer.
     /// </summary>
     /// <param name="bufferId">The buffer identifier</param>
     /// <returns>A ref struct enumerator that can be used in foreach loops</returns>
-    public BufferEnumerator<T> EnumerateBuffer(int bufferId) => new(this, bufferId);
+    public BufferEnumerator<T, TStore> EnumerateBuffer(int bufferId) => new(this, bufferId);
 
-    public int CloneBuffer(int sourceBufferId, ref ChunkAccessor accessor)
+    public int CloneBuffer(int sourceBufferId, ref ChunkAccessor<TStore> accessor)
     {
         var destBufferId = AllocateBuffer(ref accessor);
         using var source = GetReadOnlyAccessor(sourceBufferId);
@@ -498,9 +498,9 @@ public class VariableSizedBufferSegment<T> : VariableSizedBufferSegmentBase wher
 /// <typeparam name="T">The unmanaged element type stored in the buffer.</typeparam>
 /// <typeparam name="TExtraHeader">The unmanaged struct appended after the root header in the root chunk.</typeparam>
 [PublicAPI]
-public class VariableSizedBufferSegment<T, TExtraHeader> : VariableSizedBufferSegment<T> where T : unmanaged where TExtraHeader : unmanaged
+public class VariableSizedBufferSegment<T, TExtraHeader, TStore> : VariableSizedBufferSegment<T, TStore> where T : unmanaged where TExtraHeader : unmanaged where TStore : struct, IPageStore
 {
-    public unsafe VariableSizedBufferSegment(ChunkBasedSegment segment) : base(segment, sizeof(VariableSizedBufferRootHeader) + sizeof(TExtraHeader))
+    public unsafe VariableSizedBufferSegment(ChunkBasedSegment<TStore> segment) : base(segment, sizeof(VariableSizedBufferRootHeader) + sizeof(TExtraHeader))
     {
     }
 }
@@ -511,14 +511,14 @@ public class VariableSizedBufferSegment<T, TExtraHeader> : VariableSizedBufferSe
 /// </summary>
 /// <typeparam name="T">The unmanaged element type</typeparam>
 [PublicAPI]
-public ref struct BufferEnumerator<T> where T : unmanaged
+public ref struct BufferEnumerator<T, TStore> where T : unmanaged where TStore : struct, IPageStore
 {
-    private VariableSizedBufferAccessor<T> _accessor;
+    private VariableSizedBufferAccessor<T, TStore> _accessor;
     private int _currentIndex;
     private int _currentChunkLength;
     private bool _isValid;
 
-    internal BufferEnumerator(VariableSizedBufferSegment<T> owner, int bufferId)
+    internal BufferEnumerator(VariableSizedBufferSegment<T, TStore> owner, int bufferId)
     {
         _accessor = owner.GetReadOnlyAccessor(bufferId);
         _currentIndex = -1;
@@ -529,7 +529,7 @@ public ref struct BufferEnumerator<T> where T : unmanaged
     /// <summary>
     /// Returns this enumerator (required for ForEach pattern)
     /// </summary>
-    public BufferEnumerator<T> GetEnumerator() => this;
+    public BufferEnumerator<T, TStore> GetEnumerator() => this;
 
     /// <summary>
     /// Gets the current element as a readonly reference (zero-copy)
@@ -576,15 +576,15 @@ public ref struct BufferEnumerator<T> where T : unmanaged
 }
 
 [PublicAPI]
-public ref struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanaged
+public ref struct VariableSizedBufferAccessor<T, TStore> : IDisposable where T : unmanaged where TStore : struct, IPageStore
 {
-    private readonly VariableSizedBufferSegment<T> _owner;
-    private readonly ChunkBasedSegment _segment;
+    private readonly VariableSizedBufferSegment<T, TStore> _owner;
+    private readonly ChunkBasedSegment<TStore> _segment;
     private readonly int _rootHeaderTotalSize;
 
     private int _rootChunkId;
     private unsafe byte* _rootChunkAddr;
-    private ChunkAccessor _accessor;
+    private ChunkAccessor<TStore> _accessor;
 
     private int _curChunkId;
     private unsafe byte* _curChunkAddr;
@@ -615,7 +615,7 @@ public ref struct VariableSizedBufferAccessor<T> : IDisposable where T : unmanag
         }
     }
 
-    unsafe public VariableSizedBufferAccessor(VariableSizedBufferSegment<T> owner, int rootChunkId, ChangeSet changeSet = null)
+    unsafe public VariableSizedBufferAccessor(VariableSizedBufferSegment<T, TStore> owner, int rootChunkId, ChangeSet changeSet = null)
     {
         _owner = owner;
         _segment = owner.Segment;

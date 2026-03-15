@@ -39,7 +39,7 @@ public class OlcBTreeStressTests
     [TearDown]
     public void TearDown() => (_serviceProvider as IDisposable)?.Dispose();
 
-    private void LogDiagnostics<TKey>(BTree<TKey> tree) where TKey : unmanaged
+    private void LogDiagnostics<TKey>(BTree<TKey, PersistentStore> tree) where TKey : unmanaged
     {
         TestContext.Out.WriteLine(
             $"Restarts={tree.OptimisticRestarts} Fallbacks={tree.PessimisticFallbacks} " +
@@ -51,7 +51,7 @@ public class OlcBTreeStressTests
     /// Runs CheckConsistency in a try-catch. Under high-contention stress, internal node separator keys
     /// can become stale (known limitation). Returns true if consistent, false if violations found.
     /// </summary>
-    private bool TryCheckConsistency<TKey>(BTree<TKey> tree, ChunkBasedSegment segment, string context = null) where TKey : unmanaged
+    private bool TryCheckConsistency<TKey>(BTree<TKey, PersistentStore> tree, ChunkBasedSegment<PersistentStore> segment, string context = null) where TKey : unmanaged
     {
         var accessor = segment.CreateChunkAccessor();
         try
@@ -90,7 +90,7 @@ public class OlcBTreeStressTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             for (int i = 1; i <= entryCount; i++)
             {
@@ -167,7 +167,7 @@ public class OlcBTreeStressTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
             accessor.Dispose();
 
             using var barrier = new Barrier(threadCount);
@@ -232,7 +232,7 @@ public class OlcBTreeStressTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             // Pre-populate
             for (int i = 1; i <= totalKeys; i++)
@@ -308,7 +308,7 @@ public class OlcBTreeStressTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             for (int i = 1; i <= initialKeys; i++)
             {
@@ -441,7 +441,7 @@ public class OlcBTreeStressTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
             accessor.Dispose();
 
             using var barrier = new Barrier(threadCount);
@@ -509,7 +509,7 @@ public class OlcBTreeStressTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
             accessor.Dispose();
 
             using var barrier = new Barrier(threadCount);
@@ -594,7 +594,7 @@ public class OlcBTreeStressTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
             accessor.Dispose();
 
             using var startSignal = new ManualResetEventSlim(false);
@@ -721,7 +721,7 @@ public class OlcBTreeStressTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             // Pre-populate: each thread owns even keys in range [base, base+slotsPerThread)
             for (int t = 0; t < threadCount; t++)
@@ -809,7 +809,7 @@ public class OlcBTreeStressTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             for (int t = 0; t < threadCount; t++)
             {
@@ -894,7 +894,7 @@ public class OlcBTreeStressTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntMultipleBTree(segment);
+            var tree = new IntMultipleBTree<PersistentStore>(segment);
 
             // Pre-populate: 200 keys with 3 values each
             // Store element IDs for each key's first value (the one we'll move)
@@ -994,7 +994,7 @@ public class OlcBTreeStressTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             for (int i = 1; i <= initialKeys; i++)
             {
@@ -1121,7 +1121,7 @@ public class OlcBTreeStressTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             for (int i = 1; i <= initialKeys; i++)
             {

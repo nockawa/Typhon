@@ -4,7 +4,7 @@ using System.Threading;
 
 namespace Typhon.Engine;
 
-public abstract partial class BTree<TKey>
+public abstract partial class BTree<TKey, TStore>
 {
     /// <summary>Result of an OLC remove attempt.</summary>
     private enum OlcRemoveResult
@@ -385,7 +385,7 @@ public abstract partial class BTree<TKey>
     /// Slow path (leaf underflows): locks leaf + neighbors + path nodes with version validation.
     /// Sets <paramref name="completed"/> to false when lock acquisition fails and caller must retry.
     /// </summary>
-    private bool RemoveIterative(ref RemoveArguments args, ref ChunkAccessor accessor, out bool completed)
+    private bool RemoveIterative(ref RemoveArguments args, ref ChunkAccessor<TStore> accessor, out bool completed)
     {
         completed = false;
         MutationContext ctx = default;
@@ -550,7 +550,7 @@ public abstract partial class BTree<TKey>
         var merged = node.RemoveLeaf(ref args, ref relatives, ref accessor);
 
         // Phase 2.5: Mark obsolete merged leaf + unlock leaf neighbors + leaf (version bumped by WriteUnlock)
-        var retireEpoch = _segment.Manager.EpochManager.GlobalEpoch;
+        var retireEpoch = _segment.Store.EpochManager.GlobalEpoch;
         if (merged)
         {
             Interlocked.Increment(ref _mergeCount);

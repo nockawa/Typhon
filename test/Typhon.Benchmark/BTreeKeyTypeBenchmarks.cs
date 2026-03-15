@@ -23,20 +23,20 @@ public class BTreeKeyTypeBenchmarks
     private BTreeBenchmarkHelper _helper;
 
     // L16 (short keys, 18 entries/node, SIMD search)
-    private ChunkBasedSegment _segL16;
-    private ShortSingleBTree _treeL16;
+    private ChunkBasedSegment<PersistentStore> _segL16;
+    private ShortSingleBTree<PersistentStore> _treeL16;
 
     // L32 (int keys, 14 entries/node, SIMD search)
-    private ChunkBasedSegment _segL32;
-    private IntSingleBTree _treeL32;
+    private ChunkBasedSegment<PersistentStore> _segL32;
+    private IntSingleBTree<PersistentStore> _treeL32;
 
     // L64 (long keys, 9 entries/node)
-    private ChunkBasedSegment _segL64;
-    private LongSingleBTree _treeL64;
+    private ChunkBasedSegment<PersistentStore> _segL64;
+    private LongSingleBTree<PersistentStore> _treeL64;
 
     // String64 (64-byte keys, 4 entries/node)
-    private ChunkBasedSegment _segStr;
-    private String64SingleBTree _treeStr;
+    private ChunkBasedSegment<PersistentStore> _segStr;
+    private String64SingleBTree<PersistentStore> _treeStr;
 
     private const int PreFillCount = 10_000;
 
@@ -63,10 +63,10 @@ public class BTreeKeyTypeBenchmarks
         _segL64 = _helper.AllocateSegment<Index64Chunk>(500);
         _segStr = _helper.AllocateSegment<IndexString64Chunk>(500);
 
-        _treeL16 = new ShortSingleBTree(_segL16);
-        _treeL32 = new IntSingleBTree(_segL32);
-        _treeL64 = new LongSingleBTree(_segL64);
-        _treeStr = new String64SingleBTree(_segStr);
+        _treeL16 = new ShortSingleBTree<PersistentStore>(_segL16);
+        _treeL32 = new IntSingleBTree<PersistentStore>(_segL32);
+        _treeL64 = new LongSingleBTree<PersistentStore>(_segL64);
+        _treeStr = new String64SingleBTree<PersistentStore>(_segStr);
 
         // Pre-fill count capped at short.MaxValue for L16
         var l16Count = Math.Min(PreFillCount, short.MaxValue - 1);

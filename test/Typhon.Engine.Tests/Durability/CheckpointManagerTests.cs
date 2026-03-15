@@ -83,7 +83,7 @@ public class CheckpointManagerTests : AllocatorTestBase
 
         var page = segment.GetPageExclusive(0, epoch, out var memPageIdx);
         cs.AddByMemPageIndex(memPageIdx);
-        var offset = LogicalSegment.RootHeaderIndexSectionLength;
+        var offset = LogicalSegment<PersistentStore>.RootHeaderIndexSectionLength;
         page.RawData<byte>(offset, PagedMMF.PageRawDataSize - offset).Clear();
         _mmf.UnlatchPageExclusive(memPageIdx);
 

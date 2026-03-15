@@ -181,8 +181,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     private long _curPrimaryKey;
     private Dictionary<string, (long PK, ComponentR1 Comp)> _persistedComponents;
     private Dictionary<string, FieldR1[]> _persistedFieldsByComponent;
-    private ConcurrentDictionary<int, ChunkBasedSegment> _componentCollectionSegmentByStride;
-    private ConcurrentDictionary<Type, VariableSizedBufferSegmentBase> _componentCollectionVSBSByType;
+    private ConcurrentDictionary<int, ChunkBasedSegment<PersistentStore>> _componentCollectionSegmentByStride;
+    private ConcurrentDictionary<Type, VariableSizedBufferSegmentBase<PersistentStore>> _componentCollectionVSBSByType;
     private MigrationRegistry _migrationRegistry;
 
     /// <summary>Raised during schema migration to report progress to subscribers.</summary>
@@ -291,8 +291,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         _walFileIO = walFileIO;
         _durabilityNode = resourceRegistry.Durability;
         TimeoutOptions.Current = _options.Timeouts;
-        _componentCollectionSegmentByStride = new ConcurrentDictionary<int, ChunkBasedSegment>();
-        _componentCollectionVSBSByType = new ConcurrentDictionary<Type, VariableSizedBufferSegmentBase>();
+        _componentCollectionSegmentByStride = new ConcurrentDictionary<int, ChunkBasedSegment<PersistentStore>>();
+        _componentCollectionVSBSByType = new ConcurrentDictionary<Type, VariableSizedBufferSegmentBase<PersistentStore>>();
         TransactionChain = new TransactionChain(_options.Resources.MaxActiveTransactions, this);
         DeferredCleanupManager = new DeferredCleanupManager(_options.DeferredCleanup, _log);
 
@@ -447,7 +447,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             // Clear the data area so all entries start as Free (State = 0)
             var page = segment.GetPageExclusive(0, epoch, out var memPageIdx);
             cs.AddByMemPageIndex(memPageIdx);
-            var offset = LogicalSegment.RootHeaderIndexSectionLength;
+            var offset = LogicalSegment<PersistentStore>.RootHeaderIndexSectionLength;
             page.RawData<byte>(offset, PagedMMF.PageRawDataSize - offset).Clear();
             MMF.UnlatchPageExclusive(memPageIdx);
 
@@ -506,30 +506,30 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     private const int ComponentCollectionItemCountPerChunk      = 8;
     private const int ComponentCollectionSegmentStartingSize    = 8;
 
-    internal VariableSizedBufferSegment<T> GetComponentCollectionVSBS<T>() where T : unmanaged =>
-        (VariableSizedBufferSegment<T>)_componentCollectionVSBSByType.GetOrAdd(typeof(T),
-            _ => new VariableSizedBufferSegment<T>(GetComponentCollectionSegment<T>()));
+    internal VariableSizedBufferSegment<T, PersistentStore> GetComponentCollectionVSBS<T>() where T : unmanaged =>
+        (VariableSizedBufferSegment<T, PersistentStore>)_componentCollectionVSBSByType.GetOrAdd(typeof(T),
+            _ => new VariableSizedBufferSegment<T, PersistentStore>(GetComponentCollectionSegment<T>()));
 
-    internal VariableSizedBufferSegmentBase GetComponentCollectionVSBS(Type itemType, ChangeSet changeSet = null) =>
+    internal VariableSizedBufferSegmentBase<PersistentStore> GetComponentCollectionVSBS(Type itemType, ChangeSet changeSet = null) =>
         _componentCollectionVSBSByType.GetOrAdd(itemType,
             type =>
             {
                 // Create the type for ComponentCollection<T>
-                var ctType = typeof(VariableSizedBufferSegment<>).MakeGenericType(type);
+                var ctType = typeof(VariableSizedBufferSegment<,>).MakeGenericType(type, typeof(PersistentStore));
                 // Use the actual struct size (Marshal.SizeOf) to match sizeof(T) in the generic overload.
                 // DatabaseSchemaExtensions.FromType() maps [Component]-attributed types to FieldType.Component (8 bytes),// which is the storage size of a
                 // component *reference*, not the struct itself.
                 var fieldSize = Marshal.SizeOf(type);
                 var segment = GetComponentCollectionSegment(fieldSize, changeSet);
-                return (VariableSizedBufferSegmentBase)Activator.CreateInstance(ctType, segment);
+                return (VariableSizedBufferSegmentBase<PersistentStore>)Activator.CreateInstance(ctType, segment);
             });
 
-    unsafe internal ChunkBasedSegment GetComponentCollectionSegment<T>() where T : unmanaged =>
+    unsafe internal ChunkBasedSegment<PersistentStore> GetComponentCollectionSegment<T>() where T : unmanaged =>
         _componentCollectionSegmentByStride.GetOrAdd(
             RoundToStandardStride(Math.Max(sizeof(T) * ComponentCollectionItemCountPerChunk, sizeof(VariableSizedBufferRootHeader))),
             stride => MMF.AllocateChunkBasedSegment(PageBlockType.None, ComponentCollectionSegmentStartingSize, stride));
 
-    unsafe internal ChunkBasedSegment GetComponentCollectionSegment(int itemSize, ChangeSet changeSet = null) =>
+    unsafe internal ChunkBasedSegment<PersistentStore> GetComponentCollectionSegment(int itemSize, ChangeSet changeSet = null) =>
         _componentCollectionSegmentByStride.GetOrAdd(
             RoundToStandardStride(Math.Max(itemSize * ComponentCollectionItemCountPerChunk, sizeof(VariableSizedBufferRootHeader))),
             stride => MMF.AllocateChunkBasedSegment(PageBlockType.None, ComponentCollectionSegmentStartingSize, stride, changeSet));
@@ -1211,7 +1211,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     public ComponentTable GetComponentTable(Type type) => _componentTableByType.GetValueOrDefault(type);
 
     /// <summary>
-    /// Looks up a <see cref="ComponentTable"/> by its WAL type ID (derived from <see cref="ChunkBasedSegment.RootPageIndex"/>).
+    /// Looks up a <see cref="ComponentTable"/> by its WAL type ID (derived from <see cref="ChunkBasedSegment<PersistentStore>.RootPageIndex"/>).
     /// Returns null if the type ID is unknown.
     /// </summary>
     internal ComponentTable GetComponentTableByWalTypeId(ushort id) => _componentTableByWalTypeId.GetValueOrDefault(id);

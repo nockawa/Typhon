@@ -32,16 +32,16 @@ public class BTreeConcurrentWriteBenchmarks
     private EpochManager _epochManager;
 
     // Each benchmark uses its own tree to avoid cross-benchmark state pollution
-    private ChunkBasedSegment _segRandom;
-    private LongSingleBTree _treeRandom;
+    private ChunkBasedSegment<PersistentStore> _segRandom;
+    private LongSingleBTree<PersistentStore> _treeRandom;
     private long[][] _perThreadRandomKeys;
 
-    private ChunkBasedSegment _segMonotonic;
-    private LongSingleBTree _treeMonotonic;
+    private ChunkBasedSegment<PersistentStore> _segMonotonic;
+    private LongSingleBTree<PersistentStore> _treeMonotonic;
     private long _monotonicCounter;
 
-    private ChunkBasedSegment _segDelete;
-    private LongSingleBTree _treeDelete;
+    private ChunkBasedSegment<PersistentStore> _segDelete;
+    private LongSingleBTree<PersistentStore> _treeDelete;
     private long[][] _perThreadDeleteKeys;
 
     private const int PreFillCount = 10_000;
@@ -61,7 +61,7 @@ public class BTreeConcurrentWriteBenchmarks
 
         // ── Random insert tree ───────────────────────────────────────────
         _segRandom = _helper.AllocateSegment<Index64Chunk>(1000);
-        _treeRandom = new LongSingleBTree(_segRandom);
+        _treeRandom = new LongSingleBTree<PersistentStore>(_segRandom);
         BTreeBenchmarkHelper.PreFillLong(_treeRandom, _segRandom, PreFillCount);
 
         // Per-thread disjoint key ranges for remove+reinsert (no collision between threads)
@@ -84,7 +84,7 @@ public class BTreeConcurrentWriteBenchmarks
 
         // ── Delete tree ──────────────────────────────────────────────────
         _segDelete = _helper.AllocateSegment<Index64Chunk>(1000);
-        _treeDelete = new LongSingleBTree(_segDelete);
+        _treeDelete = new LongSingleBTree<PersistentStore>(_segDelete);
         BTreeBenchmarkHelper.PreFillLong(_treeDelete, _segDelete, PreFillCount);
 
         // Same disjoint ranges as random
@@ -115,7 +115,7 @@ public class BTreeConcurrentWriteBenchmarks
     public unsafe void ResetMonotonicTree()
     {
         _segMonotonic = _helper.AllocateSegment<Index64Chunk>(500);
-        _treeMonotonic = new LongSingleBTree(_segMonotonic);
+        _treeMonotonic = new LongSingleBTree<PersistentStore>(_segMonotonic);
         BTreeBenchmarkHelper.PreFillLong(_treeMonotonic, _segMonotonic, PreFillCount);
         _monotonicCounter = PreFillCount + 1;
     }

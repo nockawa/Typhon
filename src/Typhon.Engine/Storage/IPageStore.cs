@@ -163,6 +163,21 @@ public unsafe interface IPageStore
     /// </summary>
     void AllocatePages(ref Span<int> pageIds, int startFrom, ChangeSet changeSet);
 
+    /// <summary>
+    /// Create a <see cref="ChangeSet"/> for tracking dirty pages during growth or maintenance.
+    /// <para>Persistent: returns <c>new ChangeSet(mmf)</c>.</para>
+    /// <para>Transient: returns <c>null</c> (no dirty tracking needed). CBS/LS handle null ChangeSets.</para>
+    /// </summary>
+    ChangeSet CreateChangeSet();
+
+    /// <summary>
+    /// Map a resolved memory page index back to its file page index.
+    /// <para>Persistent: looks up the file page index from the page cache slot.</para>
+    /// <para>Transient: identity mapping (<c>memPageIndex == filePageIndex</c>).</para>
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    int GetFilePageIndex(int memPageIndex);
+
     // ═══════════════════════════════════════════════════════════════════════
     // Infrastructure
     // ═══════════════════════════════════════════════════════════════════════

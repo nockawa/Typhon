@@ -261,6 +261,14 @@ public unsafe struct TransientStore : IPageStore, IDisposable
         }
     }
 
+    /// <inheritdoc />
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ChangeSet CreateChangeSet() => null;
+
+    /// <inheritdoc />
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int GetFilePageIndex(int memPageIndex) => memPageIndex;
+
     // ═══════════════════════════════════════════════════════════════════════
     // Infrastructure
     // ═══════════════════════════════════════════════════════════════════════

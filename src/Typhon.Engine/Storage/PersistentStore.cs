@@ -102,6 +102,12 @@ public readonly unsafe struct PersistentStore : IPageStore
     public void AllocatePages(ref Span<int> pageIds, int startFrom, ChangeSet changeSet)
         => _mmf.AllocatePages(ref pageIds, startFrom, changeSet);
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ChangeSet CreateChangeSet() => new(_mmf);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int GetFilePageIndex(int memPageIndex) => _mmf.GetFilePageIndex(memPageIndex);
+
     // ═══════════════════════════════════════════════════════════════════════
     // Infrastructure
     // ═══════════════════════════════════════════════════════════════════════

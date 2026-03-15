@@ -10,7 +10,7 @@ namespace Typhon.Engine;
 /// </summary>
 internal static class ThrowHelper
 {
-    // --- Existing (moved from ChunkAccessor.cs) ---
+    // --- Existing (moved from ChunkAccessor<PersistentStore>.cs) ---
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     [DoesNotReturn]

@@ -83,7 +83,7 @@ public class BTreeBenchmark
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntMultipleBTree(segment);
+            var tree = new IntMultipleBTree<PersistentStore>(segment);
 
             var chunkCapacity = segment.ChunkCapacity;
             var freeChunkCount = segment.FreeChunkCount;

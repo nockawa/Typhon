@@ -29,7 +29,7 @@ internal struct UowRegistryEntry
 }
 
 /// <summary>
-/// Persistent UoW ID allocator with crash-recovery support. Manages a flat array of <see cref="UowRegistryEntry"/> in a growing <see cref="LogicalSegment"/>.
+/// Persistent UoW ID allocator with crash-recovery support. Manages a flat array of <see cref="UowRegistryEntry"/> in a growing <see cref="LogicalSegment<PersistentStore>"/>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -56,7 +56,7 @@ internal unsafe class UowRegistry : IDisposable
     // Fields
     // ═══════════════════════════════════════════════════════════════
 
-    private readonly LogicalSegment _segment;
+    private readonly LogicalSegment<PersistentStore> _segment;
     private readonly ManagedPagedMMF _mmf;
     private readonly EpochManager _epochManager;
 
@@ -119,7 +119,7 @@ internal unsafe class UowRegistry : IDisposable
     // Constructor
     // ═══════════════════════════════════════════════════════════════
 
-    internal UowRegistry(LogicalSegment segment, ManagedPagedMMF mmf, EpochManager epochManager,
+    internal UowRegistry(LogicalSegment<PersistentStore> segment, ManagedPagedMMF mmf, EpochManager epochManager,
         IMemoryAllocator allocator, IResource parent)
     {
         _segment = segment;
@@ -518,14 +518,14 @@ internal unsafe class UowRegistry : IDisposable
     /// </summary>
     internal UowRegistryEntry ReadEntry(int slotIndex, long epoch)
     {
-        var (segPageIndex, itemIndex) = LogicalSegment.GetItemLocation(slotIndex, EntrySize);
+        var (segPageIndex, itemIndex) = LogicalSegment<PersistentStore>.GetItemLocation(slotIndex, EntrySize);
         var page = _segment.GetPage(segPageIndex, epoch, out _);
-        var byteOffset = (page.IsRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (itemIndex * EntrySize);
+        var byteOffset = (page.IsRoot ? LogicalSegment<PersistentStore>.RootHeaderIndexSectionLength : 0) + (itemIndex * EntrySize);
         return page.RawDataReadOnly<UowRegistryEntry>(byteOffset, 1)[0];
     }
 
     /// <summary>
-    /// Acquires an exclusive latch on a segment page with spin-retry for concurrent access. Unlike <see cref="LogicalSegment.GetPageExclusive"/> which
+    /// Acquires an exclusive latch on a segment page with spin-retry for concurrent access. Unlike <see cref="LogicalSegment<PersistentStore>.GetPageExclusive"/> which
     /// asserts on latch failure, this method handles contention from concurrent AllocateUowId/Release calls on the same page.
     /// </summary>
     private PageAccessor LatchPageExclusive(int segPageIndex, long epoch, out int memPageIdx)
@@ -544,9 +544,9 @@ internal unsafe class UowRegistry : IDisposable
     /// </summary>
     private void WriteEntryState(int slotIndex, UnitOfWorkState newState, long epoch, ChangeSet externalCs = null)
     {
-        var (segPageIndex, itemIndex) = LogicalSegment.GetItemLocation(slotIndex, EntrySize);
+        var (segPageIndex, itemIndex) = LogicalSegment<PersistentStore>.GetItemLocation(slotIndex, EntrySize);
         var page = LatchPageExclusive(segPageIndex, epoch, out var memPageIdx);
-        var byteOffset = (page.IsRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (itemIndex * EntrySize);
+        var byteOffset = (page.IsRoot ? LogicalSegment<PersistentStore>.RootHeaderIndexSectionLength : 0) + (itemIndex * EntrySize);
 
         var cs = externalCs ?? _mmf.CreateChangeSet();
         cs.AddByMemPageIndex(memPageIdx);
@@ -568,9 +568,9 @@ internal unsafe class UowRegistry : IDisposable
     /// </summary>
     private void WriteEntryFields(int slotIndex, long epoch, Func<UowRegistryEntry, UowRegistryEntry> transform)
     {
-        var (segPageIndex, itemIndex) = LogicalSegment.GetItemLocation(slotIndex, EntrySize);
+        var (segPageIndex, itemIndex) = LogicalSegment<PersistentStore>.GetItemLocation(slotIndex, EntrySize);
         var page = LatchPageExclusive(segPageIndex, epoch, out var memPageIdx);
-        var byteOffset = (page.IsRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (itemIndex * EntrySize);
+        var byteOffset = (page.IsRoot ? LogicalSegment<PersistentStore>.RootHeaderIndexSectionLength : 0) + (itemIndex * EntrySize);
 
         var cs = _mmf.CreateChangeSet();
         cs.AddByMemPageIndex(memPageIdx);
@@ -589,9 +589,9 @@ internal unsafe class UowRegistry : IDisposable
     {
         using var guard = EpochGuard.Enter(_epochManager);
         var epoch = guard.Epoch;
-        var (segPageIndex, itemIndex) = LogicalSegment.GetItemLocation(slotIndex, EntrySize);
+        var (segPageIndex, itemIndex) = LogicalSegment<PersistentStore>.GetItemLocation(slotIndex, EntrySize);
         var page = LatchPageExclusive(segPageIndex, epoch, out var memPageIdx);
-        var byteOffset = (page.IsRoot ? LogicalSegment.RootHeaderIndexSectionLength : 0) + (itemIndex * EntrySize);
+        var byteOffset = (page.IsRoot ? LogicalSegment<PersistentStore>.RootHeaderIndexSectionLength : 0) + (itemIndex * EntrySize);
 
         var cs = externalCs ?? _mmf.CreateChangeSet();
         cs.AddByMemPageIndex(memPageIdx);

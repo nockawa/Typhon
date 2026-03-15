@@ -183,7 +183,7 @@ internal static unsafe class IndexMaintainer
     /// Caller owns accessor lifecycle.
     /// </summary>
     internal static void UpdateIndices(long pk, ComponentInfo info, ComponentInfo.CompRevInfo compRevInfo, int prevCompChunkId, ChangeSet changeSet, long tsn,
-        ChunkAccessor[] indexAccessors, ref ChunkAccessor pkAccessor, ref ChunkAccessor tailAccessor)
+        ChunkAccessor<PersistentStore>[] indexAccessors, ref ChunkAccessor<PersistentStore> pkAccessor, ref ChunkAccessor<PersistentStore> tailAccessor)
     {
         var startChunkId = compRevInfo.CompRevTableFirstChunkId;
         if (prevCompChunkId != 0)
@@ -279,7 +279,7 @@ internal static unsafe class IndexMaintainer
     /// Caller owns accessor lifecycle.
     /// </summary>
     internal static void RemoveSecondaryIndices(long pk, ComponentInfo info, int prevCompChunkId, int startChunkId, ChangeSet changeSet, long tsn,
-        ChunkAccessor[] indexAccessors, ref ChunkAccessor tailAccessor)
+        ChunkAccessor<PersistentStore>[] indexAccessors, ref ChunkAccessor<PersistentStore> tailAccessor)
     {
         var prev = info.CompContentAccessor.GetChunkAddress(prevCompChunkId);
         var indexedFieldInfos = info.ComponentTable.IndexedFieldInfos;
@@ -358,14 +358,14 @@ internal static unsafe class IndexMaintainer
     /// </summary>
     /// <param name="headBufferId">Root chunk ID of the HEAD buffer.</param>
     /// <param name="tailVSBS">The TAIL VSBS for VersionedIndexEntry storage.</param>
-    /// <param name="headAccessor">ChunkAccessor for the BTree's segment (HEAD buffer lives here).</param>
-    /// <param name="tailAccessor">ChunkAccessor for the TailIndexSegment.</param>
+    /// <param name="headAccessor">ChunkAccessor<PersistentStore> for the BTree's segment (HEAD buffer lives here).</param>
+    /// <param name="tailAccessor">ChunkAccessor<PersistentStore> for the TailIndexSegment.</param>
     /// <param name="info">ComponentInfo for looking up creation TSNs via the revision chain.</param>
     /// <param name="excludeChainId">Chain ID to skip during backfill (entity just arrived at this key via MoveValue).</param>
     /// <param name="includeChainId">Chain ID to include even though it's been removed from HEAD (entity just left via MoveValue/RemoveValue).</param>
     /// <returns>The TAIL buffer ID (existing or newly allocated and backfilled).</returns>
-    private static int EnsureTailPopulated(int headBufferId, VariableSizedBufferSegment<VersionedIndexEntry> tailVSBS, ref ChunkAccessor headAccessor, 
-        ref ChunkAccessor tailAccessor, ComponentInfo info, int excludeChainId = 0, int includeChainId = 0)
+    private static int EnsureTailPopulated(int headBufferId, VariableSizedBufferSegment<VersionedIndexEntry, PersistentStore> tailVSBS, ref ChunkAccessor<PersistentStore> headAccessor, 
+        ref ChunkAccessor<PersistentStore> tailAccessor, ComponentInfo info, int excludeChainId = 0, int includeChainId = 0)
     {
         // Fast path: TAIL already exists
         ref var extra = ref IndexBufferExtraHeader.FromChunkAddress(headAccessor.GetChunkAddress(headBufferId));
@@ -413,8 +413,8 @@ internal static unsafe class IndexMaintainer
     /// Scans all entries in the HEAD buffer and writes corresponding Active entries to the TAIL buffer.
     /// Called once per key on first mutation to populate the TAIL version history.
     /// </summary>
-    private static void BackfillHeadEntriesToTail(int headBufferId, int tailBufferId, VariableSizedBufferSegment<VersionedIndexEntry> tailVSBS, 
-        ref ChunkAccessor headAccessor, ref ChunkAccessor tailAccessor, ComponentInfo info, int excludeChainId, int includeChainId)
+    private static void BackfillHeadEntriesToTail(int headBufferId, int tailBufferId, VariableSizedBufferSegment<VersionedIndexEntry, PersistentStore> tailVSBS, 
+        ref ChunkAccessor<PersistentStore> headAccessor, ref ChunkAccessor<PersistentStore> tailAccessor, ComponentInfo info, int excludeChainId, int includeChainId)
     {
         int rootHeaderTotalSize = sizeof(VariableSizedBufferRootHeader) + sizeof(IndexBufferExtraHeader);
 

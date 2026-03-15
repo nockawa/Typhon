@@ -11,35 +11,35 @@ namespace Typhon.Engine;
 /// an abstract class is a better fit: it avoids interface dispatch overhead and provides a natural home
 /// for shared non-generic operations like <see cref="GetMinKeyAsLong"/> / <see cref="GetMaxKeyAsLong"/>.
 /// </remarks>
-public abstract class BTreeBase
+public abstract class BTreeBase<TStore> where TStore : struct, IPageStore
 {
-    public abstract ChunkBasedSegment Segment { get; }
+    public abstract ChunkBasedSegment<TStore> Segment { get; }
     public abstract bool AllowMultiple { get; }
     public abstract int EntryCount { get; }
 
-    public abstract unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor);
-    public abstract unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor, out int bufferRootId);
-    public abstract unsafe bool Remove(void* keyAddr, out int value, ref ChunkAccessor accessor);
-    public abstract unsafe Result<int, BTreeLookupStatus> TryGet(void* keyAddr, ref ChunkAccessor accessor);
-    public abstract unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref ChunkAccessor accessor, bool preserveEmptyBuffer = false);
-    public abstract unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ref ChunkAccessor accessor);
+    public abstract unsafe int Add(void* keyAddr, int value, ref ChunkAccessor<TStore>accessor);
+    public abstract unsafe int Add(void* keyAddr, int value, ref ChunkAccessor<TStore>accessor, out int bufferRootId);
+    public abstract unsafe bool Remove(void* keyAddr, out int value, ref ChunkAccessor<TStore>accessor);
+    public abstract unsafe Result<int, BTreeLookupStatus> TryGet(void* keyAddr, ref ChunkAccessor<TStore>accessor);
+    public abstract unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref ChunkAccessor<TStore>accessor, bool preserveEmptyBuffer = false);
+    public abstract unsafe VariableSizedBufferAccessor<int, TStore> TryGetMultiple(void* keyAddr, ref ChunkAccessor<TStore>accessor);
 
     /// <summary>
     /// Compound move: atomically removes <paramref name="value"/> from <paramref name="oldKeyAddr"/>
     /// and inserts it under <paramref name="newKeyAddr"/>. For unique indexes (!AllowMultiple).
     /// </summary>
     /// <returns>True if the old key was found and moved; false if old key not found.</returns>
-    public abstract unsafe bool Move(void* oldKeyAddr, void* newKeyAddr, int value, ref ChunkAccessor accessor);
+    public abstract unsafe bool Move(void* oldKeyAddr, void* newKeyAddr, int value, ref ChunkAccessor<TStore>accessor);
 
     /// <summary>
     /// Compound move for multi-value indexes (AllowMultiple): removes <paramref name="elementId"/>/<paramref name="value"/>
     /// from <paramref name="oldKeyAddr"/>'s buffer and appends <paramref name="value"/> under <paramref name="newKeyAddr"/>.
     /// Returns the new element ID and both HEAD buffer IDs for inline TAIL tracking.
     /// </summary>
-    public abstract unsafe int MoveValue(void* oldKeyAddr, void* newKeyAddr, int elementId, int value, ref ChunkAccessor accessor, out int oldHeadBufferId,
+    public abstract unsafe int MoveValue(void* oldKeyAddr, void* newKeyAddr, int elementId, int value, ref ChunkAccessor<TStore>accessor, out int oldHeadBufferId,
         out int newHeadBufferId, bool preserveEmptyBuffer = false);
 
-    public abstract void CheckConsistency(ref ChunkAccessor accessor);
+    public abstract void CheckConsistency(ref ChunkAccessor<TStore>accessor);
 
     // Diagnostic counters
     public abstract long Count { get; }

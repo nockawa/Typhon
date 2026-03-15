@@ -616,7 +616,7 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
 
     #region Helpers
 
-    private static List<VersionedIndexEntry> CollectTailEntries(VariableSizedBufferSegment<VersionedIndexEntry> tailVSBS, int tailBufferId)
+    private static List<VersionedIndexEntry> CollectTailEntries(VariableSizedBufferSegment<VersionedIndexEntry, PersistentStore> tailVSBS, int tailBufferId)
     {
         var entries = new List<VersionedIndexEntry>();
         foreach (ref readonly var entry in tailVSBS.EnumerateBuffer(tailBufferId))
