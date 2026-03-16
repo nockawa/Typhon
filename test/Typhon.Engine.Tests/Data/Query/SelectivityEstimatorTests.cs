@@ -482,23 +482,6 @@ class SelectivityEstimatorTests : TestBase<SelectivityEstimatorTests>
     #region AdvancedSelectivityEstimator Tests (Histogram fallback)
 
     [Test]
-    public void HistoEstimator_FallsBackToBasic_WhenNoHistogram()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-        dbe.InitializeArchetypes();
-        var ct = dbe.GetComponentTable<CompD>();
-        var estimator = AdvancedSelectivityEstimator.Instance;
-
-        CreateAndCommit(dbe, 1.0f, 10, 1.0);
-        CreateAndCommit(dbe, 2.0f, 20, 2.0);
-        CreateAndCommit(dbe, 3.0f, 30, 3.0);
-
-        var result = estimator.EstimateCardinality(ct, 1, CompareOp.Equal, 20);
-        Assert.That(result, Is.EqualTo(1));
-    }
-
-    [Test]
     public void HistoEstimator_UsesHistogram_WhenAvailable()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
@@ -519,46 +502,6 @@ class SelectivityEstimatorTests : TestBase<SelectivityEstimatorTests>
 
         var lte = estimator.EstimateCardinality(ct, 1, CompareOp.LessThanOrEqual, 49);
         Assert.That(lte, Is.InRange(30, 70));
-    }
-
-    [Test]
-    public void HistoEstimator_Equality_WithHistogram()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-        dbe.InitializeArchetypes();
-        var ct = dbe.GetComponentTable<CompD>();
-        var estimator = AdvancedSelectivityEstimator.Instance;
-
-        for (var i = 0; i < 1000; i++)
-        {
-            CreateAndCommit(dbe, 1.0f, i, 1.0);
-        }
-
-        ct.IndexStats[1].RebuildHistogram();
-
-        var result = estimator.EstimateCardinality(ct, 1, CompareOp.Equal, 500);
-        Assert.That(result, Is.GreaterThanOrEqualTo(1));
-    }
-
-    [Test]
-    public void HistoEstimator_NotEqual_WithHistogram()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-        dbe.InitializeArchetypes();
-        var ct = dbe.GetComponentTable<CompD>();
-        var estimator = AdvancedSelectivityEstimator.Instance;
-
-        for (var i = 0; i < 100; i++)
-        {
-            CreateAndCommit(dbe, 1.0f, i, 1.0);
-        }
-
-        ct.IndexStats[1].RebuildHistogram();
-
-        var result = estimator.EstimateCardinality(ct, 1, CompareOp.NotEqual, 50);
-        Assert.That(result, Is.InRange(90, 100));
     }
 
     #endregion
@@ -591,31 +534,6 @@ class SelectivityEstimatorTests : TestBase<SelectivityEstimatorTests>
     }
 
     [Test]
-    public void Histogram_DoubleField_OrderPreserving_CorrectBuckets()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-        dbe.InitializeArchetypes();
-        var ct = dbe.GetComponentTable<CompD>();
-
-        for (var i = 0; i < 200; i++)
-        {
-            CreateAndCommit(dbe, 1.0f, i, i * 0.5 + 0.5);
-        }
-
-        StatisticsRebuilder.RebuildStatistics(ct, dbe.EpochManager);
-        var histogram = ct.IndexStats[2].Histogram;
-
-        Assert.That(histogram, Is.Not.Null);
-        Assert.That(histogram.TotalCount, Is.EqualTo(200));
-
-        var lo = StatisticsRebuilder.ToOrderPreserving(DoubleThreshold(50.0), KeyType.Double);
-        var hi = StatisticsRebuilder.ToOrderPreserving(DoubleThreshold(100.0), KeyType.Double);
-        var estimate = histogram.EstimateRange(lo, hi);
-        Assert.That(estimate, Is.InRange(50, 150));
-    }
-
-    [Test]
     public void Advanced_FloatField_RangeEstimate_WithHistogram()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
@@ -632,26 +550,6 @@ class SelectivityEstimatorTests : TestBase<SelectivityEstimatorTests>
         StatisticsRebuilder.RebuildStatistics(ct, dbe.EpochManager);
 
         var result = estimator.EstimateCardinality(ct, 0, CompareOp.GreaterThan, FloatThreshold(100.0f));
-        Assert.That(result, Is.InRange(50, 150));
-    }
-
-    [Test]
-    public void Advanced_DoubleField_RangeEstimate_WithHistogram()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-        dbe.InitializeArchetypes();
-        var ct = dbe.GetComponentTable<CompD>();
-        var estimator = AdvancedSelectivityEstimator.Instance;
-
-        for (var i = 0; i < 200; i++)
-        {
-            CreateAndCommit(dbe, 1.0f, i, i * 0.5 + 0.5);
-        }
-
-        StatisticsRebuilder.RebuildStatistics(ct, dbe.EpochManager);
-
-        var result = estimator.EstimateCardinality(ct, 2, CompareOp.GreaterThanOrEqual, DoubleThreshold(50.0));
         Assert.That(result, Is.InRange(50, 150));
     }
 

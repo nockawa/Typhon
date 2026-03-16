@@ -534,8 +534,12 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         Assert.That(result, Is.Empty);
     }
 
+    [TestCase(CompareOp.GreaterThan, 2, false)]       // B > 30: match B=40,50; exclude B=30
+    [TestCase(CompareOp.GreaterThanOrEqual, 3, true)] // B >= 30: match B=30,40,50
+    [TestCase(CompareOp.LessThan, 2, false)]          // B < 30: match B=10,20; exclude B=30
+    [TestCase(CompareOp.LessThanOrEqual, 3, true)]    // B <= 30: match B=10,20,30
     [Test]
-    public void IndexScan_GreaterThan_ExcludesBoundary()
+    public void IndexScan_BoundaryBehavior(CompareOp op, int expectedCount, bool boundaryIncluded)
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
@@ -548,91 +552,37 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
             pks[i] = (long)CreateEntity(dbe, 1.0f, (i + 1) * 10, 1.0).RawValue;
         }
 
-        // B > 30: should match B=40 and B=50 only (NOT B=30)
-        var (plan, _) = BuildPlanFromExpression(dbe, p => p.B > 30);
-
-        Assert.That(plan.UsesSecondaryIndex, Is.True);
-
-        var result = ExecutePlan(dbe, plan);
-        Assert.That(result, Has.Count.EqualTo(2));
-        Assert.That(result, Does.Contain(pks[3])); // B=40
-        Assert.That(result, Does.Contain(pks[4])); // B=50
-        Assert.That(result, Does.Not.Contain(pks[2])); // B=30 excluded
-    }
-
-    [Test]
-    public void IndexScan_GreaterThanOrEqual_IncludesBoundary()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-        dbe.InitializeArchetypes();
-
-        var pks = new long[5];
-        for (var i = 0; i < 5; i++)
+        // Build expression: p.B {op} 30
+        var param = System.Linq.Expressions.Expression.Parameter(typeof(CompD), "p");
+        var field = System.Linq.Expressions.Expression.Field(param, nameof(CompD.B));
+        var constant = System.Linq.Expressions.Expression.Constant(30);
+        var exprType = op switch
         {
-            pks[i] = (long)CreateEntity(dbe, 1.0f, (i + 1) * 10, 1.0).RawValue;
-        }
+            CompareOp.GreaterThan => System.Linq.Expressions.ExpressionType.GreaterThan,
+            CompareOp.GreaterThanOrEqual => System.Linq.Expressions.ExpressionType.GreaterThanOrEqual,
+            CompareOp.LessThan => System.Linq.Expressions.ExpressionType.LessThan,
+            CompareOp.LessThanOrEqual => System.Linq.Expressions.ExpressionType.LessThanOrEqual,
+            _ => throw new System.ArgumentOutOfRangeException()
+        };
+        var binary = System.Linq.Expressions.Expression.MakeBinary(exprType, field, constant);
+        var lambda = System.Linq.Expressions.Expression.Lambda<System.Func<CompD, bool>>(binary, param);
 
-        // B >= 30: should match B=30, B=40, B=50
-        var (plan, _) = BuildPlanFromExpression(dbe, p => p.B >= 30);
+        var (plan, _) = BuildPlanFromExpression(dbe, lambda);
 
         Assert.That(plan.UsesSecondaryIndex, Is.True);
 
         var result = ExecutePlan(dbe, plan);
-        Assert.That(result, Has.Count.EqualTo(3));
-        Assert.That(result, Does.Contain(pks[2])); // B=30 included
-        Assert.That(result, Does.Contain(pks[3])); // B=40
-        Assert.That(result, Does.Contain(pks[4])); // B=50
-    }
+        Assert.That(result, Has.Count.EqualTo(expectedCount));
 
-    [Test]
-    public void IndexScan_LessThan_ExcludesBoundary()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-        dbe.InitializeArchetypes();
-
-        var pks = new long[5];
-        for (var i = 0; i < 5; i++)
+        // Verify boundary inclusion/exclusion for B=30 (pks[2])
+        if (boundaryIncluded)
         {
-            pks[i] = (long)CreateEntity(dbe, 1.0f, (i + 1) * 10, 1.0).RawValue;
+            Assert.That(result, Does.Contain(pks[2]), "B=30 should be included");
         }
-
-        // B < 30: should match B=10 and B=20 only (NOT B=30)
-        var (plan, _) = BuildPlanFromExpression(dbe, p => p.B < 30);
-
-        Assert.That(plan.UsesSecondaryIndex, Is.True);
-
-        var result = ExecutePlan(dbe, plan);
-        Assert.That(result, Has.Count.EqualTo(2));
-        Assert.That(result, Does.Contain(pks[0])); // B=10
-        Assert.That(result, Does.Contain(pks[1])); // B=20
-        Assert.That(result, Does.Not.Contain(pks[2])); // B=30 excluded
-    }
-
-    [Test]
-    public void IndexScan_LessThanOrEqual_IncludesBoundary()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-        dbe.InitializeArchetypes();
-
-        var pks = new long[5];
-        for (var i = 0; i < 5; i++)
+        else
         {
-            pks[i] = (long)CreateEntity(dbe, 1.0f, (i + 1) * 10, 1.0).RawValue;
+            Assert.That(result, Does.Not.Contain(pks[2]), "B=30 should be excluded");
         }
-
-        // B <= 30: should match B=10, B=20, B=30
-        var (plan, _) = BuildPlanFromExpression(dbe, p => p.B <= 30);
-
-        Assert.That(plan.UsesSecondaryIndex, Is.True);
-
-        var result = ExecutePlan(dbe, plan);
-        Assert.That(result, Has.Count.EqualTo(3));
-        Assert.That(result, Does.Contain(pks[0])); // B=10
-        Assert.That(result, Does.Contain(pks[1])); // B=20
-        Assert.That(result, Does.Contain(pks[2])); // B=30 included
     }
 
     [Test]

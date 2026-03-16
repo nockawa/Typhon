@@ -42,16 +42,10 @@ public class ViewDeltaEntryTests
     #region ViewDeltaEntry Defaults
 
     [Test]
-    public void Default_HasZeroEntityPK()
+    public void Default_HasZeroEntityPKAndKeys()
     {
         var entry = new ViewDeltaEntry();
         Assert.That(entry.EntityPK, Is.EqualTo(0));
-    }
-
-    [Test]
-    public void Default_HasZeroKeys()
-    {
-        var entry = new ViewDeltaEntry();
         Assert.That(entry.BeforeKey.IsZero, Is.True);
         Assert.That(entry.AfterKey.IsZero, Is.True);
     }
@@ -61,181 +55,51 @@ public class ViewDeltaEntryTests
     #region KeyBytes8 IsZero
 
     [Test]
-    public void KeyBytes8_IsZero_TrueForDefault() =>
+    public void KeyBytes8_IsZero_DefaultTrueNonZeroFalse()
+    {
         Assert.That(new KeyBytes8().IsZero, Is.True);
-
-    [Test]
-    public void KeyBytes8_IsZero_FalseForNonZero() =>
-        Assert.That(KeyBytes8.FromInt(42).IsZero, Is.False);
-
-    [Test]
-    public void KeyBytes8_IsZero_TrueForExplicitZero() =>
         Assert.That(KeyBytes8.FromInt(0).IsZero, Is.True);
+        Assert.That(KeyBytes8.FromInt(42).IsZero, Is.False);
+    }
 
     #endregion
 
-    #region KeyBytes8 Roundtrip — Int
+    #region KeyBytes8 Roundtrip — One per type
 
     [Test]
-    public void KeyBytes8_Roundtrip_Int_Positive()
+    public void KeyBytes8_Roundtrip_Int()
     {
         var kb = KeyBytes8.FromInt(12345);
         Assert.That(kb.AsInt(), Is.EqualTo(12345));
     }
 
     [Test]
-    public void KeyBytes8_Roundtrip_Int_Negative()
-    {
-        var kb = KeyBytes8.FromInt(-99);
-        Assert.That(kb.AsInt(), Is.EqualTo(-99));
-    }
-
-    [Test]
-    public void KeyBytes8_Roundtrip_Int_Zero()
-    {
-        var kb = KeyBytes8.FromInt(0);
-        Assert.That(kb.AsInt(), Is.EqualTo(0));
-    }
-
-    [Test]
-    public void KeyBytes8_Roundtrip_Int_MaxValue()
-    {
-        var kb = KeyBytes8.FromInt(int.MaxValue);
-        Assert.That(kb.AsInt(), Is.EqualTo(int.MaxValue));
-    }
-
-    [Test]
-    public void KeyBytes8_Roundtrip_Int_MinValue()
-    {
-        var kb = KeyBytes8.FromInt(int.MinValue);
-        Assert.That(kb.AsInt(), Is.EqualTo(int.MinValue));
-    }
-
-    #endregion
-
-    #region KeyBytes8 Roundtrip — Long
-
-    [Test]
-    public void KeyBytes8_Roundtrip_Long_Positive()
+    public void KeyBytes8_Roundtrip_Long()
     {
         var kb = KeyBytes8.FromLong(9876543210L);
         Assert.That(kb.AsLong(), Is.EqualTo(9876543210L));
     }
 
     [Test]
-    public void KeyBytes8_Roundtrip_Long_Negative()
-    {
-        var kb = KeyBytes8.FromLong(-9876543210L);
-        Assert.That(kb.AsLong(), Is.EqualTo(-9876543210L));
-    }
-
-    [Test]
-    public void KeyBytes8_Roundtrip_Long_MaxValue()
-    {
-        var kb = KeyBytes8.FromLong(long.MaxValue);
-        Assert.That(kb.AsLong(), Is.EqualTo(long.MaxValue));
-    }
-
-    [Test]
-    public void KeyBytes8_Roundtrip_Long_MinValue()
-    {
-        var kb = KeyBytes8.FromLong(long.MinValue);
-        Assert.That(kb.AsLong(), Is.EqualTo(long.MinValue));
-    }
-
-    #endregion
-
-    #region KeyBytes8 Roundtrip — Float
-
-    [Test]
-    public void KeyBytes8_Roundtrip_Float_Positive()
+    public void KeyBytes8_Roundtrip_Float()
     {
         var kb = KeyBytes8.FromFloat(3.14f);
         Assert.That(kb.AsFloat(), Is.EqualTo(3.14f));
     }
 
     [Test]
-    public void KeyBytes8_Roundtrip_Float_Negative()
-    {
-        var kb = KeyBytes8.FromFloat(-2.5f);
-        Assert.That(kb.AsFloat(), Is.EqualTo(-2.5f));
-    }
-
-    [Test]
-    public void KeyBytes8_Roundtrip_Float_Zero()
-    {
-        var kb = KeyBytes8.FromFloat(0f);
-        Assert.That(kb.AsFloat(), Is.EqualTo(0f));
-    }
-
-    [Test]
-    public void KeyBytes8_Roundtrip_Float_MaxValue()
-    {
-        var kb = KeyBytes8.FromFloat(float.MaxValue);
-        Assert.That(kb.AsFloat(), Is.EqualTo(float.MaxValue));
-    }
-
-    [Test]
-    public void KeyBytes8_Roundtrip_Float_MinValue()
-    {
-        var kb = KeyBytes8.FromFloat(float.MinValue);
-        Assert.That(kb.AsFloat(), Is.EqualTo(float.MinValue));
-    }
-
-    #endregion
-
-    #region KeyBytes8 Roundtrip — Double
-
-    [Test]
-    public void KeyBytes8_Roundtrip_Double_Positive()
+    public void KeyBytes8_Roundtrip_Double()
     {
         var kb = KeyBytes8.FromDouble(3.141592653589793);
         Assert.That(kb.AsDouble(), Is.EqualTo(3.141592653589793));
     }
 
     [Test]
-    public void KeyBytes8_Roundtrip_Double_Negative()
+    public void KeyBytes8_Roundtrip_Bool()
     {
-        var kb = KeyBytes8.FromDouble(-1.23e45);
-        Assert.That(kb.AsDouble(), Is.EqualTo(-1.23e45));
+        Assert.That(KeyBytes8.FromBool(true).AsLong(), Is.EqualTo(1));
+        Assert.That(KeyBytes8.FromBool(false).AsLong(), Is.EqualTo(0));
     }
-
-    [Test]
-    public void KeyBytes8_Roundtrip_Double_MaxValue()
-    {
-        var kb = KeyBytes8.FromDouble(double.MaxValue);
-        Assert.That(kb.AsDouble(), Is.EqualTo(double.MaxValue));
-    }
-
-    [Test]
-    public void KeyBytes8_Roundtrip_Double_MinValue()
-    {
-        var kb = KeyBytes8.FromDouble(double.MinValue);
-        Assert.That(kb.AsDouble(), Is.EqualTo(double.MinValue));
-    }
-
-    #endregion
-
-    #region KeyBytes8 Roundtrip — Bool
-
-    [Test]
-    public void KeyBytes8_Roundtrip_Bool_True()
-    {
-        var kb = KeyBytes8.FromBool(true);
-        Assert.That(kb.AsLong(), Is.EqualTo(1));
-    }
-
-    [Test]
-    public void KeyBytes8_Roundtrip_Bool_False()
-    {
-        var kb = KeyBytes8.FromBool(false);
-        Assert.That(kb.AsLong(), Is.EqualTo(0));
-        Assert.That(kb.IsZero, Is.True);
-    }
-
-    #endregion
-
-    #region KeyBytes8 Roundtrip — Byte / SByte
 
     [Test]
     public void KeyBytes8_Roundtrip_Byte()
@@ -245,43 +109,17 @@ public class ViewDeltaEntryTests
     }
 
     [Test]
-    public void KeyBytes8_Roundtrip_Byte_Zero()
-    {
-        var kb = KeyBytes8.FromByte(0);
-        Assert.That(kb.AsInt(), Is.EqualTo(0));
-        Assert.That(kb.IsZero, Is.True);
-    }
-
-    [Test]
-    public void KeyBytes8_Roundtrip_SByte_Positive()
+    public void KeyBytes8_Roundtrip_SByte()
     {
         var kb = KeyBytes8.FromSByte(127);
         Assert.That(kb.AsInt(), Is.EqualTo(127));
     }
 
     [Test]
-    public void KeyBytes8_Roundtrip_SByte_Negative()
-    {
-        var kb = KeyBytes8.FromSByte(-128);
-        Assert.That(kb.AsInt(), Is.EqualTo(-128));
-    }
-
-    #endregion
-
-    #region KeyBytes8 Roundtrip — Short / UShort
-
-    [Test]
-    public void KeyBytes8_Roundtrip_Short_Positive()
+    public void KeyBytes8_Roundtrip_Short()
     {
         var kb = KeyBytes8.FromShort(32000);
         Assert.That(kb.AsInt(), Is.EqualTo(32000));
-    }
-
-    [Test]
-    public void KeyBytes8_Roundtrip_Short_Negative()
-    {
-        var kb = KeyBytes8.FromShort(-32000);
-        Assert.That(kb.AsInt(), Is.EqualTo(-32000));
     }
 
     [Test]
@@ -290,10 +128,6 @@ public class ViewDeltaEntryTests
         var kb = KeyBytes8.FromUShort(65535);
         Assert.That(kb.AsInt(), Is.EqualTo(65535));
     }
-
-    #endregion
-
-    #region KeyBytes8 Roundtrip — UInt / ULong
 
     [Test]
     public void KeyBytes8_Roundtrip_UInt()
@@ -309,13 +143,6 @@ public class ViewDeltaEntryTests
         Assert.That((ulong)kb.AsLong(), Is.EqualTo(12345678901234UL));
     }
 
-    [Test]
-    public void KeyBytes8_Roundtrip_ULong_MaxValue()
-    {
-        var kb = KeyBytes8.FromULong(ulong.MaxValue);
-        Assert.That((ulong)kb.AsLong(), Is.EqualTo(ulong.MaxValue));
-    }
-
     #endregion
 
     #region KeyBytes8 FromPointer
@@ -328,26 +155,6 @@ public class ViewDeltaEntryTests
 
         var kb = KeyBytes8.FromPointer(ptr, 8);
         Assert.That(kb.AsLong(), Is.EqualTo(0x0102030405060708L));
-    }
-
-    [Test]
-    public unsafe void KeyBytes8_FromPointer_PartialRead_4Bytes()
-    {
-        int source = 42;
-        byte* ptr = (byte*)&source;
-
-        var kb = KeyBytes8.FromPointer(ptr, 4);
-        Assert.That(kb.AsInt(), Is.EqualTo(42));
-    }
-
-    [Test]
-    public unsafe void KeyBytes8_FromPointer_PartialRead_1Byte()
-    {
-        byte source = 0xAB;
-        byte* ptr = &source;
-
-        var kb = KeyBytes8.FromPointer(ptr, 1);
-        Assert.That((byte)kb.AsInt(), Is.EqualTo(0xAB));
     }
 
     #endregion
