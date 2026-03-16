@@ -1,3 +1,4 @@
+using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -27,6 +28,17 @@ public unsafe struct ComponentValue
 
     // 12 bytes header above, 112 bytes payload below, 4 bytes implicit tail padding = 128B total
     private fixed byte _data[MaxPayloadSize];
+
+    /// <summary>Create a ComponentValue from raw bytes. Used by reflection-based callers (Shell CLI).</summary>
+    internal static ComponentValue CreateFromRaw(int componentTypeId, byte* data, int dataSize)
+    {
+        Debug.Assert(dataSize <= MaxPayloadSize, $"Data size {dataSize} exceeds max payload {MaxPayloadSize}");
+        var cv = new ComponentValue();
+        Unsafe.AsRef(in cv.ComponentTypeId) = componentTypeId;
+        Unsafe.AsRef(in cv.DataSize) = dataSize;
+        new ReadOnlySpan<byte>(data, dataSize).CopyTo(new Span<byte>(cv._data, MaxPayloadSize));
+        return cv;
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static ComponentValue Create<T>(int componentTypeId, in T value) where T : unmanaged

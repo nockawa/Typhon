@@ -54,7 +54,7 @@ public class QueryBuilder<T1, T2> where T1 : unmanaged where T2 : unmanaged
         // Select best plan: prefer secondary index, fallback to PK scan
         var (plan, planTable) = SelectBestPlan(evals1, ct1, evals2, ct2);
 
-        var view = new View<T1, T2>(combinedEvaluators, ct1.ViewRegistry, ct2.ViewRegistry, ct1, ct2, plan, planTable, bufferCapacity);
+        var view = new View<T1, T2>(combinedEvaluators, ct1.ViewRegistry, ct2.ViewRegistry, ct1, plan, planTable, bufferCapacity);
 
         // Build field dependency arrays for each component table
         var fieldDeps1 = new int[evals1.Length];

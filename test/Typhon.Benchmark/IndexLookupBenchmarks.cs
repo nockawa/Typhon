@@ -24,6 +24,12 @@ public struct IdxComp
     public long Timestamp;
 }
 
+[Archetype(504)]
+class IdxArch : Archetype<IdxArch>
+{
+    public static readonly Comp<IdxComp> Idx = Register<IdxComp>();
+}
+
 [SimpleJob(warmupCount: 2, iterationCount: 3)]
 [MemoryDiagnoser]
 [BenchmarkCategory("Index", "Regression")]
@@ -31,9 +37,9 @@ public class IndexLookupBenchmarks
 {
     private ServiceProvider _serviceProvider;
     private DatabaseEngine _dbe;
-    private long[] _entityIds;
-    private long[] _randomOrder;
-    private long _deleteEntity;
+    private EntityId[] _entityIds;
+    private EntityId[] _randomOrder;
+    private EntityId _deleteEntity;
     private string _databaseName;
 
     private const int PrePopulateCount = 10_000;
@@ -66,14 +72,17 @@ public class IndexLookupBenchmarks
         _dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
         _dbe.RegisterComponentFromAccessor<IdxComp>();
 
+        Archetype<IdxArch>.Touch();
+        _dbe.InitializeArchetypes();
+
         // Pre-populate 10K entities
-        _entityIds = new long[PrePopulateCount];
+        _entityIds = new EntityId[PrePopulateCount];
         using (var t = _dbe.CreateQuickTransaction())
         {
             for (int i = 0; i < PrePopulateCount; i++)
             {
                 var comp = new IdxComp { Value = i, Timestamp = DateTime.UtcNow.Ticks };
-                _entityIds[i] = t.CreateEntity(ref comp);
+                _entityIds[i] = t.Spawn<IdxArch>(IdxArch.Idx.Set(in comp));
             }
             t.Commit();
         }
@@ -82,12 +91,12 @@ public class IndexLookupBenchmarks
         using (var t = _dbe.CreateQuickTransaction())
         {
             var comp = new IdxComp { Value = -1, Timestamp = 0 };
-            _deleteEntity = t.CreateEntity(ref comp);
+            _deleteEntity = t.Spawn<IdxArch>(IdxArch.Idx.Set(in comp));
             t.Commit();
         }
 
         // Random-order array for random access benchmark (fixed seed for reproducibility)
-        _randomOrder = new long[100];
+        _randomOrder = new EntityId[100];
         var rng = new Random(42);
         for (int i = 0; i < 100; i++)
         {
@@ -106,18 +115,19 @@ public class IndexLookupBenchmarks
 
     /// <summary>
     /// Read a single entity by primary key from a 10K entity table.
-    /// Measures B+Tree lookup through the full Transaction → ComponentTable stack.
+    /// Measures entity resolution through the full Transaction -> LinearHash stack.
     /// </summary>
     [Benchmark]
     public void PrimaryKey_PointLookup()
     {
         using var t = _dbe.CreateQuickTransaction();
-        t.ReadEntity(_entityIds[5000], out IdxComp _);
+        var entity = t.Open(_entityIds[5000]);
+        _ = entity.Read(IdxArch.Idx);
     }
 
     /// <summary>
     /// Read 100 entities with sequential primary keys.
-    /// Measures cache-friendly sequential access through the B+Tree.
+    /// Measures cache-friendly sequential access through entity resolution.
     /// </summary>
     [Benchmark]
     public void PrimaryKey_BatchSequential()
@@ -125,13 +135,14 @@ public class IndexLookupBenchmarks
         using var t = _dbe.CreateQuickTransaction();
         for (int i = 0; i < 100; i++)
         {
-            t.ReadEntity(_entityIds[i], out IdxComp _);
+            var entity = t.Open(_entityIds[i]);
+            _ = entity.Read(IdxArch.Idx);
         }
     }
 
     /// <summary>
     /// Read 100 entities in random order from a 10K entity table.
-    /// Measures cache-unfriendly random access through the B+Tree.
+    /// Measures cache-unfriendly random access through entity resolution.
     /// </summary>
     [Benchmark]
     public void PrimaryKey_BatchRandom()
@@ -139,21 +150,22 @@ public class IndexLookupBenchmarks
         using var t = _dbe.CreateQuickTransaction();
         for (int i = 0; i < 100; i++)
         {
-            t.ReadEntity(_randomOrder[i], out IdxComp _);
+            var entity = t.Open(_randomOrder[i]);
+            _ = entity.Read(IdxArch.Idx);
         }
     }
 
     /// <summary>
-    /// Delete a single entity and commit. Measures tombstone creation path.
-    /// Entity is re-created to maintain steady state for future invocations.
+    /// Destroy a single entity and commit. Measures tombstone creation path.
+    /// Entity is re-spawned to maintain steady state for future invocations.
     /// </summary>
     [Benchmark]
     public void DeleteEntity_SingleComponent()
     {
         using var t = _dbe.CreateQuickTransaction();
-        t.DeleteEntity<IdxComp>(_deleteEntity);
+        t.Destroy(_deleteEntity);
         var comp = new IdxComp { Value = -1, Timestamp = 0 };
-        _deleteEntity = t.CreateEntity(ref comp);
+        _deleteEntity = t.Spawn<IdxArch>(IdxArch.Idx.Set(in comp));
         t.Commit();
     }
 }

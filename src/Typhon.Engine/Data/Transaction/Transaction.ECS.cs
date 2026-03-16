@@ -85,14 +85,21 @@ public unsafe partial class Transaction
     /// </summary>
     public EntityId Spawn<TArch>(params ComponentValue[] values) where TArch : Archetype<TArch>
     {
+        var meta = Archetype<TArch>.Metadata;
+        Debug.Assert(meta != null, $"Archetype {typeof(TArch).Name} not registered");
+        Debug.Assert(_dbe._archetypeStates[meta.ArchetypeId]?.EntityMap != null,
+            $"Archetype {typeof(TArch).Name} EntityMap not initialized — call DatabaseEngine.InitializeArchetypes first");
+        return SpawnInternal(meta, values);
+    }
+
+    /// <summary>Core Spawn implementation shared by Spawn&lt;TArch&gt; and SpawnByArchetypeId.</summary>
+    private EntityId SpawnInternal(ArchetypeMetadata meta, ComponentValue[] values)
+    {
         EnsureMutable();
         State = TransactionState.InProgress;
         AssertThreadAffinity();
 
-        var meta = Archetype<TArch>.Metadata;
-        Debug.Assert(meta != null, $"Archetype {typeof(TArch).Name} not registered");
         var engineState = _dbe._archetypeStates[meta.ArchetypeId];
-        Debug.Assert(engineState?.EntityMap != null, $"Archetype {typeof(TArch).Name} EntityMap not initialized — call DatabaseEngine.InitializeArchetypes first");
 
         // Generate unique EntityKey
         long entityKey = Interlocked.Increment(ref engineState.NextEntityKey);

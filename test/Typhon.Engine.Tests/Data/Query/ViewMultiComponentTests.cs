@@ -44,7 +44,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
             MakeEvaluator(1, 4, 4, KeyType.Int, CompareOp.GreaterThan, 40, componentTag: 0),    // CompD.B > 40
             MakeEvaluator(0, 0, 4, KeyType.Int, CompareOp.GreaterThan, 10000, componentTag: 1)   // CompF.Gold > 10000
         };
-        var view = new View<CompD, CompF>(evaluators, ctD.ViewRegistry, ctF.ViewRegistry, ctD, ctF, bufferCapacity);
+        var view = new View<CompD, CompF>(evaluators, ctD.ViewRegistry, ctF.ViewRegistry, ctD, bufferCapacity);
         ctD.ViewRegistry.RegisterView(view, [1], 0);    // CompD field index 1 (B)
         ctF.ViewRegistry.RegisterView(view, [0], 1);    // CompF field index 0 (Gold)
         return view;

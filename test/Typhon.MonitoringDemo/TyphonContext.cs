@@ -65,6 +65,20 @@ public sealed class TyphonContext : IDisposable
 
     private void RegisterGameComponents()
     {
+        // Touch all archetypes to trigger static initialization
+        Archetype<FactoryBuildingArch>.Touch();
+        Archetype<ConveyorBeltArch>.Touch();
+        Archetype<ItemStackArch>.Touch();
+        Archetype<RecipeArch>.Touch();
+        Archetype<ResourceNodeArch>.Touch();
+        Archetype<PowerGridArch>.Touch();
+        Archetype<CharacterArch>.Touch();
+        Archetype<WorldPositionArch>.Touch();
+        Archetype<CombatStatsArch>.Touch();
+        Archetype<SkillArch>.Touch();
+        Archetype<QuestArch>.Touch();
+        Archetype<InventoryArch>.Touch();
+
         // Factory game components
         Engine.RegisterComponentFromAccessor<FactoryBuilding>();
         Engine.RegisterComponentFromAccessor<ConveyorBelt>();
@@ -82,6 +96,9 @@ public sealed class TyphonContext : IDisposable
         Engine.RegisterComponentFromAccessor<Quest>();
         Engine.RegisterComponentFromAccessor<WorldPosition>();
         Engine.RegisterComponentFromAccessor<CombatStats>();
+
+        // Initialize archetype storage (LinearHash, etc.)
+        Engine.InitializeArchetypes();
     }
 
     // Note: Engine is a singleton managed by the DI container, don't dispose it here

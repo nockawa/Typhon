@@ -117,7 +117,7 @@ public unsafe class OrView<T> : ViewBase where T : unmanaged
             var pkIndex = _componentTable.PrimaryKeyIndex;
             foreach (var kv in pkIndex.EnumerateLeaves())
             {
-                if (tx.ReadEntity<T>(kv.Key, out var comp))
+                if (tx.ReadComponent<T>(kv.Key, out var comp))
                 {
                     var bitmap = EvaluateAllBranches(ref comp);
                     if (bitmap != 0)
@@ -233,7 +233,7 @@ public unsafe class OrView<T> : ViewBase where T : unmanaged
 
         if (!entityRead)
         {
-            if (!tx.ReadEntity(pk, out comp))
+            if (!tx.ReadComponent(pk, out comp))
             {
                 return false;
             }

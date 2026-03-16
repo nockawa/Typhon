@@ -24,6 +24,12 @@ public struct RevComp
     public long Timestamp;
 }
 
+[Archetype(505)]
+class RevArch : Archetype<RevArch>
+{
+    public static readonly Comp<RevComp> Rev = Register<RevComp>();
+}
+
 [SimpleJob(warmupCount: 2, iterationCount: 3)]
 [MemoryDiagnoser]
 [BenchmarkCategory("MVCC", "Regression")]
@@ -33,9 +39,9 @@ public class RevisionBenchmarks
     private DatabaseEngine _dbe;
     private string _databaseName;
 
-    private long _singleVersionEntity;
-    private long _tenVersionEntity;
-    private long _fiftyVersionEntity;
+    private EntityId _singleVersionEntity;
+    private EntityId _tenVersionEntity;
+    private EntityId _fiftyVersionEntity;
 
     [GlobalSetup]
     public void GlobalSetup()
@@ -65,11 +71,14 @@ public class RevisionBenchmarks
         _dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
         _dbe.RegisterComponentFromAccessor<RevComp>();
 
+        Archetype<RevArch>.Touch();
+        _dbe.InitializeArchetypes();
+
         // Create entity with 1 version
         using (var t = _dbe.CreateQuickTransaction())
         {
             var comp = new RevComp { Value = 1, Timestamp = 1 };
-            _singleVersionEntity = t.CreateEntity(ref comp);
+            _singleVersionEntity = t.Spawn<RevArch>(RevArch.Rev.Set(in comp));
             t.Commit();
         }
 
@@ -77,14 +86,16 @@ public class RevisionBenchmarks
         using (var t = _dbe.CreateQuickTransaction())
         {
             var comp = new RevComp { Value = 1, Timestamp = 1 };
-            _tenVersionEntity = t.CreateEntity(ref comp);
+            _tenVersionEntity = t.Spawn<RevArch>(RevArch.Rev.Set(in comp));
             t.Commit();
         }
         for (int i = 2; i <= 10; i++)
         {
             using var t = _dbe.CreateQuickTransaction();
-            var comp = new RevComp { Value = i, Timestamp = i };
-            t.UpdateEntity(_tenVersionEntity, ref comp);
+            var entity = t.OpenMut(_tenVersionEntity);
+            ref var comp = ref entity.Write(RevArch.Rev);
+            comp.Value = i;
+            comp.Timestamp = i;
             t.Commit();
         }
 
@@ -92,14 +103,16 @@ public class RevisionBenchmarks
         using (var t = _dbe.CreateQuickTransaction())
         {
             var comp = new RevComp { Value = 1, Timestamp = 1 };
-            _fiftyVersionEntity = t.CreateEntity(ref comp);
+            _fiftyVersionEntity = t.Spawn<RevArch>(RevArch.Rev.Set(in comp));
             t.Commit();
         }
         for (int i = 2; i <= 50; i++)
         {
             using var t = _dbe.CreateQuickTransaction();
-            var comp = new RevComp { Value = i, Timestamp = i };
-            t.UpdateEntity(_fiftyVersionEntity, ref comp);
+            var entity = t.OpenMut(_fiftyVersionEntity);
+            ref var comp = ref entity.Write(RevArch.Rev);
+            comp.Value = i;
+            comp.Timestamp = i;
             t.Commit();
         }
     }
@@ -120,7 +133,8 @@ public class RevisionBenchmarks
     public void Read_SingleVersion()
     {
         using var t = _dbe.CreateQuickTransaction();
-        t.ReadEntity(_singleVersionEntity, out RevComp _);
+        var entity = t.Open(_singleVersionEntity);
+        _ = entity.Read(RevArch.Rev);
     }
 
     /// <summary>
@@ -130,7 +144,8 @@ public class RevisionBenchmarks
     public void Read_10Versions()
     {
         using var t = _dbe.CreateQuickTransaction();
-        t.ReadEntity(_tenVersionEntity, out RevComp _);
+        var entity = t.Open(_tenVersionEntity);
+        _ = entity.Read(RevArch.Rev);
     }
 
     /// <summary>
@@ -140,6 +155,7 @@ public class RevisionBenchmarks
     public void Read_50Versions()
     {
         using var t = _dbe.CreateQuickTransaction();
-        t.ReadEntity(_fiftyVersionEntity, out RevComp _);
+        var entity = t.Open(_fiftyVersionEntity);
+        _ = entity.Read(RevArch.Rev);
     }
 }

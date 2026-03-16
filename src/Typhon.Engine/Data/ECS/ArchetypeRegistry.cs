@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using Typhon.Schema.Definition;
@@ -327,6 +326,24 @@ public static class ArchetypeRegistry
 
     /// <summary>
     /// Build an ArchetypeMaskLarge with bits set for all archetypes that declare a component with the given type ID.
+    /// <summary>
+    /// Find the first archetype that contains a component with the given type ID.
+    /// Used by Shell CLI for dynamic archetype discovery when creating entities by component name.
+    /// Returns null if no archetype contains this component type.
+    /// </summary>
+    internal static ArchetypeMetadata FindArchetypeForComponent(int componentTypeId)
+    {
+        for (int i = 0; i <= MaxRegisteredArchetypeId; i++)
+        {
+            var meta = Archetypes[i];
+            if (meta != null && meta._typeIdToSlot.ContainsKey(componentTypeId))
+            {
+                return meta;
+            }
+        }
+        return null;
+    }
+
     /// Used when <see cref="MaxArchetypeId"/> > 255.
     /// </summary>
     internal static ArchetypeMaskLarge GetComponentMaskLarge(int componentTypeId)

@@ -6,7 +6,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
-using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
 
@@ -331,7 +330,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         _occupancyMap = new BitmapL3(_occupancySegment);
 
         var occupancyReserved = Bootstrap.Get(BK_OccupancyReserved);
-        _occupancyNextReservedPageIndex = occupancyReserved.GetInt(0);
+        _occupancyNextReservedPageIndex = occupancyReserved.GetInt();
         _occupancyNextReservedMapPageIndex = occupancyReserved.GetInt(1);
         // ReSharper restore InconsistentlySynchronizedField
     }
@@ -593,7 +592,6 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         var latched = TryLatchPageExclusive(memPageIdx);
         Debug.Assert(latched, "TryLatchPageExclusive failed on root page during occupancy reserved pages update");
 
-        var page = GetPage(memPageIdx);
         var cs = CreateChangeSet();
         cs.AddByMemPageIndex(memPageIdx);
 
@@ -620,7 +618,6 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         var latched = TryLatchPageExclusive(memPageIdx);
         Debug.Assert(latched, "TryLatchPageExclusive failed on root page during checkpoint LSN update");
 
-        var page = GetPage(memPageIdx);
         var cs = CreateChangeSet();
         cs.AddByMemPageIndex(memPageIdx);
 

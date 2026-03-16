@@ -91,7 +91,7 @@ public unsafe class View<T> : ViewBase where T : unmanaged
             var pkIndex = _componentTable.PrimaryKeyIndex;
             foreach (var kv in pkIndex.EnumerateLeaves())
             {
-                if (tx.ReadEntity<T>(kv.Key, out var comp))
+                if (tx.ReadComponent<T>(kv.Key, out var comp))
                 {
                     if (EvaluateAllFields(ref comp))
                     {
@@ -165,7 +165,7 @@ public unsafe class View<T> : ViewBase where T : unmanaged
 
     private bool CheckOtherFields(long pk, int changedFieldIndex, Transaction tx)
     {
-        if (!tx.ReadEntity<T>(pk, out var comp))
+        if (!tx.ReadComponent<T>(pk, out var comp))
         {
             return false;
         }

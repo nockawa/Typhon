@@ -406,7 +406,7 @@ internal class PipelineExecutor
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static unsafe bool EvaluateFilters<T>(FieldEvaluator[] evaluators, Transaction tx, long pk) where T : unmanaged
     {
-        if (!tx.ReadEntity<T>(pk, out var comp))
+        if (!tx.ReadComponent<T>(pk, out var comp))
         {
             return false;
         }
@@ -582,7 +582,7 @@ internal class PipelineExecutor
     private static unsafe bool EvaluateFiltersTwo<T1, T2>(FieldEvaluator[] evaluators, Transaction tx, long pk)
         where T1 : unmanaged where T2 : unmanaged
     {
-        if (!tx.ReadEntity<T1>(pk, out var comp1) || !tx.ReadEntity<T2>(pk, out var comp2))
+        if (!tx.ReadComponent<T1>(pk, out var comp1) || !tx.ReadComponent<T2>(pk, out var comp2))
         {
             return false;
         }
@@ -682,7 +682,7 @@ internal class PipelineExecutor
             var sourcePK = kv.Key;
 
             // Read source and evaluate source predicates
-            if (!tx.ReadEntity<TSource>(sourcePK, out var sourceComp))
+            if (!tx.ReadComponent<TSource>(sourcePK, out var sourceComp))
             {
                 continue;
             }
@@ -722,7 +722,7 @@ internal class PipelineExecutor
             if (targetEvals.Length == 0)
             {
                 // No target predicates — just verify the target exists
-                if (!tx.ReadEntity<TTarget>(fkValue, out _))
+                if (!tx.ReadComponent<TTarget>(fkValue, out _))
                 {
                     continue;
                 }

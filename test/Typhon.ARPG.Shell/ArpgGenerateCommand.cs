@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using Typhon.ARPG.Schema;
+using Typhon.Engine;
 using Typhon.Schema.Definition;
 using Typhon.Shell.Extensibility;
 
@@ -8,6 +9,72 @@ using Typhon.Shell.Extensibility;
 using ResourceNode = Typhon.ARPG.Schema.ResourceNode;
 
 namespace Typhon.ARPG.Shell;
+
+// ── ARPG Archetypes ──────────────────────────────────────────────────
+// IDs 400+ to avoid collisions with test archetypes (200-356) and engine archetypes (100-101)
+
+[Archetype(400)]
+class CharacterArch : Archetype<CharacterArch>
+{
+    public static readonly Comp<CharacterStats> Stats = Register<CharacterStats>();
+    public static readonly Comp<PlayerMetadata> Meta = Register<PlayerMetadata>();
+}
+
+[Archetype(401)]
+class EquipmentArch : Archetype<EquipmentArch>
+{
+    public static readonly Comp<Equipment> Equip = Register<Equipment>();
+}
+
+[Archetype(402)]
+class ActiveSkillsArch : Archetype<ActiveSkillsArch>
+{
+    public static readonly Comp<ActiveSkills> Skills = Register<ActiveSkills>();
+}
+
+[Archetype(403)]
+class PositionArch : Archetype<PositionArch>
+{
+    public static readonly Comp<Position> Pos = Register<Position>();
+}
+
+[Archetype(404)]
+class ResourceNodeArch : Archetype<ResourceNodeArch>
+{
+    public static readonly Comp<ResourceNode> Node = Register<ResourceNode>();
+}
+
+[Archetype(405)]
+class ItemDataArch : Archetype<ItemDataArch>
+{
+    public static readonly Comp<ItemData> Item = Register<ItemData>();
+}
+
+[Archetype(406)]
+class MonsterArch : Archetype<MonsterArch>
+{
+    public static readonly Comp<CharacterStats> Stats = Register<CharacterStats>();
+    public static readonly Comp<CombatStats> Combat = Register<CombatStats>();
+}
+
+[Archetype(407)]
+class MonsterAIArch : Archetype<MonsterAIArch>
+{
+    public static readonly Comp<MonsterAI> AI = Register<MonsterAI>();
+    public static readonly Comp<Position> Pos = Register<Position>();
+}
+
+[Archetype(408)]
+class CraftingRecipeArch : Archetype<CraftingRecipeArch>
+{
+    public static readonly Comp<CraftingRecipe> Recipe = Register<CraftingRecipe>();
+}
+
+[Archetype(409)]
+class CraftingStationArch : Archetype<CraftingStationArch>
+{
+    public static readonly Comp<CraftingStation> Station = Register<CraftingStation>();
+}
 
 /// <summary>
 /// Shell command that generates ARPG game data with configurable scenarios.
@@ -75,6 +142,19 @@ public sealed class ArpgGenerateCommand : ShellCommand
             }
         }
 
+        // Ensure ARPG archetypes are registered and initialized
+        Archetype<CharacterArch>.Touch();
+        Archetype<EquipmentArch>.Touch();
+        Archetype<ActiveSkillsArch>.Touch();
+        Archetype<PositionArch>.Touch();
+        Archetype<ResourceNodeArch>.Touch();
+        Archetype<ItemDataArch>.Touch();
+        Archetype<MonsterArch>.Touch();
+        Archetype<MonsterAIArch>.Touch();
+        Archetype<CraftingRecipeArch>.Touch();
+        Archetype<CraftingStationArch>.Touch();
+        context.Engine.InitializeArchetypes();
+
         var sw = Stopwatch.StartNew();
 
         try
@@ -124,15 +204,15 @@ public sealed class ArpgGenerateCommand : ShellCommand
                 var level = rng.Next(1, 100);
                 var stats = MakeCharacterStats(rng, level);
                 var meta = MakePlayerMetadata(rng, level);
-                tx.CreateEntity(ref stats, ref meta);
+                tx.Spawn<CharacterArch>(CharacterArch.Stats.Set(in stats), CharacterArch.Meta.Set(in meta));
 
                 // Equipment (separate entity — different archetype)
                 var equip = MakeEquipment(rng);
-                tx.CreateEntity(ref equip);
+                tx.Spawn<EquipmentArch>(EquipmentArch.Equip.Set(in equip));
 
                 // Active skills
                 var skills = MakeActiveSkills(rng, level);
-                tx.CreateEntity(ref skills);
+                tx.Spawn<ActiveSkillsArch>(ActiveSkillsArch.Skills.Set(in skills));
 
                 var uowCtx = uow.CreateContext();
                 tx.Commit(ref uowCtx);
@@ -163,12 +243,12 @@ public sealed class ArpgGenerateCommand : ShellCommand
                 if (rng.Next(100) < 60)
                 {
                     var pos = MakePosition(rng, zoneId);
-                    tx.CreateEntity(ref pos);
+                    tx.Spawn<PositionArch>(PositionArch.Pos.Set(in pos));
                 }
                 else
                 {
                     var node = MakeResourceNode(rng);
-                    tx.CreateEntity(ref node);
+                    tx.Spawn<ResourceNodeArch>(ResourceNodeArch.Node.Set(in node));
                 }
 
                 var uowCtx = uow.CreateContext();
@@ -199,7 +279,7 @@ public sealed class ArpgGenerateCommand : ShellCommand
                 var item = MakeItemData(rng, rarity);
 
                 // AllowMultiple (affixes) retired — create base entity only
-                tx.CreateEntity(ref item);
+                tx.Spawn<ItemDataArch>(ItemDataArch.Item.Set(in item));
 
                 entities++;
             }
@@ -227,15 +307,15 @@ public sealed class ArpgGenerateCommand : ShellCommand
                 var tx = uow.CreateTransaction();
                 var level = rng.Next(1, 100);
 
-                // Monster: CharacterStats + CombatStats (2-component overload)
+                // Monster: CharacterStats + CombatStats
                 var stats = MakeMonsterStats(rng, level);
                 var combat = MakeCombatStats(rng, level);
-                tx.CreateEntity(ref stats, ref combat);
+                tx.Spawn<MonsterArch>(MonsterArch.Stats.Set(in stats), MonsterArch.Combat.Set(in combat));
 
-                // MonsterAI + Position (2-component overload, separate entity)
+                // MonsterAI + Position (separate entity)
                 var ai = MakeMonsterAI(rng, level);
                 var pos = MakePosition(rng, rng.Next(1, 20));
-                tx.CreateEntity(ref ai, ref pos);
+                tx.Spawn<MonsterAIArch>(MonsterAIArch.AI.Set(in ai), MonsterAIArch.Pos.Set(in pos));
 
                 var uowCtx = uow.CreateContext();
                 tx.Commit(ref uowCtx);
@@ -264,7 +344,7 @@ public sealed class ArpgGenerateCommand : ShellCommand
             {
                 var tx = uow.CreateTransaction();
                 var recipe = MakeCraftingRecipe(rng, batch + i);
-                tx.CreateEntity(ref recipe);
+                tx.Spawn<CraftingRecipeArch>(CraftingRecipeArch.Recipe.Set(in recipe));
 
                 var uowCtx = uow.CreateContext();
                 tx.Commit(ref uowCtx);
@@ -283,7 +363,7 @@ public sealed class ArpgGenerateCommand : ShellCommand
             {
                 var tx = uow.CreateTransaction();
                 var station = MakeCraftingStation(rng);
-                tx.CreateEntity(ref station);
+                tx.Spawn<CraftingStationArch>(CraftingStationArch.Station.Set(in station));
 
                 var uowCtx = uow.CreateContext();
                 tx.Commit(ref uowCtx);

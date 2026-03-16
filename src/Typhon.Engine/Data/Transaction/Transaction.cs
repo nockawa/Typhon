@@ -310,140 +310,8 @@ public unsafe partial class Transaction : IDisposable
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // LEGACY CRUD API — internal only, will be removed after #168
-    // Kept as reference implementation for: revision chains, conflict detection,
-    // WAL serialization, deferred cleanup. New code should use ECS API (Spawn/Open/Destroy).
+    // Component Collections & Enumerators
     // ═══════════════════════════════════════════════════════════════════════
-
-    internal long CreateEntity<T>(ref T t) where T : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-
-        using var activity = TyphonActivitySource.StartActivity("Transaction.CreateEntity");
-        activity?.SetTag(TyphonSpanAttributes.ComponentType, typeof(T).Name);
-
-        var pk = _dbe.GetNewPrimaryKey();
-        activity?.SetTag(TyphonSpanAttributes.EntityId, pk);
-
-        CreateComponent(pk, ref t);
-        return pk;
-    }
-
-    internal long CreateEntity<TC1, TC2>(ref TC1 t, ref TC2 u) where TC1 : unmanaged where TC2 : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-        var pk = _dbe.GetNewPrimaryKey();
-
-        CreateComponent(pk, ref t);
-        CreateComponent(pk, ref u);
-        return pk;
-    }
-
-    internal long CreateEntity<TC1, TC2, TC3>(ref TC1 t, ref TC2 u, ref TC3 v) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-        var pk = _dbe.GetNewPrimaryKey();
-
-        CreateComponent(pk, ref t);
-        CreateComponent(pk, ref u);
-        CreateComponent(pk, ref v);
-        return pk;
-    }
-
-    internal bool ReadEntity<T>(long pk, out T t) where T : unmanaged
-    {
-        using var activity = TyphonActivitySource.StartActivity("Transaction.ReadEntity");
-        activity?.SetTag(TyphonSpanAttributes.EntityId, pk);
-        activity?.SetTag(TyphonSpanAttributes.ComponentType, typeof(T).Name);
-
-        var result = ReadComponent(pk, out t);
-        activity?.SetTag(TyphonSpanAttributes.ReadFound, result);
-        return result;
-    }
-
-    internal bool ReadEntity<TC1, TC2>(long pk, out TC1 t, out TC2 u) where TC1 : unmanaged where TC2 : unmanaged
-    {
-        var res = ReadComponent(pk, out t);
-        res &= ReadComponent(pk, out u);
-        return res;
-    }
-
-    internal bool ReadEntity<TC1, TC2, TC3>(long pk, out TC1 t, out TC2 u, out TC3 v) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
-    {
-        var res = ReadComponent(pk, out t);
-        res &= ReadComponent(pk, out u);
-        res &= ReadComponent(pk, out v);
-        return res;
-    }
-
-    internal bool UpdateEntity<T>(long pk, ref T t) where T : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-
-        using var activity = TyphonActivitySource.StartActivity("Transaction.UpdateEntity");
-        activity?.SetTag(TyphonSpanAttributes.EntityId, pk);
-        activity?.SetTag(TyphonSpanAttributes.ComponentType, typeof(T).Name);
-
-        return UpdateComponent(pk, ref t);
-    }
-
-    internal bool UpdateEntity<TC1, TC2>(long pk, ref TC1 t, ref TC2 u) where TC1 : unmanaged where TC2 : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-
-        var res = UpdateComponent(pk, ref t);
-        res &= UpdateComponent(pk, ref u);
-        return res;
-    }
-
-    internal bool UpdateEntity<TC1, TC2, TC3>(long pk, ref TC1 t, ref TC2 u, ref TC3 v) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-
-        var res = UpdateComponent(pk, ref t);
-        res &= UpdateComponent(pk, ref u);
-        res &= UpdateComponent(pk, ref v);
-        return res;
-    }
-
-    internal bool DeleteEntity<T>(long pk) where T : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-
-        using var activity = TyphonActivitySource.StartActivity("Transaction.DeleteEntity");
-        activity?.SetTag(TyphonSpanAttributes.EntityId, pk);
-        activity?.SetTag(TyphonSpanAttributes.ComponentType, typeof(T).Name);
-
-        return DeleteComponent<T>(pk);
-    }
-
-    internal bool DeleteEntity<TC1, TC2>(long pk) where TC1 : unmanaged where TC2 : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-
-        var res = DeleteComponent<TC1>(pk);
-        res &= DeleteComponent<TC2>(pk);
-        return res;
-    }
-
-    internal bool DeleteEntity<TC1, TC2, TC3>(long pk) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-
-        var res = DeleteComponent<TC1>(pk);
-        res &= DeleteComponent<TC2>(pk);
-        res &= DeleteComponent<TC3>(pk);
-        return res;
-    }
 
     public ComponentCollectionAccessor<T> CreateComponentCollectionAccessor<T>(ref ComponentCollection<T> field) where T : unmanaged
     {
@@ -950,47 +818,11 @@ public unsafe partial class Transaction : IDisposable
         FlushAndRefreshEpoch();
     }
 
-    private void CreateComponent<T>(long pk, ref T comp) where T : unmanaged
-    {
-        AssertThreadAffinity();
-        var componentType = typeof(T);
-
-        // Fetch the cached info or create it if it's the first time we've operated on this Component type
-        _dbe.LogCommitCreateComponent(TSN, componentType.Name, pk, "GetComponentInfo");
-        var info = GetComponentInfo(componentType);
-
-        // Allocate the chunk that will store the component's chunk
-        _dbe.LogCommitCreateComponent(TSN, componentType.Name, pk, "AllocateChunk");
-        var componentChunkId = info.CompContentSegment.AllocateChunk(false, _changeSet);
-
-        // Allocate the component revision storage as it's a new component
-        _dbe.LogCommitCreateComponent(TSN, componentType.Name, pk, "AllocCompRevStorage");
-        var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, componentChunkId, pk);
-
-        var entry = new ComponentInfo.CompRevInfo
-        {
-            Operations = ComponentInfo.OperationType.Created,
-            PrevCompContentChunkId = 0,
-            PrevRevisionIndex = -1,
-            CurCompContentChunkId = componentChunkId,
-            CompRevTableFirstChunkId = compRevChunkId,
-            CurRevisionIndex = 0,
-            ReadCommitSequence = 1,
-            ReadRevisionIndex = 0
-        };
-
-        info.AddNew(pk, entry);
-
-        // Copy the component data
-        _dbe.LogCommitCreateComponent(TSN, componentType.Name, pk, "GetChunkAsSpan");
-        int compSize = info.ComponentTable.ComponentStorageSize;
-        var dst = info.CompContentAccessor.GetChunkAsSpan(componentChunkId, true);
-        new Span<byte>(Unsafe.AsPointer(ref comp), compSize).CopyTo(dst.Slice(info.ComponentTable.ComponentOverhead));
-
-        CheckEpochRefresh();
-    }
-
-    private bool ReadComponent<T>(long pk, out T t) where T : unmanaged
+    /// <summary>
+    /// Read a component by PK from the ComponentTable revision chain. Used by the query engine for predicate evaluation.
+    /// Performs MVCC-visible revision walk — more efficient than Open().Read() for single-component access because it doesn't resolve all archetype slots.
+    /// </summary>
+    internal bool ReadComponent<T>(long pk, out T t) where T : unmanaged
     {
         AssertThreadAffinity();
         var componentType = typeof(T);
@@ -1031,94 +863,41 @@ public unsafe partial class Transaction : IDisposable
         return true;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool DeleteComponent<T>(long pk) where T : unmanaged => UpdateComponent(pk, ref Unsafe.NullRef<T>());
-
-    private bool UpdateComponent<T>(long pk, ref T comp) where T : unmanaged
+    /// <summary>
+    /// Write a component by PK. Reconstructs EntityId from the raw PK, opens the entity for mutation, and writes the component data. Used by the Shell CLI
+    /// via reflection.
+    /// </summary>
+    internal bool WriteComponent<T>(long pk, ref T comp) where T : unmanaged
     {
-        AssertThreadAffinity();
-        var componentType = typeof(T);
-        var isDelete = Unsafe.IsNullRef(ref comp);
-        
-        // Fetch the cached info or create it if it's the first time we operate on this Component type
-        var info = GetComponentInfo(componentType);
-
-        // Check if the component is in the cache (meaning we already made an operation on it in this transaction)
-        ref var compRevInfo = ref CollectionsMarshal.GetValueRefOrAddDefault(info.SingleCache, pk, out var compRevCached);
-        if (compRevCached)
-        {
-            // Can't update a deleted component...
-            if ((compRevInfo.Operations & ComponentInfo.OperationType.Deleted) == ComponentInfo.OperationType.Deleted)
-            {
-                return false;
-            }
-
-            // Check if we need to delete a component we previously added
-            if (isDelete && (compRevInfo.CurCompContentChunkId != 0))
-            {
-                info.CompContentSegment.FreeChunk(compRevInfo.CurCompContentChunkId);
-                compRevInfo.CurCompContentChunkId = 0;
-            }
-        }
-
-        // No component in cache
-        else
-        {
-            // Fetch the cache by getting the revision closest to the transaction tick, if we fail it means there's no revision, so no component for this
-            //  PK, we return false
-            var result = GetCompRevInfoFromIndex(pk, info, TSN);
-            if (result.Status == RevisionReadStatus.NotFound || result.Status == RevisionReadStatus.SnapshotInvisible)
-            {
-                // Remove the default entry that GetValueRefOrAddDefault added to avoid leaving
-                // a zombie CompRevInfo (all zeros) that would corrupt subsequent operations on
-                // the same PK within this transaction.
-                info.SingleCache.Remove(pk);
-                return false;
-            }
-            compRevInfo = result.Value; // Works for both Success AND Deleted (3-arg constructor)
-        }
-
-        // Update the operation types
-        compRevInfo.Operations |= (isDelete ? ComponentInfo.OperationType.Deleted : ComponentInfo.OperationType.Updated);
-
-        // First mutating operation on this component in this transaction: create a new component version
-        if ((!compRevCached) || ((compRevInfo.Operations & ComponentInfo.OperationType.Read) != 0))
-        {
-            // Add a new component version for the current component, if there is no data, it means we are deleting the component, we still
-            //  need to add a new version with an empty CurCompContentChunkId
-            ComponentRevisionManager.AddCompRev(info, ref compRevInfo, TSN, UowId, isDelete);
-        }
-
-        // Set up the component header
-        if (!isDelete)
-        {
-            // Copy the component data
-            int componentSize = info.ComponentTable.ComponentStorageSize;
-            var src = new Span<byte>(Unsafe.AsPointer(ref comp), componentSize);
-            var dst = info.CompContentAccessor.GetChunkAsSpan(compRevInfo.CurCompContentChunkId, true).Slice(info.ComponentTable.ComponentOverhead);
-            src.CopyTo(dst);
-
-            // If the component has collections, update the RefCounter of unchanged ones
-            var ct = info.ComponentTable;
-            if (ct.HasCollections)
-            {
-                foreach (var kvp in ct.ComponentCollectionVSBSByOffset)
-                {
-                    var offsetToCollectionField = kvp.Key;
-                    var srcBufferId = src.Slice(offsetToCollectionField).Cast<byte, int>()[0];
-                    var dstBufferId = dst.Slice(offsetToCollectionField).Cast<byte, int>()[0];
-                    if (srcBufferId == dstBufferId)
-                    {
-                        var accessor = kvp.Value.Segment.CreateChunkAccessor(_changeSet);
-                        kvp.Value.BufferAddRef(srcBufferId, ref accessor);
-                        accessor.Dispose();
-                    }
-                }
-            }
-        }
-
-        CheckEpochRefresh();
+        var entityId = Unsafe.As<long, EntityId>(ref pk);
+        var entity = OpenMut(entityId);
+        ref var target = ref entity.Write<T>();
+        target = comp;
         return true;
+    }
+
+    /// <summary>
+    /// Destroy an entity by PK. Reconstructs EntityId from the raw PK. Used by the Shell CLI via reflection.
+    /// </summary>
+    internal void DestroyByPK(long pk)
+    {
+        var entityId = Unsafe.As<long, EntityId>(ref pk);
+        Destroy(entityId);
+    }
+
+    /// <summary>
+    /// Spawn an entity using an archetype ID (non-generic). Enables reflection-based callers (Shell CLI) to create entities without compile-time archetype
+    /// type parameters.
+    /// </summary>
+    internal EntityId SpawnByArchetypeId(ushort archetypeId, params ComponentValue[] values)
+    {
+        var meta = ArchetypeRegistry.GetMetadata(archetypeId);
+        if (meta == null)
+        {
+            throw new InvalidOperationException($"Archetype ID {archetypeId} not registered");
+        }
+        // Delegate to the core Spawn logic (shared with Spawn<TArch>)
+        return SpawnInternal(meta, values);
     }
 
     private Result<int, BTreeLookupStatus> GetCompRevTableFirstChunkId(long pk, ComponentInfo info)

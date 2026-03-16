@@ -30,21 +30,19 @@ internal sealed class CommandExecutor
     private readonly List<string> _history = [];
 
     // Cached reflection method infos for generic Transaction methods
-    private static readonly MethodInfo CreateEntityMethod = typeof(Transaction)
-        .GetMethods(BindingFlags.Public | BindingFlags.Instance)
-        .First(m => m.Name == "CreateEntity" && m.GetGenericArguments().Length == 1 && m.GetParameters().Length == 1);
+    private static readonly MethodInfo ReadComponentMethod = typeof(Transaction)
+        .GetMethods(BindingFlags.NonPublic | BindingFlags.Instance)
+        .First(m => m.Name == "ReadComponent" && m.GetGenericArguments().Length == 1 && m.GetParameters().Length == 2);
 
-    private static readonly MethodInfo ReadEntityMethod = typeof(Transaction)
-        .GetMethods(BindingFlags.Public | BindingFlags.Instance)
-        .First(m => m.Name == "ReadEntity" && m.GetGenericArguments().Length == 1 && m.GetParameters().Length == 2);
+    private static readonly MethodInfo WriteComponentMethod = typeof(Transaction)
+        .GetMethods(BindingFlags.NonPublic | BindingFlags.Instance)
+        .First(m => m.Name == "WriteComponent" && m.GetGenericArguments().Length == 1 && m.GetParameters().Length == 2);
 
-    private static readonly MethodInfo UpdateEntityMethod = typeof(Transaction)
-        .GetMethods(BindingFlags.Public | BindingFlags.Instance)
-        .First(m => m.Name == "UpdateEntity" && m.GetGenericArguments().Length == 1 && m.GetParameters().Length == 2);
+    private static readonly MethodInfo SpawnByArchetypeIdMethod = typeof(Transaction)
+        .GetMethod("SpawnByArchetypeId", BindingFlags.NonPublic | BindingFlags.Instance);
 
-    private static readonly MethodInfo DeleteEntityMethod = typeof(Transaction)
-        .GetMethods(BindingFlags.Public | BindingFlags.Instance)
-        .First(m => m.Name == "DeleteEntity" && m.GetGenericArguments().Length == 1 && m.GetParameters().Length == 1);
+    private static readonly MethodInfo DestroyByPKMethod = typeof(Transaction)
+        .GetMethod("DestroyByPK", BindingFlags.NonPublic | BindingFlags.Instance);
 
     public CommandExecutor(ShellSession session)
     {
@@ -766,7 +764,7 @@ internal sealed class CommandExecutor
 
         try
         {
-            var deleted = DeleteEntityReflection(tx, entityId, componentType);
+            var deleted = DeleteEntityReflection(tx, entityId);
             if (!deleted)
             {
                 if (isAutoCommit)
@@ -1159,22 +1157,36 @@ internal sealed class CommandExecutor
         ComponentSchema schema,
         IReadOnlyDictionary<string, string> fieldValues)
     {
+        // Discover archetype for this component type
+        var componentTypeId = ArchetypeRegistry.GetComponentTypeId(componentType);
+        if (componentTypeId < 0)
+        {
+            throw new InvalidOperationException($"Component type '{componentType.Name}' has no registered ComponentTypeId. Ensure an archetype is defined.");
+        }
+        var meta = ArchetypeRegistry.FindArchetypeForComponent(componentTypeId);
+        if (meta == null)
+        {
+            throw new InvalidOperationException($"No archetype found containing component '{componentType.Name}'. Define an archetype with this component.");
+        }
+
+        // Build the component struct, populate fields, create ComponentValue from raw bytes
         var instance = Activator.CreateInstance(componentType);
         var handle = GCHandle.Alloc(instance, GCHandleType.Pinned);
+        ComponentValue cv;
         try
         {
             var ptr = (byte*)handle.AddrOfPinnedObject();
             TextToStructConverter.WriteFields(ptr, schema.StructSize, schema, fieldValues);
+            cv = ComponentValue.CreateFromRaw(componentTypeId, ptr, schema.StructSize);
         }
         finally
         {
             handle.Free();
         }
 
-        var method = CreateEntityMethod.MakeGenericMethod(componentType);
-        var args = new[] { instance };
-        var entityId = (long)method.Invoke(tx, args);
-        return entityId;
+        // Spawn via non-generic overload
+        var entityId = (EntityId)SpawnByArchetypeIdMethod.Invoke(tx, [meta.ArchetypeId, new[] { cv }])!;
+        return (long)entityId.RawValue;
     }
 
     private static unsafe IReadOnlyDictionary<string, object> ReadEntityReflection(
@@ -1185,9 +1197,9 @@ internal sealed class CommandExecutor
         out bool found)
     {
         var instance = Activator.CreateInstance(componentType);
-        var method = ReadEntityMethod.MakeGenericMethod(componentType);
+        var method = ReadComponentMethod.MakeGenericMethod(componentType);
         var args = new[] { entityId, instance };
-        found = (bool)method.Invoke(tx, args);
+        found = (bool)method.Invoke(tx, args)!;
 
         if (!found)
         {
@@ -1216,9 +1228,9 @@ internal sealed class CommandExecutor
     {
         // Step 1: Read current values
         var instance = Activator.CreateInstance(componentType);
-        var readMethod = ReadEntityMethod.MakeGenericMethod(componentType);
+        var readMethod = ReadComponentMethod.MakeGenericMethod(componentType);
         var readArgs = new[] { entityId, instance };
-        var found = (bool)readMethod.Invoke(tx, readArgs);
+        var found = (bool)readMethod.Invoke(tx, readArgs)!;
 
         if (!found)
         {
@@ -1238,17 +1250,16 @@ internal sealed class CommandExecutor
             handle.Free();
         }
 
-        // Step 3: Write updated struct back
-        var updateMethod = UpdateEntityMethod.MakeGenericMethod(componentType);
-        var updateArgs = new[] { entityId, instance };
-        return (bool)updateMethod.Invoke(tx, updateArgs);
+        // Write updated struct back via ECS WriteComponent
+        var writeMethod = WriteComponentMethod.MakeGenericMethod(componentType);
+        var writeArgs = new[] { entityId, instance };
+        return (bool)writeMethod.Invoke(tx, writeArgs)!;
     }
 
-    private static bool DeleteEntityReflection(Transaction tx, long entityId, Type componentType)
+    private static bool DeleteEntityReflection(Transaction tx, long entityId)
     {
-        var method = DeleteEntityMethod.MakeGenericMethod(componentType);
-        var args = new object[] { entityId };
-        return (bool)method.Invoke(tx, args);
+        DestroyByPKMethod.Invoke(tx, [entityId]);
+        return true;
     }
 
     // ── Helpers ────────────────────────────────────────────────

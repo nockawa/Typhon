@@ -137,19 +137,19 @@ unsafe class SchemaVersioningTests : TestBase<SchemaVersioningTests>
             }
 
             var table = dbe.GetComponentTable<ArchetypeR1>();
-            using var tx = dbe.CreateQuickTransaction();
 
             // Find and tamper with the EcsUnit record (ArchetypeId = 100)
+            var cs = dbe.MMF.CreateChangeSet();
             foreach (var kv in table.PrimaryKeyIndex.EnumerateLeaves())
             {
-                if (tx.ReadEntity<ArchetypeR1>(kv.Key, out var arch) && arch.ArchetypeId == 100)
+                if (SystemCrud.Read(table, kv.Key, out ArchetypeR1 arch, dbe.EpochManager) && arch.ArchetypeId == 100)
                 {
                     arch.ComponentCount = 99; // corrupt it
-                    tx.UpdateEntity(kv.Key, ref arch);
+                    SystemCrud.Update(table, kv.Key, ref arch, dbe.EpochManager, cs);
                     break;
                 }
             }
-            tx.Commit();
+            cs.SaveChanges();
         }
 
         // Phase 2: Reopen with real schema — validation should detect mismatch and throw
@@ -194,18 +194,19 @@ unsafe class SchemaVersioningTests : TestBase<SchemaVersioningTests>
             }
 
             var table = dbe.GetComponentTable<ArchetypeR1>();
-            using var tx = dbe.CreateQuickTransaction();
 
+            // Corrupt the revision number
+            var cs = dbe.MMF.CreateChangeSet();
             foreach (var kv in table.PrimaryKeyIndex.EnumerateLeaves())
             {
-                if (tx.ReadEntity<ArchetypeR1>(kv.Key, out var arch) && arch.ArchetypeId == 100)
+                if (SystemCrud.Read(table, kv.Key, out ArchetypeR1 arch, dbe.EpochManager) && arch.ArchetypeId == 100)
                 {
                     arch.Revision = 999; // corrupt it
-                    tx.UpdateEntity(kv.Key, ref arch);
+                    SystemCrud.Update(table, kv.Key, ref arch, dbe.EpochManager, cs);
                     break;
                 }
             }
-            tx.Commit();
+            cs.SaveChanges();
         }
 
         // Phase 2: Validation should throw

@@ -12,8 +12,8 @@ public class MixedWorkloadScenario : IScenario
     public string Name => "Mixed Workload";
     public string Description => "Factory + RPG simultaneously. Tests mixed component types and isolation.";
 
-    private readonly List<long> _factoryIds = [];
-    private readonly List<long> _characterIds = [];
+    private readonly List<EntityId> _factoryIds = [];
+    private readonly List<EntityId> _characterIds = [];
 
     public async Task RunAsync(TyphonContext context, ScenarioConfig config, ScenarioStats stats, CancellationToken ct)
     {
@@ -53,7 +53,7 @@ public class MixedWorkloadScenario : IScenario
                             if (opType < 30)
                             {
                                 var building = FactoryBuilding.Create(localRand, localRand.Next(0, 5));
-                                var id = t.CreateEntity(ref building);
+                                var id = t.Spawn<FactoryBuildingArch>(FactoryBuildingArch.Building.Set(in building));
                                 lock (_factoryIds)
                                 {
                                     _factoryIds.Add(id);
@@ -62,16 +62,17 @@ public class MixedWorkloadScenario : IScenario
                             else if (opType < 70 && _factoryIds.Count > 0)
                             {
                                 var id = _factoryIds[localRand.Next(_factoryIds.Count)];
-                                if (t.ReadEntity<FactoryBuilding>(id, out var building))
+                                if (t.TryOpen(id, out var entity))
                                 {
-                                    building.Progress = (building.Progress + 0.05f) % 1.0f;
-                                    t.UpdateEntity(id, ref building);
+                                    var building = entity.Read(FactoryBuildingArch.Building);
+                                    ref var wb = ref t.OpenMut(id).Write(FactoryBuildingArch.Building);
+                                    wb.Progress = (building.Progress + 0.05f) % 1.0f;
                                 }
                             }
                             else if (_factoryIds.Count > 0)
                             {
                                 var id = _factoryIds[localRand.Next(_factoryIds.Count)];
-                                t.ReadEntity<FactoryBuilding>(id, out _);
+                                t.TryOpen(id, out _);
                             }
 
                             stats.RecordSuccess((Stopwatch.GetTimestamp() - sw) * 1_000_000 / Stopwatch.Frequency);
@@ -123,7 +124,7 @@ public class MixedWorkloadScenario : IScenario
                             {
                                 var names = new[] { "Warrior", "Mage", "Rogue", "Paladin" };
                                 var character = Character.Create(localRand, names[localRand.Next(names.Length)], localRand.Next(2) == 0);
-                                var id = t.CreateEntity(ref character);
+                                var id = t.Spawn<CharacterArch>(CharacterArch.Character.Set(in character));
                                 lock (_characterIds)
                                 {
                                     _characterIds.Add(id);
@@ -132,17 +133,18 @@ public class MixedWorkloadScenario : IScenario
                             else if (opType < 70 && _characterIds.Count > 0)
                             {
                                 var id = _characterIds[localRand.Next(_characterIds.Count)];
-                                if (t.ReadEntity<Character>(id, out var character))
+                                if (t.TryOpen(id, out var entity))
                                 {
-                                    character.Health = Math.Min(character.MaxHealth, character.Health + localRand.Next(-20, 30));
-                                    character.Experience += localRand.Next(10, 100);
-                                    t.UpdateEntity(id, ref character);
+                                    var character = entity.Read(CharacterArch.Character);
+                                    ref var wc = ref t.OpenMut(id).Write(CharacterArch.Character);
+                                    wc.Health = Math.Min(character.MaxHealth, character.Health + localRand.Next(-20, 30));
+                                    wc.Experience = character.Experience + localRand.Next(10, 100);
                                 }
                             }
                             else if (_characterIds.Count > 0)
                             {
                                 var id = _characterIds[localRand.Next(_characterIds.Count)];
-                                t.ReadEntity<Character>(id, out _);
+                                t.TryOpen(id, out _);
                             }
 
                             stats.RecordSuccess((Stopwatch.GetTimestamp() - sw) * 1_000_000 / Stopwatch.Frequency);
@@ -181,7 +183,7 @@ public class MixedWorkloadScenario : IScenario
         for (var i = 0; i < 30 && !ct.IsCancellationRequested; i++)
         {
             var building = FactoryBuilding.Create(rand, rand.Next(0, 5));
-            var id = t.CreateEntity(ref building);
+            var id = t.Spawn<FactoryBuildingArch>(FactoryBuildingArch.Building.Set(in building));
             _factoryIds.Add(id);
         }
 
@@ -190,7 +192,7 @@ public class MixedWorkloadScenario : IScenario
         for (var i = 0; i < 30 && !ct.IsCancellationRequested; i++)
         {
             var character = Character.Create(rand, names[rand.Next(names.Length)], i > 10);
-            var id = t.CreateEntity(ref character);
+            var id = t.Spawn<CharacterArch>(CharacterArch.Character.Set(in character));
             _characterIds.Add(id);
         }
 
@@ -208,7 +210,7 @@ public class HighContentionScenario : IScenario
     public string Name => "High Contention";
     public string Description => "Multiple workers updating same entities. Stress tests locking and MVCC.";
 
-    private readonly List<long> _hotspotIds = [];
+    private readonly List<EntityId> _hotspotIds = [];
 
     public async Task RunAsync(TyphonContext context, ScenarioConfig config, ScenarioStats stats, CancellationToken ct)
     {
@@ -238,15 +240,16 @@ public class HighContentionScenario : IScenario
                         // Always pick from the small hotspot pool (high contention)
                         var id = _hotspotIds[localRand.Next(_hotspotIds.Count)];
 
-                        if (t.ReadEntity<PowerGrid>(id, out var grid))
+                        if (t.TryOpen(id, out var entity))
                         {
+                            var grid = entity.Read(PowerGridArch.Grid);
                             // Every worker tries to update power grid stats
-                            grid.Production += (float)(localRand.NextDouble() * 10);
-                            grid.Consumption += (float)(localRand.NextDouble() * 5);
-                            grid.BatteryStored = Math.Min(grid.BatteryCapacity, grid.BatteryStored + (float)(localRand.NextDouble() * 100));
-                            grid.IsOverloaded = grid.Consumption > grid.Production;
+                            ref var wg = ref t.OpenMut(id).Write(PowerGridArch.Grid);
+                            wg.Production = grid.Production + (float)(localRand.NextDouble() * 10);
+                            wg.Consumption = grid.Consumption + (float)(localRand.NextDouble() * 5);
+                            wg.BatteryStored = Math.Min(grid.BatteryCapacity, grid.BatteryStored + (float)(localRand.NextDouble() * 100));
+                            wg.IsOverloaded = wg.Consumption > wg.Production;
 
-                            t.UpdateEntity(id, ref grid);
                             stats.RecordSuccess((Stopwatch.GetTimestamp() - sw) * 1_000_000 / Stopwatch.Frequency);
                         }
                     }
@@ -281,7 +284,7 @@ public class HighContentionScenario : IScenario
         for (var i = 0; i < 5 && !ct.IsCancellationRequested; i++)
         {
             var grid = PowerGrid.Create(rand, i + 1);
-            var id = t.CreateEntity(ref grid);
+            var id = t.Spawn<PowerGridArch>(PowerGridArch.Grid.Set(in grid));
             _hotspotIds.Add(id);
         }
 

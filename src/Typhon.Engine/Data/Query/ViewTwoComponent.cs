@@ -9,30 +9,27 @@ public unsafe class View<T1, T2> : ViewBase where T1 : unmanaged where T2 : unma
     private readonly ViewRegistry _registry1;
     private readonly ViewRegistry _registry2;
     private readonly ComponentTable _componentTable1;
-    private readonly ComponentTable _componentTable2;
     private readonly ComponentTable _planTable;
     private readonly int[] _evalLookupTag0;
     private readonly int[] _evalLookupTag1;
 
-    internal View(FieldEvaluator[] evaluators, ViewRegistry registry1, ViewRegistry registry2, ComponentTable componentTable1, ComponentTable componentTable2,
+    internal View(FieldEvaluator[] evaluators, ViewRegistry registry1, ViewRegistry registry2, ComponentTable componentTable1,
         int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0) :
         base(evaluators, [], componentTable1.DBE.MemoryAllocator, componentTable1, bufferCapacity, baseTSN)
     {
         _registry1 = registry1;
         _registry2 = registry2;
         _componentTable1 = componentTable1;
-        _componentTable2 = componentTable2;
         (_evalLookupTag0, _evalLookupTag1) = BuildEvaluatorLookupByTag(evaluators);
     }
 
-    internal View(FieldEvaluator[] evaluators, ViewRegistry registry1, ViewRegistry registry2, ComponentTable componentTable1, ComponentTable componentTable2,
+    internal View(FieldEvaluator[] evaluators, ViewRegistry registry1, ViewRegistry registry2, ComponentTable componentTable1,
         ExecutionPlan plan, ComponentTable planTable, int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity, long baseTSN = 0) :
         base(evaluators, [], componentTable1.DBE.MemoryAllocator, componentTable1, [plan], bufferCapacity, baseTSN)
     {
         _registry1 = registry1;
         _registry2 = registry2;
         _componentTable1 = componentTable1;
-        _componentTable2 = componentTable2;
         _planTable = planTable;
         (_evalLookupTag0, _evalLookupTag1) = BuildEvaluatorLookupByTag(evaluators);
     }
@@ -104,7 +101,7 @@ public unsafe class View<T1, T2> : ViewBase where T1 : unmanaged where T2 : unma
             var pkIndex = _componentTable1.PrimaryKeyIndex;
             foreach (var kv in pkIndex.EnumerateLeaves())
             {
-                if (tx.ReadEntity<T1>(kv.Key, out var comp1) && tx.ReadEntity<T2>(kv.Key, out var comp2))
+                if (tx.ReadComponent<T1>(kv.Key, out var comp1) && tx.ReadComponent<T2>(kv.Key, out var comp2))
                 {
                     if (EvaluateAllFields(ref comp1, ref comp2))
                     {
@@ -185,8 +182,8 @@ public unsafe class View<T1, T2> : ViewBase where T1 : unmanaged where T2 : unma
         var read2 = false;
         // ReSharper disable TooWideLocalVariableScope
         // ReSharper disable InlineOutVariableDeclaration
-        T1 comp1 = default;
-        T2 comp2 = default;
+        T1 comp1;
+        T2 comp2;
         // ReSharper restore InlineOutVariableDeclaration
         // ReSharper restore TooWideLocalVariableScope
 
@@ -202,7 +199,7 @@ public unsafe class View<T1, T2> : ViewBase where T1 : unmanaged where T2 : unma
             {
                 if (!read1)
                 {
-                    if (!tx.ReadEntity(pk, out comp1))
+                    if (!tx.ReadComponent(pk, out comp1))
                     {
                         return false;
                     }
@@ -218,7 +215,7 @@ public unsafe class View<T1, T2> : ViewBase where T1 : unmanaged where T2 : unma
             {
                 if (!read2)
                 {
-                    if (!tx.ReadEntity(pk, out comp2))
+                    if (!tx.ReadComponent(pk, out comp2))
                     {
                         return false;
                     }

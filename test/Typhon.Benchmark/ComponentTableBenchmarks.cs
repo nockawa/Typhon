@@ -10,7 +10,7 @@ using Typhon.Schema.Definition;
 namespace Typhon.Benchmark;
 
 // ═══════════════════════════════════════════════════════════════════════
-// Data: ComponentTable / Entity CRUD Microbenchmarks
+// Data: ComponentTable / Entity ECS Microbenchmarks
 // ═══════════════════════════════════════════════════════════════════════
 
 [Component("Typhon.Benchmark.DataBenchComp", 1)]
@@ -24,6 +24,12 @@ public struct DataBenchComp
     public long Timestamp;
 }
 
+[Archetype(500)]
+class DataBenchArch : Archetype<DataBenchArch>
+{
+    public static readonly Comp<DataBenchComp> Data = Register<DataBenchComp>();
+}
+
 [SimpleJob(warmupCount: 2, iterationCount: 3)]
 [MemoryDiagnoser]
 [BenchmarkCategory("Data", "Regression")]
@@ -31,7 +37,7 @@ public class ComponentTableBenchmarks
 {
     private ServiceProvider _serviceProvider;
     private DatabaseEngine _dbe;
-    private long[] _entityIds;
+    private EntityId[] _entityIds;
     private string _databaseName;
 
     private const int PrePopulateCount = 500;
@@ -64,13 +70,16 @@ public class ComponentTableBenchmarks
         _dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
         _dbe.RegisterComponentFromAccessor<DataBenchComp>();
 
+        Archetype<DataBenchArch>.Touch();
+        _dbe.InitializeArchetypes();
+
         // Pre-populate entities for read/update benchmarks
-        _entityIds = new long[PrePopulateCount];
+        _entityIds = new EntityId[PrePopulateCount];
         using var t = _dbe.CreateQuickTransaction();
         for (int i = 0; i < PrePopulateCount; i++)
         {
             var comp = new DataBenchComp { Value = i, Timestamp = DateTime.UtcNow.Ticks };
-            _entityIds[i] = t.CreateEntity(ref comp);
+            _entityIds[i] = t.Spawn<DataBenchArch>(DataBenchArch.Data.Set(in comp));
         }
         t.Commit();
     }
@@ -85,7 +94,7 @@ public class ComponentTableBenchmarks
     }
 
     /// <summary>
-    /// Create an entity with a single component in a transaction and commit.
+    /// Spawn an entity with a single component in a transaction and commit.
     /// Measures: transaction creation + entity allocation + B+Tree insert + MVCC version + commit.
     /// </summary>
     [Benchmark]
@@ -93,19 +102,20 @@ public class ComponentTableBenchmarks
     {
         using var t = _dbe.CreateQuickTransaction();
         var comp = new DataBenchComp { Value = 42, Timestamp = 12345 };
-        t.CreateEntity(ref comp);
+        t.Spawn<DataBenchArch>(DataBenchArch.Data.Set(in comp));
         t.Commit();
     }
 
     /// <summary>
     /// Read a component by entity ID in a snapshot transaction.
-    /// Measures: transaction creation + B+Tree lookup + MVCC version resolution.
+    /// Measures: transaction creation + entity resolution + MVCC version resolution.
     /// </summary>
     [Benchmark]
     public void ReadComponent_ById()
     {
         using var t = _dbe.CreateQuickTransaction();
-        t.ReadEntity(_entityIds[0], out DataBenchComp _);
+        var entity = t.Open(_entityIds[0]);
+        _ = entity.Read(DataBenchArch.Data);
     }
 
     /// <summary>
@@ -116,8 +126,10 @@ public class ComponentTableBenchmarks
     public void UpdateComponent_SingleField()
     {
         using var t = _dbe.CreateQuickTransaction();
-        var comp = new DataBenchComp { Value = 9999, Timestamp = DateTime.UtcNow.Ticks };
-        t.UpdateEntity(_entityIds[0], ref comp);
+        var entity = t.OpenMut(_entityIds[0]);
+        ref var comp = ref entity.Write(DataBenchArch.Data);
+        comp.Value = 9999;
+        comp.Timestamp = DateTime.UtcNow.Ticks;
         t.Commit();
     }
 }

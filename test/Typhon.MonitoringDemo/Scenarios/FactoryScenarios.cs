@@ -40,26 +40,26 @@ public class FactoryBootstrapScenario : IScenario
                         {
                             // Create a building
                             var building = FactoryBuilding.Create(localRand, localRand.Next(0, 5));
-                            t.CreateEntity(ref building);
+                            t.Spawn<FactoryBuildingArch>(FactoryBuildingArch.Building.Set(in building));
                         }
                         else if (choice < 60)
                         {
                             // Create a resource node
                             var node = ResourceNode.Create(localRand, localRand.Next(0, 6));
-                            t.CreateEntity(ref node);
+                            t.Spawn<ResourceNodeArch>(ResourceNodeArch.Node.Set(in node));
                         }
                         else if (choice < 80)
                         {
                             // Create a recipe
                             var recipes = new[] { "Iron Plate", "Copper Wire", "Circuit Board", "Steel Beam" };
                             var recipe = Recipe.Create(localRand, recipes[localRand.Next(recipes.Length)], localRand.Next(1, 50));
-                            t.CreateEntity(ref recipe);
+                            t.Spawn<RecipeArch>(RecipeArch.Recipe.Set(in recipe));
                         }
                         else
                         {
                             // Create a power grid
                             var grid = PowerGrid.Create(localRand, localRand.Next(1, 10));
-                            t.CreateEntity(ref grid);
+                            t.Spawn<PowerGridArch>(PowerGridArch.Grid.Set(in grid));
                         }
 
                         stats.RecordSuccess((Stopwatch.GetTimestamp() - sw) * 1_000_000 / Stopwatch.Frequency);
@@ -99,8 +99,8 @@ public class FactoryProductionScenario : IScenario
     public string Name => "Factory Production";
     public string Description => "Updates production progress, item quantities. Heavy UPDATE load.";
 
-    private readonly List<long> _buildingIds = [];
-    private readonly List<long> _itemStackIds = [];
+    private readonly List<EntityId> _buildingIds = [];
+    private readonly List<EntityId> _itemStackIds = [];
 
     public async Task RunAsync(TyphonContext context, ScenarioConfig config, ScenarioStats stats, CancellationToken ct)
     {
@@ -129,12 +129,13 @@ public class FactoryProductionScenario : IScenario
                         {
                             // Update a building's production progress
                             var id = _buildingIds[localRand.Next(_buildingIds.Count)];
-                            if (t.ReadEntity<FactoryBuilding>(id, out var building))
+                            if (t.TryOpen(id, out var entity))
                             {
-                                building.Progress = (building.Progress + 0.1f) % 1.0f;
-                                building.IsActive = localRand.Next(10) > 0;
-                                building.Efficiency = 0.8f + (float)(localRand.NextDouble() * 0.4);
-                                t.UpdateEntity(id, ref building);
+                                var building = entity.Read(FactoryBuildingArch.Building);
+                                ref var wb = ref t.OpenMut(id).Write(FactoryBuildingArch.Building);
+                                wb.Progress = (building.Progress + 0.1f) % 1.0f;
+                                wb.IsActive = localRand.Next(10) > 0;
+                                wb.Efficiency = 0.8f + (float)(localRand.NextDouble() * 0.4);
                                 stats.RecordSuccess((Stopwatch.GetTimestamp() - sw) * 1_000_000 / Stopwatch.Frequency);
                             }
                         }
@@ -142,11 +143,12 @@ public class FactoryProductionScenario : IScenario
                         {
                             // Update item stack quantity
                             var id = _itemStackIds[localRand.Next(_itemStackIds.Count)];
-                            if (t.ReadEntity<ItemStack>(id, out var stack))
+                            if (t.TryOpen(id, out var entity))
                             {
-                                stack.Quantity = Math.Min(stack.MaxStackSize, stack.Quantity + localRand.Next(-5, 10));
-                                stack.Quantity = Math.Max(0, stack.Quantity);
-                                t.UpdateEntity(id, ref stack);
+                                var stack = entity.Read(ItemStackArch.Stack);
+                                ref var ws = ref t.OpenMut(id).Write(ItemStackArch.Stack);
+                                ws.Quantity = Math.Min(stack.MaxStackSize, stack.Quantity + localRand.Next(-5, 10));
+                                ws.Quantity = Math.Max(0, ws.Quantity);
                                 stats.RecordSuccess((Stopwatch.GetTimestamp() - sw) * 1_000_000 / Stopwatch.Frequency);
                             }
                         }
@@ -184,11 +186,11 @@ public class FactoryProductionScenario : IScenario
         for (var i = 0; i < 100 && !ct.IsCancellationRequested; i++)
         {
             var building = FactoryBuilding.Create(rand, rand.Next(0, 5));
-            var id = t.CreateEntity(ref building);
+            var id = t.Spawn<FactoryBuildingArch>(FactoryBuildingArch.Building.Set(in building));
             _buildingIds.Add(id);
 
-            var stack = ItemStack.Create(rand, rand.Next(1, 20), id);
-            var stackId = t.CreateEntity(ref stack);
+            var stack = ItemStack.Create(rand, rand.Next(1, 20), (long)id.RawValue);
+            var stackId = t.Spawn<ItemStackArch>(ItemStackArch.Stack.Set(in stack));
             _itemStackIds.Add(stackId);
         }
 
@@ -206,8 +208,8 @@ public class FactorySupplyChainScenario : IScenario
     public string Name => "Factory Supply Chain";
     public string Description => "Simulates belts, item movement, and logistics queries. Mixed READ/UPDATE.";
 
-    private readonly List<long> _beltIds = [];
-    private readonly List<long> _buildingIds = [];
+    private readonly List<EntityId> _beltIds = [];
+    private readonly List<EntityId> _buildingIds = [];
 
     public async Task RunAsync(TyphonContext context, ScenarioConfig config, ScenarioStats stats, CancellationToken ct)
     {
@@ -238,17 +240,18 @@ public class FactorySupplyChainScenario : IScenario
                         {
                             // Read belt status (logistics query)
                             var id = _beltIds[localRand.Next(_beltIds.Count)];
-                            t.ReadEntity<ConveyorBelt>(id, out _);
+                            t.TryOpen(id, out _);
                             stats.RecordSuccess((Stopwatch.GetTimestamp() - sw) * 1_000_000 / Stopwatch.Frequency);
                         }
                         else if (opType < 70 && _beltIds.Count > 0)
                         {
                             // Update belt item count (item movement)
                             var id = _beltIds[localRand.Next(_beltIds.Count)];
-                            if (t.ReadEntity<ConveyorBelt>(id, out var belt))
+                            if (t.TryOpen(id, out var entity))
                             {
-                                belt.ItemCount = Math.Max(0, belt.ItemCount + localRand.Next(-3, 5));
-                                t.UpdateEntity(id, ref belt);
+                                var belt = entity.Read(ConveyorBeltArch.Belt);
+                                ref var wb = ref t.OpenMut(id).Write(ConveyorBeltArch.Belt);
+                                wb.ItemCount = Math.Max(0, belt.ItemCount + localRand.Next(-3, 5));
                                 stats.RecordSuccess((Stopwatch.GetTimestamp() - sw) * 1_000_000 / Stopwatch.Frequency);
                             }
                         }
@@ -256,7 +259,7 @@ public class FactorySupplyChainScenario : IScenario
                         {
                             // Read building for supply check
                             var id = _buildingIds[localRand.Next(_buildingIds.Count)];
-                            t.ReadEntity<FactoryBuilding>(id, out _);
+                            t.TryOpen(id, out _);
                             stats.RecordSuccess((Stopwatch.GetTimestamp() - sw) * 1_000_000 / Stopwatch.Frequency);
                         }
                         else
@@ -266,8 +269,8 @@ public class FactorySupplyChainScenario : IScenario
                             {
                                 var src = _buildingIds[localRand.Next(_buildingIds.Count)];
                                 var dst = _buildingIds[localRand.Next(_buildingIds.Count)];
-                                var belt = ConveyorBelt.Create(localRand, localRand.Next(0, 5), src, dst);
-                                var id = t.CreateEntity(ref belt);
+                                var belt = ConveyorBelt.Create(localRand, localRand.Next(0, 5), (long)src.RawValue, (long)dst.RawValue);
+                                var id = t.Spawn<ConveyorBeltArch>(ConveyorBeltArch.Belt.Set(in belt));
                                 lock (_beltIds)
                                 {
                                     _beltIds.Add(id);
@@ -309,7 +312,7 @@ public class FactorySupplyChainScenario : IScenario
         for (var i = 0; i < 50 && !ct.IsCancellationRequested; i++)
         {
             var building = FactoryBuilding.Create(rand, rand.Next(0, 5));
-            var id = t.CreateEntity(ref building);
+            var id = t.Spawn<FactoryBuildingArch>(FactoryBuildingArch.Building.Set(in building));
             _buildingIds.Add(id);
         }
 
@@ -318,8 +321,8 @@ public class FactorySupplyChainScenario : IScenario
         {
             var src = _buildingIds[rand.Next(_buildingIds.Count)];
             var dst = _buildingIds[rand.Next(_buildingIds.Count)];
-            var belt = ConveyorBelt.Create(rand, rand.Next(0, 5), src, dst);
-            var id = t.CreateEntity(ref belt);
+            var belt = ConveyorBelt.Create(rand, rand.Next(0, 5), (long)src.RawValue, (long)dst.RawValue);
+            var id = t.Spawn<ConveyorBeltArch>(ConveyorBeltArch.Belt.Set(in belt));
             _beltIds.Add(id);
         }
 

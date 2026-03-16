@@ -484,8 +484,7 @@ class TransactionTests : TestBase<TransactionTests>
         // Verify entity is no longer readable
         {
             using var t = dbe.CreateQuickTransaction();
-            var readable = t.ReadEntity((long)e1.RawValue, out CompA _);
-            Assert.That(readable, Is.False, "Entity should not be readable after deletion");
+            Assert.That(t.IsAlive(e1), Is.False, "Entity should not be readable after deletion");
         }
 
         // Check primary key index - entry should be removed after cleanup
@@ -563,8 +562,7 @@ class TransactionTests : TestBase<TransactionTests>
         // Verify entity is not readable
         {
             using var t = dbe.CreateQuickTransaction();
-            var readable = t.ReadEntity((long)e1.RawValue, out CompA _);
-            Assert.That(readable, Is.False, "Entity should not be readable after deletion");
+            Assert.That(t.IsAlive(e1), Is.False, "Entity should not be readable after deletion");
         }
 
         // Flush deferred cleanup so deletion removes the PK index entry
@@ -731,8 +729,7 @@ class TransactionTests : TestBase<TransactionTests>
         for (int i = 0; i < 5; i += 2)
         {
             using var t = dbe.CreateQuickTransaction();
-            var readable = t.ReadEntity((long)entityIds[i].RawValue, out CompA _);
-            Assert.That(readable, Is.False, $"Entity {i} should not be readable after deletion");
+            Assert.That(t.IsAlive(entityIds[i]), Is.False, $"Entity {i} should not be readable after deletion");
         }
 
         // Verify remaining entities are still readable
@@ -925,7 +922,7 @@ class TransactionTests : TestBase<TransactionTests>
 
             // ReadEntity after rollback: no state guard — entity was rolled back so read finds nothing
             // Note: uses legacy ReadEntity because ECS TryOpen still sees the pending spawn on the same transaction
-            var readResult = t.ReadEntity((long)e2.RawValue, out CompA _);
+            var readResult = t.ReadComponent((long)e2.RawValue, out CompA _);
             Assert.That(readResult, Is.False, "ReadEntity after rollback — rolled-back entity should not be found");
 
             Assert.That(t.State, Is.EqualTo(Transaction.TransactionState.Rollbacked), "State should remain Rollbacked throughout");

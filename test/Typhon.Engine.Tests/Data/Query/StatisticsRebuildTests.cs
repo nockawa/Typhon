@@ -22,6 +22,12 @@ public struct CompStr64
     }
 }
 
+[Archetype(211)]
+class CompStr64Arch : Archetype<CompStr64Arch>
+{
+    public static readonly Comp<CompStr64> Str64 = Register<CompStr64>();
+}
+
 class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
 {
     [OneTimeSetUp]
@@ -29,6 +35,9 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         Archetype<CompDArch>.Touch();
         Archetype<CompFArch>.Touch();
+        Archetype<CompStr64Arch>.Touch();
+        Archetype<CompGuildArch>.Touch();
+        Archetype<CompPlayerArch>.Touch();
     }
 
     private static void CreateAndCommitCompD(DatabaseEngine dbe, float a, int b, double c)
@@ -334,8 +343,8 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
-        dbe.InitializeArchetypes();
         dbe.RegisterComponentFromAccessor<CompStr64>();
+        dbe.InitializeArchetypes();
 
         var ct = dbe.GetComponentTable<CompStr64>();
 
@@ -344,7 +353,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
         {
             using var t = dbe.CreateQuickTransaction();
             var c = new CompStr64($"name_{i}", i);
-            t.CreateEntity(ref c);
+            t.Spawn<CompStr64Arch>(CompStr64Arch.Str64.Set(in c));
             t.Commit();
         }
 
@@ -362,8 +371,8 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
-        dbe.InitializeArchetypes();
         dbe.RegisterComponentFromAccessor<CompStr64>();
+        dbe.InitializeArchetypes();
 
         var ctStr = dbe.GetComponentTable<CompStr64>();
         var ctD = dbe.GetComponentTable<CompD>();
@@ -373,7 +382,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
         {
             using var t = dbe.CreateQuickTransaction();
             var s = new CompStr64($"name_{i}", i);
-            t.CreateEntity(ref s);
+            t.Spawn<CompStr64Arch>(CompStr64Arch.Str64.Set(in s));
             t.Commit();
         }
         for (int i = 0; i < 100; i++)
@@ -456,17 +465,17 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
-        dbe.InitializeArchetypes();
         dbe.RegisterComponentFromAccessor<CompGuild>();
         dbe.RegisterComponentFromAccessor<CompPlayer>();
+        dbe.InitializeArchetypes();
 
         // Create a guild and player
         using (var t = dbe.CreateQuickTransaction())
         {
             var g = new CompGuild(10, 100);
-            var guildPk = t.CreateEntity(ref g);
-            var p = new CompPlayer(guildPk, true);
-            t.CreateEntity(ref p);
+            var guildEid = t.Spawn<CompGuildArch>(CompGuildArch.Guild.Set(in g));
+            var p = new CompPlayer((long)guildEid.RawValue, true);
+            t.Spawn<CompPlayerArch>(CompPlayerArch.Player.Set(in p));
             t.Commit();
         }
 
@@ -487,17 +496,18 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
-        dbe.InitializeArchetypes();
         dbe.RegisterComponentFromAccessor<CompGuild>();
         dbe.RegisterComponentFromAccessor<CompPlayer>();
+        dbe.InitializeArchetypes();
 
         long guildPk;
         using (var t = dbe.CreateQuickTransaction())
         {
             var g = new CompGuild(10, 100);
-            guildPk = t.CreateEntity(ref g);
+            var guildEid = t.Spawn<CompGuildArch>(CompGuildArch.Guild.Set(in g));
+            guildPk = (long)guildEid.RawValue;
             var p = new CompPlayer(guildPk, true);
-            t.CreateEntity(ref p);
+            t.Spawn<CompPlayerArch>(CompPlayerArch.Player.Set(in p));
             t.Commit();
         }
 

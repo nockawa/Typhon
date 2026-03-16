@@ -5,12 +5,19 @@ using System;
 using System.IO;
 using Typhon.ARPG.Schema;
 using Typhon.Engine;
+using Typhon.Schema.Definition;
 
 namespace Typhon.Benchmark;
 
 // ═══════════════════════════════════════════════════════════════════════
 // Query & View: ARPG ItemData real-world benchmarks
 // ═══════════════════════════════════════════════════════════════════════
+
+[Archetype(506)]
+class BenchItemArch : Archetype<BenchItemArch>
+{
+    public static readonly Comp<ItemData> Item = Register<ItemData>();
+}
 
 [SimpleJob(warmupCount: 3, iterationCount: 5)]
 [MemoryDiagnoser]
@@ -25,7 +32,7 @@ public class QueryViewBenchmarks : IDisposable
     private ViewBase _view;
 
     // Entities for game-loop update cycling
-    private long[] _cyclePKs;
+    private EntityId[] _cyclePKs;
     private ItemData[] _cycleItems;
     private int _updateCursor;
 
@@ -69,6 +76,9 @@ public class QueryViewBenchmarks : IDisposable
         _dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
         _dbe.RegisterComponentFromAccessor<ItemData>();
 
+        Archetype<BenchItemArch>.Touch();
+        _dbe.InitializeArchetypes();
+
         var rng = new Random(42);
 
         // Build weighted rarity lookup table for fast sampling
@@ -86,7 +96,7 @@ public class QueryViewBenchmarks : IDisposable
         _topPlayerPK = 1; // Zipf top player
 
         // Insert entities in batches
-        var matchingPKs = new System.Collections.Generic.List<long>();
+        var matchingPKs = new System.Collections.Generic.List<EntityId>();
         const int batchSize = 500;
         for (var batch = 0; batch < EntityCount / batchSize; batch++)
         {
@@ -110,12 +120,12 @@ public class QueryViewBenchmarks : IDisposable
                     BaseBlockChance = rng.Next(0, 30)
                 };
 
-                var pk = tx.CreateEntity(ref item);
+                var eid = tx.Spawn<BenchItemArch>(BenchItemArch.Item.Set(in item));
 
                 // Track Epic+ items for view cycling
                 if (item.Rarity >= 3)
                 {
-                    matchingPKs.Add(pk);
+                    matchingPKs.Add(eid);
                 }
             }
             tx.Commit();
@@ -125,13 +135,14 @@ public class QueryViewBenchmarks : IDisposable
         _view = _dbe.Query<ItemData>().Where(i => i.Rarity >= 3).ToView();
 
         // Pre-select entities for game-loop cycling (boundary crossers)
-        _cyclePKs = new long[CycleEntityCount];
+        _cyclePKs = new EntityId[CycleEntityCount];
         _cycleItems = new ItemData[CycleEntityCount];
         for (var i = 0; i < CycleEntityCount && i < matchingPKs.Count; i++)
         {
             _cyclePKs[i] = matchingPKs[i];
             using var readTx = _dbe.CreateQuickTransaction();
-            readTx.ReadEntity(_cyclePKs[i], out _cycleItems[i]);
+            var entity = readTx.Open(_cyclePKs[i]);
+            _cycleItems[i] = entity.Read(BenchItemArch.Item);
         }
     }
 
@@ -146,8 +157,8 @@ public class QueryViewBenchmarks : IDisposable
 
     /// <summary>
     /// Single predicate on AllowMultiple index: Rarity >= 3 (Epic+).
-    /// Selectivity ~15% → ~1,500 items.
-    /// Exercises: QueryBuilder → PlanBuilder → AllowMultiple primary stream → RangeMultipleEnumerator → VSBS expansion.
+    /// Selectivity ~15% -> ~1,500 items.
+    /// Exercises: QueryBuilder -> PlanBuilder -> AllowMultiple primary stream -> RangeMultipleEnumerator -> VSBS expansion.
     /// </summary>
     [Benchmark]
     public int Execute_SinglePredicate()
@@ -158,7 +169,7 @@ public class QueryViewBenchmarks : IDisposable
 
     /// <summary>
     /// Chained predicates: Rarity >= 3 AND ItemCategory == 5.
-    /// Selectivity ~1.5% → ~150 items.
+    /// Selectivity ~1.5% -> ~150 items.
     /// Exercises: chained Where, selectivity ordering, AllowMultiple primary + filter short-circuit.
     /// </summary>
     [Benchmark]
@@ -195,7 +206,8 @@ public class QueryViewBenchmarks : IDisposable
                 var idx = _updateCursor++ % _cyclePKs.Length;
                 ref var item = ref _cycleItems[idx];
                 item.Rarity = item.Rarity >= 3 ? 0 : 3;
-                tx.UpdateEntity(_cyclePKs[idx], ref item);
+                var entity = tx.OpenMut(_cyclePKs[idx]);
+                entity.Write(BenchItemArch.Item) = item;
             }
             tx.Commit();
         }
@@ -209,8 +221,8 @@ public class QueryViewBenchmarks : IDisposable
     }
 
     /// <summary>
-    /// Measures full view lifecycle: create → populate → dispose.
-    /// Exercises: QueryBuilder → PlanBuilder → PipelineExecutor → View construction + ViewRegistry registration + initial entity set + dispose.
+    /// Measures full view lifecycle: create -> populate -> dispose.
+    /// Exercises: QueryBuilder -> PlanBuilder -> PipelineExecutor -> View construction + ViewRegistry registration + initial entity set + dispose.
     /// </summary>
     [Benchmark]
     public int View_InitialPopulation()

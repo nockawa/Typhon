@@ -146,10 +146,11 @@ class FieldIdStabilityTests : TestBase<FieldIdStabilityTests>
         dbe.InitializeArchetypes();
 
         // Read back the ComponentR1 entries from the system schema
-        using var tx = dbe.CreateQuickTransaction();
+        using var epochGuard = EpochGuard.Enter(dbe.EpochManager);
+        var componentsTable = dbe.GetComponentTable<ComponentR1>();
         for (long pk = 1; pk <= 10; pk++)
         {
-            if (!tx.ReadEntity<ComponentR1>(pk, out var comp))
+            if (!SystemCrud.Read(componentsTable, pk, out ComponentR1 comp, dbe.EpochManager))
             {
                 continue;
             }

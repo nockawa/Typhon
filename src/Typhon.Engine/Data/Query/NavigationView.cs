@@ -79,7 +79,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
             if (fieldIndex == _fkFieldIndex)
             {
                 // FK field changed — forward navigation
-                ProcessFKChange(ref entry, isCreation, isDeletion, tx);
+                ProcessFKChange(ref entry, isDeletion, tx);
             }
             else
             {
@@ -98,7 +98,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
     /// Handles FK field changes on a source entity. The entity now points to a different target.
     /// BeforeKey/AfterKey contain the old/new target PKs (as long values in KeyBytes8).
     /// </summary>
-    private void ProcessFKChange(ref ViewDeltaEntry entry, bool isCreation, bool isDeletion, Transaction tx)
+    private void ProcessFKChange(ref ViewDeltaEntry entry, bool isDeletion, Transaction tx)
     {
         var sourcePK = entry.EntityPK;
         var wasInView = _entityIds.Contains(sourcePK);
@@ -188,7 +188,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
             // But if target is still qualifying, mark affected sources as Modified
             if (targetIsIn)
             {
-                MarkSourcesModified(targetPK, tx);
+                MarkSourcesModified(targetPK);
             }
             return;
         }
@@ -202,7 +202,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
     /// </summary>
     private bool EvaluateFullPredicate(long sourcePK, Transaction tx)
     {
-        if (!tx.ReadEntity<TSource>(sourcePK, out var sourceComp))
+        if (!tx.ReadComponent<TSource>(sourcePK, out var sourceComp))
         {
             return false;
         }
@@ -226,7 +226,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
         }
 
         // Read and evaluate target
-        if (!tx.ReadEntity<TTarget>(fkValue, out var targetComp))
+        if (!tx.ReadComponent<TTarget>(fkValue, out var targetComp))
         {
             return false;
         }
@@ -255,7 +255,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
     /// </summary>
     private bool CheckOtherSourceFieldsAndTarget(long sourcePK, int changedFieldIndex, Transaction tx)
     {
-        if (!tx.ReadEntity<TSource>(sourcePK, out var sourceComp))
+        if (!tx.ReadComponent<TSource>(sourcePK, out var sourceComp))
         {
             return false;
         }
@@ -283,7 +283,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
             return false;
         }
 
-        if (!tx.ReadEntity<TTarget>(fkValue, out var targetComp))
+        if (!tx.ReadComponent<TTarget>(fkValue, out var targetComp))
         {
             return false;
         }
@@ -316,7 +316,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
             return true;
         }
 
-        if (!tx.ReadEntity<TTarget>(targetPK, out var targetComp))
+        if (!tx.ReadComponent<TTarget>(targetPK, out var targetComp))
         {
             return false;
         }
@@ -339,7 +339,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
     /// </summary>
     private bool EvaluateSourcePredicates(long sourcePK, Transaction tx)
     {
-        if (!tx.ReadEntity<TSource>(sourcePK, out var sourceComp))
+        if (!tx.ReadComponent<TSource>(sourcePK, out var sourceComp))
         {
             return false;
         }
@@ -406,7 +406,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
     /// <summary>
     /// Marks all source entities pointing to a target as Modified (target field changed but didn't cross boundary).
     /// </summary>
-    private void MarkSourcesModified(long targetPK, Transaction tx)
+    private void MarkSourcesModified(long targetPK)
     {
         var fkIndexInfo = PipelineExecutor.FindFKIndex(_sourceTable, _fkFieldOffset);
         var fkIndex = (BTree<long, PersistentStore>)fkIndexInfo.Index;
