@@ -265,6 +265,12 @@ public unsafe partial class Transaction
             return false;
         }
 
+        // Check if pending destroy (committed entity marked for destruction in this transaction)
+        if (_pendingDestroys != null && _pendingDestroys.Contains(id))
+        {
+            return false;
+        }
+
         return EntityRecordAccessor.GetHeader(readBuf).IsVisibleAt(TSN);
     }
 
@@ -359,13 +365,13 @@ public unsafe partial class Transaction
 
     /// <summary>
     /// Find all entities of the child archetype that reference the given parent via FK.
-    /// MVP implementation: scans the child's entity record locations to find FK matches.
+    /// Scans pending spawns and committed entities in the child's EntityMap.
     /// </summary>
     private List<EntityId> FindCascadeChildren(ArchetypeMetadata childMeta, CascadeTarget target, EntityId parentId)
     {
         var result = new List<EntityId>();
 
-        // For MVP: scan the child's pending spawns for FK matches
+        // 1. Scan pending spawns for FK matches
         if (_pendingSpawns != null)
         {
             foreach (var kvp in _pendingSpawns)
@@ -375,18 +381,113 @@ public unsafe partial class Transaction
                     continue;
                 }
 
-                // Check if this entity's FK component contains parentId
-                // The FK field is an EntityLink<T> (8 bytes = EntityId) at a known offset in the component
-                // For MVP, we check by opening the entity and reading the FK field
-                // This will be optimized with FK index lookup later
-                result.Add(kvp.Key);
+                // Read the FK component's chunk location from the pending entity's record bytes
+                var spawn = kvp.Value;
+                var spawnMeta = spawn.Archetype;
+                var engineState = _dbe._archetypeStates[spawnMeta.ArchetypeId];
+
+                fixed (byte* recordPtr = spawn.RecordBytes)
+                {
+                    int chunkId = EntityRecordAccessor.GetLocation(recordPtr, target.FkSlotIndex);
+                    if (chunkId == 0)
+                    {
+                        continue;
+                    }
+
+                    // Read the FK field from the component chunk data
+                    var table = engineState.SlotToComponentTable[target.FkSlotIndex];
+                    var compType = spawnMeta._slotToComponentType[target.FkSlotIndex];
+                    var info = GetComponentInfo(compType);
+                    byte* ptr = table.StorageMode == StorageMode.Transient
+                        ? info.TransientCompContentAccessor.GetChunkAddress(chunkId)
+                        : info.CompContentAccessor.GetChunkAddress(chunkId);
+
+                    // EntityLink<T> is 8 bytes (same layout as EntityId) at FkFieldOffset within the component
+                    var fkEntityId = *(EntityId*)(ptr + table.ComponentOverhead + target.FkFieldOffset);
+                    if (fkEntityId == parentId)
+                    {
+                        result.Add(kvp.Key);
+                    }
+                }
             }
         }
 
-        // TODO: Also scan committed entities in the child's LinearHash via FK index
-        // For now, only pending spawns are cascade-deleted (MVP)
+        // 2. Scan committed entities in the child's EntityMap
+        var childEngineState = _dbe._archetypeStates[target.ChildArchetypeId];
+        if (childEngineState?.EntityMap != null)
+        {
+            var table = childEngineState.SlotToComponentTable[target.FkSlotIndex];
+            var compType = childMeta._slotToComponentType[target.FkSlotIndex];
+            var info = GetComponentInfo(compType);
+            int overhead = table.ComponentOverhead;
+            int fkOffset = target.FkFieldOffset;
+
+            using var guard = EpochGuard.Enter(_epochManager);
+            var accessor = childEngineState.EntityMap.Segment.CreateChunkAccessor();
+
+            var action = new CascadeChildScanner
+            {
+                Target = target,
+                ParentId = parentId,
+                ChildMeta = childMeta,
+                ChildEngineState = childEngineState,
+                Info = info,
+                Table = table,
+                Overhead = overhead,
+                FkOffset = fkOffset,
+                Result = result,
+            };
+
+            childEngineState.EntityMap.ForEachEntry(ref accessor, ref action);
+            accessor.Dispose();
+        }
 
         return result;
+    }
+
+    /// <summary>
+    /// Struct callback for zero-alloc iteration over the child archetype's EntityMap during cascade delete.
+    /// </summary>
+    private struct CascadeChildScanner : RawValueHashMap<long, PersistentStore>.IEntryAction<long>
+    {
+        public CascadeTarget Target;
+        public EntityId ParentId;
+        public ArchetypeMetadata ChildMeta;
+        public ArchetypeEngineState ChildEngineState;
+        public ComponentInfo Info;
+        public ComponentTable Table;
+        public int Overhead;
+        public int FkOffset;
+        public List<EntityId> Result;
+
+        public bool Process(long key, byte* value)
+        {
+            // Check visibility: skip dead entities
+            ref var header = ref EntityRecordAccessor.GetHeader(value);
+            if (header.DiedTSN != 0)
+            {
+                return true; // continue iteration
+            }
+
+            int fkChunkId = EntityRecordAccessor.GetLocation(value, Target.FkSlotIndex);
+            if (fkChunkId == 0)
+            {
+                return true;
+            }
+
+            byte* ptr = Table.StorageMode == StorageMode.Transient
+                ? Info.TransientCompContentAccessor.GetChunkAddress(fkChunkId)
+                : Info.CompContentAccessor.GetChunkAddress(fkChunkId);
+
+            var fkEntityId = *(EntityId*)(ptr + Overhead + FkOffset);
+            if (fkEntityId == ParentId)
+            {
+                var childId = new EntityId(key, Target.ChildArchetypeId);
+                Result.Add(childId);
+            }
+
+            return true; // continue iteration
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -462,6 +563,12 @@ public unsafe partial class Transaction
         accessor.Dispose();
 
         if (!found)
+        {
+            return default;
+        }
+
+        // Check if pending destroy (committed entity marked for destruction in this transaction)
+        if (_pendingDestroys != null && _pendingDestroys.Contains(id))
         {
             return default;
         }

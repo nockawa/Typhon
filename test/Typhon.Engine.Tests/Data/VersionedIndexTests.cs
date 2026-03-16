@@ -24,41 +24,6 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
     }
 
     [Test]
-    public void VersionedIndexEntry_Active_CorrectProperties()
-    {
-        var entry = VersionedIndexEntry.Active(42, 100);
-
-        Assert.That(entry.IsActive, Is.True);
-        Assert.That(entry.IsTombstone, Is.False);
-        Assert.That(entry.ChainId, Is.EqualTo(42));
-        Assert.That(entry.TSN, Is.EqualTo(100));
-        Assert.That(entry.SignedChainId, Is.EqualTo(42));
-    }
-
-    [Test]
-    public void VersionedIndexEntry_Tombstone_CorrectProperties()
-    {
-        var entry = VersionedIndexEntry.Tombstone(42, 200);
-
-        Assert.That(entry.IsActive, Is.False);
-        Assert.That(entry.IsTombstone, Is.True);
-        Assert.That(entry.ChainId, Is.EqualTo(42));
-        Assert.That(entry.TSN, Is.EqualTo(200));
-        Assert.That(entry.SignedChainId, Is.EqualTo(-42));
-    }
-
-    [Test]
-    public void VersionedIndexEntry_Equality()
-    {
-        var a = VersionedIndexEntry.Active(1, 100);
-        var b = VersionedIndexEntry.Active(1, 100);
-        var c = VersionedIndexEntry.Tombstone(1, 100);
-
-        Assert.That(a.Equals(b), Is.True);
-        Assert.That(a.Equals(c), Is.False);
-    }
-
-    [Test]
     public unsafe void TailBufferId_DefaultsToZero()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();

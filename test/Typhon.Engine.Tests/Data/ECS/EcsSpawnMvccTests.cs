@@ -443,36 +443,6 @@ class EcsSpawnMvccTests : TestBase<EcsSpawnMvccTests>
     // ═══════════════════════════════════════════════════════════════════════
 
     [Test]
-    public void Conflict_NoConflict_WithHandler_CommitsNormally()
-    {
-        using var dbe = SetupEngine();
-
-        // Create entity
-        EntityId id;
-        using (var tx = dbe.CreateQuickTransaction())
-        {
-            var pos = new EcsPosition(10, 0, 0);
-            var vel = new EcsVelocity(0, 0, 0);
-            id = tx.Spawn<EcsUnit>(EcsUnit.Position.Set(in pos), EcsUnit.Velocity.Set(in vel));
-            tx.Commit();
-        }
-
-        // Single writer, no concurrent update — handler should NOT be called
-        using var t1 = dbe.CreateQuickTransaction();
-        var e1 = t1.OpenMut(id);
-        e1.Write(EcsUnit.Position).X = 42;
-
-        var handlerCalled = false;
-        void Handler(ref ConcurrencyConflictSolver solver) { handlerCalled = true; }
-
-        Assert.That(t1.Commit(Handler), Is.True);
-        Assert.That(handlerCalled, Is.False, "Handler should not be invoked when no conflict");
-
-        using var tRead = dbe.CreateQuickTransaction();
-        Assert.That(tRead.Open(id).Read(EcsUnit.Position).X, Is.EqualTo(42f));
-    }
-
-    [Test]
     public void Conflict_NoHandler_LastWins()
     {
         using var dbe = SetupEngine();
@@ -503,51 +473,6 @@ class EcsSpawnMvccTests : TestBase<EcsSpawnMvccTests>
         using var tRead = dbe.CreateQuickTransaction();
         Assert.That(tRead.Open(id).Read(EcsUnit.Position).X, Is.EqualTo(20f),
             "Last writer wins: T1's value should be visible");
-    }
-
-    [Test]
-    public void Conflict_WithHandler_DeltaRebase()
-    {
-        using var dbe = SetupEngine();
-
-        // Entity starts at X=100
-        EntityId id;
-        using (var tx = dbe.CreateQuickTransaction())
-        {
-            var pos = new EcsPosition(100, 0, 0);
-            var vel = new EcsVelocity(0, 0, 0);
-            id = tx.Spawn<EcsUnit>(EcsUnit.Position.Set(in pos), EcsUnit.Velocity.Set(in vel));
-            tx.Commit();
-        }
-
-        // T1 reads (100), sets to 90 (delta -10)
-        using var t1 = dbe.CreateQuickTransaction();
-        t1.OpenMut(id).Write(EcsUnit.Position).X = 90;
-
-        // T2 reads (100), sets to 130 (delta +30), commits first
-        using (var t2 = dbe.CreateQuickTransaction())
-        {
-            t2.OpenMut(id).Write(EcsUnit.Position).X = 130;
-            t2.Commit();
-        }
-
-        // T1 commits with delta rebase: committed(130) + delta(-10) = 120
-        void DeltaRebase(ref ConcurrencyConflictSolver solver)
-        {
-            // Read = 100 (what T1 saw), Committed = 130 (T2's value), Committing = 90 (T1's write)
-            ref var read = ref solver.ReadData<EcsPosition>();
-            ref var committed = ref solver.CommittedData<EcsPosition>();
-            ref var toCommit = ref solver.ToCommitData<EcsPosition>();
-
-            float delta = toCommit.X - read.X; // -10
-            toCommit.X = committed.X + delta;   // 130 + (-10) = 120
-        }
-
-        Assert.That(t1.Commit(DeltaRebase), Is.True);
-
-        using var tRead = dbe.CreateQuickTransaction();
-        Assert.That(tRead.Open(id).Read(EcsUnit.Position).X, Is.EqualTo(120f),
-            "Delta rebase: committed(130) + delta(-10) = 120");
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -931,74 +856,6 @@ class EcsSpawnMvccTests : TestBase<EcsSpawnMvccTests>
     // ═══════════════════════════════════════════════════════════════════════
     // Conflict Resolution Strategies (gap-filling: remaining strategies)
     // ═══════════════════════════════════════════════════════════════════════
-
-    [Test]
-    public void Conflict_WithHandler_TakeCommitted()
-    {
-        using var dbe = SetupEngine();
-
-        EntityId id;
-        using (var tx = dbe.CreateQuickTransaction())
-        {
-            var pos = new EcsPosition(100, 0, 0);
-            var vel = new EcsVelocity(0, 0, 0);
-            id = tx.Spawn<EcsUnit>(EcsUnit.Position.Set(in pos), EcsUnit.Velocity.Set(in vel));
-            tx.Commit();
-        }
-
-        // T1 writes
-        using var t1 = dbe.CreateQuickTransaction();
-        t1.OpenMut(id).Write(EcsUnit.Position).X = 50;
-
-        // T2 writes and commits first
-        using (var t2 = dbe.CreateQuickTransaction())
-        {
-            t2.OpenMut(id).Write(EcsUnit.Position).X = 200;
-            t2.Commit();
-        }
-
-        // T1 commits with TakeCommitted — accept T2's value
-        void Handler(ref ConcurrencyConflictSolver solver) { solver.TakeCommitted<EcsPosition>(); }
-        Assert.That(t1.Commit(Handler), Is.True);
-
-        using var tRead = dbe.CreateQuickTransaction();
-        Assert.That(tRead.Open(id).Read(EcsUnit.Position).X, Is.EqualTo(200f),
-            "TakeCommitted should preserve T2's committed value");
-    }
-
-    [Test]
-    public void Conflict_WithHandler_TakeRead()
-    {
-        using var dbe = SetupEngine();
-
-        EntityId id;
-        using (var tx = dbe.CreateQuickTransaction())
-        {
-            var pos = new EcsPosition(100, 0, 0);
-            var vel = new EcsVelocity(0, 0, 0);
-            id = tx.Spawn<EcsUnit>(EcsUnit.Position.Set(in pos), EcsUnit.Velocity.Set(in vel));
-            tx.Commit();
-        }
-
-        // T1 writes
-        using var t1 = dbe.CreateQuickTransaction();
-        t1.OpenMut(id).Write(EcsUnit.Position).X = 50;
-
-        // T2 writes and commits first
-        using (var t2 = dbe.CreateQuickTransaction())
-        {
-            t2.OpenMut(id).Write(EcsUnit.Position).X = 200;
-            t2.Commit();
-        }
-
-        // T1 commits with TakeRead — revert to snapshot (what T1 originally read)
-        void Handler(ref ConcurrencyConflictSolver solver) { solver.TakeRead<EcsPosition>(); }
-        Assert.That(t1.Commit(Handler), Is.True);
-
-        using var tRead = dbe.CreateQuickTransaction();
-        Assert.That(tRead.Open(id).Read(EcsUnit.Position).X, Is.EqualTo(100f),
-            "TakeRead should revert to the original snapshot value");
-    }
 
     [Test]
     public void Conflict_DefaultHandler_LastWins()

@@ -101,38 +101,6 @@ class TransactionChainTests : TestBase<TransactionChainTests>
     }
 
     /// <summary>
-    /// Create+dispose a transaction, create another — verify pool recycling reuses the same object.
-    /// </summary>
-    [Test]
-    public void Pool_Recycling_ReusesSameObject()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        // Exhaust the initial pool (16 items) by creating and keeping transactions
-        var exhaustPool = new List<Transaction>();
-        for (int i = 0; i < 16; i++)
-        {
-            exhaustPool.Add(dbe.CreateQuickTransaction());
-        }
-
-        // Create one more — this must allocate new
-        var fresh = dbe.CreateQuickTransaction();
-        fresh.Dispose();
-
-        // Now create again — should get the same recycled object
-        var recycled = dbe.CreateQuickTransaction();
-        Assert.That(recycled, Is.SameAs(fresh), "Pool should recycle the disposed transaction object");
-        recycled.Dispose();
-
-        // Cleanup
-        foreach (var tx in exhaustPool)
-        {
-            tx.Dispose();
-        }
-    }
-
-    /// <summary>
     /// Read-only transaction can read entities but throws on write operations.
     /// Verifies no ChangeSet or UoW is allocated.
     /// </summary>

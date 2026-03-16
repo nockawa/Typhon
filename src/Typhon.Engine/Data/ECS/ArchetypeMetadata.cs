@@ -119,4 +119,7 @@ internal struct CascadeTarget
 
     /// <summary>Slot index of the component containing the FK field on the child archetype.</summary>
     public byte FkSlotIndex;
+
+    /// <summary>Byte offset of the EntityLink&lt;T&gt; field within the component struct (from Marshal.OffsetOf).</summary>
+    public int FkFieldOffset;
 }

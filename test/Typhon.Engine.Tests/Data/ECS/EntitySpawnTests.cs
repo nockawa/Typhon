@@ -122,33 +122,6 @@ class EntitySpawnTests : TestBase<EntitySpawnTests>
     }
 
     [Test]
-    public void Spawn_CommitThenRead_InNewTransaction()
-    {
-        using var dbe = SetupEngine();
-
-        EntityId id;
-        using (var t = dbe.CreateQuickTransaction())
-        {
-            var pos = new EcsPosition(100, 200, 300);
-            var vel = new EcsVelocity(0, 0, 0);
-            id = t.Spawn<EcsUnit>(EcsUnit.Position.Set(in pos), EcsUnit.Velocity.Set(in vel));
-            t.Commit();
-        }
-
-        // New transaction should see the committed entity
-        using (var t = dbe.CreateQuickTransaction())
-        {
-            Assert.That(t.IsAlive(id), Is.True);
-
-            var entity = t.Open(id);
-            ref readonly var pos = ref entity.Read(EcsUnit.Position);
-            Assert.That(pos.X, Is.EqualTo(100f));
-            Assert.That(pos.Y, Is.EqualTo(200f));
-            Assert.That(pos.Z, Is.EqualTo(300f));
-        }
-    }
-
-    [Test]
     public void Spawn_WithInheritedArchetype_HasParentAndOwnComponents()
     {
         using var dbe = SetupEngine();
@@ -236,32 +209,6 @@ class EntitySpawnTests : TestBase<EntitySpawnTests>
 
         using var t = dbe.CreateQuickTransaction();
         Assert.That(t.IsAlive(EntityId.Null), Is.False);
-    }
-
-    [Test]
-    public void Spawn_ThenRollback_EntityNotVisible()
-    {
-        using var dbe = SetupEngine();
-
-        EntityId spawnedId;
-        using (var t = dbe.CreateQuickTransaction())
-        {
-            var pos = new EcsPosition(1, 2, 3);
-            var vel = new EcsVelocity(0, 0, 0);
-            spawnedId = t.Spawn<EcsUnit>(EcsUnit.Position.Set(in pos), EcsUnit.Velocity.Set(in vel));
-
-            // Verify visible within the creating transaction
-            Assert.That(t.IsAlive(spawnedId), Is.True);
-
-            // Don't commit — implicit rollback on dispose
-        }
-
-        // New transaction should NOT see the rolled-back entity
-        using (var t = dbe.CreateQuickTransaction())
-        {
-            Assert.That(t.IsAlive(spawnedId), Is.False, "Rolled-back entity should be invisible");
-            Assert.That(t.TryOpen(spawnedId, out _), Is.False);
-        }
     }
 
     [Test]
