@@ -38,6 +38,10 @@ public static class ArchetypeRegistry
     private static readonly ArchetypeMetadata[] Archetypes = new ArchetypeMetadata[4096];
 
     private static int RegisteredCount;
+    private static int MaxRegisteredArchetypeId;
+
+    /// <summary>Highest ArchetypeId registered so far. Used to size ArchetypeMaskLarge.</summary>
+    internal static int MaxArchetypeId => MaxRegisteredArchetypeId;
 
     private static bool Frozen;
 
@@ -221,6 +225,10 @@ public static class ArchetypeRegistry
         Archetypes[archetypeId] = metadata;
         MetadataByType[archetypeType] = metadata;
         RegisteredCount++;
+        if (archetypeId > MaxRegisteredArchetypeId)
+        {
+            MaxRegisteredArchetypeId = archetypeId;
+        }
 
     }
 
@@ -280,6 +288,45 @@ public static class ArchetypeRegistry
             }
         }
     }
+
+    /// <summary>
+    /// Build an ArchetypeMask256 with bits set for all archetypes that declare a component with the given type ID.
+    /// O(K) where K = registered archetypes. Called at query construction time, not in hot path.
+    /// </summary>
+    internal static ArchetypeMask256 GetComponentMask(int componentTypeId)
+    {
+        var mask = new ArchetypeMask256();
+        for (int i = 0; i < Archetypes.Length; i++)
+        {
+            var meta = Archetypes[i];
+            if (meta != null && meta._typeIdToSlot.ContainsKey(componentTypeId))
+            {
+                mask.Set(meta.ArchetypeId);
+            }
+        }
+        return mask;
+    }
+
+    /// <summary>
+    /// Build an ArchetypeMaskLarge with bits set for all archetypes that declare a component with the given type ID.
+    /// Used when <see cref="MaxArchetypeId"/> > 255.
+    /// </summary>
+    internal static ArchetypeMaskLarge GetComponentMaskLarge(int componentTypeId)
+    {
+        var mask = new ArchetypeMaskLarge(MaxRegisteredArchetypeId);
+        for (int i = 0; i < Archetypes.Length; i++)
+        {
+            var meta = Archetypes[i];
+            if (meta != null && meta._typeIdToSlot.ContainsKey(componentTypeId))
+            {
+                mask.Set(meta.ArchetypeId);
+            }
+        }
+        return mask;
+    }
+
+    /// <summary>True if all registered archetypes have IDs ≤ 255 (ArchetypeMask256 can be used).</summary>
+    internal static bool UseSmallMask => MaxRegisteredArchetypeId < 256;
 
     /// <summary>
     /// Get the global ComponentTypeId for a CLR component type. Returns -1 if not registered.
@@ -480,6 +527,7 @@ public static class ArchetypeRegistry
         ComponentTypeById.Clear();
         NextComponentTypeId = 0;
         RegisteredCount = 0;
+        MaxRegisteredArchetypeId = 0;
         Frozen = false;
         PendingRegistrations.Clear();
         MetadataByType.Clear();

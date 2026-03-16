@@ -8,12 +8,31 @@ using JetBrains.Annotations;
 namespace Typhon.Engine;
 
 /// <summary>
+/// Generic interface for archetype bitsets. Enables JIT specialization via constrained generics:
+/// <c>where TMask : struct, IArchetypeMask&lt;TMask&gt;</c> compiles to direct calls with zero virtual dispatch.
+/// Same pattern as <see cref="IPageStore"/> (PersistentStore/TransientStore).
+/// </summary>
+[PublicAPI]
+public interface IArchetypeMask<TSelf> where TSelf : struct
+{
+    void Set(ushort archetypeId);
+    void Clear(ushort archetypeId);
+    bool Test(ushort archetypeId);
+    TSelf And(in TSelf other);
+    TSelf AndNot(in TSelf other);
+    TSelf Or(in TSelf other);
+    bool IsEmpty { get; }
+    int PopCount { get; }
+    int MaxId { get; }
+}
+
+/// <summary>
 /// Compact archetype bitset covering up to 256 archetypes using 4 inline ulongs (32 bytes).
 /// Used for Tier 1 query evaluation: a single AND instruction per entity to test archetype membership.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
 [PublicAPI]
-public unsafe struct ArchetypeMask256
+public unsafe struct ArchetypeMask256 : IArchetypeMask<ArchetypeMask256>
 {
     private const int WordCount = 4;
     private fixed ulong _bits[WordCount];
@@ -92,6 +111,13 @@ public unsafe struct ArchetypeMask256
         get => BitOperations.PopCount(_bits[0]) + BitOperations.PopCount(_bits[1]) + BitOperations.PopCount(_bits[2]) + BitOperations.PopCount(_bits[3]);
     }
 
+    /// <summary>Maximum archetype ID supported (255).</summary>
+    public int MaxId
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => 255;
+    }
+
     /// <summary>Create a mask with a single archetype bit set.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ArchetypeMask256 FromArchetype(ushort archetypeId)
@@ -118,7 +144,7 @@ public unsafe struct ArchetypeMask256
 /// Same API as <see cref="ArchetypeMask256"/> but supports up to 4096 archetypes.
 /// </summary>
 [PublicAPI]
-public struct ArchetypeMaskLarge
+public struct ArchetypeMaskLarge : IArchetypeMask<ArchetypeMaskLarge>
 {
     private ulong[] _bits;
 
@@ -159,6 +185,10 @@ public struct ArchetypeMaskLarge
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly bool Test(ushort archetypeId)
     {
+        if (_bits == null)
+        {
+            return false;
+        }
         int word = archetypeId >> 6;
         if (word >= _bits.Length)
         {
@@ -219,6 +249,10 @@ public struct ArchetypeMaskLarge
     {
         get
         {
+            if (_bits == null)
+            {
+                return true;
+            }
             foreach (var w in _bits)
             {
                 if (w != 0)
@@ -242,6 +276,13 @@ public struct ArchetypeMaskLarge
             }
             return count;
         }
+    }
+
+    /// <summary>Maximum archetype ID supported by this mask instance.</summary>
+    public int MaxId
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _bits == null ? 0 : (_bits.Length << 6) - 1;
     }
 
     /// <summary>Create a mask with a single archetype bit set.</summary>

@@ -36,6 +36,7 @@ public unsafe partial class Transaction : IDisposable
     public TransactionState State { get; private set; }
     private bool _isDisposed;
     private DatabaseEngine _dbe;
+    internal DatabaseEngine DBE => _dbe;
     private EpochManager _epochManager;
 
 #if DEBUG

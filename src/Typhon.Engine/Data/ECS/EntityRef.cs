@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using JetBrains.Annotations;
+using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
 
@@ -39,6 +40,9 @@ public unsafe ref struct EntityRef
             _locations[i] = EntityRecordAccessor.GetLocation(recordPtr, i);
         }
     }
+
+    /// <summary>Override the chunkId at a specific slot. Used by ResolveEntity for MVCC revision chain resolution.</summary>
+    internal void SetLocation(int slot, int chunkId) => _locations[slot] = chunkId;
 
     /// <summary>Copy locations from a managed byte array (for pending spawns).</summary>
     internal void CopyLocationsFrom(byte[] recordBytes, int componentCount)
@@ -82,7 +86,8 @@ public unsafe ref struct EntityRef
         return ref _tx.ReadEcsComponentData<T>(table, chunkId);
     }
 
-    /// <summary>Write a component by handle. Returns a mutable ref into the chunk page.</summary>
+    /// <summary>Write a component by handle. Returns a mutable ref into the chunk page.
+    /// For Versioned: copy-on-write (allocates new chunk, preserves old for concurrent readers).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ref T Write<T>(Comp<T> comp) where T : unmanaged
     {
@@ -93,6 +98,14 @@ public unsafe ref struct EntityRef
 
         int chunkId = _locations[slot];
         var table = _archetype._slotToComponentTable[slot];
+
+        if (table.StorageMode == StorageMode.Versioned)
+        {
+            var (newChunkId, rawPtr) = _tx.EcsVersionedCopyOnWrite(typeof(T), _id, table);
+            _locations[slot] = newChunkId;
+            return ref Unsafe.AsRef<T>((byte*)rawPtr + table.ComponentOverhead);
+        }
+
         return ref _tx.WriteEcsComponentData<T>(table, chunkId);
     }
 
@@ -113,7 +126,8 @@ public unsafe ref struct EntityRef
         return ref _tx.ReadEcsComponentData<T>(table, chunkId);
     }
 
-    /// <summary>Write a component by type. Resolves slot via archetype metadata.</summary>
+    /// <summary>Write a component by type. Resolves slot via archetype metadata.
+    /// For Versioned: copy-on-write (allocates new chunk, preserves old for concurrent readers).</summary>
     public ref T Write<T>() where T : unmanaged
     {
         Debug.Assert(_writable, "EntityRef opened as read-only — use OpenMut for writes");
@@ -124,6 +138,14 @@ public unsafe ref struct EntityRef
 
         int chunkId = _locations[slot];
         var table = _archetype._slotToComponentTable[slot];
+
+        if (table.StorageMode == StorageMode.Versioned)
+        {
+            var (newChunkId, rawPtr) = _tx.EcsVersionedCopyOnWrite(typeof(T), _id, table);
+            _locations[slot] = newChunkId;
+            return ref Unsafe.AsRef<T>((byte*)rawPtr + table.ComponentOverhead);
+        }
+
         return ref _tx.WriteEcsComponentData<T>(table, chunkId);
     }
 
@@ -141,6 +163,34 @@ public unsafe ref struct EntityRef
     {
         byte slot = _archetype.GetSlot(comp._componentTypeId);
         return (_enabledBits & (1 << slot)) != 0;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Optional component access — TryRead
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Attempt to read a component by type. Returns false if the archetype doesn't declare the component or it's disabled.
+    /// Returns a copy (not ref) since out parameters can't be ref readonly.
+    /// For zero-copy, use <c>if (entity.IsEnabled(comp)) { ref readonly var v = ref entity.Read(comp); }</c>.
+    /// </summary>
+    public bool TryRead<T>(out T value) where T : unmanaged
+    {
+        int typeId = ArchetypeRegistry.GetComponentTypeId<T>();
+        if (typeId < 0 || !_archetype.TryGetSlot(typeId, out byte slot))
+        {
+            value = default;
+            return false;
+        }
+        if ((_enabledBits & (1 << slot)) == 0)
+        {
+            value = default;
+            return false;
+        }
+        int chunkId = _locations[slot];
+        var table = _archetype._slotToComponentTable[slot];
+        value = _tx.ReadEcsComponentData<T>(table, chunkId);
+        return true;
     }
 
     /// <summary>Disable a component by handle. Stages the change for commit.</summary>

@@ -827,4 +827,55 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
         return map;
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // Enumeration (broad scan)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Callback interface for zero-overhead iteration via JIT specialization.
+    /// </summary>
+    internal interface IEntryAction<in TK> where TK : unmanaged
+    {
+        /// <summary>Process one entry. Return false to stop iteration.</summary>
+        bool Process(TK key, byte* value);
+    }
+
+    /// <summary>
+    /// Iterate all live entries in the hash map, calling <paramref name="action"/> for each.
+    /// Uses OLC read protocol for thread safety. Entries are visited in bucket order (cache-friendly).
+    /// </summary>
+    /// <returns>Number of entries visited.</returns>
+    internal int ForEachEntry<TAction>(ref ChunkAccessor<TStore> accessor, ref TAction action) where TAction : struct, IEntryAction<TKey>
+    {
+        int visited = 0;
+        var (_, _, bucketCount) = ReadMeta();
+
+        for (int b = 0; b < bucketCount; b++)
+        {
+            int chunkId = GetBucketChunkId(b, ref accessor);
+
+            while (chunkId != -1)
+            {
+                byte* addr = accessor.GetChunkAddress(chunkId);
+                ref readonly var header = ref GetHeader(addr);
+                int count = header.EntryCount;
+                TKey* keys = KeysPtr(addr);
+
+                for (int i = 0; i < count; i++)
+                {
+                    byte* valuePtr = ValueAt(addr, i);
+                    if (!action.Process(keys[i], valuePtr))
+                    {
+                        return visited;
+                    }
+                    visited++;
+                }
+
+                chunkId = header.OverflowChunkId;
+            }
+        }
+
+        return visited;
+    }
+
 }

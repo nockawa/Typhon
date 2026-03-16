@@ -34,6 +34,48 @@ public unsafe partial class Transaction
 
     /// <summary>
     /// Spawn an entity of the given archetype with the provided component values.
+    // ═══════════════════════════════════════════════════════════════════════
+    // ECS Queries
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Create a polymorphic query matching <typeparamref name="TArchetype"/> and all descendants.
+    /// Supports Tier 1 (.With, .Without, .Exclude), Tier 2 (.Enabled, .Disabled), and execution (.Execute, .Count, .Any, foreach).
+    /// </summary>
+    public EcsQuery<TArchetype> Query<TArchetype>() where TArchetype : class => new(this, polymorphic: true);
+
+    /// <summary>Create an exact query matching only <typeparamref name="TArchetype"/>, no descendants.</summary>
+    public EcsQuery<TArchetype> QueryExact<TArchetype>() where TArchetype : class => new(this, polymorphic: false);
+
+    /// <summary>
+    /// O(1) metadata count of live entities for <typeparamref name="TArchetype"/> and descendants.
+    /// Uses LinearHash.EntryCount — fast but includes entities with DiedTSN set (not yet cleaned up).
+    /// For exact counts respecting visibility, use <c>Query&lt;T&gt;().Count()</c>.
+    /// </summary>
+    public int EcsCount<TArchetype>() where TArchetype : class
+    {
+        var meta = ArchetypeRegistry.GetMetadata<TArchetype>();
+        if (meta?.SubtreeArchetypeIds == null)
+        {
+            return 0;
+        }
+
+        int total = 0;
+        foreach (var id in meta.SubtreeArchetypeIds)
+        {
+            var m = ArchetypeRegistry.GetMetadata(id);
+            if (m?._entityMap != null)
+            {
+                total += (int)m._entityMap.EntryCount;
+            }
+        }
+        return total;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Spawn
+    // ═══════════════════════════════════════════════════════════════════════
+
     /// Components not covered by <paramref name="values"/> are zero-initialized and disabled.
     /// The entity is stored in a pending map and inserted into the LinearHash at commit with BornTSN = TSN.
     /// </summary>
@@ -96,6 +138,29 @@ public unsafe partial class Transaction
                 {
                     // Zero-init the chunk (already done by AllocateChunk with clearContent=false,
                     // but the slot is disabled so the data doesn't matter)
+                }
+
+                // Versioned: create revision chain (CompRevStorageHeader + first revision entry)
+                // This populates _componentInfos so CommitComponentCore handles PK index, secondary// indexes, WAL serialization, and IsolationFlag
+                // clearing at commit time.
+                if (table.StorageMode == StorageMode.Versioned)
+                {
+                    var compType = meta._slotToComponentType[slot];
+                    var info = GetComponentInfo(compType);
+                    var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, chunkId, (long)entityId.RawValue);
+
+                    var cri = new ComponentInfo.CompRevInfo
+                    {
+                        Operations = ComponentInfo.OperationType.Created,
+                        PrevCompContentChunkId = 0,
+                        PrevRevisionIndex = -1,
+                        CurCompContentChunkId = chunkId,
+                        CompRevTableFirstChunkId = compRevChunkId,
+                        CurRevisionIndex = 0,
+                        ReadCommitSequence = 1,
+                        ReadRevisionIndex = 0,
+                    };
+                    info.AddNew((long)entityId.RawValue, cri);
                 }
 
                 EntityRecordAccessor.SetLocation(recordPtr, slot, chunkId);
@@ -396,6 +461,37 @@ public unsafe partial class Transaction
 
         var result = new EntityRef(id, meta, this, enabledBits, writable);
         result.CopyLocationsFrom(readBuf, meta.ComponentCount);
+
+        // For Versioned components: resolve MVCC-visible chunkId via revision chain walk.
+        // Location[slot] from EntityRecord is the spawn-time chunkId. After writes, the revision chain has newer versions. Walking the chain gives the correct
+        // chunkId for this transaction's snapshot.
+        for (int slot = 0; slot < meta.ComponentCount; slot++)
+        {
+            var table = meta._slotToComponentTable[slot];
+            if (table.StorageMode != StorageMode.Versioned)
+            {
+                continue;
+            }
+
+            var compType = meta._slotToComponentType[slot];
+            var info = GetComponentInfo(compType);
+
+            long pk = (long)id.RawValue;
+            var pkResult = GetCompRevInfoFromIndex(pk, info, TSN);
+            if (pkResult.IsFailure)
+            {
+                continue;
+            }
+
+            // Cache CompRevInfo for conflict detection (5.3 Write)
+            var compRevInfo = pkResult.Value;
+            compRevInfo.Operations = ComponentInfo.OperationType.Read;
+            info.AddNew(pk, compRevInfo);
+
+            // Override Location[slot] with MVCC-visible chunkId
+            result.SetLocation(slot, compRevInfo.CurCompContentChunkId);
+        }
+
         return result;
     }
 
@@ -432,6 +528,51 @@ public unsafe partial class Transaction
         return ref Unsafe.AsRef<T>(ptr + table.ComponentOverhead);
     }
 
+    /// <summary>
+    /// Copy-on-write for Versioned components: allocates new chunk, copies data, creates revision entry.
+    /// Called by EntityRef.Write for Versioned components. Returns (newChunkId, newChunkAddress).
+    /// First write per entity allocates; subsequent writes reuse the same new chunk.
+    /// </summary>
+    internal (int chunkId, nint ptr) EcsVersionedCopyOnWrite(Type compType, EntityId entityId, ComponentTable table)
+    {
+        var info = GetComponentInfo(compType);
+        long pk = (long)entityId.RawValue;
+
+        // CompRevInfo should be in cache from Read (5.2 ResolveEntity) or Created (5.1 Spawn)
+        ref var cri = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(info.SingleCache, pk, out var cached);
+
+        if (!cached)
+        {
+            // Fallback: Write without prior Open (edge case)
+            var result = GetCompRevInfoFromIndex(pk, info, TSN);
+            if (result.IsFailure)
+            {
+                throw new InvalidOperationException($"Entity {entityId} not found in PK index for {compType.Name}");
+            }
+            cri = result.Value;
+        }
+
+        // Only allocate new revision on FIRST write. Created (from Spawn) already has a chunk.
+        bool alreadyWritten = (cri.Operations & (ComponentInfo.OperationType.Updated | ComponentInfo.OperationType.Created)) != 0;
+
+        if (!alreadyWritten)
+        {
+            int oldChunkId = cri.CurCompContentChunkId;
+            cri.Operations |= ComponentInfo.OperationType.Updated;
+
+            // AddCompRev: allocates NEW chunk, adds revision entry with IsolationFlag=true
+            ComponentRevisionManager.AddCompRev(info, ref cri, TSN, UowId, isDelete: false);
+
+            // Copy old data to new chunk
+            byte* oldPtr = info.CompContentAccessor.GetChunkAddress(oldChunkId);
+            byte* newPtr = info.CompContentAccessor.GetChunkAddress(cri.CurCompContentChunkId, true);
+            Unsafe.CopyBlock(newPtr, oldPtr, (uint)table.ComponentTotalSize);
+        }
+
+        byte* ptr = info.CompContentAccessor.GetChunkAddress(cri.CurCompContentChunkId, true);
+        return (cri.CurCompContentChunkId, (nint)ptr);
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     // Commit hooks — flush pending ECS operations
     // ═══════════════════════════════════════════════════════════════════════
@@ -439,9 +580,11 @@ public unsafe partial class Transaction
     /// <summary>Flush all pending ECS operations into persistent storage. Called during Commit.</summary>
     internal void FlushEcsPendingOperations()
     {
+        // Enable/Disable must run BEFORE spawns: for pending spawn entities, it updates the record bytes in-place. FlushPendingSpawns then writes the
+        // corrected records to LinearHash. For committed entities, it directly upserts to LinearHash (order doesn't matter).
+        FlushPendingEnableDisable();
         FlushPendingSpawns();
         FlushPendingDestroys();
-        FlushPendingEnableDisable();
     }
 
     private void FlushPendingSpawns()
@@ -469,11 +612,17 @@ public unsafe partial class Transaction
                 meta._entityMap.Insert(entityId.EntityKey, recordPtr, ref hashAccessor, _changeSet);
                 hashAccessor.Dispose();
 
-                // Insert into secondary indexes for each component slot (Transient tables currently have IndexedFieldInfos = [], so this block is skipped
-                // for them. When transient secondary indexes are added, the accessor branch below handles it.)
+                // Insert into secondary indexes for each component slot.
+                // - Versioned: SKIP — CommitComponentCore handles via IndexMaintainer (prevents double insertion)
+                // - Transient: IndexedFieldInfos = [] so naturally skipped
+                // - SV: inserted here
                 for (int slot = 0; slot < meta.ComponentCount; slot++)
                 {
                     var table = meta._slotToComponentTable[slot];
+                    if (table.StorageMode == StorageMode.Versioned)
+                    {
+                        continue; // CommitComponentCore handles PK + secondary indexes via IndexMaintainer
+                    }
                     var indexedFieldInfos = table.IndexedFieldInfos;
                     if (indexedFieldInfos == null || indexedFieldInfos.Length == 0)
                     {
@@ -632,7 +781,46 @@ public unsafe partial class Transaction
                             else
                             {
                                 table.ComponentSegment.FreeChunk(chunkId);
+
+                                // Versioned: also free the revision chain chunk
+                                if (table.StorageMode == StorageMode.Versioned)
+                                {
+                                    var compType = meta._slotToComponentType[slot];
+                                    if (_componentInfos.TryGetValue(compType, out var info) &&
+                                        !info.IsMultiple && info.SingleCache.TryGetValue((long)kvp.Key.RawValue, out var cri))
+                                    {
+                                        table.CompRevTableSegment.FreeChunk(cri.CompRevTableFirstChunkId);
+                                    }
+                                }
                             }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Rollback Versioned writes (copy-on-write): free chunks allocated by AddCompRev
+        if (State != TransactionState.Committed && _componentInfos.Count > 0)
+        {
+            foreach (var kvp in _componentInfos)
+            {
+                var info = kvp.Value;
+                if (info.ComponentTable.StorageMode != StorageMode.Versioned)
+                {
+                    continue;
+                }
+
+                if (info.SingleCache != null)
+                {
+                    foreach (var cacheKvp in info.SingleCache)
+                    {
+                        var cri = cacheKvp.Value;
+                        // Free copy-on-write chunks (Updated but not Created — Created chunks are freed above)
+                        if ((cri.Operations & ComponentInfo.OperationType.Updated) != 0 &&
+                            (cri.Operations & ComponentInfo.OperationType.Created) == 0 &&
+                            cri.CurCompContentChunkId > 0)
+                        {
+                            info.CompContentSegment.FreeChunk(cri.CurCompContentChunkId);
                         }
                     }
                 }
