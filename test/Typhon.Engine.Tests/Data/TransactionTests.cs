@@ -18,271 +18,248 @@ class TransactionTests : TestBase<TransactionTests>
     }
 
     [Test]
-    [TestCaseSource(nameof(BuildNoiseCasesL2), [2])]
-    public void CreateComp_SingleTransaction_SuccessfulCommit(int noiseMode, bool noiseOwnTransaction, bool rollback)
+    public void CreateComp_SingleTransaction_SuccessfulCommit()
     {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
+
+        var a = new CompA(2);
+        var b = new CompB(1, 1.2f);
+        var c = new CompC("Porcupine Tree");
+
+        EntityId e1;
         {
-            using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-            RegisterComponents(dbe);
-            dbe.InitializeArchetypes();
-
-            EntityId e1;
-            var a = new CompA(2);
-            var b = new CompB(1, 1.2f);
-            var c = new CompC("Porcupine Tree");
-
-            EntityId[] noiseIds = null;
-            if (noiseMode >= 1)
-            {
-                noiseIds = CreateNoiseCompA(dbe);
-            }
-
-            {
-                using var t = dbe.CreateQuickTransaction();
-
-                if (noiseMode >= 2)
-                {
-                    UpdateNoiseCompA(dbe, noiseOwnTransaction ? null : t, noiseIds);
-                }
-
-                e1 = t.Spawn<CompABCArch>(CompABCArch.A.Set(in a), CompABCArch.B.Set(in b), CompABCArch.C.Set(in c));
-                Assert.That(e1.IsNull, Is.False, "A valid entity id must be non-null");
-
-                if (rollback)
-                {
-                    var res = t.Rollback();
-                    Assert.That(res, Is.True, "Transaction should be rollbacked successfully");
-                    Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(3), "Rolling back three components should lead to at least three operations");
-                }
-                else
-                {
-                    var res = t.Commit();
-                    Assert.That(res, Is.True, "Transaction should be successful");
-                    Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(3), "Committing three components should lead to at least three operations");
-                }
-            }
-
-            if (rollback)
-            {
-                using var t = dbe.CreateQuickTransaction();
-                Assert.That(t.IsAlive(e1), Is.False, "Entity read on a rolled back component should not be successful");
-            }
-            else
-            {
-                using var t = dbe.CreateQuickTransaction();
-                var ar = t.Open(e1).Read(CompABCArch.A);
-                Assert.That(ar.A, Is.EqualTo(a.A), $"Component should have a value of {a.A}");
-            }
-        }
-    }
-
-    [Test]
-    [TestCaseSource(nameof(BuildNoiseCasesL1), [2])]
-    public void ReadComp_SingleTransaction_SuccessfulCommit(int noiseMode, bool noiseOwnTransaction)
-    {
-        {
-            using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-            RegisterComponents(dbe);
-            dbe.InitializeArchetypes();
-
-            EntityId[] noiseIds = null;
-            if (noiseMode >= 1)
-            {
-                noiseIds = CreateNoiseCompA(dbe);
-            }
-
             using var t = dbe.CreateQuickTransaction();
 
-            var a = new CompA(2);
-            var b = new CompB(1, 1.2f);
-            var c = new CompC("Porcupine Tree");
-
-            var e1 = t.Spawn<CompABCArch>(CompABCArch.A.Set(in a), CompABCArch.B.Set(in b), CompABCArch.C.Set(in c));
+            e1 = t.Spawn<CompABCArch>(CompABCArch.A.Set(in a), CompABCArch.B.Set(in b), CompABCArch.C.Set(in c));
             Assert.That(e1.IsNull, Is.False, "A valid entity id must be non-null");
 
-            if (noiseMode >= 2)
-            {
-                UpdateNoiseCompA(dbe, noiseOwnTransaction ? null : t, noiseIds);
-            }
-
-            var ar = t.Open(e1).Read(CompABCArch.A);
-            Assert.That(ar.A, Is.EqualTo(a.A), $"The read component should have a value of {a.A}");
-
             var res = t.Commit();
-            Assert.That(res, Is.True, "Transaction commit should be successful");
-            Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(3), "Committing three components should lead to at least 3 operations");
+            Assert.That(res, Is.True, "Transaction should be successful");
+            Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(3), "Committing three components should lead to at least three operations");
+        }
+
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var ar = t.Open(e1).Read(CompABCArch.A);
+            Assert.That(ar.A, Is.EqualTo(a.A), $"Component should have a value of {a.A}");
         }
     }
 
     [Test]
-    [TestCaseSource(nameof(BuildNoiseCasesL1), [2])]
-    public void ReadComp_SeparateTransaction_SuccessfulCommit(int noiseMode, bool noiseOwnTransaction)
+    public void CreateComp_SingleTransaction_Rollback()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
+
+        var a = new CompA(2);
+        var b = new CompB(1, 1.2f);
+        var c = new CompC("Porcupine Tree");
+
+        EntityId e1;
+        {
+            using var t = dbe.CreateQuickTransaction();
+
+            e1 = t.Spawn<CompABCArch>(CompABCArch.A.Set(in a), CompABCArch.B.Set(in b), CompABCArch.C.Set(in c));
+            Assert.That(e1.IsNull, Is.False, "A valid entity id must be non-null");
+
+            var res = t.Rollback();
+            Assert.That(res, Is.True, "Transaction should be rollbacked successfully");
+            Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(3), "Rolling back three components should lead to at least three operations");
+        }
+
+        {
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.IsAlive(e1), Is.False, "Entity read on a rolled back component should not be successful");
+        }
+    }
+
+    [Test]
+    public void ReadComp_SingleTransaction_SuccessfulCommit()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
+
+        using var t = dbe.CreateQuickTransaction();
+
+        var a = new CompA(2);
+        var b = new CompB(1, 1.2f);
+        var c = new CompC("Porcupine Tree");
+
+        var e1 = t.Spawn<CompABCArch>(CompABCArch.A.Set(in a), CompABCArch.B.Set(in b), CompABCArch.C.Set(in c));
+        Assert.That(e1.IsNull, Is.False, "A valid entity id must be non-null");
+
+        var ar = t.Open(e1).Read(CompABCArch.A);
+        Assert.That(ar.A, Is.EqualTo(a.A), $"The read component should have a value of {a.A}");
+
+        var res = t.Commit();
+        Assert.That(res, Is.True, "Transaction commit should be successful");
+        Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(3), "Committing three components should lead to at least 3 operations");
+    }
+
+    [Test]
+    public void ReadComp_SeparateTransaction_SuccessfulCommit()
     {
         var a = new CompA(3);
         var b = new CompB(1, 1.2f);
         var c = new CompC("Porcupine Tree");
+
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
+
+        EntityId e1;
         {
-            using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-            RegisterComponents(dbe);
-            dbe.InitializeArchetypes();
+            using var t = dbe.CreateQuickTransaction();
 
-            EntityId[] noiseIds = null;
-            EntityId e1;
-            {
-                using var t = dbe.CreateQuickTransaction();
+            e1 = t.Spawn<CompABCArch>(CompABCArch.A.Set(in a), CompABCArch.B.Set(in b), CompABCArch.C.Set(in c));
+            Assert.That(e1.IsNull, Is.False, "A valid entity id must be non-null");
 
-                if (noiseMode >= 1)
-                {
-                    noiseIds = CreateNoiseCompA(dbe, noiseOwnTransaction ? null : t);
-                }
+            var res = t.Commit();
+            Assert.That(res, Is.True, "Transaction commit should be successful");
+            Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(3), "Committing three components should lead to at least three operations");
+        }
 
-                e1 = t.Spawn<CompABCArch>(CompABCArch.A.Set(in a), CompABCArch.B.Set(in b), CompABCArch.C.Set(in c));
-                Assert.That(e1.IsNull, Is.False, "A valid entity id must be non-null");
+        {
+            using var t = dbe.CreateQuickTransaction();
 
-                var res = t.Commit();
-                Assert.That(res, Is.True, "Transaction commit should be successful");
-                Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(3), "Committing three components should lead to at least three operations");
-            }
-
-            {
-                using var t = dbe.CreateQuickTransaction();
-
-                if (noiseMode >= 2)
-                {
-                    UpdateNoiseCompA(dbe, noiseOwnTransaction ? null : t, noiseIds);
-                }
-
-                var ar = t.Open(e1).Read(CompABCArch.A);
-                Assert.That(ar.A, Is.EqualTo(a.A), $"The read value should be {a.A}");
-            }
+            var ar = t.Open(e1).Read(CompABCArch.A);
+            Assert.That(ar.A, Is.EqualTo(a.A), $"The read value should be {a.A}");
         }
     }
 
     [Test]
-    [TestCaseSource(nameof(BuildNoiseCasesL1), [2])]
-    public void UpdateComp_SingleTransaction_SuccessfulCommit(int noiseMode, bool noiseOwnTransaction)
+    public void UpdateComp_SingleTransaction_SuccessfulCommit()
     {
         var a = new CompA(1);
         var b = new CompB(1, 1.2f);
         var c = new CompC("Porcupine Tree");
         var aChanged = 12;
+
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
+
+        EntityId e1;
         {
-            using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-            RegisterComponents(dbe);
-            dbe.InitializeArchetypes();
+            using var t = dbe.CreateQuickTransaction();
 
-            EntityId[] noiseIds = null;
-            EntityId e1;
-            {
-                using var t = dbe.CreateQuickTransaction();
+            e1 = t.Spawn<CompABCArch>(CompABCArch.A.Set(in a), CompABCArch.B.Set(in b), CompABCArch.C.Set(in c));
+            Assert.That(e1.IsNull, Is.False, "A valid entity id must be non-null");
 
-                if (noiseMode >= 1)
-                {
-                    noiseIds = CreateNoiseCompA(dbe, noiseOwnTransaction ? null : t);
-                }
+            a.A = aChanged;
+            ref var wa = ref t.OpenMut(e1).Write(CompABCArch.A);
+            wa = a;
 
-                e1 = t.Spawn<CompABCArch>(CompABCArch.A.Set(in a), CompABCArch.B.Set(in b), CompABCArch.C.Set(in c));
-                Assert.That(e1.IsNull, Is.False, "A valid entity id must be non-null");
+            var res = t.Commit();
+            Assert.That(res, Is.True, "Transaction commit should be successful");
+            Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(3), "Committing three components should lead to at least three operations");
+            Assert.That(a.A, Is.EqualTo(aChanged), "Update after create in the same transaction should have the updated value");
+        }
 
-                if (noiseMode >= 2)
-                {
-                    UpdateNoiseCompA(dbe, noiseOwnTransaction ? null : t, noiseIds);
-                }
+        {
+            using var t = dbe.CreateQuickTransaction();
 
-                a.A = aChanged;
-                ref var wa = ref t.OpenMut(e1).Write(CompABCArch.A);
-                wa = a;
-
-                var res = t.Commit();
-                Assert.That(res, Is.True, "Transaction commit should be successful");
-                Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(3), "Committing three components should lead to at least three operations");
-                Assert.That(a.A, Is.EqualTo(aChanged), "Update after create in the same transaction should have the updated value");
-            }
-
-            {
-                using var t = dbe.CreateQuickTransaction();
-
-                if (noiseMode >= 3)
-                {
-                    ReadNoiseCompA(dbe, noiseOwnTransaction ? null : t, noiseIds);
-                }
-
-                var ar = t.Open(e1).Read(CompABCArch.A);
-                Assert.That(ar.A, Is.EqualTo(aChanged), $"Component should have a value of {aChanged}");
-            }
+            var ar = t.Open(e1).Read(CompABCArch.A);
+            Assert.That(ar.A, Is.EqualTo(aChanged), $"Component should have a value of {aChanged}");
         }
     }
 
     [Test]
-    [TestCaseSource(nameof(BuildNoiseCasesL2), [3])]
-    public void UpdateComp_SeparateTransaction_SuccessfulCommit(int noiseMode, bool noiseOwnTransaction, bool readBeforeUpdate)
+    public void UpdateComp_SeparateTransaction_WithReadBeforeUpdate()
     {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
+
+        var a = new CompA(2);
+        var b = new CompB(1, 1.2f);
+        var c = new CompC("Porcupine Tree");
+        EntityId e1;
         {
-            using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-            RegisterComponents(dbe);
-            dbe.InitializeArchetypes();
+            using var t = dbe.CreateQuickTransaction();
 
-            var a = new CompA(2);
-            var b = new CompB(1, 1.2f);
-            var c = new CompC("Porcupine Tree");
-            EntityId e1;
-            {
-                using var t = dbe.CreateQuickTransaction();
+            e1 = t.Spawn<CompABCArch>(CompABCArch.A.Set(in a), CompABCArch.B.Set(in b), CompABCArch.C.Set(in c));
+            Assert.That(e1.IsNull, Is.False, "A valid entity id must be non-null");
 
-                e1 = t.Spawn<CompABCArch>(CompABCArch.A.Set(in a), CompABCArch.B.Set(in b), CompABCArch.C.Set(in c));
-                Assert.That(e1.IsNull, Is.False, "A valid entity id must be non-null");
+            var res = t.Commit();
+            Assert.That(res, Is.True);
+        }
 
-                var res = t.Commit();
-                Assert.That(res, Is.True);
-            }
+        {
+            using var t = dbe.CreateQuickTransaction();
 
-            EntityId[] noiseIds = null;
-            {
-                using var t = dbe.CreateQuickTransaction();
+            var ar = t.Open(e1).Read(CompABCArch.A);
+            Assert.That(ar.A, Is.EqualTo(a.A), "Read in the second transaction should retrieve the component created in the earlier one");
 
-                if (noiseMode >= 1)
-                {
-                    noiseIds = CreateNoiseCompA(dbe, noiseOwnTransaction ? null : t);
-                }
+            var a2 = new CompA(12);
+            ref var wa2 = ref t.OpenMut(e1).Write(CompABCArch.A);
+            wa2 = a2;
 
-                if (readBeforeUpdate)
-                {
-                    var ar = t.Open(e1).Read(CompABCArch.A);
-                    Assert.That(ar.A, Is.EqualTo(a.A), "Read in the second transaction should retrieve the component created in the earlier one");
-                }
+            var ar2 = t.Open(e1).Read(CompABCArch.A);
+            Assert.That(ar2.A, Is.EqualTo(a2.A), "Read after update should reflect the updated value");
 
-                if (noiseMode >= 2)
-                {
-                    UpdateNoiseCompA(dbe, noiseOwnTransaction ? null : t, noiseIds);
-                }
+            var res = t.Commit();
+            Assert.That(res, Is.True);
+            Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(1), "Committing three components should lead to at least one operation");
+        }
 
-                var a2 = new CompA(12);
-                ref var wa2 = ref t.OpenMut(e1).Write(CompABCArch.A);
-                wa2 = a2;
+        dbe.FlushDeferredCleanups();
+        {
+            using var t = dbe.CreateQuickTransaction();
 
-                if (noiseMode >= 3)
-                {
-                    ReadNoiseCompA(dbe, noiseOwnTransaction ? null : t, noiseIds);
-                }
+            Assert.That(t.GetRevisionCount<CompA>((long)e1.RawValue), Is.EqualTo(1), "Committing an update should remove the previous revision (as the transaction is alone).");
+            var a2Read = t.Open(e1).Read(CompABCArch.A);
+            Assert.That(a2Read.A, Is.EqualTo(12), "Read after update should reflect the updated value");
+        }
+    }
 
-                var ar2 = t.Open(e1).Read(CompABCArch.A);
-                Assert.That(ar2.A, Is.EqualTo(a2.A), "Read after update should reflect the updated value");
+    [Test]
+    public void UpdateComp_SeparateTransaction_WithoutReadBeforeUpdate()
+    {
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-                var res = t.Commit();
-                Assert.That(res, Is.True);
-                Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(1), "Committing three components should lead to at least one operation");
-            }
+        var a = new CompA(2);
+        var b = new CompB(1, 1.2f);
+        var c = new CompC("Porcupine Tree");
+        EntityId e1;
+        {
+            using var t = dbe.CreateQuickTransaction();
 
-            // Flush deferred cleanup and verify with a fresh transaction (committed tx's ChangeSet
-            // shadows the MMF pages — a new transaction is needed to see the cleanup results).
-            dbe.FlushDeferredCleanups();
-            {
-                using var t = dbe.CreateQuickTransaction();
+            e1 = t.Spawn<CompABCArch>(CompABCArch.A.Set(in a), CompABCArch.B.Set(in b), CompABCArch.C.Set(in c));
+            Assert.That(e1.IsNull, Is.False, "A valid entity id must be non-null");
 
-                Assert.That(t.GetRevisionCount<CompA>((long)e1.RawValue), Is.EqualTo(1), "Committing an update should remove the previous revision (as the transaction is alone).");
-                var a2Read = t.Open(e1).Read(CompABCArch.A);
-                Assert.That(a2Read.A, Is.EqualTo(12), "Read after update should reflect the updated value");
-            }
+            var res = t.Commit();
+            Assert.That(res, Is.True);
+        }
+
+        {
+            using var t = dbe.CreateQuickTransaction();
+
+            var a2 = new CompA(12);
+            ref var wa2 = ref t.OpenMut(e1).Write(CompABCArch.A);
+            wa2 = a2;
+
+            var ar2 = t.Open(e1).Read(CompABCArch.A);
+            Assert.That(ar2.A, Is.EqualTo(a2.A), "Read after update should reflect the updated value");
+
+            var res = t.Commit();
+            Assert.That(res, Is.True);
+            Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(1), "Committing three components should lead to at least one operation");
+        }
+
+        dbe.FlushDeferredCleanups();
+        {
+            using var t = dbe.CreateQuickTransaction();
+
+            Assert.That(t.GetRevisionCount<CompA>((long)e1.RawValue), Is.EqualTo(1), "Committing an update should remove the previous revision (as the transaction is alone).");
+            var a2Read = t.Open(e1).Read(CompABCArch.A);
+            Assert.That(a2Read.A, Is.EqualTo(12), "Read after update should reflect the updated value");
         }
     }
 

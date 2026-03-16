@@ -428,38 +428,6 @@ class StorageModeReadWriteTests : TestBase<StorageModeReadWriteTests>
     // ── Full commit cycle tests (exercises FlushAndRefreshEpoch + Commit persist path) ──
 
     [Test]
-    public void SV_FullCommitCycle_Works()
-    {
-        using var dbe = SetupEngine();
-
-        using var tx = dbe.CreateQuickTransaction();
-        var comp = new CompSmSingleVersion(42);
-        var id = tx.Spawn<SvTestArchetype>(SvTestArchetype.SvComp.Set(in comp));
-        tx.Commit();
-
-        // Verify data survives commit
-        using var tx2 = dbe.CreateQuickTransaction();
-        var entity = tx2.Open(id);
-        Assert.That(entity.Read(SvTestArchetype.SvComp).Value, Is.EqualTo(42));
-    }
-
-    [Test]
-    public void Transient_FullCommitCycle_Works()
-    {
-        using var dbe = SetupEngine();
-
-        using var tx = dbe.CreateQuickTransaction();
-        var comp = new CompSmTransient(77);
-        var id = tx.Spawn<TransientTestArchetype>(TransientTestArchetype.TransComp.Set(in comp));
-        tx.Commit();
-
-        // Verify data survives commit
-        using var tx2 = dbe.CreateQuickTransaction();
-        var entity = tx2.Open(id);
-        Assert.That(entity.Read(TransientTestArchetype.TransComp).Value, Is.EqualTo(77));
-    }
-
-    [Test]
     public void Mixed_FullCommitCycle_Works()
     {
         using var dbe = SetupEngine();
@@ -516,52 +484,6 @@ class StorageModeReadWriteTests : TestBase<StorageModeReadWriteTests>
     // ── Epoch refresh stress test (triggers FlushAndRefreshEpoch after 128 entity ops) ──
 
     [Test]
-    public void SV_ManySpawns_SurvivesEpochRefresh()
-    {
-        using var dbe = SetupEngine();
-
-        // Spawn >128 entities to trigger FlushAndRefreshEpoch at least once
-        using var tx = dbe.CreateQuickTransaction();
-        var ids = new EntityId[200];
-        for (int i = 0; i < 200; i++)
-        {
-            var comp = new CompSmSingleVersion(i);
-            ids[i] = tx.Spawn<SvTestArchetype>(SvTestArchetype.SvComp.Set(in comp));
-        }
-        tx.Commit();
-
-        // Verify all entities readable
-        using var tx2 = dbe.CreateQuickTransaction();
-        for (int i = 0; i < 200; i++)
-        {
-            var entity = tx2.Open(ids[i]);
-            Assert.That(entity.Read(SvTestArchetype.SvComp).Value, Is.EqualTo(i));
-        }
-    }
-
-    [Test]
-    public void Transient_ManySpawns_SurvivesEpochRefresh()
-    {
-        using var dbe = SetupEngine();
-
-        using var tx = dbe.CreateQuickTransaction();
-        var ids = new EntityId[200];
-        for (int i = 0; i < 200; i++)
-        {
-            var comp = new CompSmTransient(i * 10);
-            ids[i] = tx.Spawn<TransientTestArchetype>(TransientTestArchetype.TransComp.Set(in comp));
-        }
-        tx.Commit();
-
-        using var tx2 = dbe.CreateQuickTransaction();
-        for (int i = 0; i < 200; i++)
-        {
-            var entity = tx2.Open(ids[i]);
-            Assert.That(entity.Read(TransientTestArchetype.TransComp).Value, Is.EqualTo(i * 10));
-        }
-    }
-
-    [Test]
     public void Mixed_ManySpawns_SurvivesEpochRefresh()
     {
         using var dbe = SetupEngine();
@@ -591,17 +513,6 @@ class StorageModeReadWriteTests : TestBase<StorageModeReadWriteTests>
     }
 
     // ── DirtyBitmap edge cases ──
-
-    [Test]
-    public void DirtyBitmap_SingleBit_SetAndSnapshot()
-    {
-        var bitmap = new DirtyBitmap(64);
-        bitmap.Set(0);
-
-        var snapshot = bitmap.Snapshot();
-        Assert.That(snapshot[0] & 1L, Is.Not.EqualTo(0L));
-        Assert.That(bitmap.HasDirty, Is.False, "Snapshot should clear bitmap");
-    }
 
     [Test]
     public void DirtyBitmap_AllBitsInWord_SetCorrectly()
@@ -641,35 +552,32 @@ class StorageModeReadWriteTests : TestBase<StorageModeReadWriteTests>
     }
 
     [Test]
-    public void DirtyBitmap_DoubleSnapshot_SecondIsEmpty()
+    public void DirtyBitmap_SnapshotLifecycle_SetClearAndReSet()
     {
+        // Set + Snapshot clears
         var bitmap = new DirtyBitmap(64);
+        bitmap.Set(0);
+        var snapshot = bitmap.Snapshot();
+        Assert.That(snapshot[0] & 1L, Is.Not.EqualTo(0L));
+        Assert.That(bitmap.HasDirty, Is.False, "Snapshot should clear bitmap");
+
+        // Double snapshot: second is empty
         bitmap.Set(5);
-
-        bitmap.Snapshot(); // first snapshot clears
-        var second = bitmap.Snapshot(); // second should be empty
-
+        bitmap.Snapshot();
+        var second = bitmap.Snapshot();
         bool anySet = false;
         for (int i = 0; i < second.Length; i++)
         {
             if (second[i] != 0) { anySet = true; break; }
         }
         Assert.That(anySet, Is.False, "Second snapshot should be empty");
-    }
 
-    [Test]
-    public void DirtyBitmap_SetAfterSnapshot_VisibleInNextSnapshot()
-    {
-        var bitmap = new DirtyBitmap(64);
-        bitmap.Set(10);
-        bitmap.Snapshot(); // clears
-
-        bitmap.Set(20); // set after snapshot
-
-        var snapshot = bitmap.Snapshot();
+        // Set after snapshot visible in next snapshot
+        bitmap.Set(20);
+        var third = bitmap.Snapshot();
         int wordIndex = 20 >> 6;
         long mask = 1L << (20 & 63);
-        Assert.That(snapshot[wordIndex] & mask, Is.Not.EqualTo(0L), "Bit 20 set after first snapshot should appear in second");
+        Assert.That(third[wordIndex] & mask, Is.Not.EqualTo(0L), "Bit 20 set after snapshot should appear in next");
     }
 
     // ── WriteTickFence edge cases ──

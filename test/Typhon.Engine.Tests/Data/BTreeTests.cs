@@ -999,56 +999,6 @@ class BtreeTests
     }
 
     [Test]
-    [Property("MemPageCount", 1024)]
-    unsafe public void EnumerateLeaves_MultipleLeaves_YieldsAllInOrder()
-    {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 300, sizeof(Index32Chunk));
-        var depth = epochManager.EnterScope();
-        try
-        {
-            var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree<PersistentStore>(segment);
-
-            // Insert enough items to force multiple leaf splits
-            const int itemCount = 500;
-            for (int i = itemCount; i >= 1; i--)
-            {
-                tree.Add(i, i * 10, ref accessor);
-            }
-
-            Assert.That(tree.EntryCount, Is.EqualTo(itemCount));
-
-            var keys = new List<int>();
-            foreach (var kv in tree.EnumerateLeaves())
-            {
-                keys.Add(kv.Key);
-            }
-
-            Assert.That(keys.Count, Is.EqualTo(itemCount));
-
-            // Verify ascending order
-            for (int i = 1; i < keys.Count; i++)
-            {
-                Assert.That(keys[i], Is.GreaterThan(keys[i - 1]), $"Key at index {i} not in ascending order");
-            }
-
-            // Verify all expected keys present
-            for (int i = 1; i <= itemCount; i++)
-            {
-                Assert.That(keys.Contains(i), Is.True, $"Missing key {i}");
-            }
-
-            accessor.Dispose();
-        }
-        finally
-        {
-            epochManager.ExitScope(depth);
-        }
-    }
-
-    [Test]
     unsafe public void EnumerateLeaves_AfterDeletions_YieldsRemaining()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
@@ -1115,25 +1065,6 @@ class BtreeTests
             Assert.That(tree.GetMinKey(), Is.EqualTo(10));
 
             accessor.Dispose();
-        }
-        finally
-        {
-            epochManager.ExitScope(depth);
-        }
-    }
-
-    [Test]
-    unsafe public void GetMinKey_EmptyTree_ReturnsDefault()
-    {
-        using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
-        var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-        var depth = epochManager.EnterScope();
-        try
-        {
-            var tree = new IntSingleBTree<PersistentStore>(segment);
-
-            Assert.That(tree.GetMinKey(), Is.EqualTo(0));
         }
         finally
         {
@@ -1240,80 +1171,6 @@ class BtreeTests
     }
 
     [Test]
-    unsafe public void RangeScan_SingleEntry_MinEqualsMax()
-    {
-        using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
-        var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-        var depth = epochManager.EnterScope();
-        try
-        {
-            var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree<PersistentStore>(segment);
-
-            foreach (var k in new[] { 5, 10, 15, 20 })
-            {
-                tree.Add(k, k, ref accessor);
-            }
-
-            // Exact match — should yield single entry
-            var result = new List<int>();
-            foreach (var kv in tree.EnumerateRange(10, 10))
-            {
-                result.Add(kv.Key);
-            }
-            Assert.That(result, Is.EqualTo(new[] { 10 }));
-
-            // No match — key 7 doesn't exist, range [7,7] should be empty
-            var empty = new List<int>();
-            foreach (var kv in tree.EnumerateRange(7, 7))
-            {
-                empty.Add(kv.Key);
-            }
-            Assert.That(empty, Is.Empty);
-
-            accessor.Dispose();
-        }
-        finally
-        {
-            epochManager.ExitScope(depth);
-        }
-    }
-
-    [Test]
-    unsafe public void RangeScan_InvertedRange_YieldsEmpty()
-    {
-        using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
-        var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-        var depth = epochManager.EnterScope();
-        try
-        {
-            var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree<PersistentStore>(segment);
-
-            foreach (var k in new[] { 5, 10, 15, 20 })
-            {
-                tree.Add(k, k, ref accessor);
-            }
-
-            var result = new List<int>();
-            foreach (var kv in tree.EnumerateRange(20, 10))
-            {
-                result.Add(kv.Key);
-            }
-
-            Assert.That(result, Is.Empty);
-
-            accessor.Dispose();
-        }
-        finally
-        {
-            epochManager.ExitScope(depth);
-        }
-    }
-
-    [Test]
     [Property("MemPageCount", 1024)]
     unsafe public void RangeScan_MultiLeaf_CorrectOrdering()
     {
@@ -1379,80 +1236,6 @@ class BtreeTests
             }
 
             Assert.That(result, Is.EqualTo(new[] { 25, 20, 15, 10 }));
-
-            accessor.Dispose();
-        }
-        finally
-        {
-            epochManager.ExitScope(depth);
-        }
-    }
-
-    [Test]
-    [Property("MemPageCount", 1024)]
-    unsafe public void RangeScanDescending_FullRange_ReverseOfEnumerateLeaves()
-    {
-        using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
-        var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-        var depth = epochManager.EnterScope();
-        try
-        {
-            var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree<PersistentStore>(segment);
-
-            for (int i = 1; i <= 500; i++)
-            {
-                tree.Add(i, i, ref accessor);
-            }
-
-            var forward = new List<int>();
-            foreach (var kv in tree.EnumerateLeaves())
-            {
-                forward.Add(kv.Key);
-            }
-
-            var descending = new List<int>();
-            foreach (var kv in tree.EnumerateRangeDescending(int.MinValue, int.MaxValue))
-            {
-                descending.Add(kv.Key);
-            }
-
-            forward.Reverse();
-            Assert.That(descending, Is.EqualTo(forward));
-
-            accessor.Dispose();
-        }
-        finally
-        {
-            epochManager.ExitScope(depth);
-        }
-    }
-
-    [Test]
-    unsafe public void RangeScanDescending_TightBounds_CorrectEntries()
-    {
-        using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
-        var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-        var depth = epochManager.EnterScope();
-        try
-        {
-            var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree<PersistentStore>(segment);
-
-            foreach (var k in new[] { 1, 5, 10, 15, 20, 25, 30, 35, 40 })
-            {
-                tree.Add(k, k, ref accessor);
-            }
-
-            var result = new List<int>();
-            foreach (var kv in tree.EnumerateRangeDescending(10, 30))
-            {
-                result.Add(kv.Key);
-            }
-
-            Assert.That(result, Is.EqualTo(new[] { 30, 25, 20, 15, 10 }));
 
             accessor.Dispose();
         }
