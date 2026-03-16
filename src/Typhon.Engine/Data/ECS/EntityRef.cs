@@ -18,15 +18,17 @@ public unsafe ref struct EntityRef
 {
     internal readonly EntityId _id;
     internal readonly ArchetypeMetadata _archetype;
+    internal readonly ArchetypeEngineState _engineState;
     internal readonly Transaction _tx;
     internal ushort _enabledBits;
     internal readonly bool _writable;
     private fixed int _locations[16];
 
-    internal EntityRef(EntityId id, ArchetypeMetadata archetype, Transaction tx, ushort enabledBits, bool writable)
+    internal EntityRef(EntityId id, ArchetypeMetadata archetype, ArchetypeEngineState engineState, Transaction tx, ushort enabledBits, bool writable)
     {
         _id = id;
         _archetype = archetype;
+        _engineState = engineState;
         _tx = tx;
         _enabledBits = enabledBits;
         _writable = writable;
@@ -82,7 +84,7 @@ public unsafe ref struct EntityRef
         Debug.Assert((_enabledBits & (1 << slot)) != 0, $"Component at slot {slot} is disabled");
 
         int chunkId = _locations[slot];
-        var table = _archetype._slotToComponentTable[slot];
+        var table = _engineState.SlotToComponentTable[slot];
         return ref _tx.ReadEcsComponentData<T>(table, chunkId);
     }
 
@@ -97,7 +99,7 @@ public unsafe ref struct EntityRef
         Debug.Assert((_enabledBits & (1 << slot)) != 0, $"Component at slot {slot} is disabled");
 
         int chunkId = _locations[slot];
-        var table = _archetype._slotToComponentTable[slot];
+        var table = _engineState.SlotToComponentTable[slot];
 
         if (table.StorageMode == StorageMode.Versioned)
         {
@@ -122,7 +124,7 @@ public unsafe ref struct EntityRef
         Debug.Assert((_enabledBits & (1 << slot)) != 0, $"Component {typeof(T).Name} at slot {slot} is disabled");
 
         int chunkId = _locations[slot];
-        var table = _archetype._slotToComponentTable[slot];
+        var table = _engineState.SlotToComponentTable[slot];
         return ref _tx.ReadEcsComponentData<T>(table, chunkId);
     }
 
@@ -137,7 +139,7 @@ public unsafe ref struct EntityRef
         Debug.Assert((_enabledBits & (1 << slot)) != 0, $"Component {typeof(T).Name} at slot {slot} is disabled");
 
         int chunkId = _locations[slot];
-        var table = _archetype._slotToComponentTable[slot];
+        var table = _engineState.SlotToComponentTable[slot];
 
         if (table.StorageMode == StorageMode.Versioned)
         {
@@ -188,7 +190,7 @@ public unsafe ref struct EntityRef
             return false;
         }
         int chunkId = _locations[slot];
-        var table = _archetype._slotToComponentTable[slot];
+        var table = _engineState.SlotToComponentTable[slot];
         value = _tx.ReadEcsComponentData<T>(table, chunkId);
         return true;
     }

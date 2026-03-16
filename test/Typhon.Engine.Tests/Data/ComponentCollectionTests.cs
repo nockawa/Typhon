@@ -35,6 +35,12 @@ public struct CompE_Eng
 
 class ComponentCollectionTests : TestBase<ComponentCollectionTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompAEArch>.Touch();
+    }
+
     protected override void RegisterComponents(DatabaseEngine dbe)
     {
         dbe.RegisterComponentFromAccessor<CompE_Eng>();
@@ -46,8 +52,9 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId entityId;
         {
             using var t = dbe.CreateQuickTransaction();
 
@@ -62,11 +69,10 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
                     cca.Add(i);
                 }
             }
-            
-            e1 = t.CreateEntity(ref a, ref e);
-            Assert.That(e1, Is.Not.Zero, "A valid entity id must be non-zero");
-            Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1), "Creating a component should lead to a revision of 1");
-            
+
+            entityId = t.Spawn<CompAEArch>(CompAEArch.A.Set(in a), CompAEArch.E.Set(in e));
+            Assert.That(entityId.IsNull, Is.False, "A valid entity id must not be null");
+
             var res = t.Commit();
             Assert.That(res, Is.True, "Transaction commit should be successful");
         }
@@ -74,9 +80,9 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
         {
             using var t = dbe.CreateQuickTransaction();
 
-            var res = t.ReadEntity(e1, out CompE_Eng e2);
-            Assert.That(res, Is.True);
-            
+            var entity = t.Open(entityId);
+            var e2 = entity.Read(CompAEArch.E);
+
             using var cca = t.CreateComponentCollectionAccessor(ref e2.Collection);
             Span<int> allItems = stackalloc int[cca.ElementCount];
             cca.GetAllElements(allItems);
@@ -88,12 +94,12 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
                 Assert.That(allItems.Contains(actual), Is.True);
             }
         }
-        
+
         {
             using var t = dbe.CreateQuickTransaction();
 
-            var res = t.ReadEntity(e1, out CompE_Eng e2);
-            Assert.That(res, Is.True);
+            var entity = t.OpenMut(entityId);
+            ref var e2 = ref entity.Write(CompAEArch.E);
 
             {
                 using var cca = t.CreateComponentCollectionAccessor(ref e2.Collection);
@@ -103,19 +109,16 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
                     cca.Add(i);
                 }
             }
-            
-            res = t.UpdateEntity(e1, ref e2);
-            Assert.That(res, Is.True, "Updated entity should be successful");
-            
-            res = t.Commit();
+
+            var res = t.Commit();
             Assert.That(res, Is.True, "Transaction commit should be successful");
         }
-        
+
         {
             using var t = dbe.CreateQuickTransaction();
 
-            var res = t.ReadEntity(e1, out CompE_Eng e2);
-            Assert.That(res, Is.True);
+            var entity = t.Open(entityId);
+            var e2 = entity.Read(CompAEArch.E);
 
             using var cca = t.CreateComponentCollectionAccessor(ref e2.Collection);
             Span<int> allItems = stackalloc int[cca.ElementCount];
@@ -132,8 +135,9 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId entityId;
         {
             using var t = dbe.CreateQuickTransaction();
 
@@ -148,11 +152,10 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
                     cca.Add(i);
                 }
             }
-            
-            e1 = t.CreateEntity(ref a, ref e);
-            Assert.That(e1, Is.Not.Zero, "A valid entity id must be non-zero");
-            Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1), "Creating a component should lead to a revision of 1");
-            
+
+            entityId = t.Spawn<CompAEArch>(CompAEArch.A.Set(in a), CompAEArch.E.Set(in e));
+            Assert.That(entityId.IsNull, Is.False, "A valid entity id must not be null");
+
             var res = t.Commit();
             Assert.That(res, Is.True, "Transaction commit should be successful");
         }
@@ -160,20 +163,17 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
         {
             using var t = dbe.CreateQuickTransaction();
 
-            var res = t.ReadEntity(e1, out CompE_Eng e2);
-            Assert.That(res, Is.True);
+            var entity = t.OpenMut(entityId);
+            ref var e2 = ref entity.Write(CompAEArch.E);
 
-            // Change A to trigger the creation of a new revision during the Update call below
+            // Change A to trigger the creation of a new revision during the Write call above
             e2.A = 12;
-            
-            res = t.UpdateEntity(e1, ref e2);
-            Assert.That(res, Is.True, "Updated entity should be successful");
 
             {
                 Assert.That(t.GetComponentCollectionRefCounter(ref e2.Collection), Is.EqualTo(2), "RefCounter should be 2, because shared by 2 revisions");
             }
-            
-            res = t.Commit();
+
+            var res = t.Commit();
             Assert.That(res, Is.True, "Transaction commit should be successful");
         }
 
@@ -183,10 +183,10 @@ class ComponentCollectionTests : TestBase<ComponentCollectionTests>
         {
             using var t = dbe.CreateQuickTransaction();
 
-            var res = t.ReadEntity(e1, out CompE_Eng e2);
-            Assert.That(res, Is.True);
+            var entity = t.Open(entityId);
+            var e2 = entity.Read(CompAEArch.E);
 
             Assert.That(t.GetComponentCollectionRefCounter(ref e2.Collection), Is.EqualTo(1), "RefCounter should be 1, because there is now only one revision for this component");
         }
-    }    
+    }
 }

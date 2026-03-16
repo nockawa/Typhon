@@ -11,6 +11,12 @@ namespace Typhon.Engine.Tests;
 [TestFixture]
 class OwnerAggregatesTests : TestBase<OwnerAggregatesTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompAArch>.Touch();
+    }
+
     #region Test Infrastructure
 
     /// <summary>
@@ -161,6 +167,7 @@ class OwnerAggregatesTests : TestBase<OwnerAggregatesTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var componentTable = dbe.GetComponentTable<CompA>();
 
@@ -174,7 +181,7 @@ class OwnerAggregatesTests : TestBase<OwnerAggregatesTests>
             for (int i = 0; i < 10; i++)
             {
                 var a = new CompA(i);
-                t.CreateEntity(ref a);
+                t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             }
             t.Commit();
         }
@@ -400,6 +407,7 @@ class OwnerAggregatesTests : TestBase<OwnerAggregatesTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var componentTable = dbe.GetComponentTable<CompA>();
 
@@ -414,7 +422,7 @@ class OwnerAggregatesTests : TestBase<OwnerAggregatesTests>
             for (int i = 0; i < 100; i++)
             {
                 var a = new CompA(i);
-                t.CreateEntity(ref a);
+                t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             }
             t.Commit();
         }

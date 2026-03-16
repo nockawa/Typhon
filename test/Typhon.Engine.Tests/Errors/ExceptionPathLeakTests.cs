@@ -13,8 +13,14 @@ namespace Typhon.Engine.Tests;
 [TestFixture]
 class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompAArch>.Touch();
+    }
+
     private DatabaseEngine _dbe;
-    private long _entityId;
+    private EntityId _entityId;
     private TimeoutOptions _savedTimeouts;
 
     [SetUp]
@@ -24,11 +30,12 @@ class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
 
         _dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(_dbe);
+        _dbe.InitializeArchetypes();
 
         // Create and commit an entity so revision chains are populated
         var comp = new CompA(42);
         using var t = _dbe.CreateQuickTransaction();
-        _entityId = t.CreateEntity(ref comp);
+        _entityId = t.Spawn<CompAArch>(CompAArch.A.Set(in comp));
         t.Commit();
 
         // Override timeouts AFTER DatabaseEngine creation (its ctor sets TimeoutOptions.Current)
@@ -299,13 +306,13 @@ class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
     /// <summary>
     /// Looks up the revision chain's first chunk ID for a given entity via the PrimaryKeyIndex.
     /// </summary>
-    private int LookupRevisionChunkId(ComponentTable ct, long entityId)
+    private int LookupRevisionChunkId(ComponentTable ct, EntityId entityId)
     {
         var depth = _dbe.EpochManager.EnterScope();
         try
         {
             var indexAccessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-            var result = ct.PrimaryKeyIndex.TryGet(entityId, ref indexAccessor);
+            var result = ct.PrimaryKeyIndex.TryGet((long)entityId.RawValue, ref indexAccessor);
             indexAccessor.Dispose();
             Assert.That(result.IsSuccess, Is.True, "Entity should exist in PrimaryKeyIndex");
             return result.Value;

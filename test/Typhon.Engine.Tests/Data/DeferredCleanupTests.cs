@@ -7,36 +7,43 @@ namespace Typhon.Engine.Tests;
 
 class DeferredCleanupTests : TestBase<DeferredCleanupTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompAArch>.Touch();
+    }
+
     [Test]
     public void LongRunningTail_UntouchedEntities_RevisionsCleanedOnTailCommit()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // T1 starts — becomes the tail (oldest active transaction)
         using var t1 = dbe.CreateQuickTransaction();
 
         // T2 creates entity E, commits and disposes
-        long pk;
+        EntityId entityId;
         {
             using var t2 = dbe.CreateQuickTransaction();
             var a = new CompA(10);
-            pk = t2.CreateEntity(ref a);
+            entityId = t2.Spawn<CompAArch>(CompAArch.A.Set(in a));
             t2.Commit();
         }
 
         // T3 updates entity E, commits and disposes
         {
             using var t3 = dbe.CreateQuickTransaction();
-            var a = new CompA(20);
-            t3.UpdateEntity(pk, ref a);
+            ref var a = ref t3.OpenMut(entityId).Write(CompAArch.A);
+            a = new CompA(20);
             t3.Commit();
         }
 
         // Entity E should have 2 revisions (create + update), because T1 is blocking cleanup
         {
             using var tCheck = dbe.CreateQuickTransaction();
-            var revCount = tCheck.GetRevisionCount<CompA>(pk);
+            var revCount = tCheck.GetRevisionCount<CompA>((long)entityId.RawValue);
             Assert.That(revCount, Is.EqualTo(2), "Entity should have 2 revisions while tail is blocking cleanup");
         }
 
@@ -46,7 +53,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         // After T1 commits, deferred cleanup should have removed old revisions
         {
             using var tVerify = dbe.CreateQuickTransaction();
-            var revCount = tVerify.GetRevisionCount<CompA>(pk);
+            var revCount = tVerify.GetRevisionCount<CompA>((long)entityId.RawValue);
             Assert.That(revCount, Is.EqualTo(1), "Entity should have 1 revision after tail commits and deferred cleanup runs");
         }
     }
@@ -56,24 +63,25 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // T1 starts — becomes the tail
         using var t1 = dbe.CreateQuickTransaction();
 
         // T2 creates entity E, commits
-        long pk;
+        EntityId entityId;
         {
             using var t2 = dbe.CreateQuickTransaction();
             var a = new CompA(10);
-            pk = t2.CreateEntity(ref a);
+            entityId = t2.Spawn<CompAArch>(CompAArch.A.Set(in a));
             t2.Commit();
         }
 
         // T3 updates entity E, commits
         {
             using var t3 = dbe.CreateQuickTransaction();
-            var a = new CompA(20);
-            t3.UpdateEntity(pk, ref a);
+            ref var a = ref t3.OpenMut(entityId).Write(CompAArch.A);
+            a = new CompA(20);
             t3.Commit();
         }
 
@@ -92,16 +100,17 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // T1 starts — becomes the tail
         using var t1 = dbe.CreateQuickTransaction();
 
         // T2 creates entity E, commits
-        long pk;
+        EntityId entityId;
         {
             using var t2 = dbe.CreateQuickTransaction();
             var a = new CompA(10);
-            pk = t2.CreateEntity(ref a);
+            entityId = t2.Spawn<CompAArch>(CompAArch.A.Set(in a));
             t2.Commit();
         }
 
@@ -110,8 +119,8 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         // T3 updates the same entity E, commits
         {
             using var t3 = dbe.CreateQuickTransaction();
-            var a = new CompA(20);
-            t3.UpdateEntity(pk, ref a);
+            ref var a = ref t3.OpenMut(entityId).Write(CompAArch.A);
+            a = new CompA(20);
             t3.Commit();
         }
 
@@ -127,23 +136,24 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // T1 starts — becomes the tail
         using var t1 = dbe.CreateQuickTransaction();
 
         // T2 creates entity E, commits
-        long pk;
+        EntityId entityId;
         {
             using var t2 = dbe.CreateQuickTransaction();
             var a = new CompA(10);
-            pk = t2.CreateEntity(ref a);
+            entityId = t2.Spawn<CompAArch>(CompAArch.A.Set(in a));
             t2.Commit();
         }
 
         // T3 deletes entity E, commits
         {
             using var t3 = dbe.CreateQuickTransaction();
-            t3.DeleteEntity<CompA>(pk);
+            t3.Destroy(entityId);
             t3.Commit();
         }
 
@@ -159,6 +169,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         const int entityCount = 50;
 
@@ -166,12 +177,12 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         using var t1 = dbe.CreateQuickTransaction();
 
         // Create many entities in separate transactions
-        var pks = new long[entityCount];
+        var entityIds = new EntityId[entityCount];
         for (int i = 0; i < entityCount; i++)
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(i);
-            pks[i] = t.CreateEntity(ref a);
+            entityIds[i] = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             t.Commit();
         }
 
@@ -179,8 +190,8 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         for (int i = 0; i < entityCount; i++)
         {
             using var t = dbe.CreateQuickTransaction();
-            var a = new CompA(i + 1000);
-            t.UpdateEntity(pks[i], ref a);
+            ref var a = ref t.OpenMut(entityIds[i]).Write(CompAArch.A);
+            a = new CompA(i + 1000);
             t.Commit();
         }
 
@@ -189,7 +200,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
             using var tCheck = dbe.CreateQuickTransaction();
             for (int i = 0; i < entityCount; i++)
             {
-                var revCount = tCheck.GetRevisionCount<CompA>(pks[i]);
+                var revCount = tCheck.GetRevisionCount<CompA>((long)entityIds[i].RawValue);
                 Assert.That(revCount, Is.EqualTo(2), $"Entity {i} should have 2 revisions while tail is blocking");
             }
         }
@@ -202,7 +213,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
             using var tVerify = dbe.CreateQuickTransaction();
             for (int i = 0; i < entityCount; i++)
             {
-                var revCount = tVerify.GetRevisionCount<CompA>(pks[i]);
+                var revCount = tVerify.GetRevisionCount<CompA>((long)entityIds[i].RawValue);
                 Assert.That(revCount, Is.EqualTo(1), $"Entity {i} should have 1 revision after deferred cleanup");
             }
         }
@@ -215,13 +226,14 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Single transaction creates and commits — is its own tail.
         // It enqueues to deferred cleanup, which is processed after the commit loop.
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(42);
-            t.CreateEntity(ref a);
+            t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             t.Commit();
         }
 
@@ -234,17 +246,18 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // T1 (tail, TSN=X), T2 (TSN=X+1) both active
         using var t1 = dbe.CreateQuickTransaction();
         using var t2 = dbe.CreateQuickTransaction();
 
         // T3 creates entity E, commits → enqueued with blockingTSN = T1.TSN
-        long pk;
+        EntityId entityId;
         {
             using var t3 = dbe.CreateQuickTransaction();
             var a = new CompA(10);
-            pk = t3.CreateEntity(ref a);
+            entityId = t3.Spawn<CompAArch>(CompAArch.A.Set(in a));
             t3.Commit();
         }
 
@@ -254,8 +267,8 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         // Should be a no-op because T1.TSN is already the oldest blocker
         {
             using var t4 = dbe.CreateQuickTransaction();
-            var a = new CompA(20);
-            t4.UpdateEntity(pk, ref a);
+            ref var a = ref t4.OpenMut(entityId).Write(CompAArch.A);
+            a = new CompA(20);
             t4.Commit();
         }
 
@@ -272,19 +285,20 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Setup: create entities A and B, each with 1 revision (the create)
-        long pkA, pkB;
+        EntityId idA, idB;
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(1);
-            pkA = t.CreateEntity(ref a);
+            idA = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             t.Commit();
         }
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(2);
-            pkB = t.CreateEntity(ref a);
+            idB = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             t.Commit();
         }
 
@@ -294,8 +308,8 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         // Update entity A → creates 2nd revision, blocked by T_a
         {
             using var t = dbe.CreateQuickTransaction();
-            var a = new CompA(11);
-            t.UpdateEntity(pkA, ref a);
+            ref var a = ref t.OpenMut(idA).Write(CompAArch.A);
+            a = new CompA(11);
             t.Commit();
         }
 
@@ -305,10 +319,13 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         // Update entity B → creates 2nd revision, blocked by T_a (still the tail)
         {
             using var t = dbe.CreateQuickTransaction();
-            var a = new CompA(22);
-            t.UpdateEntity(pkB, ref a);
+            ref var a = ref t.OpenMut(idB).Write(CompAArch.A);
+            a = new CompA(22);
             t.Commit();
         }
+
+        long pkA = (long)idA.RawValue;
+        long pkB = (long)idB.RawValue;
 
         // Both entities should have 2 revisions
         {
@@ -360,23 +377,26 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // T1 (tail), T2 creates entity + commits, T3 updates + commits → 2 revisions, queued
         var t1 = dbe.CreateQuickTransaction();
 
-        long pk;
+        EntityId entityId;
         {
             using var t2 = dbe.CreateQuickTransaction();
             var a = new CompA(10);
-            pk = t2.CreateEntity(ref a);
+            entityId = t2.Spawn<CompAArch>(CompAArch.A.Set(in a));
             t2.Commit();
         }
         {
             using var t3 = dbe.CreateQuickTransaction();
-            var a = new CompA(20);
-            t3.UpdateEntity(pk, ref a);
+            ref var a = ref t3.OpenMut(entityId).Write(CompAArch.A);
+            a = new CompA(20);
             t3.Commit();
         }
+
+        long pk = (long)entityId.RawValue;
 
         // Verify 2 revisions and queue has entries
         {
@@ -403,28 +423,31 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // T1 (tail) makes some changes, T2 creates entity + commits
         var t1 = dbe.CreateQuickTransaction();
         {
             // T1 does some work (writes something to make rollback meaningful)
             var a = new CompA(99);
-            t1.CreateEntity(ref a);
+            t1.Spawn<CompAArch>(CompAArch.A.Set(in a));
         }
 
-        long pk;
+        EntityId entityId;
         {
             using var t2 = dbe.CreateQuickTransaction();
             var a = new CompA(10);
-            pk = t2.CreateEntity(ref a);
+            entityId = t2.Spawn<CompAArch>(CompAArch.A.Set(in a));
             t2.Commit();
         }
         {
             using var t3 = dbe.CreateQuickTransaction();
-            var a = new CompA(20);
-            t3.UpdateEntity(pk, ref a);
+            ref var a = ref t3.OpenMut(entityId).Write(CompAArch.A);
+            a = new CompA(20);
             t3.Commit();
         }
+
+        long pk = (long)entityId.RawValue;
 
         // Verify 2 revisions
         {
@@ -451,6 +474,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         const int entityCount = 20;
 
@@ -458,12 +482,12 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         using var tBlocker = dbe.CreateQuickTransaction();
 
         // Create N entities across parallel tasks (each task creates one entity)
-        var pks = new long[entityCount];
+        var entityIds = new EntityId[entityCount];
         for (int i = 0; i < entityCount; i++)
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(i);
-            pks[i] = t.CreateEntity(ref a);
+            entityIds[i] = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             t.Commit();
         }
 
@@ -471,8 +495,8 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
         Parallel.For(0, entityCount, i =>
         {
             using var t = dbe.CreateQuickTransaction();
-            var a = new CompA(i + 1000);
-            t.UpdateEntity(pks[i], ref a);
+            ref var a = ref t.OpenMut(entityIds[i]).Write(CompAArch.A);
+            a = new CompA(i + 1000);
             t.Commit();
         });
 
@@ -481,7 +505,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
             using var tCheck = dbe.CreateQuickTransaction();
             for (int i = 0; i < entityCount; i++)
             {
-                Assert.That(tCheck.GetRevisionCount<CompA>(pks[i]), Is.EqualTo(2),
+                Assert.That(tCheck.GetRevisionCount<CompA>((long)entityIds[i].RawValue), Is.EqualTo(2),
                     $"Entity {i} should have 2 revisions while blocker is active");
             }
         }
@@ -496,7 +520,7 @@ class DeferredCleanupTests : TestBase<DeferredCleanupTests>
             using var tVerify = dbe.CreateQuickTransaction();
             for (int i = 0; i < entityCount; i++)
             {
-                Assert.That(tVerify.GetRevisionCount<CompA>(pks[i]), Is.EqualTo(1),
+                Assert.That(tVerify.GetRevisionCount<CompA>((long)entityIds[i].RawValue), Is.EqualTo(1),
                     $"Entity {i} should have 1 revision after deferred cleanup");
             }
         }

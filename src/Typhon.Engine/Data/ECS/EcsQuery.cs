@@ -362,7 +362,12 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             }
 
             var meta = ArchetypeRegistry.GetMetadata((ushort)archBit);
-            if (meta?._entityMap == null || meta._slotToComponentTable == null)
+            if (meta == null)
+            {
+                continue;
+            }
+            var engineState = dbe._archetypeStates[meta.ArchetypeId];
+            if (engineState?.EntityMap == null || engineState.SlotToComponentTable == null)
             {
                 continue;
             }
@@ -373,7 +378,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 continue;
             }
 
-            var accessor = meta._entityMap.Segment.CreateChunkAccessor();
+            var accessor = engineState.EntityMap.Segment.CreateChunkAccessor();
             var action = new BroadScanAction
             {
                 Meta = meta,
@@ -386,7 +391,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 StopOnFirst = stopOnFirst,
                 Found = false,
             };
-            meta._entityMap.ForEachEntry(ref accessor, ref action);
+            engineState.EntityMap.ForEachEntry(ref accessor, ref action);
             accessor.Dispose();
 
             if (stopOnFirst && action.Found)
@@ -411,7 +416,12 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             }
 
             var meta = ArchetypeRegistry.GetMetadata((ushort)archBit);
-            if (meta?._entityMap == null || meta._slotToComponentTable == null)
+            if (meta == null)
+            {
+                continue;
+            }
+            var engineState = dbe._archetypeStates[meta.ArchetypeId];
+            if (engineState?.EntityMap == null || engineState.SlotToComponentTable == null)
             {
                 continue;
             }
@@ -422,7 +432,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 continue;
             }
 
-            var accessor = meta._entityMap.Segment.CreateChunkAccessor();
+            var accessor = engineState.EntityMap.Segment.CreateChunkAccessor();
             var action = new BroadScanCollectAction
             {
                 Meta = meta,
@@ -433,7 +443,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 RequiredDisabled = reqDisabled,
                 Results = results,
             };
-            meta._entityMap.ForEachEntry(ref accessor, ref action);
+            engineState.EntityMap.ForEachEntry(ref accessor, ref action);
             accessor.Dispose();
         }
     }
@@ -588,7 +598,8 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                     continue;
                 }
 
-                _current = new EntityRef(id, meta, _tx, enabledBits, false);
+                var engineState = _tx.DBE._archetypeStates[meta.ArchetypeId];
+                _current = new EntityRef(id, meta, engineState, _tx, enabledBits, false);
                 _current.CopyLocationsFrom(recordBytes, meta.ComponentCount);
                 return true;
             }

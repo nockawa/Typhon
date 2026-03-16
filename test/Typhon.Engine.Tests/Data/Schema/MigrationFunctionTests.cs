@@ -144,30 +144,97 @@ struct MigMissingV2
 
 #endregion
 
+// ── Archetypes for V1 components (used for Spawn in first scope) ──
+
+[Archetype(310)]
+class MigPlayerArch : Archetype<MigPlayerArch>
+{
+    public static readonly Comp<MigPlayerV1> Comp = Register<MigPlayerV1>();
+}
+
+[Archetype(311)]
+class MigChainArch : Archetype<MigChainArch>
+{
+    public static readonly Comp<MigChainV1> Comp = Register<MigChainV1>();
+}
+
+[Archetype(312)]
+class MigByteArch : Archetype<MigByteArch>
+{
+    public static readonly Comp<MigByteV1> Comp = Register<MigByteV1>();
+}
+
+[Archetype(313)]
+class MigFailArch : Archetype<MigFailArch>
+{
+    public static readonly Comp<MigFailV1> Comp = Register<MigFailV1>();
+}
+
+[Archetype(314)]
+class MigMissingArch : Archetype<MigMissingArch>
+{
+    public static readonly Comp<MigMissingV1> Comp = Register<MigMissingV1>();
+}
+
+// V2 archetypes (used for Open().Read() in scope 2 after migration)
+
+[Archetype(315)]
+class MigPlayerV2Arch : Archetype<MigPlayerV2Arch>
+{
+    public static readonly Comp<MigPlayerV2> Comp = Register<MigPlayerV2>();
+}
+
+[Archetype(316)]
+class MigChainV3Arch : Archetype<MigChainV3Arch>
+{
+    public static readonly Comp<MigChainV3> Comp = Register<MigChainV3>();
+}
+
+[Archetype(317)]
+class MigByteV2Arch : Archetype<MigByteV2Arch>
+{
+    public static readonly Comp<MigByteV2> Comp = Register<MigByteV2>();
+}
+
 /// <summary>
 /// Tests for Phase 4: Migration Functions.
 /// Verifies user-defined migration functions for breaking schema changes, chaining, error handling, and byte-level API.
 /// </summary>
+[NonParallelizable]
 class MigrationFunctionTests : TestBase<MigrationFunctionTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<MigPlayerArch>.Touch();
+        Archetype<MigChainArch>.Touch();
+        Archetype<MigByteArch>.Touch();
+        Archetype<MigFailArch>.Touch();
+        Archetype<MigMissingArch>.Touch();
+        Archetype<MigPlayerV2Arch>.Touch();
+        Archetype<MigChainV3Arch>.Touch();
+        Archetype<MigByteV2Arch>.Touch();
+    }
+
     [Test]
     public void SingleStepMigration_SemanticConversion_AllEntitiesTransformed()
     {
-        long pk1, pk2, pk3;
+        EntityId entityId1, entityId2, entityId3;
 
         // Phase 1: Create database with V1, populate multiple entities
         using (var scope = ServiceProvider.CreateScope())
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<MigPlayerV1>();
+            dbe.InitializeArchetypes();
 
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
             var c1 = new MigPlayerV1(100, 50);
             var c2 = new MigPlayerV1(75, 200);
             var c3 = new MigPlayerV1(0, 0);
-            pk1 = t.CreateEntity(ref c1);
-            pk2 = t.CreateEntity(ref c2);
-            pk3 = t.CreateEntity(ref c3);
+            entityId1 = t.Spawn<MigPlayerArch>(MigPlayerArch.Comp.Set(in c1));
+            entityId2 = t.Spawn<MigPlayerArch>(MigPlayerArch.Comp.Set(in c2));
+            entityId3 = t.Spawn<MigPlayerArch>(MigPlayerArch.Comp.Set(in c3));
             t.Commit();
         }
 
@@ -188,19 +255,20 @@ class MigrationFunctionTests : TestBase<MigrationFunctionTests>
             });
 
             dbe.RegisterComponentFromAccessor<MigPlayerV2>();
+            dbe.InitializeArchetypes();
 
             using var t = dbe.CreateQuickTransaction();
 
-            Assert.That(t.ReadEntity<MigPlayerV2>(pk1, out var r1), Is.True);
+            ref readonly var r1 = ref t.Open(entityId1).Read(MigPlayerV2Arch.Comp);
             Assert.That(r1.Health, Is.EqualTo(1.0f));
             Assert.That(r1.Mana, Is.EqualTo(50));
             Assert.That(r1.Shield, Is.EqualTo(0));
 
-            Assert.That(t.ReadEntity<MigPlayerV2>(pk2, out var r2), Is.True);
+            ref readonly var r2 = ref t.Open(entityId2).Read(MigPlayerV2Arch.Comp);
             Assert.That(r2.Health, Is.EqualTo(0.75f));
             Assert.That(r2.Mana, Is.EqualTo(200));
 
-            Assert.That(t.ReadEntity<MigPlayerV2>(pk3, out var r3), Is.True);
+            ref readonly var r3 = ref t.Open(entityId3).Read(MigPlayerV2Arch.Comp);
             Assert.That(r3.Health, Is.EqualTo(0.0f));
             Assert.That(r3.Mana, Is.EqualTo(0));
         }
@@ -209,17 +277,18 @@ class MigrationFunctionTests : TestBase<MigrationFunctionTests>
     [Test]
     public void ChainedMigration_ThreeSteps_FinalValuesCorrect()
     {
-        long pk;
+        EntityId entityId;
 
         // Phase 1: Create with V1
         using (var scope = ServiceProvider.CreateScope())
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<MigChainV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new MigChainV1(42, 100);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            pk = t.CreateEntity(ref comp);
+            entityId = t.Spawn<MigChainArch>(MigChainArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -248,9 +317,10 @@ class MigrationFunctionTests : TestBase<MigrationFunctionTests>
             });
 
             dbe.RegisterComponentFromAccessor<MigChainV3>();
+            dbe.InitializeArchetypes();
 
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity<MigChainV3>(pk, out var result), Is.True);
+            ref readonly var result = ref t.Open(entityId).Read(MigChainV3Arch.Comp);
             Assert.That(result.Value, Is.EqualTo(42.0));
             Assert.That(result.TotalScore, Is.EqualTo(110L)); // 100 + 10
         }
@@ -259,19 +329,18 @@ class MigrationFunctionTests : TestBase<MigrationFunctionTests>
     [Test]
     public void MigrationFunctionThrows_EntityLogged_ThrowsSchemaMigrationException()
     {
-        long pk1, pk2;
-
         // Phase 1: Create with V1
         using (var scope = ServiceProvider.CreateScope())
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<MigFailV1>();
+            dbe.InitializeArchetypes();
 
             var c1 = new MigFailV1(42);
             var c2 = new MigFailV1(-1); // This one will trigger the migration failure
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            pk1 = t.CreateEntity(ref c1);
-            pk2 = t.CreateEntity(ref c2);
+            t.Spawn<MigFailArch>(MigFailArch.Comp.Set(in c1));
+            t.Spawn<MigFailArch>(MigFailArch.Comp.Set(in c2));
             t.Commit();
         }
 
@@ -308,10 +377,11 @@ class MigrationFunctionTests : TestBase<MigrationFunctionTests>
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<MigMissingV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new MigMissingV1(42);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            t.CreateEntity(ref comp);
+            t.Spawn<MigMissingArch>(MigMissingArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -330,17 +400,18 @@ class MigrationFunctionTests : TestBase<MigrationFunctionTests>
     [Test]
     public void ByteLevelMigration_RawByteTransformation()
     {
-        long pk;
+        EntityId entityId;
 
         // Phase 1: Create with V1 (int A=100, int B=42)
         using (var scope = ServiceProvider.CreateScope())
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<MigByteV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new MigByteV1(100, 42);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            pk = t.CreateEntity(ref comp);
+            entityId = t.Spawn<MigByteArch>(MigByteArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -360,9 +431,10 @@ class MigrationFunctionTests : TestBase<MigrationFunctionTests>
                 });
 
             dbe.RegisterComponentFromAccessor<MigByteV2>();
+            dbe.InitializeArchetypes();
 
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity<MigByteV2>(pk, out var result), Is.True);
+            ref readonly var result = ref t.Open(entityId).Read(MigByteV2Arch.Comp);
             Assert.That(result.A, Is.EqualTo(100.0f));
             Assert.That(result.B, Is.EqualTo(42));
         }
@@ -391,17 +463,18 @@ class MigrationFunctionTests : TestBase<MigrationFunctionTests>
     [Test]
     public void MigrationAfterMigration_CanCreateNewEntities()
     {
-        long pk1;
+        EntityId entityId1;
 
         // Phase 1: Create with V1
         using (var scope = ServiceProvider.CreateScope())
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<MigPlayerV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new MigPlayerV1(80, 300);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            pk1 = t.CreateEntity(ref comp);
+            entityId1 = t.Spawn<MigPlayerArch>(MigPlayerArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -421,20 +494,21 @@ class MigrationFunctionTests : TestBase<MigrationFunctionTests>
             });
 
             dbe.RegisterComponentFromAccessor<MigPlayerV2>();
+            dbe.InitializeArchetypes();
 
             // Create new V2 entity
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
             var newComp = new MigPlayerV2(0.5f, 999, 50);
-            var pk2 = t.CreateEntity(ref newComp);
+            var entityId2 = t.Spawn<MigPlayerV2Arch>(MigPlayerV2Arch.Comp.Set(in newComp));
             t.Commit();
 
             // Verify both old (migrated) and new entities
             using var t2 = dbe.CreateQuickTransaction();
-            Assert.That(t2.ReadEntity<MigPlayerV2>(pk1, out var r1), Is.True);
+            ref readonly var r1 = ref t2.Open(entityId1).Read(MigPlayerV2Arch.Comp);
             Assert.That(r1.Health, Is.EqualTo(0.8f));
             Assert.That(r1.Mana, Is.EqualTo(300));
 
-            Assert.That(t2.ReadEntity<MigPlayerV2>(pk2, out var r2), Is.True);
+            ref readonly var r2 = ref t2.Open(entityId2).Read(MigPlayerV2Arch.Comp);
             Assert.That(r2.Health, Is.EqualTo(0.5f));
             Assert.That(r2.Mana, Is.EqualTo(999));
             Assert.That(r2.Shield, Is.EqualTo(50));

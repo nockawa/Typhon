@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Linq.Expressions;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 
@@ -8,22 +9,33 @@ namespace Typhon.Engine.Tests;
 
 class OrViewTests : TestBase<OrViewTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompDArch>.Touch();
+    }
+
     // CompD layout: A=float(offset 0, idx 0), B=int(offset 4, idx 1), C=double(offset 8, idx 2)
+
+    /// <summary>Reconstructs an EntityId from a raw pk value (test-only, uses InternalsVisibleTo).</summary>
+    private static EntityId ToEntityId(long pk) =>
+        Unsafe.As<long, EntityId>(ref pk);
 
     private static long CreateAndCommit(DatabaseEngine dbe, float a, int b, double c)
     {
         using var t = dbe.CreateQuickTransaction();
         var d = new CompD(a, b, c);
-        var pk = t.CreateEntity(ref d);
+        var id = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
         t.Commit();
-        return pk;
+        return (long)id.RawValue;
     }
 
     private static void UpdateAndCommit(DatabaseEngine dbe, long pk, float a, int b, double c)
     {
         using var t = dbe.CreateQuickTransaction();
         var d = new CompD(a, b, c);
-        t.UpdateEntity(pk, ref d);
+        ref var w = ref t.OpenMut(ToEntityId(pk)).Write(CompDArch.D);
+        w = d;
         t.Commit();
     }
 
@@ -106,24 +118,12 @@ class OrViewTests : TestBase<OrViewTests>
     [Test]
     public void ParseDnf_ClauseLimit_ThrowsOver16()
     {
-        // (A||B) && (C||D) && (E||F) && (G||H) && (I||J) = 2^5 = 32 branches
-        // We can't easily construct 5 independent two-field ORs with CompD (only 3 fields),
-        // but we can verify the limit with a direct test using the internal AST approach.
-        // Instead, verify that a more moderate case works and an excessive one fails.
-
-        // 3 OR pairs using same fields with different thresholds would still produce many branches
-        // Let's test with a simpler approach: verify limit is enforced
-        // (B > 50 || B < 10) && (A > 3 || A < 1) && (C > 5 || C < 1) && (B > 90 || B < 5) && (A > 9 || A < 0.5)
-        // = 2^5 = 32 branches → should throw
         Expression<Func<CompD, bool>> expr = p =>
             (p.B > 50 || p.B < 10) && (p.A > 3.0f || p.A < 1.0f) && (p.C > 5.0 || p.C < 1.0);
         // 2^3 = 8 branches — should be fine
         var branches = ExpressionParser.ParseDnf(expr);
         Assert.That(branches.Length, Is.EqualTo(8));
         Assert.That(branches.Length, Is.LessThanOrEqualTo(16));
-
-        // Now chain 2 more via Where to get 8 * 2 * 2 = 32 → cross-product will catch it
-        // We'll test the limit via the QueryBuilder's cross-product instead
     }
 
     #endregion
@@ -135,6 +135,7 @@ class OrViewTests : TestBase<OrViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var pk1 = CreateAndCommit(dbe, 1.0f, 60, 2.0);  // B > 50 → match branch 0
         var pk2 = CreateAndCommit(dbe, 1.0f, 5, 2.0);   // B < 10 → match branch 1
@@ -156,6 +157,7 @@ class OrViewTests : TestBase<OrViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Predicate: (A > 3.0f && B > 40) || B == 0
         // B has a unique index — all B values must be distinct
@@ -182,10 +184,8 @@ class OrViewTests : TestBase<OrViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        // Entity matches both branches: B > 50 || B < 10
-        // Start with B=60 (branch 0 holds) and B=5 would also match
-        // Use entity that matches branch 0 only
         var pk = CreateAndCommit(dbe, 1.0f, 60, 2.0);   // B=60 → branch 0 (B>50) only
 
         using var view = dbe.Query<CompD>().Where(p => p.B > 50 || p.B < 10).ToView();
@@ -203,6 +203,7 @@ class OrViewTests : TestBase<OrViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var pk = CreateAndCommit(dbe, 1.0f, 60, 2.0);  // B=60 → branch 0 (B>50)
 
@@ -223,6 +224,7 @@ class OrViewTests : TestBase<OrViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var pk = CreateAndCommit(dbe, 1.0f, 30, 2.0);  // B=30 → neither branch
 
@@ -243,6 +245,7 @@ class OrViewTests : TestBase<OrViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // B > 50 || B < 10 — field B appears in both branches
         var pk = CreateAndCommit(dbe, 1.0f, 60, 2.0);  // B=60 → branch 0
@@ -269,6 +272,7 @@ class OrViewTests : TestBase<OrViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var pk1 = CreateAndCommit(dbe, 1.0f, 60, 2.0);  // B>50 → in view
         var pk2 = CreateAndCommit(dbe, 1.0f, 30, 2.0);  // B=30 → not in view
@@ -297,6 +301,7 @@ class OrViewTests : TestBase<OrViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var pk = CreateAndCommit(dbe, 1.0f, 60, 2.0);  // B=60 → branch 0
 
@@ -327,6 +332,7 @@ class OrViewTests : TestBase<OrViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var pk1 = CreateAndCommit(dbe, 1.0f, 60, 2.0);  // B>50
         var pk2 = CreateAndCommit(dbe, 1.0f, 5, 2.0);   // B<10
@@ -362,6 +368,7 @@ class OrViewTests : TestBase<OrViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var pk1 = CreateAndCommit(dbe, 1.0f, 60, 2.0);  // B>50
         var pk2 = CreateAndCommit(dbe, 1.0f, 5, 2.0);   // B<10
@@ -383,6 +390,7 @@ class OrViewTests : TestBase<OrViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateAndCommit(dbe, 1.0f, 60, 2.0);   // B>50
         CreateAndCommit(dbe, 1.0f, 5, 2.0);    // B<10
@@ -399,6 +407,7 @@ class OrViewTests : TestBase<OrViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // (A > 3.0f && B > 40) || B == 0
         // B has a unique index — all B values must be distinct
@@ -420,6 +429,7 @@ class OrViewTests : TestBase<OrViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateAndCommit(dbe, 1.0f, 60, 2.0);  // B>50
 
@@ -436,6 +446,7 @@ class OrViewTests : TestBase<OrViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateAndCommit(dbe, 5.0f, 50, 2.0);
 

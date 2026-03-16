@@ -24,22 +24,27 @@ public struct CompStr64
 
 class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
 {
-    private static long CreateAndCommitCompD(DatabaseEngine dbe, float a, int b, double c)
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompDArch>.Touch();
+        Archetype<CompFArch>.Touch();
+    }
+
+    private static void CreateAndCommitCompD(DatabaseEngine dbe, float a, int b, double c)
     {
         using var t = dbe.CreateQuickTransaction();
         var d = new CompD(a, b, c);
-        var pk = t.CreateEntity(ref d);
+        t.Spawn<CompDArch>(CompDArch.D.Set(in d));
         t.Commit();
-        return pk;
     }
 
-    private static long CreateAndCommitCompF(DatabaseEngine dbe, int gold, int rank)
+    private static void CreateAndCommitCompF(DatabaseEngine dbe, int gold, int rank)
     {
         using var t = dbe.CreateQuickTransaction();
         var f = new CompF(gold, rank);
-        var pk = t.CreateEntity(ref f);
+        t.Spawn<CompFArch>(CompFArch.F.Set(in f));
         t.Commit();
-        return pk;
     }
 
     [Test]
@@ -47,6 +52,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
         // Insert 200 entities with B from 0 to 199
@@ -75,6 +81,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
         for (int i = 0; i < 100; i++)
@@ -99,6 +106,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompF>();
 
         // Gold (AllowMultiple): 80 entities with Gold=42, 20 with Gold=99
@@ -128,6 +136,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
         for (int i = 0; i < 100; i++)
@@ -165,21 +174,29 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
         Assert.That(ct.MutationsSinceRebuild, Is.EqualTo(0));
 
         // Create increments
-        var pk = CreateAndCommitCompD(dbe, 1.0f, 10, 1.0);
+        EntityId id;
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var d = new CompD(1.0f, 10, 1.0);
+            id = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
+            t.Commit();
+        }
         Assert.That(ct.MutationsSinceRebuild, Is.GreaterThan(0));
 
         int afterCreate = ct.MutationsSinceRebuild;
 
         // Update with changed index field increments further
-        using var t = dbe.CreateQuickTransaction();
-        var d = new CompD(2.0f, 20, 2.0); // all fields changed
-        t.UpdateEntity(pk, ref d);
-        t.Commit();
+        using var t2 = dbe.CreateQuickTransaction();
+        var d2 = new CompD(2.0f, 20, 2.0); // all fields changed
+        ref var w = ref t2.OpenMut(id).Write(CompDArch.D);
+        w = d2;
+        t2.Commit();
 
         Assert.That(ct.MutationsSinceRebuild, Is.GreaterThan(afterCreate));
     }
@@ -189,6 +206,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
         for (int i = 0; i < 10; i++)
@@ -208,6 +226,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
         // Should not throw on empty table
@@ -222,6 +241,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompF>();
 
         // Gold is AllowMultiple: 30 entities with Gold=10, 20 with Gold=50
@@ -252,6 +272,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var options = new StatisticsOptions { Enabled = true, PollIntervalMs = 100 };
         using var worker = new StatisticsWorker(dbe, options, dbe.EpochManager, dbe);
@@ -270,6 +291,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
         for (int i = 0; i < 200; i++)
@@ -312,6 +334,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         dbe.RegisterComponentFromAccessor<CompStr64>();
 
         var ct = dbe.GetComponentTable<CompStr64>();
@@ -339,6 +362,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         dbe.RegisterComponentFromAccessor<CompStr64>();
 
         var ctStr = dbe.GetComponentTable<CompStr64>();
@@ -394,6 +418,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
         // Insert entities with float A spanning negative-to-positive range
@@ -431,6 +456,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         dbe.RegisterComponentFromAccessor<CompGuild>();
         dbe.RegisterComponentFromAccessor<CompPlayer>();
 
@@ -461,6 +487,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         dbe.RegisterComponentFromAccessor<CompGuild>();
         dbe.RegisterComponentFromAccessor<CompPlayer>();
 
@@ -493,6 +520,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
         for (int i = 0; i < 100; i++)
@@ -529,6 +557,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var options = new StatisticsOptions { Enabled = true, PollIntervalMs = 100 };
         using var worker = new StatisticsWorker(dbe, options, dbe.EpochManager, dbe);
@@ -542,6 +571,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
         // Insert 500 entities with B from 0 to 499

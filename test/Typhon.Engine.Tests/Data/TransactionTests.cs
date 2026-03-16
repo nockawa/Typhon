@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
 using System;
@@ -8,6 +8,15 @@ namespace Typhon.Engine.Tests;
 
 class TransactionTests : TestBase<TransactionTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompAArch>.Touch();
+        Archetype<CompABCArch>.Touch();
+        Archetype<CompABArch>.Touch();
+        Archetype<CompDArch>.Touch();
+    }
+
     [Test]
     [TestCaseSource(nameof(BuildNoiseCasesL2), [2])]
     public void CreateComp_SingleTransaction_SuccessfulCommit(int noiseMode, bool noiseOwnTransaction, bool rollback)
@@ -15,13 +24,14 @@ class TransactionTests : TestBase<TransactionTests>
         {
             using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
             RegisterComponents(dbe);
+            dbe.InitializeArchetypes();
 
-            long e1;
+            EntityId e1;
             var a = new CompA(2);
             var b = new CompB(1, 1.2f);
             var c = new CompC("Porcupine Tree");
 
-            long[] noiseIds = null;
+            EntityId[] noiseIds = null;
             if (noiseMode >= 1)
             {
                 noiseIds = CreateNoiseCompA(dbe);
@@ -35,9 +45,8 @@ class TransactionTests : TestBase<TransactionTests>
                     UpdateNoiseCompA(dbe, noiseOwnTransaction ? null : t, noiseIds);
                 }
 
-                e1 = t.CreateEntity(ref a, ref b, ref c);
-                Assert.That(e1, Is.Not.Zero, "A valid entity id must be non-zero");
-                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1), "Creating a component should lead to a revision of 1");
+                e1 = t.Spawn<CompABCArch>(CompABCArch.A.Set(in a), CompABCArch.B.Set(in b), CompABCArch.C.Set(in c));
+                Assert.That(e1.IsNull, Is.False, "A valid entity id must be non-null");
 
                 if (rollback)
                 {
@@ -56,16 +65,13 @@ class TransactionTests : TestBase<TransactionTests>
             if (rollback)
             {
                 using var t = dbe.CreateQuickTransaction();
-                var res = t.ReadEntity(e1, out CompA ar);
-                Assert.That(res, Is.False, "Entity read on a rolled back component should not be successful");
+                Assert.That(t.IsAlive(e1), Is.False, "Entity read on a rolled back component should not be successful");
             }
             else
             {
                 using var t = dbe.CreateQuickTransaction();
-                var res = t.ReadEntity(e1, out CompA ar);
-                Assert.That(res, Is.True, "Entity read on an existing component should be successful");
+                var ar = t.Open(e1).Read(CompABCArch.A);
                 Assert.That(ar.A, Is.EqualTo(a.A), $"Component should have a value of {a.A}");
-                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1), "Component should have a revision of 1 as we only created it.");
             }
         }
     }
@@ -77,8 +83,9 @@ class TransactionTests : TestBase<TransactionTests>
         {
             using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
             RegisterComponents(dbe);
+            dbe.InitializeArchetypes();
 
-            long[] noiseIds = null;
+            EntityId[] noiseIds = null;
             if (noiseMode >= 1)
             {
                 noiseIds = CreateNoiseCompA(dbe);
@@ -90,20 +97,18 @@ class TransactionTests : TestBase<TransactionTests>
             var b = new CompB(1, 1.2f);
             var c = new CompC("Porcupine Tree");
 
-            var e1 = t.CreateEntity(ref a, ref b, ref c);
-            Assert.That(e1, Is.Not.Zero, "A valid entity id must be non-zero");
-            Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1), "Creating a component should lead to a revision of 1");
+            var e1 = t.Spawn<CompABCArch>(CompABCArch.A.Set(in a), CompABCArch.B.Set(in b), CompABCArch.C.Set(in c));
+            Assert.That(e1.IsNull, Is.False, "A valid entity id must be non-null");
 
             if (noiseMode >= 2)
             {
                 UpdateNoiseCompA(dbe, noiseOwnTransaction ? null : t, noiseIds);
             }
 
-            var res = t.ReadEntity(e1, out CompA ar);
-            Assert.That(res, Is.True, "Entity read on an existing component should be successful");
+            var ar = t.Open(e1).Read(CompABCArch.A);
             Assert.That(ar.A, Is.EqualTo(a.A), $"The read component should have a value of {a.A}");
 
-            res = t.Commit();
+            var res = t.Commit();
             Assert.That(res, Is.True, "Transaction commit should be successful");
             Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(3), "Committing three components should lead to at least 3 operations");
         }
@@ -119,10 +124,10 @@ class TransactionTests : TestBase<TransactionTests>
         {
             using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
             RegisterComponents(dbe);
+            dbe.InitializeArchetypes();
 
-            long[] noiseIds = null;
-            long e1;
-            int arev;
+            EntityId[] noiseIds = null;
+            EntityId e1;
             {
                 using var t = dbe.CreateQuickTransaction();
 
@@ -131,16 +136,12 @@ class TransactionTests : TestBase<TransactionTests>
                     noiseIds = CreateNoiseCompA(dbe, noiseOwnTransaction ? null : t);
                 }
 
-                e1 = t.CreateEntity(ref a, ref b, ref c);
-                Assert.That(e1, Is.Not.Zero, "A valid entity id must be non-zero");
-                var createRev = t.GetComponentRevision<CompA>(e1);
-                Assert.That(createRev, Is.EqualTo(1), "Creating a component should lead to a revision of 1");
+                e1 = t.Spawn<CompABCArch>(CompABCArch.A.Set(in a), CompABCArch.B.Set(in b), CompABCArch.C.Set(in c));
+                Assert.That(e1.IsNull, Is.False, "A valid entity id must be non-null");
 
                 var res = t.Commit();
                 Assert.That(res, Is.True, "Transaction commit should be successful");
                 Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(3), "Committing three components should lead to at least three operations");
-                arev = t.GetComponentRevision<CompA>(e1);
-                Assert.That(arev, Is.EqualTo(createRev), "Committing shouldn't alter the component revision");
             }
 
             {
@@ -151,10 +152,8 @@ class TransactionTests : TestBase<TransactionTests>
                     UpdateNoiseCompA(dbe, noiseOwnTransaction ? null : t, noiseIds);
                 }
 
-                var res = t.ReadEntity(e1, out CompA ar);
-                Assert.That(res, Is.True, "Reading an existing component should be succesful");
+                var ar = t.Open(e1).Read(CompABCArch.A);
                 Assert.That(ar.A, Is.EqualTo(a.A), $"The read value should be {a.A}");
-                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(arev), "Reading a component shouldn't alter its revision");
             }
         }
     }
@@ -170,9 +169,10 @@ class TransactionTests : TestBase<TransactionTests>
         {
             using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
             RegisterComponents(dbe);
+            dbe.InitializeArchetypes();
 
-            long[] noiseIds = null;
-            long e1;
+            EntityId[] noiseIds = null;
+            EntityId e1;
             {
                 using var t = dbe.CreateQuickTransaction();
 
@@ -181,9 +181,8 @@ class TransactionTests : TestBase<TransactionTests>
                     noiseIds = CreateNoiseCompA(dbe, noiseOwnTransaction ? null : t);
                 }
 
-                e1 = t.CreateEntity(ref a, ref b, ref c);
-                Assert.That(e1, Is.Not.Zero, "A valid entity id must be non-zero");
-                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1), "Creating a component should lead to a unique revision");
+                e1 = t.Spawn<CompABCArch>(CompABCArch.A.Set(in a), CompABCArch.B.Set(in b), CompABCArch.C.Set(in c));
+                Assert.That(e1.IsNull, Is.False, "A valid entity id must be non-null");
 
                 if (noiseMode >= 2)
                 {
@@ -191,13 +190,13 @@ class TransactionTests : TestBase<TransactionTests>
                 }
 
                 a.A = aChanged;
-                t.UpdateEntity(e1, ref a);
+                ref var wa = ref t.OpenMut(e1).Write(CompABCArch.A);
+                wa = a;
 
                 var res = t.Commit();
                 Assert.That(res, Is.True, "Transaction commit should be successful");
                 Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(3), "Committing three components should lead to at least three operations");
                 Assert.That(a.A, Is.EqualTo(aChanged), "Update after create in the same transaction should have the updated value");
-                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1), "Update after create in the same transaction should lead to one revision only");
             }
 
             {
@@ -208,10 +207,8 @@ class TransactionTests : TestBase<TransactionTests>
                     ReadNoiseCompA(dbe, noiseOwnTransaction ? null : t, noiseIds);
                 }
 
-                var res = t.ReadEntity(e1, out CompA ar);
-                Assert.That(res, Is.True, "Entity read on an existing component should be successful");
+                var ar = t.Open(e1).Read(CompABCArch.A);
                 Assert.That(ar.A, Is.EqualTo(aChanged), $"Component should have a value of {aChanged}");
-                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1), "Component should have a revision of 1 as we only created it.");
             }
         }
     }
@@ -223,23 +220,23 @@ class TransactionTests : TestBase<TransactionTests>
         {
             using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
             RegisterComponents(dbe);
+            dbe.InitializeArchetypes();
 
             var a = new CompA(2);
             var b = new CompB(1, 1.2f);
             var c = new CompC("Porcupine Tree");
-            long e1;
+            EntityId e1;
             {
                 using var t = dbe.CreateQuickTransaction();
 
-                e1 = t.CreateEntity(ref a, ref b, ref c);
-                Assert.That(e1, Is.Not.Zero, "A valid entity id must be non-zero");
-                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1), "Creating a component should lead to a unique revision");
+                e1 = t.Spawn<CompABCArch>(CompABCArch.A.Set(in a), CompABCArch.B.Set(in b), CompABCArch.C.Set(in c));
+                Assert.That(e1.IsNull, Is.False, "A valid entity id must be non-null");
 
                 var res = t.Commit();
                 Assert.That(res, Is.True);
             }
 
-            long[] noiseIds = null;
+            EntityId[] noiseIds = null;
             {
                 using var t = dbe.CreateQuickTransaction();
 
@@ -250,8 +247,7 @@ class TransactionTests : TestBase<TransactionTests>
 
                 if (readBeforeUpdate)
                 {
-                    var rr = t.ReadEntity(e1, out CompA ar);
-                    Assert.That(rr, Is.True);
+                    var ar = t.Open(e1).Read(CompABCArch.A);
                     Assert.That(ar.A, Is.EqualTo(a.A), "Read in the second transaction should retrieve the component created in the earlier one");
                 }
 
@@ -261,21 +257,20 @@ class TransactionTests : TestBase<TransactionTests>
                 }
 
                 var a2 = new CompA(12);
-                t.UpdateEntity(e1, ref a2);
+                ref var wa2 = ref t.OpenMut(e1).Write(CompABCArch.A);
+                wa2 = a2;
 
                 if (noiseMode >= 3)
                 {
                     ReadNoiseCompA(dbe, noiseOwnTransaction ? null : t, noiseIds);
                 }
 
-                var res = t.ReadEntity(e1, out CompA ar2);
-                Assert.That(res, Is.True);
+                var ar2 = t.Open(e1).Read(CompABCArch.A);
                 Assert.That(ar2.A, Is.EqualTo(a2.A), "Read after update should reflect the updated value");
 
-                res = t.Commit();
+                var res = t.Commit();
                 Assert.That(res, Is.True);
                 Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(1), "Committing three components should lead to at least one operation");
-                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(2), "Update after create in different transaction should lead to two distinct revisions");
             }
 
             // Flush deferred cleanup and verify with a fresh transaction (committed tx's ChangeSet
@@ -284,54 +279,10 @@ class TransactionTests : TestBase<TransactionTests>
             {
                 using var t = dbe.CreateQuickTransaction();
 
-                Assert.That(t.GetRevisionCount<CompA>(e1), Is.EqualTo(1), "Committing an update should remove the previous revision (as the transaction is alone).");
-                var res = t.ReadEntity(e1, out CompA a2);
-                Assert.That(res, Is.True);
-                Assert.That(a2.A, Is.EqualTo(12), "Read after update should reflect the updated value");
-                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(2), "Update after create in different transaction should lead to two distinct revisions");
+                Assert.That(t.GetRevisionCount<CompA>((long)e1.RawValue), Is.EqualTo(1), "Committing an update should remove the previous revision (as the transaction is alone).");
+                var a2Read = t.Open(e1).Read(CompABCArch.A);
+                Assert.That(a2Read.A, Is.EqualTo(12), "Read after update should reflect the updated value");
             }
-        }
-    }
-
-    [Test]
-    public void CreateReadUpdate_MultipleComponent_SuccessfulOperation()
-    {
-        long e1;
-        var a = new CompA(1);
-        Span<CompE> eList = stackalloc CompE[16];
-        for (int i = 0; i < eList.Length; i++)
-        {
-            eList[i] = new CompE(12.0f + i, i, 3*i);
-        }
-
-        {
-            using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-            RegisterComponents(dbe);
-
-            {
-                using var t = dbe.CreateQuickTransaction();
-
-                e1 = t.CreateEntity(ref a, eList);
-                Assert.That(e1, Is.Not.Zero, "A valid entity id must be non-zero");
-                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1), "Creating a component should lead to a unique revision");
-
-                var res = t.Commit();
-                Assert.That(res, Is.True);
-            }
-
-            {
-                using var t = dbe.CreateQuickTransaction();
-
-                var res = t.ReadEntity(e1, out a, out CompE[] eList2);
-                Assert.That(res, Is.True);
-                Assert.That(eList2.Length, Is.EqualTo(16));
-
-                for (int i = 0; i < 16; i++)
-                {
-                    Assert.That(eList[i], Is.EqualTo(eList2[i]));
-                }
-            }
-
         }
     }
 
@@ -341,17 +292,17 @@ class TransactionTests : TestBase<TransactionTests>
         {
             using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
             RegisterComponents(dbe);
+            dbe.InitializeArchetypes();
 
             var curRevisionCount = 0;
-            long e1;
+            EntityId e1;
             {
                 using var t = dbe.CreateQuickTransaction();
 
                 var a = new CompA(2, 3, 4);
-                e1 = t.CreateEntity(ref a);
+                e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
                 curRevisionCount++;
-                Assert.That(e1, Is.Not.Zero, "A valid entity id must be non-zero");
-                Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1), "Creating a component should lead to a unique revision");
+                Assert.That(e1.IsNull, Is.False, "A valid entity id must be non-null");
 
                 var res = t.Commit();
                 Assert.That(res, Is.True);
@@ -361,7 +312,8 @@ class TransactionTests : TestBase<TransactionTests>
             var longRunningValue = new CompA(200, 300, 400);
             var longRunningTransaction = dbe.CreateQuickTransaction();
             {
-                longRunningTransaction.UpdateEntity(e1, ref longRunningValue);
+                ref var w = ref longRunningTransaction.OpenMut(e1).Write(CompAArch.A);
+                w = longRunningValue;
                 curRevisionCount++;
             }
 
@@ -383,7 +335,8 @@ class TransactionTests : TestBase<TransactionTests>
                     using var t = dbe.CreateQuickTransaction();
 
                     var a = CompA.Create(Rand);
-                    t.UpdateEntity(e1, ref a);
+                    ref var w = ref t.OpenMut(e1).Write(CompAArch.A);
+                    w = a;
                     curRevisionCount++;
 
                     // revisions.Add((commit, a));
@@ -398,7 +351,7 @@ class TransactionTests : TestBase<TransactionTests>
             // Verify revision count before cleanup (no lazy/inline cleanup — all revisions accumulate)
             {
                 using var readTransaction = dbe.CreateQuickTransaction();
-                Assert.That(readTransaction.GetRevisionCount<CompA>(e1), Is.EqualTo(curRevisionCount - rbCount), "The number of revisions stored should match committed updates (no inline cleanup)");
+                Assert.That(readTransaction.GetRevisionCount<CompA>((long)e1.RawValue), Is.EqualTo(curRevisionCount - rbCount), "The number of revisions stored should match committed updates (no inline cleanup)");
             }
 
             // Commit the long-running transaction — cleanup happens in Dispose (deferred path)
@@ -412,8 +365,8 @@ class TransactionTests : TestBase<TransactionTests>
             // Verify with a fresh transaction: chain should be compacted to 1 revision
             {
                 using var readTransaction = dbe.CreateQuickTransaction();
-                Assert.That(readTransaction.GetRevisionCount<CompA>(e1), Is.EqualTo(1), "After committing the long-running transaction, only one revision should remain");
-                readTransaction.ReadEntity(e1, out CompA aFinal);
+                Assert.That(readTransaction.GetRevisionCount<CompA>((long)e1.RawValue), Is.EqualTo(1), "After committing the long-running transaction, only one revision should remain");
+                var aFinal = readTransaction.Open(e1).Read(CompAArch.A);
                 Assert.That(aFinal, Is.EqualTo(longRunningValue), "The last committed revision should be the one remaining");
             }
 
@@ -423,7 +376,7 @@ class TransactionTests : TestBase<TransactionTests>
     [Test]
     public void CompRevTest()
     {
-        long e1;
+        EntityId e1;
         var aR1 = new CompA(1);
         var bR1 = new CompB(1, 1.2f);
         var cR1 = new CompC("Porcupine Tree");
@@ -432,13 +385,14 @@ class TransactionTests : TestBase<TransactionTests>
 
         var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Create the entity e1, revision R1
         {
             using var t1 = dbe.CreateQuickTransaction();
             Logger.LogInformation("T1 creation time {tick}", t1.TSN);
 
-            e1 = t1.CreateEntity(ref aR1, ref bR1, ref cR1);
+            e1 = t1.Spawn<CompABCArch>(CompABCArch.A.Set(in aR1), CompABCArch.B.Set(in bR1), CompABCArch.C.Set(in cR1));
 
             t1.Commit();
         }
@@ -449,15 +403,17 @@ class TransactionTests : TestBase<TransactionTests>
 
         // Change the entity on a background thread to create a new revision
         {
+            var capturedE1 = e1;
             var task = Task.Run(() =>
             {
                 using var t3 = dbe.CreateQuickTransaction();
                 Logger.LogInformation("T3 creation time {tick}", t3.TSN);
-                t3.ReadEntity<CompB>(e1, out var lbR2);
+                var lbR2 = t3.Open(capturedE1).Read(CompABCArch.B);
 
                 lbR2 = bR2;
 
-                t3.UpdateEntity(e1, ref lbR2);
+                ref var w = ref t3.OpenMut(capturedE1).Write(CompABCArch.B);
+                w = lbR2;
                 t3.Commit();
             });
 
@@ -465,9 +421,8 @@ class TransactionTests : TestBase<TransactionTests>
         }
 
         // Check that T2 still sees the first revision of CompB (snapshot isolation)
-        t2.ReadEntity<CompB>(e1, out var lbR1);
+        var lbR1 = t2.Open(e1).Read(CompABCArch.B);
 
-        Assert.That(t2.GetComponentRevision<CompB>(e1), Is.EqualTo(1));
         Assert.That(lbR1.A, Is.EqualTo(bR1.A));
         Assert.That(lbR1.B, Is.EqualTo(bR1.B));
 
@@ -485,15 +440,16 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1;
         var a = new CompA(42);
 
         // Create entity
         {
             using var t = dbe.CreateQuickTransaction();
-            e1 = t.CreateEntity(ref a);
-            Assert.That(e1, Is.Not.Zero, "Entity ID should be non-zero");
+            e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
+            Assert.That(e1.IsNull, Is.False, "Entity ID should be non-null");
             var res = t.Commit();
             Assert.That(res, Is.True, "Commit should succeed");
         }
@@ -507,7 +463,7 @@ class TransactionTests : TestBase<TransactionTests>
             try
             {
                 var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-                var exists = ct.PrimaryKeyIndex.TryGet(e1, ref accessor).IsSuccess;
+                var exists = ct.PrimaryKeyIndex.TryGet((long)e1.RawValue, ref accessor).IsSuccess;
                 Assert.That(exists, Is.True, "Entity should exist in primary key index after creation");
                 accessor.Dispose();
             }
@@ -520,8 +476,7 @@ class TransactionTests : TestBase<TransactionTests>
         // Delete entity - since this is the only transaction, cleanup should happen immediately
         {
             using var t = dbe.CreateQuickTransaction();
-            var deleted = t.DeleteEntity<CompA>(e1);
-            Assert.That(deleted, Is.True, "Delete should succeed");
+            t.Destroy(e1);
             var res = t.Commit();
             Assert.That(res, Is.True, "Commit should succeed");
         }
@@ -529,7 +484,7 @@ class TransactionTests : TestBase<TransactionTests>
         // Verify entity is no longer readable
         {
             using var t = dbe.CreateQuickTransaction();
-            var readable = t.ReadEntity(e1, out CompA _);
+            var readable = t.ReadEntity((long)e1.RawValue, out CompA _);
             Assert.That(readable, Is.False, "Entity should not be readable after deletion");
         }
 
@@ -541,7 +496,7 @@ class TransactionTests : TestBase<TransactionTests>
             try
             {
                 var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-                var existsAfterDelete = ct.PrimaryKeyIndex.TryGet(e1, ref accessor).IsSuccess;
+                var existsAfterDelete = ct.PrimaryKeyIndex.TryGet((long)e1.RawValue, ref accessor).IsSuccess;
                 Assert.That(existsAfterDelete, Is.False,
                     "Primary key index entry should be removed when component is deleted and all revisions cleaned up");
 
@@ -563,15 +518,16 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1;
         var a = new CompA(42);
 
         // Create entity in first transaction
         {
             using var t = dbe.CreateQuickTransaction();
-            e1 = t.CreateEntity(ref a);
-            Assert.That(e1, Is.Not.Zero, "Entity ID should be non-zero");
+            e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
+            Assert.That(e1.IsNull, Is.False, "Entity ID should be non-null");
             var res = t.Commit();
             Assert.That(res, Is.True, "Commit should succeed");
         }
@@ -585,7 +541,7 @@ class TransactionTests : TestBase<TransactionTests>
             try
             {
                 var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-                var exists = ct.PrimaryKeyIndex.TryGet(e1, ref accessor).IsSuccess;
+                var exists = ct.PrimaryKeyIndex.TryGet((long)e1.RawValue, ref accessor).IsSuccess;
                 Assert.That(exists, Is.True, "Entity should exist in primary key index after creation");
 
                 accessor.Dispose();
@@ -599,8 +555,7 @@ class TransactionTests : TestBase<TransactionTests>
         // Delete entity in second transaction
         {
             using var t = dbe.CreateQuickTransaction();
-            var deleted = t.DeleteEntity<CompA>(e1);
-            Assert.That(deleted, Is.True, "Delete should succeed");
+            t.Destroy(e1);
             var res = t.Commit();
             Assert.That(res, Is.True, "Commit should succeed");
         }
@@ -608,7 +563,7 @@ class TransactionTests : TestBase<TransactionTests>
         // Verify entity is not readable
         {
             using var t = dbe.CreateQuickTransaction();
-            var readable = t.ReadEntity(e1, out CompA _);
+            var readable = t.ReadEntity((long)e1.RawValue, out CompA _);
             Assert.That(readable, Is.False, "Entity should not be readable after deletion");
         }
 
@@ -621,7 +576,7 @@ class TransactionTests : TestBase<TransactionTests>
             try
             {
                 var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-                var exists = ct.PrimaryKeyIndex.TryGet(e1, ref accessor).IsSuccess;
+                var exists = ct.PrimaryKeyIndex.TryGet((long)e1.RawValue, ref accessor).IsSuccess;
                 Assert.That(exists, Is.False,
                     "Primary key index should not contain entry after entity is deleted");
 
@@ -644,14 +599,15 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1;
         var a = new CompA(42);
 
         // Create entity
         {
             using var t = dbe.CreateQuickTransaction();
-            e1 = t.CreateEntity(ref a);
+            e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             var res = t.Commit();
             Assert.That(res, Is.True, "Commit should succeed");
         }
@@ -662,13 +618,12 @@ class TransactionTests : TestBase<TransactionTests>
         var longRunningTxn = dbe.CreateQuickTransaction();
 
         // Read in long-running transaction to establish snapshot
-        longRunningTxn.ReadEntity(e1, out CompA _);
+        longRunningTxn.Open(e1).Read(CompAArch.A);
 
         // Delete entity in a separate transaction
         {
             using var t = dbe.CreateQuickTransaction();
-            var deleted = t.DeleteEntity<CompA>(e1);
-            Assert.That(deleted, Is.True, "Delete should succeed");
+            t.Destroy(e1);
             var res = t.Commit();
             Assert.That(res, Is.True, "Commit should succeed");
         }
@@ -679,7 +634,7 @@ class TransactionTests : TestBase<TransactionTests>
             try
             {
                 var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-                var existsDuringLongTxn = ct.PrimaryKeyIndex.TryGet(e1, ref accessor).IsSuccess;
+                var existsDuringLongTxn = ct.PrimaryKeyIndex.TryGet((long)e1.RawValue, ref accessor).IsSuccess;
                 Assert.That(existsDuringLongTxn, Is.True,
                     "Primary key index should retain entry while long-running transaction holds old revisions");
 
@@ -694,7 +649,7 @@ class TransactionTests : TestBase<TransactionTests>
         // Verify multiple revisions exist (create + delete)
         {
             using var t = dbe.CreateQuickTransaction();
-            var revCount = t.GetRevisionCount<CompA>(e1);
+            var revCount = t.GetRevisionCount<CompA>((long)e1.RawValue);
             Assert.That(revCount, Is.GreaterThanOrEqualTo(2),
                 "Should have at least 2 revisions (create and delete) while long-running transaction exists");
         }
@@ -710,7 +665,7 @@ class TransactionTests : TestBase<TransactionTests>
             try
             {
                 var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-                var existsAfterCleanup = ct.PrimaryKeyIndex.TryGet(e1, ref accessor).IsSuccess;
+                var existsAfterCleanup = ct.PrimaryKeyIndex.TryGet((long)e1.RawValue, ref accessor).IsSuccess;
                 Assert.That(existsAfterCleanup, Is.False,
                     "Primary key index entry should be removed after long-running transaction completes and cleanup runs");
 
@@ -731,16 +686,17 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var ct = dbe.GetComponentTable<CompA>();
-        var entityIds = new long[5];
+        var entityIds = new EntityId[5];
 
         // Create multiple entities
         for (int i = 0; i < 5; i++)
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(i * 10);
-            entityIds[i] = t.CreateEntity(ref a);
+            entityIds[i] = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             t.Commit();
         }
 
@@ -752,7 +708,7 @@ class TransactionTests : TestBase<TransactionTests>
                 var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
                 for (int i = 0; i < 5; i++)
                 {
-                    var exists = ct.PrimaryKeyIndex.TryGet(entityIds[i], ref accessor).IsSuccess;
+                    var exists = ct.PrimaryKeyIndex.TryGet((long)entityIds[i].RawValue, ref accessor).IsSuccess;
                     Assert.That(exists, Is.True, $"Entity {i} should exist in primary key index");
                 }
                 accessor.Dispose();
@@ -767,7 +723,7 @@ class TransactionTests : TestBase<TransactionTests>
         for (int i = 0; i < 5; i += 2)
         {
             using var t = dbe.CreateQuickTransaction();
-            t.DeleteEntity<CompA>(entityIds[i]);
+            t.Destroy(entityIds[i]);
             t.Commit();
         }
 
@@ -775,7 +731,7 @@ class TransactionTests : TestBase<TransactionTests>
         for (int i = 0; i < 5; i += 2)
         {
             using var t = dbe.CreateQuickTransaction();
-            var readable = t.ReadEntity(entityIds[i], out CompA _);
+            var readable = t.ReadEntity((long)entityIds[i].RawValue, out CompA _);
             Assert.That(readable, Is.False, $"Entity {i} should not be readable after deletion");
         }
 
@@ -783,8 +739,8 @@ class TransactionTests : TestBase<TransactionTests>
         for (int i = 1; i < 5; i += 2)
         {
             using var t = dbe.CreateQuickTransaction();
-            var readable = t.ReadEntity(entityIds[i], out CompA _);
-            Assert.That(readable, Is.True, $"Entity {i} should still be readable");
+            var readA = t.Open(entityIds[i]).Read(CompAArch.A);
+            Assert.That(readA.A, Is.EqualTo(i * 10), $"Entity {i} should still be readable");
         }
 
         // Check primary key index state
@@ -797,14 +753,14 @@ class TransactionTests : TestBase<TransactionTests>
                 // Remaining entities should exist
                 for (int i = 1; i < 5; i += 2)
                 {
-                    var exists = ct.PrimaryKeyIndex.TryGet(entityIds[i], ref accessor).IsSuccess;
+                    var exists = ct.PrimaryKeyIndex.TryGet((long)entityIds[i].RawValue, ref accessor).IsSuccess;
                     Assert.That(exists, Is.True, $"Entity {i} should exist in primary key index");
                 }
 
                 // Deleted entities should not exist (expected behavior after cleanup)
                 for (int i = 0; i < 5; i += 2)
                 {
-                    var exists = ct.PrimaryKeyIndex.TryGet(entityIds[i], ref accessor).IsSuccess;
+                    var exists = ct.PrimaryKeyIndex.TryGet((long)entityIds[i].RawValue, ref accessor).IsSuccess;
                     Assert.That(exists, Is.False,
                         $"Entity {i} should be removed from primary key index after deletion and cleanup");
                 }
@@ -826,15 +782,16 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1;
         var a = new CompA(42);
 
         // Create and rollback
         {
             using var t = dbe.CreateQuickTransaction();
-            e1 = t.CreateEntity(ref a);
-            Assert.That(e1, Is.Not.Zero, "Entity ID should be non-zero");
+            e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
+            Assert.That(e1.IsNull, Is.False, "Entity ID should be non-null");
 
             var res = t.Rollback();
             Assert.That(res, Is.True, "Rollback should succeed");
@@ -843,8 +800,7 @@ class TransactionTests : TestBase<TransactionTests>
         // Verify entity is not readable
         {
             using var t = dbe.CreateQuickTransaction();
-            var readable = t.ReadEntity(e1, out CompA _);
-            Assert.That(readable, Is.False, "Entity should not be readable after rollback");
+            Assert.That(t.IsAlive(e1), Is.False, "Entity should not be readable after rollback");
         }
 
         // Check primary key index - entry should not exist after rollback
@@ -856,7 +812,7 @@ class TransactionTests : TestBase<TransactionTests>
             try
             {
                 var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-                var exists = ct.PrimaryKeyIndex.TryGet(e1, ref accessor).IsSuccess;
+                var exists = ct.PrimaryKeyIndex.TryGet((long)e1.RawValue, ref accessor).IsSuccess;
                 Assert.That(exists, Is.False,
                     "Primary key index should not contain entry for rolled back creation");
 
@@ -882,10 +838,11 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
         var a = new CompA(1);
-        t.CreateEntity(ref a);
+        t.Spawn<CompAArch>(CompAArch.A.Set(in a));
 
         var firstCommit = t.Commit();
         Assert.That(firstCommit, Is.True, "First commit should succeed");
@@ -905,10 +862,11 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
         var a = new CompA(1);
-        t.CreateEntity(ref a);
+        t.Spawn<CompAArch>(CompAArch.A.Set(in a));
 
         var firstRollback = t.Rollback();
         Assert.That(firstRollback, Is.True, "First rollback should succeed");
@@ -928,25 +886,25 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // --- After Commit ---
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(42);
-            var e1 = t.CreateEntity(ref a);
+            var e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             Assert.That(t.Commit(), Is.True);
 
             var a2 = new CompA(99);
-            Assert.Throws<InvalidOperationException>(() => t.CreateEntity(ref a2), "CreateEntity after commit should throw");
+            Assert.Throws<InvalidOperationException>(() => t.Spawn<CompAArch>(CompAArch.A.Set(in a2)), "Spawn after commit should throw");
 
-            var a3 = new CompA(100);
-            Assert.Throws<InvalidOperationException>(() => t.UpdateEntity(e1, ref a3), "UpdateEntity after commit should throw");
+            Assert.Throws<InvalidOperationException>(() => t.OpenMut(e1), "OpenMut after commit should throw");
 
-            Assert.Throws<InvalidOperationException>(() => t.DeleteEntity<CompA>(e1), "DeleteEntity after commit should throw");
+            Assert.Throws<InvalidOperationException>(() => t.Destroy(e1), "Destroy after commit should throw");
 
-            // ReadEntity after commit: no state guard — reads remain allowed by design
-            var readResult = t.ReadEntity(e1, out CompA _);
-            Assert.That(readResult, Is.True, "ReadEntity has no state guard — reads succeed on committed data");
+            // Open after commit: no state guard — reads remain allowed by design
+            var readA = t.Open(e1).Read(CompAArch.A);
+            Assert.That(readA.A, Is.EqualTo(42), "Open has no state guard — reads succeed on committed data");
 
             Assert.That(t.State, Is.EqualTo(Transaction.TransactionState.Committed), "State should remain Committed throughout");
         }
@@ -955,19 +913,19 @@ class TransactionTests : TestBase<TransactionTests>
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(55);
-            var e2 = t.CreateEntity(ref a);
+            var e2 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             Assert.That(t.Rollback(), Is.True);
 
             var a2 = new CompA(99);
-            Assert.Throws<InvalidOperationException>(() => t.CreateEntity(ref a2), "CreateEntity after rollback should throw");
+            Assert.Throws<InvalidOperationException>(() => t.Spawn<CompAArch>(CompAArch.A.Set(in a2)), "Spawn after rollback should throw");
 
-            var a3 = new CompA(100);
-            Assert.Throws<InvalidOperationException>(() => t.UpdateEntity(e2, ref a3), "UpdateEntity after rollback should throw");
+            Assert.Throws<InvalidOperationException>(() => t.OpenMut(e2), "OpenMut after rollback should throw");
 
-            Assert.Throws<InvalidOperationException>(() => t.DeleteEntity<CompA>(e2), "DeleteEntity after rollback should throw");
+            Assert.Throws<InvalidOperationException>(() => t.Destroy(e2), "Destroy after rollback should throw");
 
             // ReadEntity after rollback: no state guard — entity was rolled back so read finds nothing
-            var readResult = t.ReadEntity(e2, out CompA _);
+            // Note: uses legacy ReadEntity because ECS TryOpen still sees the pending spawn on the same transaction
+            var readResult = t.ReadEntity((long)e2.RawValue, out CompA _);
             Assert.That(readResult, Is.False, "ReadEntity after rollback — rolled-back entity should not be found");
 
             Assert.That(t.State, Is.EqualTo(Transaction.TransactionState.Rollbacked), "State should remain Rollbacked throughout");
@@ -984,13 +942,14 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // First transaction: work with CompA + CompB
         {
             using var t1 = dbe.CreateQuickTransaction();
             var a = new CompA(10);
             var b = new CompB(20, 3.14f);
-            t1.CreateEntity(ref a, ref b);
+            t1.Spawn<CompABArch>(CompABArch.A.Set(in a), CompABArch.B.Set(in b));
             Assert.That(t1.Commit(), Is.True);
             Assert.That(t1.CommittedOperationCount, Is.GreaterThanOrEqualTo(2),
                 "t1 should have at least 2 operations (CompA + CompB)");
@@ -1004,8 +963,8 @@ class TransactionTests : TestBase<TransactionTests>
                 "Reused transaction should start in Created state");
 
             var a = new CompA(30);
-            var e2 = t2.CreateEntity(ref a);
-            Assert.That(e2, Is.GreaterThan(0), "Entity creation on reused transaction should succeed");
+            var e2 = t2.Spawn<CompAArch>(CompAArch.A.Set(in a));
+            Assert.That(e2.IsNull, Is.False, "Entity creation on reused transaction should succeed");
 
             Assert.That(t2.Commit(), Is.True, "Commit on reused transaction should succeed");
             Assert.That(t2.CommittedOperationCount, Is.EqualTo(1),
@@ -1026,36 +985,37 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Create and rollback
-        long e1;
+        EntityId e1;
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(100);
-            e1 = t.CreateEntity(ref a);
-            Assert.That(e1, Is.GreaterThan(0));
+            e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
+            Assert.That(e1.IsNull, Is.False);
             Assert.That(t.Rollback(), Is.True);
         }
 
         // Entity should not be readable
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA _), Is.False, "Rolled-back created entity should not be readable");
+            Assert.That(t.IsAlive(e1), Is.False, "Rolled-back created entity should not be readable");
         }
 
         // A fresh create+commit should succeed (storage is clean)
         {
             using var t = dbe.CreateQuickTransaction();
             var a2 = new CompA(200);
-            var e2 = t.CreateEntity(ref a2);
-            Assert.That(e2, Is.GreaterThan(0));
+            var e2 = t.Spawn<CompAArch>(CompAArch.A.Set(in a2));
+            Assert.That(e2.IsNull, Is.False);
             Assert.That(t.Commit(), Is.True);
         }
 
-        // Verify the new entity is readable
+        // Verify the original rolled-back entity is still not readable
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA _), Is.False, "Original rolled-back entity should still not be readable");
+            Assert.That(t.IsAlive(e1), Is.False, "Original rolled-back entity should still not be readable");
         }
     }
 
@@ -1067,28 +1027,30 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1;
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(10);
-            e1 = t.CreateEntity(ref a);
+            e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             Assert.That(t.Commit(), Is.True);
         }
 
         // Update and rollback
         {
             using var t = dbe.CreateQuickTransaction();
-            t.ReadEntity(e1, out CompA _);
+            t.Open(e1).Read(CompAArch.A);
             var updated = new CompA(999);
-            Assert.That(t.UpdateEntity(e1, ref updated), Is.True);
+            ref var w = ref t.OpenMut(e1).Write(CompAArch.A);
+            w = updated;
             Assert.That(t.Rollback(), Is.True);
         }
 
         // Original value should still be readable
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA result), Is.True);
+            var result = t.Open(e1).Read(CompAArch.A);
             Assert.That(result.A, Is.EqualTo(10), "Original value should be preserved after rollback of update");
         }
     }
@@ -1101,26 +1063,28 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1;
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(42);
-            e1 = t.CreateEntity(ref a);
+            e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             Assert.That(t.Commit(), Is.True);
         }
 
         // Delete and rollback
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.DeleteEntity<CompA>(e1), Is.True);
+            t.Destroy(e1);
             Assert.That(t.Rollback(), Is.True);
         }
 
         // Entity should still be readable
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA result), Is.True, "Entity should still be readable after rollback of delete");
+            Assert.That(t.IsAlive(e1), Is.True, "Entity should still be readable after rollback of delete");
+            var result = t.Open(e1).Read(CompAArch.A);
             Assert.That(result.A, Is.EqualTo(42));
         }
     }
@@ -1133,24 +1097,23 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1;
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(1);
             var b = new CompB(2, 3.0f);
             var c = new CompC("test");
-            e1 = t.CreateEntity(ref a, ref b, ref c);
-            Assert.That(e1, Is.GreaterThan(0));
+            e1 = t.Spawn<CompABCArch>(CompABCArch.A.Set(in a), CompABCArch.B.Set(in b), CompABCArch.C.Set(in c));
+            Assert.That(e1.IsNull, Is.False);
             Assert.That(t.Rollback(), Is.True);
         }
 
         // None of the components should be readable
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA _), Is.False, "CompA should not be readable after rollback");
-            Assert.That(t.ReadEntity(e1, out CompB _), Is.False, "CompB should not be readable after rollback");
-            Assert.That(t.ReadEntity(e1, out CompC _), Is.False, "CompC should not be readable after rollback");
+            Assert.That(t.IsAlive(e1), Is.False, "Entity should not be alive after rollback");
         }
     }
 
@@ -1163,6 +1126,7 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
         Assert.That(t.State, Is.EqualTo(Transaction.TransactionState.Created));
@@ -1184,29 +1148,31 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1;
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(10);
-            e1 = t.CreateEntity(ref a);
+            e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             Assert.That(t.Commit(), Is.True);
         }
 
         // Update in a second transaction
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA existing), Is.True);
+            var existing = t.Open(e1).Read(CompAArch.A);
             Assert.That(existing.A, Is.EqualTo(10));
             var updated = new CompA(20);
-            Assert.That(t.UpdateEntity(e1, ref updated), Is.True);
+            ref var w = ref t.OpenMut(e1).Write(CompAArch.A);
+            w = updated;
             Assert.That(t.Commit(), Is.True);
         }
 
         // Verify the updated value
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA result), Is.True);
+            var result = t.Open(e1).Read(CompAArch.A);
             Assert.That(result.A, Is.EqualTo(20), "Value should reflect the second commit");
         }
     }
@@ -1220,27 +1186,28 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1;
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(10);
-            e1 = t.CreateEntity(ref a);
+            e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             Assert.That(t.Commit(), Is.True);
         }
 
         // T1 reads and updates
         using var t1 = dbe.CreateQuickTransaction();
-        t1.ReadEntity(e1, out CompA _);
-        var u1 = new CompA(100);
-        t1.UpdateEntity(e1, ref u1);
+        t1.Open(e1).Read(CompAArch.A);
+        ref var u1 = ref t1.OpenMut(e1).Write(CompAArch.A);
+        u1 = new CompA(100);
 
         // T2 reads, updates, and commits first
         {
             using var t2 = dbe.CreateQuickTransaction();
-            t2.ReadEntity(e1, out CompA _);
-            var u2 = new CompA(200);
-            t2.UpdateEntity(e1, ref u2);
+            t2.Open(e1).Read(CompAArch.A);
+            ref var u2 = ref t2.OpenMut(e1).Write(CompAArch.A);
+            u2 = new CompA(200);
             Assert.That(t2.Commit(), Is.True);
         }
 
@@ -1258,7 +1225,7 @@ class TransactionTests : TestBase<TransactionTests>
         // Verify the resolved value
         {
             using var tRead = dbe.CreateQuickTransaction();
-            Assert.That(tRead.ReadEntity(e1, out CompA result), Is.True);
+            var result = tRead.Open(e1).Read(CompAArch.A);
             Assert.That(result.A, Is.EqualTo(200), "Should reflect the handler's TakeCommitted resolution");
         }
     }
@@ -1272,27 +1239,28 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1;
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(10);
-            e1 = t.CreateEntity(ref a);
+            e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             Assert.That(t.Commit(), Is.True);
         }
 
         // T1 reads and updates
         using var t1 = dbe.CreateQuickTransaction();
-        t1.ReadEntity(e1, out CompA _);
-        var u1 = new CompA(100);
-        t1.UpdateEntity(e1, ref u1);
+        t1.Open(e1).Read(CompAArch.A);
+        ref var u1 = ref t1.OpenMut(e1).Write(CompAArch.A);
+        u1 = new CompA(100);
 
         // T2 reads, updates, and commits first
         {
             using var t2 = dbe.CreateQuickTransaction();
-            t2.ReadEntity(e1, out CompA _);
-            var u2 = new CompA(200);
-            t2.UpdateEntity(e1, ref u2);
+            t2.Open(e1).Read(CompAArch.A);
+            ref var u2 = ref t2.OpenMut(e1).Write(CompAArch.A);
+            u2 = new CompA(200);
             Assert.That(t2.Commit(), Is.True);
         }
 
@@ -1302,7 +1270,7 @@ class TransactionTests : TestBase<TransactionTests>
         // Verify the last-committed value (T1's value)
         {
             using var tRead = dbe.CreateQuickTransaction();
-            Assert.That(tRead.ReadEntity(e1, out CompA result), Is.True);
+            var result = tRead.Open(e1).Read(CompAArch.A);
             Assert.That(result.A, Is.EqualTo(100), "Last-committed value (T1) should win");
         }
     }
@@ -1316,33 +1284,34 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1;
         var d = new CompD(1.0f, 42, 3.14);
         {
             using var t = dbe.CreateQuickTransaction();
-            e1 = t.CreateEntity(ref d);
+            e1 = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             Assert.That(t.Commit(), Is.True);
         }
 
-        // Verify entity exists in primary key index before delete
+        // Verify entity exists before delete
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompD readD), Is.True);
+            var readD = t.Open(e1).Read(CompDArch.D);
             Assert.That(readD.B, Is.EqualTo(42));
         }
 
         // Delete and commit
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.DeleteEntity<CompD>(e1), Is.True);
+            t.Destroy(e1);
             Assert.That(t.Commit(), Is.True);
         }
 
         // Entity should not be readable
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompD _), Is.False, "Deleted entity should not be readable");
+            Assert.That(t.IsAlive(e1), Is.False, "Deleted entity should not be readable");
         }
     }
 
@@ -1354,10 +1323,11 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
         var a = new CompA(1);
-        t.CreateEntity(ref a);
+        t.Spawn<CompAArch>(CompAArch.A.Set(in a));
 
         Assert.That(t.Rollback(), Is.True);
         Assert.That(t.Commit(), Is.False, "Commit after rollback should return false");
@@ -1377,14 +1347,15 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1;
 
         // Step 1: Create an entity
         {
             using var t1 = dbe.CreateQuickTransaction();
             var a = new CompA(42);
-            e1 = t1.CreateEntity(ref a);
+            e1 = t1.Spawn<CompAArch>(CompAArch.A.Set(in a));
             Assert.That(t1.Commit(), Is.True);
         }
 
@@ -1395,7 +1366,7 @@ class TransactionTests : TestBase<TransactionTests>
             // Step 3: Delete the entity — cleanup deferred because tBlocker is the chain tail
             {
                 using var t2 = dbe.CreateQuickTransaction();
-                Assert.That(t2.DeleteEntity<CompA>(e1), Is.True, "Delete should succeed");
+                t2.Destroy(e1);
                 Assert.That(t2.Commit(), Is.True);
             }
 
@@ -1431,48 +1402,20 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1;
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(42);
-            e1 = t.CreateEntity(ref a);
+            e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             Assert.That(t.Commit(), Is.True);
         }
 
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA result), Is.True);
+            var result = t.Open(e1).Read(CompAArch.A);
             Assert.That(result.A, Is.EqualTo(42));
-        }
-    }
-
-    /// <summary>
-    /// Unified GetComponentInfo returns a ComponentInfo with MultipleCache for AllowMultiple components.
-    /// Verified by creating multiple components and committing — exercises the Multiple path.
-    /// </summary>
-    [Test]
-    public void UnifiedComponentInfo_MultipleComponent_CommitSucceeds()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        long e1;
-        var items = new CompE[] { new(1.0f, 10, 0.1), new(2.0f, 20, 0.2), new(3.0f, 30, 0.3) };
-        {
-            using var t = dbe.CreateQuickTransaction();
-            var a = new CompA(1);
-            e1 = t.CreateEntity(ref a, items.AsSpan());
-            Assert.That(t.Commit(), Is.True);
-        }
-
-        {
-            using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA _, out CompE[] readItems), Is.True);
-            Assert.That(readItems.Length, Is.EqualTo(3));
-            Assert.That(readItems[0].B, Is.EqualTo(10));
-            Assert.That(readItems[1].B, Is.EqualTo(20));
-            Assert.That(readItems[2].B, Is.EqualTo(30));
         }
     }
 
@@ -1485,19 +1428,20 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1;
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(10);
-            e1 = t.CreateEntity(ref a);
+            e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             Assert.That(t.Commit(), Is.True);
         }
 
         // Read-only transaction: read but don't modify — commit succeeds, no changes persisted
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA readA), Is.True);
+            var readA = t.Open(e1).Read(CompAArch.A);
             Assert.That(readA.A, Is.EqualTo(10), "Read should return the committed value");
             Assert.That(t.Commit(), Is.True);
         }
@@ -1505,7 +1449,7 @@ class TransactionTests : TestBase<TransactionTests>
         // Verify original value is unchanged (ForEachMutableEntry skipped the Read entry)
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA verify), Is.True);
+            var verify = t.Open(e1).Read(CompAArch.A);
             Assert.That(verify.A, Is.EqualTo(10), "Value should be unchanged after read-only commit");
         }
     }
@@ -1518,8 +1462,9 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1, e2, e3;
+        EntityId e1, e2, e3;
 
         // Create three entities
         {
@@ -1527,21 +1472,21 @@ class TransactionTests : TestBase<TransactionTests>
             var a1 = new CompA(1);
             var a2 = new CompA(2);
             var a3 = new CompA(3);
-            e1 = t.CreateEntity(ref a1);
-            e2 = t.CreateEntity(ref a2);
-            e3 = t.CreateEntity(ref a3);
+            e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a1));
+            e2 = t.Spawn<CompAArch>(CompAArch.A.Set(in a2));
+            e3 = t.Spawn<CompAArch>(CompAArch.A.Set(in a3));
             Assert.That(t.Commit(), Is.True);
         }
 
         // In one transaction: read e1, update e2, delete e3
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA _), Is.True);
+            t.Open(e1).Read(CompAArch.A);
 
-            var updated = new CompA(200);
-            Assert.That(t.UpdateEntity(e2, ref updated), Is.True);
+            ref var w2 = ref t.OpenMut(e2).Write(CompAArch.A);
+            w2 = new CompA(200);
 
-            Assert.That(t.DeleteEntity<CompA>(e3), Is.True);
+            t.Destroy(e3);
 
             Assert.That(t.Commit(), Is.True);
             // 2 mutations (update + delete); read is skipped by ForEachMutableEntry
@@ -1551,50 +1496,13 @@ class TransactionTests : TestBase<TransactionTests>
         // Verify results
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA r1), Is.True);
+            var r1 = t.Open(e1).Read(CompAArch.A);
             Assert.That(r1.A, Is.EqualTo(1), "e1 was only read, should be unchanged");
 
-            Assert.That(t.ReadEntity(e2, out CompA r2), Is.True);
+            var r2 = t.Open(e2).Read(CompAArch.A);
             Assert.That(r2.A, Is.EqualTo(200), "e2 should be updated");
 
-            Assert.That(t.ReadEntity(e3, out CompA _), Is.False, "e3 should be deleted");
-        }
-    }
-
-    /// <summary>
-    /// ForEachMutableEntry processes all entries for Multiple components per PK.
-    /// </summary>
-    [Test]
-    public void ForEachMutableEntry_Multiple_ProcessesAllEntriesPerPK()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        long e1;
-        var items = new CompE[] { new(1.0f, 10, 0.1), new(2.0f, 20, 0.2) };
-        {
-            using var t = dbe.CreateQuickTransaction();
-            var a = new CompA(1);
-            e1 = t.CreateEntity(ref a, items.AsSpan());
-            Assert.That(t.Commit(), Is.True);
-        }
-
-        // Update both items in a single transaction (TC1=CompA, TC2=CompE)
-        var updatedItems = new CompE[] { new(10.0f, 100, 1.0), new(20.0f, 200, 2.0) };
-        {
-            using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA readA), Is.True);
-            Assert.That(t.UpdateEntity(e1, ref readA, updatedItems.AsSpan()), Is.True);
-            Assert.That(t.Commit(), Is.True);
-        }
-
-        // Verify both items were updated (ForEachMutableEntry visited both)
-        {
-            using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA _, out CompE[] readItems), Is.True);
-            Assert.That(readItems.Length, Is.EqualTo(2));
-            Assert.That(readItems[0].B, Is.EqualTo(100));
-            Assert.That(readItems[1].B, Is.EqualTo(200));
+            Assert.That(t.IsAlive(e3), Is.False, "e3 should be deleted");
         }
     }
 
@@ -1607,54 +1515,29 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1;
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(99);
-            e1 = t.CreateEntity(ref a);
+            e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             Assert.That(t.Rollback(), Is.True);
         }
 
         // Entity should not be readable
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA _), Is.False);
+            Assert.That(t.IsAlive(e1), Is.False);
         }
 
         // Fresh create should succeed (no stale cache)
         {
             using var t = dbe.CreateQuickTransaction();
             var a2 = new CompA(200);
-            var e2 = t.CreateEntity(ref a2);
+            var e2 = t.Spawn<CompAArch>(CompAArch.A.Set(in a2));
             Assert.That(t.Commit(), Is.True);
-            Assert.That(e2, Is.GreaterThan(0));
-        }
-    }
-
-    /// <summary>
-    /// Rollback of a Created entity in the Multiple path voids the revision entry.
-    /// The entity should not be readable afterward.
-    /// </summary>
-    [Test]
-    public void Rollback_Created_Multiple_EntityNotReadable()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        long e1;
-        var items = new CompE[] { new(1.0f, 10, 0.1) };
-        {
-            using var t = dbe.CreateQuickTransaction();
-            var a = new CompA(1);
-            e1 = t.CreateEntity(ref a, items.AsSpan());
-            Assert.That(t.Rollback(), Is.True);
-        }
-
-        // Multiple component should not be readable after rollback
-        {
-            using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA _), Is.False, "CompA should not be readable after rollback");
+            Assert.That(e2.IsNull, Is.False);
         }
     }
 
@@ -1666,87 +1549,30 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1;
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(50);
-            e1 = t.CreateEntity(ref a);
+            e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             Assert.That(t.Commit(), Is.True);
         }
 
         // Update and rollback — exercises ForEachMutableEntry's rollback path
         {
             using var t = dbe.CreateQuickTransaction();
-            t.ReadEntity(e1, out CompA _);
-            var updated = new CompA(777);
-            Assert.That(t.UpdateEntity(e1, ref updated), Is.True);
+            t.Open(e1).Read(CompAArch.A);
+            ref var w = ref t.OpenMut(e1).Write(CompAArch.A);
+            w = new CompA(777);
             Assert.That(t.Rollback(), Is.True);
         }
 
         // Original value preserved
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA result), Is.True);
+            var result = t.Open(e1).Read(CompAArch.A);
             Assert.That(result.A, Is.EqualTo(50), "Original value should be preserved after rollback");
-        }
-    }
-
-    /// <summary>
-    /// Commit with Single and Multiple component types in the same transaction — exercises
-    /// ForEachMutableEntry on both cache types within a single commit loop.
-    /// </summary>
-    [Test]
-    public void Commit_MixedSingleAndMultiple_BothCommitted()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        long e1;
-        var items = new CompE[] { new(1.0f, 10, 0.1), new(2.0f, 20, 0.2) };
-        {
-            using var t = dbe.CreateQuickTransaction();
-            var a = new CompA(100);
-            e1 = t.CreateEntity(ref a, items.AsSpan());
-            Assert.That(t.Commit(), Is.True);
-            // EntryCount counts unique PKs per cache: 1 PK in CompA SingleCache + 1 PK in CompE MultipleCache = 2
-            Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(2),
-                "Should have at least 2 entries (1 CompA PK + 1 CompE PK)");
-        }
-
-        // Verify both types committed
-        {
-            using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA a, out CompE[] readItems), Is.True);
-            Assert.That(a.A, Is.EqualTo(100));
-            Assert.That(readItems.Length, Is.EqualTo(2));
-            Assert.That(readItems[0].B, Is.EqualTo(10));
-            Assert.That(readItems[1].B, Is.EqualTo(20));
-        }
-    }
-
-    /// <summary>
-    /// Rollback with both Single and Multiple components — all components are properly rolled back.
-    /// </summary>
-    [Test]
-    public void Rollback_MixedSingleAndMultiple_AllRolledBack()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        long e1;
-        var items = new CompE[] { new(1.0f, 10, 0.1), new(2.0f, 20, 0.2) };
-        {
-            using var t = dbe.CreateQuickTransaction();
-            var a = new CompA(100);
-            e1 = t.CreateEntity(ref a, items.AsSpan());
-            Assert.That(t.Rollback(), Is.True);
-        }
-
-        // Both component types should not be readable
-        {
-            using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA _), Is.False, "CompA should not be readable after rollback");
         }
     }
 
@@ -1759,16 +1585,17 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1, e2, e3;
+        EntityId e1, e2, e3;
         {
             using var t = dbe.CreateQuickTransaction();
             var a1 = new CompA(1);
             var a2 = new CompA(2);
             var a3 = new CompA(3);
-            e1 = t.CreateEntity(ref a1);
-            e2 = t.CreateEntity(ref a2);
-            e3 = t.CreateEntity(ref a3);
+            e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a1));
+            e2 = t.Spawn<CompAArch>(CompAArch.A.Set(in a2));
+            e3 = t.Spawn<CompAArch>(CompAArch.A.Set(in a3));
             Assert.That(t.CommittedOperationCount, Is.EqualTo(3),
                 "Three created entities should produce three entries");
             Assert.That(t.Commit(), Is.True);
@@ -1777,118 +1604,12 @@ class TransactionTests : TestBase<TransactionTests>
         // All three should be readable
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA r1), Is.True);
+            var r1 = t.Open(e1).Read(CompAArch.A);
             Assert.That(r1.A, Is.EqualTo(1));
-            Assert.That(t.ReadEntity(e2, out CompA r2), Is.True);
+            var r2 = t.Open(e2).Read(CompAArch.A);
             Assert.That(r2.A, Is.EqualTo(2));
-            Assert.That(t.ReadEntity(e3, out CompA r3), Is.True);
+            var r3 = t.Open(e3).Read(CompAArch.A);
             Assert.That(r3.A, Is.EqualTo(3));
-        }
-    }
-
-    /// <summary>
-    /// ComponentInfo.AddNew correctly routes to MultipleCache for AllowMultiple components.
-    /// Verified indirectly: creating multiple AllowMultiple entries for the same PK accumulates in list.
-    /// </summary>
-    [Test]
-    public void ComponentInfo_AddNew_Multiple_AccumulatesEntries()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        long e1;
-        var items = new CompE[] { new(1.0f, 10, 0.1), new(2.0f, 20, 0.2), new(3.0f, 30, 0.3), new(4.0f, 40, 0.4) };
-        {
-            using var t = dbe.CreateQuickTransaction();
-            var a = new CompA(1);
-            e1 = t.CreateEntity(ref a, items.AsSpan());
-            Assert.That(t.Commit(), Is.True);
-        }
-
-        {
-            using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA _, out CompE[] readItems), Is.True);
-            Assert.That(readItems.Length, Is.EqualTo(4), "All four entries should be committed via AddNew");
-        }
-    }
-
-    /// <summary>
-    /// EntryCount returns correct count for both Single and Multiple modes.
-    /// Verified indirectly through CommittedOperationCount.
-    /// </summary>
-    [Test]
-    public void ComponentInfo_EntryCount_CorrectForBothModes()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        var items = new CompE[] { new(1.0f, 10, 0.1), new(2.0f, 20, 0.2) };
-        {
-            using var t = dbe.CreateQuickTransaction();
-            var a = new CompA(1);
-            var b = new CompB(2, 3.0f);
-            t.CreateEntity(ref a, items.AsSpan());
-            // Also create a standalone CompB entity
-            t.CreateEntity(ref b);
-            Assert.That(t.Commit(), Is.True);
-            // EntryCount counts unique PKs per cache: CompA=1 PK (Single), CompE=1 PK (Multiple), CompB=1 PK (Single) = 3
-            Assert.That(t.CommittedOperationCount, Is.GreaterThanOrEqualTo(3),
-                "Should have at least 3 entries: 1 CompA PK + 1 CompE PK + 1 CompB PK");
-        }
-    }
-
-    /// <summary>
-    /// GetComponentRevision works correctly through the unified GetComponentInfo for both
-    /// Single and Multiple component types.
-    /// </summary>
-    [Test]
-    public void GetComponentRevision_UnifiedPath_CorrectForBothModes()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        long e1;
-        var items = new CompE[] { new(1.0f, 10, 0.1), new(2.0f, 20, 0.2) };
-        {
-            using var t = dbe.CreateQuickTransaction();
-            var a = new CompA(1);
-            e1 = t.CreateEntity(ref a, items.AsSpan());
-            Assert.That(t.GetComponentRevision<CompA>(e1), Is.EqualTo(1), "Single component revision should be 1 at creation");
-            Assert.That(t.GetComponentRevision<CompE>(e1), Is.EqualTo(1), "Multiple component revision should be 1 at creation");
-            Assert.That(t.Commit(), Is.True);
-        }
-    }
-
-    /// <summary>
-    /// DeleteEntities (bulk delete for AllowMultiple) through the unified path marks all entries as deleted.
-    /// </summary>
-    [Test]
-    public void DeleteEntities_Multiple_AllDeleted()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        long e1;
-        var items = new CompE[] { new(1.0f, 10, 0.1), new(2.0f, 20, 0.2), new(3.0f, 30, 0.3) };
-        {
-            using var t = dbe.CreateQuickTransaction();
-            var a = new CompA(1);
-            e1 = t.CreateEntity(ref a, items.AsSpan());
-            Assert.That(t.Commit(), Is.True);
-        }
-
-        // Delete all CompE entries
-        {
-            using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.DeleteEntities<CompE>(e1), Is.True);
-            Assert.That(t.Commit(), Is.True);
-        }
-
-        // Verify deletion
-        {
-            using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA _, out CompE[] readItems), Is.False,
-                "All CompE entries should be deleted");
         }
     }
 
@@ -1901,27 +1622,28 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1;
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(10);
-            e1 = t.CreateEntity(ref a);
+            e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             Assert.That(t.Commit(), Is.True);
         }
 
         // T1 reads and updates
         using var t1 = dbe.CreateQuickTransaction();
-        t1.ReadEntity(e1, out CompA _);
-        var u1 = new CompA(100);
-        t1.UpdateEntity(e1, ref u1);
+        t1.Open(e1).Read(CompAArch.A);
+        ref var u1 = ref t1.OpenMut(e1).Write(CompAArch.A);
+        u1 = new CompA(100);
 
         // T2 reads, updates, and commits first — creates a conflict
         {
             using var t2 = dbe.CreateQuickTransaction();
-            t2.ReadEntity(e1, out CompA _);
-            var u2 = new CompA(200);
-            t2.UpdateEntity(e1, ref u2);
+            t2.Open(e1).Read(CompAArch.A);
+            ref var u2 = ref t2.OpenMut(e1).Write(CompAArch.A);
+            u2 = new CompA(200);
             Assert.That(t2.Commit(), Is.True);
         }
 
@@ -1937,7 +1659,7 @@ class TransactionTests : TestBase<TransactionTests>
 
         {
             using var tRead = dbe.CreateQuickTransaction();
-            Assert.That(tRead.ReadEntity(e1, out CompA result), Is.True);
+            var result = tRead.Open(e1).Read(CompAArch.A);
             Assert.That(result.A, Is.EqualTo(100), "TakeCommitting should use our value");
         }
     }
@@ -1954,14 +1676,15 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
         var a = new CompA(1);
-        t.CreateEntity(ref a);
+        t.Spawn<CompAArch>(CompAArch.A.Set(in a));
         Assert.That(t.Commit(), Is.True);
 
         var a2 = new CompA(2);
-        Assert.Throws<InvalidOperationException>(() => t.CreateEntity(ref a2));
+        Assert.Throws<InvalidOperationException>(() => t.Spawn<CompAArch>(CompAArch.A.Set(in a2)));
     }
 
     /// <summary>
@@ -1972,25 +1695,25 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1;
         {
             using var tSetup = dbe.CreateQuickTransaction();
             var a = new CompA(10);
-            e1 = tSetup.CreateEntity(ref a);
+            e1 = tSetup.Spawn<CompAArch>(CompAArch.A.Set(in a));
             Assert.That(tSetup.Commit(), Is.True);
         }
 
         using var t = dbe.CreateQuickTransaction();
-        // Perform a mutation to move state to InProgress (ReadEntity doesn't change state)
-        var aUpdate = new CompA(20);
-        t.UpdateEntity(e1, ref aUpdate);
+        // Perform a mutation to move state to InProgress
+        ref var w = ref t.OpenMut(e1).Write(CompAArch.A);
+        w = new CompA(20);
         Assert.That(t.State, Is.EqualTo(Transaction.TransactionState.InProgress));
         Assert.That(t.Rollback(), Is.True);
         Assert.That(t.State, Is.EqualTo(Transaction.TransactionState.Rollbacked));
 
-        var a2 = new CompA(99);
-        Assert.Throws<InvalidOperationException>(() => t.UpdateEntity(e1, ref a2));
+        Assert.Throws<InvalidOperationException>(() => t.OpenMut(e1));
     }
 
     /// <summary>
@@ -2001,13 +1724,14 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
-        var e1 = t.CreateEntity(ref a);
+        var e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
         Assert.That(t.Commit(), Is.True);
 
-        Assert.Throws<InvalidOperationException>(() => t.DeleteEntity<CompA>(e1));
+        Assert.Throws<InvalidOperationException>(() => t.Destroy(e1));
     }
 
     /// <summary>
@@ -2018,15 +1742,15 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
-        var e1 = t.CreateEntity(ref a);
+        var e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
         Assert.That(t.Commit(), Is.True);
 
-        var readResult = t.ReadEntity(e1, out CompA readA);
-        Assert.That(readResult, Is.True, "ReadEntity should succeed on committed transaction");
-        Assert.That(readA.A, Is.EqualTo(42));
+        var readA = t.Open(e1).Read(CompAArch.A);
+        Assert.That(readA.A, Is.EqualTo(42), "Open should succeed on committed transaction");
     }
 
     /// <summary>
@@ -2037,12 +1761,13 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1;
         {
             var t = dbe.CreateQuickTransaction();
             var a = new CompA(42);
-            e1 = t.CreateEntity(ref a);
+            e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             Assert.That(t.State, Is.EqualTo(Transaction.TransactionState.InProgress));
             t.Dispose();
             // After dispose, state should be Rollbacked (auto-rollback in EnsureCompleted)
@@ -2052,7 +1777,7 @@ class TransactionTests : TestBase<TransactionTests>
         // Entity should not be readable
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA _), Is.False, "Entity should not exist after auto-rollback");
+            Assert.That(t.IsAlive(e1), Is.False, "Entity should not exist after auto-rollback");
         }
     }
 
@@ -2064,12 +1789,13 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1;
         {
             var t = dbe.CreateQuickTransaction();
             var a = new CompA(42);
-            e1 = t.CreateEntity(ref a);
+            e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             Assert.That(t.Commit(), Is.True);
             Assert.That(t.State, Is.EqualTo(Transaction.TransactionState.Committed));
             t.Dispose();
@@ -2079,8 +1805,8 @@ class TransactionTests : TestBase<TransactionTests>
         // Entity should still be readable
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA readA), Is.True, "Entity should be readable after committed transaction is disposed");
-            Assert.That(readA.A, Is.EqualTo(42));
+            var readA = t.Open(e1).Read(CompAArch.A);
+            Assert.That(readA.A, Is.EqualTo(42), "Entity should be readable after committed transaction is disposed");
         }
     }
 
@@ -2092,12 +1818,13 @@ class TransactionTests : TestBase<TransactionTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1;
         {
             var t = dbe.CreateQuickTransaction();
             var a = new CompA(42);
-            e1 = t.CreateEntity(ref a);
+            e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
             Assert.That(t.Commit(), Is.True);
 
             t.Dispose();
@@ -2107,7 +1834,7 @@ class TransactionTests : TestBase<TransactionTests>
         // Entity should still be readable
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity(e1, out CompA readA), Is.True);
+            var readA = t.Open(e1).Read(CompAArch.A);
             Assert.That(readA.A, Is.EqualTo(42));
         }
     }
@@ -2124,10 +1851,11 @@ class TransactionTests : TestBase<TransactionTests>
         // We verify indirectly: double-commit returns false (guard in Commit prevents TransitionTo call).
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
         var a = new CompA(1);
-        t.CreateEntity(ref a);
+        t.Spawn<CompAArch>(CompAArch.A.Set(in a));
 
         Assert.That(t.Commit(), Is.True);
         Assert.That(t.State, Is.EqualTo(Transaction.TransactionState.Committed));

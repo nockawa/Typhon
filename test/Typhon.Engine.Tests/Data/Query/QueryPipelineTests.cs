@@ -9,6 +9,12 @@ namespace Typhon.Engine.Tests;
 
 class QueryPipelineTests : TestBase<QueryPipelineTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompDArch>.Touch();
+    }
+
     #region ExpressionParser Tests
 
     [Test]
@@ -96,20 +102,25 @@ class QueryPipelineTests : TestBase<QueryPipelineTests>
 
     #region QueryBuilder End-to-End Tests
 
+    /// <summary>Reconstructs an EntityId from a raw pk value (test-only, uses InternalsVisibleTo).</summary>
+    private static EntityId ToEntityId(long pk) =>
+        Unsafe.As<long, EntityId>(ref pk);
+
     private static long CreateAndCommit(DatabaseEngine dbe, float a, int b, double c)
     {
         using var t = dbe.CreateQuickTransaction();
         var d = new CompD(a, b, c);
-        var pk = t.CreateEntity(ref d);
+        var id = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
         t.Commit();
-        return pk;
+        return (long)id.RawValue;
     }
 
     private static void UpdateAndCommit(DatabaseEngine dbe, long pk, float a, int b, double c)
     {
         using var t = dbe.CreateQuickTransaction();
         var d = new CompD(a, b, c);
-        t.UpdateEntity(pk, ref d);
+        ref var w = ref t.OpenMut(ToEntityId(pk)).Write(CompDArch.D);
+        w = d;
         t.Commit();
     }
 
@@ -124,6 +135,7 @@ class QueryPipelineTests : TestBase<QueryPipelineTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var pk1 = CreateAndCommit(dbe, 1.0f, 50, 2.0);  // matches B > 40
         var pk2 = CreateAndCommit(dbe, 1.0f, 30, 2.0);  // doesn't match
@@ -143,6 +155,7 @@ class QueryPipelineTests : TestBase<QueryPipelineTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Entities created before view
         var pk1 = CreateAndCommit(dbe, 1.0f, 50, 2.0);
@@ -161,6 +174,7 @@ class QueryPipelineTests : TestBase<QueryPipelineTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var view = dbe.Query<CompD>().Where(p => p.B > 40).ToView();
         Assert.That(view.Count, Is.EqualTo(0));
@@ -178,6 +192,7 @@ class QueryPipelineTests : TestBase<QueryPipelineTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var pk = CreateAndCommit(dbe, 1.0f, 50, 2.0);
         using var view = dbe.Query<CompD>().Where(p => p.B > 40).ToView();
@@ -197,6 +212,7 @@ class QueryPipelineTests : TestBase<QueryPipelineTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var pk1 = CreateAndCommit(dbe, 5.0f, 50, 2.0);  // A>3.0 AND B>40 → both pass
         var pk2 = CreateAndCommit(dbe, 5.0f, 30, 2.0);  // A>3.0 but B<=40 → fails
@@ -217,6 +233,7 @@ class QueryPipelineTests : TestBase<QueryPipelineTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var ct = dbe.GetComponentTable<CompD>();
         var view = dbe.Query<CompD>().Where(p => p.B > 40).ToView();
@@ -235,6 +252,7 @@ class QueryPipelineTests : TestBase<QueryPipelineTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         Assert.That(() => dbe.Query<CompE>().Where(p => p.B > 40).ToView(),
             Throws.TypeOf<InvalidOperationException>());
@@ -259,6 +277,7 @@ class QueryPipelineTests : TestBase<QueryPipelineTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var view = dbe.Query<CompD>().Where(p => p.B > 40).ToView();
 
@@ -295,6 +314,7 @@ class QueryPipelineTests : TestBase<QueryPipelineTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Entities created before view are in initial population
         var pk1 = CreateAndCommit(dbe, 1.0f, 50, 2.0);

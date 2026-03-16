@@ -203,6 +203,9 @@ internal static class SchemaEvolutionEngine
                 var oldPtr = oldAccessor.GetChunkAddress(chunkId);
                 var newPtr = newAccessor.GetChunkAddress(chunkId, dirty: true);
 
+                // Zero-fill the new chunk so added fields get default values (not stale memory)
+                new Span<byte>(newPtr, newSeg.Stride).Clear();
+
                 // Copy overhead section (AllowMultiple index element IDs stored before component data)
                 if (oldOverhead > 0 && newOverhead > 0)
                 {
@@ -582,6 +585,9 @@ internal static class SchemaEvolutionEngine
                     newSeg.ReserveChunk(chunkId);
 
                     var newPtr = newAccessor.GetChunkAddress(chunkId, dirty: true);
+
+                    // Zero-fill the new chunk so added fields get default values (not stale memory)
+                    new Span<byte>(newPtr, newSeg.Stride).Clear();
 
                     // Copy overhead section (AllowMultiple element IDs) — separate from user migration
                     if (oldOverhead > 0 && newOverhead > 0)

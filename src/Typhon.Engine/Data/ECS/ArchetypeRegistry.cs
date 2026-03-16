@@ -29,6 +29,9 @@ public static class ArchetypeRegistry
     /// <summary>CLR Type → globally unique ComponentTypeId (deduplication across archetypes).</summary>
     private static readonly Dictionary<Type, int> ComponentTypeIds = new();
 
+    /// <summary>Component schema name → ComponentTypeId (dedup across V1/V2 CLR types sharing the same schema name).</summary>
+    private static readonly Dictionary<string, int> ComponentTypeIdsBySchemaName = new();
+
     /// <summary>ComponentTypeId → CLR Type (reverse lookup for slot-to-type mapping).</summary>
     private static readonly Dictionary<int, Type> ComponentTypeById = new();
 
@@ -71,12 +74,27 @@ public static class ArchetypeRegistry
 
         var archetypeType = typeof(TArchetype);
 
-        // Get or create ComponentTypeId (dedup across archetypes sharing the same component type)
+        // Get or create ComponentTypeId (dedup by schema name — V1/V2 CLR types sharing the same [Component("SchemaName")] get the same ID so archetype
+        // slot mappings work across schema evolution)
         if (!ComponentTypeIds.TryGetValue(typeof(T), out int componentTypeId))
         {
-            componentTypeId = NextComponentTypeId++;
-            ComponentTypeIds[typeof(T)] = componentTypeId;
-            ComponentTypeById[componentTypeId] = typeof(T);
+            var schemaName = typeof(T).GetCustomAttribute<ComponentAttribute>()?.Name;
+            if (schemaName != null && ComponentTypeIdsBySchemaName.TryGetValue(schemaName, out componentTypeId))
+            {
+                // Same schema name as another CLR type (schema evolution) — reuse the ID
+                ComponentTypeIds[typeof(T)] = componentTypeId;
+                ComponentTypeById[componentTypeId] = typeof(T); // update reverse mapping to latest type
+            }
+            else
+            {
+                componentTypeId = NextComponentTypeId++;
+                ComponentTypeIds[typeof(T)] = componentTypeId;
+                ComponentTypeById[componentTypeId] = typeof(T);
+                if (schemaName != null)
+                {
+                    ComponentTypeIdsBySchemaName[schemaName] = componentTypeId;
+                }
+            }
         }
 
         // Get or create pending registration for this archetype
@@ -524,6 +542,7 @@ public static class ArchetypeRegistry
     {
         Array.Clear(Archetypes);
         ComponentTypeIds.Clear();
+        ComponentTypeIdsBySchemaName.Clear();
         ComponentTypeById.Clear();
         NextComponentTypeId = 0;
         RegisteredCount = 0;

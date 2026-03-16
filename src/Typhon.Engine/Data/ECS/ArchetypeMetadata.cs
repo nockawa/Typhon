@@ -45,24 +45,11 @@ internal class ArchetypeMetadata
     internal Dictionary<int, byte> _typeIdToSlot = new();
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Component → ComponentTable mapping (initialized by DatabaseEngine)
+    // Schema-level component type mapping (immutable after static registration)
     // ═══════════════════════════════════════════════════════════════════════
-
-    /// <summary>[slotIndex] → ComponentTable that stores this component type. Length == ComponentCount.</summary>
-    internal ComponentTable[] _slotToComponentTable;
 
     /// <summary>[slotIndex] → CLR Type of the component at this slot. Length == ComponentCount.</summary>
     internal Type[] _slotToComponentType;
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // Per-archetype entity storage (initialized by DatabaseEngine)
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /// <summary>Per-archetype HashMap storing EntityRecords keyed by EntityKey (long).</summary>
-    internal RawValueHashMap<long, PersistentStore> _entityMap;
-
-    /// <summary>Monotonic entity key counter. Use Interlocked.Increment for thread-safe generation.</summary>
-    internal long _nextEntityKey;
 
     /// <summary>Cached entity record size: 14 + ComponentCount * 4 bytes.</summary>
     internal int _entityRecordSize;
@@ -100,6 +87,23 @@ internal class ArchetypeMetadata
         throw new InvalidOperationException(
             $"Component type ID {componentTypeId} is not part of archetype '{ArchetypeType?.Name}' (Id={ArchetypeId}). " +
             $"Ensure you are using a Comp<T> handle declared on this archetype.");
+}
+
+/// <summary>
+/// Per-engine archetype runtime state. Each <see cref="DatabaseEngine"/> instance owns its own array of these, indexed
+/// by <see cref="ArchetypeMetadata.ArchetypeId"/>. This separates per-engine mutable data (entity storage, key counters, ComponentTable bindings) from the
+/// globally-shared immutable schema in <see cref="ArchetypeMetadata"/>.
+/// </summary>
+internal class ArchetypeEngineState
+{
+    /// <summary>[slotIndex] → ComponentTable that stores this component type for THIS engine. Length == ComponentCount.</summary>
+    public ComponentTable[] SlotToComponentTable;
+
+    /// <summary>Per-archetype HashMap storing EntityRecords keyed by EntityKey (long). Backed by THIS engine's MMF.</summary>
+    public RawValueHashMap<long, PersistentStore> EntityMap;
+
+    /// <summary>Monotonic entity key counter. Use Interlocked.Increment for thread-safe generation.</summary>
+    public long NextEntityKey;
 }
 
 /// <summary>

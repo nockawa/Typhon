@@ -125,6 +125,82 @@ public struct CompF
     }
 }
 
+// ── Shared test archetypes for ECS migration ──
+// IDs 200+ to avoid collisions with ECS test archetypes (EcsUnit=100, EcsSoldier=101, SvTestArchetype=50, etc.)
+
+[Archetype(200)]
+class CompAArch : Archetype<CompAArch>
+{
+    public static readonly Comp<CompA> A = Register<CompA>();
+}
+
+[Archetype(201)]
+class CompDArch : Archetype<CompDArch>
+{
+    public static readonly Comp<CompD> D = Register<CompD>();
+}
+
+[Archetype(202)]
+class CompAEArch : Archetype<CompAEArch>
+{
+    public static readonly Comp<CompA> A = Register<CompA>();
+    public static readonly Comp<CompE_Eng> E = Register<CompE_Eng>();
+}
+
+[Archetype(203)]
+class CompABCArch : Archetype<CompABCArch>
+{
+    public static readonly Comp<CompA> A = Register<CompA>();
+    public static readonly Comp<CompB> B = Register<CompB>();
+    public static readonly Comp<CompC> C = Register<CompC>();
+}
+
+[Archetype(204)]
+class CompABArch : Archetype<CompABArch>
+{
+    public static readonly Comp<CompA> A = Register<CompA>();
+    public static readonly Comp<CompB> B = Register<CompB>();
+}
+
+[Archetype(205)]
+class CompBArch : Archetype<CompBArch>
+{
+    public static readonly Comp<CompB> B = Register<CompB>();
+}
+
+[Archetype(206)]
+class CompABDArch : Archetype<CompABDArch>
+{
+    public static readonly Comp<CompA> A = Register<CompA>();
+    public static readonly Comp<CompB> B = Register<CompB>();
+    public static readonly Comp<CompD> D = Register<CompD>();
+}
+
+[Archetype(207)]
+class CompFArch : Archetype<CompFArch>
+{
+    public static readonly Comp<CompF> F = Register<CompF>();
+}
+
+[Archetype(208)]
+class CompDFArch : Archetype<CompDFArch>
+{
+    public static readonly Comp<CompD> D = Register<CompD>();
+    public static readonly Comp<CompF> F = Register<CompF>();
+}
+
+[Archetype(209)]
+class CompGuildArch : Archetype<CompGuildArch>
+{
+    public static readonly Comp<CompGuild> Guild = Register<CompGuild>();
+}
+
+[Archetype(210)]
+class CompPlayerArch : Archetype<CompPlayerArch>
+{
+    public static readonly Comp<CompPlayer> Player = Register<CompPlayer>();
+}
+
 [PublicAPI]
 public abstract class TestBase{
     protected readonly Random Rand;
@@ -194,17 +270,17 @@ public abstract class TestBase{
         dbe.RegisterComponentFromAccessor<CompF>();
     }
     
-    protected long[] CreateNoiseCompA(DatabaseEngine dbe, Transaction t = null, int count = 10)
+    protected EntityId[] CreateNoiseCompA(DatabaseEngine dbe, Transaction t = null, int count = 10)
     {
         RegisterComponents(dbe);
-        
+
         var cur = t ?? dbe.CreateQuickTransaction();
 
-        var res = new long[count];
+        var res = new EntityId[count];
         for (int i = 0; i < count; i++)
         {
             var a = CompA.Create(Rand);
-            res[i] = cur.CreateEntity(ref a);
+            res[i] = cur.Spawn<CompAArch>(CompAArch.A.Set(in a));
         }
 
         if (t == null)
@@ -212,50 +288,47 @@ public abstract class TestBase{
             cur.Commit();
             cur.Dispose();
         }
-        
+
         return res;
     }
-    
-    protected void UpdateNoiseCompA(DatabaseEngine dbe, Transaction t, long[] pks)
+
+    protected void UpdateNoiseCompA(DatabaseEngine dbe, Transaction t, EntityId[] ids)
     {
         RegisterComponents(dbe);
 
         var cur = t ?? dbe.CreateQuickTransaction();
-        
-        for (var i = 0; i < pks.Length; i++)
-        {
-            long pk = pks[i];
 
+        for (var i = 0; i < ids.Length; i++)
+        {
             CompA a = default;
             if ((i & 1) != 0)
             {
-                cur.ReadEntity(pk, out a);
+                a = cur.Open(ids[i]).Read(CompAArch.A);
             }
-            
+
             a.Update(Rand);
-            cur.UpdateEntity(pk, ref a);
+            ref var w = ref cur.OpenMut(ids[i]).Write(CompAArch.A);
+            w = a;
         }
-        
+
         if (t == null)
         {
             cur.Commit();
             cur.Dispose();
         }
     }
-    
-    protected void ReadNoiseCompA(DatabaseEngine dbe, Transaction t, long[] pks)
+
+    protected void ReadNoiseCompA(DatabaseEngine dbe, Transaction t, EntityId[] ids)
     {
         RegisterComponents(dbe);
 
         var cur = t ?? dbe.CreateQuickTransaction();
-        
-        for (var i = 0; i < pks.Length; i++)
-        {
-            long pk = pks[i];
 
-            cur.ReadEntity(pk, out CompA a);
+        for (var i = 0; i < ids.Length; i++)
+        {
+            cur.Open(ids[i]).Read(CompAArch.A);
         }
-        
+
         if (t == null)
         {
             cur.Dispose();

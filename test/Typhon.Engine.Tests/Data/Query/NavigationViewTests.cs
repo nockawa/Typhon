@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using System;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Typhon.Schema.Definition;
 
@@ -38,6 +39,16 @@ public struct CompPlayer
 
 class NavigationViewTests : TestBase<NavigationViewTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompDArch>.Touch();
+        Archetype<CompDFArch>.Touch();
+        Archetype<CompFArch>.Touch();
+        Archetype<CompGuildArch>.Touch();
+        Archetype<CompPlayerArch>.Touch();
+    }
+
     protected override void RegisterComponents(DatabaseEngine dbe)
     {
         base.RegisterComponents(dbe);
@@ -45,29 +56,34 @@ class NavigationViewTests : TestBase<NavigationViewTests>
         dbe.RegisterComponentFromAccessor<CompPlayer>();
     }
 
+    /// <summary>Reconstructs an EntityId from a raw pk value (test-only, uses InternalsVisibleTo).</summary>
+    private static EntityId ToEntityId(long pk) =>
+        Unsafe.As<long, EntityId>(ref pk);
+
     private static long CreateGuild(DatabaseEngine dbe, int level, int memberCap)
     {
         using var t = dbe.CreateQuickTransaction();
         var g = new CompGuild(level, memberCap);
-        var pk = t.CreateEntity(ref g);
+        var id = t.Spawn<CompGuildArch>(CompGuildArch.Guild.Set(in g));
         t.Commit();
-        return pk;
+        return (long)id.RawValue;
     }
 
     private static long CreatePlayer(DatabaseEngine dbe, long guildId, bool active)
     {
         using var t = dbe.CreateQuickTransaction();
         var p = new CompPlayer(guildId, active);
-        var pk = t.CreateEntity(ref p);
+        var id = t.Spawn<CompPlayerArch>(CompPlayerArch.Player.Set(in p));
         t.Commit();
-        return pk;
+        return (long)id.RawValue;
     }
 
     private static void UpdateGuild(DatabaseEngine dbe, long pk, int level, int memberCap)
     {
         using var t = dbe.CreateQuickTransaction();
         var g = new CompGuild(level, memberCap);
-        t.UpdateEntity(pk, ref g);
+        ref var w = ref t.OpenMut(ToEntityId(pk)).Write(CompGuildArch.Guild);
+        w = g;
         t.Commit();
     }
 
@@ -75,14 +91,22 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var t = dbe.CreateQuickTransaction();
         var p = new CompPlayer(guildId, active);
-        t.UpdateEntity(pk, ref p);
+        ref var w = ref t.OpenMut(ToEntityId(pk)).Write(CompPlayerArch.Player);
+        w = p;
         t.Commit();
     }
 
-    private static void DeleteEntity<T>(DatabaseEngine dbe, long pk) where T : unmanaged
+    private static void DeleteGuild(DatabaseEngine dbe, long pk)
     {
         using var t = dbe.CreateQuickTransaction();
-        t.DeleteEntity<T>(pk);
+        t.Destroy(ToEntityId(pk));
+        t.Commit();
+    }
+
+    private static void DeletePlayer(DatabaseEngine dbe, long pk)
+    {
+        using var t = dbe.CreateQuickTransaction();
+        t.Destroy(ToEntityId(pk));
         t.Commit();
     }
 
@@ -99,6 +123,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var ct = dbe.GetComponentTable<CompPlayer>();
         Assert.That(ct, Is.Not.Null);
@@ -114,6 +139,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
         // so we validate the Field metadata directly.
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Verify that CompGuild.Level (int) does NOT have IsForeignKey set
         var ct = dbe.GetComponentTable<CompGuild>();
@@ -126,6 +152,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // CompD.B is an indexed int field, NOT a foreign key — validation happens at Execute/ToView time
         using var tx = dbe.CreateQuickTransaction();
@@ -142,6 +169,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // CompPlayer.GuildId is FK to CompGuild, but we try to navigate to CompD
         using var tx = dbe.CreateQuickTransaction();
@@ -162,6 +190,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var guild1 = CreateGuild(dbe, 10, 50);  // Level >= 10 → qualifies
         var guild2 = CreateGuild(dbe, 5, 30);   // Level < 10 → doesn't qualify
@@ -185,6 +214,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var guild1 = CreateGuild(dbe, 10, 50);  // qualifies
         var guild2 = CreateGuild(dbe, 5, 30);   // doesn't qualify
@@ -209,6 +239,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var guild1 = CreateGuild(dbe, 10, 50);  // qualifies
         var guild2 = CreateGuild(dbe, 5, 30);   // doesn't qualify
@@ -233,6 +264,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var guild1 = CreateGuild(dbe, 10, 50);
         var guild2 = CreateGuild(dbe, 15, 60);
@@ -257,6 +289,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var guild1 = CreateGuild(dbe, 10, 50);
 
@@ -279,6 +312,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var guild1 = CreateGuild(dbe, 10, 50);
         var player = CreatePlayer(dbe, guild1, true);
@@ -290,7 +324,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
 
         Assert.That(view.Contains(player), Is.True);
 
-        DeleteEntity<CompPlayer>(dbe, player);
+        DeletePlayer(dbe, player);
         RefreshView(dbe, view);
 
         Assert.That(view.Contains(player), Is.False);
@@ -305,6 +339,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var guild1 = CreateGuild(dbe, 5, 30);  // initially doesn't qualify
         var player1 = CreatePlayer(dbe, guild1, true);
@@ -331,6 +366,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var guild1 = CreateGuild(dbe, 10, 50);  // qualifies
         var player1 = CreatePlayer(dbe, guild1, true);
@@ -355,6 +391,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var guild1 = CreateGuild(dbe, 10, 50);  // qualifies
         var player = CreatePlayer(dbe, guild1, true);
@@ -380,6 +417,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var guild1 = CreateGuild(dbe, 10, 50);
         var player = CreatePlayer(dbe, guild1, true);
@@ -391,7 +429,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
 
         Assert.That(view.Contains(player), Is.True);
 
-        DeleteEntity<CompGuild>(dbe, guild1);
+        DeleteGuild(dbe, guild1);
         RefreshView(dbe, view);
 
         Assert.That(view.Contains(player), Is.False);
@@ -402,6 +440,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var guild = CreateGuild(dbe, 5, 200);  // doesn't qualify initially
         var playerPKs = new long[100];
@@ -437,6 +476,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var guild = CreateGuild(dbe, 10, 50);
 
@@ -458,6 +498,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var guild = CreateGuild(dbe, 10, 50);
         var player = CreatePlayer(dbe, guild, false);  // not active
@@ -481,6 +522,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var guild = CreateGuild(dbe, 5, 30);  // doesn't qualify
         var player = CreatePlayer(dbe, guild, true);   // active
@@ -503,6 +545,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var guild1 = CreateGuild(dbe, 10, 50);
         var guild2 = CreateGuild(dbe, 5, 30);
@@ -526,6 +569,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var guild1 = CreateGuild(dbe, 10, 50);
         var guild2 = CreateGuild(dbe, 5, 30);
@@ -547,6 +591,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var guild = CreateGuild(dbe, 10, 50);
         CreatePlayer(dbe, guild, true);
@@ -565,6 +610,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateGuild(dbe, 10, 50);
 
@@ -587,6 +633,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Player pointing to a non-existent guild PK
         var player = CreatePlayer(dbe, 999999, true);
@@ -604,6 +651,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var player = CreatePlayer(dbe, 0, true);  // FK = 0, no target
 
@@ -620,6 +668,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         Assert.Throws<InvalidOperationException>(() =>
         {
@@ -639,12 +688,17 @@ class NavigationViewTests : TestBase<NavigationViewTests>
         // Verify that existing View<T1,T2> still works after NavigationView additions
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        using var t = dbe.CreateQuickTransaction();
-        var d = new CompD(5.0f, 50, 2.0);
-        var f = new CompF(15000, 1);
-        var pk = t.CreateEntity(ref d, ref f);
-        t.Commit();
+        long pk;
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var d = new CompD(5.0f, 50, 2.0);
+            var f = new CompF(15000, 1);
+            var id = t.Spawn<CompDFArch>(CompDFArch.D.Set(in d), CompDFArch.F.Set(in f));
+            pk = (long)id.RawValue;
+            t.Commit();
+        }
 
         using var view = dbe.Query<CompD, CompF>()
             .Where((d2, f2) => d2.B > 40 && f2.Gold > 10000)
@@ -663,6 +717,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var guild = CreateGuild(dbe, 10, 100);
         var player1 = CreatePlayer(dbe, guild, true);
@@ -698,6 +753,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var guild = CreateGuild(dbe, 10, 50);
         var player1 = CreatePlayer(dbe, guild, true);
@@ -731,6 +787,7 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var guild = CreateGuild(dbe, 10, 50);
         var player = CreatePlayer(dbe, guild, true);

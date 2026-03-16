@@ -9,6 +9,12 @@ namespace Typhon.Engine.Tests;
 
 class ViewTests : TestBase<ViewTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompDArch>.Touch();
+    }
+
     // CompD layout: A=float(offset 0, idx 0), B=int(offset 4, idx 1), C=double(offset 8, idx 2)
 
     private static FieldEvaluator MakeEvaluator(int fieldIndex, int fieldOffset, byte fieldSize,
@@ -55,27 +61,32 @@ class ViewTests : TestBase<ViewTests>
         return view;
     }
 
+    /// <summary>Reconstructs an EntityId from a raw pk value (test-only, uses InternalsVisibleTo).</summary>
+    private static EntityId ToEntityId(long pk) =>
+        System.Runtime.CompilerServices.Unsafe.As<long, EntityId>(ref pk);
+
     private static long CreateAndCommit(DatabaseEngine dbe, float a, int b, double c)
     {
         using var t = dbe.CreateQuickTransaction();
         var d = new CompD(a, b, c);
-        var pk = t.CreateEntity(ref d);
+        var id = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
         t.Commit();
-        return pk;
+        return (long)id.RawValue;
     }
 
     private static void UpdateAndCommit(DatabaseEngine dbe, long pk, float a, int b, double c)
     {
         using var t = dbe.CreateQuickTransaction();
         var d = new CompD(a, b, c);
-        t.UpdateEntity(pk, ref d);
+        ref var w = ref t.OpenMut(ToEntityId(pk)).Write(CompDArch.D);
+        w = d;
         t.Commit();
     }
 
     private static void DeleteAndCommit(DatabaseEngine dbe, long pk)
     {
         using var t = dbe.CreateQuickTransaction();
-        t.DeleteEntity<CompD>(pk);
+        t.Destroy(ToEntityId(pk));
         t.Commit();
     }
 
@@ -92,6 +103,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct);
 
@@ -116,6 +128,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct);
 
@@ -140,6 +153,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct);
 
@@ -165,6 +179,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct);
 
@@ -187,6 +202,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct);
 
@@ -204,6 +220,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct);
 
@@ -220,6 +237,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct);
 
@@ -242,6 +260,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct);
 
@@ -267,6 +286,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct);
 
@@ -287,6 +307,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct);
 
@@ -309,6 +330,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct);
 
@@ -339,6 +361,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct);
 
@@ -369,6 +392,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct);
 
@@ -385,6 +409,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         // Small buffer: capacity=4
         using var view = CreateSingleFieldView(ct, bufferCapacity: 4);
@@ -413,6 +438,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateMultiFieldView(ct);
 
@@ -431,6 +457,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateMultiFieldView(ct);
 
@@ -447,6 +474,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateMultiFieldView(ct);
 
@@ -469,6 +497,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateMultiFieldView(ct);
 
@@ -490,6 +519,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateMultiFieldView(ct);
 
@@ -513,6 +543,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateMultiFieldView(ct);
 
@@ -535,6 +566,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateMultiFieldView(ct);
 
@@ -561,6 +593,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct);
 
@@ -580,6 +613,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct);
 
@@ -603,6 +637,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         var view = CreateSingleFieldView(ct);
 
@@ -620,6 +655,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         var view = CreateSingleFieldView(ct);
         view.Dispose();
@@ -637,6 +673,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct);
 
@@ -680,6 +717,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
         // View on field A: A > 3.0f (single evaluator on float field)
@@ -703,6 +741,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct);
 
@@ -746,6 +785,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct, bufferCapacity: 4);
 
@@ -774,6 +814,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct, bufferCapacity: 4);
 
@@ -808,6 +849,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct, bufferCapacity: 4);
 
@@ -836,6 +878,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct, bufferCapacity: 4);
 
@@ -863,6 +906,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct, bufferCapacity: 4);
 
@@ -892,6 +936,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         var view = CreateSingleFieldView(ct);
 
@@ -912,7 +957,7 @@ class ViewTests : TestBase<ViewTests>
                         var b = Interlocked.Increment(ref counter) + 10000;
                         using var tx = dbe.CreateQuickTransaction();
                         var d = new CompD(1.0f, b, 2.0);
-                        tx.CreateEntity(ref d);
+                        tx.Spawn<CompDArch>(CompDArch.D.Set(in d));
                         tx.Commit();
                     }
                     catch (ObjectDisposedException)
@@ -951,6 +996,7 @@ class ViewTests : TestBase<ViewTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         using var view = CreateSingleFieldView(ct);
 

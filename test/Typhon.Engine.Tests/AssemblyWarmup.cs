@@ -98,23 +98,29 @@ public class AssemblyWarmup
                 dbe.RegisterComponentFromAccessor<CompE>();
                 dbe.RegisterComponentFromAccessor<CompF>();
 
-                // Create, read, update, delete — exercises transaction lifecycle, MVCC, page cache,
+                // Initialize ECS archetypes — connects archetype slots to ComponentTables
+                Archetype<CompAArch>.Touch();
+                Archetype<CompDArch>.Touch();
+                dbe.InitializeArchetypes();
+
+                // Spawn, read, update, destroy — exercises transaction lifecycle, MVCC, page cache,
                 // BTree indexes, WAL writer, dirty page tracking, checkpoint path
+                EntityId warmupId1;
                 {
                     using var t = dbe.CreateQuickTransaction();
                     var a = new CompA(1, 2.0f, 3.0);
-                    var id1 = t.CreateEntity(ref a);
+                    warmupId1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
                     var a2 = new CompA(2, 3.0f, 4.0);
-                    var id2 = t.CreateEntity(ref a2);
+                    var id2 = t.Spawn<CompAArch>(CompAArch.A.Set(in a2));
 
                     // CompD has indexed fields — triggers BTree insert paths
                     var d = new CompD(1.0f, 100, 2.0);
-                    t.CreateEntity(ref d);
+                    t.Spawn<CompDArch>(CompDArch.D.Set(in d));
 
-                    t.ReadEntity(id1, out CompA _);
-                    a.A = 999;
-                    t.UpdateEntity(id1, ref a);
-                    t.DeleteEntity<CompA>(id2);
+                    t.Open(warmupId1).Read(CompAArch.A);
+                    ref var wa = ref t.OpenMut(warmupId1).Write(CompAArch.A);
+                    wa.A = 999;
+                    t.Destroy(id2);
                     t.Commit();
                 }
 
@@ -122,8 +128,8 @@ public class AssemblyWarmup
                 {
                     using var t = dbe.CreateQuickTransaction();
                     var a = new CompA(10, 20.0f, 30.0);
-                    t.CreateEntity(ref a);
-                    t.ReadEntity(1, out CompA _);
+                    t.Spawn<CompAArch>(CompAArch.A.Set(in a));
+                    t.Open(warmupId1).Read(CompAArch.A);
                     t.Commit();
                 }
 

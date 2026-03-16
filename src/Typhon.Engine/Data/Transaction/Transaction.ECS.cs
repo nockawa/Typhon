@@ -64,9 +64,13 @@ public unsafe partial class Transaction
         foreach (var id in meta.SubtreeArchetypeIds)
         {
             var m = ArchetypeRegistry.GetMetadata(id);
-            if (m?._entityMap != null)
+            if (m != null)
             {
-                total += (int)m._entityMap.EntryCount;
+                var es = _dbe._archetypeStates[m.ArchetypeId];
+                if (es?.EntityMap != null)
+                {
+                    total += (int)es.EntityMap.EntryCount;
+                }
             }
         }
         return total;
@@ -87,10 +91,11 @@ public unsafe partial class Transaction
 
         var meta = Archetype<TArch>.Metadata;
         Debug.Assert(meta != null, $"Archetype {typeof(TArch).Name} not registered");
-        Debug.Assert(meta._entityMap != null, $"Archetype {typeof(TArch).Name} EntityMap not initialized — call DatabaseEngine.InitializeArchetypes first");
+        var engineState = _dbe._archetypeStates[meta.ArchetypeId];
+        Debug.Assert(engineState?.EntityMap != null, $"Archetype {typeof(TArch).Name} EntityMap not initialized — call DatabaseEngine.InitializeArchetypes first");
 
         // Generate unique EntityKey
-        long entityKey = Interlocked.Increment(ref meta._nextEntityKey);
+        long entityKey = Interlocked.Increment(ref engineState.NextEntityKey);
         var entityId = new EntityId(entityKey, meta.ArchetypeId);
 
         // Allocate record bytes
@@ -106,7 +111,7 @@ public unsafe partial class Transaction
             // For each component slot, allocate a chunk and store the location
             for (int slot = 0; slot < meta.ComponentCount; slot++)
             {
-                var table = meta._slotToComponentTable[slot];
+                var table = engineState.SlotToComponentTable[slot];
                 int chunkId = table.StorageMode == StorageMode.Transient ? 
                     table.TransientComponentSegment.AllocateChunk(false) : table.ComponentSegment.AllocateChunk(false, _changeSet);
 
@@ -230,7 +235,12 @@ public unsafe partial class Transaction
 
         // Check LinearHash
         var meta = ArchetypeRegistry.GetMetadata(id.ArchetypeId);
-        if (meta?._entityMap == null)
+        if (meta == null)
+        {
+            return false;
+        }
+        var engineState = _dbe._archetypeStates[meta.ArchetypeId];
+        if (engineState?.EntityMap == null)
         {
             return false;
         }
@@ -239,8 +249,8 @@ public unsafe partial class Transaction
         byte* readBuf = stackalloc byte[recordSize];
 
         using var guard = EpochGuard.Enter(_epochManager);
-        var accessor = meta._entityMap.Segment.CreateChunkAccessor();
-        bool found = meta._entityMap.TryGet(id.EntityKey, readBuf, ref accessor);
+        var accessor = engineState.EntityMap.Segment.CreateChunkAccessor();
+        bool found = engineState.EntityMap.TryGet(id.EntityKey, readBuf, ref accessor);
         accessor.Dispose();
 
         if (!found)
@@ -310,7 +320,12 @@ public unsafe partial class Transaction
         foreach (var target in meta._cascadeTargets)
         {
             var childMeta = ArchetypeRegistry.GetMetadata(target.ChildArchetypeId);
-            if (childMeta?._entityMap == null)
+            if (childMeta == null)
+            {
+                continue;
+            }
+            var childEngineState = _dbe._archetypeStates[childMeta.ArchetypeId];
+            if (childEngineState?.EntityMap == null)
             {
                 continue;
             }
@@ -418,13 +433,15 @@ public unsafe partial class Transaction
                 bits = overrideBits;
             }
 
-            var entityRef = new EntityRef(id, meta, this, bits, writable);
+            var engineState = _dbe._archetypeStates[meta.ArchetypeId];
+            var entityRef = new EntityRef(id, meta, engineState, this, bits, writable);
             entityRef.CopyLocationsFrom(pending.RecordBytes, meta.ComponentCount);
             return entityRef;
         }
 
         // Probe LinearHash
-        if (meta._entityMap == null)
+        var es = _dbe._archetypeStates[meta.ArchetypeId];
+        if (es?.EntityMap == null)
         {
             return default;
         }
@@ -433,8 +450,8 @@ public unsafe partial class Transaction
         byte* readBuf = stackalloc byte[recordSize];
 
         using var guard = EpochGuard.Enter(_epochManager);
-        var accessor = meta._entityMap.Segment.CreateChunkAccessor();
-        bool found = meta._entityMap.TryGet(id.EntityKey, readBuf, ref accessor);
+        var accessor = es.EntityMap.Segment.CreateChunkAccessor();
+        bool found = es.EntityMap.TryGet(id.EntityKey, readBuf, ref accessor);
         accessor.Dispose();
 
         if (!found)
@@ -459,7 +476,7 @@ public unsafe partial class Transaction
             enabledBits = pendingBits;
         }
 
-        var result = new EntityRef(id, meta, this, enabledBits, writable);
+        var result = new EntityRef(id, meta, es, this, enabledBits, writable);
         result.CopyLocationsFrom(readBuf, meta.ComponentCount);
 
         // For Versioned components: resolve MVCC-visible chunkId via revision chain walk.
@@ -467,7 +484,7 @@ public unsafe partial class Transaction
         // chunkId for this transaction's snapshot.
         for (int slot = 0; slot < meta.ComponentCount; slot++)
         {
-            var table = meta._slotToComponentTable[slot];
+            var table = es.SlotToComponentTable[slot];
             if (table.StorageMode != StorageMode.Versioned)
             {
                 continue;
@@ -477,6 +494,14 @@ public unsafe partial class Transaction
             var info = GetComponentInfo(compType);
 
             long pk = (long)id.RawValue;
+
+            // If already resolved in this transaction (e.g. second Open on same entity), reuse cached entry
+            if (!info.IsMultiple && info.SingleCache.TryGetValue(pk, out var cached))
+            {
+                result.SetLocation(slot, cached.CurCompContentChunkId);
+                continue;
+            }
+
             var pkResult = GetCompRevInfoFromIndex(pk, info, TSN);
             if (pkResult.IsFailure)
             {
@@ -567,6 +592,23 @@ public unsafe partial class Transaction
             byte* oldPtr = info.CompContentAccessor.GetChunkAddress(oldChunkId);
             byte* newPtr = info.CompContentAccessor.GetChunkAddress(cri.CurCompContentChunkId, true);
             Unsafe.CopyBlock(newPtr, oldPtr, (uint)table.ComponentTotalSize);
+
+            // If the component has collections, increment RefCounters for shared collection buffers.
+            // The byte copy above duplicated the _bufferId fields — both old and new revisions now
+            // reference the same collection storage, so RefCounter must reflect that.
+            if (table.HasCollections)
+            {
+                foreach (var kvp in table.ComponentCollectionVSBSByOffset)
+                {
+                    int bufferId = *(int*)(newPtr + table.ComponentOverhead + kvp.Key);
+                    if (bufferId != 0)
+                    {
+                        var accessor = kvp.Value.Segment.CreateChunkAccessor(_changeSet);
+                        kvp.Value.BufferAddRef(bufferId, ref accessor);
+                        accessor.Dispose();
+                    }
+                }
+            }
         }
 
         byte* ptr = info.CompContentAccessor.GetChunkAddress(cri.CurCompContentChunkId, true);
@@ -608,8 +650,9 @@ public unsafe partial class Transaction
                 EntityRecordAccessor.GetHeader(recordPtr).BornTSN = TSN;
 
                 // Insert into per-archetype LinearHash
-                var hashAccessor = meta._entityMap.Segment.CreateChunkAccessor(_changeSet);
-                meta._entityMap.Insert(entityId.EntityKey, recordPtr, ref hashAccessor, _changeSet);
+                var engineState = _dbe._archetypeStates[meta.ArchetypeId];
+                var hashAccessor = engineState.EntityMap.Segment.CreateChunkAccessor(_changeSet);
+                engineState.EntityMap.Insert(entityId.EntityKey, recordPtr, ref hashAccessor, _changeSet);
                 hashAccessor.Dispose();
 
                 // Insert into secondary indexes for each component slot.
@@ -618,7 +661,7 @@ public unsafe partial class Transaction
                 // - SV: inserted here
                 for (int slot = 0; slot < meta.ComponentCount; slot++)
                 {
-                    var table = meta._slotToComponentTable[slot];
+                    var table = engineState.SlotToComponentTable[slot];
                     if (table.StorageMode == StorageMode.Versioned)
                     {
                         continue; // CommitComponentCore handles PK + secondary indexes via IndexMaintainer
@@ -677,22 +720,117 @@ public unsafe partial class Transaction
         foreach (var entityId in _pendingDestroys)
         {
             var meta = ArchetypeRegistry.GetMetadata(entityId.ArchetypeId);
-            if (meta?._entityMap == null)
+            if (meta == null)
+            {
+                continue;
+            }
+            var engineState = _dbe._archetypeStates[meta.ArchetypeId];
+            if (engineState?.EntityMap == null)
             {
                 continue;
             }
 
-            var accessor = meta._entityMap.Segment.CreateChunkAccessor(_changeSet);
-            if (meta._entityMap.TryGet(entityId.EntityKey, readBuf, ref accessor))
+            var accessor = engineState.EntityMap.Segment.CreateChunkAccessor(_changeSet);
+            if (engineState.EntityMap.TryGet(entityId.EntityKey, readBuf, ref accessor))
             {
                 // Set DiedTSN
                 EntityRecordAccessor.GetHeader(readBuf).DiedTSN = TSN;
-                meta._entityMap.Upsert(entityId.EntityKey, readBuf, ref accessor, _changeSet);
+                engineState.EntityMap.Upsert(entityId.EntityKey, readBuf, ref accessor, _changeSet);
 
                 // Enqueue for deferred GC (LinearHash removal + chunk freeing when MinTSN advances past DiedTSN)
                 _dbe.EnqueueEcsCleanup(entityId, meta, TSN);
             }
             accessor.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Prepare component-level tombstone revisions for pending destroys. Called BEFORE CommitComponentCore so it can handle secondary index removal,
+    /// WAL delete entries, and view notifications. The archetype-level DiedTSN is set later in FlushPendingDestroys (post-commit).
+    /// </summary>
+    private void PrepareEcsDestroys()
+    {
+        if (_pendingDestroys == null || _pendingDestroys.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var entityId in _pendingDestroys)
+        {
+            // Skip entities that were spawned in this same transaction — they were never inserted
+            // into ComponentTables (FlushPendingSpawns skips them), so there's nothing to delete.
+            if (_pendingSpawns != null && _pendingSpawns.ContainsKey(entityId))
+            {
+                continue;
+            }
+
+            var meta = ArchetypeRegistry.GetMetadata(entityId.ArchetypeId);
+            if (meta == null)
+            {
+                continue;
+            }
+            var engineState = _dbe._archetypeStates[meta.ArchetypeId];
+            if (engineState?.SlotToComponentTable == null)
+            {
+                continue;
+            }
+
+            long pk = (long)entityId.RawValue;
+            for (int slot = 0; slot < meta.ComponentCount; slot++)
+            {
+                var table = engineState.SlotToComponentTable[slot];
+                if (table == null || table.StorageMode != StorageMode.Versioned)
+                {
+                    continue;
+                }
+                MarkComponentDeleted(meta._slotToComponentType[slot], pk);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Mark a component as deleted in the ComponentInfo cache for a destroyed entity.
+    /// Creates a tombstone revision (CurCompContentChunkId = 0) so CommitComponentCore can handle index removal, WAL entries, and deferred cleanup.
+    /// </summary>
+    private void MarkComponentDeleted(Type compType, long pk)
+    {
+        var info = GetComponentInfo(compType);
+
+        ref var cri = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(info.SingleCache, pk, out var cached);
+
+        if (cached)
+        {
+            // Already in cache (from Open/Write in same tx)
+            if ((cri.Operations & ComponentInfo.OperationType.Deleted) != 0)
+            {
+                return;
+            }
+
+            // Free chunk allocated by Spawn/Write in same tx
+            if (cri.CurCompContentChunkId != 0)
+            {
+                info.CompContentSegment.FreeChunk(cri.CurCompContentChunkId);
+                cri.CurCompContentChunkId = 0;
+            }
+        }
+        else
+        {
+            // Not in cache — read from index
+            var result = GetCompRevInfoFromIndex(pk, info, TSN);
+            if (result.IsFailure)
+            {
+                info.SingleCache.Remove(pk);
+                return;
+            }
+            cri = result.Value;
+        }
+
+        cri.Operations |= ComponentInfo.OperationType.Deleted;
+
+        // Create tombstone revision only on first mutation (same guard as UpdateComponent)
+        if (!cached || (cri.Operations & ComponentInfo.OperationType.Read) != 0)
+        {
+            ComponentRevisionManager.AddCompRev(info, ref cri, TSN, UowId, isDelete: true);
         }
     }
 
@@ -728,13 +866,18 @@ public unsafe partial class Transaction
             }
 
             var meta = ArchetypeRegistry.GetMetadata(entityId.ArchetypeId);
-            if (meta?._entityMap == null)
+            if (meta == null)
+            {
+                continue;
+            }
+            var engineState = _dbe._archetypeStates[meta.ArchetypeId];
+            if (engineState?.EntityMap == null)
             {
                 continue;
             }
 
-            var accessor = meta._entityMap.Segment.CreateChunkAccessor(_changeSet);
-            if (meta._entityMap.TryGet(entityId.EntityKey, readBuf, ref accessor))
+            var accessor = engineState.EntityMap.Segment.CreateChunkAccessor(_changeSet);
+            if (engineState.EntityMap.TryGet(entityId.EntityKey, readBuf, ref accessor))
             {
                 ushort oldBits = EntityRecordAccessor.GetHeader(readBuf).EnabledBits;
 
@@ -746,7 +889,7 @@ public unsafe partial class Transaction
 
                 // Update
                 EntityRecordAccessor.GetHeader(readBuf).EnabledBits = newBits;
-                meta._entityMap.Upsert(entityId.EntityKey, readBuf, ref accessor, _changeSet);
+                engineState.EntityMap.Upsert(entityId.EntityKey, readBuf, ref accessor, _changeSet);
             }
             accessor.Dispose();
         }
@@ -761,7 +904,8 @@ public unsafe partial class Transaction
             foreach (var kvp in _pendingSpawns)
             {
                 var meta = kvp.Value.Archetype;
-                if (meta._slotToComponentTable == null)
+                var engineState = _dbe._archetypeStates[meta.ArchetypeId];
+                if (engineState?.SlotToComponentTable == null)
                 {
                     continue;
                 }
@@ -773,7 +917,7 @@ public unsafe partial class Transaction
                         int chunkId = EntityRecordAccessor.GetLocation(recordPtr, slot);
                         if (chunkId != 0)
                         {
-                            var table = meta._slotToComponentTable[slot];
+                            var table = engineState.SlotToComponentTable[slot];
                             if (table.StorageMode == StorageMode.Transient)
                             {
                                 table.TransientComponentSegment.FreeChunk(chunkId);

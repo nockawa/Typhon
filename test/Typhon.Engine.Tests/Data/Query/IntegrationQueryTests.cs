@@ -3,18 +3,31 @@ using NUnit.Framework;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine.Tests;
 
 class IntegrationQueryTests : TestBase<IntegrationQueryTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompDArch>.Touch();
+        Archetype<CompDFArch>.Touch();
+        Archetype<CompFArch>.Touch();
+    }
+
+    /// <summary>Reconstructs an EntityId from a raw pk value (test-only, uses InternalsVisibleTo).</summary>
+    private static EntityId ToEntityId(long pk) =>
+        Unsafe.As<long, EntityId>(ref pk);
+
     private static long CreateAndCommit(DatabaseEngine dbe, float a, int b, double c)
     {
         using var t = dbe.CreateQuickTransaction();
         var d = new CompD(a, b, c);
-        var pk = t.CreateEntity(ref d);
+        var id = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
         t.Commit();
-        return pk;
+        return (long)id.RawValue;
     }
 
     private static long CreateBothAndCommit(DatabaseEngine dbe, float a, int b, double c, int gold, int rank)
@@ -22,9 +35,9 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
         using var t = dbe.CreateQuickTransaction();
         var d = new CompD(a, b, c);
         var f = new CompF(gold, rank);
-        var pk = t.CreateEntity(ref d, ref f);
+        var id = t.Spawn<CompDFArch>(CompDFArch.D.Set(in d), CompDFArch.F.Set(in f));
         t.Commit();
-        return pk;
+        return (long)id.RawValue;
     }
 
     private static void RefreshView(DatabaseEngine dbe, ViewBase view)
@@ -46,6 +59,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateAndCommit(dbe, 5.0f, 50, 2.0);  // A>3 AND B>40 → match
         CreateAndCommit(dbe, 5.0f, 30, 2.0);  // A>3 but B≤40 → no
@@ -77,6 +91,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateAndCommit(dbe, 5.0f, 50, 10.0);  // all pass
         CreateAndCommit(dbe, 5.0f, 45, 1.0);   // B>40 but C<=5 → fail
@@ -101,6 +116,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var pk1 = CreateAndCommit(dbe, 1.0f, 50, 2.0);  // B>40 → match
         var pk2 = CreateAndCommit(dbe, 1.0f, 30, 2.0);  // B≤40 → no
@@ -119,6 +135,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateAndCommit(dbe, 1.0f, 50, 2.0);
 
@@ -138,6 +155,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Create entities before view
         var pk1 = CreateAndCommit(dbe, 1.0f, 50, 2.0);
@@ -176,6 +194,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateAndCommit(dbe, 1.0f, 50, 2.0);
 
@@ -191,6 +210,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateAndCommit(dbe, 1.0f, 50, 2.0);
 
@@ -210,6 +230,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var pk1 = CreateAndCommit(dbe, 1.0f, 50, 2.0);
         var pk2 = CreateAndCommit(dbe, 1.0f, 30, 2.0);
@@ -229,6 +250,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateAndCommit(dbe, 1.0f, 50, 2.0);
 
@@ -250,6 +272,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateAndCommit(dbe, 1.0f, 70, 2.0);
         CreateAndCommit(dbe, 1.0f, 50, 2.0);
@@ -266,8 +289,8 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
         // Verify ordering: should be sorted by B ascending
         for (var i = 1; i < results.Count; i++)
         {
-            tx.ReadEntity<CompD>(results[i - 1], out var prev);
-            tx.ReadEntity<CompD>(results[i], out var curr);
+            var prev = tx.Open(ToEntityId(results[i - 1])).Read(CompDArch.D);
+            var curr = tx.Open(ToEntityId(results[i])).Read(CompDArch.D);
             Assert.That(prev.B, Is.LessThanOrEqualTo(curr.B), $"B values should be ascending at index {i}");
         }
     }
@@ -277,6 +300,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateAndCommit(dbe, 1.0f, 70, 2.0);
         CreateAndCommit(dbe, 1.0f, 50, 2.0);
@@ -291,8 +315,8 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
         Assert.That(results, Has.Count.EqualTo(3));
         for (var i = 1; i < results.Count; i++)
         {
-            tx.ReadEntity<CompD>(results[i - 1], out var prev);
-            tx.ReadEntity<CompD>(results[i], out var curr);
+            var prev = tx.Open(ToEntityId(results[i - 1])).Read(CompDArch.D);
+            var curr = tx.Open(ToEntityId(results[i])).Read(CompDArch.D);
             Assert.That(prev.B, Is.GreaterThanOrEqualTo(curr.B), $"B values should be descending at index {i}");
         }
     }
@@ -302,6 +326,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var pk1 = CreateAndCommit(dbe, 1.0f, 50, 2.0);
         var pk2 = CreateAndCommit(dbe, 1.0f, 60, 2.0);
@@ -326,6 +351,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Create 5 matching entities with distinct B values
         for (var i = 0; i < 5; i++)
@@ -359,6 +385,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateAndCommit(dbe, 1.0f, 50, 2.0);
         CreateAndCommit(dbe, 1.0f, 60, 2.0);
@@ -383,6 +410,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateAndCommit(dbe, 1.0f, 50, 2.0);
         CreateAndCommit(dbe, 1.0f, 60, 2.0);
@@ -401,6 +429,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateAndCommit(dbe, 1.0f, 30, 2.0);
 
@@ -415,6 +444,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateAndCommit(dbe, 1.0f, 50, 2.0);
 
@@ -429,6 +459,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateAndCommit(dbe, 1.0f, 30, 2.0);
 
@@ -447,6 +478,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         Assert.That(() => dbe.Query<CompD>().Where(p => p.B > 40).Skip(1),
             Throws.TypeOf<InvalidOperationException>());
@@ -457,6 +489,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         Assert.That(() => dbe.Query<CompD>().Where(p => p.B > 40).Take(1),
             Throws.TypeOf<InvalidOperationException>());
@@ -467,6 +500,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         Assert.That(() => dbe.Query<CompD>()
             .Where(p => p.B > 40)
@@ -481,6 +515,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         // CompE has no indexed fields
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         Assert.That(() => dbe.Query<CompE>()
             .Where(p => p.B > 40)
@@ -493,6 +528,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var tx = dbe.CreateQuickTransaction();
         Assert.That(() => dbe.Query<CompD>()
@@ -510,6 +546,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Need entities so the indexes are populated
         CreateBothAndCommit(dbe, 5.0f, 50, 2.0, 20000, 1);
@@ -528,6 +565,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var pk1 = CreateBothAndCommit(dbe, 5.0f, 50, 2.0, 20000, 1);  // B>40 AND Gold>10000 → match
         var pk2 = CreateBothAndCommit(dbe, 5.0f, 30, 2.0, 20000, 2);  // B≤40 → no
@@ -551,6 +589,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var pk1 = CreateBothAndCommit(dbe, 1.0f, 50, 2.0, 20000, 1);
 
@@ -588,6 +627,7 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Phase 1: Insert entities
         var pk1 = CreateAndCommit(dbe, 5.0f, 50, 10.0);  // all pass

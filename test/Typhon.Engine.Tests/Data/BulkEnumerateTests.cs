@@ -6,11 +6,19 @@ namespace Typhon.Engine.Tests;
 
 class BulkEnumerateTests : TestBase<BulkEnumerateTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompAArch>.Touch();
+        Archetype<CompDArch>.Touch();
+    }
+
     [Test]
     public void PK_FullScan()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var createdPKs = new List<long>();
         using (var tx = dbe.CreateQuickTransaction())
@@ -18,7 +26,7 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
             for (int i = 0; i < 10; i++)
             {
                 var comp = new CompA(i * 100, i * 1.5f, i * 2.5);
-                createdPKs.Add(tx.CreateEntity(ref comp));
+                createdPKs.Add((long)tx.Spawn<CompAArch>(CompAArch.A.Set(in comp)).RawValue);
             }
 
             tx.Commit();
@@ -52,6 +60,7 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var createdPKs = new List<long>();
         using (var tx = dbe.CreateQuickTransaction())
@@ -59,7 +68,7 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
             for (int i = 0; i < 10; i++)
             {
                 var comp = new CompA(i);
-                createdPKs.Add(tx.CreateEntity(ref comp));
+                createdPKs.Add((long)tx.Spawn<CompAArch>(CompAArch.A.Set(in comp)).RawValue);
             }
 
             tx.Commit();
@@ -95,13 +104,14 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using (var tx = dbe.CreateQuickTransaction())
         {
             for (int i = 0; i < 5; i++)
             {
                 var comp = new CompA(i);
-                tx.CreateEntity(ref comp);
+                tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             }
 
             tx.Commit();
@@ -126,16 +136,18 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // tx1: Create 5 entities
-        long[] pks;
+        var entityIds = new EntityId[5];
+        var pks = new long[5];
         using (var tx1 = dbe.CreateQuickTransaction())
         {
-            pks = new long[5];
             for (int i = 0; i < 5; i++)
             {
                 var comp = new CompA(i);
-                pks[i] = tx1.CreateEntity(ref comp);
+                entityIds[i] = tx1.Spawn<CompAArch>(CompAArch.A.Set(in comp));
+                pks[i] = (long)entityIds[i].RawValue;
             }
 
             tx1.Commit();
@@ -144,8 +156,8 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
         // tx2: Delete entities at indices 1 and 3
         using (var tx2 = dbe.CreateQuickTransaction())
         {
-            tx2.DeleteEntity<CompA>(pks[1]);
-            tx2.DeleteEntity<CompA>(pks[3]);
+            tx2.Destroy(entityIds[1]);
+            tx2.Destroy(entityIds[3]);
             tx2.Commit();
         }
 
@@ -173,19 +185,20 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long pk;
+        EntityId entityId;
         using (var tx = dbe.CreateQuickTransaction())
         {
             var comp = new CompA(42);
-            pk = tx.CreateEntity(ref comp);
+            entityId = tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             tx.Commit();
         }
 
         // Delete it
         using (var tx = dbe.CreateQuickTransaction())
         {
-            tx.DeleteEntity<CompA>(pk);
+            tx.Destroy(entityId);
             tx.Commit();
         }
 
@@ -208,6 +221,7 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // CompD has [Index] int B (unique secondary index)
         using (var tx = dbe.CreateQuickTransaction())
@@ -215,7 +229,7 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
             for (int i = 0; i < 10; i++)
             {
                 var comp = new CompD(i * 1.1f, i * 10, i * 2.2);
-                tx.CreateEntity(ref comp);
+                tx.Spawn<CompDArch>(CompDArch.D.Set(in comp));
             }
 
             tx.Commit();
@@ -251,6 +265,7 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // CompD has [Index(AllowMultiple = true)] float A
         // Create entities with duplicate A values
@@ -260,7 +275,7 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
             {
                 // Groups: A=1.0 (3 entities), A=2.0 (3 entities)
                 var comp = new CompD(i < 3 ? 1.0f : 2.0f, i * 10, i * 0.5);
-                tx.CreateEntity(ref comp);
+                tx.Spawn<CompDArch>(CompDArch.D.Set(in comp));
             }
 
             tx.Commit();
@@ -292,6 +307,7 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var pkToValue = new Dictionary<long, int>();
         using (var tx = dbe.CreateQuickTransaction())
@@ -299,7 +315,7 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
             for (int i = 0; i < 5; i++)
             {
                 var comp = new CompD(i * 1.0f, i * 100, 0.0);
-                long pk = tx.CreateEntity(ref comp);
+                long pk = (long)tx.Spawn<CompDArch>(CompDArch.D.Set(in comp)).RawValue;
                 pkToValue[pk] = i * 100;
             }
 
@@ -327,13 +343,14 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using (var tx = dbe.CreateQuickTransaction())
         {
             for (int i = 0; i < 5; i++)
             {
                 var comp = new CompA(i);
-                tx.CreateEntity(ref comp);
+                tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             }
 
             tx.Commit();
@@ -358,6 +375,7 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Create >256 entities to trigger multiple epoch refreshes (every 128 entities)
         using (var tx = dbe.CreateQuickTransaction())
@@ -365,7 +383,7 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
             for (int i = 0; i < 300; i++)
             {
                 var comp = new CompA(i);
-                tx.CreateEntity(ref comp);
+                tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             }
 
             tx.Commit();
@@ -418,13 +436,14 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using (var tx = dbe.CreateQuickTransaction())
         {
             for (int i = 0; i < 5; i++)
             {
                 var comp = new CompA(i * 10);
-                tx.CreateEntity(ref comp);
+                tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             }
 
             tx.Commit();
@@ -469,13 +488,14 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using (var tx = dbe.CreateQuickTransaction())
         {
             for (int i = 0; i < 5; i++)
             {
                 var comp = new CompA(i * 100, i * 1.5f, i * 2.5);
-                tx.CreateEntity(ref comp);
+                tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             }
 
             tx.Commit();

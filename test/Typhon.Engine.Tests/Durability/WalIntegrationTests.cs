@@ -21,6 +21,14 @@ namespace Typhon.Engine.Tests;
 [Category("WAL")]
 class WalIntegrationTests : TestBase
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompAArch>.Touch();
+        Archetype<CompDArch>.Touch();
+        Archetype<CompABCArch>.Touch();
+    }
+
     private ServiceProvider _serviceProvider;
     private string _walDir;
     private string _dbDir;
@@ -105,12 +113,13 @@ class WalIntegrationTests : TestBase
     {
         var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         return dbe;
     }
 
-    private (long[] ids, CompA[] values) CreateCompAEntities(DatabaseEngine dbe, int count, DurabilityMode mode)
+    private (EntityId[] ids, CompA[] values) CreateCompAEntities(DatabaseEngine dbe, int count, DurabilityMode mode)
     {
-        var ids = new long[count];
+        var ids = new EntityId[count];
         var values = new CompA[count];
 
         using (var uow = dbe.CreateUnitOfWork(mode))
@@ -119,7 +128,7 @@ class WalIntegrationTests : TestBase
             {
                 using var tx = uow.CreateTransaction();
                 var comp = new CompA(i + 1, (float)(i * 1.5), i * 2.5);
-                ids[i] = tx.CreateEntity(ref comp);
+                ids[i] = tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
                 values[i] = comp;
                 tx.Commit();
             }
@@ -130,18 +139,15 @@ class WalIntegrationTests : TestBase
         return (ids, values);
     }
 
-    private void VerifyCompAEntities(DatabaseEngine dbe, long[] ids, CompA[] expected)
+    private void VerifyCompAEntities(DatabaseEngine dbe, EntityId[] ids, CompA[] expected)
     {
         var errors = new List<string>();
         using var tx = dbe.CreateQuickTransaction();
 
         for (int i = 0; i < ids.Length; i++)
         {
-            if (!tx.ReadEntity(ids[i], out CompA actual))
-            {
-                errors.Add($"Entity {ids[i]} (index {i}) not readable");
-            }
-            else if (actual.A != expected[i].A || actual.B != expected[i].B || actual.C != expected[i].C)
+            var actual = tx.Open(ids[i]).Read(CompAArch.A);
+            if (actual.A != expected[i].A || actual.B != expected[i].B || actual.C != expected[i].C)
             {
                 errors.Add($"Entity {ids[i]} (index {i}): got A={actual.A},B={actual.B},C={actual.C}; " +
                            $"expected A={expected[i].A},B={expected[i].B},C={expected[i].C}");
@@ -284,7 +290,7 @@ class WalIntegrationTests : TestBase
         {
             using var tx = uow.CreateTransaction();
             var comp = new CompA(42);
-            tx.CreateEntity(ref comp);
+            tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             tx.Commit();
             uow.Flush();
         }
@@ -305,7 +311,7 @@ class WalIntegrationTests : TestBase
         {
             using var tx = uow.CreateTransaction();
             var comp = new CompA(1);
-            tx.CreateEntity(ref comp);
+            tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             tx.Commit();
             uow.Flush();
         }
@@ -317,7 +323,7 @@ class WalIntegrationTests : TestBase
         {
             using var tx = uow.CreateTransaction();
             var comp = new CompA(2);
-            tx.CreateEntity(ref comp);
+            tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             tx.Commit();
             uow.Flush();
         }
@@ -380,7 +386,7 @@ class WalIntegrationTests : TestBase
         {
             using var tx = uow.CreateTransaction();
             var comp = new CompA(1);
-            tx.CreateEntity(ref comp);
+            tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             tx.Commit();
             uow.Flush();
         }
@@ -398,7 +404,7 @@ class WalIntegrationTests : TestBase
     [CancelAfter(15000)]
     public void WAL_CreateEntity_SurvivesReopen(DurabilityMode mode)
     {
-        long[] ids;
+        EntityId[] ids;
         CompA[] values;
 
         using (var scope1 = _serviceProvider.CreateScope())
@@ -420,7 +426,7 @@ class WalIntegrationTests : TestBase
     [CancelAfter(15000)]
     public void WAL_UpdateComponent_SurvivesReopen(DurabilityMode mode)
     {
-        long[] ids;
+        EntityId[] ids;
         CompA[] updatedValues;
 
         using (var scope1 = _serviceProvider.CreateScope())
@@ -436,7 +442,8 @@ class WalIntegrationTests : TestBase
                 {
                     using var tx = uow.CreateTransaction();
                     var comp = new CompA(i + 1000, (float)(i * 3.0), i * 7.0);
-                    tx.UpdateEntity(ids[i], ref comp);
+                    ref var w = ref tx.OpenMut(ids[i]).Write(CompAArch.A);
+                    w = comp;
                     updatedValues[i] = comp;
                     tx.Commit();
                 }
@@ -458,7 +465,7 @@ class WalIntegrationTests : TestBase
     [CancelAfter(15000)]
     public void WAL_DeleteEntity_SurvivesReopen(DurabilityMode mode)
     {
-        long[] ids;
+        EntityId[] ids;
         CompA[] values;
 
         using (var scope1 = _serviceProvider.CreateScope())
@@ -472,7 +479,7 @@ class WalIntegrationTests : TestBase
                 for (int i = 0; i < 10; i++)
                 {
                     using var tx = uow.CreateTransaction();
-                    tx.DeleteEntity<CompA>(ids[i]);
+                    tx.Destroy(ids[i]);
                     tx.Commit();
                 }
 
@@ -490,22 +497,26 @@ class WalIntegrationTests : TestBase
             // First 10 should be deleted
             for (int i = 0; i < 10; i++)
             {
-                if (tx.ReadEntity(ids[i], out CompA _))
+                if (tx.IsAlive(ids[i]))
                 {
-                    errors.Add($"Entity {ids[i]} (index {i}) should be deleted but was readable");
+                    errors.Add($"Entity {ids[i]} (index {i}) should be deleted but was alive");
                 }
             }
 
             // Last 10 should survive
             for (int i = 10; i < 20; i++)
             {
-                if (!tx.ReadEntity(ids[i], out CompA actual))
+                if (!tx.IsAlive(ids[i]))
                 {
-                    errors.Add($"Entity {ids[i]} (index {i}) should survive but was not readable");
+                    errors.Add($"Entity {ids[i]} (index {i}) should survive but was not alive");
                 }
-                else if (actual.A != values[i].A)
+                else
                 {
-                    errors.Add($"Entity {ids[i]} (index {i}): A={actual.A}, expected {values[i].A}");
+                    var actual = tx.Open(ids[i]).Read(CompAArch.A);
+                    if (actual.A != values[i].A)
+                    {
+                        errors.Add($"Entity {ids[i]} (index {i}): A={actual.A}, expected {values[i].A}");
+                    }
                 }
             }
 
@@ -518,7 +529,7 @@ class WalIntegrationTests : TestBase
     public void WAL_StringComponent_SurvivesReopen()
     {
         const int count = 20;
-        var ids = new long[count];
+        var ids = new EntityId[count];
         var strings = new string[count];
 
         using (var scope1 = _serviceProvider.CreateScope())
@@ -530,8 +541,9 @@ class WalIntegrationTests : TestBase
                 for (int i = 0; i < count; i++)
                 {
                     using var tx = uow.CreateTransaction();
-                    var comp = new CompC($"Entity_{i:D3}");
-                    ids[i] = tx.CreateEntity(ref comp);
+                    var compA = new CompA(0);
+                    var compC = new CompC($"Entity_{i:D3}");
+                    ids[i] = tx.Spawn<CompABCArch>(CompABCArch.A.Set(in compA), CompABCArch.C.Set(in compC));
                     strings[i] = $"Entity_{i:D3}";
                     tx.Commit();
                 }
@@ -549,11 +561,8 @@ class WalIntegrationTests : TestBase
 
             for (int i = 0; i < count; i++)
             {
-                if (!tx.ReadEntity(ids[i], out CompC actual))
-                {
-                    errors.Add($"Entity {ids[i]} not readable");
-                }
-                else if (actual.String.AsString != strings[i])
+                var actual = tx.Open(ids[i]).Read(CompABCArch.C);
+                if (actual.String.AsString != strings[i])
                 {
                     errors.Add($"Entity {ids[i]}: got '{actual.String.AsString}', expected '{strings[i]}'");
                 }
@@ -568,7 +577,7 @@ class WalIntegrationTests : TestBase
     public void WAL_IndexedComponent_SurvivesReopen()
     {
         const int count = 20;
-        var ids = new long[count];
+        var ids = new EntityId[count];
         var values = new CompD[count];
 
         using (var scope1 = _serviceProvider.CreateScope())
@@ -581,7 +590,7 @@ class WalIntegrationTests : TestBase
                 {
                     using var tx = uow.CreateTransaction();
                     var comp = new CompD((float)(i * 1.1), i * 10, i * 2.2);
-                    ids[i] = tx.CreateEntity(ref comp);
+                    ids[i] = tx.Spawn<CompDArch>(CompDArch.D.Set(in comp));
                     values[i] = comp;
                     tx.Commit();
                 }
@@ -599,11 +608,8 @@ class WalIntegrationTests : TestBase
 
             for (int i = 0; i < count; i++)
             {
-                if (!tx.ReadEntity(ids[i], out CompD actual))
-                {
-                    errors.Add($"Entity {ids[i]} not readable");
-                }
-                else if (actual.B != values[i].B)
+                var actual = tx.Open(ids[i]).Read(CompDArch.D);
+                if (actual.B != values[i].B)
                 {
                     errors.Add($"Entity {ids[i]}: B={actual.B}, expected {values[i].B}");
                 }
@@ -618,7 +624,7 @@ class WalIntegrationTests : TestBase
     public void WAL_MultipleComponents_SurvivesReopen()
     {
         const int count = 20;
-        var ids = new long[count];
+        var ids = new EntityId[count];
         var valuesA = new CompA[count];
         var valuesC = new CompC[count];
 
@@ -633,7 +639,7 @@ class WalIntegrationTests : TestBase
                     using var tx = uow.CreateTransaction();
                     var compA = new CompA(i + 1, (float)(i * 1.5), i * 2.5);
                     var compC = new CompC($"Multi_{i:D3}");
-                    ids[i] = tx.CreateEntity(ref compA, ref compC);
+                    ids[i] = tx.Spawn<CompABCArch>(CompABCArch.A.Set(in compA), CompABCArch.C.Set(in compC));
                     valuesA[i] = compA;
                     valuesC[i] = compC;
                     tx.Commit();
@@ -652,21 +658,18 @@ class WalIntegrationTests : TestBase
 
             for (int i = 0; i < count; i++)
             {
-                if (!tx.ReadEntity(ids[i], out CompA actualA, out CompC actualC))
-                {
-                    errors.Add($"Entity {ids[i]} not readable");
-                }
-                else
-                {
-                    if (actualA.A != valuesA[i].A)
-                    {
-                        errors.Add($"Entity {ids[i]}: CompA.A={actualA.A}, expected {valuesA[i].A}");
-                    }
+                var entity = tx.Open(ids[i]);
+                var actualA = entity.Read(CompABCArch.A);
+                var actualC = entity.Read(CompABCArch.C);
 
-                    if (actualC.String.AsString != valuesC[i].String.AsString)
-                    {
-                        errors.Add($"Entity {ids[i]}: CompC.String='{actualC.String.AsString}', expected '{valuesC[i].String.AsString}'");
-                    }
+                if (actualA.A != valuesA[i].A)
+                {
+                    errors.Add($"Entity {ids[i]}: CompA.A={actualA.A}, expected {valuesA[i].A}");
+                }
+
+                if (actualC.String.AsString != valuesC[i].String.AsString)
+                {
+                    errors.Add($"Entity {ids[i]}: CompC.String='{actualC.String.AsString}', expected '{valuesC[i].String.AsString}'");
                 }
             }
 
@@ -678,7 +681,7 @@ class WalIntegrationTests : TestBase
     [CancelAfter(15000)]
     public void WAL_ManyEntities_SurvivesReopen()
     {
-        long[] ids;
+        EntityId[] ids;
         CompA[] values;
 
         using (var scope1 = _serviceProvider.CreateScope())
@@ -738,7 +741,8 @@ class WalIntegrationTests : TestBase
         {
             using var tx = uow.CreateTransaction();
             var updated = new CompA(999);
-            tx.UpdateEntity(ids[0], ref updated);
+            ref var w = ref tx.OpenMut(ids[0]).Write(CompAArch.A);
+            w = updated;
             tx.Commit();
             uow.Flush();
         }
@@ -792,7 +796,7 @@ class WalIntegrationTests : TestBase
                 {
                     using var tx = uow.CreateTransaction();
                     var comp = new CompA(batch * 100 + i);
-                    tx.CreateEntity(ref comp);
+                    tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
                     tx.Commit();
                 }
 
@@ -831,10 +835,10 @@ class WalIntegrationTests : TestBase
             // Verify we can create entities (proves component tables are functional)
             using var tx = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
             var comp = new CompA(42);
-            var id = tx.CreateEntity(ref comp);
+            var id = tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             tx.Commit();
 
-            Assert.That(id, Is.GreaterThan(0), "Should be able to create entities after schema reload");
+            Assert.That(id.IsNull, Is.False, "Should be able to create entities after schema reload");
         }
     }
 
@@ -842,7 +846,7 @@ class WalIntegrationTests : TestBase
     [CancelAfter(15000)]
     public void WAL_LoadAndContinue_NewEntitiesAfterReopen()
     {
-        long[] ids1;
+        EntityId[] ids1;
         CompA[] values1;
 
         // Phase 1: Create 20 entities
@@ -852,7 +856,7 @@ class WalIntegrationTests : TestBase
             (ids1, values1) = CreateCompAEntities(dbe, 20, DurabilityMode.Immediate);
         }
 
-        long[] ids2;
+        EntityId[] ids2;
         CompA[] values2;
 
         // Phase 2: Reopen and create 20 more
@@ -875,7 +879,7 @@ class WalIntegrationTests : TestBase
     [CancelAfter(15000)]
     public void WAL_MultipleReopenCycles_DataAccumulates()
     {
-        var allIds = new List<long>();
+        var allIds = new List<EntityId>();
         var allValues = new List<CompA>();
 
         for (int cycle = 0; cycle < 3; cycle++)
@@ -928,7 +932,7 @@ class WalIntegrationTests : TestBase
     [CancelAfter(15000)]
     public void WAL_FpiCapture_RecoveryScansRecords()
     {
-        long[] ids;
+        EntityId[] ids;
         CompA[] expectedValues;
 
         // Phase 1: Create entities, checkpoint, then update to trigger FPI capture
@@ -945,7 +949,8 @@ class WalIntegrationTests : TestBase
                 {
                     using var tx = uow.CreateTransaction();
                     var updated = new CompA(i + 5000, (float)(i * 9.0), i * 11.0);
-                    tx.UpdateEntity(ids[i], ref updated);
+                    ref var w = ref tx.OpenMut(ids[i]).Write(CompAArch.A);
+                    w = updated;
                     expectedValues[i] = updated; // Track the final value
                     tx.Commit();
                 }
@@ -996,7 +1001,7 @@ class WalIntegrationTests : TestBase
     [CancelAfter(15000)]
     public void WAL_Recovery_CommittedDataSurvivesRecovery()
     {
-        long[] ids;
+        EntityId[] ids;
         CompA[] values;
 
         using (var scope1 = _serviceProvider.CreateScope())
@@ -1036,7 +1041,8 @@ class WalIntegrationTests : TestBase
             {
                 using var tx = uow.CreateTransaction();
                 var comp = new CompA(i + 2000, (float)(i * 0.5), i * 0.25);
-                tx.UpdateEntity(ids[i], ref comp);
+                ref var w = ref tx.OpenMut(ids[i]).Write(CompAArch.A);
+                w = comp;
                 expectedValues[i] = comp;
                 tx.Commit();
             }
@@ -1065,16 +1071,18 @@ class WalIntegrationTests : TestBase
         using (var uow = dbe.CreateUnitOfWork(DurabilityMode.Immediate))
         {
             using var tx = uow.CreateTransaction();
-            tx.UpdateEntity(ids[0], ref tradeA);
-            tx.UpdateEntity(ids[1], ref tradeB);
+            ref var wa = ref tx.OpenMut(ids[0]).Write(CompAArch.A);
+            wa = tradeA;
+            ref var wb = ref tx.OpenMut(ids[1]).Write(CompAArch.A);
+            wb = tradeB;
             tx.Commit();
             uow.Flush();
         }
 
         // Both should reflect the trade
         using var readTx = dbe.CreateQuickTransaction();
-        readTx.ReadEntity(ids[0], out CompA a);
-        readTx.ReadEntity(ids[1], out CompA b);
+        var a = readTx.Open(ids[0]).Read(CompAArch.A);
+        var b = readTx.Open(ids[1]).Read(CompAArch.A);
 
         Assert.That(a.A, Is.EqualTo(100), "Trade entity A should have new value");
         Assert.That(b.A, Is.EqualTo(200), "Trade entity B should have new value");
@@ -1087,7 +1095,7 @@ class WalIntegrationTests : TestBase
         using var scope = _serviceProvider.CreateScope();
         using var dbe = CreateEngine(scope);
 
-        var allIds = new ConcurrentBag<(long id, CompA value, DurabilityMode mode)>();
+        var allIds = new ConcurrentBag<(EntityId id, CompA value, DurabilityMode mode)>();
         var errors = new ConcurrentBag<string>();
         var modes = new[] { DurabilityMode.Deferred, DurabilityMode.GroupCommit, DurabilityMode.Immediate };
         var barrier = new Barrier(modes.Length);
@@ -1108,7 +1116,7 @@ class WalIntegrationTests : TestBase
                     {
                         using var tx = uow.CreateTransaction();
                         var comp = new CompA(threadIdx * 1000 + i, (float)(threadIdx * 0.1 + i), threadIdx * 100.0 + i);
-                        var id = tx.CreateEntity(ref comp);
+                        var id = tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
                         tx.Commit();
                         allIds.Add((id, comp, mode));
                     }
@@ -1137,13 +1145,17 @@ class WalIntegrationTests : TestBase
 
         foreach (var (id, expected, mode) in allIds)
         {
-            if (!readTx.ReadEntity(id, out CompA actual))
+            if (!readTx.IsAlive(id))
             {
                 verifyErrors.Add($"Entity {id} ({mode}) not readable");
             }
-            else if (actual.A != expected.A)
+            else
             {
-                verifyErrors.Add($"Entity {id} ({mode}): A={actual.A}, expected {expected.A}");
+                var actual = readTx.Open(id).Read(CompAArch.A);
+                if (actual.A != expected.A)
+                {
+                    verifyErrors.Add($"Entity {id} ({mode}): A={actual.A}, expected {expected.A}");
+                }
             }
         }
 
@@ -1157,7 +1169,7 @@ class WalIntegrationTests : TestBase
         using var scope = _serviceProvider.CreateScope();
         using var dbe = CreateEngine(scope);
 
-        var allIds = new List<long>();
+        var allIds = new List<EntityId>();
         var allValues = new List<CompA>();
 
         // Import 500 entities in 5 batches of 100 each
@@ -1169,7 +1181,7 @@ class WalIntegrationTests : TestBase
             {
                 using var tx = uow.CreateTransaction();
                 var comp = new CompA(batch * 100 + i, (float)(batch * 10.0 + i), batch * 100.0 + i);
-                allIds.Add(tx.CreateEntity(ref comp));
+                allIds.Add(tx.Spawn<CompAArch>(CompAArch.A.Set(in comp)));
                 allValues.Add(comp);
                 tx.Commit();
             }
@@ -1190,7 +1202,7 @@ class WalIntegrationTests : TestBase
 
         const int threadCount = 4;
         const int entitiesPerThread = 25;
-        var allIds = new ConcurrentBag<(long id, CompA value)>();
+        var allIds = new ConcurrentBag<(EntityId id, CompA value)>();
         var errors = new ConcurrentBag<string>();
         var barrier = new Barrier(threadCount);
 
@@ -1209,7 +1221,7 @@ class WalIntegrationTests : TestBase
                         using var uow = dbe.CreateUnitOfWork(DurabilityMode.Immediate);
                         using var tx = uow.CreateTransaction();
                         var comp = new CompA(threadIdx * 1000 + i, (float)(threadIdx + i * 0.01), threadIdx * 10.0 + i);
-                        var id = tx.CreateEntity(ref comp);
+                        var id = tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
                         tx.Commit();
                         uow.Flush();
                         allIds.Add((id, comp));
@@ -1238,13 +1250,17 @@ class WalIntegrationTests : TestBase
 
         foreach (var (id, expected) in allIds)
         {
-            if (!readTx.ReadEntity(id, out CompA actual))
+            if (!readTx.IsAlive(id))
             {
                 verifyErrors.Add($"Entity {id} not readable");
             }
-            else if (actual.A != expected.A)
+            else
             {
-                verifyErrors.Add($"Entity {id}: A={actual.A}, expected {expected.A}");
+                var actual = readTx.Open(id).Read(CompAArch.A);
+                if (actual.A != expected.A)
+                {
+                    verifyErrors.Add($"Entity {id}: A={actual.A}, expected {expected.A}");
+                }
             }
         }
 

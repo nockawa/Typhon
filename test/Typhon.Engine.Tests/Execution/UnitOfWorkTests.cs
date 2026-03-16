@@ -6,6 +6,12 @@ namespace Typhon.Engine.Tests;
 
 class UnitOfWorkTests : TestBase<UnitOfWorkTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompAArch>.Touch();
+    }
+
     [Test]
     public void UoW_Create_Dispose_Lifecycle()
     {
@@ -25,6 +31,7 @@ class UnitOfWorkTests : TestBase<UnitOfWorkTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var uow = dbe.CreateUnitOfWork();
         using var tx = uow.CreateTransaction();
@@ -35,8 +42,8 @@ class UnitOfWorkTests : TestBase<UnitOfWorkTests>
 
         // Verify the transaction actually works: create, commit, read
         var comp = new CompA(42);
-        var pk = tx.CreateEntity(ref comp);
-        Assert.That(pk, Is.GreaterThan(0));
+        var entityId = tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
+        Assert.That(entityId.IsNull, Is.False);
 
         var committed = tx.Commit();
         Assert.That(committed, Is.True);
@@ -47,6 +54,7 @@ class UnitOfWorkTests : TestBase<UnitOfWorkTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var uow = dbe.CreateUnitOfWork();
 
@@ -147,6 +155,7 @@ class UnitOfWorkTests : TestBase<UnitOfWorkTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var uow = dbe.CreateUnitOfWork();
         Assert.That(uow.TransactionCount, Is.EqualTo(0));
@@ -188,6 +197,7 @@ class UnitOfWorkTests : TestBase<UnitOfWorkTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var uow = dbe.CreateUnitOfWork();
         using var tx = uow.CreateTransaction();
@@ -204,9 +214,10 @@ class UnitOfWorkTests : TestBase<UnitOfWorkTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         UnitOfWork capturedUow;
-        long pk;
+        EntityId entityId;
 
         // Create, use, commit, dispose — all in one block
         {
@@ -217,7 +228,7 @@ class UnitOfWorkTests : TestBase<UnitOfWorkTests>
             Assert.That(tx.OwnsUnitOfWork, Is.True);
 
             var comp = new CompA(99);
-            pk = tx.CreateEntity(ref comp);
+            entityId = tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             tx.Commit();
             tx.Dispose();
         }
@@ -229,8 +240,7 @@ class UnitOfWorkTests : TestBase<UnitOfWorkTests>
         // Verify the data is actually committed and readable
         using var uow2 = dbe.CreateUnitOfWork();
         using var readTx = uow2.CreateTransaction();
-        var found = readTx.ReadEntity(pk, out CompA readComp);
-        Assert.That(found, Is.True);
+        var readComp = readTx.Open(entityId).Read(CompAArch.A);
         Assert.That(readComp.A, Is.EqualTo(99));
     }
 
@@ -265,15 +275,16 @@ class UnitOfWorkTests : TestBase<UnitOfWorkTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long pk;
+        EntityId entityId;
         {
             using var uow = dbe.CreateUnitOfWork();
             using var tx = uow.CreateTransaction();
 
             var comp = new CompA(123, 4.56f, 7.89);
-            pk = tx.CreateEntity(ref comp);
-            Assert.That(pk, Is.GreaterThan(0));
+            entityId = tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
+            Assert.That(entityId.IsNull, Is.False);
             tx.Commit();
         }
 
@@ -282,8 +293,7 @@ class UnitOfWorkTests : TestBase<UnitOfWorkTests>
             using var uow = dbe.CreateUnitOfWork();
             using var tx = uow.CreateTransaction();
 
-            var found = tx.ReadEntity(pk, out CompA read);
-            Assert.That(found, Is.True);
+            var read = tx.Open(entityId).Read(CompAArch.A);
             Assert.That(read.A, Is.EqualTo(123));
             Assert.That(read.B, Is.EqualTo(4.56f));
             Assert.That(read.C, Is.EqualTo(7.89));
@@ -295,14 +305,15 @@ class UnitOfWorkTests : TestBase<UnitOfWorkTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Create data in UoW 1
-        long pk;
+        EntityId entityId;
         {
             using var uow1 = dbe.CreateUnitOfWork();
             using var tx1 = uow1.CreateTransaction();
             var comp = new CompA(100);
-            pk = tx1.CreateEntity(ref comp);
+            entityId = tx1.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             tx1.Commit();
         }
 
@@ -313,11 +324,9 @@ class UnitOfWorkTests : TestBase<UnitOfWorkTests>
         using var tx2 = uow2.CreateTransaction();
         using var tx3 = uow3.CreateTransaction();
 
-        var found2 = tx2.ReadEntity(pk, out CompA read2);
-        var found3 = tx3.ReadEntity(pk, out CompA read3);
+        var read2 = tx2.Open(entityId).Read(CompAArch.A);
+        var read3 = tx3.Open(entityId).Read(CompAArch.A);
 
-        Assert.That(found2, Is.True);
-        Assert.That(found3, Is.True);
         Assert.That(read2.A, Is.EqualTo(100));
         Assert.That(read3.A, Is.EqualTo(100));
 

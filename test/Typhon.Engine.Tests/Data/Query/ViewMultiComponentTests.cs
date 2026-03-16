@@ -8,8 +8,20 @@ namespace Typhon.Engine.Tests;
 
 class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompDArch>.Touch();
+        Archetype<CompDFArch>.Touch();
+        Archetype<CompFArch>.Touch();
+    }
+
     // CompD layout: A=float(offset 0, idx 0), B=int(offset 4, idx 1), C=double(offset 8, idx 2)
     // CompF layout: Gold=int(offset 0, idx 0), Rank=int(offset 4, idx 1)
+
+    /// <summary>Reconstructs an EntityId from a raw pk value (test-only, uses InternalsVisibleTo).</summary>
+    private static EntityId ToEntityId(long pk) =>
+        Unsafe.As<long, EntityId>(ref pk);
 
     private static FieldEvaluator MakeEvaluator(int fieldIndex, int fieldOffset, byte fieldSize,
         KeyType keyType, CompareOp compareOp, long threshold, byte componentTag = 0) =>
@@ -43,16 +55,17 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
         using var t = dbe.CreateQuickTransaction();
         var d = new CompD(a, b, c);
         var f = new CompF(gold, rank);
-        var pk = t.CreateEntity(ref d, ref f);
+        var id = t.Spawn<CompDFArch>(CompDFArch.D.Set(in d), CompDFArch.F.Set(in f));
         t.Commit();
-        return pk;
+        return (long)id.RawValue;
     }
 
     private static void UpdateCompDAndCommit(DatabaseEngine dbe, long pk, float a, int b, double c)
     {
         using var t = dbe.CreateQuickTransaction();
         var d = new CompD(a, b, c);
-        t.UpdateEntity(pk, ref d);
+        ref var w = ref t.OpenMut(ToEntityId(pk)).Write(CompDFArch.D);
+        w = d;
         t.Commit();
     }
 
@@ -60,15 +73,15 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
     {
         using var t = dbe.CreateQuickTransaction();
         var f = new CompF(gold, rank);
-        t.UpdateEntity(pk, ref f);
+        ref var w = ref t.OpenMut(ToEntityId(pk)).Write(CompDFArch.F);
+        w = f;
         t.Commit();
     }
 
     private static void DeleteBothAndCommit(DatabaseEngine dbe, long pk)
     {
         using var t = dbe.CreateQuickTransaction();
-        t.DeleteEntity<CompD>(pk);
-        t.DeleteEntity<CompF>(pk);
+        t.Destroy(ToEntityId(pk));
         t.Commit();
     }
 
@@ -85,6 +98,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ctD = dbe.GetComponentTable<CompD>();
         var ctF = dbe.GetComponentTable<CompF>();
         using var view = CreateCrossComponentView(ctD, ctF);
@@ -104,6 +118,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ctD = dbe.GetComponentTable<CompD>();
         var ctF = dbe.GetComponentTable<CompF>();
         using var view = CreateCrossComponentView(ctD, ctF);
@@ -121,6 +136,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ctD = dbe.GetComponentTable<CompD>();
         var ctF = dbe.GetComponentTable<CompF>();
         using var view = CreateCrossComponentView(ctD, ctF);
@@ -133,10 +149,13 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
         // Update both in one commit: B=50 (pass), Gold=20000 (pass)
         {
             using var t = dbe.CreateQuickTransaction();
+            var eid = ToEntityId(pk);
             var d = new CompD(1.0f, 50, 2.0);
-            t.UpdateEntity(pk, ref d);
+            ref var wd = ref t.OpenMut(eid).Write(CompDFArch.D);
+            wd = d;
             var f = new CompF(20000, 1);
-            t.UpdateEntity(pk, ref f);
+            ref var wf = ref t.OpenMut(eid).Write(CompDFArch.F);
+            wf = f;
             t.Commit();
         }
         RefreshView(dbe, view);
@@ -151,6 +170,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ctD = dbe.GetComponentTable<CompD>();
         var ctF = dbe.GetComponentTable<CompF>();
         using var view = CreateCrossComponentView(ctD, ctF);
@@ -176,6 +196,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ctD = dbe.GetComponentTable<CompD>();
         var ctF = dbe.GetComponentTable<CompF>();
         using var view = CreateCrossComponentView(ctD, ctF);
@@ -200,6 +221,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ctD = dbe.GetComponentTable<CompD>();
         var ctF = dbe.GetComponentTable<CompF>();
         using var view = CreateCrossComponentView(ctD, ctF);
@@ -224,6 +246,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ctD = dbe.GetComponentTable<CompD>();
         var ctF = dbe.GetComponentTable<CompF>();
         using var view = CreateCrossComponentView(ctD, ctF);
@@ -247,6 +270,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ctD = dbe.GetComponentTable<CompD>();
         var ctF = dbe.GetComponentTable<CompF>();
         using var view = CreateCrossComponentView(ctD, ctF);
@@ -256,7 +280,8 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 50, 2.0); // B=50 passes
-            pk = t.CreateEntity(ref d);
+            var id = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
+            pk = (long)id.RawValue;
             t.Commit();
         }
         RefreshView(dbe, view);
@@ -269,6 +294,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ctD = dbe.GetComponentTable<CompD>();
         var ctF = dbe.GetComponentTable<CompF>();
         using var view = CreateCrossComponentView(ctD, ctF);
@@ -309,6 +335,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Create entities before the view
         var pk1 = CreateBothAndCommit(dbe, 1.0f, 50, 2.0, 20000, 1);  // matching
@@ -337,6 +364,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ctD = dbe.GetComponentTable<CompD>();
         var ctF = dbe.GetComponentTable<CompF>();
         var view = CreateCrossComponentView(ctD, ctF);
@@ -360,6 +388,7 @@ class ViewMultiComponentTests : TestBase<ViewMultiComponentTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ctD = dbe.GetComponentTable<CompD>();
         var ctF = dbe.GetComponentTable<CompF>();
         // Small buffer: capacity=4

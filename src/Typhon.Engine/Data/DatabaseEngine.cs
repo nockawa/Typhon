@@ -237,6 +237,9 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     internal long LastTickFenceLSN => _lastTickFenceLSN;
     private Dictionary<string, (long PK, ComponentR1 Comp)> _persistedComponents;
     private Dictionary<ushort, (long PK, ArchetypeR1 Arch)> _persistedArchetypes;
+
+    /// <summary>Per-engine archetype runtime state, indexed by ArchetypeId. Separates per-engine mutable data from shared schema metadata.</summary>
+    internal ArchetypeEngineState[] _archetypeStates;
     private Dictionary<string, FieldR1[]> _persistedFieldsByComponent;
     private ConcurrentDictionary<int, ChunkBasedSegment<PersistentStore>> _componentCollectionSegmentByStride;
     private ConcurrentDictionary<Type, VariableSizedBufferSegmentBase<PersistentStore>> _componentCollectionVSBSByType;
@@ -290,8 +293,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     }
 
     /// <summary>
-    /// Process ECS deferred cleanups: remove LinearHash entries and free component chunks
-    /// for entities whose DiedTSN is below minTSN (no active transaction can see them).
+    /// Process ECS deferred cleanups: remove LinearHash entries and free component chunks for entities whose DiedTSN is below minTSN
+    /// (no active transaction can see them).
     /// </summary>
     internal unsafe int ProcessEcsCleanups(long minTSN)
     {
@@ -315,12 +318,13 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         foreach (var entry in toProcess)
         {
             var meta = entry.Meta;
-            if (meta._entityMap == null)
+            var engineState = _archetypeStates[meta.ArchetypeId];
+            if (engineState?.EntityMap == null)
             {
                 continue;
             }
-            var accessor = meta._entityMap.Segment.CreateChunkAccessor();
-            bool found = meta._entityMap.TryGet(entry.Id.EntityKey, readBuf, ref accessor);
+            var accessor = engineState.EntityMap.Segment.CreateChunkAccessor();
+            bool found = engineState.EntityMap.TryGet(entry.Id.EntityKey, readBuf, ref accessor);
 
             if (found)
             {
@@ -328,14 +332,14 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 for (int slot = 0; slot < meta.ComponentCount; slot++)
                 {
                     int chunkId = EntityRecordAccessor.GetLocation(readBuf, slot);
-                    if (chunkId != 0 && meta._slotToComponentTable != null)
+                    if (chunkId != 0 && engineState.SlotToComponentTable != null)
                     {
-                        meta._slotToComponentTable[slot].ComponentSegment.FreeChunk(chunkId);
+                        engineState.SlotToComponentTable[slot].ComponentSegment.FreeChunk(chunkId);
                     }
                 }
 
                 // Remove from LinearHash
-                meta._entityMap.Remove(entry.Id.EntityKey, ref accessor, null);
+                engineState.EntityMap.Remove(entry.Id.EntityKey, ref accessor, null);
             }
 
             accessor.Dispose();
@@ -1306,14 +1310,19 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
             if (persistedFields != null)
             {
-                diff = SchemaValidator.ComputeDiff(schemaName, persistedFields, persisted.Comp, definition, 
+                // Guard: refuse to open a database written by a newer application version
+                var targetRevision = componentAttr?.Revision ?? 1;
+                var persistedRevision = persisted.Comp.SchemaRevision;
+                if (persistedRevision > targetRevision)
+                {
+                    throw new SchemaDowngradeException(schemaName, persistedRevision, targetRevision);
+                }
+
+                diff = SchemaValidator.ComputeDiff(schemaName, persistedFields, persisted.Comp, definition,
                     resolver.Renames ?? (IReadOnlyList<(string, string, int)>)[]);
 
                 if (diff.HasBreakingChanges && schemaValidation != SchemaValidationMode.Skip)
                 {
-                    // Breaking changes detected — check migration registry for a user-provided migration path
-                    var targetRevision = componentAttr?.Revision ?? 1;
-                    var persistedRevision = persisted.Comp.SchemaRevision;
 
                     // Backward compat: databases created before Phase 4 have SchemaRevision=0.
                     // Try the persisted value first, then fall back to searching the registry.
@@ -1500,6 +1509,27 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     internal ComponentTable GetComponentTableByWalTypeId(ushort id) => _componentTableByWalTypeId.GetValueOrDefault(id);
 
     /// <summary>
+    /// Find a ComponentTable by the component's schema name (from [Component] attribute).
+    /// Used as a fallback when the CLR type doesn't match (schema evolution: V1 type → V2 table).
+    /// </summary>
+    internal ComponentTable FindComponentTableBySchemaName(Type compType)
+    {
+        var attr = compType.GetCustomAttribute<ComponentAttribute>();
+        if (attr == null)
+        {
+            return null;
+        }
+        foreach (var ct in _componentTableByType.Values)
+        {
+            if (ct.Definition.Name == attr.Name)
+            {
+                return ct;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Initialize ECS archetype storage. For each registered archetype, allocates a per-archetype RawValueHashMap and connects component slots to their
     /// ComponentTables. Must be called after all components are registered.
     /// </summary>
@@ -1518,6 +1548,9 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         _persistedArchetypes ??= new Dictionary<ushort, (long, ArchetypeR1)>();
         LoadPersistedArchetypes();
 
+        // Allocate per-engine state array indexed by ArchetypeId
+        _archetypeStates = new ArchetypeEngineState[ArchetypeRegistry.MaxArchetypeId + 1];
+
         foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
         {
             // Connect slots to ComponentTables — skip archetypes with unregistered component types
@@ -1526,7 +1559,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 continue;
             }
 
-            meta._slotToComponentTable = new ComponentTable[meta.ComponentCount];
+            var slotToTable = new ComponentTable[meta.ComponentCount];
             bool allComponentsRegistered = true;
             for (int slot = 0; slot < meta.ComponentCount; slot++)
             {
@@ -1539,35 +1572,156 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 var table = GetComponentTable(compType);
                 if (table == null)
                 {
+                    // Schema evolution fallback: the CLR type may be from an older version (V1)
+                    // while the registered ComponentTable uses the newer version (V2).
+                    // Fall back to schema-name matching since both versions share the same name.
+                    table = FindComponentTableBySchemaName(compType);
+                }
+                if (table == null)
+                {
                     allComponentsRegistered = false;
                     break;
                 }
-                meta._slotToComponentTable[slot] = table;
+                slotToTable[slot] = table;
             }
 
             if (!allComponentsRegistered)
             {
-                meta._slotToComponentTable = null;
                 continue;
             }
 
             // Schema validation: compare runtime archetype against persisted schema
             ValidateArchetypeSchema(meta);
 
-            // Allocate per-archetype entity storage (RawValueHashMap)
+            // Allocate per-archetype entity storage (RawValueHashMap) on THIS engine's MMF
+            int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(meta._entityRecordSize);
+            var segment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 10, stride);
+
+            _archetypeStates[meta.ArchetypeId] = new ArchetypeEngineState
             {
-                int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(meta._entityRecordSize);
-                var segment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 10, stride);
-                meta._entityMap = RawValueHashMap<long, PersistentStore>.Create(segment, 16, meta._entityRecordSize);
-                meta._nextEntityKey = 0;
-            }
+                SlotToComponentTable = slotToTable,
+                EntityMap = RawValueHashMap<long, PersistentStore>.Create(segment, 16, meta._entityRecordSize),
+                NextEntityKey = 0,
+            };
         }
 
         // Build and validate cascade delete graph (after all slots connected)
         ArchetypeRegistry.BuildAndValidateCascadeGraph();
 
+        // Rebuild entity maps from persisted ComponentTable data (entities from prior database sessions)
+        RebuildEntityMapsFromPersistedData();
+
         // Persist any new archetypes not yet in the database
         PersistNewArchetypes();
+    }
+
+    /// <summary>
+    /// Rebuild per-archetype entity maps and NextEntityKey counters from persisted ComponentTable data.
+    /// After a database reopen, the entity maps are empty (allocated fresh). This method scans the PK index
+    /// of each archetype's first component to find existing entities and reconstructs their entity records.
+    /// </summary>
+    private unsafe void RebuildEntityMapsFromPersistedData()
+    {
+        using var guard = EpochGuard.Enter(EpochManager);
+        byte* recordBuf = stackalloc byte[EntityRecordAccessor.MaxRecordSize];
+
+        foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
+        {
+            var state = _archetypeStates[meta.ArchetypeId];
+            if (state?.SlotToComponentTable == null)
+            {
+                continue;
+            }
+
+            // Use the first component slot's PK index to enumerate entities
+            var firstTable = state.SlotToComponentTable[0];
+            if (firstTable?.PrimaryKeyIndex == null || firstTable.PrimaryKeyIndex.EntryCount == 0)
+            {
+                continue;
+            }
+
+            long maxEntityKey = 0;
+            var mapCs = MMF.CreateChangeSet();
+
+            using var pkEnum = firstTable.PrimaryKeyIndex.EnumerateLeaves();
+            while (pkEnum.MoveNext())
+            {
+                long pk = pkEnum.Current.Key;
+
+                // Filter by archetype — PK = (EntityKey << 12) | ArchetypeId
+                if ((pk & 0xFFF) != meta.ArchetypeId)
+                {
+                    continue;
+                }
+
+                long entityKey = pk >> 12;
+
+                // Walk revision chain for each component slot to get latest chunkId
+                bool allLive = true;
+                for (int slot = 0; slot < meta.ComponentCount; slot++)
+                {
+                    var table = state.SlotToComponentTable[slot];
+                    if (table?.CompRevTableSegment == null)
+                    {
+                        allLive = false;
+                        break;
+                    }
+
+                    // Look up this PK in the slot's PK index to get the revision chain head
+                    var slotAccessor = table.PrimaryKeyIndex.Segment.CreateChunkAccessor();
+                    var lookupResult = table.PrimaryKeyIndex.TryGet(&pk, ref slotAccessor);
+                    slotAccessor.Dispose();
+
+                    if (!lookupResult.IsSuccess)
+                    {
+                        allLive = false;
+                        break;
+                    }
+
+                    int compRevFirstChunkId = lookupResult.Value;
+
+                    // Walk revision chain with TSN=long.MaxValue to get latest committed revision
+                    var compRevAccessor = table.CompRevTableSegment.CreateChunkAccessor();
+                    var result = RevisionChainReader.WalkChain(ref compRevAccessor, compRevFirstChunkId, long.MaxValue);
+                    compRevAccessor.Dispose();
+
+                    if (result.IsFailure || result.Value.CurCompContentChunkId == 0)
+                    {
+                        allLive = false; // Tombstoned or invisible
+                        break;
+                    }
+
+                    EntityRecordAccessor.SetLocation(recordBuf, slot, result.Value.CurCompContentChunkId);
+                }
+
+                if (!allLive)
+                {
+                    continue;
+                }
+
+                // Build entity record header
+                ref var header = ref EntityRecordAccessor.GetHeader(recordBuf);
+                header.BornTSN = 0; // Always visible (committed before checkpoint)
+                header.DiedTSN = 0; // Live entity
+                header.EnabledBits = (ushort)((1 << meta.ComponentCount) - 1); // All components enabled
+
+                // Insert into entity map
+                var mapAccessor = state.EntityMap.Segment.CreateChunkAccessor(mapCs);
+                state.EntityMap.Insert(entityKey, recordBuf, ref mapAccessor, mapCs);
+                mapAccessor.Dispose();
+
+                if (entityKey > maxEntityKey)
+                {
+                    maxEntityKey = entityKey;
+                }
+            }
+
+            // Resume entity key counter from max existing key
+            if (maxEntityKey > 0)
+            {
+                state.NextEntityKey = maxEntityKey;
+            }
+        }
     }
 
     private void LoadPersistedArchetypes()
@@ -1658,7 +1812,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
         foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
         {
-            if (meta._slotToComponentTable == null)
+            var engineState = _archetypeStates[meta.ArchetypeId];
+            if (engineState?.SlotToComponentTable == null)
             {
                 continue;
             }

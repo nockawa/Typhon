@@ -14,6 +14,12 @@ namespace Typhon.Engine.Tests;
 [TestFixture]
 class EndToEndPipelineTests : TestBase<EndToEndPipelineTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompAArch>.Touch();
+    }
+
     private InMemoryWalFileIO _fileIO;
     private string _walDir;
 
@@ -87,15 +93,16 @@ class EndToEndPipelineTests : TestBase<EndToEndPipelineTests>
         // Step 1: Register components and create an entity via a real transaction.
         // This exercises the full write path: transaction → page allocation → data write → commit.
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var compData = new CompA(42, 3.14f, 2.718);
         var t = dbe.CreateQuickTransaction();
-        var entityId = t.CreateEntity(ref compData);
+        var entityId = t.Spawn<CompAArch>(CompAArch.A.Set(in compData));
         t.Commit();
         t.Dispose();
 
         // Verify entity exists
         var readTx = dbe.CreateQuickTransaction();
-        readTx.ReadEntity(entityId, out CompA readBack);
+        var readBack = readTx.Open(entityId).Read(CompAArch.A);
         Assert.That(readBack.A, Is.EqualTo(42), "Entity should be readable after commit");
         readTx.Dispose();
 

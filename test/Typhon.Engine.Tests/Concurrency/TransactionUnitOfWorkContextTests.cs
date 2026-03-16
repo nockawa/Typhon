@@ -8,6 +8,12 @@ namespace Typhon.Engine.Tests;
 [TestFixture]
 class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompAArch>.Touch();
+    }
+
     // ========================================
     // Backward Compatibility
     // ========================================
@@ -17,10 +23,11 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
-        t.CreateEntity(ref a);
+        t.Spawn<CompAArch>(CompAArch.A.Set(in a));
 
         var res = t.Commit();
         Assert.That(res, Is.True);
@@ -32,6 +39,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
 
@@ -44,10 +52,11 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
-        t.CreateEntity(ref a);
+        t.Spawn<CompAArch>(CompAArch.A.Set(in a));
 
         var res = t.Rollback();
         Assert.That(res, Is.True);
@@ -59,6 +68,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
 
@@ -75,10 +85,11 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
-        t.CreateEntity(ref a);
+        t.Spawn<CompAArch>(CompAArch.A.Set(in a));
 
         var ctx = UnitOfWorkContext.FromTimeout(TimeSpan.Zero);
         Thread.Sleep(1); // Ensure deadline expires
@@ -93,10 +104,11 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
-        t.CreateEntity(ref a);
+        t.Spawn<CompAArch>(CompAArch.A.Set(in a));
 
         using var cts = new CancellationTokenSource();
         cts.Cancel();
@@ -111,10 +123,11 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
-        t.CreateEntity(ref a);
+        t.Spawn<CompAArch>(CompAArch.A.Set(in a));
 
         var ctx = UnitOfWorkContext.None;
         var res = t.Commit(ref ctx);
@@ -128,10 +141,11 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
-        t.CreateEntity(ref a);
+        t.Spawn<CompAArch>(CompAArch.A.Set(in a));
 
         var ctx = UnitOfWorkContext.FromTimeout(TimeSpan.FromSeconds(10));
         var res = t.Commit(ref ctx);
@@ -149,10 +163,11 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
-        t.CreateEntity(ref a);
+        t.Spawn<CompAArch>(CompAArch.A.Set(in a));
 
         // Use a very short timeout that will still be valid when Commit is called
         // but the holdoff inside Commit should protect the commit loop
@@ -169,10 +184,11 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
-        t.CreateEntity(ref a);
+        t.Spawn<CompAArch>(CompAArch.A.Set(in a));
 
         // Expired deadline — rollback must still complete (no yield point)
         var ctx = UnitOfWorkContext.FromTimeout(TimeSpan.Zero);
@@ -189,10 +205,11 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
-        t.CreateEntity(ref a);
+        t.Spawn<CompAArch>(CompAArch.A.Set(in a));
 
         using var cts = new CancellationTokenSource();
         cts.Cancel();
@@ -209,10 +226,11 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
-        t.CreateEntity(ref a);
+        t.Spawn<CompAArch>(CompAArch.A.Set(in a));
 
         var ctx = UnitOfWorkContext.FromTimeout(TimeSpan.FromSeconds(10));
 
@@ -234,12 +252,13 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long entityId;
+        EntityId entityId;
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(42);
-            entityId = t.CreateEntity(ref a);
+            entityId = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
 
             var ctx = UnitOfWorkContext.FromTimeout(TimeSpan.FromSeconds(10));
             t.Commit(ref ctx);
@@ -248,8 +267,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
         // Verify the committed data is readable
         {
             using var t2 = dbe.CreateQuickTransaction();
-            var found = t2.ReadEntity(entityId, out CompA readA);
-            Assert.That(found, Is.True);
+            var readA = t2.Open(entityId).Read(CompAArch.A);
             Assert.That(readA.A, Is.EqualTo(42));
         }
     }
@@ -259,12 +277,13 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long entityId;
+        EntityId entityId;
         {
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(42);
-            entityId = t.CreateEntity(ref a);
+            entityId = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
 
             var ctx = UnitOfWorkContext.FromTimeout(TimeSpan.FromSeconds(10));
             t.Rollback(ref ctx);
@@ -273,8 +292,7 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
         // Verify the entity does not exist after rollback
         {
             using var t2 = dbe.CreateQuickTransaction();
-            var found = t2.ReadEntity(entityId, out CompA _);
-            Assert.That(found, Is.False);
+            Assert.That(t2.IsAlive(entityId), Is.False);
         }
     }
 
@@ -300,10 +318,11 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
             // The wrapper Commit() should still work with the custom timeout
             using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
             RegisterComponents(dbe);
+            dbe.InitializeArchetypes();
 
             using var t = dbe.CreateQuickTransaction();
             var a = new CompA(42);
-            t.CreateEntity(ref a);
+            t.Spawn<CompAArch>(CompAArch.A.Set(in a));
 
             var res = t.Commit();
             Assert.That(res, Is.True);
@@ -370,10 +389,11 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
-        t.CreateEntity(ref a);
+        t.Spawn<CompAArch>(CompAArch.A.Set(in a));
 
         var ctx = UnitOfWorkContext.FromTimeout(TimeSpan.FromSeconds(10));
         var res1 = t.Commit(ref ctx);
@@ -390,10 +410,11 @@ class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextT
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using var t = dbe.CreateQuickTransaction();
         var a = new CompA(42);
-        t.CreateEntity(ref a);
+        t.Spawn<CompAArch>(CompAArch.A.Set(in a));
 
         var ctx = UnitOfWorkContext.FromTimeout(TimeSpan.FromSeconds(10));
         var res1 = t.Rollback(ref ctx);

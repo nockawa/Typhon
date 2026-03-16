@@ -124,6 +124,9 @@ public unsafe partial class Transaction : IDisposable
 
     internal void Reset()
     {
+        // Clean up ECS state BEFORE nulling _dbe — CleanupEcsState needs _dbe._archetypeStates
+        CleanupEcsState();
+
         _dbe = null;
         _epochManager = null;
         OwningUnitOfWork = null;
@@ -148,9 +151,6 @@ public unsafe partial class Transaction : IDisposable
         _deletedComponentCount = 0;
         _changeSet = null;
         _deferredEnqueueBatch?.Clear();
-
-        // Clean up ECS state
-        CleanupEcsState();
     }
 
     [Conditional("DEBUG")]
@@ -353,17 +353,6 @@ public unsafe partial class Transaction : IDisposable
         return pk;
     }
 
-    internal long CreateEntity<TC1, TC2>(ref TC1 t, Span<TC2> u) where TC1 : unmanaged where TC2 : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-        var pk = _dbe.GetNewPrimaryKey();
-
-        CreateComponent(pk, ref t);
-        CreateComponents(pk, u);
-        return pk;
-    }
-
     internal bool ReadEntity<T>(long pk, out T t) where T : unmanaged
     {
         using var activity = TyphonActivitySource.StartActivity("Transaction.ReadEntity");
@@ -387,13 +376,6 @@ public unsafe partial class Transaction : IDisposable
         var res = ReadComponent(pk, out t);
         res &= ReadComponent(pk, out u);
         res &= ReadComponent(pk, out v);
-        return res;
-    }
-
-    internal bool ReadEntity<TC1, TC2>(long pk, out TC1 t, out TC2[] u) where TC1 : unmanaged where TC2 : unmanaged
-    {
-        var res = ReadComponent(pk, out t);
-        res &= ReadComponents(pk, out u);
         return res;
     }
 
@@ -430,16 +412,6 @@ public unsafe partial class Transaction : IDisposable
         return res;
     }
 
-    internal bool UpdateEntity<TC1, TC2>(long pk, ref TC1 t, ReadOnlySpan<TC2> u) where TC1 : unmanaged where TC2 : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-
-        var res = UpdateComponent(pk, ref t);
-        res &= UpdateComponents(pk, u);
-        return res;
-    }
-
     internal bool DeleteEntity<T>(long pk) where T : unmanaged
     {
         EnsureMutable();
@@ -471,44 +443,6 @@ public unsafe partial class Transaction : IDisposable
         res &= DeleteComponent<TC2>(pk);
         res &= DeleteComponent<TC3>(pk);
         return res;
-    }
-
-    internal bool DeleteEntities<T>(long pk) where T : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-
-        return UpdateComponents(pk, ReadOnlySpan<T>.Empty);
-    }
-    
-    internal int GetComponentRevision<T>(long pk) where T : unmanaged
-    {
-        AssertThreadAffinity();
-        var info = GetComponentInfo(typeof(T));
-        ComponentInfo.CompRevInfo compRevInfo;
-        if (info.IsMultiple)
-        {
-            if (!info.MultipleCache.TryGetValue(pk, out var compRevInfoList))
-            {
-                return -1;
-            }
-            compRevInfo = compRevInfoList[0];
-        }
-        else
-        {
-            if (!info.SingleCache.TryGetValue(pk, out compRevInfo))
-            {
-                return -1;
-            }
-        }
-
-        // After getting from the cache, check if it was deleted
-        if (compRevInfo.CurCompContentChunkId == 0)
-        {
-            return -1;
-        }
-
-        return compRevInfo.ReadCommitSequence + (compRevInfo.CurRevisionIndex - compRevInfo.ReadRevisionIndex);
     }
 
     public ComponentCollectionAccessor<T> CreateComponentCollectionAccessor<T>(ref ComponentCollection<T> field) where T : unmanaged
@@ -912,8 +846,11 @@ public unsafe partial class Transaction : IDisposable
             return info;
         }
 
-        var ct = _dbe.GetComponentTable(componentType) ??
-                 throw new InvalidOperationException($"The type {componentType} doesn't have a registered Component Table");
+        var ct = _dbe.GetComponentTable(componentType) ?? _dbe.FindComponentTableBySchemaName(componentType);
+        if (ct == null)
+        {
+            throw new InvalidOperationException($"The type {componentType} doesn't have a registered Component Table");
+        }
 
         var isMultiple = ct.Definition.AllowMultiple;
         info = new ComponentInfo(isMultiple)
@@ -1053,44 +990,6 @@ public unsafe partial class Transaction : IDisposable
         CheckEpochRefresh();
     }
 
-    private void CreateComponents<T>(long pk, ReadOnlySpan<T> compList) where T : unmanaged
-    {
-        AssertThreadAffinity();
-        var componentType = typeof(T);
-
-        // Fetch the cached info or create it if it's the first time we've operated on this Component type
-        var info = GetComponentInfo(componentType);
-
-        for (int i = 0; i < compList.Length; i++)
-        {
-            // Allocate the chunk that will store the component's chunk
-            var componentChunkId = info.CompContentSegment.AllocateChunk(false, _changeSet);
-
-            // Allocate the component revision storage as it's a new component
-            var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, componentChunkId, pk);
-
-            var entry = new ComponentInfo.CompRevInfo
-            {
-                Operations = ComponentInfo.OperationType.Created,
-                PrevCompContentChunkId = 0,
-                PrevRevisionIndex = -1,
-                CurCompContentChunkId = componentChunkId,
-                CompRevTableFirstChunkId = compRevChunkId,
-                CurRevisionIndex = 0,
-                ReadCommitSequence = 1,
-                ReadRevisionIndex = 0
-            };
-
-            info.AddNew(pk, entry);
-
-            // Copy the component data
-            var dst = info.CompContentAccessor.GetChunkAsSpan(componentChunkId, true);
-            compList.Slice(i, 1).Cast<T, byte>().CopyTo(dst.Slice(info.ComponentTable.ComponentOverhead));
-        }
-
-        CheckEpochRefresh();
-    }
-
     private bool ReadComponent<T>(long pk, out T t) where T : unmanaged
     {
         AssertThreadAffinity();
@@ -1132,73 +1031,8 @@ public unsafe partial class Transaction : IDisposable
         return true;
     }
 
-    private bool ReadComponents<T>(long pk, out T[] t) where T : unmanaged
-    {
-        AssertThreadAffinity();
-        var componentType = typeof(T);
-        var info = GetComponentInfo(componentType);
-
-        // Check if we already have this component in the cache
-        if (!info.MultipleCache.TryGetValue(pk, out var compRevInfoList))
-        {
-            // Couldn't find in the cache, get it from the index
-            if (!GetCompRevInfoFromIndex(pk, info, TSN, out compRevInfoList))
-            {
-                t = null;
-                return false;
-            }
-
-            // Add to cache for future operations (revision tracking, updates, etc.)
-            info.MultipleCache[pk] = compRevInfoList;
-        }
-
-        var compRevInfoSpan = CollectionsMarshal.AsSpan(compRevInfoList);
-
-        t = new T[compRevInfoSpan.Length];
-        var deletedCount = 0;
-        var destSpan = t.AsSpan();
-        int destIndex = 0;
-        for (int i = 0; i < compRevInfoSpan.Length; i++)
-        {
-            ref var compRevInfo = ref compRevInfoSpan[i];
-            compRevInfo.Operations |= ComponentInfo.OperationType.Read;
-
-            // Skip deleted components
-            if (compRevInfo.CurCompContentChunkId == 0)
-            {
-                ++deletedCount;
-                continue;
-            }
-
-            // If there is a valid component, copy its content to the destination
-            var chunkSpan = info.CompContentAccessor.GetChunkAsReadOnlySpan(compRevInfo.CurCompContentChunkId);
-            chunkSpan.Slice(info.ComponentTable.ComponentOverhead).Cast<byte, T>().CopyTo(destSpan.Slice(destIndex++));
-        }
-
-        // Deleted items were skipped, we need to trim the list...
-        if (deletedCount > 0)
-        {
-            // ... or remove it if everything was deleted
-            if (deletedCount == t.Length)
-            {
-                t = null;
-                return false;
-            }
-            Array.Resize(ref t, t.Length - deletedCount);
-        }
-
-        return true;
-    }
-    
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool DeleteComponent<T>(long pk) where T : unmanaged
-    {
-        if (_dbe.GetComponentTable(typeof(T)).Definition.AllowMultiple)
-        {
-            return UpdateComponents(pk, ReadOnlySpan<T>.Empty);
-        }
-        return UpdateComponent(pk, ref Unsafe.NullRef<T>());
-    }
+    private bool DeleteComponent<T>(long pk) where T : unmanaged => UpdateComponent(pk, ref Unsafe.NullRef<T>());
 
     private bool UpdateComponent<T>(long pk, ref T comp) where T : unmanaged
     {
@@ -1287,117 +1121,6 @@ public unsafe partial class Transaction : IDisposable
         return true;
     }
 
-    private bool UpdateComponents<T>(long pk, ReadOnlySpan<T> compList) where T : unmanaged
-    {
-        AssertThreadAffinity();
-        var componentType = typeof(T);
-        var isDelete = compList.Length == 0;
-
-        // Fetch the cached info or create it if it's the first time we operate on this Component type
-        var info = GetComponentInfo(componentType);
-
-        // Check if the component is in the cache (meaning we already made an operation on it in this transaction)
-        var compRevCached = info.MultipleCache.TryGetValue(pk, out var compRevInfoList);
-        if (!compRevCached)
-        {
-            // Fetch the cache by getting the revision closest to the transaction tick, if we fail it means there's no revision, so no component for this
-            //  PK, we return false
-            if (!GetCompRevInfoFromIndex(pk, info, TSN, out compRevInfoList))
-            {
-                return false;
-            }
-
-            // Add to cache so the updates are tracked and committed
-            info.MultipleCache[pk] = compRevInfoList;
-        }
-
-        // x source items, y destination items, three cases:
-        // 1. x == y easy
-        // 2. x < y, update the x items to destination, remove the excess from destination (y - x)
-        // 3. x > y, update y items from source to destination, add the excess to destination (x - y)
-        var compRevInfoSpan = CollectionsMarshal.AsSpan(compRevInfoList);
-        var overlapCount = Math.Min(compList.Length, compRevInfoSpan.Length);
-        var i = 0;
-
-        // Case 1
-        // min(x, y) the item count shared by source and dest
-        for ( ; i < overlapCount; i++)
-        {
-            ref var compRevInfo = ref compRevInfoSpan[i];
-
-            // Can't update a deleted component...
-            if ((compRevInfo.Operations & ComponentInfo.OperationType.Deleted) == ComponentInfo.OperationType.Deleted)
-            {
-                return false;
-            }
-
-            // Check if we need to delete a component we previously added
-            if (isDelete && (compRevInfo.CurCompContentChunkId != 0))
-            {
-                info.CompContentSegment.FreeChunk(compRevInfo.CurCompContentChunkId);
-            }
-
-            // Update the operation types
-            compRevInfo.Operations |= (isDelete ? ComponentInfo.OperationType.Deleted : ComponentInfo.OperationType.Updated);
-
-            // First mutating operation on this component in this transaction: create a new component version
-            // Also create a new revision if the component was deleted (CurCompContentChunkId == 0) - to resurrect it
-            if ((!compRevCached) || ((compRevInfo.Operations & ComponentInfo.OperationType.Read) != 0) || compRevInfo.CurCompContentChunkId == 0)
-            {
-                // Add a new component version for the current component, if there is no data, it means we are deleting the component, we still
-                //  need to add a new version with an empty CurCompContentChunkId
-                ComponentRevisionManager.AddCompRev(info, ref compRevInfo, TSN, UowId, isDelete);
-            }
-
-            // Set up the component header
-            if (!isDelete)
-            {
-                // Copy the component data
-                var dst = info.CompContentAccessor.GetChunkAsSpan(compRevInfo.CurCompContentChunkId, true).Slice(info.ComponentTable.ComponentOverhead);
-                var src = compList.Slice(i, 1).Cast<T, byte>();
-                src.CopyTo(dst);
-            
-                // If the component has collections, update the RefCounter of unchanged ones
-                var ct = info.ComponentTable;
-                if (ct.HasCollections)
-                {
-                    foreach (var kvp in ct.ComponentCollectionVSBSByOffset)
-                    {
-                        var offsetToCollectionField = kvp.Key;
-                        var srcBufferId = src.Slice(offsetToCollectionField).Cast<byte, int>()[0];
-                        var dstBufferId = dst.Slice(offsetToCollectionField).Cast<byte, int>()[0];
-                        if (srcBufferId == dstBufferId)
-                        {
-                            var accessor = kvp.Value.Segment.CreateChunkAccessor(_changeSet);
-                            kvp.Value.BufferAddRef(srcBufferId, ref accessor);
-                            accessor.Dispose();
-                        }
-                    }
-                }
-            }
-        }
-
-        // Case 2: Mark excess items as deleted
-        if (compList.Length < compRevInfoSpan.Length)
-        {
-            for (int j = i; j < compRevInfoSpan.Length; j++)
-            {
-                ref var compRevInfo = ref compRevInfoSpan[j];
-                compRevInfo.Operations |= ComponentInfo.OperationType.Deleted;
-                ComponentRevisionManager.AddCompRev(info, ref compRevInfo, TSN, UowId, true);
-            }
-        }
-        
-        // Case 3
-        else if (compList.Length > compRevInfoSpan.Length)
-        {
-            CreateComponents(pk, compList.Slice(compRevInfoSpan.Length));
-        }
-
-        CheckEpochRefresh();
-        return true;
-    }
-
     private Result<int, BTreeLookupStatus> GetCompRevTableFirstChunkId(long pk, ComponentInfo info)
     {
         var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
@@ -1417,38 +1140,6 @@ public unsafe partial class Transaction : IDisposable
         }
 
         return RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, lookupResult.Value, TSN);
-    }
-
-    private bool GetCompRevInfoFromIndex(long pk, ComponentInfo info, long tick, out List<ComponentInfo.CompRevInfo> compRevInfoList)
-    {
-        var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
-        using var vsba = info.PrimaryKeyIndex.TryGetMultiple(pk, ref accessor);
-        if (!vsba.IsValid)
-        {
-            accessor.Dispose();
-            compRevInfoList = null;
-            return false;
-        }
-        accessor.Dispose();
-
-        compRevInfoList = new List<ComponentInfo.CompRevInfo>(vsba.TotalCount);
-        do
-        {
-            var compRevChunks = vsba.Elements;
-            foreach (int compRevFirstChunkId in compRevChunks)
-            {
-                var result = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, TSN);
-
-                // WalkChain returns SnapshotInvisible when no committed entry is visible — skip this chain.
-                // Both Success and Deleted carry valid revision metadata that callers need.
-                if (result.Status != RevisionReadStatus.SnapshotInvisible)
-                {
-                    compRevInfoList.Add(result.Value);
-                }
-            }
-        } while (vsba.NextChunk());
-
-        return true;
     }
 
     /// <summary>
@@ -2001,6 +1692,10 @@ public unsafe partial class Transaction : IDisposable
         context.NextMinTSN = context.IsTail ? _dbe.TransactionChain.ComputeNextMinTSN() : 0;
         context.TailTSN = _dbe.TransactionChain.MinTSN;
         _dbe.TransactionChain.Control.ExitSharedAccess();
+
+        // Prepare ECS destroy operations: create component-level tombstone revisions BEFORE CommitComponentCore so it can handle index removal,
+        // WAL, and cleanup.
+        PrepareEcsDestroys();
 
         _dbe.LogCommitPhase(TSN, "CommitComponentCore");
 

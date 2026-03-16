@@ -228,26 +228,158 @@ struct EvoBulkV2
 
 #endregion
 
+// ── Archetypes for V1 components (used for Spawn in first scope) ──
+
+[Archetype(300)]
+class EvoAddArch : Archetype<EvoAddArch>
+{
+    public static readonly Comp<EvoAddV1> Comp = Register<EvoAddV1>();
+}
+
+[Archetype(301)]
+class EvoRemoveArch : Archetype<EvoRemoveArch>
+{
+    public static readonly Comp<EvoRemoveV1> Comp = Register<EvoRemoveV1>();
+}
+
+[Archetype(302)]
+class EvoReorderArch : Archetype<EvoReorderArch>
+{
+    public static readonly Comp<EvoReorderV1> Comp = Register<EvoReorderV1>();
+}
+
+[Archetype(303)]
+class EvoWidenIntArch : Archetype<EvoWidenIntArch>
+{
+    public static readonly Comp<EvoWidenIntV1> Comp = Register<EvoWidenIntV1>();
+}
+
+[Archetype(304)]
+class EvoWidenFloatArch : Archetype<EvoWidenFloatArch>
+{
+    public static readonly Comp<EvoWidenFloatV1> Comp = Register<EvoWidenFloatV1>();
+}
+
+[Archetype(305)]
+class EvoCombinedArch : Archetype<EvoCombinedArch>
+{
+    public static readonly Comp<EvoCombinedV1> Comp = Register<EvoCombinedV1>();
+}
+
+[Archetype(306)]
+class EvoAddRemoveArch : Archetype<EvoAddRemoveArch>
+{
+    public static readonly Comp<EvoAddRemoveV1> Comp = Register<EvoAddRemoveV1>();
+}
+
+[Archetype(307)]
+class EvoSignExtArch : Archetype<EvoSignExtArch>
+{
+    public static readonly Comp<EvoSignExtV1> Comp = Register<EvoSignExtV1>();
+}
+
+[Archetype(308)]
+class EvoBulkArch : Archetype<EvoBulkArch>
+{
+    public static readonly Comp<EvoBulkV1> Comp = Register<EvoBulkV1>();
+}
+
+// ── V2 Archetypes (used for Open().Read() in scope 2 after schema evolution) ──
+// V1 and V2 CLR types sharing the same [Component] name get the SAME ComponentTypeId.
+// InitializeArchetypes connects V1Arch's slots to V2's ComponentTable via schema-name fallback.
+
+[Archetype(309)]
+class EvoAddV2Arch : Archetype<EvoAddV2Arch>
+{
+    public static readonly Comp<EvoAddV2> Comp = Register<EvoAddV2>();
+}
+
+[Archetype(350)]
+class EvoRemoveV2Arch : Archetype<EvoRemoveV2Arch>
+{
+    public static readonly Comp<EvoRemoveV2> Comp = Register<EvoRemoveV2>();
+}
+
+[Archetype(351)]
+class EvoReorderV2Arch : Archetype<EvoReorderV2Arch>
+{
+    public static readonly Comp<EvoReorderV2> Comp = Register<EvoReorderV2>();
+}
+
+[Archetype(352)]
+class EvoWidenIntV2Arch : Archetype<EvoWidenIntV2Arch>
+{
+    public static readonly Comp<EvoWidenIntV2> Comp = Register<EvoWidenIntV2>();
+}
+
+[Archetype(353)]
+class EvoSignExtV2Arch : Archetype<EvoSignExtV2Arch>
+{
+    public static readonly Comp<EvoSignExtV2> Comp = Register<EvoSignExtV2>();
+}
+
+[Archetype(354)]
+class EvoWidenFloatV2Arch : Archetype<EvoWidenFloatV2Arch>
+{
+    public static readonly Comp<EvoWidenFloatV2> Comp = Register<EvoWidenFloatV2>();
+}
+
+[Archetype(355)]
+class EvoCombinedV2Arch : Archetype<EvoCombinedV2Arch>
+{
+    public static readonly Comp<EvoCombinedV2> Comp = Register<EvoCombinedV2>();
+}
+
+[Archetype(356)]
+class EvoAddRemoveV2Arch : Archetype<EvoAddRemoveV2Arch>
+{
+    public static readonly Comp<EvoAddRemoveV2> Comp = Register<EvoAddRemoveV2>();
+}
+
 /// <summary>
 /// Integration tests for compatible schema evolution.
 /// Each test creates a database with V1 layout, populates it, closes, then reopens with V2 layout.
 /// The migration engine should automatically remap fields and verify data correctness.
 /// </summary>
+[NonParallelizable]
 class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<EvoAddArch>.Touch();
+        Archetype<EvoRemoveArch>.Touch();
+        Archetype<EvoReorderArch>.Touch();
+        Archetype<EvoWidenIntArch>.Touch();
+        Archetype<EvoWidenFloatArch>.Touch();
+        Archetype<EvoCombinedArch>.Touch();
+        Archetype<EvoAddRemoveArch>.Touch();
+        Archetype<EvoSignExtArch>.Touch();
+        Archetype<EvoBulkArch>.Touch();
+        Archetype<EvoAddV2Arch>.Touch();
+        Archetype<EvoRemoveV2Arch>.Touch();
+        Archetype<EvoReorderV2Arch>.Touch();
+        Archetype<EvoWidenIntV2Arch>.Touch();
+        Archetype<EvoSignExtV2Arch>.Touch();
+        Archetype<EvoWidenFloatV2Arch>.Touch();
+        Archetype<EvoCombinedV2Arch>.Touch();
+        Archetype<EvoAddRemoveV2Arch>.Touch();
+    }
+
     [Test]
     public void AddField_DataMigratedAndNewFieldZeroFilled()
     {
-        long pk;
+        EntityId entityId;
 
         using (var scope = ServiceProvider.CreateScope())
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoAddV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new EvoAddV1(42, 3.14f);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            pk = t.CreateEntity(ref comp);
+            entityId = t.Spawn<EvoAddArch>(EvoAddArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -255,9 +387,10 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoAddV2>();
+            dbe.InitializeArchetypes();
 
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity<EvoAddV2>(pk, out var comp), Is.True);
+            ref readonly var comp = ref t.Open(entityId).Read(EvoAddV2Arch.Comp);
             Assert.That(comp.A, Is.EqualTo(42));
             Assert.That(comp.B, Is.EqualTo(3.14f));
             Assert.That(comp.C, Is.EqualTo(0)); // New field should be zero
@@ -267,16 +400,17 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
     [Test]
     public void RemoveField_RemainingDataIntact()
     {
-        long pk;
+        EntityId entityId;
 
         using (var scope = ServiceProvider.CreateScope())
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoRemoveV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new EvoRemoveV1(10, 20, 1.5f);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            pk = t.CreateEntity(ref comp);
+            entityId = t.Spawn<EvoRemoveArch>(EvoRemoveArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -284,9 +418,10 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoRemoveV2>();
+            dbe.InitializeArchetypes();
 
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity<EvoRemoveV2>(pk, out var comp), Is.True);
+            ref readonly var comp = ref t.Open(entityId).Read(EvoRemoveV2Arch.Comp);
             Assert.That(comp.A, Is.EqualTo(10));
             Assert.That(comp.C, Is.EqualTo(1.5f));
         }
@@ -295,16 +430,17 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
     [Test]
     public void ReorderFields_DataCorrect()
     {
-        long pk;
+        EntityId entityId;
 
         using (var scope = ServiceProvider.CreateScope())
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoReorderV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new EvoReorderV1(2.718f, 99);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            pk = t.CreateEntity(ref comp);
+            entityId = t.Spawn<EvoReorderArch>(EvoReorderArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -312,9 +448,10 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoReorderV2>();
+            dbe.InitializeArchetypes();
 
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity<EvoReorderV2>(pk, out var comp), Is.True);
+            ref readonly var comp = ref t.Open(entityId).Read(EvoReorderV2Arch.Comp);
             Assert.That(comp.A, Is.EqualTo(2.718f));
             Assert.That(comp.B, Is.EqualTo(99));
         }
@@ -323,16 +460,17 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
     [Test]
     public void WidenIntToLong_PositiveValue_Preserved()
     {
-        long pk;
+        EntityId entityId;
 
         using (var scope = ServiceProvider.CreateScope())
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoWidenIntV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new EvoWidenIntV1(1_000_000);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            pk = t.CreateEntity(ref comp);
+            entityId = t.Spawn<EvoWidenIntArch>(EvoWidenIntArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -340,9 +478,10 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoWidenIntV2>();
+            dbe.InitializeArchetypes();
 
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity<EvoWidenIntV2>(pk, out var comp), Is.True);
+            ref readonly var comp = ref t.Open(entityId).Read(EvoWidenIntV2Arch.Comp);
             Assert.That(comp.Score, Is.EqualTo(1_000_000L));
         }
     }
@@ -350,16 +489,17 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
     [Test]
     public void WidenIntToLong_NegativeValue_SignExtended()
     {
-        long pk;
+        EntityId entityId;
 
         using (var scope = ServiceProvider.CreateScope())
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoSignExtV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new EvoSignExtV1(-42);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            pk = t.CreateEntity(ref comp);
+            entityId = t.Spawn<EvoSignExtArch>(EvoSignExtArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -367,9 +507,10 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoSignExtV2>();
+            dbe.InitializeArchetypes();
 
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity<EvoSignExtV2>(pk, out var comp), Is.True);
+            ref readonly var comp = ref t.Open(entityId).Read(EvoSignExtV2Arch.Comp);
             Assert.That(comp.Value, Is.EqualTo(-42L));
         }
     }
@@ -377,16 +518,17 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
     [Test]
     public void WidenFloatToDouble_LosslessIEEE754()
     {
-        long pk;
+        EntityId entityId;
 
         using (var scope = ServiceProvider.CreateScope())
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoWidenFloatV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new EvoWidenFloatV1(3.14159f);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            pk = t.CreateEntity(ref comp);
+            entityId = t.Spawn<EvoWidenFloatArch>(EvoWidenFloatArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -394,9 +536,10 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoWidenFloatV2>();
+            dbe.InitializeArchetypes();
 
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity<EvoWidenFloatV2>(pk, out var comp), Is.True);
+            ref readonly var comp = ref t.Open(entityId).Read(EvoWidenFloatV2Arch.Comp);
             // IEEE754: float→double promotion preserves exact float value
             Assert.That(comp.Speed, Is.EqualTo((double)3.14159f));
         }
@@ -405,16 +548,17 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
     [Test]
     public void CombinedAddAndWiden_AllFieldsCorrect()
     {
-        long pk;
+        EntityId entityId;
 
         using (var scope = ServiceProvider.CreateScope())
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoCombinedV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new EvoCombinedV1(100, 2.5f);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            pk = t.CreateEntity(ref comp);
+            entityId = t.Spawn<EvoCombinedArch>(EvoCombinedArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -422,9 +566,10 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoCombinedV2>();
+            dbe.InitializeArchetypes();
 
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity<EvoCombinedV2>(pk, out var comp), Is.True);
+            ref readonly var comp = ref t.Open(entityId).Read(EvoCombinedV2Arch.Comp);
             Assert.That(comp.A, Is.EqualTo(100L)); // int→long widened
             Assert.That(comp.B, Is.EqualTo((double)2.5f)); // float→double widened
             Assert.That(comp.C, Is.EqualTo(0)); // new field zero-filled
@@ -434,16 +579,17 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
     [Test]
     public void AddAndRemoveSimultaneously_CorrectData()
     {
-        long pk;
+        EntityId entityId;
 
         using (var scope = ServiceProvider.CreateScope())
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoAddRemoveV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new EvoAddRemoveV1(7, 13, 1.1f);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            pk = t.CreateEntity(ref comp);
+            entityId = t.Spawn<EvoAddRemoveArch>(EvoAddRemoveArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -451,9 +597,10 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoAddRemoveV2>();
+            dbe.InitializeArchetypes();
 
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity<EvoAddRemoveV2>(pk, out var comp), Is.True);
+            ref readonly var comp = ref t.Open(entityId).Read(EvoAddRemoveV2Arch.Comp);
             Assert.That(comp.A, Is.EqualTo(7));
             Assert.That(comp.C, Is.EqualTo(1.1f));
             Assert.That(comp.D, Is.EqualTo(0.0)); // new field zero-filled
@@ -464,18 +611,19 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
     public void MultipleEntities_AllMigratedCorrectly()
     {
         const int entityCount = 100;
-        var pks = new long[entityCount];
+        var entityIds = new EntityId[entityCount];
 
         using (var scope = ServiceProvider.CreateScope())
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoAddV1>();
+            dbe.InitializeArchetypes();
 
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
             for (int i = 0; i < entityCount; i++)
             {
                 var comp = new EvoAddV1(i * 10, i * 0.5f);
-                pks[i] = t.CreateEntity(ref comp);
+                entityIds[i] = t.Spawn<EvoAddArch>(EvoAddArch.Comp.Set(in comp));
             }
             t.Commit();
         }
@@ -484,14 +632,15 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoAddV2>();
+            dbe.InitializeArchetypes();
 
             using var t = dbe.CreateQuickTransaction();
             for (int i = 0; i < entityCount; i++)
             {
-                Assert.That(t.ReadEntity<EvoAddV2>(pks[i], out var comp), Is.True);
-                Assert.That(comp.A, Is.EqualTo(i * 10));
-                Assert.That(comp.B, Is.EqualTo(i * 0.5f));
-                Assert.That(comp.C, Is.EqualTo(0));
+                ref readonly var comp = ref t.Open(entityIds[i]).Read(EvoAddV2Arch.Comp);
+                Assert.That(comp.A, Is.EqualTo(i * 10), $"Entity {i}: A mismatch");
+                Assert.That(comp.B, Is.EqualTo(i * 0.5f), $"Entity {i}: B mismatch");
+                Assert.That(comp.C, Is.EqualTo(0), $"Entity {i}: new field C should be zero (got {comp.C})");
             }
         }
     }
@@ -499,16 +648,17 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
     [Test]
     public void SurvivingIndexes_RemainValidAfterMigration()
     {
-        long pk;
+        EntityId entityId;
 
         using (var scope = ServiceProvider.CreateScope())
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoAddV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new EvoAddV1(42, 3.14f);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            pk = t.CreateEntity(ref comp);
+            entityId = t.Spawn<EvoAddArch>(EvoAddArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -516,10 +666,11 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoAddV2>();
+            dbe.InitializeArchetypes();
 
             // PK index should still work
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity<EvoAddV2>(pk, out var comp), Is.True);
+            ref readonly var comp = ref t.Open(entityId).Read(EvoAddV2Arch.Comp);
             Assert.That(comp.A, Is.EqualTo(42));
 
             // Verify PK index lookups work (the index was not rebuilt)
@@ -538,6 +689,7 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoBulkV1>();
+            dbe.InitializeArchetypes();
 
             // Insert entities in batches to avoid overwhelming a single transaction
             const int batchSize = 5_000;
@@ -547,7 +699,7 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
                 for (int i = 0; i < batchSize; i++)
                 {
                     var comp = new EvoBulkV1(batch * batchSize + i, i);
-                    t.CreateEntity(ref comp);
+                    t.Spawn<EvoBulkArch>(EvoBulkArch.Comp.Set(in comp));
                 }
                 t.Commit();
             }
@@ -575,16 +727,17 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
     [Test]
     public void MigrationWithExistingData_CanCreateNewEntitiesAfter()
     {
-        long pk1;
+        EntityId entityId1;
 
         using (var scope = ServiceProvider.CreateScope())
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoAddV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new EvoAddV1(1, 2.0f);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            pk1 = t.CreateEntity(ref comp);
+            entityId1 = t.Spawn<EvoAddArch>(EvoAddArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -592,20 +745,21 @@ class SchemaEvolutionTests : TestBase<SchemaEvolutionTests>
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<EvoAddV2>();
+            dbe.InitializeArchetypes();
 
             // Create a new entity with the new schema
             var newComp = new EvoAddV2(100, 200, 3.0f);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            var pk2 = t.CreateEntity(ref newComp);
+            var entityId2 = t.Spawn<EvoAddV2Arch>(EvoAddV2Arch.Comp.Set(in newComp));
             t.Commit();
 
             // Read both entities
             using var t2 = dbe.CreateQuickTransaction();
-            Assert.That(t2.ReadEntity<EvoAddV2>(pk1, out var old), Is.True);
+            ref readonly var old = ref t2.Open(entityId1).Read(EvoAddV2Arch.Comp);
             Assert.That(old.A, Is.EqualTo(1));
             Assert.That(old.C, Is.EqualTo(0)); // migrated, new field zero
 
-            Assert.That(t2.ReadEntity<EvoAddV2>(pk2, out var fresh), Is.True);
+            ref readonly var fresh = ref t2.Open(entityId2).Read(EvoAddV2Arch.Comp);
             Assert.That(fresh.A, Is.EqualTo(100));
             Assert.That(fresh.C, Is.EqualTo(200));
             Assert.That(fresh.B, Is.EqualTo(3.0f));

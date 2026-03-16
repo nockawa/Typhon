@@ -6,6 +6,12 @@ namespace Typhon.Engine.Tests;
 
 class VersionedIndexTests : TestBase<VersionedIndexTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompDArch>.Touch();
+    }
+
     #region Phase 1 — Infrastructure Tests
 
     [Test]
@@ -113,11 +119,12 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 10, 2.0);
-            t.CreateEntity(ref d);
+            t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
@@ -150,20 +157,21 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long entityId;
+        EntityId id;
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 10, 2.0);
-            entityId = t.CreateEntity(ref d);
+            id = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
         // Update field A from 1.0f to 5.0f
         {
             using var t = dbe.CreateQuickTransaction();
-            var d = new CompD(5.0f, 10, 2.0);
-            t.UpdateEntity(entityId, ref d);
+            ref var d = ref t.OpenMut(id).Write(CompDArch.D);
+            d = new CompD(5.0f, 10, 2.0);
             t.Commit();
         }
 
@@ -207,19 +215,20 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long entityId;
+        EntityId id;
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(3.0f, 10, 4.0);
-            entityId = t.CreateEntity(ref d);
+            id = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
-        // Delete the entity — this triggers EnsureTailPopulated + Tombstone write
+        // Delete the entity
         {
             using var t = dbe.CreateQuickTransaction();
-            t.DeleteEntity<CompD>(entityId);
+            t.Destroy(id);
             t.Commit();
         }
 
@@ -252,19 +261,19 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         // Verify that normal CRUD on CompD still works (HEAD path unchanged)
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1Id;
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 10, 2.0);
-            e1 = t.CreateEntity(ref d);
+            e1Id = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
         {
             using var t = dbe.CreateQuickTransaction();
-            var res = t.ReadEntity(e1, out CompD read);
-            Assert.That(res, Is.True);
+            var read = t.Open(e1Id).Read(CompDArch.D);
             Assert.That(read.A, Is.EqualTo(1.0f));
             Assert.That(read.B, Is.EqualTo(10));
             Assert.That(read.C, Is.EqualTo(2.0));
@@ -273,15 +282,14 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         // Update and verify
         {
             using var t = dbe.CreateQuickTransaction();
-            var d = new CompD(5.0f, 20, 6.0);
-            t.UpdateEntity(e1, ref d);
+            ref var d = ref t.OpenMut(e1Id).Write(CompDArch.D);
+            d = new CompD(5.0f, 20, 6.0);
             t.Commit();
         }
 
         {
             using var t = dbe.CreateQuickTransaction();
-            var res = t.ReadEntity(e1, out CompD read);
-            Assert.That(res, Is.True);
+            var read = t.Open(e1Id).Read(CompDArch.D);
             Assert.That(read.A, Is.EqualTo(5.0f));
             Assert.That(read.B, Is.EqualTo(20));
             Assert.That(read.C, Is.EqualTo(6.0));
@@ -295,14 +303,15 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         // EnsureTailPopulated should backfill both entities' Active entries before writing the Tombstone.
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long entity1, entity2;
+        EntityId entity1Id, entity2Id;
         {
             using var t = dbe.CreateQuickTransaction();
             var d1 = new CompD(1.0f, 10, 2.0);
-            entity1 = t.CreateEntity(ref d1);
+            entity1Id = t.Spawn<CompDArch>(CompDArch.D.Set(in d1));
             var d2 = new CompD(1.0f, 20, 3.0);
-            entity2 = t.CreateEntity(ref d2);
+            entity2Id = t.Spawn<CompDArch>(CompDArch.D.Set(in d2));
             t.Commit();
         }
 
@@ -325,8 +334,8 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         // Update entity1's A from 1.0f to 5.0f — triggers backfill on old key
         {
             using var t = dbe.CreateQuickTransaction();
-            var d = new CompD(5.0f, 10, 2.0);
-            t.UpdateEntity(entity1, ref d);
+            ref var d = ref t.OpenMut(entity1Id).Write(CompDArch.D);
+            d = new CompD(5.0f, 10, 2.0);
             t.Commit();
         }
 
@@ -365,13 +374,14 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         // This is correct: no version history needed when no mutations exist.
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var tsnBeforeCreate = dbe.TransactionChain.NextFreeId;
 
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 10, 2.0);
-            t.CreateEntity(ref d);
+            t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
@@ -390,13 +400,14 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         long tsnAtCreate;
         {
             using var t = dbe.CreateQuickTransaction();
             tsnAtCreate = t.TSN;
             var d = new CompD(1.0f, 10, 2.0);
-            t.CreateEntity(ref d);
+            t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
@@ -417,22 +428,23 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         // A temporal query at the creation TSN should still find the entity under the old key.
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long entityId;
+        EntityId id;
         long tsnAtCreate;
         {
             using var t = dbe.CreateQuickTransaction();
             tsnAtCreate = t.TSN;
             var d = new CompD(1.0f, 10, 2.0);
-            entityId = t.CreateEntity(ref d);
+            id = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
         // Update field A from 1.0f to 5.0f — last entity leaves the old key
         {
             using var t = dbe.CreateQuickTransaction();
-            var d = new CompD(5.0f, 10, 2.0);
-            t.UpdateEntity(entityId, ref d);
+            ref var d = ref t.OpenMut(id).Write(CompDArch.D);
+            d = new CompD(5.0f, 10, 2.0);
             t.Commit();
         }
 
@@ -453,12 +465,13 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         // A temporal query at the "both created" TSN should see 2 chain IDs for key 1.0f.
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long entity1;
+        EntityId entity1Id;
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 10, 2.0);
-            entity1 = t.CreateEntity(ref d);
+            entity1Id = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
@@ -467,15 +480,15 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
             using var t = dbe.CreateQuickTransaction();
             tsnAfterBothCreated = t.TSN;
             var d = new CompD(1.0f, 20, 3.0); // Same A=1.0f key (AllowMultiple), different B (unique index)
-            t.CreateEntity(ref d);
+            t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
         // Update entity1's A from 1.0f to 5.0f
         {
             using var t = dbe.CreateQuickTransaction();
-            var d = new CompD(5.0f, 10, 2.0);
-            t.UpdateEntity(entity1, ref d);
+            ref var d = ref t.OpenMut(entity1Id).Write(CompDArch.D);
+            d = new CompD(5.0f, 10, 2.0);
             t.Commit();
         }
 
@@ -496,22 +509,23 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         // on the OLD key should return the entity (backfilled Active entry is visible).
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long entityId;
+        EntityId id;
         long tsnAtCreate;
         {
             using var t = dbe.CreateQuickTransaction();
             tsnAtCreate = t.TSN;
             var d = new CompD(1.0f, 10, 2.0);
-            entityId = t.CreateEntity(ref d);
+            id = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
         // Update field A from 1.0f to 5.0f — triggers TAIL backfill on both keys
         {
             using var t = dbe.CreateQuickTransaction();
-            var d = new CompD(5.0f, 10, 2.0);
-            t.UpdateEntity(entityId, ref d);
+            ref var d = ref t.OpenMut(id).Write(CompDArch.D);
+            d = new CompD(5.0f, 10, 2.0);
             t.Commit();
         }
 

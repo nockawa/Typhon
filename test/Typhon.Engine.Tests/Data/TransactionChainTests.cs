@@ -15,6 +15,12 @@ namespace Typhon.Engine.Tests;
 [TestFixture]
 class TransactionChainTests : TestBase<TransactionChainTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompAArch>.Touch();
+    }
+
     /// <summary>
     /// 4 threads creating transactions concurrently — verify all TSNs are unique (no duplicates from lock-free path).
     /// Each thread disposes its own transactions to respect thread affinity.
@@ -135,27 +141,28 @@ class TransactionChainTests : TestBase<TransactionChainTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Create an entity with a normal transaction
         var comp = new CompA(42, 1.5f, 2.5);
-        long pk;
+        EntityId entityId;
         using (var wt = dbe.CreateQuickTransaction())
         {
-            pk = wt.CreateEntity(ref comp);
+            entityId = wt.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             wt.Commit();
         }
 
         // Read-only transaction can read
         using var rt = dbe.CreateReadOnlyTransaction();
         Assert.That(rt.IsReadOnly, Is.True);
-        Assert.That(rt.ReadEntity(pk, out CompA read), Is.True);
+        var read = rt.Open(entityId).Read(CompAArch.A);
         Assert.That(read.A, Is.EqualTo(42));
 
         // Write operations throw
         var writeComp = new CompA(99);
-        Assert.Throws<InvalidOperationException>(() => rt.CreateEntity(ref writeComp));
-        Assert.Throws<InvalidOperationException>(() => rt.UpdateEntity(pk, ref writeComp));
-        Assert.Throws<InvalidOperationException>(() => rt.DeleteEntity<CompA>(pk));
+        Assert.Throws<InvalidOperationException>(() => rt.Spawn<CompAArch>(CompAArch.A.Set(in writeComp)));
+        Assert.Throws<InvalidOperationException>(() => rt.OpenMut(entityId));
+        Assert.Throws<InvalidOperationException>(() => rt.Destroy(entityId));
 
         // Commit is a no-op
         Assert.That(rt.Commit(), Is.True);
@@ -191,31 +198,32 @@ class TransactionChainTests : TestBase<TransactionChainTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Create entity
         var comp = new CompA(10);
-        long pk;
+        EntityId entityId;
         using (var wt = dbe.CreateQuickTransaction())
         {
-            pk = wt.CreateEntity(ref comp);
+            entityId = wt.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             wt.Commit();
         }
 
         // Open read-only snapshot
         using var rt = dbe.CreateReadOnlyTransaction();
-        Assert.That(rt.ReadEntity(pk, out CompA before), Is.True);
+        var before = rt.Open(entityId).Read(CompAArch.A);
         Assert.That(before.A, Is.EqualTo(10));
 
         // Update after snapshot was taken
-        var updated = new CompA(99);
         using (var wt2 = dbe.CreateQuickTransaction())
         {
-            wt2.UpdateEntity(pk, ref updated);
+            ref var w = ref wt2.OpenMut(entityId).Write(CompAArch.A);
+            w = new CompA(99);
             wt2.Commit();
         }
 
         // Read-only tx still sees the old value (snapshot isolation)
-        Assert.That(rt.ReadEntity(pk, out CompA after), Is.True);
+        var after = rt.Open(entityId).Read(CompAArch.A);
         Assert.That(after.A, Is.EqualTo(10), "Read-only transaction should see snapshot, not the update");
     }
 
@@ -228,6 +236,7 @@ class TransactionChainTests : TestBase<TransactionChainTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Exhaust initial pool
         var exhaustPool = new List<Transaction>();
@@ -248,7 +257,7 @@ class TransactionChainTests : TestBase<TransactionChainTests>
 
         // Write operations should work on the recycled tx
         var comp = new CompA(1);
-        Assert.DoesNotThrow(() => rwTx.CreateEntity(ref comp));
+        Assert.DoesNotThrow(() => rwTx.Spawn<CompAArch>(CompAArch.A.Set(in comp)));
         rwTx.Commit();
         rwTx.Dispose();
 
