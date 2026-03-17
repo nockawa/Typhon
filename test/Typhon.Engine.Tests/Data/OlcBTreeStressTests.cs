@@ -12,6 +12,7 @@ namespace Typhon.Engine.Tests;
 /// that rarely trigger under light contention (2-8 threads in OlcBTreeTests).
 /// </summary>
 [TestFixture]
+[Explicit("Stress test — spawns 16-32 threads, run manually to avoid thread pool saturation in parallel CI")]
 public class OlcBTreeStressTests
 {
     private IServiceProvider _serviceProvider;

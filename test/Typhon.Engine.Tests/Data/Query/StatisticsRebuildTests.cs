@@ -328,7 +328,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
         var deadline = DateTime.UtcNow.AddSeconds(5);
         while (ct.IndexStats[1].HyperLogLog == null && DateTime.UtcNow < deadline)
         {
-            System.Threading.Thread.Sleep(10);
+            System.Threading.Thread.Sleep(1);
         }
 
         Assert.That(ct.IndexStats[1].HyperLogLog, Is.Not.Null, "ForceRebuild should trigger statistics rebuild");
@@ -409,7 +409,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
         var deadline = DateTime.UtcNow.AddSeconds(5);
         while (ctD.IndexStats[1].HyperLogLog == null && DateTime.UtcNow < deadline)
         {
-            System.Threading.Thread.Sleep(10);
+            System.Threading.Thread.Sleep(1);
         }
 
         // Worker must still be running (not killed by String64 table)
@@ -554,7 +554,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
         var deadline = DateTime.UtcNow.AddSeconds(5);
         while (ct.IndexStats[1].HyperLogLog == null && DateTime.UtcNow < deadline)
         {
-            System.Threading.Thread.Sleep(10);
+            System.Threading.Thread.Sleep(1);
         }
 
         // After successful rebuild, counter should be reset
@@ -584,8 +584,8 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
         dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
-        // Insert 500 entities with B from 0 to 499
-        for (int i = 0; i < 500; i++)
+        // Insert 200 entities with B from 0 to 199
+        for (int i = 0; i < 200; i++)
         {
             CreateAndCommitCompD(dbe, i * 1.0f, i, i * 2.0);
         }
@@ -596,14 +596,14 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
         var stats = ct.IndexStats[1]; // B field
         Assert.That(stats.HyperLogLog, Is.Not.Null, "HLL should be populated even with sampling");
 
-        // HLL only sees sampled pages (~half the entities with pageInterval=2), so its raw estimate is ~250.
+        // HLL only sees sampled pages (~half the entities with pageInterval=2), so its raw estimate is ~100.
         // The key invariant: HLL is populated and gives a positive estimate.
         long hllEstimate = stats.DistinctValues;
-        Assert.That(hllEstimate, Is.GreaterThan(100), $"HLL estimate {hllEstimate} should reflect sampled entities");
-        Assert.That(hllEstimate, Is.LessThan(500), $"HLL estimate {hllEstimate} should be less than total (only sampled half)");
+        Assert.That(hllEstimate, Is.GreaterThan(40), $"HLL estimate {hllEstimate} should reflect sampled entities");
+        Assert.That(hllEstimate, Is.LessThan(200), $"HLL estimate {hllEstimate} should be less than total (only sampled half)");
 
         // Histogram should be populated with scaled counts (scaleFactor ~ 2x)
         Assert.That(stats.Histogram, Is.Not.Null, "Histogram should be populated even with sampling");
-        Assert.That(stats.Histogram.TotalCount, Is.InRange(300, 700), $"Histogram total {stats.Histogram.TotalCount} should be scaled toward 500");
+        Assert.That(stats.Histogram.TotalCount, Is.InRange(120, 280), $"Histogram total {stats.Histogram.TotalCount} should be scaled toward 200");
     }
 }

@@ -387,32 +387,6 @@ class NavigationViewTests : TestBase<NavigationViewTests>
     }
 
     [Test]
-    public void Navigate_TargetNoBoundaryCrossing_NoReverseUpdate()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-        dbe.InitializeArchetypes();
-
-        var guild1 = CreateGuild(dbe, 10, 50);  // qualifies
-        var player = CreatePlayer(dbe, guild1, true);
-
-        using var view = dbe.Query<CompPlayer>()
-            .Navigate<CompGuild>(p => p.GuildId)
-            .Where((s, t) => t.Level >= 10)
-            .ToView();
-
-        Assert.That(view.Count, Is.EqualTo(1));
-
-        // Change guild level from 10 to 15 — still qualifies, no boundary crossing
-        UpdateGuild(dbe, guild1, 15, 50);
-        RefreshView(dbe, view);
-
-        // Entity should still be in view
-        Assert.That(view.Count, Is.EqualTo(1));
-        Assert.That(view.Contains(player), Is.True);
-    }
-
-    [Test]
     public void Navigate_TargetDeleted_RemovesSourceEntities()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();

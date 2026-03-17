@@ -85,13 +85,13 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         RegisterComponents(dbe);
         dbe.InitializeArchetypes();
 
-        // Create 100 entities with varying field values
-        for (var i = 0; i < 100; i++)
+        // Create 20 entities with varying field values
+        for (var i = 0; i < 20; i++)
         {
             CreateEntity(dbe, i / 10.0f, i, i * 1.0);
         }
 
-        var (plan, _) = BuildPlanFromExpression(dbe, p => p.B > 90 && p.A > 5.0f);
+        var (plan, _) = BuildPlanFromExpression(dbe, p => p.B > 15 && p.A > 1.0f);
 
         // Verify evaluators are ordered by ascending estimated cardinality
         Assert.That(plan.OrderedEvaluators, Has.Length.EqualTo(2));

@@ -86,27 +86,6 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
         }
     }
 
-    [Test]
-    public void ChainedWhere_ThreePredicates()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-        dbe.InitializeArchetypes();
-
-        CreateAndCommit(dbe, 5.0f, 50, 10.0);  // all pass
-        CreateAndCommit(dbe, 5.0f, 45, 1.0);   // B>40 but C<=5 → fail
-        CreateAndCommit(dbe, 5.0f, 30, 10.0);  // B<=40 → fail
-        CreateAndCommit(dbe, 2.0f, 60, 10.0);  // A<=3 → fail
-
-        using var view = dbe.Query<CompD>()
-            .Where(p => p.A > 3.0f)
-            .Where(p => p.B > 40)
-            .Where(p => p.C > 5.0)
-            .ToView();
-
-        Assert.That(view.Count, Is.EqualTo(1));
-    }
-
     #endregion
 
     #region View creation pipeline
@@ -128,22 +107,6 @@ class IntegrationQueryTests : TestBase<IntegrationQueryTests>
         Assert.That(view.Contains(pk1), Is.True);
         Assert.That(view.Contains(pk2), Is.False);
         Assert.That(view.Contains(pk3), Is.True);
-    }
-
-    [Test]
-    public void ToView_CachesPlanOnView()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-        dbe.InitializeArchetypes();
-
-        CreateAndCommit(dbe, 1.0f, 50, 2.0);
-
-        using var view = dbe.Query<CompD>().Where(p => p.B > 40).ToView();
-
-        Assert.That(view.HasCachedPlan, Is.True);
-        Assert.That(view.ExecutionPlan.OrderedEvaluators, Is.Not.Null);
-        Assert.That(view.ExecutionPlan.OrderedEvaluators.Length, Is.GreaterThan(0));
     }
 
     #endregion

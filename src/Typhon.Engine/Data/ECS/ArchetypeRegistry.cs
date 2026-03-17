@@ -554,20 +554,4 @@ public static class ArchetypeRegistry
         }
     }
 
-    /// <summary>
-    /// Reset all registration state. For testing only — allows re-registration of archetypes.
-    /// </summary>
-    internal static void Reset()
-    {
-        Array.Clear(Archetypes);
-        ComponentTypeIds.Clear();
-        ComponentTypeIdsBySchemaName.Clear();
-        ComponentTypeById.Clear();
-        NextComponentTypeId = 0;
-        RegisteredCount = 0;
-        MaxRegisteredArchetypeId = 0;
-        Frozen = false;
-        PendingRegistrations.Clear();
-        MetadataByType.Clear();
-    }
 }

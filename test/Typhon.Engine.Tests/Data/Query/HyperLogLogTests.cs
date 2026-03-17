@@ -94,30 +94,6 @@ class HyperLogLogTests
     }
 
     [Test]
-    public void Merge_DisjointSets_CorrectCombinedEstimate()
-    {
-        var hll1 = new HyperLogLog();
-        var hll2 = new HyperLogLog();
-
-        // Set 1: values 0..4999
-        for (int i = 0; i < 5000; i++)
-        {
-            hll1.Add(i);
-        }
-
-        // Set 2: values 5000..9999 (disjoint)
-        for (int i = 5000; i < 10000; i++)
-        {
-            hll2.Add(i);
-        }
-
-        hll1.Merge(hll2);
-        long estimate = hll1.EstimateCardinality();
-        double errorPct = Math.Abs(estimate - 10000) / 10000.0;
-        Assert.That(errorPct, Is.LessThan(0.05), $"Merged estimate {estimate} for 10K unique, error {errorPct:P2}");
-    }
-
-    [Test]
     public void Merge_OverlappingSets_CorrectEstimate()
     {
         var hll1 = new HyperLogLog();

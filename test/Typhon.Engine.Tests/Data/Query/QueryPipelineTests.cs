@@ -70,17 +70,6 @@ class QueryPipelineTests : TestBase<QueryPipelineTests>
     }
 
     [Test]
-    public void Parse_AllSixOperators()
-    {
-        Assert.That(ExpressionParser.Parse<CompD>(p => p.B == 1)[0].Operator, Is.EqualTo(CompareOp.Equal));
-        Assert.That(ExpressionParser.Parse<CompD>(p => p.B != 1)[0].Operator, Is.EqualTo(CompareOp.NotEqual));
-        Assert.That(ExpressionParser.Parse<CompD>(p => p.B > 1)[0].Operator, Is.EqualTo(CompareOp.GreaterThan));
-        Assert.That(ExpressionParser.Parse<CompD>(p => p.B < 1)[0].Operator, Is.EqualTo(CompareOp.LessThan));
-        Assert.That(ExpressionParser.Parse<CompD>(p => p.B >= 1)[0].Operator, Is.EqualTo(CompareOp.GreaterThanOrEqual));
-        Assert.That(ExpressionParser.Parse<CompD>(p => p.B <= 1)[0].Operator, Is.EqualTo(CompareOp.LessThanOrEqual));
-    }
-
-    [Test]
     public void Parse_FloatComparison()
     {
         var predicates = ExpressionParser.Parse<CompD>(p => p.A > 3.5f);

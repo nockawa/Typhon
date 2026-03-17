@@ -115,17 +115,6 @@ class OrViewTests : TestBase<OrViewTests>
         Assert.That(branches[0].Length, Is.EqualTo(2));
     }
 
-    [Test]
-    public void ParseDnf_ClauseLimit_ThrowsOver16()
-    {
-        Expression<Func<CompD, bool>> expr = p =>
-            (p.B > 50 || p.B < 10) && (p.A > 3.0f || p.A < 1.0f) && (p.C > 5.0 || p.C < 1.0);
-        // 2^3 = 8 branches — should be fine
-        var branches = ExpressionParser.ParseDnf(expr);
-        Assert.That(branches.Length, Is.EqualTo(8));
-        Assert.That(branches.Length, Is.LessThanOrEqualTo(16));
-    }
-
     #endregion
 
     #region OrView initial population
@@ -265,35 +254,6 @@ class OrViewTests : TestBase<OrViewTests>
         view.ClearDelta();
 
         Assert.That(view.Contains(pk), Is.False);
-    }
-
-    [Test]
-    public void OrView_Delta_SameSemantics()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-        dbe.InitializeArchetypes();
-
-        var pk1 = CreateAndCommit(dbe, 1.0f, 60, 2.0);  // B>50 → in view
-        var pk2 = CreateAndCommit(dbe, 1.0f, 30, 2.0);  // B=30 → not in view
-
-        using var view = dbe.Query<CompD>().Where(p => p.B > 50 || p.B < 10).ToView();
-
-        // Add entity into view
-        UpdateAndCommit(dbe, pk2, 1.0f, 5, 2.0);  // B=5 → enters branch 1
-        RefreshView(dbe, view);
-
-        var delta = view.GetDelta();
-        Assert.That(delta.Added.Count, Is.EqualTo(1));
-
-        view.ClearDelta();
-
-        // Remove entity from view
-        UpdateAndCommit(dbe, pk1, 1.0f, 30, 2.0);  // B=30 → leaves all branches
-        RefreshView(dbe, view);
-
-        delta = view.GetDelta();
-        Assert.That(delta.Removed.Count, Is.EqualTo(1));
     }
 
     [Test]

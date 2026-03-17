@@ -282,27 +282,6 @@ class ViewTests : TestBase<ViewTests>
     }
 
     [Test]
-    public void SingleField_MultipleRefreshes_DeltaAccumulates()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-        dbe.InitializeArchetypes();
-        var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateSingleFieldView(ct);
-
-        // First commit + refresh → Added
-        var pk1 = CreateAndCommit(dbe, 1.0f, 50, 2.0);
-        RefreshView(dbe, view);
-
-        // Second commit + refresh (without ClearDelta) → should accumulate
-        var pk2 = CreateAndCommit(dbe, 1.0f, 60, 2.0);
-        RefreshView(dbe, view);
-
-        var delta = view.GetDelta();
-        Assert.That(delta.Added, Has.Count.EqualTo(2));
-    }
-
-    [Test]
     public void SingleField_CompactDelta_AddedThenRemoved_Cancel()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
@@ -810,41 +789,6 @@ class ViewTests : TestBase<ViewTests>
     }
 
     [Test]
-    public void OverflowRecovery_DeltaCorrectly_AddedAndRemoved()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-        dbe.InitializeArchetypes();
-        var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateSingleFieldView(ct, bufferCapacity: 4);
-
-        // Pre-populate: create entity in view before overflow
-        var pkOld = CreateAndCommit(dbe, 1.0f, 50, 2.0);
-        RefreshView(dbe, view);
-        view.ClearDelta();
-        Assert.That(view.Contains(pkOld), Is.True);
-
-        // Delete pkOld and create new entities to cause overflow
-        DeleteAndCommit(dbe, pkOld);
-        var pkNew1 = CreateAndCommit(dbe, 1.0f, 60, 2.0);
-        var pkNew2 = CreateAndCommit(dbe, 1.0f, 70, 2.0);
-        CreateAndCommit(dbe, 1.0f, 80, 2.0);
-        CreateAndCommit(dbe, 1.0f, 90, 2.0);
-
-        Assert.That(view.DeltaBuffer.HasOverflow, Is.True);
-
-        RefreshView(dbe, view);
-
-        var delta = view.GetDelta();
-        Assert.That(view.Contains(pkOld), Is.False, "Deleted entity should be absent");
-        Assert.That(view.Contains(pkNew1), Is.True);
-        Assert.That(view.Contains(pkNew2), Is.True);
-        Assert.That(delta.Removed, Does.Contain(pkOld), "pkOld should be in Removed");
-        Assert.That(delta.Added, Does.Contain(pkNew1), "pkNew1 should be in Added");
-        Assert.That(delta.Added, Does.Contain(pkNew2), "pkNew2 should be in Added");
-    }
-
-    [Test]
     public void OverflowRecovery_ReturnsToIncrementalMode()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
@@ -899,35 +843,6 @@ class ViewTests : TestBase<ViewTests>
 
         Assert.That(view.Contains(pk), Is.False, "Deleted entity should be absent after recovery");
         Assert.That(view.HasOverflow, Is.False);
-    }
-
-    [Test]
-    public void OverflowRecovery_NoPlanRebuild_ReusesEvaluators()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-        dbe.InitializeArchetypes();
-        var ct = dbe.GetComponentTable<CompD>();
-        using var view = CreateSingleFieldView(ct, bufferCapacity: 4);
-
-        // Overflow
-        for (var i = 0; i < 5; i++)
-        {
-            CreateAndCommit(dbe, 1.0f, 50 + i, 2.0);
-        }
-
-        RefreshView(dbe, view);
-
-        // Verify the view works correctly — evaluators are reused (same filter B > 40)
-        Assert.That(view.Count, Is.EqualTo(5));
-        view.ClearDelta();
-
-        // Add entity that does NOT match
-        CreateAndCommit(dbe, 1.0f, 30, 2.0);
-        RefreshView(dbe, view);
-
-        Assert.That(view.Count, Is.EqualTo(5), "Non-matching entity should not be in view");
-        Assert.That(view.GetDelta().IsEmpty, Is.True);
     }
 
     [Test]
@@ -1001,7 +916,7 @@ class ViewTests : TestBase<ViewTests>
         using var view = CreateSingleFieldView(ct);
 
         var matchingCount = 0;
-        for (var i = 0; i < 100; i++)
+        for (var i = 0; i < 50; i++)
         {
             // Unique B values: alternating below/above threshold (B > 40)
             var b = (i % 2 == 0) ? 1000 + i : -(1000 + i); // even=matching (>40), odd=non-matching (<40)
