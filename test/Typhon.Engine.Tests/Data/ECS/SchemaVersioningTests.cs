@@ -22,8 +22,8 @@ unsafe class SchemaVersioningTests : TestBase<SchemaVersioningTests>
     [Test]
     public void ArchetypeR1_SizeOf_Compact()
     {
-        // 64B Name + 2B ArchetypeId + 2B ParentArchetypeId + 1B ComponentCount + 3B pad + 4B Revision + 4B ComponentNames = 80B
-        Assert.That(sizeof(ArchetypeR1), Is.EqualTo(80));
+        // 64B Name + 2B ArchetypeId + 2B ParentArchetypeId + 1B ComponentCount + 3B pad + 4B Revision + 4B ComponentNames + 4B EntityMapSPI + 4B pad + 8B NextEntityKey = 96B
+        Assert.That(sizeof(ArchetypeR1), Is.EqualTo(96));
     }
 
     [Test]

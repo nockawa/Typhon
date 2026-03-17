@@ -4,6 +4,7 @@ using NUnit.Framework;
 using System;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using Typhon.Engine;
 using Typhon.Engine.Tests;
 
@@ -34,6 +35,11 @@ public class AssemblyWarmup
             }
             catch { /* best effort */ }
         };
+
+
+        // Pre-grow the thread pool so concurrent test fixtures don't starve waiting for
+        // on-demand thread creation (default growth: 1 thread per 500ms under starvation).
+        ThreadPool.SetMinThreads(96, 32);
 
         // Phase 1: Full engine stack with WAL — DI, PagedMMF, DatabaseEngine, transactions,
         // components, BTree, WAL writer, checkpoint, durability pipeline
@@ -170,4 +176,5 @@ public class AssemblyWarmup
         rac.EnterAccessing(ref WaitContext.Null);
         rac.ExitAccessing();
     }
+
 }

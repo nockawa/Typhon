@@ -899,7 +899,7 @@ class TransactionTests : TestBase<TransactionTests>
 
             // ReadEntity after rollback: no state guard — entity was rolled back so read finds nothing
             // Note: uses legacy ReadEntity because ECS TryOpen still sees the pending spawn on the same transaction
-            var readResult = t.ReadComponent((long)e2.RawValue, out CompA _);
+            var readResult = t.QueryRead((long)e2.RawValue, out CompA _);
             Assert.That(readResult, Is.False, "ReadEntity after rollback — rolled-back entity should not be found");
 
             Assert.That(t.State, Is.EqualTo(Transaction.TransactionState.Rollbacked), "State should remain Rollbacked throughout");

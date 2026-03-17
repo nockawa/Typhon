@@ -101,7 +101,7 @@ public unsafe class View<T1, T2> : ViewBase where T1 : unmanaged where T2 : unma
             var pkIndex = _componentTable1.PrimaryKeyIndex;
             foreach (var kv in pkIndex.EnumerateLeaves())
             {
-                if (tx.ReadComponent<T1>(kv.Key, out var comp1) && tx.ReadComponent<T2>(kv.Key, out var comp2))
+                if (tx.QueryRead<T1>(kv.Key, out var comp1) && tx.QueryRead<T2>(kv.Key, out var comp2))
                 {
                     if (EvaluateAllFields(ref comp1, ref comp2))
                     {
@@ -199,7 +199,7 @@ public unsafe class View<T1, T2> : ViewBase where T1 : unmanaged where T2 : unma
             {
                 if (!read1)
                 {
-                    if (!tx.ReadComponent(pk, out comp1))
+                    if (!tx.QueryRead(pk, out comp1))
                     {
                         return false;
                     }
@@ -215,7 +215,7 @@ public unsafe class View<T1, T2> : ViewBase where T1 : unmanaged where T2 : unma
             {
                 if (!read2)
                 {
-                    if (!tx.ReadComponent(pk, out comp2))
+                    if (!tx.QueryRead(pk, out comp2))
                     {
                         return false;
                     }

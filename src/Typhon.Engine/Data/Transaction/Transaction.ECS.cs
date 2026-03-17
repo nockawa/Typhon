@@ -92,6 +92,132 @@ public unsafe partial class Transaction
         return SpawnInternal(meta, values);
     }
 
+    /// <summary>
+    /// Spawn a batch of entities. Amortizes per-call overhead: single EnsureMutable check, single Interlocked.Add for all entity keys, single epoch
+    /// refresh at the end.
+    /// All entities are initialized with the same component values (or zero if none provided).
+    /// </summary>
+    public void SpawnBatch<TArch>(Span<EntityId> ids, params ComponentValue[] sharedValues) where TArch : Archetype<TArch>
+    {
+        var meta = Archetype<TArch>.Metadata;
+        Debug.Assert(meta != null, $"Archetype {typeof(TArch).Name} not registered");
+        Debug.Assert(_dbe._archetypeStates[meta.ArchetypeId]?.EntityMap != null,
+            $"Archetype {typeof(TArch).Name} EntityMap not initialized");
+
+        EnsureMutable();
+        State = TransactionState.InProgress;
+        AssertThreadAffinity();
+
+        var engineState = _dbe._archetypeStates[meta.ArchetypeId];
+        int count = ids.Length;
+
+        // Allocate N entity keys in one atomic operation
+        long baseKey = Interlocked.Add(ref engineState.NextEntityKey, count) - count + 1;
+
+        // Pre-size pending map
+        _pendingSpawns ??= new Dictionary<EntityId, PendingSpawn>(count);
+        if (_pendingSpawns.Count == 0 && count > 16)
+        {
+            _pendingSpawns.EnsureCapacity(count);
+        }
+
+        int recordSize = meta._entityRecordSize;
+
+        for (int n = 0; n < count; n++)
+        {
+            var entityId = new EntityId(baseKey + n, meta.ArchetypeId);
+            ids[n] = entityId;
+
+            var recordBytes = new byte[recordSize];
+            ushort enabledBits = 0;
+
+            fixed (byte* recordPtr = recordBytes)
+            {
+                EntityRecordAccessor.InitializeRecord(recordPtr, meta.ComponentCount);
+
+                for (int slot = 0; slot < meta.ComponentCount; slot++)
+                {
+                    var table = engineState.SlotToComponentTable[slot];
+                    int chunkId = table.StorageMode == StorageMode.Transient
+                        ? table.TransientComponentSegment.AllocateChunk(false)
+                        : table.ComponentSegment.AllocateChunk(false, _changeSet);
+
+                    // Copy shared component value if provided for this slot
+                    int slotTypeId = meta._componentTypeIds[slot];
+                    for (int v = 0; v < sharedValues.Length; v++)
+                    {
+                        if (sharedValues[v].ComponentTypeId == slotTypeId)
+                        {
+                            var compType = meta._slotToComponentType[slot];
+                            var info = GetComponentInfo(compType);
+                            var dst = table.StorageMode == StorageMode.Transient
+                                ? info.TransientCompContentAccessor.GetChunkAsSpan(chunkId, true)
+                                : info.CompContentAccessor.GetChunkAsSpan(chunkId, true);
+                            int overhead = table.ComponentOverhead;
+                            int copySize = Math.Min(sharedValues[v].DataSize, dst.Length - overhead);
+                            new ReadOnlySpan<byte>((byte*)Unsafe.AsPointer(ref Unsafe.AsRef(in sharedValues[v])) + 12, copySize)
+                                .CopyTo(dst.Slice(overhead));
+                            enabledBits |= (ushort)(1 << slot);
+                            break;
+                        }
+                    }
+
+                    if (table.StorageMode == StorageMode.Versioned)
+                    {
+                        var compType = meta._slotToComponentType[slot];
+                        var info = GetComponentInfo(compType);
+                        var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, chunkId, (long)entityId.RawValue);
+                        var cri = new ComponentInfo.CompRevInfo
+                        {
+                            Operations = ComponentInfo.OperationType.Created,
+                            PrevCompContentChunkId = 0,
+                            PrevRevisionIndex = -1,
+                            CurCompContentChunkId = chunkId,
+                            CompRevTableFirstChunkId = compRevChunkId,
+                            CurRevisionIndex = 0,
+                            ReadCommitSequence = 1,
+                            ReadRevisionIndex = 0,
+                        };
+                        info.AddNew((long)entityId.RawValue, cri);
+                    }
+
+                    EntityRecordAccessor.SetLocation(recordPtr, slot, chunkId);
+                }
+
+                EntityRecordAccessor.GetHeader(recordPtr).EnabledBits = enabledBits;
+            }
+
+            _pendingSpawns[entityId] = new PendingSpawn { RecordBytes = recordBytes, Archetype = meta };
+
+            // Epoch refresh every 128 entities to avoid holding epoch too long
+            if ((n & 127) == 127)
+            {
+                _epochManager.RefreshScope();
+            }
+        }
+
+        CheckEpochRefresh();
+    }
+
+    /// <summary>
+    /// Destroy a batch of entities. Single EnsureMutable check, pre-sized pending list.
+    /// Cascade delete is applied per entity.
+    /// </summary>
+    public void DestroyBatch(ReadOnlySpan<EntityId> ids)
+    {
+        EnsureMutable();
+        State = TransactionState.InProgress;
+        AssertThreadAffinity();
+
+        _pendingDestroys ??= new List<EntityId>(ids.Length);
+
+        for (int i = 0; i < ids.Length; i++)
+        {
+            Debug.Assert(!ids[i].IsNull, "Cannot destroy null entity");
+            DestroyInternal(ids[i], 0, out _);
+        }
+    }
+
     /// <summary>Core Spawn implementation shared by Spawn&lt;TArch&gt; and SpawnByArchetypeId.</summary>
     private EntityId SpawnInternal(ArchetypeMetadata meta, ComponentValue[] values)
     {
@@ -412,82 +538,47 @@ public unsafe partial class Transaction
             }
         }
 
-        // 2. Scan committed entities in the child's EntityMap
+        // 2. Find committed children via FK index lookup (O(log n + k) instead of O(n) EntityMap scan)
         var childEngineState = _dbe._archetypeStates[target.ChildArchetypeId];
-        if (childEngineState?.EntityMap != null)
+        if (childEngineState?.SlotToComponentTable != null)
         {
             var table = childEngineState.SlotToComponentTable[target.FkSlotIndex];
-            var compType = childMeta._slotToComponentType[target.FkSlotIndex];
-            var info = GetComponentInfo(compType);
-            int overhead = table.ComponentOverhead;
-            int fkOffset = target.FkFieldOffset;
+            var fkIndexInfo = PipelineExecutor.FindFKIndex(table, target.FkFieldOffset);
+            var fkIndex = (BTree<long, PersistentStore>)fkIndexInfo.Index;
+            long parentPK = (long)parentId.RawValue;
 
             using var guard = EpochGuard.Enter(_epochManager);
-            var accessor = childEngineState.EntityMap.Segment.CreateChunkAccessor();
+            var compRevAccessor = table.CompRevTableSegment.CreateChunkAccessor();
 
-            var action = new CascadeChildScanner
+            var enumerator = fkIndex.EnumerateRangeMultiple(parentPK, parentPK);
+            try
             {
-                Target = target,
-                ParentId = parentId,
-                ChildMeta = childMeta,
-                ChildEngineState = childEngineState,
-                Info = info,
-                Table = table,
-                Overhead = overhead,
-                FkOffset = fkOffset,
-                Result = result,
-            };
-
-            childEngineState.EntityMap.ForEachEntry(ref accessor, ref action);
-            accessor.Dispose();
+                while (enumerator.MoveNextKey())
+                {
+                    do
+                    {
+                        var values = enumerator.CurrentValues;
+                        for (int j = 0; j < values.Length; j++)
+                        {
+                            ref var header = ref compRevAccessor.GetChunk<CompRevStorageHeader>(values[j]);
+                            long childPK = header.EntityPK;
+                            var childId = Unsafe.As<long, EntityId>(ref childPK);
+                            if (childId.ArchetypeId == target.ChildArchetypeId)
+                            {
+                                result.Add(childId);
+                            }
+                        }
+                    } while (enumerator.NextChunk());
+                }
+            }
+            finally
+            {
+                enumerator.Dispose();
+                compRevAccessor.Dispose();
+            }
         }
 
         return result;
-    }
-
-    /// <summary>
-    /// Struct callback for zero-alloc iteration over the child archetype's EntityMap during cascade delete.
-    /// </summary>
-    private struct CascadeChildScanner : RawValueHashMap<long, PersistentStore>.IEntryAction<long>
-    {
-        public CascadeTarget Target;
-        public EntityId ParentId;
-        public ArchetypeMetadata ChildMeta;
-        public ArchetypeEngineState ChildEngineState;
-        public ComponentInfo Info;
-        public ComponentTable Table;
-        public int Overhead;
-        public int FkOffset;
-        public List<EntityId> Result;
-
-        public bool Process(long key, byte* value)
-        {
-            // Check visibility: skip dead entities
-            ref var header = ref EntityRecordAccessor.GetHeader(value);
-            if (header.DiedTSN != 0)
-            {
-                return true; // continue iteration
-            }
-
-            int fkChunkId = EntityRecordAccessor.GetLocation(value, Target.FkSlotIndex);
-            if (fkChunkId == 0)
-            {
-                return true;
-            }
-
-            byte* ptr = Table.StorageMode == StorageMode.Transient
-                ? Info.TransientCompContentAccessor.GetChunkAddress(fkChunkId)
-                : Info.CompContentAccessor.GetChunkAddress(fkChunkId);
-
-            var fkEntityId = *(EntityId*)(ptr + Overhead + FkOffset);
-            if (fkEntityId == ParentId)
-            {
-                var childId = new EntityId(key, Target.ChildArchetypeId);
-                Result.Add(childId);
-            }
-
-            return true; // continue iteration
-        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════

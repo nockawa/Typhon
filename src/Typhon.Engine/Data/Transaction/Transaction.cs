@@ -822,7 +822,11 @@ public unsafe partial class Transaction : IDisposable
     /// Read a component by PK from the ComponentTable revision chain. Used by the query engine for predicate evaluation.
     /// Performs MVCC-visible revision walk — more efficient than Open().Read() for single-component access because it doesn't resolve all archetype slots.
     /// </summary>
-    internal bool ReadComponent<T>(long pk, out T t) where T : unmanaged
+    /// <summary>
+    /// Query-engine read primitive. Reads a single component by PK via MVCC revision chain walk.
+    /// More efficient than Open().Read() for query evaluation — resolves only the requested component, not all archetype slots.
+    /// </summary>
+    internal bool QueryRead<T>(long pk, out T t) where T : unmanaged
     {
         AssertThreadAffinity();
         var componentType = typeof(T);

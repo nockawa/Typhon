@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 namespace Typhon.Engine.Tests;
 
 [TestFixture]
+[NonParallelizable]
 public class AccessControlSmallTests
 {
     // ========================================

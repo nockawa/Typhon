@@ -27,6 +27,8 @@ class WalIntegrationTests : TestBase
         Archetype<CompAArch>.Touch();
         Archetype<CompDArch>.Touch();
         Archetype<CompABCArch>.Touch();
+        Archetype<CascadeBag>.Touch();
+        Archetype<CascadeItem>.Touch();
     }
 
     private ServiceProvider _serviceProvider;
@@ -113,6 +115,8 @@ class WalIntegrationTests : TestBase
     {
         var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.RegisterComponentFromAccessor<BagData>();
+        dbe.RegisterComponentFromAccessor<ItemData>();
         dbe.InitializeArchetypes();
         return dbe;
     }
@@ -521,6 +525,177 @@ class WalIntegrationTests : TestBase
             }
 
             Assert.That(errors, Is.Empty, string.Join("\n", errors));
+        }
+    }
+
+    [Test]
+    [CancelAfter(15000)]
+    public void WAL_Destroy_SecondaryIndexCleanedAfterReopen()
+    {
+        // CompD has secondary indexes on fields A (AllowMultiple), B (Unique), C (AllowMultiple)
+        // Destroy should create tombstone revisions that clean secondary indexes via CommitComponentCore
+
+        EntityId entityId;
+        var comp = new CompD(1.0f, 42, 2.0);
+
+        using (var scope1 = _serviceProvider.CreateScope())
+        {
+            var dbe = CreateEngine(scope1);
+
+            using (var uow = dbe.CreateUnitOfWork(DurabilityMode.Immediate))
+            {
+                using var tx = uow.CreateTransaction();
+                entityId = tx.Spawn<CompDArch>(CompDArch.D.Set(in comp));
+                tx.Commit();
+                uow.Flush();
+            }
+
+            // Verify entity exists and index works before destroy
+            var indexRef = dbe.GetIndexRef<CompD, int>(d => d.B);
+            using (var tx = dbe.CreateQuickTransaction())
+            {
+                using var enumerator = tx.EnumerateIndex<CompD, int>(indexRef, 42, 42);
+                Assert.That(enumerator.MoveNext(), Is.True, "Entity should be in B=42 index before destroy");
+            }
+
+            // Destroy the entity
+            using (var uow = dbe.CreateUnitOfWork(DurabilityMode.Immediate))
+            {
+                using var tx = uow.CreateTransaction();
+                tx.Destroy(entityId);
+                tx.Commit();
+                uow.Flush();
+            }
+        }
+
+        // Reopen and verify: entity is dead AND secondary index is clean
+        using (var scope2 = _serviceProvider.CreateScope())
+        {
+            var dbe = CreateEngine(scope2);
+
+            using var tx = dbe.CreateQuickTransaction();
+            Assert.That(tx.IsAlive(entityId), Is.False, "Entity should be dead after reopen");
+
+            // Secondary index should not return the destroyed entity
+            var indexRef = dbe.GetIndexRef<CompD, int>(d => d.B);
+            using var enumerator = tx.EnumerateIndex<CompD, int>(indexRef, 42, 42);
+            var found = false;
+            while (enumerator.MoveNext())
+            {
+                if (enumerator.Current.EntityPK == (long)entityId.RawValue)
+                {
+                    found = true;
+                }
+            }
+            Assert.That(found, Is.False, "Destroyed entity should not appear in secondary index after reopen");
+        }
+    }
+
+    [Test]
+    [CancelAfter(15000)]
+    public void WAL_CascadeDestroy_SurvivesReopen()
+    {
+        // Create bag + items, destroy bag (cascade deletes items), reopen, verify all dead
+
+        EntityId bagId, item1Id, item2Id;
+
+        using (var scope1 = _serviceProvider.CreateScope())
+        {
+            var dbe = CreateEngine(scope1);
+
+            using (var uow = dbe.CreateUnitOfWork(DurabilityMode.Immediate))
+            {
+                // Create bag
+                using (var tx = uow.CreateTransaction())
+                {
+                    var bagData = new BagData { Capacity = 10 };
+                    bagId = tx.Spawn<CascadeBag>(CascadeBag.Bag.Set(in bagData));
+                    tx.Commit();
+                }
+
+                // Create items pointing to the bag
+                using (var tx = uow.CreateTransaction())
+                {
+                    var item1 = new ItemData { Owner = bagId, Weight = 5 };
+                    var item2 = new ItemData { Owner = bagId, Weight = 3 };
+                    item1Id = tx.Spawn<CascadeItem>(CascadeItem.Item.Set(in item1));
+                    item2Id = tx.Spawn<CascadeItem>(CascadeItem.Item.Set(in item2));
+                    tx.Commit();
+                }
+
+                uow.Flush();
+            }
+
+            // Destroy bag — should cascade to items
+            using (var uow = dbe.CreateUnitOfWork(DurabilityMode.Immediate))
+            {
+                using var tx = uow.CreateTransaction();
+                tx.Destroy(bagId);
+                tx.Commit();
+                uow.Flush();
+            }
+        }
+
+        // Reopen and verify all dead
+        using (var scope2 = _serviceProvider.CreateScope())
+        {
+            var dbe = CreateEngine(scope2);
+
+            using var tx = dbe.CreateQuickTransaction();
+            Assert.That(tx.IsAlive(bagId), Is.False, "Bag should be dead after reopen");
+            Assert.That(tx.IsAlive(item1Id), Is.False, "Item 1 should be cascade-dead after reopen");
+            Assert.That(tx.IsAlive(item2Id), Is.False, "Item 2 should be cascade-dead after reopen");
+        }
+    }
+
+    [Test]
+    [CancelAfter(15000)]
+    public void WAL_Destroy_TombstonedEntitiesExcludedFromEntityMapRebuild()
+    {
+        // Verify that RebuildEntityMapsFromPersistedData correctly excludes
+        // entities with tombstone revisions (CurCompContentChunkId == 0)
+
+        EntityId aliveId, deadId;
+
+        using (var scope1 = _serviceProvider.CreateScope())
+        {
+            var dbe = CreateEngine(scope1);
+
+            using (var uow = dbe.CreateUnitOfWork(DurabilityMode.Immediate))
+            {
+                using var tx = uow.CreateTransaction();
+                var a1 = new CompA(100);
+                var a2 = new CompA(200);
+                aliveId = tx.Spawn<CompAArch>(CompAArch.A.Set(in a1));
+                deadId = tx.Spawn<CompAArch>(CompAArch.A.Set(in a2));
+                tx.Commit();
+                uow.Flush();
+            }
+
+            // Destroy one entity
+            using (var uow = dbe.CreateUnitOfWork(DurabilityMode.Immediate))
+            {
+                using var tx = uow.CreateTransaction();
+                tx.Destroy(deadId);
+                tx.Commit();
+                uow.Flush();
+            }
+        }
+
+        // Reopen — RebuildEntityMapsFromPersistedData runs
+        using (var scope2 = _serviceProvider.CreateScope())
+        {
+            var dbe = CreateEngine(scope2);
+
+            using var tx = dbe.CreateQuickTransaction();
+
+            // Alive entity should be in the rebuilt map and readable
+            Assert.That(tx.IsAlive(aliveId), Is.True, "Alive entity should survive reopen");
+            var comp = tx.Open(aliveId).Read(CompAArch.A);
+            Assert.That(comp.A, Is.EqualTo(100), "Alive entity data should be correct");
+
+            // Dead entity should NOT be in the rebuilt map
+            Assert.That(tx.IsAlive(deadId), Is.False, "Tombstoned entity should be excluded from EntityMap rebuild");
         }
     }
 

@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
@@ -243,6 +245,119 @@ class EntitySpawnTests : TestBase<EntitySpawnTests>
         {
             // Rolled-back entities should all be invisible
             Assert.That(t.IsAlive(new EntityId(1, 100)), Is.False);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // SpawnBatch / DestroyBatch tests
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void SpawnBatch_CreatesAllEntities()
+    {
+        using var dbe = SetupEngine();
+
+        using var t = dbe.CreateQuickTransaction();
+        Span<EntityId> ids = stackalloc EntityId[100];
+        var pos = new EcsPosition(1, 2, 3);
+        var vel = new EcsVelocity(4, 5, 6);
+        t.SpawnBatch<EcsUnit>(ids, EcsUnit.Position.Set(in pos), EcsUnit.Velocity.Set(in vel));
+
+        Assert.That(ids[0].IsNull, Is.False);
+        Assert.That(ids[99].IsNull, Is.False);
+        Assert.That(ids[0].ArchetypeId, Is.EqualTo(100));
+
+        // All entities should be readable
+        for (int i = 0; i < 100; i++)
+        {
+            var entity = t.Open(ids[i]);
+            ref readonly var readPos = ref entity.Read(EcsUnit.Position);
+            Assert.That(readPos.X, Is.EqualTo(1f));
+        }
+
+        t.Commit();
+    }
+
+    [Test]
+    public void SpawnBatch_UniqueEntityKeys()
+    {
+        using var dbe = SetupEngine();
+
+        using var t = dbe.CreateQuickTransaction();
+        Span<EntityId> ids = stackalloc EntityId[50];
+        t.SpawnBatch<EcsUnit>(ids);
+
+        var keys = new HashSet<long>();
+        for (int i = 0; i < 50; i++)
+        {
+            Assert.That(keys.Add(ids[i].EntityKey), Is.True, $"Entity key {ids[i].EntityKey} is not unique at index {i}");
+        }
+    }
+
+    [Test]
+    public void SpawnBatch_ZeroValues_AllDisabled()
+    {
+        using var dbe = SetupEngine();
+
+        using var t = dbe.CreateQuickTransaction();
+        Span<EntityId> ids = stackalloc EntityId[10];
+        t.SpawnBatch<EcsUnit>(ids); // No component values
+
+        // Entities exist but components are disabled (no values provided)
+        for (int i = 0; i < 10; i++)
+        {
+            Assert.That(t.IsAlive(ids[i]), Is.True);
+        }
+    }
+
+    [Test]
+    public void SpawnBatch_CommitThenRead_InNewTransaction()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId[] ids = new EntityId[20];
+        {
+            using var t = dbe.CreateQuickTransaction();
+            t.SpawnBatch<EcsUnit>(ids, EcsUnit.Position.Set(new EcsPosition(10, 20, 30)));
+            t.Commit();
+        }
+
+        using var t2 = dbe.CreateQuickTransaction();
+        for (int i = 0; i < 20; i++)
+        {
+            var entity = t2.Open(ids[i]);
+            ref readonly var pos = ref entity.Read(EcsUnit.Position);
+            Assert.That(pos.X, Is.EqualTo(10f));
+        }
+    }
+
+    [Test]
+    public void DestroyBatch_AllDestroyed()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId[] ids = new EntityId[30];
+        {
+            using var t = dbe.CreateQuickTransaction();
+            t.SpawnBatch<EcsUnit>(ids, EcsUnit.Position.Set(new EcsPosition(1, 2, 3)));
+            t.Commit();
+        }
+
+        // Destroy the first 15
+        {
+            using var t = dbe.CreateQuickTransaction();
+            t.DestroyBatch(new ReadOnlySpan<EntityId>(ids, 0, 15));
+            t.Commit();
+        }
+
+        using var t2 = dbe.CreateQuickTransaction();
+        for (int i = 0; i < 15; i++)
+        {
+            Assert.That(t2.IsAlive(ids[i]), Is.False, $"Entity {i} should be destroyed");
+        }
+        for (int i = 15; i < 30; i++)
+        {
+            Assert.That(t2.IsAlive(ids[i]), Is.True, $"Entity {i} should survive");
         }
     }
 }

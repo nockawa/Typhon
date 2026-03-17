@@ -97,6 +97,12 @@ public struct ArchetypeR1
     /// <summary>Component schema names in slot order, stored in VSBS.</summary>
     public ComponentCollection<String64> ComponentNames;
 
+    /// <summary>Root page index of the EntityMap segment (0 = not persisted, rebuild from PK indexes).</summary>
+    public int EntityMapSPI;
+
+    /// <summary>Resume entity key counter on reopen (avoids scanning PK indexes).</summary>
+    public long NextEntityKey;
+
     public const ushort NoParent = 0xFFFF;
 }
 
@@ -480,6 +486,10 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             // Dispose staging pool after checkpoint manager (checkpoint may use it during final cycle)
             _stagingBufferPool?.Dispose();
             _stagingBufferPool = null;
+
+            _log?.LogInformation("Engine disposing: PersistArchetypeState");
+            // Persist EntityMap SPIs and NextEntityKey counters so reopen can load EntityMaps directly
+            PersistArchetypeState();
 
             _log?.LogInformation("Engine disposing: PersistEngineState");
             // Persist final TSN counter and flush all dirty pages to disk. This ensures:
@@ -1170,6 +1180,55 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     }
 
     /// <summary>
+    /// Persists EntityMap segment root page indexes and NextEntityKey counters for all archetypes.
+    /// Called during engine dispose so that reopen can load EntityMaps directly (O(1)) instead of
+    /// rebuilding from PK index scans.
+    /// </summary>
+    private void PersistArchetypeState()
+    {
+        var archetypesTable = GetComponentTable<ArchetypeR1>();
+        if (archetypesTable == null || _archetypeStates == null || _persistedArchetypes == null)
+        {
+            return;
+        }
+
+        using var guard = EpochGuard.Enter(EpochManager);
+        var cs = MMF.CreateChangeSet();
+        bool anyUpdated = false;
+
+        foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
+        {
+            if (meta.ArchetypeId >= _archetypeStates.Length)
+            {
+                continue;
+            }
+
+            var state = _archetypeStates[meta.ArchetypeId];
+            if (state?.EntityMap == null)
+            {
+                continue;
+            }
+
+            if (!_persistedArchetypes.TryGetValue(meta.ArchetypeId, out var persisted))
+            {
+                continue;
+            }
+
+            var arch = persisted.Arch;
+            arch.EntityMapSPI = state.EntityMap.Segment.RootPageIndex;
+            arch.NextEntityKey = Interlocked.Read(ref state.NextEntityKey);
+
+            SystemCrud.Update(archetypesTable, persisted.PK, ref arch, EpochManager, cs);
+            anyUpdated = true;
+        }
+
+        if (anyUpdated)
+        {
+            cs.SaveChanges();
+        }
+    }
+
+    /// <summary>
     /// Increments the UserSchemaVersion counter in the bootstrap dictionary.
     /// Called after any user component schema change is persisted.
     /// </summary>
@@ -1591,16 +1650,31 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             // Schema validation: compare runtime archetype against persisted schema
             ValidateArchetypeSchema(meta);
 
-            // Allocate per-archetype entity storage (RawValueHashMap) on THIS engine's MMF
+            // Allocate or reload per-archetype entity storage (RawValueHashMap) on THIS engine's MMF
             int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(meta._entityRecordSize);
-            var segment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 10, stride);
 
-            _archetypeStates[meta.ArchetypeId] = new ArchetypeEngineState
+            if (_persistedArchetypes.TryGetValue(meta.ArchetypeId, out var persisted) && persisted.Arch.EntityMapSPI > 0)
             {
-                SlotToComponentTable = slotToTable,
-                EntityMap = RawValueHashMap<long, PersistentStore>.Create(segment, 16, meta._entityRecordSize),
-                NextEntityKey = 0,
-            };
+                // Reload existing EntityMap from persisted segment (O(1) reopen)
+                var segment = MMF.LoadChunkBasedSegment(persisted.Arch.EntityMapSPI, stride);
+                _archetypeStates[meta.ArchetypeId] = new ArchetypeEngineState
+                {
+                    SlotToComponentTable = slotToTable,
+                    EntityMap = RawValueHashMap<long, PersistentStore>.Open(segment, 16, meta._entityRecordSize),
+                    NextEntityKey = persisted.Arch.NextEntityKey,
+                };
+            }
+            else
+            {
+                // Fresh allocation (new archetype or legacy database without SPI)
+                var segment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 10, stride);
+                _archetypeStates[meta.ArchetypeId] = new ArchetypeEngineState
+                {
+                    SlotToComponentTable = slotToTable,
+                    EntityMap = RawValueHashMap<long, PersistentStore>.Create(segment, 16, meta._entityRecordSize),
+                    NextEntityKey = 0,
+                };
+            }
         }
 
         // Build and validate cascade delete graph (after all slots connected)
@@ -1627,6 +1701,12 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         {
             var state = _archetypeStates[meta.ArchetypeId];
             if (state?.SlotToComponentTable == null)
+            {
+                continue;
+            }
+
+            // Skip archetypes that were loaded from persisted EntityMap segment (O(1) reopen path)
+            if (_persistedArchetypes.TryGetValue(meta.ArchetypeId, out var p) && p.Arch.EntityMapSPI > 0)
             {
                 continue;
             }
@@ -1839,6 +1919,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         ParentArchetypeId = meta.ParentArchetypeId,
         ComponentCount = meta.ComponentCount,
         Revision = meta.Revision,
+        EntityMapSPI = 0,
+        NextEntityKey = 0,
     };
 
     /// <summary>Get the component schema names for an archetype's slots (for validation/persistence).</summary>

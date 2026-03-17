@@ -202,7 +202,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
     /// </summary>
     private bool EvaluateFullPredicate(long sourcePK, Transaction tx)
     {
-        if (!tx.ReadComponent<TSource>(sourcePK, out var sourceComp))
+        if (!tx.QueryRead<TSource>(sourcePK, out var sourceComp))
         {
             return false;
         }
@@ -226,7 +226,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
         }
 
         // Read and evaluate target
-        if (!tx.ReadComponent<TTarget>(fkValue, out var targetComp))
+        if (!tx.QueryRead<TTarget>(fkValue, out var targetComp))
         {
             return false;
         }
@@ -255,7 +255,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
     /// </summary>
     private bool CheckOtherSourceFieldsAndTarget(long sourcePK, int changedFieldIndex, Transaction tx)
     {
-        if (!tx.ReadComponent<TSource>(sourcePK, out var sourceComp))
+        if (!tx.QueryRead<TSource>(sourcePK, out var sourceComp))
         {
             return false;
         }
@@ -283,7 +283,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
             return false;
         }
 
-        if (!tx.ReadComponent<TTarget>(fkValue, out var targetComp))
+        if (!tx.QueryRead<TTarget>(fkValue, out var targetComp))
         {
             return false;
         }
@@ -316,7 +316,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
             return true;
         }
 
-        if (!tx.ReadComponent<TTarget>(targetPK, out var targetComp))
+        if (!tx.QueryRead<TTarget>(targetPK, out var targetComp))
         {
             return false;
         }
@@ -339,7 +339,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
     /// </summary>
     private bool EvaluateSourcePredicates(long sourcePK, Transaction tx)
     {
-        if (!tx.ReadComponent<TSource>(sourcePK, out var sourceComp))
+        if (!tx.QueryRead<TSource>(sourcePK, out var sourceComp))
         {
             return false;
         }

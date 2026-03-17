@@ -32,7 +32,7 @@ internal sealed class CommandExecutor
     // Cached reflection method infos for generic Transaction methods
     private static readonly MethodInfo ReadComponentMethod = typeof(Transaction)
         .GetMethods(BindingFlags.NonPublic | BindingFlags.Instance)
-        .First(m => m.Name == "ReadComponent" && m.GetGenericArguments().Length == 1 && m.GetParameters().Length == 2);
+        .First(m => m.Name == "QueryRead" && m.GetGenericArguments().Length == 1 && m.GetParameters().Length == 2);
 
     private static readonly MethodInfo WriteComponentMethod = typeof(Transaction)
         .GetMethods(BindingFlags.NonPublic | BindingFlags.Instance)
