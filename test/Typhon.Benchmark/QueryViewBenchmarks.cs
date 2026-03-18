@@ -21,7 +21,7 @@ class BenchItemArch : Archetype<BenchItemArch>
 
 [SimpleJob(warmupCount: 3, iterationCount: 5)]
 [MemoryDiagnoser]
-[BenchmarkCategory("Query", "View")]
+[BenchmarkCategory("Query", "View", "Regression")]
 public class QueryViewBenchmarks : IDisposable
 {
     private ServiceProvider _serviceProvider;
