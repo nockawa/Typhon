@@ -10,7 +10,7 @@ using Typhon.Schema.Definition;
 namespace Typhon.Benchmark;
 
 // ═══════════════════════════════════════════════════════════════════════
-// Query & View: ARPG ItemData real-world benchmarks
+// Query & View: ARPG ItemData real-world benchmarks (ECS API)
 // ═══════════════════════════════════════════════════════════════════════
 
 [Archetype(506)]
@@ -29,7 +29,7 @@ public class QueryViewBenchmarks : IDisposable
     private string _databaseName;
 
     // Pre-created view for refresh benchmarks
-    private ViewBase _view;
+    private EcsView<BenchItemArch> _view;
 
     // Entities for game-loop update cycling
     private EntityId[] _cyclePKs;
@@ -132,7 +132,8 @@ public class QueryViewBenchmarks : IDisposable
         }
 
         // Pre-create view for refresh benchmarks: Rarity >= 3 (Epic+)
-        _view = _dbe.Query<ItemData>().Where(i => i.Rarity >= 3).ToView();
+        using var viewTx = _dbe.CreateQuickTransaction();
+        _view = viewTx.Query<BenchItemArch>().WhereField<ItemData>(i => i.Rarity >= 3).ToView();
 
         // Pre-select entities for game-loop cycling (boundary crossers)
         _cyclePKs = new EntityId[CycleEntityCount];
@@ -158,25 +159,25 @@ public class QueryViewBenchmarks : IDisposable
     /// <summary>
     /// Single predicate on AllowMultiple index: Rarity >= 3 (Epic+).
     /// Selectivity ~15% -> ~1,500 items.
-    /// Exercises: QueryBuilder -> PlanBuilder -> AllowMultiple primary stream -> RangeMultipleEnumerator -> VSBS expansion.
+    /// Exercises: EcsQuery -> WhereField -> PlanBuilder -> AllowMultiple primary stream -> targeted scan.
     /// </summary>
     [Benchmark]
     public int Execute_SinglePredicate()
     {
         using var tx = _dbe.CreateQuickTransaction();
-        return _dbe.Query<ItemData>().Where(i => i.Rarity >= 3).Execute(tx).Count;
+        return tx.Query<BenchItemArch>().WhereField<ItemData>(i => i.Rarity >= 3).Execute().Count;
     }
 
     /// <summary>
     /// Chained predicates: Rarity >= 3 AND ItemCategory == 5.
     /// Selectivity ~1.5% -> ~150 items.
-    /// Exercises: chained Where, selectivity ordering, AllowMultiple primary + filter short-circuit.
+    /// Exercises: WhereField with AND, selectivity ordering, AllowMultiple primary + filter short-circuit.
     /// </summary>
     [Benchmark]
     public int Execute_ChainedPredicates()
     {
         using var tx = _dbe.CreateQuickTransaction();
-        return _dbe.Query<ItemData>().Where(i => i.Rarity >= 3).Where(i => i.ItemCategory == 5).Execute(tx).Count;
+        return tx.Query<BenchItemArch>().WhereField<ItemData>(i => i.Rarity >= 3 && i.ItemCategory == 5).Execute().Count;
     }
 
     /// <summary>
@@ -188,7 +189,7 @@ public class QueryViewBenchmarks : IDisposable
     public int Count_PlayerItems()
     {
         using var tx = _dbe.CreateQuickTransaction();
-        return _dbe.Query<ItemData>().Where(i => i.OwnerId == _topPlayerPK).Count(tx);
+        return tx.Query<BenchItemArch>().WhereField<ItemData>(i => i.OwnerId == _topPlayerPK).Count();
     }
 
     /// <summary>
@@ -216,18 +217,18 @@ public class QueryViewBenchmarks : IDisposable
         using var readTx = _dbe.CreateQuickTransaction();
         _view.Refresh(readTx);
         var count = _view.Count;
-        _view.ClearDelta();
         return count;
     }
 
     /// <summary>
     /// Measures full view lifecycle: create -> populate -> dispose.
-    /// Exercises: QueryBuilder -> PlanBuilder -> PipelineExecutor -> View construction + ViewRegistry registration + initial entity set + dispose.
+    /// Exercises: EcsQuery -> WhereField -> PlanBuilder -> PipelineExecutor -> EcsView construction + ViewRegistry registration + initial entity set + dispose.
     /// </summary>
     [Benchmark]
     public int View_InitialPopulation()
     {
-        using var view = _dbe.Query<ItemData>().Where(i => i.Rarity >= 3).ToView();
+        using var tx = _dbe.CreateQuickTransaction();
+        using var view = tx.Query<BenchItemArch>().WhereField<ItemData>(i => i.Rarity >= 3).ToView();
         return view.Count;
     }
 

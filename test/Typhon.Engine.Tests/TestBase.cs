@@ -125,6 +125,37 @@ public struct CompF
     }
 }
 
+// ── Shared test component types (moved from deleted NavigationViewTests.cs) ──
+
+[Component("Typhon.Schema.UnitTest.TestGuild", 1)]
+[StructLayout(LayoutKind.Sequential)]
+public struct CompGuild
+{
+    [Index(AllowMultiple = true)] public int Level;
+    [Index] public int MemberCap;
+
+    public CompGuild(int level, int memberCap)
+    {
+        Level = level;
+        MemberCap = memberCap;
+    }
+}
+
+[Component("Typhon.Schema.UnitTest.TestPlayer", 1)]
+[StructLayout(LayoutKind.Sequential)]
+public struct CompPlayer
+{
+    [Index(AllowMultiple = true), ForeignKey(typeof(CompGuild))]
+    public long GuildId;
+    [Index(AllowMultiple = true)] public int Active;
+
+    public CompPlayer(long guildId, bool active)
+    {
+        GuildId = guildId;
+        Active = active ? 1 : 0;
+    }
+}
+
 // ── Shared test archetypes for ECS migration ──
 // IDs 200+ to avoid collisions with ECS test archetypes (EcsUnit=100, EcsSoldier=101, SvTestArchetype=50, etc.)
 

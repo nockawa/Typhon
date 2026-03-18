@@ -53,6 +53,14 @@ public readonly struct EntityId : IEquatable<EntityId>
         _value = ((ulong)entityKey << 12) | ((ulong)archetypeId & 0xFFF);
     }
 
+    /// <summary>Reconstruct an EntityId from a raw packed value (e.g., from <see cref="CompRevStorageHeader.EntityPK"/>).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static EntityId FromRaw(long rawValue)
+    {
+        var raw = (ulong)rawValue;
+        return Unsafe.As<ulong, EntityId>(ref raw);
+    }
+
     /// <summary>Raw packed value — for serialization and diagnostics only.</summary>
     internal ulong RawValue
     {

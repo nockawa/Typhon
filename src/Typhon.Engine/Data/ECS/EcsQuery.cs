@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
 using JetBrains.Annotations;
 
@@ -20,6 +21,16 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
     private bool _useLargeMask;
     private int _enabledTypeIdCount;
     private int _disabledTypeIdCount;
+
+    // Expression-based WHERE state (for incremental views)
+    private FieldPredicate[][] _fieldPredicateBranches;
+    private ComponentTable _whereComponentTable;
+    private EcsViewFieldReader _whereFieldReader;
+
+    // OrderBy/Skip/Take state
+    private OrderByField? _orderBy;
+    private int _skip;
+    private int _take;
     private int _enabledTypeId0, _enabledTypeId1, _enabledTypeId2, _enabledTypeId3;
     private int _disabledTypeId0, _disabledTypeId1, _disabledTypeId2, _disabledTypeId3;
     private Func<EntityId, Transaction, bool> _whereFilter;
@@ -165,14 +176,14 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         _disabledTypeIdCount++;
     }
 
-    private bool HasT2 => _enabledTypeIdCount > 0 || _disabledTypeIdCount > 0;
+    private readonly bool HasT2 => _enabledTypeIdCount > 0 || _disabledTypeIdCount > 0;
 
-    private bool MaskIsEmpty => _useLargeMask ? _maskLarge.IsEmpty : _mask256.IsEmpty;
+    private readonly bool MaskIsEmpty => _useLargeMask ? _maskLarge.IsEmpty : _mask256.IsEmpty;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool MaskTest(ushort archetypeId) => _useLargeMask ? _maskLarge.Test(archetypeId) : _mask256.Test(archetypeId);
+    private readonly bool MaskTest(ushort archetypeId) => _useLargeMask ? _maskLarge.Test(archetypeId) : _mask256.Test(archetypeId);
 
-    private int MaskMaxId => _useLargeMask ? _maskLarge.MaxId : _mask256.MaxId;
+    private readonly int MaskMaxId => _useLargeMask ? _maskLarge.MaxId : _mask256.MaxId;
 
     // ═══════════════════════════════════════════════════════════════════════
     // Tier 3 constraints — WHERE predicates (broad scan evaluation)
@@ -200,6 +211,123 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 return entity.TryRead<T>(out var value) && predicate(value);
             };
         return this;
+    }
+
+    /// <summary>
+    /// Filter entities by an indexed-field predicate, enabling incremental view refresh via <see cref="ViewDeltaRingBuffer"/>.
+    /// The expression is parsed into <see cref="FieldEvaluator"/> for boundary crossing detection. Requires indexed fields.
+    /// </summary>
+    public EcsQuery<TArchetype> WhereField<T>(Expression<Func<T, bool>> predicate) where T : unmanaged
+    {
+        var ct = _tx.DBE.GetComponentTable<T>();
+        if (ct == null)
+        {
+            throw new InvalidOperationException($"Component type {typeof(T).Name} is not registered.");
+        }
+
+        var branches = ExpressionParser.ParseDnf(predicate);
+
+        if (_fieldPredicateBranches != null)
+        {
+            // Multiple WhereField calls: cross-product (AND of ORs)
+            var combined = new FieldPredicate[_fieldPredicateBranches.Length * branches.Length][];
+            var idx = 0;
+            for (var l = 0; l < _fieldPredicateBranches.Length; l++)
+            {
+                for (var r = 0; r < branches.Length; r++)
+                {
+                    var merged = new FieldPredicate[_fieldPredicateBranches[l].Length + branches[r].Length];
+                    Array.Copy(_fieldPredicateBranches[l], merged, _fieldPredicateBranches[l].Length);
+                    Array.Copy(branches[r], 0, merged, _fieldPredicateBranches[l].Length, branches[r].Length);
+                    combined[idx++] = merged;
+                }
+            }
+            _fieldPredicateBranches = combined;
+        }
+        else
+        {
+            _fieldPredicateBranches = branches;
+        }
+
+        _whereComponentTable = ct;
+        _whereFieldReader = EcsViewFieldReader<T>.Instance;
+        return this;
+    }
+
+    /// <summary>True if this query has Expression-based field predicates (enabling incremental views).</summary>
+    internal readonly bool HasFieldPredicates => _fieldPredicateBranches != null;
+
+    /// <summary>
+    /// Start a navigation (FK join) query from the source archetype to a target component type.
+    /// The FK field selector identifies the long FK field on the source component.
+    /// </summary>
+    public readonly EcsNavigationQueryBuilder<TArchetype, TSource, TTarget> NavigateField<TSource, TTarget>(Expression<Func<TSource, long>> fkSelector)
+        where TSource : unmanaged where TTarget : unmanaged
+    {
+        var fkFieldName = ExpressionParser.ExtractFieldName(fkSelector);
+        return new EcsNavigationQueryBuilder<TArchetype, TSource, TTarget>(this, _tx, fkFieldName);
+    }
+
+    /// <summary>Test if an archetype ID matches the query mask. Used by EcsView to filter delta entries.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal readonly bool MaskTestPublic(ushort archetypeId) => MaskTest(archetypeId);
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // OrderBy / Skip / Take
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>Order results by an indexed field. Requires <see cref="WhereField{T}"/> to identify the component.</summary>
+    public EcsQuery<TArchetype> OrderByField<T, TKey>(Expression<Func<T, TKey>> keySelector) where T : unmanaged
+    {
+        _orderBy = new OrderByField(ResolveOrderByFieldIndex(keySelector));
+        return this;
+    }
+
+    /// <summary>Order results descending by an indexed field.</summary>
+    public EcsQuery<TArchetype> OrderByFieldDescending<T, TKey>(Expression<Func<T, TKey>> keySelector) where T : unmanaged
+    {
+        _orderBy = new OrderByField(ResolveOrderByFieldIndex(keySelector), descending: true);
+        return this;
+    }
+
+    /// <summary>Skip the first <paramref name="count"/> results. Requires OrderBy.</summary>
+    public EcsQuery<TArchetype> Skip(int count)
+    {
+        if (!_orderBy.HasValue)
+        {
+            throw new InvalidOperationException("Skip requires OrderByField.");
+        }
+        _skip = count;
+        return this;
+    }
+
+    /// <summary>Take at most <paramref name="count"/> results. Requires OrderBy.</summary>
+    public EcsQuery<TArchetype> Take(int count)
+    {
+        if (!_orderBy.HasValue)
+        {
+            throw new InvalidOperationException("Take requires OrderByField.");
+        }
+        _take = count;
+        return this;
+    }
+
+    private int ResolveOrderByFieldIndex<T, TKey>(Expression<Func<T, TKey>> keySelector) where T : unmanaged
+    {
+        if (_whereComponentTable == null)
+        {
+            throw new InvalidOperationException("OrderByField requires WhereField to be called first to identify the component table.");
+        }
+        var fieldName = ExpressionParser.ExtractFieldName(keySelector);
+        if (!_whereComponentTable.Definition.FieldsByName.TryGetValue(fieldName, out var field))
+        {
+            throw new InvalidOperationException($"Field '{fieldName}' not found on component '{_whereComponentTable.Definition.Name}'.");
+        }
+        if (!field.HasIndex)
+        {
+            throw new InvalidOperationException($"Field '{fieldName}' must be indexed to use as OrderBy.");
+        }
+        return QueryResolverHelper.FindFieldIndex(_whereComponentTable.Definition, field);
     }
 
     /// <summary>Resolve T2 masks for a specific archetype.</summary>
@@ -235,11 +363,88 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
     // Execution — broad scan
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>Create a persistent, refreshable View from this query. Initial population via Execute().</summary>
-    public EcsView<TArchetype> ToView()
+    /// <summary>
+    /// Create a persistent, refreshable View from this query.
+    /// If Expression-based WHERE (WhereField) was used, creates an incremental view with ring buffer delta notifications.
+    /// Otherwise, creates a pull-model view (full re-query on each Refresh).
+    /// </summary>
+    public EcsView<TArchetype> ToView(int bufferCapacity = ViewDeltaRingBuffer.DefaultCapacity)
+    {
+        if (HasFieldPredicates)
+        {
+            return ToIncrementalView(bufferCapacity);
+        }
+
+        // Pull mode: no field evaluators
+        return ToPullView(bufferCapacity);
+    }
+
+    private EcsView<TArchetype> ToPullView(int bufferCapacity)
     {
         var initialSet = Execute();
-        return new EcsView<TArchetype>(this, initialSet, _tx.TSN);
+        var meta = ArchetypeRegistry.GetMetadata<TArchetype>();
+        var engineState = _tx.DBE._archetypeStates[meta.ArchetypeId];
+        var firstTable = engineState.SlotToComponentTable[0];
+
+        var view = new EcsView<TArchetype>(this, firstTable.DBE.MemoryAllocator, firstTable, bufferCapacity, _tx.TSN);
+
+        // Populate initial entity set
+        foreach (var id in initialSet)
+        {
+            view.AddEntityDirect((long)id.RawValue);
+        }
+
+        return view;
+    }
+
+    private EcsView<TArchetype> ToIncrementalView(int bufferCapacity)
+    {
+        var ct = _whereComponentTable;
+        var branches = _fieldPredicateBranches;
+
+        if (branches.Length > 1)
+        {
+            // OR path: create EcsOrView
+            return ToOrView(ct, branches, bufferCapacity);
+        }
+
+        // Single AND branch
+        var evaluators = QueryResolverHelper.ResolveEvaluators(branches[0], ct, 0);
+        var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance);
+
+        var view = new EcsView<TArchetype>(this, evaluators, ct, _whereFieldReader, plan, bufferCapacity, _tx.TSN);
+
+        // Register with ViewRegistry for delta notifications
+        ct.ViewRegistry.RegisterView(view);
+
+        // Initial population via PipelineExecutor (uses secondary index if plan selects one)
+        _whereFieldReader.ExecuteFullScan(plan, plan.OrderedEvaluators, ct, _tx, view.EntityIdsInternal);
+
+        // Process any deltas that arrived during population
+        view.Refresh(_tx);
+        view.ClearDelta();
+
+        return view;
+    }
+
+    private EcsView<TArchetype> ToOrView(ComponentTable ct, FieldPredicate[][] branches, int bufferCapacity)
+    {
+        var branchEvaluators = new FieldEvaluator[branches.Length][];
+        var plans = new ExecutionPlan[branches.Length];
+        for (var b = 0; b < branches.Length; b++)
+        {
+            branchEvaluators[b] = QueryResolverHelper.ResolveEvaluators(branches[b], ct, 0, (byte)b);
+            plans[b] = PlanBuilder.Instance.BuildPlan(branchEvaluators[b], ct, AdvancedSelectivityEstimator.Instance);
+        }
+
+        var view = new EcsView<TArchetype>(this, branchEvaluators, plans, ct, _whereFieldReader, bufferCapacity, _tx.TSN);
+        ct.ViewRegistry.RegisterView(view);
+
+        view.PopulateInitialOr(_tx);
+        view.Refresh(_tx);
+        view.ClearDelta();
+
+        return view;
     }
 
     /// <summary>Rebind this query to a different transaction (different TSN → different visibility).</summary>
@@ -254,9 +459,100 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             return result;
         }
 
+        // Targeted scan via PipelineExecutor when field predicates are present
+        if (HasFieldPredicates)
+        {
+            return ExecuteTargeted();
+        }
+
         CollectMatching((id, _) => result.Add(id));
 
         // T3 post-filter: evaluate WHERE predicate per entity via Transaction.Open
+        var filter = _whereFilter;
+        var tx = _tx;
+        if (filter != null)
+        {
+            result.RemoveWhere(id => !filter(id, tx));
+        }
+
+        return result;
+    }
+
+    /// <summary>Execute the query with ordering support. Requires <see cref="OrderByField{T,TKey}"/>.</summary>
+    public List<EntityId> ExecuteOrdered()
+    {
+        if (!_orderBy.HasValue)
+        {
+            throw new InvalidOperationException("ExecuteOrdered requires OrderByField.");
+        }
+        if (!HasFieldPredicates)
+        {
+            throw new InvalidOperationException("ExecuteOrdered requires WhereField to identify the component table.");
+        }
+        if (MaskIsEmpty)
+        {
+            return [];
+        }
+
+        var ct = _whereComponentTable;
+        var evaluators = QueryResolverHelper.ResolveEvaluators(_fieldPredicateBranches[0], ct, 0);
+        var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance, _orderBy.Value);
+
+        // PipelineExecutor handles secondary index order; we post-filter by archetype mask
+        var pkResult = new List<long>();
+        _whereFieldReader.ExecuteOrderedScan(plan, plan.OrderedEvaluators, ct, _tx, pkResult);
+
+        // Post-filter by archetype mask and convert to EntityId, applying Skip/Take
+        var result = new List<EntityId>();
+        int skipped = 0;
+        int taken = 0;
+        int take = _take > 0 ? _take : int.MaxValue;
+
+        for (var i = 0; i < pkResult.Count; i++)
+        {
+            var entityId = EntityId.FromRaw(pkResult[i]);
+            if (!MaskTest(entityId.ArchetypeId))
+            {
+                continue;
+            }
+            if (skipped < _skip)
+            {
+                skipped++;
+                continue;
+            }
+            result.Add(entityId);
+            taken++;
+            if (taken >= take)
+            {
+                break;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>Execute targeted scan via PipelineExecutor with archetype mask post-filter.</summary>
+    private HashSet<EntityId> ExecuteTargeted()
+    {
+        var ct = _whereComponentTable;
+        var evaluators = QueryResolverHelper.ResolveEvaluators(_fieldPredicateBranches[0], ct, 0);
+        var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance);
+
+        var pkResult = new HashSet<long>();
+        _whereFieldReader.ExecuteFullScan(plan, plan.OrderedEvaluators, ct, _tx, pkResult);
+
+        // Post-filter by archetype mask and convert to EntityId
+        var result = new HashSet<EntityId>();
+        foreach (var pk in pkResult)
+        {
+            var entityId = EntityId.FromRaw(pk);
+            if (MaskTest(entityId.ArchetypeId))
+            {
+                result.Add(entityId);
+            }
+        }
+
+        // T3 post-filter (opaque WHERE) if chained
         var filter = _whereFilter;
         var tx = _tx;
         if (filter != null)
@@ -273,6 +569,12 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         if (MaskIsEmpty)
         {
             return 0;
+        }
+
+        // Targeted scan when field predicates are present
+        if (HasFieldPredicates)
+        {
+            return ExecuteTargeted().Count;
         }
 
         // If WHERE filter, use Execute (which applies post-filter) then count
@@ -292,6 +594,11 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         if (MaskIsEmpty)
         {
             return false;
+        }
+
+        if (HasFieldPredicates)
+        {
+            return ExecuteTargeted().Count > 0;
         }
 
         if (_whereFilter != null)

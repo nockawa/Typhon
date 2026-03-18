@@ -480,10 +480,11 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
         }
 
         // Attempting to create a navigation view with only source predicates should throw
+        using var txNav = dbe.CreateQuickTransaction();
         var ex = Assert.Throws<InvalidOperationException>(() =>
         {
-            dbe.Query<CompPlayer>()
-                .Navigate<CompGuild>(p => p.GuildId)
+            txNav.Query<CompPlayerArch>()
+                .NavigateField<CompPlayer, CompGuild>(p => p.GuildId)
                 .Where((p, g) => p.Active == 1)
                 .ToView();
         });
@@ -513,10 +514,10 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
 
         // One-shot Execute with only source predicates should work (no incremental tracking needed)
         using var tx = dbe.CreateQuickTransaction();
-        var result = dbe.Query<CompPlayer>()
-            .Navigate<CompGuild>(p => p.GuildId)
+        var result = tx.Query<CompPlayerArch>()
+            .NavigateField<CompPlayer, CompGuild>(p => p.GuildId)
             .Where((p, g) => p.Active == 1)
-            .Execute(tx);
+            .Execute();
 
         Assert.That(result.Count, Is.EqualTo(1));
     }
