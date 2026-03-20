@@ -11,6 +11,7 @@ class EcsQueryTests : TestBase<EcsQueryTests>
     {
         Archetype<EcsUnit>.Touch();
         Archetype<EcsSoldier>.Touch();
+        Archetype<CompDArch>.Touch();
     }
 
     private DatabaseEngine SetupEngine()
@@ -19,6 +20,7 @@ class EcsQueryTests : TestBase<EcsQueryTests>
         dbe.RegisterComponentFromAccessor<EcsPosition>();
         dbe.RegisterComponentFromAccessor<EcsVelocity>();
         dbe.RegisterComponentFromAccessor<EcsHealth>();
+        dbe.RegisterComponentFromAccessor<CompD>();
         dbe.InitializeArchetypes();
         return dbe;
     }
@@ -380,6 +382,40 @@ class EcsQueryTests : TestBase<EcsQueryTests>
         var result = tx3.Query<EcsUnit>().Execute();
         Assert.That(result, Has.Count.EqualTo(1));
         Assert.That(result, Does.Contain(aliveId));
+    }
+
+    [Test]
+    public void WhereField_ExcludesDestroyedEntities()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId aliveId, deadId;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            aliveId = tx.Spawn<CompDArch>(CompDArch.D.Set(new CompD(1.0f, 100, 2.0)));
+            deadId = tx.Spawn<CompDArch>(CompDArch.D.Set(new CompD(2.0f, 200, 3.0)));
+            tx.Commit();
+        }
+
+        // Destroy one entity
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            tx.Destroy(deadId);
+            tx.Commit();
+        }
+
+        // Execute with WhereField — destroyed entity must not appear
+        using var tx3 = dbe.CreateQuickTransaction();
+        var result = tx3.Query<CompDArch>().WhereField<CompD>(d => d.B >= 50).Execute();
+        Assert.That(result, Has.Count.EqualTo(1), "Destroyed entity should not appear in WhereField query");
+        Assert.That(result, Does.Contain(aliveId));
+
+        // Count should also exclude
+        Assert.That(tx3.Query<CompDArch>().WhereField<CompD>(d => d.B >= 50).Count(), Is.EqualTo(1));
+
+        // ExecuteOrdered too
+        var ordered = tx3.Query<CompDArch>().WhereField<CompD>(d => d.B >= 50).OrderByField<CompD, int>(d => d.B).ExecuteOrdered();
+        Assert.That(ordered, Has.Count.EqualTo(1));
     }
 
     // ── WHERE predicates (T3) ──

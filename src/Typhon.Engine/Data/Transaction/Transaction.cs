@@ -859,6 +859,57 @@ public unsafe partial class Transaction : IDisposable
         return 0;
     }
 
+    /// <summary>
+    /// Lightweight MVCC visibility check via EntityRecord BornTSN/DiedTSN.
+    /// Uses the cached EntityMap accessor — no CompRev chain walk, no component data read.
+    /// For query Count/Execute paths where the primary index scan already guarantees field predicates.
+    /// </summary>
+    internal bool IsEntityVisible(long pk)
+    {
+        var entityId = EntityId.FromRaw(pk);
+        if (entityId.ArchetypeId == 0)
+        {
+            return false;
+        }
+
+        var meta = ArchetypeRegistry.GetMetadata(entityId.ArchetypeId);
+        if (meta == null)
+        {
+            return false;
+        }
+
+        var es = _dbe._archetypeStates[meta.ArchetypeId];
+        if (es?.EntityMap == null)
+        {
+            return false;
+        }
+
+        // Reuse cached EntityMap accessor
+        if (!_hasEntityMapCache || _entityMapCacheArchId != entityId.ArchetypeId)
+        {
+            if (_hasEntityMapCache)
+            {
+                _entityMapCacheAccessor.Dispose();
+            }
+            _entityMapCacheAccessor = es.EntityMap.Segment.CreateChunkAccessor();
+            _entityMapCacheArchId = entityId.ArchetypeId;
+            _hasEntityMapCache = true;
+        }
+
+        byte* buf = stackalloc byte[EntityRecordAccessor.HeaderSize];
+        // TryGet copies full record, but we only need the header (first 14 bytes).
+        // Use full record size to satisfy TryGet's contract, but stackalloc min header.
+        int recordSize = meta._entityRecordSize;
+        byte* fullBuf = stackalloc byte[recordSize];
+        if (!es.EntityMap.TryGet(entityId.EntityKey, fullBuf, ref _entityMapCacheAccessor))
+        {
+            return false;
+        }
+
+        ref var header = ref EntityRecordAccessor.GetHeader(fullBuf);
+        return header.IsVisibleAt(TSN);
+    }
+
     private Result<int, BTreeLookupStatus> GetCompRevTableFirstChunkId(long pk, ComponentInfo info)
     {
         int chunkId = ResolveEntityMapSlotChunkId(pk, info);

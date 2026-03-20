@@ -81,7 +81,9 @@ internal class PipelineExecutor
         var minKey = BTree<TKey, PersistentStore>.LongToKey(plan.PrimaryScanMin);
         var maxKey = BTree<TKey, PersistentStore>.LongToKey(plan.PrimaryScanMax);
 
-        var hasFilters = evaluators.Length > 0;
+        // Filter out primary-field evaluators — their conditions are guaranteed by the index range scan.
+        var nonPrimaryEvals = ComputeNonPrimaryEvaluators(evaluators, plan.PrimaryFieldIndex);
+        var hasFilters = nonPrimaryEvals.Length > 0;
         var count = 0;
         Span<long> batch = stackalloc long[BatchSize];
         var batchCount = 0;
@@ -103,7 +105,7 @@ internal class PipelineExecutor
                             batch[batchCount++] = header.EntityPK;
                             if (batchCount >= BatchSize)
                             {
-                                count += CountBatch<T>(batch[..batchCount], evaluators, tx, hasFilters);
+                                count += CountBatch<T>(batch[..batchCount], nonPrimaryEvals, tx, hasFilters);
                                 batchCount = 0;
                             }
                         }
@@ -127,7 +129,7 @@ internal class PipelineExecutor
                     batch[batchCount++] = header.EntityPK;
                     if (batchCount >= BatchSize)
                     {
-                        count += CountBatch<T>(batch[..batchCount], evaluators, tx, hasFilters);
+                        count += CountBatch<T>(batch[..batchCount], nonPrimaryEvals, tx, hasFilters);
                         batchCount = 0;
                     }
                 }
@@ -140,7 +142,7 @@ internal class PipelineExecutor
 
         if (batchCount > 0)
         {
-            count += CountBatch<T>(batch[..batchCount], evaluators, tx, hasFilters);
+            count += CountBatch<T>(batch[..batchCount], nonPrimaryEvals, tx, hasFilters);
         }
 
         return count;
@@ -149,14 +151,70 @@ internal class PipelineExecutor
     private static int CountBatch<T>(Span<long> batch, FieldEvaluator[] evaluators, Transaction tx, bool hasFilters) where T : unmanaged
     {
         var count = 0;
-        for (var i = 0; i < batch.Length; i++)
+        if (!hasFilters)
         {
-            if (!hasFilters || EvaluateFilters<T>(evaluators, tx, batch[i]))
+            // Primary-only: lightweight MVCC visibility check (no QueryRead, no field eval)
+            for (var i = 0; i < batch.Length; i++)
             {
-                count++;
+                if (tx.IsEntityVisible(batch[i]))
+                {
+                    count++;
+                }
+            }
+        }
+        else
+        {
+            for (var i = 0; i < batch.Length; i++)
+            {
+                if (EvaluateFilters<T>(evaluators, tx, batch[i]))
+                {
+                    count++;
+                }
             }
         }
         return count;
+    }
+
+    /// <summary>
+    /// Filters out evaluators whose FieldIndex matches the primary scan field — those conditions are already guaranteed by the B+Tree range scan.
+    /// Returns the original array if no filtering needed.
+    /// </summary>
+    private static FieldEvaluator[] ComputeNonPrimaryEvaluators(FieldEvaluator[] evaluators, int primaryFieldIndex)
+    {
+        if (primaryFieldIndex < 0 || evaluators.Length == 0)
+        {
+            return evaluators;
+        }
+
+        int nonPrimaryCount = 0;
+        for (int i = 0; i < evaluators.Length; i++)
+        {
+            if (evaluators[i].FieldIndex != primaryFieldIndex)
+            {
+                nonPrimaryCount++;
+            }
+        }
+
+        if (nonPrimaryCount == evaluators.Length)
+        {
+            return evaluators; // No primary evaluators to filter
+        }
+
+        if (nonPrimaryCount == 0)
+        {
+            return []; // All evaluators covered by index scan
+        }
+
+        var result = new FieldEvaluator[nonPrimaryCount];
+        int j = 0;
+        for (int i = 0; i < evaluators.Length; i++)
+        {
+            if (evaluators[i].FieldIndex != primaryFieldIndex)
+            {
+                result[j++] = evaluators[i];
+            }
+        }
+        return result;
     }
 
     private void ExecuteCore<T>(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, HashSet<long> unorderedResult,
@@ -183,7 +241,11 @@ internal class PipelineExecutor
         // Step 1: Collect entity PKs from secondary index range scan
         var pks = CollectPKsFromSecondaryIndex(plan, table);
 
-        // Step 2: Process collected PKs in batches — use Span over List internals to avoid indexer bounds checks
+        // Step 2: Compute non-primary evaluators (fields NOT covered by the index range scan).
+        // When all evaluators are primary-covered (single-predicate queries), we skip full QueryRead and use a lightweight EntityMap visibility check instead.
+        var nonPrimaryEvals = ComputeNonPrimaryEvaluators(evaluators, plan.PrimaryFieldIndex);
+
+        // Step 3: Process collected PKs in batches
         var pkSpan = CollectionsMarshal.AsSpan(pks);
         var collected = 0;
         Span<long> batch = stackalloc long[BatchSize];
@@ -197,7 +259,7 @@ internal class PipelineExecutor
                 continue;
             }
 
-            if (FlushBatch<T>(batch[..batchCount], evaluators, tx, unorderedResult, orderedResult, ref skip, ref take, ref collected))
+            if (FlushBatch<T>(batch[..batchCount], nonPrimaryEvals, tx, unorderedResult, orderedResult, ref skip, ref take, ref collected))
             {
                 return;
             }
@@ -206,7 +268,7 @@ internal class PipelineExecutor
 
         if (batchCount > 0)
         {
-            FlushBatch<T>(batch[..batchCount], evaluators, tx, unorderedResult, orderedResult, ref skip, ref take, ref collected);
+            FlushBatch<T>(batch[..batchCount], nonPrimaryEvals, tx, unorderedResult, orderedResult, ref skip, ref take, ref collected);
         }
     }
 
@@ -304,9 +366,13 @@ internal class PipelineExecutor
     {
         if (evaluators.Length == 0)
         {
+            // Primary-only: all field predicates covered by index scan. Lightweight MVCC visibility check.
             for (var i = 0; i < batch.Length; i++)
             {
-                result.Add(batch[i]);
+                if (tx.IsEntityVisible(batch[i]))
+                {
+                    result.Add(batch[i]);
+                }
             }
         }
         else
@@ -321,14 +387,25 @@ internal class PipelineExecutor
         }
     }
 
-    private static bool ProcessBatchToList<T>(Span<long> batch, FieldEvaluator[] evaluators, Transaction tx, List<long> result, ref int skip, ref int take, 
+    private static bool ProcessBatchToList<T>(Span<long> batch, FieldEvaluator[] evaluators, Transaction tx, List<long> result, ref int skip, ref int take,
         ref int collected) where T : unmanaged
     {
         for (var i = 0; i < batch.Length; i++)
         {
-            if (evaluators.Length > 0 && !EvaluateFilters<T>(evaluators, tx, batch[i]))
+            if (evaluators.Length > 0)
             {
-                continue;
+                if (!EvaluateFilters<T>(evaluators, tx, batch[i]))
+                {
+                    continue;
+                }
+            }
+            else
+            {
+                // Primary-only: lightweight MVCC visibility check
+                if (!tx.IsEntityVisible(batch[i]))
+                {
+                    continue;
+                }
             }
 
             if (skip > 0)

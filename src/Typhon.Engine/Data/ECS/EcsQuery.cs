@@ -541,8 +541,8 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         var pkResult = new HashSet<long>();
         _whereFieldReader.ExecuteFullScan(plan, plan.OrderedEvaluators, ct, _tx, pkResult);
 
-        // Post-filter by archetype mask and convert to EntityId
-        var result = new HashSet<EntityId>();
+        // Convert PKs to EntityIds — pre-size result to avoid rehashing
+        var result = new HashSet<EntityId>(pkResult.Count);
         foreach (var pk in pkResult)
         {
             var entityId = EntityId.FromRaw(pk);
@@ -571,10 +571,13 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             return 0;
         }
 
-        // Targeted scan when field predicates are present
+        // Targeted count via PipelineExecutor — avoids allocating result collections
         if (HasFieldPredicates)
         {
-            return ExecuteTargeted().Count;
+            var ct = _whereComponentTable;
+            var evaluators = QueryResolverHelper.ResolveEvaluators(_fieldPredicateBranches[0], ct, 0);
+            var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance);
+            return _whereFieldReader.CountScan(plan, plan.OrderedEvaluators, ct, _tx);
         }
 
         // If WHERE filter, use Execute (which applies post-filter) then count
@@ -598,7 +601,10 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
 
         if (HasFieldPredicates)
         {
-            return ExecuteTargeted().Count > 0;
+            var ct = _whereComponentTable;
+            var evaluators = QueryResolverHelper.ResolveEvaluators(_fieldPredicateBranches[0], ct, 0);
+            var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance);
+            return _whereFieldReader.CountScan(plan, plan.OrderedEvaluators, ct, _tx) > 0;
         }
 
         if (_whereFilter != null)
