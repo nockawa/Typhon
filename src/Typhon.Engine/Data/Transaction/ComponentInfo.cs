@@ -67,10 +67,10 @@ internal sealed class ComponentInfo
     public int EntryCount => IsMultiple ? MultipleCache.Count : SingleCache.Count;
 
     // Common fields
+    public int ComponentTypeId;
     public ComponentTable ComponentTable;
     public ChunkBasedSegment<PersistentStore> CompContentSegment;
     public ChunkBasedSegment<PersistentStore> CompRevTableSegment;
-    public BTree<long, PersistentStore> PrimaryKeyIndex;
     public ChunkAccessor<PersistentStore> CompContentAccessor;
     public ChunkAccessor<PersistentStore> CompRevTableAccessor;
     public ChunkAccessor<TransientStore> TransientCompContentAccessor;

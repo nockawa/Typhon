@@ -398,6 +398,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     }
 
     [Test]
+    [Ignore("PK B+Tree removed — PK scan returns empty. Use ECS queries instead.")]
     public void Execute_OrderByPK_FiltersCorrectly()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();

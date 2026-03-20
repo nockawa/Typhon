@@ -79,6 +79,24 @@ class Program
                 return;
             }
 
+            if (args.Contains("--profile-spawn"))
+            {
+                SpawnProfile.Run();
+                return;
+            }
+
+            if (args.Contains("--crud-compare"))
+            {
+                BenchmarkRunner.Run<CrudCompareBenchmarks>();
+                return;
+            }
+
+            if (args.Contains("--quick-bench"))
+            {
+                QuickSpawnBench.Run();
+                return;
+            }
+
             if (args.Contains("--profile-delete"))
             {
                 BTreeDeleteProfile.Run();

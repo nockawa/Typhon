@@ -148,14 +148,21 @@ class FieldIdStabilityTests : TestBase<FieldIdStabilityTests>
         // Read back the ComponentR1 entries from the system schema
         using var epochGuard = EpochGuard.Enter(dbe.EpochManager);
         var componentsTable = dbe.GetComponentTable<ComponentR1>();
-        for (long pk = 1; pk <= 10; pk++)
+        var segment = componentsTable.ComponentSegment;
+        var capacity = segment.ChunkCapacity;
+        for (int chunkId = 1; chunkId < capacity; chunkId++)
         {
-            if (!SystemCrud.Read(componentsTable, pk, out ComponentR1 comp, dbe.EpochManager))
+            if (!segment.IsChunkAllocated(chunkId))
             {
                 continue;
             }
 
-            TestContext.Out.WriteLine($"Pk={pk}: Name={comp.Name.AsString}, Fields._bufferId={comp.Fields._bufferId}");
+            if (!SystemCrud.Read(componentsTable, chunkId, out ComponentR1 comp, dbe.EpochManager))
+            {
+                continue;
+            }
+
+            TestContext.Out.WriteLine($"ChunkId={chunkId}: Name={comp.Name.AsString}, Fields._bufferId={comp.Fields._bufferId}");
 
             if (comp.Fields._bufferId != 0)
             {

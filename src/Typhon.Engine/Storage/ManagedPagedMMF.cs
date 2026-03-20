@@ -487,6 +487,31 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         return segment;
     }
 
+    /// <summary>Try to load a segment. Returns false (instead of asserting) if the root page is already registered.</summary>
+    public bool TryLoadChunkBasedSegment(int filePageIndex, int stride, out ChunkBasedSegment<PersistentStore> result)
+    {
+        result = null;
+        var dic = _segments;
+        if (dic == null)
+        {
+            return false;
+        }
+
+        var segment = new ChunkBasedSegment<PersistentStore>(EpochManager, new PersistentStore(this), stride);
+        if (!dic.TryAdd(filePageIndex, segment))
+        {
+            return false; // Already registered — caller should fall back to fresh allocation
+        }
+
+        if (!segment.Load(filePageIndex))
+        {
+            return false;
+        }
+
+        result = segment;
+        return true;
+    }
+
     /// <summary>
     /// Returns a previously loaded segment for the given page index, or loads it if not yet present.
     /// Safe to call when the segment may already be in the registry (e.g., system component segments loaded by the engine constructor).

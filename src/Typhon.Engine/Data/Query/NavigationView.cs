@@ -454,10 +454,6 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
 
         _entityIds.Clear();
 
-        // Re-execute full navigation pipeline
-        PipelineExecutor.Instance.ExecuteNavigationSourceFirst<TSource, TTarget>(_sourceEvaluators, _targetEvaluators, _sourceTable, _targetTable,
-            _fkFieldOffset, tx, _entityIds);
-
         DrainBufferAfterRefreshFull(tx.TSN);
         ComputeRefreshFullDeltas(oldEntities);
 

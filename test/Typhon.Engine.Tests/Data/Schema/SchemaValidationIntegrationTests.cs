@@ -296,9 +296,16 @@ class SchemaValidationIntegrationTests : TestBase<SchemaValidationIntegrationTes
             // Read back ComponentR1 to check SchemaRevision
             using var epochGuard = EpochGuard.Enter(dbe.EpochManager);
             var compTable = dbe.GetComponentTable<ComponentR1>();
-            foreach (var kv in compTable.PrimaryKeyIndex.EnumerateLeaves())
+            var segment = compTable.ComponentSegment;
+            var capacity = segment.ChunkCapacity;
+            for (int chunkId = 1; chunkId < capacity; chunkId++)
             {
-                if (!SystemCrud.Read(compTable, kv.Key, out ComponentR1 comp, dbe.EpochManager))
+                if (!segment.IsChunkAllocated(chunkId))
+                {
+                    continue;
+                }
+
+                if (!SystemCrud.Read(compTable, chunkId, out ComponentR1 comp, dbe.EpochManager))
                 {
                     continue;
                 }

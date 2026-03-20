@@ -325,6 +325,116 @@ unsafe class RawValueHashMapTests
     }
 
     // ═══════════════════════════════════════════════════════════════════════
+    // EnsureCapacity correctness
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void EnsureCapacity_PreExistingEntries_RemainFindable()
+    {
+        using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var em = _serviceProvider.GetRequiredService<EpochManager>();
+        int valueSize = EntityRecordAccessor.RecordSize(2);
+        int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(valueSize);
+        var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 200, stride);
+
+        // n0=4 so level advancement happens quickly
+        var map = RawValueHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
+
+        // Insert 20 entries
+        using (var guard = EpochGuard.Enter(em))
+        {
+            var accessor = segment.CreateChunkAccessor();
+            for (int i = 1; i <= 20; i++)
+            {
+                byte* record = stackalloc byte[valueSize];
+                EntityRecordAccessor.InitializeRecord(record, 2);
+                EntityRecordAccessor.GetHeader(record).BornTSN = i * 10;
+                EntityRecordAccessor.SetLocation(record, 0, i * 100);
+                map.Insert(i, record, ref accessor, null);
+            }
+            accessor.Dispose();
+        }
+
+        int bucketsBefore = map.BucketCount;
+
+        // EnsureCapacity for a much larger target — forces segment + directory pre-grow
+        // (with the old buggy code, this would advance level and orphan entries)
+        using (var guard = EpochGuard.Enter(em))
+        {
+            map.EnsureCapacity(500);
+        }
+
+        // All 20 entries must still be findable
+        using (var guard = EpochGuard.Enter(em))
+        {
+            var accessor = segment.CreateChunkAccessor();
+            for (int i = 1; i <= 20; i++)
+            {
+                byte* readBuf = stackalloc byte[valueSize];
+                bool found = map.TryGet(i, readBuf, ref accessor);
+                Assert.That(found, Is.True, $"Entry {i} not found after EnsureCapacity");
+                Assert.That(EntityRecordAccessor.GetHeader(readBuf).BornTSN, Is.EqualTo(i * 10));
+            }
+            accessor.Dispose();
+        }
+
+        // Bucket count should NOT have changed — only segment/directory capacity grew
+        Assert.That(map.BucketCount, Is.EqualTo(bucketsBefore));
+    }
+
+    [Test]
+    public void EnsureCapacity_ThenInsert_SplitsCorrectly()
+    {
+        using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var em = _serviceProvider.GetRequiredService<EpochManager>();
+        int valueSize = EntityRecordAccessor.RecordSize(2);
+        int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(valueSize);
+        var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 200, stride);
+
+        var map = RawValueHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
+
+        // Pre-allocate for 200 entries
+        using (var guard = EpochGuard.Enter(em))
+        {
+            map.EnsureCapacity(200);
+        }
+
+        // Insert 150 entries (triggers organic splits with pre-allocated backing)
+        using (var guard = EpochGuard.Enter(em))
+        {
+            var accessor = segment.CreateChunkAccessor();
+            for (int i = 1; i <= 150; i++)
+            {
+                byte* record = stackalloc byte[valueSize];
+                EntityRecordAccessor.InitializeRecord(record, 2);
+                EntityRecordAccessor.GetHeader(record).BornTSN = i;
+                map.Insert(i, record, ref accessor, null);
+            }
+            accessor.Dispose();
+        }
+
+        Assert.That(map.EntryCount, Is.EqualTo(150));
+        Assert.That(map.BucketCount, Is.GreaterThan(4));
+
+        // Verify all 150 entries are findable
+        using (var guard = EpochGuard.Enter(em))
+        {
+            var accessor = segment.CreateChunkAccessor();
+            for (int i = 1; i <= 150; i++)
+            {
+                byte* readBuf = stackalloc byte[valueSize];
+                bool found = map.TryGet(i, readBuf, ref accessor);
+                Assert.That(found, Is.True, $"Entry {i} not found");
+                Assert.That(EntityRecordAccessor.GetHeader(readBuf).BornTSN, Is.EqualTo(i));
+            }
+
+            // Structural integrity check
+            Assert.That(map.VerifyIntegrity(ref accessor), Is.True);
+            accessor.Dispose();
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     // Various value sizes
     // ═══════════════════════════════════════════════════════════════════════
 

@@ -103,7 +103,6 @@ class StorageModeInfrastructureTests : TestBase<StorageModeInfrastructureTests>
         Assert.That(table.ComponentSegment, Is.Not.Null);
         Assert.That(table.CompRevTableSegment, Is.Not.Null);
         Assert.That(table.DefaultIndexSegment, Is.Not.Null);
-        Assert.That(table.PrimaryKeyIndex, Is.Not.Null);
         Assert.That(table.TransientComponentSegment, Is.Null);
     }
 
@@ -120,7 +119,6 @@ class StorageModeInfrastructureTests : TestBase<StorageModeInfrastructureTests>
         Assert.That(table.ComponentSegment, Is.Not.Null, "SV uses PersistentStore (MMF checkpoint)");
         Assert.That(table.CompRevTableSegment, Is.Null, "SV has no revision chains");
         Assert.That(table.DefaultIndexSegment, Is.Not.Null);
-        Assert.That(table.PrimaryKeyIndex, Is.Not.Null);
         Assert.That(table.TransientComponentSegment, Is.Null);
     }
 
@@ -139,12 +137,10 @@ class StorageModeInfrastructureTests : TestBase<StorageModeInfrastructureTests>
         Assert.That(table.ComponentSegment, Is.Null);
         Assert.That(table.CompRevTableSegment, Is.Null);
         Assert.That(table.DefaultIndexSegment, Is.Null);
-        Assert.That(table.PrimaryKeyIndex, Is.Null);
 
         // Transient segments should be non-null
         Assert.That(table.TransientComponentSegment, Is.Not.Null);
         Assert.That(table.TransientDefaultIndexSegment, Is.Not.Null);
-        Assert.That(table.TransientPrimaryKeyIndex, Is.Not.Null);
     }
 
     [Test]
@@ -256,8 +252,7 @@ class StorageModeInfrastructureTests : TestBase<StorageModeInfrastructureTests>
             var table = dbe.GetComponentTable<CompSmTransient>();
             Assert.That(table.StorageMode, Is.EqualTo(StorageMode.Transient));
             Assert.That(table.TransientComponentSegment, Is.Not.Null, "Transient recreated fresh on reload");
-            Assert.That(table.TransientPrimaryKeyIndex, Is.Not.Null, "Transient PK index recreated fresh on reload");
-            Assert.That(table.TransientPrimaryKeyIndex.EntryCount, Is.EqualTo(0), "Transient PK index should be empty after reload");
+            // PK B+Tree removed — just verify transient segments are fresh
             Assert.That(table.ComponentSegment, Is.Null, "Transient should have no persistent segments");
         }
     }

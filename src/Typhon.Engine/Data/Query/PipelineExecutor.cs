@@ -47,33 +47,9 @@ internal class PipelineExecutor
             return CountCoreSecondaryIndex<T>(plan, evaluators, table, tx);
         }
 
-        var pkIndex = table.PrimaryKeyIndex;
-        var hasFilters = evaluators.Length > 0;
-        var count = 0;
-        Span<long> batch = stackalloc long[BatchSize];
-        var batchCount = 0;
-
-        var enumerator = plan.Descending ? pkIndex.EnumerateRangeDescending(plan.PrimaryScanMin, plan.PrimaryScanMax) :
-            pkIndex.EnumerateRange(plan.PrimaryScanMin, plan.PrimaryScanMax);
-
-        foreach (var kv in enumerator)
-        {
-            batch[batchCount++] = kv.Key;
-            if (batchCount < BatchSize)
-            {
-                continue;
-            }
-
-            count += CountBatch<T>(batch[..batchCount], evaluators, tx, hasFilters);
-            batchCount = 0;
-        }
-
-        if (batchCount > 0)
-        {
-            count += CountBatch<T>(batch[..batchCount], evaluators, tx, hasFilters);
-        }
-
-        return count;
+        // PK B+Tree removed — PK scan path is dead. Only caller (EcsViewTyped.CountScan) is never invoked;
+        // ECS queries use EcsQuery.Count() which bypasses PipelineExecutor entirely.
+        return 0;
     }
 
     /// <summary>
@@ -194,37 +170,6 @@ internal class PipelineExecutor
         if (plan.UsesSecondaryIndex)
         {
             ExecuteCoreSecondaryIndex<T>(plan, evaluators, table, tx, unorderedResult, orderedResult, skip, take);
-            return;
-        }
-
-        // PK scan path — scan the PK index and evaluate all predicates per entity
-        var pkIndex = table.PrimaryKeyIndex;
-
-        var collected = 0;
-        Span<long> batch = stackalloc long[BatchSize];
-        var batchCount = 0;
-
-        var enumerator = plan.Descending ? pkIndex.EnumerateRangeDescending(plan.PrimaryScanMin, plan.PrimaryScanMax) :
-            pkIndex.EnumerateRange(plan.PrimaryScanMin, plan.PrimaryScanMax);
-
-        foreach (var kv in enumerator)
-        {
-            batch[batchCount++] = kv.Key; // PK index: key = entity PK
-            if (batchCount < BatchSize)
-            {
-                continue;
-            }
-
-            if (FlushBatch<T>(batch[..batchCount], evaluators, tx, unorderedResult, orderedResult, ref skip, ref take, ref collected))
-            {
-                return;
-            }
-            batchCount = 0;
-        }
-
-        if (batchCount > 0)
-        {
-            FlushBatch<T>(batch[..batchCount], evaluators, tx, unorderedResult, orderedResult, ref skip, ref take, ref collected);
         }
     }
 
@@ -404,7 +349,7 @@ internal class PipelineExecutor
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static unsafe bool EvaluateFilters<T>(FieldEvaluator[] evaluators, Transaction tx, long pk) where T : unmanaged
+    internal static unsafe bool EvaluateFilters<T>(FieldEvaluator[] evaluators, Transaction tx, long pk) where T : unmanaged
     {
         if (!tx.QueryRead<T>(pk, out var comp))
         {
@@ -452,37 +397,6 @@ internal class PipelineExecutor
         if (plan.UsesSecondaryIndex)
         {
             ExecuteCoreSecondaryIndexTwo<T1, T2>(plan, evaluators, table, tx, unorderedResult, orderedResult, skip, take);
-            return;
-        }
-
-        // PK scan path
-        var pkIndex = table.PrimaryKeyIndex;
-
-        var collected = 0;
-        Span<long> batch = stackalloc long[BatchSize];
-        var batchCount = 0;
-
-        var enumerator = plan.Descending ? pkIndex.EnumerateRangeDescending(plan.PrimaryScanMin, plan.PrimaryScanMax) :
-            pkIndex.EnumerateRange(plan.PrimaryScanMin, plan.PrimaryScanMax);
-
-        foreach (var kv in enumerator)
-        {
-            batch[batchCount++] = kv.Key;
-            if (batchCount < BatchSize)
-            {
-                continue;
-            }
-
-            if (FlushBatchTwo<T1, T2>(batch[..batchCount], evaluators, tx, unorderedResult, orderedResult, ref skip, ref take, ref collected))
-            {
-                return;
-            }
-            batchCount = 0;
-        }
-
-        if (batchCount > 0)
-        {
-            FlushBatchTwo<T1, T2>(batch[..batchCount], evaluators, tx, unorderedResult, orderedResult, ref skip, ref take, ref collected);
         }
     }
 
@@ -605,132 +519,6 @@ internal class PipelineExecutor
     #endregion
 
     #region Navigation overloads
-
-    /// <summary>
-    /// Target-first navigation: scans the target PK index, evaluates target predicates, then reverse-lookups source entities
-    /// via the FK index (AllowMultiple) and evaluates source predicates.
-    /// </summary>
-    public void ExecuteNavigationTargetFirst<TSource, TTarget>(FieldEvaluator[] sourceEvals, FieldEvaluator[] targetEvals, ComponentTable sourceCT, 
-        ComponentTable targetCT, int fkFieldOffset, Transaction tx, HashSet<long> result) where TSource : unmanaged where TTarget : unmanaged
-    {
-        // Find the FK index on the source table (long, AllowMultiple)
-        var fkIndexInfo = FindFKIndex(sourceCT, fkFieldOffset);
-        var fkIndex = (BTree<long, PersistentStore>)fkIndexInfo.Index;
-        var compRevAccessor = sourceCT.CompRevTableSegment.CreateChunkAccessor();
-
-        try
-        {
-            // Scan target PK index for qualifying targets
-            var targetPKIndex = targetCT.PrimaryKeyIndex;
-            foreach (var kv in targetPKIndex.EnumerateLeaves())
-            {
-                var targetPK = kv.Key;
-
-                // Evaluate target predicates
-                if (targetEvals.Length > 0 && !EvaluateFilters<TTarget>(targetEvals, tx, targetPK))
-                {
-                    continue;
-                }
-
-                // Reverse lookup: find source entities that have FK == targetPK
-                var enumerator = fkIndex.EnumerateRangeMultiple(targetPK, targetPK);
-                try
-                {
-                    while (enumerator.MoveNextKey())
-                    {
-                        do
-                        {
-                            var values = enumerator.CurrentValues;
-                            for (var j = 0; j < values.Length; j++)
-                            {
-                                ref var header = ref compRevAccessor.GetChunk<CompRevStorageHeader>(values[j]);
-                                var sourcePK = header.EntityPK;
-
-                                // Evaluate source predicates
-                                if (sourceEvals.Length > 0 && !EvaluateFilters<TSource>(sourceEvals, tx, sourcePK))
-                                {
-                                    continue;
-                                }
-
-                                result.Add(sourcePK);
-                            }
-                        } while (enumerator.NextChunk());
-                    }
-                }
-                finally
-                {
-                    enumerator.Dispose();
-                }
-            }
-        }
-        finally
-        {
-            compRevAccessor.Dispose();
-        }
-    }
-
-    /// <summary>
-    /// Source-first navigation: scans source entities, extracts FK value, reads target, evaluates target predicates.
-    /// </summary>
-    public unsafe void ExecuteNavigationSourceFirst<TSource, TTarget>(FieldEvaluator[] sourceEvals, FieldEvaluator[] targetEvals, ComponentTable sourceCT, 
-        ComponentTable targetCT, int fkFieldOffset, Transaction tx, HashSet<long> result) where TSource : unmanaged where TTarget : unmanaged
-    {
-        var sourcePKIndex = sourceCT.PrimaryKeyIndex;
-
-        foreach (var kv in sourcePKIndex.EnumerateLeaves())
-        {
-            var sourcePK = kv.Key;
-
-            // Read source and evaluate source predicates
-            if (!tx.QueryRead<TSource>(sourcePK, out var sourceComp))
-            {
-                continue;
-            }
-
-            if (sourceEvals.Length > 0)
-            {
-                var sourcePtr = (byte*)Unsafe.AsPointer(ref sourceComp);
-                var allPass = true;
-                for (var i = 0; i < sourceEvals.Length; i++)
-                {
-                    ref var eval = ref sourceEvals[i];
-                    if (!FieldEvaluator.Evaluate(ref eval, sourcePtr + eval.FieldOffset))
-                    {
-                        allPass = false;
-                        break;
-                    }
-                }
-                if (!allPass)
-                {
-                    continue;
-                }
-            }
-
-            // Extract FK value
-            var fkValue = *(long*)((byte*)Unsafe.AsPointer(ref sourceComp) + fkFieldOffset);
-            if (fkValue == 0)
-            {
-                continue; // No target reference
-            }
-
-            // Read and evaluate target
-            if (targetEvals.Length > 0 && !EvaluateFilters<TTarget>(targetEvals, tx, fkValue))
-            {
-                continue;
-            }
-
-            if (targetEvals.Length == 0)
-            {
-                // No target predicates — just verify the target exists
-                if (!tx.QueryRead<TTarget>(fkValue, out _))
-                {
-                    continue;
-                }
-            }
-
-            result.Add(sourcePK);
-        }
-    }
 
     /// <summary>
     /// Finds the IndexedFieldInfo for the FK field by matching its offset.

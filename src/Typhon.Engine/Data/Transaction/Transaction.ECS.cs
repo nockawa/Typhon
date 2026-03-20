@@ -13,27 +13,67 @@ public unsafe partial class Transaction
     // ECS State
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>Pending entity spawns — keyed by EntityId. Flushed to LinearHash at commit.</summary>
-    private Dictionary<EntityId, PendingSpawn> _pendingSpawns;
+    /// <summary>Spawned entity data — flat list for sequential iteration at commit time.</summary>
+    private List<SpawnEntry> _spawnedEntities;
 
-    /// <summary>Pending entity destroys. Flushed at commit (DiedTSN set).</summary>
-    private List<EntityId> _pendingDestroys;
+    /// <summary>O(1) lookup: EntityId → index into <see cref="_spawnedEntities"/>. Built lazily on first Contains/IndexOf call.</summary>
+    private Dictionary<EntityId, int> _spawnedEntityIndex;
+    private bool _spawnedEntityIndexStale;
+
+    /// <summary>Lightweight spawn record: EntityId + EnabledBits + per-slot chunk IDs. No heap allocation.</summary>
+    internal struct SpawnEntry
+    {
+        public EntityId Id;
+        public ushort EnabledBits;
+        /// <summary>Per-slot component content chunk IDs (for same-tx reads and rollback).</summary>
+        public fixed int Loc[16];
+        /// <summary>Per-slot compRevFirstChunkIds for Versioned components (used at commit for EntityRecord).</summary>
+        public fixed int Rev[16];
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool SpawnedContains(EntityId id)
+    {
+        if (_spawnedEntities == null || _spawnedEntities.Count == 0)
+        {
+            return false;
+        }
+        RebuildSpawnedIndex();
+        return _spawnedEntityIndex.ContainsKey(id);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int SpawnedIndexOf(EntityId id)
+    {
+        if (_spawnedEntities == null || _spawnedEntities.Count == 0)
+        {
+            return -1;
+        }
+        RebuildSpawnedIndex();
+        return _spawnedEntityIndex.TryGetValue(id, out int idx) ? idx : -1;
+    }
+
+    private void RebuildSpawnedIndex()
+    {
+        if (!_spawnedEntityIndexStale)
+        {
+            return;
+        }
+        _spawnedEntityIndex ??= new Dictionary<EntityId, int>(_spawnedEntities.Count);
+        _spawnedEntityIndex.Clear();
+        for (int i = 0; i < _spawnedEntities.Count; i++)
+        {
+            _spawnedEntityIndex[_spawnedEntities[i].Id] = i;
+        }
+        _spawnedEntityIndexStale = false;
+    }
+
+    /// <summary>Pending entity destroys. Flushed at commit (DiedTSN set). HashSet for O(1) Contains.</summary>
+    private HashSet<EntityId> _pendingDestroys;
 
     /// <summary>Pending EnabledBits changes — keyed by EntityId.</summary>
     private Dictionary<EntityId, ushort> _pendingEnableDisable;
 
-    internal struct PendingSpawn
-    {
-        public byte[] RecordBytes;
-        public ArchetypeMetadata Archetype;
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // Spawn
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /// <summary>
-    /// Spawn an entity of the given archetype with the provided component values.
     // ═══════════════════════════════════════════════════════════════════════
     // ECS Queries
     // ═══════════════════════════════════════════════════════════════════════
@@ -52,7 +92,7 @@ public unsafe partial class Transaction
     /// Uses LinearHash.EntryCount — fast but includes entities with DiedTSN set (not yet cleaned up).
     /// For exact counts respecting visibility, use <c>Query&lt;T&gt;().Count()</c>.
     /// </summary>
-    public int EcsCount<TArchetype>() where TArchetype : class
+    public long EcsCount<TArchetype>() where TArchetype : class
     {
         var meta = ArchetypeRegistry.GetMetadata<TArchetype>();
         if (meta?.SubtreeArchetypeIds == null)
@@ -60,7 +100,7 @@ public unsafe partial class Transaction
             return 0;
         }
 
-        int total = 0;
+        long total = 0;
         foreach (var id in meta.SubtreeArchetypeIds)
         {
             var m = ArchetypeRegistry.GetMetadata(id);
@@ -69,7 +109,7 @@ public unsafe partial class Transaction
                 var es = _dbe._archetypeStates[m.ArchetypeId];
                 if (es?.EntityMap != null)
                 {
-                    total += (int)es.EntityMap.EntryCount;
+                    total += es.EntityMap.EntryCount;
                 }
             }
         }
@@ -83,7 +123,7 @@ public unsafe partial class Transaction
     /// Components not covered by <paramref name="values"/> are zero-initialized and disabled.
     /// The entity is stored in a pending map and inserted into the LinearHash at commit with BornTSN = TSN.
     /// </summary>
-    public EntityId Spawn<TArch>(params ComponentValue[] values) where TArch : Archetype<TArch>
+    public EntityId Spawn<TArch>(params ReadOnlySpan<ComponentValue> values) where TArch : Archetype<TArch>
     {
         var meta = Archetype<TArch>.Metadata;
         Debug.Assert(meta != null, $"Archetype {typeof(TArch).Name} not registered");
@@ -114,80 +154,68 @@ public unsafe partial class Transaction
         // Allocate N entity keys in one atomic operation
         long baseKey = Interlocked.Add(ref engineState.NextEntityKey, count) - count + 1;
 
-        // Pre-size pending map
-        _pendingSpawns ??= new Dictionary<EntityId, PendingSpawn>(count);
-        if (_pendingSpawns.Count == 0 && count > 16)
-        {
-            _pendingSpawns.EnsureCapacity(count);
-        }
-
-        int recordSize = meta._entityRecordSize;
+        _spawnedEntities ??= new List<SpawnEntry>(count);
+        _spawnedEntityIndexStale = true;
 
         for (int n = 0; n < count; n++)
         {
             var entityId = new EntityId(baseKey + n, meta.ArchetypeId);
             ids[n] = entityId;
 
-            var recordBytes = new byte[recordSize];
-            ushort enabledBits = 0;
+            var entry = new SpawnEntry { Id = entityId, EnabledBits = 0 };
 
-            fixed (byte* recordPtr = recordBytes)
+            for (int slot = 0; slot < meta.ComponentCount; slot++)
             {
-                EntityRecordAccessor.InitializeRecord(recordPtr, meta.ComponentCount);
+                var table = engineState.SlotToComponentTable[slot];
+                int chunkId = table.StorageMode == StorageMode.Transient
+                    ? table.TransientComponentSegment.AllocateChunk(false)
+                    : table.ComponentSegment.AllocateChunk(false, _changeSet);
 
-                for (int slot = 0; slot < meta.ComponentCount; slot++)
+                // Copy shared component value if provided for this slot
+                int slotTypeId = meta._componentTypeIds[slot];
+                for (int v = 0; v < sharedValues.Length; v++)
                 {
-                    var table = engineState.SlotToComponentTable[slot];
-                    int chunkId = table.StorageMode == StorageMode.Transient
-                        ? table.TransientComponentSegment.AllocateChunk(false)
-                        : table.ComponentSegment.AllocateChunk(false, _changeSet);
-
-                    // Copy shared component value if provided for this slot
-                    int slotTypeId = meta._componentTypeIds[slot];
-                    for (int v = 0; v < sharedValues.Length; v++)
-                    {
-                        if (sharedValues[v].ComponentTypeId == slotTypeId)
-                        {
-                            var compType = meta._slotToComponentType[slot];
-                            var info = GetComponentInfo(compType);
-                            var dst = table.StorageMode == StorageMode.Transient
-                                ? info.TransientCompContentAccessor.GetChunkAsSpan(chunkId, true)
-                                : info.CompContentAccessor.GetChunkAsSpan(chunkId, true);
-                            int overhead = table.ComponentOverhead;
-                            int copySize = Math.Min(sharedValues[v].DataSize, dst.Length - overhead);
-                            new ReadOnlySpan<byte>((byte*)Unsafe.AsPointer(ref Unsafe.AsRef(in sharedValues[v])) + 12, copySize)
-                                .CopyTo(dst.Slice(overhead));
-                            enabledBits |= (ushort)(1 << slot);
-                            break;
-                        }
-                    }
-
-                    if (table.StorageMode == StorageMode.Versioned)
+                    if (sharedValues[v].ComponentTypeId == slotTypeId)
                     {
                         var compType = meta._slotToComponentType[slot];
                         var info = GetComponentInfo(compType);
-                        var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, chunkId, (long)entityId.RawValue);
-                        var cri = new ComponentInfo.CompRevInfo
-                        {
-                            Operations = ComponentInfo.OperationType.Created,
-                            PrevCompContentChunkId = 0,
-                            PrevRevisionIndex = -1,
-                            CurCompContentChunkId = chunkId,
-                            CompRevTableFirstChunkId = compRevChunkId,
-                            CurRevisionIndex = 0,
-                            ReadCommitSequence = 1,
-                            ReadRevisionIndex = 0,
-                        };
-                        info.AddNew((long)entityId.RawValue, cri);
+                        var dst = table.StorageMode == StorageMode.Transient
+                            ? info.TransientCompContentAccessor.GetChunkAsSpan(chunkId, true)
+                            : info.CompContentAccessor.GetChunkAsSpan(chunkId, true);
+                        int overhead = table.ComponentOverhead;
+                        int copySize = Math.Min(sharedValues[v].DataSize, dst.Length - overhead);
+                        new ReadOnlySpan<byte>((byte*)Unsafe.AsPointer(ref Unsafe.AsRef(in sharedValues[v])) + 12, copySize)
+                            .CopyTo(dst.Slice(overhead));
+                        entry.EnabledBits |= (ushort)(1 << slot);
+                        break;
                     }
-
-                    EntityRecordAccessor.SetLocation(recordPtr, slot, chunkId);
                 }
 
-                EntityRecordAccessor.GetHeader(recordPtr).EnabledBits = enabledBits;
+                if (table.StorageMode == StorageMode.Versioned)
+                {
+                    var compType = meta._slotToComponentType[slot];
+                    var info = GetComponentInfo(compType);
+                    var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, chunkId, (long)entityId.RawValue);
+                    var cri = new ComponentInfo.CompRevInfo
+                    {
+                        Operations = ComponentInfo.OperationType.Created,
+                        PrevCompContentChunkId = 0,
+                        PrevRevisionIndex = -1,
+                        CurCompContentChunkId = chunkId,
+                        CompRevTableFirstChunkId = compRevChunkId,
+                        CurRevisionIndex = 0,
+                        ReadCommitSequence = 1,
+                        ReadRevisionIndex = 0,
+                    };
+                    info.AddNew((long)entityId.RawValue, cri);
+                    entry.Rev[slot] = compRevChunkId;
+                }
+
+                entry.Loc[slot] = chunkId;
             }
 
-            _pendingSpawns[entityId] = new PendingSpawn { RecordBytes = recordBytes, Archetype = meta };
+            _spawnedEntityIndexStale = true;
+            _spawnedEntities.Add(entry);
 
             // Epoch refresh every 128 entities to avoid holding epoch too long
             if ((n & 127) == 127)
@@ -209,7 +237,7 @@ public unsafe partial class Transaction
         State = TransactionState.InProgress;
         AssertThreadAffinity();
 
-        _pendingDestroys ??= new List<EntityId>(ids.Length);
+        _pendingDestroys ??= new HashSet<EntityId>(ids.Length);
 
         for (int i = 0; i < ids.Length; i++)
         {
@@ -219,7 +247,7 @@ public unsafe partial class Transaction
     }
 
     /// <summary>Core Spawn implementation shared by Spawn&lt;TArch&gt; and SpawnByArchetypeId.</summary>
-    private EntityId SpawnInternal(ArchetypeMetadata meta, ComponentValue[] values)
+    private EntityId SpawnInternal(ArchetypeMetadata meta, ReadOnlySpan<ComponentValue> values)
     {
         EnsureMutable();
         State = TransactionState.InProgress;
@@ -231,86 +259,70 @@ public unsafe partial class Transaction
         long entityKey = Interlocked.Increment(ref engineState.NextEntityKey);
         var entityId = new EntityId(entityKey, meta.ArchetypeId);
 
-        // Allocate record bytes
-        int recordSize = meta._entityRecordSize;
-        var recordBytes = new byte[recordSize];
-
-        ushort enabledBits = 0;
-
-        fixed (byte* recordPtr = recordBytes)
+        // Pre-build slot-indexed lookup — O(values.Length) once, then O(1) per slot
+        Span<int> valueBySlot = stackalloc int[meta.ComponentCount];
+        valueBySlot.Fill(-1);
+        for (int v = 0; v < values.Length; v++)
         {
-            EntityRecordAccessor.InitializeRecord(recordPtr, meta.ComponentCount);
-
-            // For each component slot, allocate a chunk and store the location
-            for (int slot = 0; slot < meta.ComponentCount; slot++)
+            if (meta.TryGetSlot(values[v].ComponentTypeId, out byte targetSlot))
             {
-                var table = engineState.SlotToComponentTable[slot];
-                int chunkId = table.StorageMode == StorageMode.Transient ? 
-                    table.TransientComponentSegment.AllocateChunk(false) : table.ComponentSegment.AllocateChunk(false, _changeSet);
-
-                // Check if a ComponentValue was provided for this slot
-                bool hasValue = false;
-                int slotTypeId = meta._componentTypeIds[slot];
-                for (int v = 0; v < values.Length; v++)
-                {
-                    if (values[v].ComponentTypeId == slotTypeId)
-                    {
-                        // Copy component data into chunk using existing ComponentInfo accessor
-                        var compType = meta._slotToComponentType[slot];
-                        var info = GetComponentInfo(compType);
-                        var dst = table.StorageMode == StorageMode.Transient ? 
-                            info.TransientCompContentAccessor.GetChunkAsSpan(chunkId, true) : info.CompContentAccessor.GetChunkAsSpan(chunkId, true);
-                        int overhead = table.ComponentOverhead;
-                        // Copy min(DataSize, available chunk space) — sizeof(T) may exceed ComponentStorageSize
-                        // due to struct alignment padding (e.g., 8-byte aligned struct with 12B fields → sizeof = 16)
-                        int copySize = Math.Min(values[v].DataSize, dst.Length - overhead);
-                        new ReadOnlySpan<byte>((byte*)Unsafe.AsPointer(ref Unsafe.AsRef(in values[v])) + 12, copySize)
-                            .CopyTo(dst.Slice(overhead));
-                        enabledBits |= (ushort)(1 << slot);
-                        hasValue = true;
-                        break;
-                    }
-                }
-
-                if (!hasValue)
-                {
-                    // Zero-init the chunk (already done by AllocateChunk with clearContent=false,
-                    // but the slot is disabled so the data doesn't matter)
-                }
-
-                // Versioned: create revision chain (CompRevStorageHeader + first revision entry)
-                // This populates _componentInfos so CommitComponentCore handles PK index, secondary// indexes, WAL serialization, and IsolationFlag
-                // clearing at commit time.
-                if (table.StorageMode == StorageMode.Versioned)
-                {
-                    var compType = meta._slotToComponentType[slot];
-                    var info = GetComponentInfo(compType);
-                    var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, chunkId, (long)entityId.RawValue);
-
-                    var cri = new ComponentInfo.CompRevInfo
-                    {
-                        Operations = ComponentInfo.OperationType.Created,
-                        PrevCompContentChunkId = 0,
-                        PrevRevisionIndex = -1,
-                        CurCompContentChunkId = chunkId,
-                        CompRevTableFirstChunkId = compRevChunkId,
-                        CurRevisionIndex = 0,
-                        ReadCommitSequence = 1,
-                        ReadRevisionIndex = 0,
-                    };
-                    info.AddNew((long)entityId.RawValue, cri);
-                }
-
-                EntityRecordAccessor.SetLocation(recordPtr, slot, chunkId);
+                valueBySlot[targetSlot] = v;
             }
-
-            // Set EnabledBits
-            EntityRecordAccessor.GetHeader(recordPtr).EnabledBits = enabledBits;
         }
 
-        // Store in pending map
-        _pendingSpawns ??= new Dictionary<EntityId, PendingSpawn>();
-        _pendingSpawns[entityId] = new PendingSpawn { RecordBytes = recordBytes, Archetype = meta };
+        var entry = new SpawnEntry { Id = entityId, EnabledBits = 0 };
+
+        for (int slot = 0; slot < meta.ComponentCount; slot++)
+        {
+            var table = engineState.SlotToComponentTable[slot];
+            int chunkId = table.StorageMode == StorageMode.Transient ? 
+                table.TransientComponentSegment.AllocateChunk(false) : table.ComponentSegment.AllocateChunk(false, _changeSet);
+
+            // Copy component value data if provided for this slot
+            int vi = valueBySlot[slot];
+            if (vi >= 0)
+            {
+                var compType = meta._slotToComponentType[slot];
+                var info = GetComponentInfo(compType);
+                var dst = table.StorageMode == StorageMode.Transient ? 
+                    info.TransientCompContentAccessor.GetChunkAsSpan(chunkId, true) : info.CompContentAccessor.GetChunkAsSpan(chunkId, true);
+                int overhead = table.ComponentOverhead;
+                int copySize = Math.Min(values[vi].DataSize, dst.Length - overhead);
+                new ReadOnlySpan<byte>((byte*)Unsafe.AsPointer(ref Unsafe.AsRef(in values[vi])) + 12, copySize)
+                    .CopyTo(dst.Slice(overhead));
+                entry.EnabledBits |= (ushort)(1 << slot);
+            }
+
+            // Versioned: create revision chain (CompRevStorageHeader + first revision entry).
+            // This populates _componentInfos so CommitComponentCore handles secondary indexes, WAL, and IsolationFlag clearing.
+            if (table.StorageMode == StorageMode.Versioned)
+            {
+                var compType = meta._slotToComponentType[slot];
+                var info = GetComponentInfo(compType);
+                var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, chunkId, (long)entityId.RawValue);
+
+                var cri = new ComponentInfo.CompRevInfo
+                {
+                    Operations = ComponentInfo.OperationType.Created,
+                    PrevCompContentChunkId = 0,
+                    PrevRevisionIndex = -1,
+                    CurCompContentChunkId = chunkId,
+                    CompRevTableFirstChunkId = compRevChunkId,
+                    CurRevisionIndex = 0,
+                    ReadCommitSequence = 1,
+                    ReadRevisionIndex = 0,
+                };
+                info.AddNew((long)entityId.RawValue, cri);
+                entry.Rev[slot] = compRevChunkId;
+            }
+
+            entry.Loc[slot] = chunkId;
+        }
+
+        // Store in flat list — index rebuilt lazily on first Contains/IndexOf call
+        _spawnedEntities ??= [];
+        _spawnedEntityIndexStale = true;
+        _spawnedEntities.Add(entry);
 
         CheckEpochRefresh();
         return entityId;
@@ -359,8 +371,8 @@ public unsafe partial class Transaction
             return false;
         }
 
-        // Check pending spawns first
-        if (_pendingSpawns != null && _pendingSpawns.ContainsKey(id))
+        // Check spawned entities first (not yet in EntityMap)
+        if (SpawnedContains(id))
         {
             // Check if also pending destroy
             return _pendingDestroys == null || !_pendingDestroys.Contains(id);
@@ -438,7 +450,7 @@ public unsafe partial class Transaction
         }
 
         // Check if already pending spawn (destroy own spawn)
-        bool isPending = _pendingSpawns != null && _pendingSpawns.ContainsKey(id);
+        bool isPending = SpawnedContains(id);
         if (!isPending)
         {
             Debug.Assert(IsAlive(id), $"Entity {id} not alive — cannot destroy");
@@ -491,49 +503,50 @@ public unsafe partial class Transaction
 
     /// <summary>
     /// Find all entities of the child archetype that reference the given parent via FK.
-    /// Scans pending spawns and committed entities in the child's EntityMap.
+    /// Scans spawned entities (via EntityMap) and committed entities (via FK index).
     /// </summary>
     private List<EntityId> FindCascadeChildren(ArchetypeMetadata childMeta, CascadeTarget target, EntityId parentId)
     {
         var result = new List<EntityId>();
 
-        // 1. Scan pending spawns for FK matches
-        if (_pendingSpawns != null)
+        // 1. Scan spawned entities for FK matches (read component data from SpawnEntry locations directly)
+        if (_spawnedEntities != null)
         {
-            foreach (var kvp in _pendingSpawns)
+            for (int i = 0; i < _spawnedEntities.Count; i++)
             {
-                if (kvp.Key.ArchetypeId != target.ChildArchetypeId)
+                var entry = _spawnedEntities[i];
+                if (entry.Id.ArchetypeId != target.ChildArchetypeId)
                 {
                     continue;
                 }
 
-                // Read the FK component's chunk location from the pending entity's record bytes
-                var spawn = kvp.Value;
-                var spawnMeta = spawn.Archetype;
-                var engineState = _dbe._archetypeStates[spawnMeta.ArchetypeId];
-
-                fixed (byte* recordPtr = spawn.RecordBytes)
+                int chunkId = entry.Loc[target.FkSlotIndex];
+                if (chunkId == 0)
                 {
-                    int chunkId = EntityRecordAccessor.GetLocation(recordPtr, target.FkSlotIndex);
-                    if (chunkId == 0)
-                    {
-                        continue;
-                    }
+                    continue;
+                }
 
-                    // Read the FK field from the component chunk data
-                    var table = engineState.SlotToComponentTable[target.FkSlotIndex];
-                    var compType = spawnMeta._slotToComponentType[target.FkSlotIndex];
-                    var info = GetComponentInfo(compType);
-                    byte* ptr = table.StorageMode == StorageMode.Transient
-                        ? info.TransientCompContentAccessor.GetChunkAddress(chunkId)
-                        : info.CompContentAccessor.GetChunkAddress(chunkId);
+                // For Versioned FK slot: chunkId is compContentChunkId in GetLoc, but need to check SingleCache for COW
+                var spawnMeta = ArchetypeRegistry.GetMetadata(entry.Id.ArchetypeId);
+                var spawnES = _dbe._archetypeStates[spawnMeta.ArchetypeId];
+                var table = spawnES.SlotToComponentTable[target.FkSlotIndex];
+                var compType = spawnMeta._slotToComponentType[target.FkSlotIndex];
+                var info = GetComponentInfo(compType);
 
-                    // EntityLink<T> is 8 bytes (same layout as EntityId) at FkFieldOffset within the component
-                    var fkEntityId = *(EntityId*)(ptr + table.ComponentOverhead + target.FkFieldOffset);
-                    if (fkEntityId == parentId)
-                    {
-                        result.Add(kvp.Key);
-                    }
+                int dataChunkId = chunkId;
+                if (table.StorageMode == StorageMode.Versioned &&
+                    !info.IsMultiple && info.SingleCache.TryGetValue((long)entry.Id.RawValue, out var cri))
+                {
+                    dataChunkId = cri.CurCompContentChunkId;
+                }
+
+                byte* ptr = table.StorageMode == StorageMode.Transient ? 
+                    info.TransientCompContentAccessor.GetChunkAddress(dataChunkId) : info.CompContentAccessor.GetChunkAddress(dataChunkId);
+
+                var fkEntityId = *(EntityId*)(ptr + table.ComponentOverhead + target.FkFieldOffset);
+                if (fkEntityId == parentId)
+                {
+                    result.Add(entry.Id);
                 }
             }
         }
@@ -611,40 +624,62 @@ public unsafe partial class Transaction
             return default;
         }
 
-        // Check pending spawns first (own transaction's entities)
-        if (_pendingSpawns != null && _pendingSpawns.TryGetValue(id, out var pending))
+        // Check if this entity was spawned in this transaction (not yet in EntityMap)
+        int spawnIdx = SpawnedIndexOf(id);
+        bool isOwnSpawn = spawnIdx >= 0;
+
+        // Early destroy check for own spawns
+        if (isOwnSpawn && _pendingDestroys != null && _pendingDestroys.Contains(id))
         {
-            // Check if pending destroy
-            if (_pendingDestroys != null && _pendingDestroys.Contains(id))
-            {
-                return default;
-            }
-
-            ushort bits;
-            fixed (byte* ptr = pending.RecordBytes)
-            {
-                bits = EntityRecordAccessor.GetHeader(ptr).EnabledBits;
-            }
-
-            // Check for pending enable/disable override
-            if (_pendingEnableDisable != null && _pendingEnableDisable.TryGetValue(id, out var overrideBits))
-            {
-                bits = overrideBits;
-            }
-
-            var engineState = _dbe._archetypeStates[meta.ArchetypeId];
-            var entityRef = new EntityRef(id, meta, engineState, this, bits, writable);
-            entityRef.CopyLocationsFrom(pending.RecordBytes, meta.ComponentCount);
-            return entityRef;
+            return default;
         }
 
-        // Probe LinearHash
         var es = _dbe._archetypeStates[meta.ArchetypeId];
         if (es?.EntityMap == null)
         {
             return default;
         }
 
+        if (isOwnSpawn)
+        {
+            // Own spawn: build EntityRef directly from SpawnEntry (entity not in EntityMap yet)
+            var entry = _spawnedEntities[spawnIdx];
+
+            ushort enabledBits = entry.EnabledBits;
+            if (_pendingEnableDisable != null && _pendingEnableDisable.TryGetValue(id, out var pendingBits))
+            {
+                enabledBits = pendingBits;
+            }
+
+            var result = new EntityRef(id, meta, es, this, enabledBits, writable);
+            for (int slot = 0; slot < meta.ComponentCount; slot++)
+            {
+                result.SetLocation(slot, entry.Loc[slot]);
+            }
+
+            // For Versioned: override from SingleCache (same as before — Spawn already populated it)
+            for (int slot = 0; slot < meta.ComponentCount; slot++)
+            {
+                var table = es.SlotToComponentTable[slot];
+                if (table.StorageMode != StorageMode.Versioned)
+                {
+                    continue;
+                }
+
+                var compType = meta._slotToComponentType[slot];
+                var info = GetComponentInfo(compType);
+                long pk = (long)id.RawValue;
+
+                if (!info.IsMultiple && info.SingleCache.TryGetValue(pk, out var cached))
+                {
+                    result.SetLocation(slot, cached.CurCompContentChunkId);
+                }
+            }
+
+            return result;
+        }
+
+        // Committed entity: read from EntityMap
         int recordSize = meta._entityRecordSize;
         byte* readBuf = stackalloc byte[recordSize];
 
@@ -658,7 +693,7 @@ public unsafe partial class Transaction
             return default;
         }
 
-        // Check if pending destroy (committed entity marked for destruction in this transaction)
+        // Check pending destroy for committed entities
         if (_pendingDestroys != null && _pendingDestroys.Contains(id))
         {
             return default;
@@ -672,57 +707,63 @@ public unsafe partial class Transaction
             return default;
         }
 
-        // Resolve EnabledBits (MVCC)
-        ushort enabledBits = _dbe.EnabledBitsOverrides.ResolveEnabledBits(id.EntityKey, header.EnabledBits, TSN);
-
-        // Check for pending enable/disable override
-        if (_pendingEnableDisable != null && _pendingEnableDisable.TryGetValue(id, out var pendingBits))
+        // Resolve EnabledBits: committed entities check MVCC overrides
         {
-            enabledBits = pendingBits;
+            ushort enabledBits = _dbe.EnabledBitsOverrides.ResolveEnabledBits(id.EntityKey, header.EnabledBits, TSN);
+
+            // Check for pending enable/disable override
+            if (_pendingEnableDisable != null && _pendingEnableDisable.TryGetValue(id, out var pendingBits))
+            {
+                enabledBits = pendingBits;
+            }
+
+            var result = new EntityRef(id, meta, es, this, enabledBits, writable);
+            result.CopyLocationsFrom(readBuf, meta.ComponentCount);
+
+            // For Versioned components: resolve MVCC-visible chunkId via SingleCache or revision chain walk.
+            // Location[slot] from EntityMap is compRevFirstChunkId.
+            // For committed entities, walk the revision chain to find the visible version.
+            for (int slot = 0; slot < meta.ComponentCount; slot++)
+            {
+                var table = es.SlotToComponentTable[slot];
+                if (table.StorageMode != StorageMode.Versioned)
+                {
+                    continue;
+                }
+
+                var compType = meta._slotToComponentType[slot];
+                var info = GetComponentInfo(compType);
+                long pk = (long)id.RawValue;
+
+                // If already resolved in this transaction (prior Open or Write), reuse cached entry
+                if (!info.IsMultiple && info.SingleCache.TryGetValue(pk, out var cached))
+                {
+                    result.SetLocation(slot, cached.CurCompContentChunkId);
+                    continue;
+                }
+
+                // Walk revision chain from EntityMap's compRevFirstChunkId
+                int compRevFirstChunkId = result.GetLocation(slot);
+                if (compRevFirstChunkId == 0)
+                {
+                    continue;
+                }
+
+                var chainResult = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, TSN);
+                if (chainResult.IsFailure)
+                {
+                    continue;
+                }
+
+                // Cache CompRevInfo for conflict detection
+                var compRevInfo = chainResult.Value;
+                compRevInfo.Operations = ComponentInfo.OperationType.Read;
+                info.AddNew(pk, compRevInfo);
+                result.SetLocation(slot, compRevInfo.CurCompContentChunkId);
+            }
+
+            return result;
         }
-
-        var result = new EntityRef(id, meta, es, this, enabledBits, writable);
-        result.CopyLocationsFrom(readBuf, meta.ComponentCount);
-
-        // For Versioned components: resolve MVCC-visible chunkId via revision chain walk.
-        // Location[slot] from EntityRecord is the spawn-time chunkId. After writes, the revision chain has newer versions. Walking the chain gives the correct
-        // chunkId for this transaction's snapshot.
-        for (int slot = 0; slot < meta.ComponentCount; slot++)
-        {
-            var table = es.SlotToComponentTable[slot];
-            if (table.StorageMode != StorageMode.Versioned)
-            {
-                continue;
-            }
-
-            var compType = meta._slotToComponentType[slot];
-            var info = GetComponentInfo(compType);
-
-            long pk = (long)id.RawValue;
-
-            // If already resolved in this transaction (e.g. second Open on same entity), reuse cached entry
-            if (!info.IsMultiple && info.SingleCache.TryGetValue(pk, out var cached))
-            {
-                result.SetLocation(slot, cached.CurCompContentChunkId);
-                continue;
-            }
-
-            var pkResult = GetCompRevInfoFromIndex(pk, info, TSN);
-            if (pkResult.IsFailure)
-            {
-                continue;
-            }
-
-            // Cache CompRevInfo for conflict detection (5.3 Write)
-            var compRevInfo = pkResult.Value;
-            compRevInfo.Operations = ComponentInfo.OperationType.Read;
-            info.AddNew(pk, compRevInfo);
-
-            // Override Location[slot] with MVCC-visible chunkId
-            result.SetLocation(slot, compRevInfo.CurCompContentChunkId);
-        }
-
-        return result;
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -827,84 +868,247 @@ public unsafe partial class Transaction
     /// <summary>Flush all pending ECS operations into persistent storage. Called during Commit.</summary>
     internal void FlushEcsPendingOperations()
     {
-        // Enable/Disable must run BEFORE spawns: for pending spawn entities, it updates the record bytes in-place. FlushPendingSpawns then writes the
-        // corrected records to LinearHash. For committed entities, it directly upserts to LinearHash (order doesn't matter).
+        // Enable/Disable for committed entities: directly upserts to EntityMap.
+        // For spawned entities: skip here, FinalizeSpawns applies the override.
         FlushPendingEnableDisable();
-        FlushPendingSpawns();
+        // Finalize spawned entities: set BornTSN from sentinel to actual TSN, insert SV secondary indexes.
+        FinalizeSpawns();
         FlushPendingDestroys();
     }
 
-    private void FlushPendingSpawns()
+    /// <summary>
+    /// Finalize spawned entities: set BornTSN from sentinel (MaxValue) to actual TSN, making them visible.
+    /// Also inserts SV secondary indexes (Versioned secondary indexes are handled by CommitComponentCore).
+    /// </summary>
+    private void FinalizeSpawns()
     {
-        if (_pendingSpawns == null || _pendingSpawns.Count == 0)
+        if (_spawnedEntities == null || _spawnedEntities.Count == 0)
         {
             return;
         }
 
+        // Pre-size EntityMaps to avoid per-insert splits
+        if (_spawnedEntities.Count >= 64)
+        {
+            Span<ushort> seenArchetypes = stackalloc ushort[16];
+            int seenCount = 0;
+            foreach (var entry in _spawnedEntities)
+            {
+                var archId = entry.Id.ArchetypeId;
+                bool alreadySeen = false;
+                for (int i = 0; i < seenCount; i++)
+                {
+                    if (seenArchetypes[i] == archId) { alreadySeen = true; break; }
+                }
+                if (alreadySeen) continue;
+                if (seenCount < 16) seenArchetypes[seenCount++] = archId;
+
+                var es = _dbe._archetypeStates[archId];
+                if (es?.EntityMap != null)
+                {
+                    es.EntityMap.EnsureCapacity((int)es.EntityMap.EntryCount + _spawnedEntities.Count, _changeSet);
+                }
+            }
+        }
+
         using var guard = EpochGuard.Enter(_epochManager);
 
-        foreach (var kvp in _pendingSpawns)
+        // Hoist stackalloc outside the loop — max record size is 78B (14B header + 16 components × 4B)
+        byte* recordPtr = stackalloc byte[EntityRecordAccessor.MaxRecordSize];
+
+        // Hoist all accessors outside the per-entity loop.
+        // Track last-used archetype — covers the dominant case (single archetype per TX).
+        // When archetype changes, dispose old accessors and create new ones.
+        ushort lastArchId = 0;
+        var mapAccessor = default(ChunkAccessor<PersistentStore>);
+        bool hasMapAccessor = false;
+
+        // Hoisted SV index accessors — one compAccessor per SV indexed slot, one idxAccessor per indexed field.
+        // Allocated lazily with exact sizes when archetype changes (typically 1-3 slots, 2-8 indexes).
+        Span<int> svSlots = stackalloc int[16];
+        int svSlotCount = 0;
+        ChunkAccessor<PersistentStore>[] svCompAccessors = null;
+        ChunkAccessor<PersistentStore>[] svIdxAccessors = null;
+        Span<int> svIdxAccessorBase = stackalloc int[16]; // offset into svIdxAccessors for each slot
+        int svIdxAccessorTotal = 0;
+
+        // Per-archetype cached state — avoids per-entity metadata lookups
+        ArchetypeMetadata meta = null;
+        ArchetypeEngineState engineState = null;
+        int componentCount = 0;
+        ushort versionedMask = 0; // bit set for Versioned slots — eliminates per-slot table dereference
+
+        try
         {
-            var entityId = kvp.Key;
-            var spawn = kvp.Value;
-            var meta = spawn.Archetype;
-
-            fixed (byte* recordPtr = spawn.RecordBytes)
+            foreach (var entry in _spawnedEntities)
             {
-                // Set BornTSN = commit TSN
-                EntityRecordAccessor.GetHeader(recordPtr).BornTSN = TSN;
-
-                // Insert into per-archetype LinearHash
-                var engineState = _dbe._archetypeStates[meta.ArchetypeId];
-                var hashAccessor = engineState.EntityMap.Segment.CreateChunkAccessor(_changeSet);
-                engineState.EntityMap.Insert(entityId.EntityKey, recordPtr, ref hashAccessor, _changeSet);
-                hashAccessor.Dispose();
-
-                // Insert into secondary indexes for each component slot.
-                // - Versioned: SKIP — CommitComponentCore handles via IndexMaintainer (prevents double insertion)
-                // - Transient: IndexedFieldInfos = [] so naturally skipped
-                // - SV: inserted here
-                for (int slot = 0; slot < meta.ComponentCount; slot++)
+                // Skip entities that were also destroyed in this transaction — no EntityMap insert needed
+                if (_pendingDestroys != null && _pendingDestroys.Contains(entry.Id))
                 {
-                    var table = engineState.SlotToComponentTable[slot];
-                    if (table.StorageMode == StorageMode.Versioned)
+                    continue;
+                }
+
+                // Build EntityRecord on stack from SpawnEntry
+                ref var header = ref *(EntityRecordHeader*)recordPtr;
+                header = default;
+                header.BornTSN = TSN;
+
+                ushort enabledBits = entry.EnabledBits;
+                if (_pendingEnableDisable != null && _pendingEnableDisable.TryGetValue(entry.Id, out var newBits))
+                {
+                    enabledBits = newBits;
+                }
+                header.EnabledBits = enabledBits;
+
+                // Hoist all per-archetype state — recycle when archetype changes
+                if (!hasMapAccessor || entry.Id.ArchetypeId != lastArchId)
+                {
+                    // Dispose previous archetype's accessors
+                    if (hasMapAccessor)
                     {
-                        continue; // CommitComponentCore handles PK + secondary indexes via IndexMaintainer
-                    }
-                    var indexedFieldInfos = table.IndexedFieldInfos;
-                    if (indexedFieldInfos == null || indexedFieldInfos.Length == 0)
-                    {
-                        continue;
+                        mapAccessor.Dispose();
+                        for (int si = 0; si < svSlotCount; si++)
+                        {
+                            svCompAccessors[si].Dispose();
+                        }
+                        for (int ai = 0; ai < svIdxAccessorTotal; ai++)
+                        {
+                            svIdxAccessors[ai].Dispose();
+                        }
                     }
 
-                    int chunkId = EntityRecordAccessor.GetLocation(recordPtr, slot);
+                    // Cache archetype metadata + compute versioned slot mask
+                    meta = ArchetypeRegistry.GetMetadata(entry.Id.ArchetypeId);
+                    engineState = _dbe._archetypeStates[meta.ArchetypeId];
+                    componentCount = meta.ComponentCount;
+                    versionedMask = 0;
+                    for (int slot = 0; slot < componentCount; slot++)
+                    {
+                        if (engineState.SlotToComponentTable[slot].StorageMode == StorageMode.Versioned)
+                        {
+                            versionedMask |= (ushort)(1 << slot);
+                        }
+                    }
+
+                    mapAccessor = engineState.EntityMap.Segment.CreateChunkAccessor(_changeSet);
+                    lastArchId = entry.Id.ArchetypeId;
+                    hasMapAccessor = true;
+
+                    // Build SV indexed slot accessors for this archetype.
+                    // First pass: count, then allocate exact sizes.
+                    svSlotCount = 0;
+                    svIdxAccessorTotal = 0;
+                    int idxCount = 0;
+                    for (int slot = 0; slot < meta.ComponentCount; slot++)
+                    {
+                        var table = engineState.SlotToComponentTable[slot];
+                        if (table.StorageMode == StorageMode.Versioned)
+                        {
+                            continue;
+                        }
+                        var ifi = table.IndexedFieldInfos;
+                        if (ifi == null || ifi.Length == 0)
+                        {
+                            continue;
+                        }
+                        svSlotCount++;
+                        idxCount += ifi.Length;
+                    }
+
+                    if (svSlotCount > 0)
+                    {
+                        // Reuse arrays if large enough, otherwise allocate exact size
+                        if (svCompAccessors == null || svCompAccessors.Length < svSlotCount)
+                        {
+                            svCompAccessors = new ChunkAccessor<PersistentStore>[svSlotCount];
+                        }
+                        if (svIdxAccessors == null || svIdxAccessors.Length < idxCount)
+                        {
+                            svIdxAccessors = new ChunkAccessor<PersistentStore>[idxCount];
+                        }
+                    }
+
+                    svSlotCount = 0;
+                    svIdxAccessorTotal = 0;
+                    for (int slot = 0; slot < meta.ComponentCount; slot++)
+                    {
+                        var table = engineState.SlotToComponentTable[slot];
+                        if (table.StorageMode == StorageMode.Versioned)
+                        {
+                            continue;
+                        }
+                        var indexedFieldInfos = table.IndexedFieldInfos;
+                        if (indexedFieldInfos == null || indexedFieldInfos.Length == 0)
+                        {
+                            continue;
+                        }
+                        Debug.Assert(table.StorageMode != StorageMode.Transient, "Transient secondary indexes not yet implemented");
+
+                        svSlots[svSlotCount] = slot;
+                        svCompAccessors[svSlotCount] = table.ComponentSegment.CreateChunkAccessor(_changeSet);
+                        svIdxAccessorBase[svSlotCount] = svIdxAccessorTotal;
+                        for (int i = 0; i < indexedFieldInfos.Length; i++)
+                        {
+                            svIdxAccessors[svIdxAccessorTotal++] = indexedFieldInfos[i].Index.Segment.CreateChunkAccessor(_changeSet);
+                        }
+                        svSlotCount++;
+                    }
+                }
+
+                // Build location array from SpawnEntry using pre-computed versioned mask
+                var locDest = (int*)(recordPtr + EntityRecordAccessor.HeaderSize);
+                for (int slot = 0; slot < componentCount; slot++)
+                {
+                    locDest[slot] = (versionedMask & (1 << slot)) != 0 ? entry.Rev[slot] : entry.Loc[slot];
+                }
+
+                // Insert into EntityMap — skip duplicate check (EntityKey is freshly generated, guaranteed unique)
+                engineState.EntityMap.InsertNew(entry.Id.EntityKey, recordPtr, ref mapAccessor, _changeSet);
+
+                // Insert SV secondary indexes (Versioned is handled by CommitComponentCore).
+                // Accessors are hoisted: created once when archetype changes (alongside mapAccessor),
+                // reused across all entities of the same archetype.
+                for (int si = 0; si < svSlotCount; si++)
+                {
+                    int slot = svSlots[si];
+                    var table = engineState.SlotToComponentTable[slot];
+                    int chunkId = entry.Loc[slot];
                     if (chunkId == 0)
                     {
                         continue;
                     }
 
-                    // Transient secondary indexes require ChunkAccessor<TransientStore> — not yet implemented (IndexedFieldInfos = [] for Transient).
-                    // Guard defensively.
-                    Debug.Assert(table.StorageMode != StorageMode.Transient, "Transient secondary indexes not yet implemented — IndexedFieldInfos should be empty");
-                    var compAccessor = table.ComponentSegment.CreateChunkAccessor(_changeSet);
-                    byte* chunkAddr = compAccessor.GetChunkAddress(chunkId, true);
+                    byte* chunkAddr = svCompAccessors[si].GetChunkAddress(chunkId, true);
+                    var indexedFieldInfos = table.IndexedFieldInfos;
 
                     for (int i = 0; i < indexedFieldInfos.Length; i++)
                     {
                         ref var ifi = ref indexedFieldInfos[i];
-                        var idxAccessor = ifi.Index.Segment.CreateChunkAccessor(_changeSet);
                         if (ifi.Index.AllowMultiple)
                         {
-                            *(int*)&chunkAddr[ifi.OffsetToIndexElementId] = ifi.Index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref idxAccessor, out _);
+                            *(int*)&chunkAddr[ifi.OffsetToIndexElementId] =
+                                ifi.Index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref svIdxAccessors[svIdxAccessorBase[si] + i], out _);
                         }
                         else
                         {
-                            ifi.Index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref idxAccessor);
+                            ifi.Index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref svIdxAccessors[svIdxAccessorBase[si] + i]);
                         }
-                        idxAccessor.Dispose();
                     }
-
-                    compAccessor.Dispose();
+                }
+            }
+        }
+        finally
+        {
+            if (hasMapAccessor)
+            {
+                mapAccessor.Dispose();
+                for (int si = 0; si < svSlotCount; si++)
+                {
+                    svCompAccessors[si].Dispose();
+                }
+                for (int ai = 0; ai < svIdxAccessorTotal; ai++)
+                {
+                    svIdxAccessors[ai].Dispose();
                 }
             }
         }
@@ -922,30 +1126,54 @@ public unsafe partial class Transaction
         // Hoist stackalloc out of loop — max record size is 78B (14B header + 16 components × 4B)
         byte* readBuf = stackalloc byte[EntityRecordAccessor.MaxRecordSize];
 
-        foreach (var entityId in _pendingDestroys)
+        // Hoist EntityMap accessor — reuse when archetype matches (same pattern as FinalizeSpawns)
+        ushort lastArchId = 0;
+        var accessor = default(ChunkAccessor<PersistentStore>);
+        bool hasAccessor = false;
+
+        try
         {
-            var meta = ArchetypeRegistry.GetMetadata(entityId.ArchetypeId);
-            if (meta == null)
+            foreach (var entityId in _pendingDestroys)
             {
-                continue;
-            }
-            var engineState = _dbe._archetypeStates[meta.ArchetypeId];
-            if (engineState?.EntityMap == null)
-            {
-                continue;
-            }
+                var meta = ArchetypeRegistry.GetMetadata(entityId.ArchetypeId);
+                if (meta == null)
+                {
+                    continue;
+                }
+                var engineState = _dbe._archetypeStates[meta.ArchetypeId];
+                if (engineState?.EntityMap == null)
+                {
+                    continue;
+                }
 
-            var accessor = engineState.EntityMap.Segment.CreateChunkAccessor(_changeSet);
-            if (engineState.EntityMap.TryGet(entityId.EntityKey, readBuf, ref accessor))
-            {
-                // Set DiedTSN
-                EntityRecordAccessor.GetHeader(readBuf).DiedTSN = TSN;
-                engineState.EntityMap.Upsert(entityId.EntityKey, readBuf, ref accessor, _changeSet);
+                if (!hasAccessor || entityId.ArchetypeId != lastArchId)
+                {
+                    if (hasAccessor)
+                    {
+                        accessor.Dispose();
+                    }
+                    accessor = engineState.EntityMap.Segment.CreateChunkAccessor(_changeSet);
+                    lastArchId = entityId.ArchetypeId;
+                    hasAccessor = true;
+                }
 
-                // Enqueue for deferred GC (LinearHash removal + chunk freeing when MinTSN advances past DiedTSN)
-                _dbe.EnqueueEcsCleanup(entityId, meta, TSN);
+                if (engineState.EntityMap.TryGet(entityId.EntityKey, readBuf, ref accessor))
+                {
+                    // Set DiedTSN
+                    EntityRecordAccessor.GetHeader(readBuf).DiedTSN = TSN;
+                    engineState.EntityMap.Upsert(entityId.EntityKey, readBuf, ref accessor, _changeSet);
+
+                    // Enqueue for deferred GC (LinearHash removal + chunk freeing when MinTSN advances past DiedTSN)
+                    _dbe.EnqueueEcsCleanup(entityId, meta, TSN);
+                }
             }
-            accessor.Dispose();
+        }
+        finally
+        {
+            if (hasAccessor)
+            {
+                accessor.Dispose();
+            }
         }
     }
 
@@ -962,9 +1190,9 @@ public unsafe partial class Transaction
 
         foreach (var entityId in _pendingDestroys)
         {
-            // Skip entities that were spawned in this same transaction — they were never inserted
-            // into ComponentTables (FlushPendingSpawns skips them), so there's nothing to delete.
-            if (_pendingSpawns != null && _pendingSpawns.ContainsKey(entityId))
+            // Skip entities that were spawned in this same transaction — they have no committed component data to delete
+            // (FinalizeSpawns skips spawn+destroy entities).
+            if (SpawnedContains(entityId))
             {
                 continue;
             }
@@ -1056,17 +1284,9 @@ public unsafe partial class Transaction
             var entityId = kvp.Key;
             ushort newBits = kvp.Value;
 
-            // Skip pending spawns — their EnabledBits are already set in FlushPendingSpawns
-            if (_pendingSpawns != null && _pendingSpawns.ContainsKey(entityId))
+            // Skip spawned entities — FinalizeSpawns applies the enable/disable override
+            if (SpawnedContains(entityId))
             {
-                // Update the pending spawn's EnabledBits before it gets flushed
-                if (_pendingSpawns.TryGetValue(entityId, out var spawn))
-                {
-                    fixed (byte* ptr = spawn.RecordBytes)
-                    {
-                        EntityRecordAccessor.GetHeader(ptr).EnabledBits = newBits;
-                    }
-                }
                 continue;
             }
 
@@ -1103,26 +1323,52 @@ public unsafe partial class Transaction
     /// <summary>Clean up ECS-specific state on transaction reset/dispose. Frees orphaned chunks on rollback.</summary>
     internal void CleanupEcsState()
     {
-        // If transaction was NOT committed, free component chunks allocated by pending spawns
-        if (_pendingSpawns is { Count: > 0 } && State != TransactionState.Committed)
+        // If transaction was NOT committed, free component chunks for spawned entities.
+        // Entity was never inserted into EntityMap, so no EntityMap.Remove needed.
+        if (_spawnedEntities is { Count: > 0 } && State != TransactionState.Committed)
         {
-            foreach (var kvp in _pendingSpawns)
+            foreach (var entry in _spawnedEntities)
             {
-                var meta = kvp.Value.Archetype;
+                var meta = ArchetypeRegistry.GetMetadata(entry.Id.ArchetypeId);
+                if (meta == null)
+                {
+                    continue;
+                }
                 var engineState = _dbe._archetypeStates[meta.ArchetypeId];
                 if (engineState?.SlotToComponentTable == null)
                 {
                     continue;
                 }
 
-                fixed (byte* recordPtr = kvp.Value.RecordBytes)
+                for (int slot = 0; slot < meta.ComponentCount; slot++)
                 {
-                    for (int slot = 0; slot < meta.ComponentCount; slot++)
+                    var table = engineState.SlotToComponentTable[slot];
+
+                    if (table.StorageMode == StorageMode.Versioned)
                     {
-                        int chunkId = EntityRecordAccessor.GetLocation(recordPtr, slot);
+                        // Versioned: free componentChunkId from SpawnEntry + compRev chain from SingleCache
+                        int chunkId = entry.Loc[slot];
+                        if (chunkId > 0)
+                        {
+                            table.ComponentSegment.FreeChunk(chunkId);
+                        }
+
+                        var compType = meta._slotToComponentType[slot];
+                        if (_componentInfos.TryGetValue(compType, out var info) &&
+                            !info.IsMultiple && info.SingleCache.TryGetValue((long)entry.Id.RawValue, out var cri))
+                        {
+                            if (cri.CompRevTableFirstChunkId > 0)
+                            {
+                                table.CompRevTableSegment.FreeChunk(cri.CompRevTableFirstChunkId);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // SV/Transient: free componentChunkId from SpawnEntry directly
+                        int chunkId = entry.Loc[slot];
                         if (chunkId != 0)
                         {
-                            var table = engineState.SlotToComponentTable[slot];
                             if (table.StorageMode == StorageMode.Transient)
                             {
                                 table.TransientComponentSegment.FreeChunk(chunkId);
@@ -1130,17 +1376,6 @@ public unsafe partial class Transaction
                             else
                             {
                                 table.ComponentSegment.FreeChunk(chunkId);
-
-                                // Versioned: also free the revision chain chunk
-                                if (table.StorageMode == StorageMode.Versioned)
-                                {
-                                    var compType = meta._slotToComponentType[slot];
-                                    if (_componentInfos.TryGetValue(compType, out var info) &&
-                                        !info.IsMultiple && info.SingleCache.TryGetValue((long)kvp.Key.RawValue, out var cri))
-                                    {
-                                        table.CompRevTableSegment.FreeChunk(cri.CompRevTableFirstChunkId);
-                                    }
-                                }
                             }
                         }
                     }
@@ -1176,7 +1411,8 @@ public unsafe partial class Transaction
             }
         }
 
-        _pendingSpawns?.Clear();
+        _spawnedEntities?.Clear();
+        _spawnedEntityIndex?.Clear();
         _pendingDestroys?.Clear();
         _pendingEnableDisable?.Clear();
     }

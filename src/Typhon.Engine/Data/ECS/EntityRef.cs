@@ -43,10 +43,13 @@ public unsafe ref struct EntityRef
         }
     }
 
+    /// <summary>Read the chunkId at a specific slot.</summary>
+    internal int GetLocation(int slot) => _locations[slot];
+
     /// <summary>Override the chunkId at a specific slot. Used by ResolveEntity for MVCC revision chain resolution.</summary>
     internal void SetLocation(int slot, int chunkId) => _locations[slot] = chunkId;
 
-    /// <summary>Copy locations from a managed byte array (for pending spawns).</summary>
+    /// <summary>Copy locations from a managed byte array.</summary>
     internal void CopyLocationsFrom(byte[] recordBytes, int componentCount)
     {
         fixed (byte* ptr = recordBytes)

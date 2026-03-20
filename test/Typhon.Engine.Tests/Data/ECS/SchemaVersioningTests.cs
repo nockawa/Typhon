@@ -79,7 +79,7 @@ unsafe class SchemaVersioningTests : TestBase<SchemaVersioningTests>
             // Verify ArchetypeR1 entities were persisted
             var table = dbe.GetComponentTable<ArchetypeR1>();
             Assert.That(table, Is.Not.Null);
-            Assert.That(table.PrimaryKeyIndex.EntryCount, Is.GreaterThan(0),
+            Assert.That(table.ComponentSegment.AllocatedChunkCount, Is.GreaterThan(0),
                 "ArchetypeR1 entities should have been persisted");
         }
     }
@@ -140,12 +140,19 @@ unsafe class SchemaVersioningTests : TestBase<SchemaVersioningTests>
 
             // Find and tamper with the EcsUnit record (ArchetypeId = 100)
             var cs = dbe.MMF.CreateChangeSet();
-            foreach (var kv in table.PrimaryKeyIndex.EnumerateLeaves())
+            var segment = table.ComponentSegment;
+            var capacity = segment.ChunkCapacity;
+            for (int chunkId = 1; chunkId < capacity; chunkId++)
             {
-                if (SystemCrud.Read(table, kv.Key, out ArchetypeR1 arch, dbe.EpochManager) && arch.ArchetypeId == 100)
+                if (!segment.IsChunkAllocated(chunkId))
+                {
+                    continue;
+                }
+
+                if (SystemCrud.Read(table, chunkId, out ArchetypeR1 arch, dbe.EpochManager) && arch.ArchetypeId == 100)
                 {
                     arch.ComponentCount = 99; // corrupt it
-                    SystemCrud.Update(table, kv.Key, ref arch, dbe.EpochManager, cs);
+                    SystemCrud.Update(table, chunkId, ref arch, dbe.EpochManager, cs);
                     break;
                 }
             }
@@ -197,12 +204,19 @@ unsafe class SchemaVersioningTests : TestBase<SchemaVersioningTests>
 
             // Corrupt the revision number
             var cs = dbe.MMF.CreateChangeSet();
-            foreach (var kv in table.PrimaryKeyIndex.EnumerateLeaves())
+            var segment = table.ComponentSegment;
+            var capacity = segment.ChunkCapacity;
+            for (int chunkId = 1; chunkId < capacity; chunkId++)
             {
-                if (SystemCrud.Read(table, kv.Key, out ArchetypeR1 arch, dbe.EpochManager) && arch.ArchetypeId == 100)
+                if (!segment.IsChunkAllocated(chunkId))
+                {
+                    continue;
+                }
+
+                if (SystemCrud.Read(table, chunkId, out ArchetypeR1 arch, dbe.EpochManager) && arch.ArchetypeId == 100)
                 {
                     arch.Revision = 999; // corrupt it
-                    SystemCrud.Update(table, kv.Key, ref arch, dbe.EpochManager, cs);
+                    SystemCrud.Update(table, chunkId, ref arch, dbe.EpochManager, cs);
                     break;
                 }
             }
@@ -236,12 +250,19 @@ unsafe class SchemaVersioningTests : TestBase<SchemaVersioningTests>
 
             // Read back persisted ArchetypeR1 and verify ComponentNames collection is populated
             using var epochGuard = EpochGuard.Enter(dbe.EpochManager);
-            var pkIndex = dbe.GetComponentTable<ArchetypeR1>().PrimaryKeyIndex;
+            var archTable = dbe.GetComponentTable<ArchetypeR1>();
+            var archSegment = archTable.ComponentSegment;
+            var archCapacity = archSegment.ChunkCapacity;
 
             bool foundUnit = false;
-            foreach (var kv in pkIndex.EnumerateLeaves())
+            for (int chunkId = 1; chunkId < archCapacity; chunkId++)
             {
-                if (!SystemCrud.Read(dbe.GetComponentTable<ArchetypeR1>(), kv.Key, out ArchetypeR1 arch, dbe.EpochManager))
+                if (!archSegment.IsChunkAllocated(chunkId))
+                {
+                    continue;
+                }
+
+                if (!SystemCrud.Read(archTable, chunkId, out ArchetypeR1 arch, dbe.EpochManager))
                 {
                     continue;
                 }

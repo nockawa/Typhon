@@ -79,7 +79,7 @@ internal static class StatisticsRebuilder
             }
 
             // Unsigned subtraction: handles OP-encoded float/double ranges spanning the signed long boundary
-            bucketWidths[i] = (maxes[i] == mins[i]) ? 0 : Math.Max(1L, (long)(((ulong)maxes[i] - (ulong)mins[i]) / (ulong)Histogram.BucketCount));
+            bucketWidths[i] = (maxes[i] == mins[i]) ? 0 : Math.Max(1L, (long)(((ulong)maxes[i] - (ulong)mins[i]) / Histogram.BucketCount));
         }
 
         var segment = table.ComponentSegment;
@@ -178,7 +178,7 @@ internal static class StatisticsRebuilder
         }
 
         // Compute scale factor for sampling
-        int estimatedTotalEntities = table.PrimaryKeyIndex.EntryCount;
+        int estimatedTotalEntities = table.EstimatedEntityCount;
         double scaleFactor = (pageInterval > 1 && sampledEntities > 0) ? (double)estimatedTotalEntities / sampledEntities : 1.0;
         long scaledTotal = (long)(sampledEntities * scaleFactor);
 

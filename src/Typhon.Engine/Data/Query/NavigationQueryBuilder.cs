@@ -74,9 +74,8 @@ public class NavigationQueryBuilder<TSource, TTarget> where TSource : unmanaged 
             targetCT.ViewRegistry.RegisterView(view, targetFieldDeps, 1);
         }
 
-        // Populate initial entity set
+        // Populate initial entity set — currently empty (PK B+Tree removed, pending EntityMap-based port)
         using var tx = _dbe.CreateQuickTransaction();
-        ExecuteNavigation(sourceEvals, targetEvals, sourceCT, targetCT, fkField, tx, view.EntityIdsInternal);
 
         // Drain any concurrent entries that arrived during population
         view.Refresh(tx);
@@ -85,48 +84,14 @@ public class NavigationQueryBuilder<TSource, TTarget> where TSource : unmanaged 
         return view;
     }
 
-    public HashSet<long> Execute(Transaction tx)
+    /// <summary>Expose resolved tables, FK field, and evaluators for external execution (e.g., EntityMap-based navigation).</summary>
+    internal (ComponentTable sourceCT, ComponentTable targetCT, DBComponentDefinition.Field fkField, FieldEvaluator[] sourceEvals, FieldEvaluator[] targetEvals)
+        ResolveForExternalExecution()
     {
-        if (_sourcePredicates.Count == 0 && _targetPredicates.Count == 0)
-        {
-            throw new InvalidOperationException("A Where predicate must be specified.");
-        }
-
         var (sourceCT, targetCT, fkField, _) = ValidateAndResolve();
-
         var sourceEvals = _sourcePredicates.Count > 0 ? QueryResolverHelper.ResolveEvaluators(_sourcePredicates.ToArray(), sourceCT, 0) : [];
         var targetEvals = _targetPredicates.Count > 0 ? QueryResolverHelper.ResolveEvaluators(_targetPredicates.ToArray(), targetCT, 1) : [];
-
-        var result = new HashSet<long>();
-        ExecuteNavigation(sourceEvals, targetEvals, sourceCT, targetCT, fkField, tx, result);
-        return result;
-    }
-
-    public int Count(Transaction tx) => Execute(tx).Count;
-
-    public bool Any(Transaction tx) => Execute(tx).Count > 0;
-
-    public List<long> ExecuteOrdered(Transaction tx) =>
-        throw new InvalidOperationException("ExecuteOrdered is not supported for navigation queries. Use Execute(tx) for unordered results.");
-
-    private void ExecuteNavigation(FieldEvaluator[] sourceEvals, FieldEvaluator[] targetEvals, ComponentTable sourceCT, ComponentTable targetCT,
-        DBComponentDefinition.Field fkField, Transaction tx, HashSet<long> result)
-    {
-        var hasSourcePreds = sourceEvals.Length > 0;
-        var hasTargetPreds = targetEvals.Length > 0;
-
-        if (hasTargetPreds)
-        {
-            // Target-first: scan target, reverse-lookup source entities via FK index
-            PipelineExecutor.Instance.ExecuteNavigationTargetFirst<TSource, TTarget>(sourceEvals, targetEvals, sourceCT, targetCT, 
-                fkField.OffsetInComponentStorage, tx, result);
-        }
-        else
-        {
-            // Source-first: scan source, forward-lookup targets
-            PipelineExecutor.Instance.ExecuteNavigationSourceFirst<TSource, TTarget>(sourceEvals, targetEvals, sourceCT, targetCT, 
-                fkField.OffsetInComponentStorage, tx, result);
-        }
+        return (sourceCT, targetCT, fkField, sourceEvals, targetEvals);
     }
 
     private (ComponentTable sourceCT, ComponentTable targetCT, DBComponentDefinition.Field fkField, int fkFieldIndex) ValidateAndResolve()

@@ -6,14 +6,14 @@ namespace Typhon.Engine;
 /// <summary>
 /// Minimal CRUD helper for engine-internal system schema persistence (ComponentR1, ArchetypeR1, etc.).
 /// Single-threaded, no MVCC, no WAL, no conflict detection, no revision tracking.
-/// Operates directly on ComponentTable's PK B+Tree and ComponentSegment.
+/// Operates directly on ComponentTable's ComponentSegment using chunkId as the stable identifier.
 /// </summary>
 internal static unsafe class SystemCrud
 {
     /// <summary>
-    /// Create a system entity: allocate chunk, copy data, insert PK → chunkId in B+Tree.
+    /// Create a system entity: allocate chunk, copy data, return chunkId as the stable identifier.
     /// </summary>
-    public static void Create<T>(ComponentTable table, long pk, ref T data, EpochManager epochManager, ChangeSet cs) where T : unmanaged
+    public static int Create<T>(ComponentTable table, ref T data, EpochManager epochManager, ChangeSet cs) where T : unmanaged
     {
         using var guard = EpochGuard.Enter(epochManager);
 
@@ -28,31 +28,15 @@ internal static unsafe class SystemCrud
         new Span<byte>(Unsafe.AsPointer(ref data), compSize).CopyTo(dst.Slice(overhead));
         compAccessor.Dispose();
 
-        // Insert into PK B+Tree: pk → chunkId
-        var pkAccessor = table.PrimaryKeyIndex.Segment.CreateChunkAccessor(cs);
-        table.PrimaryKeyIndex.Add(&pk, chunkId, ref pkAccessor);
-        pkAccessor.Dispose();
+        return chunkId;
     }
 
     /// <summary>
-    /// Read a system entity by PK: lookup in B+Tree → read chunk data.
+    /// Read a system entity by chunkId: read chunk data directly.
     /// </summary>
-    public static bool Read<T>(ComponentTable table, long pk, out T data, EpochManager epochManager) where T : unmanaged
+    public static bool Read<T>(ComponentTable table, int chunkId, out T data, EpochManager epochManager) where T : unmanaged
     {
         using var guard = EpochGuard.Enter(epochManager);
-
-        // Lookup PK in B+Tree
-        var pkAccessor = table.PrimaryKeyIndex.Segment.CreateChunkAccessor();
-        var result = table.PrimaryKeyIndex.TryGet(&pk, ref pkAccessor);
-        pkAccessor.Dispose();
-
-        if (result.IsFailure)
-        {
-            data = default;
-            return false;
-        }
-
-        int chunkId = result.Value;
 
         // Read chunk data
         var compAccessor = table.ComponentSegment.CreateChunkAccessor();
@@ -68,43 +52,18 @@ internal static unsafe class SystemCrud
     }
 
     /// <summary>
-    /// Update a system entity: allocate new chunk, copy new data, update PK → newChunkId, free old chunk.
+    /// Update a system entity: overwrite data in-place at the known chunkId (no reallocation).
     /// </summary>
-    public static bool Update<T>(ComponentTable table, long pk, ref T data, EpochManager epochManager, ChangeSet cs) where T : unmanaged
+    public static void Update<T>(ComponentTable table, int chunkId, ref T data, EpochManager epochManager, ChangeSet cs) where T : unmanaged
     {
         using var guard = EpochGuard.Enter(epochManager);
 
-        // Lookup old chunkId
-        var pkAccessor = table.PrimaryKeyIndex.Segment.CreateChunkAccessor(cs);
-        var result = table.PrimaryKeyIndex.TryGet(&pk, ref pkAccessor);
-
-        if (result.IsFailure)
-        {
-            pkAccessor.Dispose();
-            return false;
-        }
-
-        int oldChunkId = result.Value;
-
-        // Allocate new chunk
-        int newChunkId = table.ComponentSegment.AllocateChunk(false, cs);
-
-        // Copy new data
+        // Overwrite data in-place
         var compAccessor = table.ComponentSegment.CreateChunkAccessor(cs);
-        var dst = compAccessor.GetChunkAsSpan(newChunkId, true);
+        var dst = compAccessor.GetChunkAsSpan(chunkId, true);
         int overhead = table.ComponentOverhead;
         int compSize = Math.Min(sizeof(T), table.ComponentStorageSize);
         new Span<byte>(Unsafe.AsPointer(ref data), compSize).CopyTo(dst.Slice(overhead));
         compAccessor.Dispose();
-
-        // Update PK B+Tree: remove old, insert new
-        table.PrimaryKeyIndex.Remove(&pk, out _, ref pkAccessor);
-        table.PrimaryKeyIndex.Add(&pk, newChunkId, ref pkAccessor);
-        pkAccessor.Dispose();
-
-        // Free old chunk
-        table.ComponentSegment.FreeChunk(oldChunkId);
-
-        return true;
     }
 }

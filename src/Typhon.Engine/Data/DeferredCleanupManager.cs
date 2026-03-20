@@ -303,7 +303,7 @@ internal class DeferredCleanupManager
 
             if (allSameTable)
             {
-                CleanupEntityRevisionsBatched(cleanupSpan, nextMinTSN, dbe, changeSet, collectedChunkFrees, ref cleanedCount);
+                CleanupEntityRevisionsBatched(cleanupSpan, nextMinTSN, changeSet, collectedChunkFrees, ref cleanedCount);
             }
             else
             {
@@ -318,7 +318,7 @@ internal class DeferredCleanupManager
                     {
                         groupEnd++;
                     }
-                    CleanupEntityRevisionsBatched(cleanupSpan.Slice(groupStart, groupEnd - groupStart), nextMinTSN, dbe, changeSet,
+                    CleanupEntityRevisionsBatched(cleanupSpan.Slice(groupStart, groupEnd - groupStart), nextMinTSN, changeSet,
                         collectedChunkFrees, ref cleanedCount);
                     groupStart = groupEnd;
                 }
@@ -404,11 +404,10 @@ internal class DeferredCleanupManager
     /// Shares CompRevTable and CompContent accessors across the batch to avoid per-entity creation overhead.
     /// Caller must be inside an epoch scope.
     /// </summary>
-    private static void CleanupEntityRevisionsBatched(Span<CleanupEntry> entries, long nextMinTSN, DatabaseEngine dbe, ChangeSet changeSet,
+    private static void CleanupEntityRevisionsBatched(Span<CleanupEntry> entries, long nextMinTSN, ChangeSet changeSet,
         List<DeferredChunkFreeEntry> collectedChunkFrees, ref int cleanedCount)
     {
         Debug.Assert(entries.Length > 0);
-        Debug.Assert(dbe.EpochManager.IsCurrentThreadInScope);
 
         var table = entries[0].Table;
 
@@ -447,11 +446,6 @@ internal class DeferredCleanupManager
             {
                 if (!table.Definition.AllowMultiple)
                 {
-                    // Entity is fully deleted — remove from PK index and free revision chain
-                    var pkAccessor = table.PrimaryKeyIndex.Segment.CreateChunkAccessor(changeSet);
-                    table.PrimaryKeyIndex.Remove(entry.PrimaryKey, out _, ref pkAccessor);
-                    pkAccessor.Dispose();
-
                     table.CompRevTableSegment.FreeChunk(firstChunkId);
                 }
             }

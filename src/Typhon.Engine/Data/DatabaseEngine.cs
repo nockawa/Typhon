@@ -237,12 +237,14 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     private ComponentTable _schemaHistoryTable;
     private ComponentTable _archetypesTable;
     private ConcurrentDictionary<Type, ComponentTable> _componentTableByType;
+
+    /// <summary>Component schema names that underwent migration during this engine session. Used to invalidate stale EntityMaps.</summary>
+    private HashSet<string> _migratedComponents;
     private ConcurrentDictionary<ushort, ComponentTable> _componentTableByWalTypeId;
-    private long _curPrimaryKey;
     private long _lastTickFenceLSN;
     internal long LastTickFenceLSN => _lastTickFenceLSN;
-    private Dictionary<string, (long PK, ComponentR1 Comp)> _persistedComponents;
-    private Dictionary<ushort, (long PK, ArchetypeR1 Arch)> _persistedArchetypes;
+    private Dictionary<string, (int ChunkId, ComponentR1 Comp)> _persistedComponents;
+    private Dictionary<ushort, (int ChunkId, ArchetypeR1 Arch)> _persistedArchetypes;
 
     /// <summary>Per-engine archetype runtime state, indexed by ArchetypeId. Separates per-engine mutable data from shared schema metadata.</summary>
     internal ArchetypeEngineState[] _archetypeStates;
@@ -258,7 +260,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     internal void RaiseMigrationProgress(MigrationProgressEventArgs args) => OnMigrationProgress?.Invoke(this, args);
 
     /// <summary>Exposes persisted component metadata for operational tooling (Inspect, tsh commands).</summary>
-    internal IReadOnlyDictionary<string, (long PK, ComponentR1 Comp)> PersistedComponents => _persistedComponents;
+    internal IReadOnlyDictionary<string, (int ChunkId, ComponentR1 Comp)> PersistedComponents => _persistedComponents;
 
     /// <summary>Exposes persisted field definitions per component for operational tooling.</summary>
     internal IReadOnlyDictionary<string, FieldR1[]> PersistedFieldsByComponent => _persistedFieldsByComponent;
@@ -738,7 +740,6 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     {
         _componentTableByType = new ConcurrentDictionary<Type, ComponentTable>();
         _componentTableByWalTypeId = new ConcurrentDictionary<ushort, ComponentTable>();
-        _curPrimaryKey = 0;
     }
 
     private void InitializeUowRegistry()
@@ -834,8 +835,6 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             RoundToStandardStride(Math.Max(itemSize * ComponentCollectionItemCountPerChunk, sizeof(VariableSizedBufferRootHeader))),
             stride => MMF.AllocateChunkBasedSegment(PageBlockType.None, ComponentCollectionSegmentStartingSize, stride, changeSet));
 
-    internal long GetNewPrimaryKey() => Interlocked.Increment(ref _curPrimaryKey);
-
     // Create the first revision of the system schema
     private unsafe void CreateSystemSchemaR1()
     {
@@ -843,14 +842,16 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         // allocated during component registration. This replaces the old FlushAllCachedPages() nuclear approach.
         var cs = MMF.CreateChangeSet();
 
-        // Register the system components, passing the ChangeSet so all structural mutations are tracked
+        // Register core system components first, then assign _componentsTable so that
+        // subsequent registrations (ArchetypeR1) can persist their schema to the system table.
         RegisterComponentFromAccessor<ComponentR1>(cs);
         RegisterComponentFromAccessor<SchemaHistoryR1>(cs);
-        RegisterComponentFromAccessor<ArchetypeR1>(cs);
-
-        // Get their tables
         _componentsTable = GetComponentTable<ComponentR1>();
         _schemaHistoryTable = GetComponentTable<SchemaHistoryR1>();
+
+        // ArchetypeR1 registered AFTER _componentsTable is set — ensures its ComponentR1 row
+        // is persisted to the system schema (needed for LoadPersistedArchetypes on reopen).
+        RegisterComponentFromAccessor<ArchetypeR1>(cs);
         _archetypesTable = GetComponentTable<ArchetypeR1>();
 
         using var guard = EpochGuard.Enter(EpochManager);
@@ -897,7 +898,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         MMF.FlushToDisk();
     }
 
-    private (long PK, ComponentR1 Comp, FieldR1[] Fields) SaveInSystemSchema(ComponentTable table)
+    private (int ChunkId, ComponentR1 Comp, FieldR1[] Fields) SaveInSystemSchema(ComponentTable table)
     {
         var definition = table.Definition;
         var cs = MMF.CreateChangeSet();
@@ -955,24 +956,23 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             }
         }
 
-        var pk = GetNewPrimaryKey();
-        SystemCrud.Create(_componentsTable, pk, ref comp, EpochManager, cs);
+        var chunkId = SystemCrud.Create(_componentsTable, ref comp, EpochManager, cs);
         cs.SaveChanges();
-        return (pk, comp, fieldList.ToArray());
+        return (chunkId, comp, fieldList.ToArray());
     }
 
     /// <summary>
     /// Persists schema changes (renames, new fields, removed fields) for a component after the resolver detects that the runtime field layout differs from
     /// the persisted FieldR1 entries. When a migration has occurred, also updates the segment SPIs and component sizes.
     /// </summary>
-    /// <param name="pk">Primary key of the existing ComponentR1 entity.</param>
+    /// <param name="chunkId">Chunk ID of the existing ComponentR1 entity.</param>
     /// <param name="definition">The resolved component definition with updated field IDs and names.</param>
     /// <param name="migrationResult">Optional migration result containing new segment SPIs.</param>
-    private void PersistSchemaChanges(long pk, DBComponentDefinition definition, MigrationResult? migrationResult = null)
+    private void PersistSchemaChanges(int chunkId, DBComponentDefinition definition, MigrationResult? migrationResult = null)
     {
         var cs = MMF.CreateChangeSet();
 
-        SystemCrud.Read(_componentsTable, pk, out ComponentR1 comp, EpochManager);
+        SystemCrud.Read(_componentsTable, chunkId, out ComponentR1 comp, EpochManager);
 
         // Reset the Fields collection — we rebuild it entirely with the resolved definitions.
         comp.Fields = default;
@@ -1024,7 +1024,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             }
         }
 
-        SystemCrud.Update(_componentsTable, pk, ref comp, EpochManager, cs);
+        SystemCrud.Update(_componentsTable, chunkId, ref comp, EpochManager, cs);
         cs.SaveChanges();
     }
 
@@ -1093,18 +1093,23 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             }
         }
 
-        // Read all ComponentR1 entries to build the persisted components dictionary
-        _persistedComponents = new Dictionary<string, (long, ComponentR1)>();
+        // Read all ComponentR1 entries by scanning ComponentSegment allocated chunks
+        _persistedComponents = new Dictionary<string, (int, ComponentR1)>();
         _persistedFieldsByComponent = new Dictionary<string, FieldR1[]>();
-        var pkIndex = _componentsTable.PrimaryKeyIndex;
-        if (pkIndex.EntryCount > 0)
         {
-            foreach (var kv in pkIndex.EnumerateLeaves())
+            var segment = _componentsTable.ComponentSegment;
+            var capacity = segment.ChunkCapacity;
+            for (int chunkId = 1; chunkId < capacity; chunkId++)
             {
-                if (SystemCrud.Read(_componentsTable, kv.Key, out ComponentR1 comp, EpochManager))
+                if (!segment.IsChunkAllocated(chunkId))
+                {
+                    continue;
+                }
+
+                if (SystemCrud.Read(_componentsTable, chunkId, out ComponentR1 comp, EpochManager))
                 {
                     var schemaName = comp.Name.AsString;
-                    _persistedComponents[schemaName] = (kv.Key, comp);
+                    _persistedComponents[schemaName] = (chunkId, comp);
                 }
             }
 
@@ -1126,9 +1131,6 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     }
                 }
             }
-
-            // Update _curPrimaryKey from system table
-            UpdateCurPrimaryKey(pkIndex.GetMaxKey());
         }
     }
 
@@ -1218,7 +1220,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             arch.EntityMapSPI = state.EntityMap.Segment.RootPageIndex;
             arch.NextEntityKey = Interlocked.Read(ref state.NextEntityKey);
 
-            SystemCrud.Update(archetypesTable, persisted.PK, ref arch, EpochManager, cs);
+            SystemCrud.Update(archetypesTable, persisted.ChunkId, ref arch, EpochManager, cs);
             anyUpdated = true;
         }
 
@@ -1291,8 +1293,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         };
 
         var cs = MMF.CreateChangeSet();
-        var pk = GetNewPrimaryKey();
-        SystemCrud.Create(_schemaHistoryTable, pk, ref entry, EpochManager, cs);
+        SystemCrud.Create(_schemaHistoryTable, ref entry, EpochManager, cs);
         cs.SaveChanges();
     }
 
@@ -1307,34 +1308,25 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             return [];
         }
 
-        var pkIndex = _schemaHistoryTable.PrimaryKeyIndex;
-        if (pkIndex.EntryCount == 0)
-        {
-            return [];
-        }
-
-        var result = new List<SchemaHistoryR1>(pkIndex.EntryCount);
         using var guard = EpochGuard.Enter(EpochManager);
+        var segment = _schemaHistoryTable.ComponentSegment;
+        var capacity = segment.ChunkCapacity;
+        var result = new List<SchemaHistoryR1>();
 
-        foreach (var kv in pkIndex.EnumerateLeaves())
+        for (int chunkId = 1; chunkId < capacity; chunkId++)
         {
-            if (SystemCrud.Read(_schemaHistoryTable, kv.Key, out SchemaHistoryR1 entry, EpochManager))
+            if (!segment.IsChunkAllocated(chunkId))
+            {
+                continue;
+            }
+
+            if (SystemCrud.Read(_schemaHistoryTable, chunkId, out SchemaHistoryR1 entry, EpochManager))
             {
                 result.Add(entry);
             }
         }
 
         return result;
-    }
-
-    private void UpdateCurPrimaryKey(long pk)
-    {
-        long current;
-        do
-        {
-            current = _curPrimaryKey;
-        }
-        while (pk > current && Interlocked.CompareExchange(ref _curPrimaryKey, pk, current) != current);
     }
 
     public bool RegisterComponentFromAccessor<T>(ChangeSet changeSet = null, SchemaValidationMode schemaValidation = SchemaValidationMode.Enforce,
@@ -1479,19 +1471,19 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     migrationChangeSet?.SaveChanges();
                     MMF.FlushToDisk();
                 }
+            }
 
-                // Update _curPrimaryKey from loaded PK index
-                if (componentTable.PrimaryKeyIndex != null && componentTable.PrimaryKeyIndex.EntryCount > 0)
-                {
-                    var maxPk = componentTable.PrimaryKeyIndex.GetMaxKey();
-                    UpdateCurPrimaryKey(maxPk);
-                }
+            // Track migrated components so InitializeArchetypes can invalidate stale EntityMaps
+            if (migrationResult.HasValue)
+            {
+                _migratedComponents ??= [];
+                _migratedComponents.Add(schemaName);
             }
 
             // Persist schema changes if the resolver detected changes or migration ran
             if ((resolver != null && resolver.HasChanges) || migrationResult.HasValue)
             {
-                PersistSchemaChanges(persisted.PK, definition, migrationResult);
+                PersistSchemaChanges(persisted.ChunkId, definition, migrationResult);
                 IncrementUserSchemaVersion();
 
                 // Record in schema history audit trail
@@ -1512,9 +1504,9 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 MMF.FlushToDisk();
 
                 // Populate persisted dictionaries so schema commands work on first-run databases
-                _persistedComponents ??= new Dictionary<string, (long, ComponentR1)>();
+                _persistedComponents ??= new Dictionary<string, (int, ComponentR1)>();
                 _persistedFieldsByComponent ??= new Dictionary<string, FieldR1[]>();
-                _persistedComponents[schemaName] = (saved.PK, saved.Comp);
+                _persistedComponents[schemaName] = (saved.ChunkId, saved.Comp);
                 _persistedFieldsByComponent[schemaName] = saved.Fields;
             }
         }
@@ -1601,7 +1593,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         }
 
         // Load persisted archetype schemas for validation
-        _persistedArchetypes ??= new Dictionary<ushort, (long, ArchetypeR1)>();
+        _persistedArchetypes ??= new Dictionary<ushort, (int, ArchetypeR1)>();
         LoadPersistedArchetypes();
 
         // Allocate per-engine state array indexed by ArchetypeId
@@ -1649,25 +1641,40 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             // Allocate or reload per-archetype entity storage (RawValueHashMap) on THIS engine's MMF
             int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(meta._entityRecordSize);
 
-            if (_persistedArchetypes.TryGetValue(meta.ArchetypeId, out var persisted) && persisted.Arch.EntityMapSPI > 0)
+            // Skip O(1) EntityMap reopen if any of this archetype's component tables underwent migration.
+            // Migration creates new segments with preserved chunk IDs, but the persisted EntityMap
+            // points to old chunk IDs that may not be valid in the context of the new revision chain layout.
+            bool hasMigratedSlot = false;
+            if (_migratedComponents != null)
+            {
+                for (int slot = 0; slot < meta.ComponentCount && !hasMigratedSlot; slot++)
+                {
+                    hasMigratedSlot = _migratedComponents.Contains(slotToTable[slot].Definition.Name);
+                }
+            }
+
+            if (!hasMigratedSlot && _persistedArchetypes.TryGetValue(meta.ArchetypeId, out var persisted) && persisted.Arch.EntityMapSPI > 0
+                && MMF.TryLoadChunkBasedSegment(persisted.Arch.EntityMapSPI, stride, out var loadedSegment))
             {
                 // Reload existing EntityMap from persisted segment (O(1) reopen)
-                var segment = MMF.LoadChunkBasedSegment(persisted.Arch.EntityMapSPI, stride);
+                var em = RawValueHashMap<long, PersistentStore>.Open(loadedSegment, 256, meta._entityRecordSize);
                 _archetypeStates[meta.ArchetypeId] = new ArchetypeEngineState
                 {
                     SlotToComponentTable = slotToTable,
-                    EntityMap = RawValueHashMap<long, PersistentStore>.Open(segment, 16, meta._entityRecordSize),
+                    EntityMap = em,
                     NextEntityKey = persisted.Arch.NextEntityKey,
                 };
             }
             else
             {
                 // Fresh allocation (new archetype or legacy database without SPI)
-                var segment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 10, stride);
+                // n0=256 avoids excessive linear hash splits during bulk entity insertion
+                // (256 buckets × ~9 entries/bucket × 0.75 load = ~1728 entities before first split)
+                var segment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 20, stride);
                 _archetypeStates[meta.ArchetypeId] = new ArchetypeEngineState
                 {
                     SlotToComponentTable = slotToTable,
-                    EntityMap = RawValueHashMap<long, PersistentStore>.Create(segment, 16, meta._entityRecordSize),
+                    EntityMap = RawValueHashMap<long, PersistentStore>.Create(segment, 256, meta._entityRecordSize),
                     NextEntityKey = 0,
                 };
             }
@@ -1685,9 +1692,20 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
     /// <summary>
     /// Rebuild per-archetype entity maps and NextEntityKey counters from persisted ComponentTable data.
-    /// After a database reopen, the entity maps are empty (allocated fresh). This method scans the PK index
-    /// of each archetype's first component to find existing entities and reconstructs their entity records.
+    /// After a database reopen, the entity maps are empty (allocated fresh). This method scans each
+    /// Versioned slot's CompRevTableSegment to discover chain heads via their EntityPK field,
+    /// completely bypassing the PK B+Tree (which is no longer populated for archetype entities).
     /// </summary>
+    /// <remarks>
+    /// Algorithm (two-pass per slot):
+    ///   Pass 1: Collect overflow chunk IDs (NextChunkId != 0) into a set.
+    ///   Pass 2: Allocated chunks NOT in the overflow set are chain heads.
+    ///           Read EntityPK from the header, filter by archetype, store compRevFirstChunkId.
+    /// Then merge all slot maps to build EntityRecords and insert into EntityMap.
+    ///
+    /// SV limitation: SingleVersion components don't have CompRevTableSegment. SV slot locations
+    /// can't be recovered by this scan. EntityMap persistence (the primary path) covers SV.
+    /// </remarks>
     private unsafe void RebuildEntityMapsFromPersistedData()
     {
         using var guard = EpochGuard.Enter(EpochManager);
@@ -1701,76 +1719,140 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 continue;
             }
 
-            // Skip archetypes that were loaded from persisted EntityMap segment (O(1) reopen path)
-            if (_persistedArchetypes.TryGetValue(meta.ArchetypeId, out var p) && p.Arch.EntityMapSPI > 0)
+            // Skip archetypes that were loaded from persisted EntityMap segment (O(1) reopen path).
+            // BUT: if migration invalidated the EntityMap (hasMigratedSlot → fresh allocation), the
+            // EntityMap will be empty despite persisted SPI > 0. Check EntryCount to distinguish.
+            if (_persistedArchetypes.TryGetValue(meta.ArchetypeId, out var p) && p.Arch.EntityMapSPI > 0
+                && state.EntityMap.EntryCount > 0)
             {
                 continue;
             }
 
-            // Use the first component slot's PK index to enumerate entities
-            var firstTable = state.SlotToComponentTable[0];
-            if (firstTable?.PrimaryKeyIndex == null || firstTable.PrimaryKeyIndex.EntryCount == 0)
+            // Phase 1: Scan each Versioned slot's CompRevTableSegment to find chain heads
+            // slotMaps[slot] = { EntityPK → compRevFirstChunkId }
+            var slotMaps = new Dictionary<long, int>[meta.ComponentCount];
+            bool anySlotPopulated = false;
+
+            for (int slot = 0; slot < meta.ComponentCount; slot++)
+            {
+                var table = state.SlotToComponentTable[slot];
+                if (table?.CompRevTableSegment == null || table.StorageMode != StorageMode.Versioned)
+                {
+                    slotMaps[slot] = null;
+                    continue;
+                }
+
+                var segment = table.CompRevTableSegment;
+                int capacity = segment.ChunkCapacity;
+                if (capacity == 0 || segment.AllocatedChunkCount == 0)
+                {
+                    slotMaps[slot] = null;
+                    continue;
+                }
+
+                // Pass 1: Collect overflow set (chunks that are NextChunkId of another chunk)
+                var overflowSet = new HashSet<int>();
+                var accessor = segment.CreateChunkAccessor();
+
+                for (int chunkId = 0; chunkId < capacity; chunkId++)
+                {
+                    if (!segment.IsChunkAllocated(chunkId))
+                    {
+                        continue;
+                    }
+
+                    ref var hdr = ref accessor.GetChunk<CompRevStorageHeader>(chunkId, true);
+                    if (hdr.NextChunkId != 0)
+                    {
+                        overflowSet.Add(hdr.NextChunkId);
+                    }
+                }
+
+                // Pass 2: Chain heads = allocated chunks NOT in overflow set, filtered by archetype
+                var chainHeads = new Dictionary<long, int>();
+
+                for (int chunkId = 0; chunkId < capacity; chunkId++)
+                {
+                    if (!segment.IsChunkAllocated(chunkId))
+                    {
+                        continue;
+                    }
+
+                    if (overflowSet.Contains(chunkId))
+                    {
+                        continue; // Overflow chunk, not a chain head
+                    }
+
+                    ref var hdr = ref accessor.GetChunk<CompRevStorageHeader>(chunkId);
+                    long pk = hdr.EntityPK;
+
+                    // Filter: only this archetype's entities (PK lower 12 bits = ArchetypeId)
+                    if ((pk & 0xFFF) != meta.ArchetypeId)
+                    {
+                        continue;
+                    }
+
+                    chainHeads[pk] = chunkId;
+                }
+
+                accessor.Dispose();
+                slotMaps[slot] = chainHeads;
+
+                if (chainHeads.Count > 0)
+                {
+                    anySlotPopulated = true;
+                }
+            }
+
+            if (!anySlotPopulated)
             {
                 continue;
+            }
+
+            // Phase 2: Build EntityRecords from collected slot data
+            // Union all entity PKs across slots
+            var allEntityPKs = new HashSet<long>();
+            for (int slot = 0; slot < meta.ComponentCount; slot++)
+            {
+                if (slotMaps[slot] != null)
+                {
+                    foreach (var pk in slotMaps[slot].Keys)
+                    {
+                        allEntityPKs.Add(pk);
+                    }
+                }
             }
 
             long maxEntityKey = 0;
             var mapCs = MMF.CreateChangeSet();
 
-            using var pkEnum = firstTable.PrimaryKeyIndex.EnumerateLeaves();
-            while (pkEnum.MoveNext())
+            foreach (long pk in allEntityPKs)
             {
-                long pk = pkEnum.Current.Key;
-
-                // Filter by archetype — PK = (EntityKey << 12) | ArchetypeId
-                if ((pk & 0xFFF) != meta.ArchetypeId)
-                {
-                    continue;
-                }
-
                 long entityKey = pk >> 12;
 
-                // Walk revision chain for each component slot to get latest chunkId
-                bool allLive = true;
+                // Build locations for each Versioned slot
+                bool allSlotsPresent = true;
                 for (int slot = 0; slot < meta.ComponentCount; slot++)
                 {
-                    var table = state.SlotToComponentTable[slot];
-                    if (table?.CompRevTableSegment == null)
+                    if (slotMaps[slot] == null)
                     {
-                        allLive = false;
+                        // SV or non-Versioned slot — can't recover location, set to 0
+                        EntityRecordAccessor.SetLocation(recordBuf, slot, 0);
+                        continue;
+                    }
+
+                    if (!slotMaps[slot].TryGetValue(pk, out int compRevFirstChunkId))
+                    {
+                        allSlotsPresent = false;
                         break;
                     }
 
-                    // Look up this PK in the slot's PK index to get the revision chain head
-                    var slotAccessor = table.PrimaryKeyIndex.Segment.CreateChunkAccessor();
-                    var lookupResult = table.PrimaryKeyIndex.TryGet(&pk, ref slotAccessor);
-                    slotAccessor.Dispose();
-
-                    if (!lookupResult.IsSuccess)
-                    {
-                        allLive = false;
-                        break;
-                    }
-
-                    int compRevFirstChunkId = lookupResult.Value;
-
-                    // Walk revision chain with TSN=long.MaxValue to get latest committed revision
-                    var compRevAccessor = table.CompRevTableSegment.CreateChunkAccessor();
-                    var result = RevisionChainReader.WalkChain(ref compRevAccessor, compRevFirstChunkId, long.MaxValue);
-                    compRevAccessor.Dispose();
-
-                    if (result.IsFailure || result.Value.CurCompContentChunkId == 0)
-                    {
-                        allLive = false; // Tombstoned or invisible
-                        break;
-                    }
-
-                    EntityRecordAccessor.SetLocation(recordBuf, slot, result.Value.CurCompContentChunkId);
+                    EntityRecordAccessor.SetLocation(recordBuf, slot, compRevFirstChunkId);
                 }
 
-                if (!allLive)
+                if (!allSlotsPresent)
                 {
-                    continue;
+                    continue; // Entity missing from a Versioned slot — inconsistent, skip
                 }
 
                 // Build entity record header
@@ -1806,18 +1888,20 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             return;
         }
 
-        var pkIndex = archetypesTable.PrimaryKeyIndex;
-        if (pkIndex.EntryCount == 0)
-        {
-            return;
-        }
-
         using var guard = EpochGuard.Enter(EpochManager);
-        foreach (var kv in pkIndex.EnumerateLeaves())
+        var segment = archetypesTable.ComponentSegment;
+        var capacity = segment.ChunkCapacity;
+
+        for (int chunkId = 1; chunkId < capacity; chunkId++)
         {
-            if (SystemCrud.Read(archetypesTable, kv.Key, out ArchetypeR1 arch, EpochManager))
+            if (!segment.IsChunkAllocated(chunkId))
             {
-                _persistedArchetypes[arch.ArchetypeId] = (kv.Key, arch);
+                continue;
+            }
+
+            if (SystemCrud.Read(archetypesTable, chunkId, out ArchetypeR1 arch, EpochManager))
+            {
+                _persistedArchetypes[arch.ArchetypeId] = (chunkId, arch);
             }
         }
     }
@@ -1895,9 +1979,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 }
             }
 
-            var pk = GetNewPrimaryKey();
-            SystemCrud.Create(archetypesTable, pk, ref arch, EpochManager, cs);
-            _persistedArchetypes[meta.ArchetypeId] = (pk, arch);
+            var chunkId = SystemCrud.Create(archetypesTable, ref arch, EpochManager, cs);
+            _persistedArchetypes[meta.ArchetypeId] = (chunkId, arch);
             anyNew = true;
         }
 
@@ -2078,7 +2161,6 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             ["ComponentTables.Count"] = _componentTableByType?.Count ?? 0,
             ["Schema.ComponentCount"] = DBD.ComponentCount,
             ["Schema.Components"] = string.Join(", ", DBD.ComponentNames),
-            ["PrimaryKey.Current"] = _curPrimaryKey,
             ["Transactions.Created"] = _transactionsCreated,
             ["Transactions.Committed"] = _transactionsCommitted,
             ["Transactions.RolledBack"] = _transactionsRolledBack,

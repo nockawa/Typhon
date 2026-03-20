@@ -50,11 +50,12 @@ class EcsSpawnMvccTests : TestBase<EcsSpawnMvccTests>
         var entityId = tx.Spawn<EcsUnit>(EcsUnit.Position.Set(in pos), EcsUnit.Velocity.Set(in vel));
         tx.Commit();
 
-        // After commit, per-component PK index should contain EntityId → compRevChunkId
+        // After commit, EntityMap should contain the entity with finalized BornTSN
         var posTable = dbe.GetComponentTable<EcsPosition>();
         Assert.That(posTable.StorageMode, Is.EqualTo(StorageMode.Versioned));
-        Assert.That(posTable.PrimaryKeyIndex.EntryCount, Is.GreaterThan(0),
-            "PK index should contain entry after Versioned ECS Spawn+Commit");
+        var engineState = dbe._archetypeStates[entityId.ArchetypeId];
+        Assert.That(engineState.EntityMap.EntryCount, Is.GreaterThan(0),
+            "EntityMap should contain entry after Versioned ECS Spawn+Commit");
     }
 
     [Test]
@@ -76,9 +77,10 @@ class EcsSpawnMvccTests : TestBase<EcsSpawnMvccTests>
 
         tx.Commit();
 
-        // After commit, PK index should have the entry
-        Assert.That(posTable.PrimaryKeyIndex.EntryCount, Is.GreaterThan(0),
-            "PK index should contain EntityId → compRevChunkId after commit");
+        // After commit, EntityMap should have the entry with finalized BornTSN
+        var engineState = dbe._archetypeStates[Archetype<EcsUnit>.Metadata.ArchetypeId];
+        Assert.That(engineState.EntityMap.EntryCount, Is.GreaterThan(0),
+            "EntityMap should contain entry after Versioned ECS Spawn+Commit");
     }
 
     [Test]
@@ -97,15 +99,13 @@ class EcsSpawnMvccTests : TestBase<EcsSpawnMvccTests>
         tx.Commit();
 
         // After commit: IsolationFlag should be cleared by CommitComponentCore
-        // Verify by reading via the old CRUD path — if IsolationFlag is still set,
+        // Verify by reading via Open — if IsolationFlag is still set,
         // the revision would be invisible to other transactions
         using var tx2 = dbe.CreateQuickTransaction();
-        var posTable = dbe.GetComponentTable<EcsPosition>();
-        long pk = (long)entityId.RawValue;
-
-        // Use the internal ReadEntity (legacy) to verify the revision is visible
-        // If IsolationFlag wasn't cleared, this would fail
-        Assert.That(posTable.PrimaryKeyIndex.EntryCount, Is.GreaterThan(0));
+        var entity = tx2.Open(entityId);
+        Assert.That(entity.IsValid, Is.True, "Entity should be visible after commit (IsolationFlag cleared)");
+        ref readonly var readPos = ref entity.Read(EcsUnit.Position);
+        Assert.That(readPos.X, Is.EqualTo(1), "Position data should be readable after IsolationFlag cleared");
     }
 
     // ── SV/Transient unchanged ──
@@ -183,10 +183,11 @@ class EcsSpawnMvccTests : TestBase<EcsSpawnMvccTests>
             MixedModeArchetype.Trans.Set(in tr));
         tx.Commit();
 
-        // Versioned component should have PK index entry
+        // Versioned component should be readable via EntityMap (revision chain resolved)
         var vTable = dbe.GetComponentTable<CompSmVersionedMix>();
-        Assert.That(vTable.PrimaryKeyIndex.EntryCount, Is.GreaterThan(0),
-            "Versioned component should have PK index entry after commit");
+        var engineState = dbe._archetypeStates[Archetype<MixedModeArchetype>.Metadata.ArchetypeId];
+        Assert.That(engineState.EntityMap.EntryCount, Is.GreaterThan(0),
+            "EntityMap should have entry after mixed-mode Spawn+Commit");
 
         // SV should NOT
         var svTable = dbe.GetComponentTable<CompSmSingleVersion>();
@@ -900,19 +901,23 @@ class EcsSpawnMvccTests : TestBase<EcsSpawnMvccTests>
     {
         using var dbe = SetupEngine();
 
-        var posTable = dbe.GetComponentTable<EcsPosition>();
-        long pkCountBefore = posTable.PrimaryKeyIndex.EntryCount;
-
+        // PK B+Tree removed — verify entity is not visible after rollback via EntityMap
         using (var tx = dbe.CreateQuickTransaction())
         {
             var pos = new EcsPosition(1, 2, 3);
             var vel = new EcsVelocity(0, 0, 0);
-            tx.Spawn<EcsUnit>(EcsUnit.Position.Set(in pos), EcsUnit.Velocity.Set(in vel));
+            var e = tx.Spawn<EcsUnit>(EcsUnit.Position.Set(in pos), EcsUnit.Velocity.Set(in vel));
             // No commit → rollback
         }
 
-        Assert.That(posTable.PrimaryKeyIndex.EntryCount, Is.EqualTo(pkCountBefore),
-            "PK index should NOT contain entry after rollback");
+        // Verify no entity is visible (rollback should have cleaned up)
+        using (var tx2 = dbe.CreateQuickTransaction())
+        {
+            // Count entities via ECS query — should be 0 since spawn was rolled back
+            var count = tx2.Query<EcsUnit>().Count();
+            Assert.That(count, Is.EqualTo(0),
+                "No entities should be visible after rollback");
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════

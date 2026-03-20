@@ -174,14 +174,42 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     public ChunkBasedSegment<PersistentStore> DefaultIndexSegment { get; private set; }
     public ChunkBasedSegment<PersistentStore> String64IndexSegment { get; private set; }
     public ChunkBasedSegment<PersistentStore> TailIndexSegment { get; private set; }
-    public BTree<long, PersistentStore> PrimaryKeyIndex { get; private set; }
+
+    /// <summary>
+    /// Estimated total entity count. Sums EntityMap entry counts across archetypes that include this component.
+    /// </summary>
+    public int EstimatedEntityCount
+    {
+        get
+        {
+            int typeId = ArchetypeRegistry.GetComponentTypeId(Definition.POCOType);
+            if (typeId < 0)
+            {
+                return 0;
+            }
+            int total = 0;
+            foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
+            {
+                if (!meta.TryGetSlot(typeId, out _))
+                {
+                    continue;
+                }
+                var dbe = (DatabaseEngine)Parent; // ComponentTable is a child of DatabaseEngine in the resource tree
+                var state = dbe._archetypeStates[meta.ArchetypeId];
+                if (state?.EntityMap != null)
+                {
+                    total += (int)state.EntityMap.EntryCount;
+                }
+            }
+            return total;
+        }
+    }
     internal VariableSizedBufferSegment<VersionedIndexEntry, PersistentStore> TailVSBS { get; private set; }
 
     // ── Transient segments (non-null only when StorageMode == Transient) ──
     internal ChunkBasedSegment<TransientStore> TransientComponentSegment { get; private set; }
     internal ChunkBasedSegment<TransientStore> TransientDefaultIndexSegment { get; private set; }
     internal ChunkBasedSegment<TransientStore> TransientString64IndexSegment { get; private set; }
-    internal BTree<long, TransientStore> TransientPrimaryKeyIndex { get; private set; }
 
     // ── Transient stores (one per CBS — struct-copy of _pageCount requires independent instances) ──
     private TransientStore? _transientComponentStore;
@@ -393,16 +421,6 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
             CompRevTableSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, ComponentRevisionManager.CompRevChunkSize, changeSet);
         }
 
-        // PK index uses stableId -1 on DefaultIndexSegment; secondary indexes use Field.FieldId
-        if (definition.AllowMultiple)
-        {
-            PrimaryKeyIndex = new LongMultipleBTree<PersistentStore>(DefaultIndexSegment, stableId: -1, changeSet: changeSet);
-        }
-        else
-        {
-            PrimaryKeyIndex = new LongSingleBTree<PersistentStore>(DefaultIndexSegment, stableId: -1, changeSet: changeSet);
-        }
-
         // Allocate TAIL version-history segment for AllowMultiple secondary indexes
         if (Definition.MultipleIndicesCount > 0)
         {
@@ -455,10 +473,6 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
             CompRevTableSegment = mmf.LoadChunkBasedSegment(versionSPI, ComponentRevisionManager.CompRevChunkSize);
         }
 
-        PrimaryKeyIndex = definition.AllowMultiple ? 
-            new LongMultipleBTree<PersistentStore>(DefaultIndexSegment, load: true, stableId: -1) : 
-            new LongSingleBTree<PersistentStore>(DefaultIndexSegment, load: true, stableId: -1);
-
         // Restore TAIL version-history segment for AllowMultiple secondary indexes
         if (Definition.MultipleIndicesCount > 0)
         {
@@ -496,9 +510,6 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         CompRevTableSegment = revisionSegment;
         DefaultIndexSegment = mmf.LoadChunkBasedSegment(defaultIndexSPI, sizeof(Index64Chunk));
         String64IndexSegment = mmf.LoadChunkBasedSegment(string64IndexSPI, sizeof(IndexString64Chunk));
-
-        PrimaryKeyIndex = definition.AllowMultiple ? new LongMultipleBTree<PersistentStore>(DefaultIndexSegment, load: true, stableId: -1) : 
-            new LongSingleBTree<PersistentStore>(DefaultIndexSegment, load: true, stableId: -1);
 
         if (Definition.MultipleIndicesCount > 0)
         {
@@ -544,11 +555,6 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         Span<int> s64Pages = stackalloc int[MainIndexSegmentStartingSize];
         s64Store.AllocatePages(ref s64Pages, 0, null);
         TransientString64IndexSegment.Create(PageBlockType.None, s64Pages, false);
-
-        // PK index on transient default index segment
-        TransientPrimaryKeyIndex = Definition.AllowMultiple
-            ? new LongMultipleBTree<TransientStore>(TransientDefaultIndexSegment, stableId: -1)
-            : new LongSingleBTree<TransientStore>(TransientDefaultIndexSegment, stableId: -1);
 
         // Secondary indexes for Transient deferred to 3.2 (needs IndexedFieldInfo<TransientStore>)
         IndexedFieldInfos = [];

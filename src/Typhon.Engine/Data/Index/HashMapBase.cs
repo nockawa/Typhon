@@ -1,5 +1,6 @@
 // unset
 
+using System;
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -309,6 +310,43 @@ abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
         finally
         {
             ReleaseSplitLock();
+        }
+    }
+
+    /// <summary>
+    /// Pre-allocate backing storage so that organic splits triggered by subsequent inserts are cheap (no page-level Grow). Does NOT advance the linear
+    /// hash state — entry redistribution happens correctly via per-insert <see cref="ExecuteSplit"/>.
+    /// </summary>
+    public void EnsureCapacity(int totalEntries, ChangeSet changeSet = null)
+    {
+        int targetBuckets = Math.Max(_n0, (int)((totalEntries / (BucketCapacity * MaxLoadFactor)) + 1));
+        // Round up to power-of-2 × n0 boundary (valid linear hash state: bucketCount = n0 * 2^level)
+        int rounded = _n0;
+        while (rounded < targetBuckets)
+        {
+            rounded <<= 1;
+        }
+
+        var (_, _, bucketCount) = ReadMeta();
+        if (bucketCount >= rounded)
+        {
+            return;
+        }
+
+        // Pre-grow the segment so AllocateChunk during organic splits won't trigger expensive page Grow.
+        // Estimate: meta(1) + bucket chunks(rounded) + directory chunks(ceil(rounded/64)).
+        int totalChunksNeeded = 1 + rounded + ((rounded + 63) >> 6);
+        _segment.EnsureCapacity(totalChunksNeeded, changeSet);
+
+        // Pre-expand directory so ExecuteSplit doesn't allocate directory chunks per-split.
+        var accessor = _segment.CreateChunkAccessor(changeSet);
+        try
+        {
+            EnsureDirectoryCapacity(rounded - 1, ref accessor, changeSet);
+        }
+        finally
+        {
+            accessor.Dispose();
         }
     }
 

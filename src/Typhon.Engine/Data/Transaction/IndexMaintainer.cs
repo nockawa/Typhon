@@ -1,5 +1,5 @@
 // LEGACY — will be removed after #168. Kept as reference for index maintenance patterns.
-// ECS path inserts indexes directly in FlushPendingSpawns (Transaction.ECS.cs).
+// ECS path inserts indexes directly in FinalizeSpawns (Transaction.ECS.cs).
 
 using System;
 using System.Runtime.CompilerServices;
@@ -91,13 +91,6 @@ internal static unsafe class IndexMaintainer
         {
             var cur = info.CompContentAccessor.GetChunkAddress(compRevInfo.CurCompContentChunkId, true);
 
-            // Update the index with this new entry
-            {
-                var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(changeSet);
-                info.PrimaryKeyIndex.Add(pk, startChunkId, ref accessor);
-                accessor.Dispose();
-            }
-
             var indexedFieldInfos = info.ComponentTable.IndexedFieldInfos;
             for (int i = 0; i < indexedFieldInfos.Length; i++)
             {
@@ -184,7 +177,7 @@ internal static unsafe class IndexMaintainer
     /// Caller owns accessor lifecycle.
     /// </summary>
     internal static void UpdateIndices(long pk, ComponentInfo info, ComponentInfo.CompRevInfo compRevInfo, int prevCompChunkId, ChangeSet changeSet, long tsn,
-        ChunkAccessor<PersistentStore>[] indexAccessors, ref ChunkAccessor<PersistentStore> pkAccessor, ref ChunkAccessor<PersistentStore> tailAccessor)
+        ChunkAccessor<PersistentStore>[] indexAccessors, ref ChunkAccessor<PersistentStore> tailAccessor)
     {
         var startChunkId = compRevInfo.CompRevTableFirstChunkId;
         if (prevCompChunkId != 0)
@@ -247,8 +240,6 @@ internal static unsafe class IndexMaintainer
         else if ((compRevInfo.Operations & ComponentInfo.OperationType.Created) == ComponentInfo.OperationType.Created)
         {
             var cur = info.CompContentAccessor.GetChunkAddress(compRevInfo.CurCompContentChunkId, true);
-
-            info.PrimaryKeyIndex.Add(pk, startChunkId, ref pkAccessor);
 
             var indexedFieldInfos = info.ComponentTable.IndexedFieldInfos;
             for (int i = 0; i < indexedFieldInfos.Length; i++)

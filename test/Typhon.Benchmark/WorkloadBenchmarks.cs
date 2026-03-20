@@ -48,6 +48,24 @@ class WorkMultiArch : Archetype<WorkMultiArch>
     public static readonly Comp<WorkCompB> WorkB = Register<WorkCompB>();
 }
 
+[Component("Typhon.Benchmark.IndexedSvComp", 1, StorageMode = StorageMode.SingleVersion)]
+[StructLayout(LayoutKind.Sequential)]
+public struct IndexedSvComp
+{
+    [Field] [Index(AllowMultiple = true)]
+    public int Category;
+
+    [Field] [Index(AllowMultiple = true)]
+    public int Score;
+}
+
+[Archetype(504)]
+class IndexedSvArch : Archetype<IndexedSvArch>
+{
+    public static readonly Comp<WorkComp> Work = Register<WorkComp>();
+    public static readonly Comp<IndexedSvComp> Indexed = Register<IndexedSvComp>();
+}
+
 [SimpleJob(warmupCount: 2, iterationCount: 3)]
 [MemoryDiagnoser]
 [BenchmarkCategory("Workload", "Regression")]
@@ -88,20 +106,48 @@ public class WorkloadBenchmarks
         _dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
         _dbe.RegisterComponentFromAccessor<WorkComp>();
         _dbe.RegisterComponentFromAccessor<WorkCompB>();
+        _dbe.RegisterComponentFromAccessor<IndexedSvComp>();
 
         Archetype<WorkArch>.Touch();
         Archetype<WorkMultiArch>.Touch();
+        Archetype<IndexedSvArch>.Touch();
         _dbe.InitializeArchetypes();
 
-        // Pre-populate entities for read-heavy benchmarks
-        _entityIds = new EntityId[PrePopulateCount];
-        using var t = _dbe.CreateQuickTransaction();
-        for (int i = 0; i < PrePopulateCount; i++)
+        // Pre-grow EntityMap to avoid bucket splits during measurement.
+        // Spawn+destroy 200K entities so the hashmap allocates enough buckets upfront.
+        // RawValueHashMap never shrinks — buckets stay allocated after destroy.
+        const int preGrowCount = 200_000;
+        var preGrowIds = new EntityId[preGrowCount];
         {
-            var comp = new WorkComp { Value = i, Timestamp = DateTime.UtcNow.Ticks };
-            _entityIds[i] = t.Spawn<WorkArch>(WorkArch.Work.Set(in comp));
+            using var gt = _dbe.CreateQuickTransaction();
+            for (int i = 0; i < preGrowCount; i++)
+            {
+                var comp = new WorkComp { Value = i, Timestamp = 12345 };
+                preGrowIds[i] = gt.Spawn<WorkArch>(WorkArch.Work.Set(in comp));
+            }
+            gt.Commit();
         }
-        t.Commit();
+        {
+            using var dt = _dbe.CreateQuickTransaction();
+            for (int i = 0; i < preGrowCount; i++)
+            {
+                dt.Destroy(preGrowIds[i]);
+            }
+            dt.Commit();
+        }
+        _dbe.FlushDeferredCleanups();
+
+        // Pre-populate entities for read-heavy benchmarks (after pre-grow so these stay alive)
+        _entityIds = new EntityId[PrePopulateCount];
+        {
+            using var t = _dbe.CreateQuickTransaction();
+            for (int i = 0; i < PrePopulateCount; i++)
+            {
+                var comp = new WorkComp { Value = i, Timestamp = DateTime.UtcNow.Ticks };
+                _entityIds[i] = t.Spawn<WorkArch>(WorkArch.Work.Set(in comp));
+            }
+            t.Commit();
+        }
     }
 
     [GlobalCleanup]
@@ -156,7 +202,7 @@ public class WorkloadBenchmarks
 
     /// <summary>
     /// Write-heavy batch: spawn 100 entities in a single transaction.
-    /// Measures bulk insertion throughput.
+    /// Measures bulk insertion throughput at steady-state (bounded entity count).
     /// </summary>
     [Benchmark]
     public void WriteHeavy_Batch()
@@ -185,6 +231,23 @@ public class WorkloadBenchmarks
         _ = entity.Read(WorkMultiArch.Work);
         var mutEntity = t.OpenMut(eid);
         mutEntity.Write(WorkMultiArch.Work).Value = 99;
+        t.Commit();
+    }
+
+    /// <summary>
+    /// Spawn 100 entities with a SV component that has 2 indexed fields.
+    /// Exercises the FinalizeSpawns SV index insertion path (accessor create/dispose per entity per index).
+    /// </summary>
+    [Benchmark]
+    public void WriteHeavy_SvIndexed_Batch()
+    {
+        using var t = _dbe.CreateQuickTransaction();
+        for (int i = 0; i < 100; i++)
+        {
+            var comp = new WorkComp { Value = i, Timestamp = 12345 };
+            var idx = new IndexedSvComp { Category = i % 10, Score = i * 100 };
+            t.Spawn<IndexedSvArch>(IndexedSvArch.Work.Set(in comp), IndexedSvArch.Indexed.Set(in idx));
+        }
         t.Commit();
     }
 }

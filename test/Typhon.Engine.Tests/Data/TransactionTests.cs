@@ -413,7 +413,7 @@ class TransactionTests : TestBase<TransactionTests>
     /// This test verifies the expected behavior - currently the cleanup is not implemented (TOFIX in Transaction.cs).
     /// </summary>
     [Test]
-    public void DeleteComponent_WhenLastRevisionCleanedUp_PrimaryKeyIndexShouldBeRemoved()
+    public void DeleteComponent_WhenLastRevisionCleanedUp_EntityShouldBeRemoved()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
@@ -431,23 +431,12 @@ class TransactionTests : TestBase<TransactionTests>
             Assert.That(res, Is.True, "Commit should succeed");
         }
 
-        // Verify entity exists in primary key index
-        var ct = dbe.GetComponentTable<CompA>();
-        Assert.That(ct, Is.Not.Null, "ComponentTable should exist");
-
+        // Verify entity is alive after creation
         {
-            var depth = dbe.EpochManager.EnterScope();
-            try
-            {
-                var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-                var exists = ct.PrimaryKeyIndex.TryGet((long)e1.RawValue, ref accessor).IsSuccess;
-                Assert.That(exists, Is.True, "Entity should exist in primary key index after creation");
-                accessor.Dispose();
-            }
-            finally
-            {
-                dbe.EpochManager.ExitScope(depth);
-            }
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.IsAlive(e1), Is.True, "Entity should be alive after creation");
+            var readA = t.Open(e1).Read(CompAArch.A);
+            Assert.That(readA.A, Is.EqualTo(42), "Component data should be readable");
         }
 
         // Delete entity - since this is the only transaction, cleanup should happen immediately
@@ -458,30 +447,10 @@ class TransactionTests : TestBase<TransactionTests>
             Assert.That(res, Is.True, "Commit should succeed");
         }
 
-        // Verify entity is no longer readable
+        // Verify entity is no longer alive after deletion
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.IsAlive(e1), Is.False, "Entity should not be readable after deletion");
-        }
-
-        // Check primary key index - entry should be removed after cleanup
-        // NOTE: This assertion documents the EXPECTED behavior.
-        // Currently this will FAIL because the cleanup code is commented out (TOFIX in Transaction.cs line ~971)
-        {
-            var depth = dbe.EpochManager.EnterScope();
-            try
-            {
-                var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-                var existsAfterDelete = ct.PrimaryKeyIndex.TryGet((long)e1.RawValue, ref accessor).IsSuccess;
-                Assert.That(existsAfterDelete, Is.False,
-                    "Primary key index entry should be removed when component is deleted and all revisions cleaned up");
-
-                accessor.Dispose();
-            }
-            finally
-            {
-                dbe.EpochManager.ExitScope(depth);
-            }
+            Assert.That(t.IsAlive(e1), Is.False, "Entity should not be alive after deletion");
         }
     }
 
@@ -490,7 +459,7 @@ class TransactionTests : TestBase<TransactionTests>
     /// the primary key index entry should be removed after cleanup.
     /// </summary>
     [Test]
-    public void CreateInOneTxn_DeleteInAnother_PrimaryKeyIndexShouldBeRemoved()
+    public void CreateInOneTxn_DeleteInAnother_EntityShouldBeRemoved()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
@@ -508,24 +477,10 @@ class TransactionTests : TestBase<TransactionTests>
             Assert.That(res, Is.True, "Commit should succeed");
         }
 
-        var ct = dbe.GetComponentTable<CompA>();
-        Assert.That(ct, Is.Not.Null, "ComponentTable should exist");
-
-        // Verify entity exists in primary key index after creation
+        // Verify entity is alive after creation
         {
-            var depth = dbe.EpochManager.EnterScope();
-            try
-            {
-                var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-                var exists = ct.PrimaryKeyIndex.TryGet((long)e1.RawValue, ref accessor).IsSuccess;
-                Assert.That(exists, Is.True, "Entity should exist in primary key index after creation");
-
-                accessor.Dispose();
-            }
-            finally
-            {
-                dbe.EpochManager.ExitScope(depth);
-            }
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.IsAlive(e1), Is.True, "Entity should be alive after creation");
         }
 
         // Delete entity in second transaction
@@ -536,31 +491,19 @@ class TransactionTests : TestBase<TransactionTests>
             Assert.That(res, Is.True, "Commit should succeed");
         }
 
-        // Verify entity is not readable
+        // Verify entity is not alive after deletion
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.IsAlive(e1), Is.False, "Entity should not be readable after deletion");
+            Assert.That(t.IsAlive(e1), Is.False, "Entity should not be alive after deletion");
         }
 
-        // Flush deferred cleanup so deletion removes the PK index entry
+        // Flush deferred cleanup
         dbe.FlushDeferredCleanups();
 
-        // Check primary key index - entry should be removed after cleanup
+        // Verify entity is still not alive after cleanup
         {
-            var depth = dbe.EpochManager.EnterScope();
-            try
-            {
-                var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-                var exists = ct.PrimaryKeyIndex.TryGet((long)e1.RawValue, ref accessor).IsSuccess;
-                Assert.That(exists, Is.False,
-                    "Primary key index should not contain entry after entity is deleted");
-
-                accessor.Dispose();
-            }
-            finally
-            {
-                dbe.EpochManager.ExitScope(depth);
-            }
+            using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.IsAlive(e1), Is.False, "Entity should not be alive after cleanup");
         }
     }
 
@@ -608,12 +551,8 @@ class TransactionTests : TestBase<TransactionTests>
             var depth = dbe.EpochManager.EnterScope();
             try
             {
-                var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-                var existsDuringLongTxn = ct.PrimaryKeyIndex.TryGet((long)e1.RawValue, ref accessor).IsSuccess;
-                Assert.That(existsDuringLongTxn, Is.True,
-                    "Primary key index should retain entry while long-running transaction holds old revisions");
-
-                accessor.Dispose();
+                // PK B+Tree removed — this test is no longer applicable
+                Assert.Pass("PK B+Tree removed — test obsolete");
             }
             finally
             {
@@ -639,12 +578,8 @@ class TransactionTests : TestBase<TransactionTests>
             var depth = dbe.EpochManager.EnterScope();
             try
             {
-                var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-                var existsAfterCleanup = ct.PrimaryKeyIndex.TryGet((long)e1.RawValue, ref accessor).IsSuccess;
-                Assert.That(existsAfterCleanup, Is.False,
-                    "Primary key index entry should be removed after long-running transaction completes and cleanup runs");
-
-                accessor.Dispose();
+                // PK B+Tree removed — this test is no longer applicable
+                Assert.Pass("PK B+Tree removed — test obsolete");
             }
             finally
             {
@@ -657,13 +592,12 @@ class TransactionTests : TestBase<TransactionTests>
     /// Tests that multiple create-delete cycles properly clean up primary key index entries.
     /// </summary>
     [Test]
-    public void MultipleCreateDeleteCycles_PrimaryKeyIndexShouldBeCleanedUp()
+    public void MultipleCreateDeleteCycles_EntitiesShouldBeCleanedUp()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         dbe.InitializeArchetypes();
 
-        var ct = dbe.GetComponentTable<CompA>();
         var entityIds = new EntityId[5];
 
         // Create multiple entities
@@ -675,26 +609,16 @@ class TransactionTests : TestBase<TransactionTests>
             t.Commit();
         }
 
-        // Verify all entities exist in index
+        // Verify all entities are alive
         {
-            var depth = dbe.EpochManager.EnterScope();
-            try
+            using var t = dbe.CreateQuickTransaction();
+            for (int i = 0; i < 5; i++)
             {
-                var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-                for (int i = 0; i < 5; i++)
-                {
-                    var exists = ct.PrimaryKeyIndex.TryGet((long)entityIds[i].RawValue, ref accessor).IsSuccess;
-                    Assert.That(exists, Is.True, $"Entity {i} should exist in primary key index");
-                }
-                accessor.Dispose();
-            }
-            finally
-            {
-                dbe.EpochManager.ExitScope(depth);
+                Assert.That(t.IsAlive(entityIds[i]), Is.True, $"Entity {i} should be alive after creation");
             }
         }
 
-        // Delete entities 0, 2, 4 (odd indices in the array)
+        // Delete entities 0, 2, 4
         for (int i = 0; i < 5; i += 2)
         {
             using var t = dbe.CreateQuickTransaction();
@@ -702,49 +626,20 @@ class TransactionTests : TestBase<TransactionTests>
             t.Commit();
         }
 
-        // Verify deleted entities are not readable
+        // Verify deleted entities are not alive
         for (int i = 0; i < 5; i += 2)
         {
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.IsAlive(entityIds[i]), Is.False, $"Entity {i} should not be readable after deletion");
+            Assert.That(t.IsAlive(entityIds[i]), Is.False, $"Entity {i} should not be alive after deletion");
         }
 
-        // Verify remaining entities are still readable
+        // Verify remaining entities are still readable with correct data
         for (int i = 1; i < 5; i += 2)
         {
             using var t = dbe.CreateQuickTransaction();
+            Assert.That(t.IsAlive(entityIds[i]), Is.True, $"Entity {i} should be alive");
             var readA = t.Open(entityIds[i]).Read(CompAArch.A);
             Assert.That(readA.A, Is.EqualTo(i * 10), $"Entity {i} should still be readable");
-        }
-
-        // Check primary key index state
-        // NOTE: The assertions for deleted entities document EXPECTED behavior.
-        {
-            var depth = dbe.EpochManager.EnterScope();
-            try
-            {
-                var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-                // Remaining entities should exist
-                for (int i = 1; i < 5; i += 2)
-                {
-                    var exists = ct.PrimaryKeyIndex.TryGet((long)entityIds[i].RawValue, ref accessor).IsSuccess;
-                    Assert.That(exists, Is.True, $"Entity {i} should exist in primary key index");
-                }
-
-                // Deleted entities should not exist (expected behavior after cleanup)
-                for (int i = 0; i < 5; i += 2)
-                {
-                    var exists = ct.PrimaryKeyIndex.TryGet((long)entityIds[i].RawValue, ref accessor).IsSuccess;
-                    Assert.That(exists, Is.False,
-                        $"Entity {i} should be removed from primary key index after deletion and cleanup");
-                }
-
-                accessor.Dispose();
-            }
-            finally
-            {
-                dbe.EpochManager.ExitScope(depth);
-            }
         }
     }
 
@@ -785,12 +680,9 @@ class TransactionTests : TestBase<TransactionTests>
             var depth = dbe.EpochManager.EnterScope();
             try
             {
-                var accessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-                var exists = ct.PrimaryKeyIndex.TryGet((long)e1.RawValue, ref accessor).IsSuccess;
-                Assert.That(exists, Is.False,
-                    "Primary key index should not contain entry for rolled back creation");
-
-                accessor.Dispose();
+                // PK B+Tree removed — verify entity is not reachable via EntityMap
+                // (already verified above via IsAlive check)
+                Assert.Pass("PK B+Tree removed — rollback verified via IsAlive");
             }
             finally
             {

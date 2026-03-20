@@ -261,7 +261,7 @@ internal unsafe class UowRegistry : IDisposable
     /// </summary>
     public void Release(ushort uowId, ChangeSet externalCs = null)
     {
-        if (uowId == 0)
+        if (uowId == 0 || _disposed)
         {
             return;
         }
@@ -695,8 +695,12 @@ internal unsafe class UowRegistry : IDisposable
     // ═══════════════════════════════════════════════════════════════
 
     // Registry does not own the segment — DatabaseEngine manages segment lifecycle
+    private volatile bool _disposed;
+    internal bool IsDisposed => _disposed;
+
     public void Dispose()
     {
+        _disposed = true;
         _slotFreed.Dispose();
         _bitmapBlock.Dispose();
     }

@@ -304,18 +304,35 @@ class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
     #region Helpers
 
     /// <summary>
-    /// Looks up the revision chain's first chunk ID for a given entity via the PrimaryKeyIndex.
+    /// Looks up the revision chain's first chunk ID for a given entity via EntityMap.
     /// </summary>
-    private int LookupRevisionChunkId(ComponentTable ct, EntityId entityId)
+    private unsafe int LookupRevisionChunkId(ComponentTable ct, EntityId entityId)
     {
         var depth = _dbe.EpochManager.EnterScope();
         try
         {
-            var indexAccessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-            var result = ct.PrimaryKeyIndex.TryGet((long)entityId.RawValue, ref indexAccessor);
-            indexAccessor.Dispose();
-            Assert.That(result.IsSuccess, Is.True, "Entity should exist in PrimaryKeyIndex");
-            return result.Value;
+            var meta = ArchetypeRegistry.GetMetadata(entityId.ArchetypeId);
+            var es = _dbe._archetypeStates[meta.ArchetypeId];
+            Assert.That(es?.EntityMap, Is.Not.Null, "EntityMap should exist");
+
+            int targetSlot = -1;
+            for (int s = 0; s < meta.ComponentCount; s++)
+            {
+                if (ReferenceEquals(es.SlotToComponentTable[s], ct))
+                {
+                    targetSlot = s;
+                    break;
+                }
+            }
+            Assert.That(targetSlot, Is.GreaterThanOrEqualTo(0), "Component slot should be found");
+
+            byte* buf = stackalloc byte[meta._entityRecordSize];
+            var accessor = es.EntityMap.Segment.CreateChunkAccessor();
+            bool found = es.EntityMap.TryGet(entityId.EntityKey, buf, ref accessor);
+            accessor.Dispose();
+            Assert.That(found, Is.True, "Entity should exist in EntityMap");
+
+            return EntityRecordAccessor.GetLocation(buf, targetSlot);
         }
         finally
         {

@@ -268,6 +268,7 @@ internal sealed class WalRecovery : IDisposable
         // Phase 7: Finalize
         // ═══════════════════════════════════════════════════════════
 
+        WalReplayHelper.ResetReplayState();
         result.ElapsedMicroseconds = ElapsedUs(startTicks);
         return result;
     }

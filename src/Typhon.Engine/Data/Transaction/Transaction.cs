@@ -45,6 +45,14 @@ public unsafe partial class Transaction : IDisposable
 
     private Dictionary<Type, ComponentInfo> _componentInfos;
 
+    /// <summary>
+    /// Cached EntityMap accessor for GetCompRevTableFirstChunkId / GetCompRevInfoFromIndex.
+    /// Reused across multiple calls targeting the same archetype. Disposed in Reset().
+    /// </summary>
+    private ushort _entityMapCacheArchId;
+    private ChunkAccessor<PersistentStore> _entityMapCacheAccessor;
+    private bool _hasEntityMapCache;
+
     private int? _committedOperationCount;
     private int _deletedComponentCount;
     private int _entityOperationCount;
@@ -56,7 +64,6 @@ public unsafe partial class Transaction : IDisposable
 
     // Hoisted accessors for batch index maintenance (set per component type during Commit)
     private ChunkAccessor<PersistentStore>[] _batchIndexAccessors;
-    private ChunkAccessor<PersistentStore> _batchPkAccessor;
     private ChunkAccessor<PersistentStore> _batchTailAccessor;
     private bool _batchIndexActive;
     private int _batchEntityCount;
@@ -135,6 +142,11 @@ public unsafe partial class Transaction : IDisposable
 #if DEBUG
         _debugOwningThreadId = 0;
 #endif
+        if (_hasEntityMapCache)
+        {
+            _entityMapCacheAccessor.Dispose();
+            _hasEntityMapCache = false;
+        }
         if (_componentInfos.Capacity <= ComponentInfosMaxCapacity)
         {
             _componentInfos.Clear();
@@ -202,11 +214,15 @@ public unsafe partial class Transaction : IDisposable
     {
         // Dispose transient batch accessors first — safe even on double-dispose or if never created
         // (ChunkAccessor<PersistentStore>.Dispose() is idempotent: no-op when _segment==null).
-        _batchPkAccessor.Dispose();
         _batchTailAccessor.Dispose();
 
         if (_isDisposed)
         {
+            if (_hasEntityMapCache)
+            {
+                _entityMapCacheAccessor.Dispose();
+                _hasEntityMapCache = false;
+            }
             return;
         }
 
@@ -216,6 +232,11 @@ public unsafe partial class Transaction : IDisposable
         // just exit the epoch scope and remove from the chain.
         if (IsReadOnly)
         {
+            if (_hasEntityMapCache)
+            {
+                _entityMapCacheAccessor.Dispose();
+                _hasEntityMapCache = false;
+            }
             _isDisposed = true;
             ExitEpochAndRemove();
             return;
@@ -357,27 +378,7 @@ public unsafe partial class Transaction : IDisposable
     }
 
     /// <summary>
-    /// Returns an enumerator that streams all entities with component <typeparamref name="T"/> in primary key order, filtered by MVCC visibility at this
-    /// transaction's snapshot.
-    /// </summary>
-    /// <param name="minPK">Inclusive lower bound of the PK range (default: all).</param>
-    /// <param name="maxPK">Inclusive upper bound of the PK range (default: all).</param>
-    public PKEntityEnumerator<T> EnumeratePK<T>(long minPK = long.MinValue, long maxPK = long.MaxValue) where T : unmanaged
-    {
-        AssertThreadAffinity();
-        var ct = _dbe.GetComponentTable<T>() ?? throw new InvalidOperationException($"Component '{typeof(T).Name}' is not registered.");
-
-        if (ct.Definition.AllowMultiple)
-        {
-            throw new InvalidOperationException("EnumeratePK does not support AllowMultiple components. Use the single-value component API.");
-        }
-
-        return new PKEntityEnumerator<T>(ct, this, minPK, maxPK, _changeSet);
-    }
-
-    /// <summary>
-    /// Returns an enumerator that streams entities via any index (primary or secondary) in key order, filtered by MVCC visibility at this transaction's snapshot.
-    /// For PK indexes, <typeparamref name="TKey"/> must be <c>long</c>.
+    /// Returns an enumerator that streams entities via a secondary index in key order, filtered by MVCC visibility at this transaction's snapshot.
     /// </summary>
     public IndexEntityEnumerator<T, TKey> EnumerateIndex<T, TKey>(IndexRef indexRef, TKey minKey, TKey maxKey) where T : unmanaged where TKey : unmanaged
     {
@@ -385,119 +386,22 @@ public unsafe partial class Transaction : IDisposable
         indexRef.Validate();
 
         var ct = indexRef.Table;
-        BTree<TKey, PersistentStore> typedIndex;
 
         if (indexRef.IsPrimaryKey)
         {
-            if (ct.PrimaryKeyIndex is not BTree<TKey, PersistentStore> pkIndex)
-            {
-                throw new InvalidOperationException($"PK index requires TKey=long, caller specified '{typeof(TKey).Name}'.");
-            }
-
-            typedIndex = pkIndex;
+            throw new InvalidOperationException("PK B+Tree has been removed. Use ECS queries with EntityMap instead.");
         }
-        else
+
+        var ifi = ct.IndexedFieldInfos[indexRef.FieldIndex];
+        if (ifi.Index is not BTree<TKey, PersistentStore> skIndex)
         {
-            var ifi = ct.IndexedFieldInfos[indexRef.FieldIndex];
-            if (ifi.Index is not BTree<TKey, PersistentStore> skIndex)
-            {
-                throw new InvalidOperationException(
-                    $"TKey type mismatch: index uses '{ifi.Index.GetType().GenericTypeArguments[0].Name}', caller specified '{typeof(TKey).Name}'.");
-            }
-
-            typedIndex = skIndex;
+            throw new InvalidOperationException(
+                $"TKey type mismatch: index uses '{ifi.Index.GetType().GenericTypeArguments[0].Name}', caller specified '{typeof(TKey).Name}'.");
         }
+
+        BTree<TKey, PersistentStore> typedIndex = skIndex;
 
         return new IndexEntityEnumerator<T, TKey>(typedIndex, ct, this, minKey, maxKey, _changeSet);
-    }
-
-    /// <summary>
-    /// MVCC-correct streaming enumerator over the primary key B+Tree leaf chain.
-    /// Yields entities in PK order. Use <see cref="CurrentComponent"/> for zero-copy ref access
-    /// into page memory, or <see cref="Current"/> for a convenience copy.
-    /// </summary>
-    [PublicAPI]
-    public ref struct PKEntityEnumerator<T> where T : unmanaged
-    {
-        private BTree<long, PersistentStore>.RangeEnumerator _inner;
-        private ChunkAccessor<PersistentStore> _compRevAccessor;
-        private ChunkAccessor<PersistentStore> _compContentAccessor;
-        private readonly Transaction _tx;
-        private readonly long _transactionTSN;
-        private readonly int _componentOverhead;
-        private int _entityCount;
-        private long _currentPK;
-        private ReadOnlySpan<byte> _currentComponentSpan;
-        private bool _disposed;
-
-        internal PKEntityEnumerator(ComponentTable ct, Transaction tx, long minPK, long maxPK, ChangeSet changeSet)
-        {
-            _inner = ct.PrimaryKeyIndex.EnumerateRange(minPK, maxPK);
-            _compRevAccessor = ct.CompRevTableSegment.CreateChunkAccessor(changeSet);
-            _compContentAccessor = ct.ComponentSegment.CreateChunkAccessor(changeSet);
-            _tx = tx;
-            _transactionTSN = tx.TSN;
-            _componentOverhead = ct.ComponentOverhead;
-            _entityCount = 0;
-            _currentPK = 0;
-            _currentComponentSpan = default;
-            _disposed = false;
-        }
-
-        public PKEntityEnumerator<T> GetEnumerator() => this;
-
-        /// <summary>Convenience accessor — copies the component into a tuple. Prefer <see cref="CurrentComponent"/> for zero-copy.</summary>
-        public (long EntityPK, T Component) Current => (_currentPK, MemoryMarshal.AsRef<T>(_currentComponentSpan));
-
-        /// <summary>Zero-copy ref into the epoch-protected page memory. Valid until the next <see cref="MoveNext"/> call.</summary>
-        public ref readonly T CurrentComponent => ref MemoryMarshal.AsRef<T>(_currentComponentSpan);
-
-        /// <summary>The primary key of the current entity.</summary>
-        public long CurrentEntityPK => _currentPK;
-
-        public bool MoveNext()
-        {
-            while (_inner.MoveNext())
-            {
-                var kv = _inner.Current;
-                long pk = kv.Key;
-                int compRevFirstChunkId = kv.Value;
-
-                // MVCC visibility check
-                var result = RevisionChainReader.WalkChain(ref _compRevAccessor, compRevFirstChunkId, _transactionTSN);
-                if (result.IsFailure || result.Value.CurCompContentChunkId == 0)
-                {
-                    // SnapshotInvisible or Deleted — skip
-                    continue;
-                }
-
-                // Store span into page memory — no copy
-                _currentPK = pk;
-                var src = _compContentAccessor.GetChunkAsReadOnlySpan(result.Value.CurCompContentChunkId);
-                _currentComponentSpan = src.Slice(_componentOverhead);
-
-                // Epoch refresh cadence
-                if (++_entityCount % EpochRefreshInterval == 0)
-                {
-                    _tx.EnumerateRefreshEpoch();
-                }
-
-                return true;
-            }
-
-            return false;
-        }
-
-        public void Dispose()
-        {
-            if (!_disposed)
-            {
-                _disposed = true;
-                _inner.Dispose();
-                _compRevAccessor.Dispose();
-                _compContentAccessor.Dispose();
-            }
-        }
     }
 
     /// <summary>
@@ -723,6 +627,7 @@ public unsafe partial class Transaction : IDisposable
         var isMultiple = ct.Definition.AllowMultiple;
         info = new ComponentInfo(isMultiple)
         {
+            ComponentTypeId = ArchetypeRegistry.GetComponentTypeId(componentType),
             ComponentTable = ct,
             SingleCache    = isMultiple ? null : new Dictionary<long, ComponentInfo.CompRevInfo>(),
             MultipleCache  = isMultiple ? new Dictionary<long, List<ComponentInfo.CompRevInfo>>() : null,
@@ -735,13 +640,11 @@ public unsafe partial class Transaction : IDisposable
                 break;
             case StorageMode.SingleVersion:
                 info.CompContentSegment  = ct.ComponentSegment;
-                info.PrimaryKeyIndex     = ct.PrimaryKeyIndex;
                 info.CompContentAccessor = ct.ComponentSegment.CreateChunkAccessor(_changeSet);
                 break;
             default: // Versioned
                 info.CompContentSegment   = ct.ComponentSegment;
                 info.CompRevTableSegment  = ct.CompRevTableSegment;
-                info.PrimaryKeyIndex      = ct.PrimaryKeyIndex;
                 info.CompContentAccessor  = ct.ComponentSegment.CreateChunkAccessor(_changeSet);
                 info.CompRevTableAccessor = ct.CompRevTableSegment.CreateChunkAccessor(_changeSet);
                 break;
@@ -904,25 +807,72 @@ public unsafe partial class Transaction : IDisposable
         return SpawnInternal(meta, values);
     }
 
+    /// <summary>
+    /// Resolve compRevFirstChunkId for an archetype entity via EntityMap lookup.
+    /// Uses a Transaction-level cached accessor (same-archetype calls reuse the accessor's MRU warmth).
+    /// </summary>
+    private int ResolveEntityMapSlotChunkId(long pk, ComponentInfo info)
+    {
+        var entityId = EntityId.FromRaw(pk);
+        if (entityId.ArchetypeId == 0)
+        {
+            return 0;
+        }
+
+        var meta = ArchetypeRegistry.GetMetadata(entityId.ArchetypeId);
+        if (meta == null)
+        {
+            return 0;
+        }
+
+        // O(1) slot lookup via cached componentTypeId (replaces O(C) linear scan)
+        if (!meta.TryGetSlot(info.ComponentTypeId, out byte slot))
+        {
+            return 0;
+        }
+
+        var es = _dbe._archetypeStates[meta.ArchetypeId];
+        if (es?.EntityMap == null)
+        {
+            return 0;
+        }
+
+        // Reuse cached EntityMap accessor when archetype matches
+        if (!_hasEntityMapCache || _entityMapCacheArchId != entityId.ArchetypeId)
+        {
+            if (_hasEntityMapCache)
+            {
+                _entityMapCacheAccessor.Dispose();
+            }
+            _entityMapCacheAccessor = es.EntityMap.Segment.CreateChunkAccessor();
+            _entityMapCacheArchId = entityId.ArchetypeId;
+            _hasEntityMapCache = true;
+        }
+
+        int recordSize = meta._entityRecordSize;
+        byte* buf = stackalloc byte[recordSize];
+        if (es.EntityMap.TryGet(entityId.EntityKey, buf, ref _entityMapCacheAccessor))
+        {
+            return EntityRecordAccessor.GetLocation(buf, slot);
+        }
+
+        return 0;
+    }
+
     private Result<int, BTreeLookupStatus> GetCompRevTableFirstChunkId(long pk, ComponentInfo info)
     {
-        var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
-        var result = info.PrimaryKeyIndex.TryGet(pk, ref accessor);
-        accessor.Dispose();
-        return result;
+        int chunkId = ResolveEntityMapSlotChunkId(pk, info);
+        return chunkId != 0 ? new Result<int, BTreeLookupStatus>(chunkId) : new Result<int, BTreeLookupStatus>(BTreeLookupStatus.NotFound);
     }
 
     private Result<ComponentInfo.CompRevInfo, RevisionReadStatus> GetCompRevInfoFromIndex(long pk, ComponentInfo info, long tick)
     {
-        var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
-        var lookupResult = info.PrimaryKeyIndex.TryGet(pk, ref accessor);
-        accessor.Dispose();
-        if (lookupResult.IsFailure)
+        int chunkId = ResolveEntityMapSlotChunkId(pk, info);
+        if (chunkId != 0)
         {
-            return new Result<ComponentInfo.CompRevInfo, RevisionReadStatus>(RevisionReadStatus.NotFound);
+            return RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, chunkId, TSN);
         }
-
-        return RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, lookupResult.Value, TSN);
+        return new Result<ComponentInfo.CompRevInfo, RevisionReadStatus>(RevisionReadStatus.NotFound);
     }
 
     /// <summary>
@@ -1190,8 +1140,7 @@ public unsafe partial class Transaction : IDisposable
             {
                 if (_batchIndexActive)
                 {
-                    IndexMaintainer.UpdateIndices(pk, info, compRevInfo, readCompChunkId, _changeSet, TSN, _batchIndexAccessors,
-                        ref _batchPkAccessor, ref _batchTailAccessor);
+                    IndexMaintainer.UpdateIndices(pk, info, compRevInfo, readCompChunkId, _changeSet, TSN, _batchIndexAccessors, ref _batchTailAccessor);
                 }
                 else
                 {
@@ -1218,7 +1167,6 @@ public unsafe partial class Transaction : IDisposable
                 {
                     _batchIndexAccessors[i].CommitChanges();
                 }
-                _batchPkAccessor.CommitChanges();
                 if (info.ComponentTable.TailVSBS != null)
                 {
                     _batchTailAccessor.CommitChanges();
@@ -1510,11 +1458,8 @@ public unsafe partial class Transaction : IDisposable
             {
                 _batchIndexAccessors[i] = indexedFieldInfos[i].Index.Segment.CreateChunkAccessor(_changeSet);
             }
-            _batchPkAccessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
             var tailVSBS = info.ComponentTable.TailVSBS;
-            _batchTailAccessor = tailVSBS != null
-                ? tailVSBS.Segment.CreateChunkAccessor(_changeSet)
-                : default;
+            _batchTailAccessor = tailVSBS != null ? tailVSBS.Segment.CreateChunkAccessor(_changeSet) : default;
             _batchIndexActive = true;
             _batchEntityCount = 0;
             ChunkBasedSegment<PersistentStore>.EnterBatchMode();
@@ -1532,7 +1477,6 @@ public unsafe partial class Transaction : IDisposable
                 {
                     _batchIndexAccessors[i].Dispose();
                 }
-                _batchPkAccessor.Dispose();
                 if (tailVSBS != null)
                 {
                     _batchTailAccessor.Dispose();

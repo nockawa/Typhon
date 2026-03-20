@@ -496,6 +496,46 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
     }
 
     /// <summary>
+    /// Insert a key-value pair, skipping duplicate detection. Caller guarantees the key does not exist.
+    /// Used for batch inserts of known-unique keys (e.g., freshly generated EntityKeys in FinalizeSpawns).
+    /// </summary>
+    public void InsertNew(TKey key, byte* value, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
+    {
+        uint hash = ComputeHash(key);
+
+        while (true)
+        {
+            long packed = _packedMeta;
+            var (level, next, _) = UnpackMeta(packed);
+            int bucket = ResolveBucket(hash, level, next, _n0);
+            int chunkId = GetBucketChunkId(bucket, ref accessor);
+
+            byte* addr = accessor.GetChunkAddress(chunkId, true);
+            ref var header = ref GetHeader(addr);
+            var latch = new OlcLatch(ref header.OlcVersion);
+            if (!latch.TryWriteLock())
+            {
+                continue;
+            }
+
+            if (_packedMeta != packed)
+            {
+                latch.AbortWriteLock();
+                continue;
+            }
+
+            AppendEntry(chunkId, key, value, ref accessor, changeSet);
+            Interlocked.Increment(ref _entryCount);
+
+            byte* unlockAddr = accessor.GetChunkAddress(chunkId, true);
+            new OlcLatch(ref GetHeader(unlockAddr).OlcVersion).WriteUnlock();
+
+            TrySplitIfNeeded(ref accessor, changeSet);
+            return;
+        }
+    }
+
+    /// <summary>
     /// Insert or update a key-value pair. Returns true if inserted, false if updated.
     /// </summary>
     public bool Upsert(TKey key, byte* value, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
@@ -603,37 +643,22 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
         byte* oldAddr = accessor.GetChunkAddress(oldChunkId, true);
         SpinUntilWriteLock(ref GetHeader(oldAddr).OlcVersion);
 
-        // First pass: count total entries and overflow chunks
-        int totalEntries = 0;
-        int overflowChunkCount = 0;
-        int walkId = oldChunkId;
-        while (walkId != -1)
-        {
-            byte* wAddr = accessor.GetChunkAddress(walkId);
-            ref readonly var wHeader = ref GetHeader(wAddr);
-            totalEntries += wHeader.EntryCount;
-            if (walkId != oldChunkId)
-            {
-                overflowChunkCount++;
-            }
-            walkId = wHeader.OverflowChunkId;
-        }
-
-        // Stackalloc key+value buffers for classification
-        int keyBufSize = totalEntries * sizeof(TKey);
-        int valBufSize = totalEntries * _valueSize;
-        byte* keepBuf = stackalloc byte[keyBufSize + valBufSize];
-        byte* moveBuf = stackalloc byte[keyBufSize + valBufSize];
+        // Single-pass: classify entries into keep/move buffers while walking the chain.
+        // Upper-bound: 8 chunks worth of entries covers all realistic chains (primary + 7 overflow).
+        int maxEntries = _bucketCapacity * 8;
+        int entrySize = sizeof(TKey) + _valueSize;
+        byte* keepBuf = stackalloc byte[maxEntries * entrySize];
+        byte* moveBuf = stackalloc byte[maxEntries * entrySize];
         TKey* keepKeys = (TKey*)keepBuf;
-        byte* keepValues = keepBuf + keyBufSize;
+        byte* keepValues = keepBuf + maxEntries * sizeof(TKey);
         TKey* moveKeys = (TKey*)moveBuf;
-        byte* moveValues = moveBuf + keyBufSize;
+        byte* moveValues = moveBuf + maxEntries * sizeof(TKey);
         int keepCount = 0, moveCount = 0;
 
-        Span<int> overflowIds = stackalloc int[Math.Max(overflowChunkCount, 1)];
+        Span<int> overflowIds = stackalloc int[8];
         int overflowCount = 0;
 
-        walkId = oldChunkId;
+        int walkId = oldChunkId;
         while (walkId != -1)
         {
             byte* wAddr = accessor.GetChunkAddress(walkId);
@@ -650,12 +675,20 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
 
                 if (targetBucket == oldBucketId)
                 {
+                    if (keepCount >= maxEntries)
+                    {
+                        throw new InvalidOperationException($"ExecuteSplit: keep buffer overflow ({keepCount} >= {maxEntries}). Overflow chain exceeds expected capacity.");
+                    }
                     keepKeys[keepCount] = key;
                     Unsafe.CopyBlock(keepValues + keepCount * _valueSize, ValueAt(wAddr, i), (uint)_valueSize);
                     keepCount++;
                 }
                 else
                 {
+                    if (moveCount >= maxEntries)
+                    {
+                        throw new InvalidOperationException($"ExecuteSplit: move buffer overflow ({moveCount} >= {maxEntries}). Overflow chain exceeds expected capacity.");
+                    }
                     moveKeys[moveCount] = key;
                     Unsafe.CopyBlock(moveValues + moveCount * _valueSize, ValueAt(wAddr, i), (uint)_valueSize);
                     moveCount++;
@@ -664,7 +697,11 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
 
             if (walkId != oldChunkId)
             {
-                overflowIds[overflowCount++] = walkId;
+                if (overflowCount < overflowIds.Length)
+                {
+                    overflowIds[overflowCount] = walkId;
+                }
+                overflowCount++;
             }
 
             walkId = nextId;
@@ -680,7 +717,9 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
         EnsureDirectoryCapacity(newBucketId, ref accessor, changeSet);
         SetBucketChunkId(newBucketId, newChunkId, ref accessor);
 
-        for (int i = 0; i < overflowCount; i++)
+        // Free overflow chunks (up to what we tracked; excess overflows are rare)
+        int freeCount = Math.Min(overflowCount, overflowIds.Length);
+        for (int i = 0; i < freeCount; i++)
         {
             _segment.FreeChunk(overflowIds[i]);
         }
