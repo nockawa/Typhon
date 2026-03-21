@@ -757,12 +757,13 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             }
 
             ref var ifi = ref fields[fieldIdx];
+            var index = ifi.PersistentIndex;
 
             // ChangeSet required for index write operations (Move/MoveValue may trigger TAIL segment growth for AllowMultiple indexes). Created per-field,
             // saved after processing.
             var changeSet = MMF.CreateChangeSet();
             var compAccessor = table.ComponentSegment.CreateChunkAccessor(changeSet);
-            var idxAccessor = ifi.Index.Segment.CreateChunkAccessor(changeSet);
+            var idxAccessor = index.Segment.CreateChunkAccessor(changeSet);
             try
             {
                 for (int e = 0; e < count; e++)
@@ -776,15 +777,15 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                         // Entity is dead — remove old index entry using shadow value (matches current index key).
                         // Copy to local to allow address-of on stack variable.
                         var destroyOldKey = entry.OldKey;
-                        if (ifi.Index.AllowMultiple)
+                        if (index.AllowMultiple)
                         {
                             byte* ptr = compAccessor.GetChunkAddress(entry.ChunkId);
                             int elementId = *(int*)(ptr + ifi.OffsetToIndexElementId);
-                            ifi.Index.RemoveValue(&destroyOldKey, elementId, entry.ChunkId, ref idxAccessor);
+                            index.RemoveValue(&destroyOldKey, elementId, entry.ChunkId, ref idxAccessor);
                         }
                         else
                         {
-                            ifi.Index.Remove(&destroyOldKey, out _, ref idxAccessor);
+                            index.Remove(&destroyOldKey, out _, ref idxAccessor);
                         }
 
                         // Notify views of deletion
@@ -817,17 +818,17 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     }
 
                     // Update B+Tree index
-                    if (ifi.Index.AllowMultiple)
+                    if (index.AllowMultiple)
                     {
                         int elementId = *(int*)(chunkPtr + ifi.OffsetToIndexElementId);
-                        int newElementId = ifi.Index.MoveValue(&oldKey, newFieldPtr, elementId, entry.ChunkId, ref idxAccessor, out _, out _, 
+                        int newElementId = index.MoveValue(&oldKey, newFieldPtr, elementId, entry.ChunkId, ref idxAccessor, out _, out _, 
                             preserveEmptyBuffer: false);
                         // Write back new element ID — page is already dirty from the mutation that triggered shadowing
                         *(int*)(chunkPtr + ifi.OffsetToIndexElementId) = newElementId;
                     }
                     else
                     {
-                        ifi.Index.Move(&oldKey, newFieldPtr, entry.ChunkId, ref idxAccessor);
+                        index.Move(&oldKey, newFieldPtr, entry.ChunkId, ref idxAccessor);
                     }
 
                     // Notify registered views

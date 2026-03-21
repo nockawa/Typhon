@@ -99,14 +99,14 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         Assert.That(tailVSBS, Is.Not.Null);
 
         var ifi = ct.IndexedFieldInfos[0]; // Field A (float, AllowMultiple)
-        Assert.That(ifi.Index.AllowMultiple, Is.True, "First indexed field should be AllowMultiple");
+        Assert.That(ifi.PersistentIndex.AllowMultiple, Is.True, "First indexed field should be AllowMultiple");
 
         unsafe
         {
             using var guard = EpochGuard.Enter(dbe.EpochManager);
             float key = 1.0f;
-            var accessor = ifi.Index.Segment.CreateChunkAccessor();
-            var headResult = ifi.Index.TryGet(&key, ref accessor);
+            var accessor = ifi.PersistentIndex.Segment.CreateChunkAccessor();
+            var headResult = ifi.PersistentIndex.TryGet(&key, ref accessor);
             Assert.That(headResult.IsSuccess, Is.True, "Key should exist in HEAD index");
 
             var headBufferId = headResult.Value;
@@ -151,8 +151,8 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
 
             // Check old key (1.0f) — preserved by preserveEmptyBuffer even though HEAD buffer is empty
             float oldKey = 1.0f;
-            var accessor = ifi.Index.Segment.CreateChunkAccessor();
-            var oldHeadResult = ifi.Index.TryGet(&oldKey, ref accessor);
+            var accessor = ifi.PersistentIndex.Segment.CreateChunkAccessor();
+            var oldHeadResult = ifi.PersistentIndex.TryGet(&oldKey, ref accessor);
             Assert.That(oldHeadResult.IsSuccess, Is.True, "Old key should be preserved in BTree (preserveEmptyBuffer)");
 
             var oldTailBufferId = IndexBufferExtraHeader.FromChunkAddress(accessor.GetChunkAddress(oldHeadResult.Value)).TailBufferId;
@@ -163,7 +163,7 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
 
             // Check new key (5.0f) — should have Active entry
             float newKey = 5.0f;
-            var newHeadResult = ifi.Index.TryGet(&newKey, ref accessor);
+            var newHeadResult = ifi.PersistentIndex.TryGet(&newKey, ref accessor);
             Assert.That(newHeadResult.IsSuccess, Is.True, "New key should exist in HEAD index");
 
             var newTailBufferId = IndexBufferExtraHeader.FromChunkAddress(accessor.GetChunkAddress(newHeadResult.Value)).TailBufferId;
@@ -206,8 +206,8 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         {
             using var guard = EpochGuard.Enter(dbe.EpochManager);
             float key = 3.0f;
-            var accessor = ifi.Index.Segment.CreateChunkAccessor();
-            var headResult = ifi.Index.TryGet(&key, ref accessor);
+            var accessor = ifi.PersistentIndex.Segment.CreateChunkAccessor();
+            var headResult = ifi.PersistentIndex.TryGet(&key, ref accessor);
             Assert.That(headResult.IsSuccess, Is.True, "Key should be preserved (preserveEmptyBuffer)");
 
             var tailBufferId = IndexBufferExtraHeader.FromChunkAddress(accessor.GetChunkAddress(headResult.Value)).TailBufferId;
@@ -289,8 +289,8 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         {
             using var guard = EpochGuard.Enter(dbe.EpochManager);
             float key = 1.0f;
-            var accessor = ifi.Index.Segment.CreateChunkAccessor();
-            var headResult = ifi.Index.TryGet(&key, ref accessor);
+            var accessor = ifi.PersistentIndex.Segment.CreateChunkAccessor();
+            var headResult = ifi.PersistentIndex.TryGet(&key, ref accessor);
             Assert.That(IndexBufferExtraHeader.FromChunkAddress(accessor.GetChunkAddress(headResult.Value)).TailBufferId,
                 Is.EqualTo(0), "TAIL should not be allocated before any mutation");
             accessor.Dispose();
@@ -309,8 +309,8 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         {
             using var guard = EpochGuard.Enter(dbe.EpochManager);
             float key = 1.0f;
-            var accessor = ifi.Index.Segment.CreateChunkAccessor();
-            var headResult = ifi.Index.TryGet(&key, ref accessor);
+            var accessor = ifi.PersistentIndex.Segment.CreateChunkAccessor();
+            var headResult = ifi.PersistentIndex.TryGet(&key, ref accessor);
             Assert.That(headResult.IsSuccess, Is.True);
 
             var tailBufferId = IndexBufferExtraHeader.FromChunkAddress(accessor.GetChunkAddress(headResult.Value)).TailBufferId;

@@ -484,6 +484,74 @@ class PipelineExecutorCombinedPathTests : TestBase<PipelineExecutorCombinedPathT
     // ═══════════════════════════════════════════════════════════════════════
     // J. Single entity edge case
     // ═══════════════════════════════════════════════════════════════════════
+    // K. Dual-bound range queries (PlanBuilder bounds merging)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void Versioned_DualBound_RangeQuery_Count()
+    {
+        using var dbe = SetupEngine();
+        SpawnCompDEntities(dbe, 20);
+
+        // B >= 5 AND B < 15 → entities with B=5,6,...,14 → 10 entities
+        using var tx = dbe.CreateQuickTransaction();
+        Assert.That(tx.Query<CompDArch>().WhereField<CompD>(d => d.B >= 5 && d.B < 15).Count(), Is.EqualTo(10));
+    }
+
+    [Test]
+    public void Versioned_DualBound_RangeQuery_Execute()
+    {
+        using var dbe = SetupEngine();
+        var ids = SpawnCompDEntities(dbe, 20);
+
+        // B > 3 AND B <= 7 → entities with B=4,5,6,7 → 4 entities
+        using var tx = dbe.CreateQuickTransaction();
+        var result = tx.Query<CompDArch>().WhereField<CompD>(d => d.B > 3 && d.B <= 7).Execute();
+        Assert.That(result, Has.Count.EqualTo(4));
+        for (int i = 4; i <= 7; i++)
+        {
+            Assert.That(result, Does.Contain(ids[i]));
+        }
+    }
+
+    [Test]
+    public void Versioned_DualBound_EmptyRange()
+    {
+        using var dbe = SetupEngine();
+        SpawnCompDEntities(dbe, 20);
+
+        // B >= 15 AND B < 10 → empty range (min > max)
+        using var tx = dbe.CreateQuickTransaction();
+        Assert.That(tx.Query<CompDArch>().WhereField<CompD>(d => d.B >= 15 && d.B < 10).Count(), Is.EqualTo(0));
+    }
+
+    [Test]
+    public void Versioned_DualBound_EqualityCollapse()
+    {
+        using var dbe = SetupEngine();
+        SpawnCompDEntities(dbe, 20);
+
+        // B >= 10 AND B <= 10 → exactly 1 entity (B=10)
+        using var tx = dbe.CreateQuickTransaction();
+        Assert.That(tx.Query<CompDArch>().WhereField<CompD>(d => d.B >= 10 && d.B <= 10).Count(), Is.EqualTo(1));
+    }
+
+    [Test]
+    public void SV_DualBound_RangeQuery_Count()
+    {
+        using var dbe = SetupEngine();
+        SpawnSvEntities(dbe, 25);
+        dbe.WriteTickFence(1);
+
+        // Category >= 1 AND Category <= 3 → entities with Category=1,2,3
+        // Out of 25 entities (0-4 cycling): 5 each for 1,2,3 → 15 entities
+        using var tx = dbe.CreateQuickTransaction();
+        Assert.That(tx.Query<PipeSvArch>().WhereField<PipeSvData>(d => d.Category >= 1 && d.Category <= 3).Count(), Is.EqualTo(15));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // L. Edge cases
+    // ═══════════════════════════════════════════════════════════════════════
 
     [Test]
     public void SingleEntity_Count_ReturnsOne()

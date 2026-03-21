@@ -1501,7 +1501,7 @@ public unsafe partial class Transaction : IDisposable
             _batchIndexAccessors = new ChunkAccessor<PersistentStore>[indexedFieldInfos.Length];
             for (int i = 0; i < indexedFieldInfos.Length; i++)
             {
-                _batchIndexAccessors[i] = indexedFieldInfos[i].Index.Segment.CreateChunkAccessor(_changeSet);
+                _batchIndexAccessors[i] = indexedFieldInfos[i].PersistentIndex.Segment.CreateChunkAccessor(_changeSet);
             }
             var tailVSBS = info.ComponentTable.TailVSBS;
             _batchTailAccessor = tailVSBS != null ? tailVSBS.Segment.CreateChunkAccessor(_changeSet) : default;

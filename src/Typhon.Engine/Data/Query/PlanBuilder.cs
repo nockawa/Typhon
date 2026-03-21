@@ -109,17 +109,33 @@ internal class PlanBuilder
             var typeMin = TypeMinAsLong(eval.KeyType);
             var typeMax = TypeMaxAsLong(eval.KeyType);
             var isInteger = IsIntegerKeyType(eval.KeyType);
-            var (scanMin, scanMax) = eval.CompareOp switch
-            {
-                CompareOp.Equal => (eval.Threshold, eval.Threshold),
-                CompareOp.GreaterThan => (isInteger ? eval.Threshold + 1 : eval.Threshold, typeMax),
-                CompareOp.GreaterThanOrEqual => (eval.Threshold, typeMax),
-                CompareOp.LessThan => (typeMin, isInteger ? eval.Threshold - 1 : eval.Threshold),
-                CompareOp.LessThanOrEqual => (typeMin, eval.Threshold),
-                _ => (typeMin, typeMax)
-            };
+            var (scanMin, scanMax) = ComputeBounds(ref eval, typeMin, typeMax, isInteger);
 
-            return (eval.FieldIndex, eval.KeyType, scanMin, scanMax);
+            // Merge bounds from additional evaluators on the same field (e.g., B >= 5 && B < 15 → intersect ranges).
+            var selectedFieldIndex = eval.FieldIndex;
+            var selectedKeyType = eval.KeyType;
+            for (var j = i + 1; j < orderedEvaluators.Length; j++)
+            {
+                ref var other = ref orderedEvaluators[j];
+                if (other.FieldIndex != selectedFieldIndex || other.CompareOp == CompareOp.NotEqual)
+                {
+                    continue;
+                }
+
+                var (otherMin, otherMax) = ComputeBounds(ref other, typeMin, typeMax, isInteger);
+                // Intersect: tighten both bounds
+                if (otherMin > scanMin)
+                {
+                    scanMin = otherMin;
+                }
+
+                if (otherMax < scanMax)
+                {
+                    scanMax = otherMax;
+                }
+            }
+
+            return (selectedFieldIndex, selectedKeyType, scanMin, scanMax);
         }
 
         return (-1, default, 0, 0);
@@ -218,4 +234,15 @@ internal class PlanBuilder
             default: return long.MinValue;
         }
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static (long Min, long Max) ComputeBounds(ref FieldEvaluator eval, long typeMin, long typeMax, bool isInteger) => eval.CompareOp switch
+    {
+        CompareOp.Equal => (eval.Threshold, eval.Threshold),
+        CompareOp.GreaterThan => (isInteger ? eval.Threshold + 1 : eval.Threshold, typeMax),
+        CompareOp.GreaterThanOrEqual => (eval.Threshold, typeMax),
+        CompareOp.LessThan => (typeMin, isInteger ? eval.Threshold - 1 : eval.Threshold),
+        CompareOp.LessThanOrEqual => (typeMin, eval.Threshold),
+        _ => (typeMin, typeMax)
+    };
 }

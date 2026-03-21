@@ -12,9 +12,9 @@ namespace Typhon.Engine;
 /// </summary>
 internal class IndexStatistics
 {
-    private readonly BTreeBase<PersistentStore> _index;
+    private readonly IBTreeIndex _index;
 
-    public IndexStatistics(BTreeBase<PersistentStore> index)
+    public IndexStatistics(IBTreeIndex index)
     {
         _index = index;
         KeyType = DeriveKeyType(index);
@@ -26,7 +26,7 @@ internal class IndexStatistics
     /// </summary>
     public KeyType KeyType { get; }
 
-    private static KeyType DeriveKeyType(BTreeBase<PersistentStore> index) => index switch
+    private static KeyType DeriveKeyType(IBTreeIndex index) => index switch
     {
         BTree<byte, PersistentStore> => KeyType.Byte,
         BTree<sbyte, PersistentStore> => KeyType.SByte,
@@ -80,7 +80,7 @@ internal class IndexStatistics
     public volatile Histogram Histogram;
 
     /// <summary>The underlying B+Tree index.</summary>
-    internal BTreeBase<PersistentStore> Index => _index;
+    internal IBTreeIndex Index => _index;
 
     /// <summary>
     /// Rebuilds the histogram by scanning all leaf entries in the B+Tree.

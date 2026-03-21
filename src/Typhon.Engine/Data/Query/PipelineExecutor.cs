@@ -688,6 +688,7 @@ internal class PipelineExecutor
     {
         var minKey = BTree<TKey, PersistentStore>.LongToKey(plan.PrimaryScanMin);
         var maxKey = BTree<TKey, PersistentStore>.LongToKey(plan.PrimaryScanMax);
+        var nonPrimaryEvals = ComputeNonPrimaryEvaluators(evaluators, plan.PrimaryFieldIndex);
         var collected = 0;
 
         var compRevAccessor = table.CompRevTableSegment.CreateChunkAccessor();
@@ -706,7 +707,7 @@ internal class PipelineExecutor
                             var values = enumerator.CurrentValues;
                             for (var j = 0; j < values.Length; j++)
                             {
-                                if (ExecuteOneTwoVersioned<T>(values[j], ref compRevAccessor, ref compContentAccessor, table, evaluators, tx,
+                                if (ExecuteOneTwoVersioned<T>(values[j], ref compRevAccessor, ref compContentAccessor, table, nonPrimaryEvals, tx,
                                         unorderedResult, orderedResult, ref skip, ref collected) && collected >= take)
                                 {
                                     return;
@@ -725,7 +726,7 @@ internal class PipelineExecutor
                 var enumerator = plan.Descending ? index.EnumerateRangeDescending(minKey, maxKey) : index.EnumerateRange(minKey, maxKey);
                 foreach (var kv in enumerator)
                 {
-                    if (ExecuteOneTwoVersioned<T>(kv.Value, ref compRevAccessor, ref compContentAccessor, table, evaluators, tx,
+                    if (ExecuteOneTwoVersioned<T>(kv.Value, ref compRevAccessor, ref compContentAccessor, table, nonPrimaryEvals, tx,
                             unorderedResult, orderedResult, ref skip, ref collected) && collected >= take)
                     {
                         return;
@@ -797,6 +798,7 @@ internal class PipelineExecutor
     {
         var minKey = BTree<TKey, PersistentStore>.LongToKey(plan.PrimaryScanMin);
         var maxKey = BTree<TKey, PersistentStore>.LongToKey(plan.PrimaryScanMax);
+        var nonPrimaryEvals = ComputeNonPrimaryEvaluators(evaluators, plan.PrimaryFieldIndex);
         var collected = 0;
 
         var compAccessor = table.ComponentSegment.CreateChunkAccessor();
@@ -814,7 +816,7 @@ internal class PipelineExecutor
                             var values = enumerator.CurrentValues;
                             for (var j = 0; j < values.Length; j++)
                             {
-                                if (ExecuteOneTwoSV<T>(values[j], ref compAccessor, table, evaluators, tx,
+                                if (ExecuteOneTwoSV<T>(values[j], ref compAccessor, table, nonPrimaryEvals, tx,
                                         unorderedResult, orderedResult, ref skip, ref collected) && collected >= take)
                                 {
                                     return;
@@ -833,7 +835,7 @@ internal class PipelineExecutor
                 var enumerator = plan.Descending ? index.EnumerateRangeDescending(minKey, maxKey) : index.EnumerateRange(minKey, maxKey);
                 foreach (var kv in enumerator)
                 {
-                    if (ExecuteOneTwoSV<T>(kv.Value, ref compAccessor, table, evaluators, tx,
+                    if (ExecuteOneTwoSV<T>(kv.Value, ref compAccessor, table, nonPrimaryEvals, tx,
                             unorderedResult, orderedResult, ref skip, ref collected) && collected >= take)
                     {
                         return;

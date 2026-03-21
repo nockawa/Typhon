@@ -138,7 +138,10 @@ internal struct IndexedFieldInfo
     public int Size;
 
     public int OffsetToIndexElementId;
-    public BTreeBase<PersistentStore> Index;
+    public IBTreeIndex Index;
+
+    /// <summary>Returns the index cast to <see cref="BTreeBase{TStore}"/> for PersistentStore operations (Versioned and SingleVersion paths).</summary>
+    internal BTreeBase<PersistentStore> PersistentIndex => (BTreeBase<PersistentStore>)Index;
 }
 
 [PublicAPI]
@@ -597,7 +600,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         s64Store.AllocatePages(ref s64Pages, 0, null);
         TransientString64IndexSegment.Create(PageBlockType.None, s64Pages, false);
 
-        // Secondary indexes for Transient deferred to 3.2 (needs IndexedFieldInfo<TransientStore>)
+        // Secondary indexes for Transient deferred (IBTreeIndex type erasure is ready; needs TransientStore index creation + query pipeline dispatch)
         IndexedFieldInfos = [];
         IndexStats = [];
         ViewRegistry = new ViewRegistry(0);
@@ -696,7 +699,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
 
                     var chunkAddr = accessor.GetChunkAddress(chunkId);
                     var keyAddr = chunkAddr + ifi.OffsetToField;
-                    ifi.Index.Add(keyAddr, chunkId, ref accessor);
+                    ifi.PersistentIndex.Add(keyAddr, chunkId, ref accessor);
                 }
             }
         }

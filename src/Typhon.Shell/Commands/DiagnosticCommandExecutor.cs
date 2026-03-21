@@ -1058,7 +1058,7 @@ internal sealed class DiagnosticCommandExecutor
                 {
                     if (info.OffsetToField == field.OffsetInComponentStorage)
                     {
-                        return (info.Index, null);
+                        return (info.PersistentIndex, null);
                     }
                 }
             }
@@ -1258,7 +1258,7 @@ internal sealed class DiagnosticCommandExecutor
         sb.AppendLine();
     }
 
-    private static void AppendSingleIndexStats(StringBuilder sb, string qualifiedName, IndexStatistics stats, BTreeBase<PersistentStore> index)
+    private static void AppendSingleIndexStats(StringBuilder sb, string qualifiedName, IndexStatistics stats, IBTreeIndex index)
     {
         var multiStr = index.AllowMultiple ? " [yellow]AllowMultiple[/]" : " [dim]Unique[/]";
         sb.AppendLine($"  [cyan]{Markup.Escape(qualifiedName)}[/]{multiStr}");
@@ -1385,7 +1385,8 @@ internal sealed class DiagnosticCommandExecutor
         return count;
     }
 
-    private (IndexStatistics Stats, BTreeBase<PersistentStore> Index, string Error) ResolveIndexStats(string name)
+    private (IndexStatistics Stats, IBTreeIndex Index, string Error) ResolveIndexStats(string name)
+
     {
         var dotPos = name.LastIndexOf('.');
         if (dotPos < 0)

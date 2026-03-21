@@ -23,18 +23,19 @@ internal static unsafe class IndexMaintainer
             for (int i = 0; i < indexedFieldInfos.Length; i++)
             {
                 ref var ifi = ref indexedFieldInfos[i];
+                var index = ifi.PersistentIndex;
 
                 // The update changed the field?
                 if (prevSpan.Slice(ifi.OffsetToField, ifi.Size).SequenceEqual(curSpan.Slice(ifi.OffsetToField, ifi.Size)) == false)
                 {
-                    var accessor = ifi.Index.Segment.CreateChunkAccessor(changeSet);
-                    if (ifi.Index.AllowMultiple)
+                    var accessor = index.Segment.CreateChunkAccessor(changeSet);
+                    if (index.AllowMultiple)
                     {
                         var tailVSBS = info.ComponentTable.TailVSBS;
 
                         // Compound MoveValue: atomic remove-from-old + insert-under-new in a single traversal.
                         // With TAIL tracking, preserveEmptyBuffer keeps the old HEAD buffer alive for tombstone writes.
-                        *(int*)&cur[ifi.OffsetToIndexElementId] = ifi.Index.MoveValue(&prev[ifi.OffsetToField], &cur[ifi.OffsetToField],
+                        *(int*)&cur[ifi.OffsetToIndexElementId] = index.MoveValue(&prev[ifi.OffsetToField], &cur[ifi.OffsetToField],
                             *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref accessor,
                             out var oldHeadBufferId, out var newHeadBufferId, preserveEmptyBuffer: tailVSBS != null);
 
@@ -67,14 +68,14 @@ internal static unsafe class IndexMaintainer
                     else
                     {
                         // Unique index — compound Move for atomic single-traversal move
-                        ifi.Index.Move(&prev[ifi.OffsetToField], &cur[ifi.OffsetToField], startChunkId, ref accessor);
+                        index.Move(&prev[ifi.OffsetToField], &cur[ifi.OffsetToField], startChunkId, ref accessor);
                     }
                     accessor.Dispose();
 
                     NotifyViews(info.ComponentTable, i, pk, tsn, prev + ifi.OffsetToField, cur + ifi.OffsetToField, ifi.Size, isCreation: false,
                         isDeletion: false);
                 }
-                else if (ifi.Index.AllowMultiple)
+                else if (index.AllowMultiple)
                 {
                     // Carry forward the elementId for unchanged AllowMultiple fields so that
                     // the new content chunk has valid buffer references for later removal (e.g., on delete).
@@ -95,16 +96,17 @@ internal static unsafe class IndexMaintainer
             for (int i = 0; i < indexedFieldInfos.Length; i++)
             {
                 ref var ifi = ref indexedFieldInfos[i];
+                var index = ifi.PersistentIndex;
 
-                var accessor = ifi.Index.Segment.CreateChunkAccessor(changeSet);
-                if (ifi.Index.AllowMultiple)
+                var accessor = index.Segment.CreateChunkAccessor(changeSet);
+                if (index.AllowMultiple)
                 {
-                    *(int*)&cur[ifi.OffsetToIndexElementId] = ifi.Index.Add(&cur[ifi.OffsetToField], startChunkId, ref accessor, out _);
+                    *(int*)&cur[ifi.OffsetToIndexElementId] = index.Add(&cur[ifi.OffsetToField], startChunkId, ref accessor, out _);
                     // TAIL write deferred to first mutation — see EnsureTailPopulated
                 }
                 else
                 {
-                    ifi.Index.Add(&cur[ifi.OffsetToField], startChunkId, ref accessor);
+                    index.Add(&cur[ifi.OffsetToField], startChunkId, ref accessor);
                 }
                 accessor.Dispose();
             }
@@ -135,14 +137,15 @@ internal static unsafe class IndexMaintainer
         for (int i = 0; i < indexedFieldInfos.Length; i++)
         {
             ref var ifi = ref indexedFieldInfos[i];
-            var accessor = ifi.Index.Segment.CreateChunkAccessor(changeSet);
-            if (ifi.Index.AllowMultiple)
+            var index = ifi.PersistentIndex;
+            var accessor = index.Segment.CreateChunkAccessor(changeSet);
+            if (index.AllowMultiple)
             {
                 var tailVSBS = info.ComponentTable.TailVSBS;
 
                 // When TAIL tracking is active, preserve the BTree key even if the HEAD buffer empties.
                 // This keeps the TAIL version-history buffer reachable for temporal queries.
-                ifi.Index.RemoveValue(&prev[ifi.OffsetToField], *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref accessor,
+                index.RemoveValue(&prev[ifi.OffsetToField], *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref accessor,
                     preserveEmptyBuffer: tailVSBS != null);
 
                 // TAIL: backfill + Active + Tombstone for the deleted entity.
@@ -150,7 +153,7 @@ internal static unsafe class IndexMaintainer
                 if (tailVSBS != null)
                 {
                     var tailAccessor = tailVSBS.Segment.CreateChunkAccessor(changeSet);
-                    var headResult = ifi.Index.TryGet(&prev[ifi.OffsetToField], ref accessor);
+                    var headResult = index.TryGet(&prev[ifi.OffsetToField], ref accessor);
                     if (headResult.IsSuccess)
                     {
                         var tailBufId = EnsureTailPopulated(headResult.Value, tailVSBS,
@@ -164,7 +167,7 @@ internal static unsafe class IndexMaintainer
             }
             else
             {
-                ifi.Index.Remove(&prev[ifi.OffsetToField], out _, ref accessor);
+                index.Remove(&prev[ifi.OffsetToField], out _, ref accessor);
             }
             accessor.Dispose();
         }
@@ -191,14 +194,15 @@ internal static unsafe class IndexMaintainer
             for (int i = 0; i < indexedFieldInfos.Length; i++)
             {
                 ref var ifi = ref indexedFieldInfos[i];
+                var index = ifi.PersistentIndex;
 
                 if (prevSpan.Slice(ifi.OffsetToField, ifi.Size).SequenceEqual(curSpan.Slice(ifi.OffsetToField, ifi.Size)) == false)
                 {
-                    if (ifi.Index.AllowMultiple)
+                    if (index.AllowMultiple)
                     {
                         var tailVSBS = info.ComponentTable.TailVSBS;
 
-                        *(int*)&cur[ifi.OffsetToIndexElementId] = ifi.Index.MoveValue(&prev[ifi.OffsetToField], &cur[ifi.OffsetToField],
+                        *(int*)&cur[ifi.OffsetToIndexElementId] = index.MoveValue(&prev[ifi.OffsetToField], &cur[ifi.OffsetToField],
                             *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref indexAccessors[i],
                             out var oldHeadBufferId, out var newHeadBufferId, preserveEmptyBuffer: tailVSBS != null);
 
@@ -223,13 +227,13 @@ internal static unsafe class IndexMaintainer
                     }
                     else
                     {
-                        ifi.Index.Move(&prev[ifi.OffsetToField], &cur[ifi.OffsetToField], startChunkId, ref indexAccessors[i]);
+                        index.Move(&prev[ifi.OffsetToField], &cur[ifi.OffsetToField], startChunkId, ref indexAccessors[i]);
                     }
 
                     NotifyViews(info.ComponentTable, i, pk, tsn, prev + ifi.OffsetToField, cur + ifi.OffsetToField, ifi.Size, isCreation: false,
                         isDeletion: false);
                 }
-                else if (ifi.Index.AllowMultiple)
+                else if (index.AllowMultiple)
                 {
                     *(int*)&cur[ifi.OffsetToIndexElementId] = *(int*)&prev[ifi.OffsetToIndexElementId];
                 }
@@ -245,14 +249,15 @@ internal static unsafe class IndexMaintainer
             for (int i = 0; i < indexedFieldInfos.Length; i++)
             {
                 ref var ifi = ref indexedFieldInfos[i];
+                var index = ifi.PersistentIndex;
 
-                if (ifi.Index.AllowMultiple)
+                if (index.AllowMultiple)
                 {
-                    *(int*)&cur[ifi.OffsetToIndexElementId] = ifi.Index.Add(&cur[ifi.OffsetToField], startChunkId, ref indexAccessors[i], out _);
+                    *(int*)&cur[ifi.OffsetToIndexElementId] = index.Add(&cur[ifi.OffsetToField], startChunkId, ref indexAccessors[i], out _);
                 }
                 else
                 {
-                    ifi.Index.Add(&cur[ifi.OffsetToField], startChunkId, ref indexAccessors[i]);
+                    index.Add(&cur[ifi.OffsetToField], startChunkId, ref indexAccessors[i]);
                 }
             }
 
@@ -286,16 +291,17 @@ internal static unsafe class IndexMaintainer
         for (int i = 0; i < indexedFieldInfos.Length; i++)
         {
             ref var ifi = ref indexedFieldInfos[i];
-            if (ifi.Index.AllowMultiple)
+            var index = ifi.PersistentIndex;
+            if (index.AllowMultiple)
             {
                 var tailVSBS = info.ComponentTable.TailVSBS;
 
-                ifi.Index.RemoveValue(&prev[ifi.OffsetToField], *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref indexAccessors[i],
+                index.RemoveValue(&prev[ifi.OffsetToField], *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref indexAccessors[i],
                     preserveEmptyBuffer: tailVSBS != null);
 
                 if (tailVSBS != null)
                 {
-                    var headResult = ifi.Index.TryGet(&prev[ifi.OffsetToField], ref indexAccessors[i]);
+                    var headResult = index.TryGet(&prev[ifi.OffsetToField], ref indexAccessors[i]);
                     if (headResult.IsSuccess)
                     {
                         var tailBufId = EnsureTailPopulated(headResult.Value, tailVSBS,
@@ -308,7 +314,7 @@ internal static unsafe class IndexMaintainer
             }
             else
             {
-                ifi.Index.Remove(&prev[ifi.OffsetToField], out _, ref indexAccessors[i]);
+                index.Remove(&prev[ifi.OffsetToField], out _, ref indexAccessors[i]);
             }
         }
 

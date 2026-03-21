@@ -59,10 +59,10 @@ class TickBoundaryIndexTests : TestBase<TickBoundaryIndexTests>
         using var epoch = EpochGuard.Enter(dbe.EpochManager);
         var table = dbe.GetComponentTable<TbSvData>();
         var ifi = table.IndexedFieldInfos[0]; // Category is the first (only) indexed field
-        var accessor = ifi.Index.Segment.CreateChunkAccessor();
+        var accessor = ifi.PersistentIndex.Segment.CreateChunkAccessor();
         try
         {
-            var result = ifi.Index.TryGet(&category, ref accessor);
+            var result = ifi.PersistentIndex.TryGet(&category, ref accessor);
             return result.IsSuccess;
         }
         finally

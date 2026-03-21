@@ -1129,7 +1129,7 @@ public unsafe partial class Transaction
                         svIdxAccessorBase[svSlotCount] = svIdxAccessorTotal;
                         for (int i = 0; i < indexedFieldInfos.Length; i++)
                         {
-                            svIdxAccessors[svIdxAccessorTotal++] = indexedFieldInfos[i].Index.Segment.CreateChunkAccessor(_changeSet);
+                            svIdxAccessors[svIdxAccessorTotal++] = indexedFieldInfos[i].PersistentIndex.Segment.CreateChunkAccessor(_changeSet);
                         }
                         svSlotCount++;
                     }
@@ -1172,14 +1172,15 @@ public unsafe partial class Transaction
                     for (int i = 0; i < indexedFieldInfos.Length; i++)
                     {
                         ref var ifi = ref indexedFieldInfos[i];
-                        if (ifi.Index.AllowMultiple)
+                        var index = ifi.PersistentIndex;
+                        if (index.AllowMultiple)
                         {
                             *(int*)&chunkAddr[ifi.OffsetToIndexElementId] =
-                                ifi.Index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref svIdxAccessors[svIdxAccessorBase[si] + i], out _);
+                                index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref svIdxAccessors[svIdxAccessorBase[si] + i], out _);
                         }
                         else
                         {
-                            ifi.Index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref svIdxAccessors[svIdxAccessorBase[si] + i]);
+                            index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref svIdxAccessors[svIdxAccessorBase[si] + i]);
                         }
                     }
                 }
@@ -1389,18 +1390,19 @@ public unsafe partial class Transaction
             for (int i = 0; i < fields.Length; i++)
             {
                 ref var ifi = ref fields[i];
+                var index = ifi.PersistentIndex;
                 byte* fieldPtr = ptr + ifi.OffsetToField;
-                var idxAccessor = ifi.Index.Segment.CreateChunkAccessor();
+                var idxAccessor = index.Segment.CreateChunkAccessor();
                 try
                 {
-                    if (ifi.Index.AllowMultiple)
+                    if (index.AllowMultiple)
                     {
                         int elementId = *(int*)(ptr + ifi.OffsetToIndexElementId);
-                        ifi.Index.RemoveValue(fieldPtr, elementId, chunkId, ref idxAccessor);
+                        index.RemoveValue(fieldPtr, elementId, chunkId, ref idxAccessor);
                     }
                     else
                     {
-                        ifi.Index.Remove(fieldPtr, out _, ref idxAccessor);
+                        index.Remove(fieldPtr, out _, ref idxAccessor);
                     }
                 }
                 finally

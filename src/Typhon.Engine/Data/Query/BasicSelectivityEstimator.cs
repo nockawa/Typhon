@@ -23,7 +23,7 @@ internal class BasicSelectivityEstimator : ISelectivityEstimator
             return 0;
         }
 
-        var index = stats.Index;
+        var index = (BTreeBase<PersistentStore>)stats.Index;
         long min = stats.MinValue;
         long max = stats.MaxValue;
 

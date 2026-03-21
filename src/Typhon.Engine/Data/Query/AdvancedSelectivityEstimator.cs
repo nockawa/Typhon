@@ -29,7 +29,7 @@ internal sealed class AdvancedSelectivityEstimator : ISelectivityEstimator
             return 0;
         }
 
-        var index = stats.Index;
+        var index = (BTreeBase<PersistentStore>)stats.Index;
         long min = stats.MinValue;
         long max = stats.MaxValue;
 
@@ -89,7 +89,7 @@ internal sealed class AdvancedSelectivityEstimator : ISelectivityEstimator
         }
 
         // Priority 2: B+Tree point seek
-        return ExactEqualityCount(stats.Index, threshold);
+        return ExactEqualityCount((BTreeBase<PersistentStore>)stats.Index, threshold);
     }
 
     /// <summary>

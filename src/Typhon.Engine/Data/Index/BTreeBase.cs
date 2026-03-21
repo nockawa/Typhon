@@ -10,8 +10,9 @@ namespace Typhon.Engine;
 /// Replaces the former <c>IBTree</c> interface. Since <see cref="BTree{TKey}"/> was the only implementation,
 /// an abstract class is a better fit: it avoids interface dispatch overhead and provides a natural home
 /// for shared non-generic operations like <see cref="GetMinKeyAsLong"/> / <see cref="GetMaxKeyAsLong"/>.
+/// Implements <see cref="IBTreeIndex"/> to allow <see cref="IndexedFieldInfo"/> to hold indexes backed by any store type without being generic itself.
 /// </remarks>
-public abstract class BTreeBase<TStore> where TStore : struct, IPageStore
+public abstract class BTreeBase<TStore> : IBTreeIndex where TStore : struct, IPageStore
 {
     public abstract ChunkBasedSegment<TStore> Segment { get; }
     public abstract bool AllowMultiple { get; }
