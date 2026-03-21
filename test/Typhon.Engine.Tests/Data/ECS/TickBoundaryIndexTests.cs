@@ -13,7 +13,7 @@ namespace Typhon.Engine.Tests;
 [StructLayout(LayoutKind.Sequential)]
 struct TbSvData
 {
-    [Index]
+    [Index(AllowMultiple = true)]
     public int Category;
     public int Value;
     public TbSvData(int cat, int val) { Category = cat; Value = val; }
@@ -334,5 +334,60 @@ class TickBoundaryIndexTests : TestBase<TickBoundaryIndexTests>
         Assert.That(IndexContainsKey(dbe, 3), Is.True);
         Assert.That(IndexContainsKey(dbe, 2), Is.False);
         Assert.That(IndexContainsKey(dbe, 1), Is.False);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 9 — WhereField Count on SV uses index directly (PipelineExecutor SV path)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void WhereField_Count_WorksForSV()
+    {
+        using var dbe = SetupEngine();
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            SpawnSv(tx, 10);
+            SpawnSv(tx, 20);
+            SpawnSv(tx, 20);
+            SpawnSv(tx, 30);
+            tx.Commit();
+        }
+        dbe.WriteTickFence(1);
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            Assert.That(tx.Query<TbSvArch>().WhereField<TbSvData>(d => d.Category == 20).Count(), Is.EqualTo(2));
+            Assert.That(tx.Query<TbSvArch>().WhereField<TbSvData>(d => d.Category == 10).Count(), Is.EqualTo(1));
+            Assert.That(tx.Query<TbSvArch>().WhereField<TbSvData>(d => d.Category == 99).Count(), Is.EqualTo(0));
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 10 — WhereField Execute on SV uses broad scan fallback
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void WhereField_Execute_WorksForSV()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId id1, id2;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            id1 = SpawnSv(tx, 42);
+            SpawnSv(tx, 99);
+            id2 = SpawnSv(tx, 42);
+            tx.Commit();
+        }
+        dbe.WriteTickFence(1);
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var results = tx.Query<TbSvArch>().WhereField<TbSvData>(d => d.Category == 42).Execute();
+            Assert.That(results, Has.Count.EqualTo(2));
+            Assert.That(results, Does.Contain(id1));
+            Assert.That(results, Does.Contain(id2));
+        }
     }
 }

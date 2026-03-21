@@ -1159,6 +1159,14 @@ public unsafe partial class Transaction
                     }
 
                     byte* chunkAddr = svCompAccessors[si].GetChunkAddress(chunkId, true);
+
+                    // Write inline entityPK at offset 0 (SV indexed components store entityPK in overhead to enable chunkId → entityPK resolution during
+                    // index-based queries).
+                    if (table.Definition.EntityPKOverheadSize > 0)
+                    {
+                        *(long*)chunkAddr = (long)entry.Id.RawValue;
+                    }
+
                     var indexedFieldInfos = table.IndexedFieldInfos;
 
                     for (int i = 0; i < indexedFieldInfos.Length; i++)
@@ -1511,6 +1519,11 @@ public unsafe partial class Transaction
                 if (oldBits != newBits)
                 {
                     _dbe.EnabledBitsOverrides.Record(entityId.EntityKey, TSN, oldBits);
+
+                    // Notify views: enable/disable changes component visibility.
+                    // Enable (0→1) emits isCreation so the view re-evaluates the entity.
+                    // Disable (1→0) emits isDeletion so the view removes the entity.
+                    NotifyViewsForEnableDisable(entityId, meta, engineState, oldBits, newBits);
                 }
 
                 // Update
@@ -1518,6 +1531,51 @@ public unsafe partial class Transaction
                 engineState.EntityMap.Upsert(entityId.EntityKey, readBuf, ref accessor, _changeSet);
             }
             accessor.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Emit ring buffer entries for enable/disable changes so views can update entity membership.
+    /// Enable (bit 0→1) emits isCreation; Disable (bit 1→0) emits isDeletion.
+    /// Emits per-field to each registered view — redundant entries are idempotent in ProcessEntry.
+    /// </summary>
+    private void NotifyViewsForEnableDisable(EntityId entityId, ArchetypeMetadata meta, ArchetypeEngineState engineState, ushort oldBits, ushort newBits)
+    {
+        ushort changedBits = (ushort)(oldBits ^ newBits);
+        long pk = (long)entityId.RawValue;
+
+        for (int slot = 0; slot < meta.ComponentCount && changedBits != 0; slot++)
+        {
+            if ((changedBits & (1 << slot)) == 0)
+            {
+                continue;
+            }
+
+            var table = engineState.SlotToComponentTable[slot];
+            if (table?.ViewRegistry == null || table.ViewRegistry.ViewCount == 0)
+            {
+                continue;
+            }
+
+            bool wasEnabled = (oldBits & (1 << slot)) != 0;
+
+            // Iterate all fields that have registered views and emit one entry per view per field.
+            for (int fi = 0; fi < table.ViewRegistry.FieldCount; fi++)
+            {
+                var views = table.ViewRegistry.GetViewsForField(fi);
+                for (int v = 0; v < views.Length; v++)
+                {
+                    var reg = views[v];
+                    if (reg.View.IsDisposed)
+                    {
+                        continue;
+                    }
+
+                    // isDeletion (0x80) for disable, isCreation (0x40) for enable
+                    byte flags = wasEnabled ? (byte)((fi & 0x3F) | 0x80) : (byte)((fi & 0x3F) | 0x40);
+                    reg.View.DeltaBuffer.TryAppend(pk, default, default, TSN, flags, reg.ComponentTag);
+                }
+            }
         }
     }
 

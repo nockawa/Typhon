@@ -265,7 +265,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     public bool HasCollections => (_flags & ComponentTableFlags.HasCollections) != 0;
 
     internal DatabaseEngine DBE { get; private set; }
-    internal int ComponentOverhead => Definition.MultipleIndicesCount * sizeof(int);
+    internal int ComponentOverhead => Definition.ComponentStorageOverhead;
     internal int ComponentTotalSize => Definition.ComponentStorageTotalSize;
 
     /// <summary>
@@ -629,7 +629,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
                 Size          = f.SizeInComponentStorage,
                 Index         = CreateIndexForField(f, (short)f.FieldId, useLoad, changeSet),
             };
-            fi.OffsetToIndexElementId = fi.Index.AllowMultiple ? (j++ * sizeof(int)) : 0;
+            fi.OffsetToIndexElementId = fi.Index.AllowMultiple ? (Definition.EntityPKOverheadSize + j++ * sizeof(int)) : 0;
             l.Add(fi);
         }
 

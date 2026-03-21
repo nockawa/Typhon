@@ -576,6 +576,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
     private HashSet<EntityId> ExecuteTargeted()
     {
         var ct = _whereComponentTable;
+
         var evaluators = QueryResolverHelper.ResolveEvaluators(_fieldPredicateBranches[0], ct, 0);
         var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance);
 
@@ -595,41 +596,52 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
 
         // Read-your-own-writes: pending spawns have no secondary index entries, so the targeted scan above can't find them. Evaluate them via compiled
         // predicate fallback.
-        var tx = _tx;
-        var pendingFieldFilter = _pendingSpawnFieldFilter;
-        if (pendingFieldFilter != null)
-        {
-            var pending = tx.PendingSpawns;
-            if (pending != null && pending.Count > 0)
-            {
-                var destroys = tx.PendingDestroys;
-                for (int i = 0; i < pending.Count; i++)
-                {
-                    var entry = pending[i];
-                    if (destroys != null && destroys.Contains(entry.Id))
-                    {
-                        continue;
-                    }
-                    if (!MaskTest(entry.Id.ArchetypeId))
-                    {
-                        continue;
-                    }
-                    if (pendingFieldFilter(entry.Id, tx))
-                    {
-                        result.Add(entry.Id);
-                    }
-                }
-            }
-        }
+        CollectPendingSpawnsWithFieldFilter(result);
 
         // Opaque WHERE post-filter (from .Where<T>(Func), separate from WhereField)
         var filter = _whereFilter;
         if (filter != null)
         {
+            var tx = _tx;
             result.RemoveWhere(id => !filter(id, tx));
         }
 
         return result;
+    }
+
+    /// <summary>Evaluate pending spawns against the compiled WhereField predicate.</summary>
+    private void CollectPendingSpawnsWithFieldFilter(HashSet<EntityId> result)
+    {
+        var tx = _tx;
+        var pendingFieldFilter = _pendingSpawnFieldFilter;
+        if (pendingFieldFilter == null)
+        {
+            return;
+        }
+
+        var pending = tx.PendingSpawns;
+        if (pending == null || pending.Count == 0)
+        {
+            return;
+        }
+
+        var destroys = tx.PendingDestroys;
+        for (int i = 0; i < pending.Count; i++)
+        {
+            var entry = pending[i];
+            if (destroys != null && destroys.Contains(entry.Id))
+            {
+                continue;
+            }
+            if (!MaskTest(entry.Id.ArchetypeId))
+            {
+                continue;
+            }
+            if (pendingFieldFilter(entry.Id, tx))
+            {
+                result.Add(entry.Id);
+            }
+        }
     }
 
     /// <summary>Count matching entities.</summary>

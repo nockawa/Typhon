@@ -758,10 +758,11 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
             ref var ifi = ref fields[fieldIdx];
 
-            // Component accessor for reading current field values.
-            // No ChangeSet — pages are already dirty from prior writes during the tick.
-            var compAccessor = table.ComponentSegment.CreateChunkAccessor();
-            var idxAccessor = ifi.Index.Segment.CreateChunkAccessor();
+            // ChangeSet required for index write operations (Move/MoveValue may trigger TAIL segment growth for AllowMultiple indexes). Created per-field,
+            // saved after processing.
+            var changeSet = MMF.CreateChangeSet();
+            var compAccessor = table.ComponentSegment.CreateChunkAccessor(changeSet);
+            var idxAccessor = ifi.Index.Segment.CreateChunkAccessor(changeSet);
             try
             {
                 for (int e = 0; e < count; e++)
@@ -848,6 +849,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             {
                 compAccessor.Dispose();
                 idxAccessor.Dispose();
+                changeSet.SaveChanges();
             }
 
             buffer.Reset();
