@@ -729,7 +729,8 @@ public unsafe partial class Transaction : IDisposable
     /// Query-engine read primitive. Reads a single component by PK via MVCC revision chain walk.
     /// More efficient than Open().Read() for query evaluation — resolves only the requested component, not all archetype slots.
     /// </summary>
-    internal bool QueryRead<T>(long pk, out T t) where T : unmanaged
+    [PublicAPI]
+    public bool QueryRead<T>(long pk, out T t) where T : unmanaged
     {
         AssertThreadAffinity();
         var componentType = typeof(T);
@@ -771,10 +772,11 @@ public unsafe partial class Transaction : IDisposable
     }
 
     /// <summary>
-    /// Write a component by PK. Reconstructs EntityId from the raw PK, opens the entity for mutation, and writes the component data. Used by the Shell CLI
-    /// via reflection.
+    /// Write a component by PK. Reconstructs EntityId from the raw PK, opens the entity for mutation, and writes the component data.
+    /// Generic — the Shell CLI calls this via <c>MakeGenericMethod</c> for runtime-resolved component types.
     /// </summary>
-    internal bool WriteComponent<T>(long pk, ref T comp) where T : unmanaged
+    [PublicAPI]
+    public bool WriteComponent<T>(long pk, ref T comp) where T : unmanaged
     {
         var entityId = Unsafe.As<long, EntityId>(ref pk);
         var entity = OpenMut(entityId);
@@ -784,19 +786,11 @@ public unsafe partial class Transaction : IDisposable
     }
 
     /// <summary>
-    /// Destroy an entity by PK. Reconstructs EntityId from the raw PK. Used by the Shell CLI via reflection.
+    /// Spawn an entity using an archetype ID (non-generic). Enables runtime callers (Shell CLI) to create entities
+    /// without compile-time archetype type parameters.
     /// </summary>
-    internal void DestroyByPK(long pk)
-    {
-        var entityId = Unsafe.As<long, EntityId>(ref pk);
-        Destroy(entityId);
-    }
-
-    /// <summary>
-    /// Spawn an entity using an archetype ID (non-generic). Enables reflection-based callers (Shell CLI) to create entities without compile-time archetype
-    /// type parameters.
-    /// </summary>
-    internal EntityId SpawnByArchetypeId(ushort archetypeId, params ComponentValue[] values)
+    [PublicAPI]
+    public EntityId SpawnByArchetypeId(ushort archetypeId, params ComponentValue[] values)
     {
         var meta = ArchetypeRegistry.GetMetadata(archetypeId);
         if (meta == null)

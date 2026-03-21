@@ -30,17 +30,14 @@ internal sealed class CommandExecutor
     private readonly Dictionary<string, IOutputFormatter> _formatters;
     private readonly List<string> _history = [];
 
-    // Cached reflection method infos for generic Transaction methods
+    // Cached reflection method infos for generic Transaction methods (runtime type dispatch requires MakeGenericMethod)
     private static readonly MethodInfo ReadComponentMethod = typeof(Transaction)
-        .GetMethods(BindingFlags.NonPublic | BindingFlags.Instance)
+        .GetMethods(BindingFlags.Public | BindingFlags.Instance)
         .First(m => m.Name == "QueryRead" && m.GetGenericArguments().Length == 1 && m.GetParameters().Length == 2);
 
     private static readonly MethodInfo WriteComponentMethod = typeof(Transaction)
-        .GetMethods(BindingFlags.NonPublic | BindingFlags.Instance)
+        .GetMethods(BindingFlags.Public | BindingFlags.Instance)
         .First(m => m.Name == "WriteComponent" && m.GetGenericArguments().Length == 1 && m.GetParameters().Length == 2);
-
-    private static readonly MethodInfo SpawnByArchetypeIdMethod = typeof(Transaction)
-        .GetMethod("SpawnByArchetypeId", BindingFlags.NonPublic | BindingFlags.Instance);
 
     public CommandExecutor(ShellSession session)
     {
@@ -1325,8 +1322,8 @@ internal sealed class CommandExecutor
             handle.Free();
         }
 
-        // Spawn via non-generic overload
-        var entityId = (EntityId)SpawnByArchetypeIdMethod.Invoke(tx, [meta.ArchetypeId, new[] { cv }])!;
+        // Spawn via non-generic public API (no reflection needed)
+        var entityId = tx.SpawnByArchetypeId(meta.ArchetypeId, cv);
         return (long)entityId.RawValue;
     }
 
