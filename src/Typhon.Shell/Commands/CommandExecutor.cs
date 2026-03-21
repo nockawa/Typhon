@@ -42,9 +42,6 @@ internal sealed class CommandExecutor
     private static readonly MethodInfo SpawnByArchetypeIdMethod = typeof(Transaction)
         .GetMethod("SpawnByArchetypeId", BindingFlags.NonPublic | BindingFlags.Instance);
 
-    private static readonly MethodInfo DestroyByPKMethod = typeof(Transaction)
-        .GetMethod("DestroyByPK", BindingFlags.NonPublic | BindingFlags.Instance);
-
     public CommandExecutor(ShellSession session)
     {
         _session = session;
@@ -895,7 +892,7 @@ internal sealed class CommandExecutor
 
         var componentName = tokens[pos].Value;
 
-        if (!ResolveComponent(componentName, out var componentType, out ComponentSchema _, out var error))
+        if (!ResolveComponent(componentName, out Type _, out ComponentSchema _, out var error))
         {
             return CommandResult.Error(error);
         }
@@ -1402,7 +1399,7 @@ internal sealed class CommandExecutor
 
     private static bool DeleteEntityReflection(Transaction tx, long entityId)
     {
-        DestroyByPKMethod.Invoke(tx, [entityId]);
+        tx.Destroy(EntityId.FromRaw(entityId));
         return true;
     }
 

@@ -720,12 +720,12 @@ internal sealed unsafe class EcsViewFieldReader<T> : EcsViewFieldReader where T 
     }
 
     public override void ExecuteFullScan(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, HashSet<long> result) =>
-        PipelineExecutor.Instance.Execute<T>(plan, evaluators, table, tx, result);
+        PipelineExecutor.Instance.Execute(plan, evaluators, table, tx, result);
 
     public override void ExecuteOrderedScan(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, List<long> result,
         int skip = 0, int take = int.MaxValue) =>
-        PipelineExecutor.Instance.ExecuteOrdered<T>(plan, evaluators, table, tx, result, skip, take);
+        PipelineExecutor.Instance.ExecuteOrdered(plan, evaluators, table, tx, result, skip, take);
 
     public override int CountScan(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx) =>
-        PipelineExecutor.Instance.Count<T>(plan, evaluators, table, tx);
+        PipelineExecutor.Instance.Count(plan, evaluators, table, tx);
 }

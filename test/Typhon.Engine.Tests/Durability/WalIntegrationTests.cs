@@ -29,6 +29,7 @@ class WalIntegrationTests : TestBase
         Archetype<CompABCArch>.Touch();
         Archetype<CascadeBag>.Touch();
         Archetype<CascadeItem>.Touch();
+        Archetype<TbSvArch>.Touch();
     }
 
     private ServiceProvider _serviceProvider;
@@ -117,6 +118,7 @@ class WalIntegrationTests : TestBase
         RegisterComponents(dbe);
         dbe.RegisterComponentFromAccessor<BagData>();
         dbe.RegisterComponentFromAccessor<ItemData>();
+        dbe.RegisterComponentFromAccessor<TbSvData>();
         dbe.InitializeArchetypes();
         return dbe;
     }
@@ -1440,5 +1442,139 @@ class WalIntegrationTests : TestBase
         }
 
         Assert.That(verifyErrors, Is.Empty, string.Join("\n", verifyErrors));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // ECS Destroy — Cascade delete crash recovery
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    [CancelAfter(15000)]
+    public void WAL_CascadeDestroy_ParentAndChildrenExcludedFromReopen()
+    {
+        EntityId bagId, item1Id, item2Id, survivorItemId, survivorBagId;
+
+        // Phase 1: Spawn parent (Bag) + children (Items), destroy parent → cascade deletes children
+        using (var scope1 = _serviceProvider.CreateScope())
+        {
+            var dbe = CreateEngine(scope1);
+
+            using (var uow = dbe.CreateUnitOfWork(DurabilityMode.Immediate))
+            {
+                using var tx = uow.CreateTransaction();
+                var bagData = new BagData { Capacity = 10 };
+                bagId = tx.Spawn<CascadeBag>(CascadeBag.Bag.Set(in bagData));
+
+                var survivorBagData = new BagData { Capacity = 20 };
+                survivorBagId = tx.Spawn<CascadeBag>(CascadeBag.Bag.Set(in survivorBagData));
+
+                var i1 = new ItemData { Owner = new EntityLink<CascadeBag>(bagId), Weight = 5 };
+                var i2 = new ItemData { Owner = new EntityLink<CascadeBag>(bagId), Weight = 10 };
+                item1Id = tx.Spawn<CascadeItem>(CascadeItem.Item.Set(in i1));
+                item2Id = tx.Spawn<CascadeItem>(CascadeItem.Item.Set(in i2));
+
+                var survivorItem = new ItemData { Owner = new EntityLink<CascadeBag>(survivorBagId), Weight = 99 };
+                survivorItemId = tx.Spawn<CascadeItem>(CascadeItem.Item.Set(in survivorItem));
+
+                tx.Commit();
+                uow.Flush();
+            }
+
+            // Destroy parent → cascade deletes item1 and item2
+            using (var uow = dbe.CreateUnitOfWork(DurabilityMode.Immediate))
+            {
+                using var tx = uow.CreateTransaction();
+                tx.Destroy(bagId);
+                tx.Commit();
+                uow.Flush();
+            }
+
+            dbe.ForceCheckpoint();
+        }
+
+        // Phase 2: Reopen and verify
+        using (var scope2 = _serviceProvider.CreateScope())
+        {
+            var dbe = CreateEngine(scope2);
+            using var tx = dbe.CreateQuickTransaction();
+
+            Assert.That(tx.IsAlive(bagId), Is.False, "Destroyed bag");
+            Assert.That(tx.IsAlive(item1Id), Is.False, "Cascade-deleted item 1");
+            Assert.That(tx.IsAlive(item2Id), Is.False, "Cascade-deleted item 2");
+            Assert.That(tx.IsAlive(survivorBagId), Is.True, "Surviving bag");
+            Assert.That(tx.IsAlive(survivorItemId), Is.True, "Surviving item");
+
+            // Verify survivor data is intact
+            var comp = tx.Open(survivorBagId).Read(CascadeBag.Bag);
+            Assert.That(comp.Capacity, Is.EqualTo(20));
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // ECS Destroy — SV component with tick fence + reopen
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    [CancelAfter(15000)]
+    public void WAL_SvDestroy_TickFenceAndReopen_DataAndIndexCorrect()
+    {
+        EntityId aliveId, deadId;
+
+        // Phase 1: Spawn SV entities, mutate, tick fence, destroy one, tick fence, checkpoint
+        using (var scope1 = _serviceProvider.CreateScope())
+        {
+            var dbe = CreateEngine(scope1);
+            var comp = TbSvArch.Data;
+
+            using (var uow = dbe.CreateUnitOfWork(DurabilityMode.Immediate))
+            {
+                using var tx = uow.CreateTransaction();
+                var d1 = new TbSvData(10, 100);
+                aliveId = tx.Spawn<TbSvArch>(TbSvArch.Data.Set(in d1));
+                var d2 = new TbSvData(20, 200);
+                deadId = tx.Spawn<TbSvArch>(TbSvArch.Data.Set(in d2));
+                tx.Commit();
+                uow.Flush();
+            }
+
+            // Tick fence to establish SV state
+            dbe.WriteTickFence(1);
+
+            // Mutate alive entity
+            using (var uow = dbe.CreateUnitOfWork(DurabilityMode.Immediate))
+            {
+                using var tx = uow.CreateTransaction();
+                tx.OpenMut(aliveId).Write(comp) = new TbSvData(15, 150);
+                tx.Commit();
+                uow.Flush();
+            }
+
+            // Destroy dead entity
+            using (var uow = dbe.CreateUnitOfWork(DurabilityMode.Immediate))
+            {
+                using var tx = uow.CreateTransaction();
+                tx.Destroy(deadId);
+                tx.Commit();
+                uow.Flush();
+            }
+
+            dbe.WriteTickFence(2);
+            dbe.ForceCheckpoint();
+        }
+
+        // Phase 2: Reopen
+        using (var scope2 = _serviceProvider.CreateScope())
+        {
+            var dbe = CreateEngine(scope2);
+            using var tx = dbe.CreateQuickTransaction();
+
+            Assert.That(tx.IsAlive(aliveId), Is.True, "Alive SV entity");
+            Assert.That(tx.IsAlive(deadId), Is.False, "Destroyed SV entity");
+
+            // Read surviving entity's data
+            var data = tx.Open(aliveId).Read(TbSvArch.Data);
+            Assert.That(data.Category, Is.EqualTo(15), "Mutated SV value survived");
+            Assert.That(data.Value, Is.EqualTo(150));
+        }
     }
 }

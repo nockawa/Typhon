@@ -1,7 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using System.Collections.Generic;
-using System.Linq;
 
 namespace Typhon.Engine.Tests;
 
@@ -46,7 +45,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         var ct = dbe.GetComponentTable<CompD>();
         using var tx = dbe.CreateQuickTransaction();
         var result = new HashSet<long>();
-        PipelineExecutor.Instance.Execute<CompD>(plan, plan.OrderedEvaluators, ct, tx, result);
+        PipelineExecutor.Instance.Execute(plan, plan.OrderedEvaluators, ct, tx, result);
         return result;
     }
 
@@ -56,7 +55,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         var ct = dbe.GetComponentTable<CompD>();
         using var tx = dbe.CreateQuickTransaction();
         var result = new List<long>();
-        PipelineExecutor.Instance.ExecuteOrdered<CompD>(plan, plan.OrderedEvaluators, ct, tx, result, skip, take);
+        PipelineExecutor.Instance.ExecuteOrdered(plan, plan.OrderedEvaluators, ct, tx, result, skip, take);
         return result;
     }
 

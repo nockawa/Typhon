@@ -31,7 +31,7 @@ unsafe class RawValueHashMapTests
             .AddScopedManagedPagedMemoryMappedFile(options =>
             {
                 options.DatabaseName = CurrentDatabaseName;
-                options.DatabaseCacheSize = (ulong)(PagedMMF.DefaultMemPageCount * PagedMMF.PageSize);
+                options.DatabaseCacheSize = PagedMMF.DefaultMemPageCount * PagedMMF.PageSize;
                 options.PagesDebugPattern = true;
             });
 
@@ -49,14 +49,14 @@ unsafe class RawValueHashMapTests
     [Test]
     public void RecommendedStride_SmallValue_256()
     {
-        int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(22, 4);
+        int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(22);
         Assert.That(stride, Is.EqualTo(256));
     }
 
     [Test]
     public void RecommendedStride_LargeValue_512()
     {
-        int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(78, 4);
+        int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(78);
         Assert.That(stride, Is.EqualTo(512));
     }
 
@@ -84,7 +84,7 @@ unsafe class RawValueHashMapTests
         EntityRecordAccessor.SetLocation(record, 1, 200);
 
         // Insert
-        using (var guard = EpochGuard.Enter(em))
+        using (EpochGuard.Enter(em))
         {
             var accessor = segment.CreateChunkAccessor();
             map.Insert(1L, record, ref accessor, null);
@@ -95,7 +95,7 @@ unsafe class RawValueHashMapTests
 
         // Read back
         byte* readBuf = stackalloc byte[valueSize];
-        using (var guard = EpochGuard.Enter(em))
+        using (EpochGuard.Enter(em))
         {
             var accessor = segment.CreateChunkAccessor();
             bool found = map.TryGet(1L, readBuf, ref accessor);
@@ -121,12 +121,12 @@ unsafe class RawValueHashMapTests
         var map = RawValueHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
 
         // Insert 10 entries
-        using (var guard = EpochGuard.Enter(em))
+        byte* record = stackalloc byte[valueSize];
+        using (EpochGuard.Enter(em))
         {
             var accessor = segment.CreateChunkAccessor();
             for (int i = 1; i <= 10; i++)
             {
-                byte* record = stackalloc byte[valueSize];
                 EntityRecordAccessor.InitializeRecord(record, 2);
                 EntityRecordAccessor.GetHeader(record).BornTSN = i * 10;
                 EntityRecordAccessor.SetLocation(record, 0, i * 100);
@@ -139,12 +139,12 @@ unsafe class RawValueHashMapTests
         Assert.That(map.EntryCount, Is.EqualTo(10));
 
         // Verify each entry
-        using (var guard = EpochGuard.Enter(em))
+        byte* readBuf = stackalloc byte[valueSize];
+        using (EpochGuard.Enter(em))
         {
             var accessor = segment.CreateChunkAccessor();
             for (int i = 1; i <= 10; i++)
             {
-                byte* readBuf = stackalloc byte[valueSize];
                 bool found = map.TryGet(i, readBuf, ref accessor);
                 Assert.That(found, Is.True, $"Entry {i} not found");
                 Assert.That(EntityRecordAccessor.GetHeader(readBuf).BornTSN, Is.EqualTo(i * 10));
@@ -168,7 +168,7 @@ unsafe class RawValueHashMapTests
         byte* record = stackalloc byte[valueSize];
         EntityRecordAccessor.InitializeRecord(record, 1);
 
-        using (var guard = EpochGuard.Enter(em))
+        using (EpochGuard.Enter(em))
         {
             var accessor = segment.CreateChunkAccessor();
             Assert.That(map.Insert(1L, record, ref accessor, null), Is.True);
@@ -198,7 +198,7 @@ unsafe class RawValueHashMapTests
         EntityRecordAccessor.InitializeRecord(record, 2);
         EntityRecordAccessor.GetHeader(record).BornTSN = 10;
 
-        using (var guard = EpochGuard.Enter(em))
+        using (EpochGuard.Enter(em))
         {
             var accessor = segment.CreateChunkAccessor();
             map.Upsert(1L, record, ref accessor, null);
@@ -209,7 +209,7 @@ unsafe class RawValueHashMapTests
         }
 
         byte* readBuf = stackalloc byte[valueSize];
-        using (var guard = EpochGuard.Enter(em))
+        using (EpochGuard.Enter(em))
         {
             var accessor = segment.CreateChunkAccessor();
             map.TryGet(1L, readBuf, ref accessor);
@@ -238,7 +238,7 @@ unsafe class RawValueHashMapTests
         byte* record = stackalloc byte[valueSize];
         EntityRecordAccessor.InitializeRecord(record, 1);
 
-        using (var guard = EpochGuard.Enter(em))
+        using (EpochGuard.Enter(em))
         {
             var accessor = segment.CreateChunkAccessor();
             map.Insert(1L, record, ref accessor, null);
@@ -247,7 +247,7 @@ unsafe class RawValueHashMapTests
 
         Assert.That(map.EntryCount, Is.EqualTo(1));
 
-        using (var guard = EpochGuard.Enter(em))
+        using (EpochGuard.Enter(em))
         {
             var accessor = segment.CreateChunkAccessor();
             bool removed = map.Remove(1L, ref accessor, null);
@@ -269,7 +269,7 @@ unsafe class RawValueHashMapTests
 
         var map = RawValueHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
 
-        using (var guard = EpochGuard.Enter(em))
+        using (EpochGuard.Enter(em))
         {
             var accessor = segment.CreateChunkAccessor();
             bool removed = map.Remove(999L, ref accessor, null);
@@ -294,12 +294,12 @@ unsafe class RawValueHashMapTests
         var map = RawValueHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
         int initialBucketCount = map.BucketCount;
 
-        using (var guard = EpochGuard.Enter(em))
+        byte* record = stackalloc byte[valueSize];
+        using (EpochGuard.Enter(em))
         {
             var accessor = segment.CreateChunkAccessor();
             for (int i = 1; i <= 100; i++)
             {
-                byte* record = stackalloc byte[valueSize];
                 EntityRecordAccessor.InitializeRecord(record, 2);
                 EntityRecordAccessor.GetHeader(record).BornTSN = i;
                 map.Insert(i, record, ref accessor, null);
@@ -310,12 +310,12 @@ unsafe class RawValueHashMapTests
         Assert.That(map.EntryCount, Is.EqualTo(100));
         Assert.That(map.BucketCount, Is.GreaterThan(initialBucketCount));
 
-        using (var guard = EpochGuard.Enter(em))
+        byte* readBuf = stackalloc byte[valueSize];
+        using (EpochGuard.Enter(em))
         {
             var accessor = segment.CreateChunkAccessor();
             for (int i = 1; i <= 100; i++)
             {
-                byte* readBuf = stackalloc byte[valueSize];
                 bool found = map.TryGet(i, readBuf, ref accessor);
                 Assert.That(found, Is.True, $"Entry {i} not found after splits");
                 Assert.That(EntityRecordAccessor.GetHeader(readBuf).BornTSN, Is.EqualTo(i));
@@ -341,12 +341,12 @@ unsafe class RawValueHashMapTests
         var map = RawValueHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
 
         // Insert 20 entries
-        using (var guard = EpochGuard.Enter(em))
+        byte* record = stackalloc byte[valueSize];
+        using (EpochGuard.Enter(em))
         {
             var accessor = segment.CreateChunkAccessor();
             for (int i = 1; i <= 20; i++)
             {
-                byte* record = stackalloc byte[valueSize];
                 EntityRecordAccessor.InitializeRecord(record, 2);
                 EntityRecordAccessor.GetHeader(record).BornTSN = i * 10;
                 EntityRecordAccessor.SetLocation(record, 0, i * 100);
@@ -359,18 +359,18 @@ unsafe class RawValueHashMapTests
 
         // EnsureCapacity for a much larger target — forces segment + directory pre-grow
         // (with the old buggy code, this would advance level and orphan entries)
-        using (var guard = EpochGuard.Enter(em))
+        using (EpochGuard.Enter(em))
         {
             map.EnsureCapacity(500);
         }
 
         // All 20 entries must still be findable
-        using (var guard = EpochGuard.Enter(em))
+        byte* readBuf = stackalloc byte[valueSize];
+        using (EpochGuard.Enter(em))
         {
             var accessor = segment.CreateChunkAccessor();
             for (int i = 1; i <= 20; i++)
             {
-                byte* readBuf = stackalloc byte[valueSize];
                 bool found = map.TryGet(i, readBuf, ref accessor);
                 Assert.That(found, Is.True, $"Entry {i} not found after EnsureCapacity");
                 Assert.That(EntityRecordAccessor.GetHeader(readBuf).BornTSN, Is.EqualTo(i * 10));
@@ -394,18 +394,18 @@ unsafe class RawValueHashMapTests
         var map = RawValueHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
 
         // Pre-allocate for 200 entries
-        using (var guard = EpochGuard.Enter(em))
+        using (EpochGuard.Enter(em))
         {
             map.EnsureCapacity(200);
         }
 
         // Insert 150 entries (triggers organic splits with pre-allocated backing)
-        using (var guard = EpochGuard.Enter(em))
+        byte* record = stackalloc byte[valueSize];
+        using (EpochGuard.Enter(em))
         {
             var accessor = segment.CreateChunkAccessor();
             for (int i = 1; i <= 150; i++)
             {
-                byte* record = stackalloc byte[valueSize];
                 EntityRecordAccessor.InitializeRecord(record, 2);
                 EntityRecordAccessor.GetHeader(record).BornTSN = i;
                 map.Insert(i, record, ref accessor, null);
@@ -417,12 +417,12 @@ unsafe class RawValueHashMapTests
         Assert.That(map.BucketCount, Is.GreaterThan(4));
 
         // Verify all 150 entries are findable
-        using (var guard = EpochGuard.Enter(em))
+        byte* readBuf = stackalloc byte[valueSize];
+        using (EpochGuard.Enter(em))
         {
             var accessor = segment.CreateChunkAccessor();
             for (int i = 1; i <= 150; i++)
             {
-                byte* readBuf = stackalloc byte[valueSize];
                 bool found = map.TryGet(i, readBuf, ref accessor);
                 Assert.That(found, Is.True, $"Entry {i} not found");
                 Assert.That(EntityRecordAccessor.GetHeader(readBuf).BornTSN, Is.EqualTo(i));
@@ -461,7 +461,7 @@ unsafe class RawValueHashMapTests
             EntityRecordAccessor.SetLocation(record, s, (s + 1) * 1000);
         }
 
-        using (var guard = EpochGuard.Enter(em))
+        using (EpochGuard.Enter(em))
         {
             var accessor = segment.CreateChunkAccessor();
             map.Insert(42L, record, ref accessor, null);
@@ -469,7 +469,7 @@ unsafe class RawValueHashMapTests
         }
 
         byte* readBuf = stackalloc byte[valueSize];
-        using (var guard = EpochGuard.Enter(em))
+        using (EpochGuard.Enter(em))
         {
             var accessor = segment.CreateChunkAccessor();
             bool found = map.TryGet(42L, readBuf, ref accessor);
@@ -507,7 +507,7 @@ unsafe class RawValueHashMapTests
         EntityRecordAccessor.GetHeader(record).BornTSN = largeTsn;
         EntityRecordAccessor.GetHeader(record).DiedTSN = largeTsn - 1000;
 
-        using (var guard = EpochGuard.Enter(em))
+        using (EpochGuard.Enter(em))
         {
             var accessor = segment.CreateChunkAccessor();
             map.Insert(1L, record, ref accessor, null);
@@ -515,7 +515,7 @@ unsafe class RawValueHashMapTests
         }
 
         byte* readBuf = stackalloc byte[valueSize];
-        using (var guard = EpochGuard.Enter(em))
+        using (EpochGuard.Enter(em))
         {
             var accessor = segment.CreateChunkAccessor();
             map.TryGet(1L, readBuf, ref accessor);
