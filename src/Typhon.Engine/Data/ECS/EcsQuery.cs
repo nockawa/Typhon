@@ -34,6 +34,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
     private int _enabledTypeId0, _enabledTypeId1, _enabledTypeId2, _enabledTypeId3;
     private int _disabledTypeId0, _disabledTypeId1, _disabledTypeId2, _disabledTypeId3;
     private Func<EntityId, Transaction, bool> _whereFilter;
+    private Func<EntityId, Transaction, bool> _pendingSpawnFieldFilter;
 
     internal EcsQuery(Transaction tx, bool polymorphic)
     {
@@ -158,7 +159,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             case 1: _enabledTypeId1 = typeId; break;
             case 2: _enabledTypeId2 = typeId; break;
             case 3: _enabledTypeId3 = typeId; break;
-            default: throw new InvalidOperationException("Max 4 Enabled<T> constraints per query");
+            default: throw new InvalidOperationException("Max 4 Enabled<T> constraints per query. Use archetype hierarchy or component composition to reduce filter count.");
         }
         _enabledTypeIdCount++;
     }
@@ -171,7 +172,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             case 1: _disabledTypeId1 = typeId; break;
             case 2: _disabledTypeId2 = typeId; break;
             case 3: _disabledTypeId3 = typeId; break;
-            default: throw new InvalidOperationException("Max 4 Disabled<T> constraints per query");
+            default: throw new InvalidOperationException("Max 4 Disabled<T> constraints per query. Use archetype hierarchy or component composition to reduce filter count.");
         }
         _disabledTypeIdCount++;
     }
@@ -251,6 +252,29 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
 
         _whereComponentTable = ct;
         _whereFieldReader = EcsViewFieldReader<T>.Instance;
+
+        // Compile the expression as a fallback filter for pending spawns (read-your-own-writes).
+        // Pending spawns have no secondary index entries — they can't be found by the targeted scan.
+        // This compiled predicate is evaluated via tx.Open() + TryRead() for pending spawn entities only.
+        // Kept separate from _whereFilter to avoid re-evaluating committed entities that the index already filtered.
+        var compiledPredicate = predicate.Compile();
+        var prevPendingFilter = _pendingSpawnFieldFilter;
+        _pendingSpawnFieldFilter = prevPendingFilter == null 
+            ? (id, tx) =>
+            {
+                var entity = tx.Open(id);
+                return entity.TryRead<T>(out var value) && compiledPredicate(value);
+            } 
+            : (id, tx) =>
+            {
+                if (!prevPendingFilter(id, tx))
+                {
+                    return false;
+                }
+                var entity = tx.Open(id);
+                return entity.TryRead<T>(out var value) && compiledPredicate(value);
+            };
+
         return this;
     }
 
@@ -453,16 +477,29 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
     /// <summary>Execute the query and collect matching entity IDs into a HashSet.</summary>
     public HashSet<EntityId> Execute()
     {
+        Activity activity = null;
+        if (TelemetryConfig.EcsActive)
+        {
+            activity = TyphonActivitySource.StartActivity("ECS.Query.Execute");
+            activity?.SetTag(TyphonSpanAttributes.EcsArchetype, typeof(TArchetype).Name);
+        }
+
         var result = new HashSet<EntityId>();
         if (MaskIsEmpty)
         {
+            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, 0);
+            activity?.Dispose();
             return result;
         }
 
         // Targeted scan via PipelineExecutor when field predicates are present
         if (HasFieldPredicates)
         {
-            return ExecuteTargeted();
+            var targeted = ExecuteTargeted();
+            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, targeted.Count);
+            activity?.SetTag(TyphonSpanAttributes.EcsQueryScanMode, "targeted");
+            activity?.Dispose();
+            return targeted;
         }
 
         CollectMatching((id, _) => result.Add(id));
@@ -474,6 +511,10 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         {
             result.RemoveWhere(id => !filter(id, tx));
         }
+
+        activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, result.Count);
+        activity?.SetTag(TyphonSpanAttributes.EcsQueryScanMode, "broad");
+        activity?.Dispose();
 
         return result;
     }
@@ -552,9 +593,37 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             }
         }
 
-        // T3 post-filter (opaque WHERE) if chained
-        var filter = _whereFilter;
+        // Read-your-own-writes: pending spawns have no secondary index entries, so the targeted scan above can't find them. Evaluate them via compiled
+        // predicate fallback.
         var tx = _tx;
+        var pendingFieldFilter = _pendingSpawnFieldFilter;
+        if (pendingFieldFilter != null)
+        {
+            var pending = tx.PendingSpawns;
+            if (pending != null && pending.Count > 0)
+            {
+                var destroys = tx.PendingDestroys;
+                for (int i = 0; i < pending.Count; i++)
+                {
+                    var entry = pending[i];
+                    if (destroys != null && destroys.Contains(entry.Id))
+                    {
+                        continue;
+                    }
+                    if (!MaskTest(entry.Id.ArchetypeId))
+                    {
+                        continue;
+                    }
+                    if (pendingFieldFilter(entry.Id, tx))
+                    {
+                        result.Add(entry.Id);
+                    }
+                }
+            }
+        }
+
+        // Opaque WHERE post-filter (from .Where<T>(Func), separate from WhereField)
+        var filter = _whereFilter;
         if (filter != null)
         {
             result.RemoveWhere(id => !filter(id, tx));
@@ -620,7 +689,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
     /// <summary>Get an enumerator for foreach support. Pre-collects matching entities then iterates.</summary>
     public EcsQueryEnumerator GetEnumerator()
     {
-        var entities = new List<(EntityId Id, ArchetypeMetadata Meta, ushort EnabledBits, byte[] RecordBytes)>();
+        var entities = new List<(EntityId Id, ArchetypeMetadata Meta, ushort EnabledBits, EntityLocations Locations)>();
         if (!MaskIsEmpty)
         {
             CollectMatchingFull(entities);
@@ -631,29 +700,166 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
     /// <summary>
     /// Core broad scan: iterate matching archetypes, then all entities in each LinearHash.
     /// Dispatches to the generic core once — the JIT fully specializes per TMask type.
+    /// Also includes pending spawns for read-your-own-writes support.
     /// </summary>
     private void CollectMatching(Action<EntityId, ushort> onMatch, bool stopOnFirst = false)
     {
         if (_useLargeMask)
         {
             CollectMatchingCore(_maskLarge, onMatch, stopOnFirst);
+            CollectPendingSpawns(_maskLarge, onMatch, stopOnFirst);
         }
         else
         {
             CollectMatchingCore(_mask256, onMatch, stopOnFirst);
+            CollectPendingSpawns(_mask256, onMatch, stopOnFirst);
         }
     }
 
     /// <summary>Collect full entity data for foreach enumeration. Dispatches to generic core.</summary>
-    private void CollectMatchingFull(List<(EntityId, ArchetypeMetadata, ushort, byte[])> results)
+    private void CollectMatchingFull(List<(EntityId, ArchetypeMetadata, ushort, EntityLocations)> results)
     {
         if (_useLargeMask)
         {
             CollectMatchingFullCore(_maskLarge, results);
+            CollectPendingSpawnsFull(_maskLarge, results);
         }
         else
         {
             CollectMatchingFullCore(_mask256, results);
+            CollectPendingSpawnsFull(_mask256, results);
+        }
+    }
+
+    /// <summary>
+    /// Scan the transaction's pending spawns for entities matching the query (read-your-own-writes).
+    /// Pending spawns are not yet in the EntityMap — without this, Query().Execute() would miss them.
+    /// </summary>
+    private void CollectPendingSpawns<TMask>(TMask mask, Action<EntityId, ushort> onMatch, bool stopOnFirst) where TMask : struct, IArchetypeMask<TMask>
+    {
+        var pending = _tx.PendingSpawns;
+        if (pending == null || pending.Count == 0)
+        {
+            return;
+        }
+
+        var destroys = _tx.PendingDestroys;
+        var enableDisable = _tx.PendingEnableDisable;
+        bool hasT2 = HasT2;
+
+        for (int i = 0; i < pending.Count; i++)
+        {
+            var entry = pending[i];
+
+            // Skip if pending destroy
+            if (destroys != null && destroys.Contains(entry.Id))
+            {
+                continue;
+            }
+
+            // T1: archetype mask
+            if (!mask.Test(entry.Id.ArchetypeId))
+            {
+                continue;
+            }
+
+            // Resolve EnabledBits (may have been overridden by Enable/Disable in same tx)
+            ushort enabledBits = entry.EnabledBits;
+            if (enableDisable != null && enableDisable.TryGetValue(entry.Id, out ushort overrideBits))
+            {
+                enabledBits = overrideBits;
+            }
+
+            // T2: check enabled/disabled constraints
+            if (hasT2)
+            {
+                var meta = ArchetypeRegistry.GetMetadata(entry.Id.ArchetypeId);
+                if (meta == null || !ResolveT2Masks(meta, out ushort reqEnabled, out ushort reqDisabled))
+                {
+                    continue;
+                }
+                if ((enabledBits & reqEnabled) != reqEnabled)
+                {
+                    continue;
+                }
+                if ((enabledBits & reqDisabled) != 0)
+                {
+                    continue;
+                }
+            }
+
+            onMatch(entry.Id, enabledBits);
+
+            if (stopOnFirst)
+            {
+                return;
+            }
+        }
+    }
+
+    /// <summary>Pending spawn collection for foreach enumeration (includes EntityLocations).</summary>
+    private void CollectPendingSpawnsFull<TMask>(TMask mask, List<(EntityId, ArchetypeMetadata, ushort, EntityLocations)> results) where TMask : struct, IArchetypeMask<TMask>
+    {
+        var pending = _tx.PendingSpawns;
+        if (pending == null || pending.Count == 0)
+        {
+            return;
+        }
+
+        var destroys = _tx.PendingDestroys;
+        var enableDisable = _tx.PendingEnableDisable;
+        bool hasT2 = HasT2;
+
+        for (int i = 0; i < pending.Count; i++)
+        {
+            var entry = pending[i];
+
+            if (destroys != null && destroys.Contains(entry.Id))
+            {
+                continue;
+            }
+
+            if (!mask.Test(entry.Id.ArchetypeId))
+            {
+                continue;
+            }
+
+            ushort enabledBits = entry.EnabledBits;
+            if (enableDisable != null && enableDisable.TryGetValue(entry.Id, out ushort overrideBits))
+            {
+                enabledBits = overrideBits;
+            }
+
+            var meta = ArchetypeRegistry.GetMetadata(entry.Id.ArchetypeId);
+            if (meta == null)
+            {
+                continue;
+            }
+
+            if (hasT2)
+            {
+                if (!ResolveT2Masks(meta, out ushort reqEnabled, out ushort reqDisabled))
+                {
+                    continue;
+                }
+                if ((enabledBits & reqEnabled) != reqEnabled)
+                {
+                    continue;
+                }
+                if ((enabledBits & reqDisabled) != 0)
+                {
+                    continue;
+                }
+            }
+
+            // Copy locations from SpawnEntry into EntityLocations
+            var locs = new EntityLocations();
+            for (int s = 0; s < meta.ComponentCount; s++)
+            {
+                locs.Values[s] = entry.Loc[s];
+            }
+
+            results.Add((entry.Id, meta, enabledBits, locs));
         }
     }
 
@@ -715,7 +921,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
     }
 
     /// <summary>JIT-specialized variant for full entity data collection (foreach enumeration).</summary>
-    private void CollectMatchingFullCore<TMask>(TMask mask, List<(EntityId, ArchetypeMetadata, ushort, byte[])> results) where TMask : struct, IArchetypeMask<TMask>
+    private void CollectMatchingFullCore<TMask>(TMask mask, List<(EntityId, ArchetypeMetadata, ushort, EntityLocations)> results) where TMask : struct, IArchetypeMask<TMask>
     {
         long txTsn = _tx.TSN;
         var dbe = _tx.DBE;
@@ -826,7 +1032,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         public bool HasT2;
         public ushort RequiredEnabled;
         public ushort RequiredDisabled;
-        public List<(EntityId, ArchetypeMetadata, ushort, byte[])> Results;
+        public List<(EntityId, ArchetypeMetadata, ushort, EntityLocations)> Results;
 
         public bool Process(long key, byte* value)
         {
@@ -856,15 +1062,11 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
 
             ushort bits = HasT2 ? EnabledBitsOverrides.ResolveEnabledBits(key, header.EnabledBits, TxTsn) : header.EnabledBits;
 
-            // Copy entity record for EntityRef construction
-            int recordSize = EntityRecordAccessor.RecordSize(Meta.ComponentCount);
-            var recordBytes = new byte[recordSize];
-            fixed (byte* dst = recordBytes)
-            {
-                Unsafe.CopyBlock(dst, value, (uint)recordSize);
-            }
+            // Copy component locations inline — no heap allocation
+            var locs = new EntityLocations();
+            EntityRecordAccessor.CopyLocationsTo(value, ref locs, Meta.ComponentCount);
 
-            Results.Add((new EntityId(key, Meta.ArchetypeId), Meta, bits, recordBytes));
+            Results.Add((new EntityId(key, Meta.ArchetypeId), Meta, bits, locs));
             return true;
         }
     }
@@ -873,17 +1075,20 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
     // Enumerator (iterates pre-collected results)
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>Iterates pre-collected query results, yielding EntityRefs with zero-copy component access.</summary>
+    /// <summary>
+    /// Iterates pre-collected query results, yielding read-only EntityRefs with zero-copy component access.
+    /// Entities returned by query enumeration are opened as read-only — use <see cref="Transaction.OpenMut"/> for writes.
+    /// </summary>
     [PublicAPI]
     public ref struct EcsQueryEnumerator
     {
         private readonly Transaction _tx;
-        private readonly List<(EntityId Id, ArchetypeMetadata Meta, ushort EnabledBits, byte[] RecordBytes)> _entities;
+        private readonly List<(EntityId Id, ArchetypeMetadata Meta, ushort EnabledBits, EntityLocations Locations)> _entities;
         private readonly Func<EntityId, Transaction, bool> _whereFilter;
         private int _index;
         private EntityRef _current;
 
-        internal EcsQueryEnumerator(Transaction tx, List<(EntityId, ArchetypeMetadata, ushort, byte[])> entities, Func<EntityId, Transaction, bool> whereFilter)
+        internal EcsQueryEnumerator(Transaction tx, List<(EntityId, ArchetypeMetadata, ushort, EntityLocations)> entities, Func<EntityId, Transaction, bool> whereFilter)
         {
             _tx = tx;
             _entities = entities;
@@ -903,7 +1108,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                     return false;
                 }
 
-                var (id, meta, enabledBits, recordBytes) = _entities[_index];
+                var (id, meta, enabledBits, locations) = _entities[_index];
 
                 // T3 post-filter: evaluate WHERE via Transaction.Open
                 if (_whereFilter != null && !_whereFilter(id, _tx))
@@ -913,7 +1118,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
 
                 var engineState = _tx.DBE._archetypeStates[meta.ArchetypeId];
                 _current = new EntityRef(id, meta, engineState, _tx, enabledBits, false);
-                _current.CopyLocationsFrom(recordBytes, meta.ComponentCount);
+                _current.CopyLocationsFrom(in locations, meta.ComponentCount);
                 return true;
             }
         }

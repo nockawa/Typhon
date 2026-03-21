@@ -10,6 +10,7 @@ using System.Threading;
 using Microsoft.Extensions.Logging;
 using Spectre.Console;
 using Typhon.Engine;
+using Typhon.Schema.Definition;
 using Typhon.Shell.Formatting;
 using Typhon.Shell.Parsing;
 using Typhon.Shell.Schema;
@@ -150,6 +151,7 @@ internal sealed class CommandExecutor
             "log-level"     => ExecuteLogLevel(tokens, 1),
             "echo"          => ExecuteEcho(tokens, 1),
             "help"          => ExecuteHelp(tokens, 1),
+            "migrate"       => ExecuteMigrate(tokens, 1),
             "history"       => ExecuteHistory(),
             "pause"         => ExecutePause(tokens, 1),
             "exit" or "quit" => CommandResult.Exit(),
@@ -256,6 +258,148 @@ internal sealed class CommandExecutor
         }
 
         return CommandResult.Markup(sb.ToString().TrimEnd());
+    }
+
+    // ── Migrate Command ────────────────────────────────────────
+
+    private CommandResult ExecuteMigrate(List<Token> tokens, int pos)
+    {
+        string dbPath = null;
+
+        while (pos < tokens.Count)
+        {
+            if (dbPath == null)
+            {
+                dbPath = tokens[pos].Value;
+                pos++;
+            }
+            else
+            {
+                return CommandResult.Error($"Syntax error: unexpected token '{tokens[pos].Value}'.\nUsage: migrate [<path>]");
+            }
+        }
+
+        // If DB not open, require a path
+        if (!_session.IsOpen && dbPath == null)
+        {
+            return CommandResult.Error(
+                "Usage: migrate [<path>]\n" +
+                "  Opens the database and applies any pending schema migrations.\n" +
+                "  Compatible changes (add field, type widen) are applied automatically.\n" +
+                "  Breaking changes require migration functions registered in your schema assembly.\n" +
+                "  Use 'schema-validate' on an already-open database for dry-run validation.");
+        }
+
+        // If path provided but DB already open, close first
+        if (dbPath != null && _session.IsOpen)
+        {
+            _session.CloseDatabase();
+        }
+
+        // Open the database — this triggers RegisterComponentFromAccessor for all loaded schemas,
+        // which runs SchemaEvolutionEngine.Migrate() for compatible changes and MigrateWithFunction()
+        // for breaking changes with registered migration chains.
+        if (!_session.IsOpen)
+        {
+            if (dbPath == null)
+            {
+                return CommandResult.Error("Error: No database is open and no path provided.");
+            }
+
+            try
+            {
+                _session.OpenDatabase(dbPath);
+            }
+            catch (Exception ex)
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine($"  [red]Database open failed:[/] {Markup.Escape(ex.Message)}");
+                sb.AppendLine();
+                sb.AppendLine("  Schema validation failed during open. Possible causes:");
+                sb.AppendLine("    - Breaking schema change with no migration function registered");
+                sb.AppendLine("    - Database created by a newer version of the application");
+                sb.AppendLine("  Ensure your schema assembly is loaded first via [yellow]load-schema <assembly>[/]");
+                sb.AppendLine("  and that all required migration functions are registered.");
+                return CommandResult.Markup(sb.ToString().TrimEnd());
+            }
+        }
+
+        // DB is now open — run schema-validate logic to show status
+        var result = new StringBuilder();
+        result.AppendLine("  [white]Schema Migration Report[/]");
+        result.AppendLine("  [grey]══════════════════════════════════════════════════════════════════[/]");
+
+        var persisted = _session.Engine.PersistedComponents;
+        var fieldsByComp = _session.Engine.PersistedFieldsByComponent;
+        int identicalCount = 0, migratedCount = 0, newCount = 0, failCount = 0;
+
+        foreach (var kvp in _session.ComponentTypes)
+        {
+            var runtimeType = kvp.Value;
+            var attr = runtimeType.GetCustomAttribute<ComponentAttribute>();
+            var schemaName = attr?.Name ?? runtimeType.Name;
+
+            if (persisted == null || !persisted.TryGetValue(schemaName, out var comp))
+            {
+                result.AppendLine($"  [blue]NEW[/]      {Markup.Escape(schemaName)} — will be created on first use");
+                newCount++;
+                continue;
+            }
+
+            var persistedFields = fieldsByComp != null && fieldsByComp.TryGetValue(schemaName, out var pf) ? pf : [];
+            var resolver = persistedFields.Length > 0 ? new FieldIdResolver(persistedFields) : null;
+            var definition = _session.Engine.DBD.CreateFromAccessor(runtimeType, resolver)
+                             ?? _session.Engine.DBD.GetComponent(schemaName, attr?.Revision ?? 1);
+
+            if (definition == null)
+            {
+                result.AppendLine($"  [yellow]?[/]        {Markup.Escape(schemaName)} — could not resolve definition");
+                continue;
+            }
+
+            var diff = SchemaValidator.ComputeDiff(schemaName, persistedFields, comp.Comp, definition,
+                resolver?.Renames ?? (IReadOnlyList<(string, string, int)>)[]);
+
+            if (diff.IsIdentical)
+            {
+                result.AppendLine($"  [green]OK[/]       {Markup.Escape(schemaName)} — identical");
+                identicalCount++;
+            }
+            else if (diff.HasBreakingChanges)
+            {
+                var targetRevision = attr?.Revision ?? 1;
+                var chain = _session.Engine.MigrationRegistry?.GetChain(schemaName, comp.Comp.SchemaRevision, targetRevision);
+                if (chain != null)
+                {
+                    result.AppendLine($"  [green]MIGRATED[/] {Markup.Escape(schemaName)} — {Markup.Escape(diff.Summary)} (migration applied during open)");
+                    migratedCount++;
+                }
+                else
+                {
+                    result.AppendLine($"  [red]FAIL[/]     {Markup.Escape(schemaName)} — {Markup.Escape(diff.Summary)} (no migration path registered)");
+                    failCount++;
+                }
+            }
+            else
+            {
+                // Compatible change — auto-migrated during open
+                result.AppendLine($"  [green]MIGRATED[/] {Markup.Escape(schemaName)} — {Markup.Escape(diff.Summary)} (auto-resolved during open)");
+                migratedCount++;
+            }
+        }
+
+        result.AppendLine("  [grey]══════════════════════════════════════════════════════════════════[/]");
+        if (failCount == 0)
+        {
+            result.AppendLine($"  [green]Migration complete.[/] {identicalCount} identical, {migratedCount} migrated, {newCount} new.");
+        }
+        else
+        {
+            result.AppendLine($"  [red]{failCount} component(s) could not be migrated.[/] Register migration functions and retry.");
+            result.AppendLine($"  {identicalCount} identical, {migratedCount} migrated, {newCount} new.");
+        }
+
+        return CommandResult.Markup(result.ToString().TrimEnd());
     }
 
     // ── Schema Commands ────────────────────────────────────────

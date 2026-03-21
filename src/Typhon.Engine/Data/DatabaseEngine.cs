@@ -277,7 +277,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     internal DeferredCleanupManager DeferredCleanupManager { get; }
 
     /// <summary>Engine-level MVCC exception dictionary for ECS EnabledBits.</summary>
-    internal EnabledBitsOverrides EnabledBitsOverrides { get; } = new();
+    internal EnabledBitsOverrides EnabledBitsOverrides { get; private set; }
 
     // ── ECS Deferred Cleanup ──
 
@@ -446,6 +446,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         _componentCollectionVSBSByType = new ConcurrentDictionary<Type, VariableSizedBufferSegmentBase<PersistentStore>>();
         TransactionChain = new TransactionChain(_options.Resources.MaxActiveTransactions, this);
         DeferredCleanupManager = new DeferredCleanupManager(_options.DeferredCleanup, _log);
+        EnabledBitsOverrides = new EnabledBitsOverrides(_log);
 
         DBD = new DatabaseDefinitions();
         ConstructComponentStore();

@@ -129,7 +129,20 @@ public unsafe partial class Transaction
         Debug.Assert(meta != null, $"Archetype {typeof(TArch).Name} not registered");
         Debug.Assert(_dbe._archetypeStates[meta.ArchetypeId]?.EntityMap != null,
             $"Archetype {typeof(TArch).Name} EntityMap not initialized — call DatabaseEngine.InitializeArchetypes first");
-        return SpawnInternal(meta, values);
+
+        Activity activity = null;
+        if (TelemetryConfig.EcsActive)
+        {
+            activity = TyphonActivitySource.StartActivity("ECS.Spawn");
+            activity?.SetTag(TyphonSpanAttributes.EcsArchetype, typeof(TArch).Name);
+        }
+
+        var id = SpawnInternal(meta, values);
+
+        activity?.SetTag(TyphonSpanAttributes.EntityId, (long)id.RawValue);
+        activity?.Dispose();
+
+        return id;
     }
 
     /// <summary>
@@ -432,16 +445,42 @@ public unsafe partial class Transaction
 
         Debug.Assert(!id.IsNull, "Cannot destroy null entity");
 
-        DestroyInternal(id, 0, out _);
+        Activity activity = null;
+        if (TelemetryConfig.EcsActive)
+        {
+            activity = TyphonActivitySource.StartActivity("ECS.Destroy");
+            activity?.SetTag(TyphonSpanAttributes.EntityId, (long)id.RawValue);
+        }
+
+        DestroyInternal(id, 0, out int totalDestroyed);
+
+        if (activity != null)
+        {
+            if (totalDestroyed > 1)
+            {
+                activity.SetTag(TyphonSpanAttributes.EcsCascadeCount, totalDestroyed - 1);
+            }
+            activity.Dispose();
+        }
     }
 
     /// <summary>Mark an entity link target for destruction.</summary>
     public void Destroy<T>(EntityLink<T> link) where T : class => Destroy(link.Id);
 
+    /// <summary>Maximum cascade depth. DAG validation prevents cycles, but this guards against bugs.</summary>
+    private const int MaxCascadeDepth = 32;
+
     /// <summary>Internal recursive destroy with cascade support.</summary>
     private void DestroyInternal(EntityId id, int depth, out int totalDestroyed)
     {
         totalDestroyed = 0;
+
+        if (depth >= MaxCascadeDepth)
+        {
+            throw new InvalidOperationException(
+                $"Cascade delete exceeded max depth {MaxCascadeDepth} at entity {id}. " +
+                "This indicates a bug in cascade graph validation — cycles should be caught at registration time.");
+        }
 
         // Check if already pending destroy (avoid double-destroy)
         if (_pendingDestroys != null && _pendingDestroys.Contains(id))
@@ -604,6 +643,19 @@ public unsafe partial class Transaction
         _pendingEnableDisable ??= new Dictionary<EntityId, ushort>();
         _pendingEnableDisable[id] = newEnabledBits;
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Pending spawn query support (read-your-own-writes)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>Pending spawns — exposed for EcsQuery read-your-own-writes support.</summary>
+    internal List<SpawnEntry> PendingSpawns => _spawnedEntities;
+
+    /// <summary>Pending destroys — exposed for EcsQuery read-your-own-writes support.</summary>
+    internal HashSet<EntityId> PendingDestroys => _pendingDestroys;
+
+    /// <summary>Pending EnabledBits overrides — exposed for EcsQuery read-your-own-writes support.</summary>
+    internal Dictionary<EntityId, ushort> PendingEnableDisable => _pendingEnableDisable;
 
     // ═══════════════════════════════════════════════════════════════════════
     // Internal helpers — entity resolution

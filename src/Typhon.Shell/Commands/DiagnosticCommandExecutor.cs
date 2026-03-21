@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using Spectre.Console;
 using Typhon.Engine;
+using Typhon.Schema.Definition;
 using Typhon.Shell.Parsing;
 using Typhon.Shell.Session;
 
@@ -48,6 +49,8 @@ internal sealed class DiagnosticCommandExecutor
             "stats-show"       => ExecuteStatsShow(tokens, 1),
             "stats-rebuild"    => ExecuteStatsRebuild(tokens, 1),
             "db-stats"         => ExecuteDbStats(),
+            "list-archetypes"  => ExecuteListArchetypes(),
+            "entity-info"      => ExecuteEntityInfo(tokens, 1),
             _                  => null
         };
     }
@@ -693,38 +696,28 @@ internal sealed class DiagnosticCommandExecutor
             return CommandResult.Error($"Error: No component table for '{componentName}'.");
         }
 
-        // Look up the entity in the primary key index
-        var pkIndex = table.PrimaryKeyIndex;
-        var epochManager = _session.Engine.EpochManager;
-        var epochDepth = epochManager.EnterScope();
+        // For the revisions command, we need the entity's EntityRecord to get the Location ChunkId,
+        // then access the CompRevTableSegment from that.
+        if (table.StorageMode != StorageMode.Versioned)
+        {
+            return CommandResult.Error($"Error: Component '{componentName}' is {table.StorageMode} — no revision chain (only Versioned components have revisions).");
+        }
+
+        // Resolve entity via ECS Open path
+        var tx = _session.Engine.CreateQuickTransaction();
         try
         {
-            var accessor = pkIndex.Segment.CreateChunkAccessor();
-            unsafe
+            if (!tx.TryOpen(new EntityId(entityId, 0), out _))
             {
-                var lookupResult = pkIndex.TryGet(&entityId, ref accessor);
-                if (!lookupResult.IsSuccess)
-                {
-                    return CommandResult.Error($"Error: Entity {entityId} not found in {componentName}.");
-                }
-
-                var revChunkId = lookupResult.Value;
-                var revAccessor = table.CompRevTableSegment.CreateChunkAccessor();
-                var revPtr = (CompRevStorageHeader*)revAccessor.GetChunkAddress(revChunkId);
-
-                var sb = new StringBuilder();
-                sb.AppendLine($"  [white]Entity {entityId} — {Markup.Escape(componentName)} revision chain[/]");
-                sb.AppendLine("  [grey]──────────────────────────────────────[/]");
-                sb.AppendLine($"  [grey]Chain:[/]           [white]{revPtr->ChainLength} chunk(s), {revPtr->ItemCount} items[/]");
-                sb.AppendLine($"  [grey]Entity PK:[/]  [white]{revPtr->EntityPK}[/]  [grey]CommitSeq:[/] [white]{revPtr->CommitSequence}[/] [grey](index {revPtr->FirstItemIndex})[/]");
-                sb.AppendLine($"  [grey]Next chunk:[/]      [white]{(revPtr->NextChunkId >= 0 ? revPtr->NextChunkId.ToString() : "(none)")}[/]");
-
-                return CommandResult.Markup(sb.ToString().TrimEnd());
+                // Try all archetype IDs — entityId from shell is the raw PK value
+                return CommandResult.Error($"Error: Entity {entityId} not found. Use the full EntityId (EntityKey << 12 | ArchetypeId).");
             }
+
+            return CommandResult.Error("Error: 'revisions' command not yet updated for ECS EntityMap-based lookup. Use tsh diagnostics for now.");
         }
         finally
         {
-            epochManager.ExitScope(epochDepth);
+            tx.Dispose();
         }
     }
 
@@ -1049,10 +1042,10 @@ internal sealed class DiagnosticCommandExecutor
             return (null, $"Error: No component table for '{componentName}'.");
         }
 
-        // PK is the primary key index
+        // Entity routing goes through EntityMap
         if (fieldName.Equals("PK", StringComparison.OrdinalIgnoreCase))
         {
-            return (table.PrimaryKeyIndex, null);
+            return (null, "Error: PK B+Tree has been eliminated. Entity routing now uses the per-archetype EntityMap (LinearHash). Use secondary index field names instead.");
         }
 
         // Look through indexed fields via the definition's field map
@@ -1475,4 +1468,148 @@ internal sealed class DiagnosticCommandExecutor
     }
 
     private static string Pct(int part, int total) => total > 0 ? $"{(double)part / total:P1}" : "0.0%";
+
+    // ═══════════════════════════════════════════════════════════════
+    // ECS Diagnostics
+    // ═══════════════════════════════════════════════════════════════
+
+    private CommandResult ExecuteListArchetypes()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("  [white]Registered Archetypes[/]");
+        sb.AppendLine("  [grey]══════════════════════════════════════════════════════════════════[/]");
+
+        var dbe = _session.Engine;
+        var states = dbe._archetypeStates;
+        int count = 0;
+
+        for (int id = 0; id < states.Length; id++)
+        {
+            var state = states[id];
+            if (state == null)
+            {
+                continue;
+            }
+
+            var meta = ArchetypeRegistry.GetMetadata((ushort)id);
+            if (meta == null)
+            {
+                continue;
+            }
+
+            count++;
+            long entityCount = state.EntityMap?.EntryCount ?? 0;
+            string parentName = meta.ParentArchetypeId == 0xFFFF
+                ? "(root)"
+                : ArchetypeRegistry.GetMetadata(meta.ParentArchetypeId)?.ArchetypeType?.Name ?? "?";
+
+            sb.AppendLine($"  [white]{Markup.Escape(meta.ArchetypeType?.Name ?? "?")}[/]  " +
+                          $"[grey]Id=[/][yellow]{meta.ArchetypeId}[/]  " +
+                          $"[grey]Components=[/][yellow]{meta.ComponentCount}[/]  " +
+                          $"[grey]Parent=[/][yellow]{Markup.Escape(parentName)}[/]  " +
+                          $"[grey]Entities=[/][yellow]{entityCount}[/]");
+
+            // List component slots
+            if (state.SlotToComponentTable != null)
+            {
+                for (int slot = 0; slot < meta.ComponentCount; slot++)
+                {
+                    var table = state.SlotToComponentTable[slot];
+                    string compName = meta._slotToComponentType?[slot]?.Name ?? "?";
+                    string mode = table?.StorageMode.ToString() ?? "?";
+                    sb.AppendLine($"    [grey]Slot {slot}:[/] [white]{Markup.Escape(compName)}[/] [grey]({mode})[/]");
+                }
+            }
+
+            // List cascade targets
+            if (meta._cascadeTargets != null && meta._cascadeTargets.Count > 0)
+            {
+                foreach (var target in meta._cascadeTargets)
+                {
+                    string childName = target.ChildArchetypeType?.Name ?? "?";
+                    sb.AppendLine($"    [grey]Cascade →[/] [red]{Markup.Escape(childName)}[/] [grey](FK slot {target.FkSlotIndex})[/]");
+                }
+            }
+        }
+
+        sb.AppendLine($"\n  [grey]Total:[/] [white]{count} archetype(s)[/]");
+        return CommandResult.Markup(sb.ToString().TrimEnd());
+    }
+
+    private CommandResult ExecuteEntityInfo(List<Token> tokens, int pos)
+    {
+        if (tokens.Count <= pos)
+        {
+            return CommandResult.Error("Syntax error: entity-info <entityId>\n  entityId is the raw packed value (EntityKey << 12 | ArchetypeId).");
+        }
+
+        if (!long.TryParse(tokens[pos].Value, out long rawId))
+        {
+            return CommandResult.Error($"Error: '{tokens[pos].Value}' is not a valid integer.");
+        }
+
+        var entityId = EntityId.FromRaw(rawId);
+        var meta = ArchetypeRegistry.GetMetadata(entityId.ArchetypeId);
+        if (meta == null)
+        {
+            return CommandResult.Error($"Error: ArchetypeId {entityId.ArchetypeId} not registered.");
+        }
+
+        var dbe = _session.Engine;
+        var engineState = dbe._archetypeStates[meta.ArchetypeId];
+        if (engineState?.EntityMap == null)
+        {
+            return CommandResult.Error($"Error: Archetype {meta.ArchetypeType?.Name} has no EntityMap.");
+        }
+
+        // Look up in EntityMap
+        int recordSize = meta._entityRecordSize;
+        var readBuf = new byte[recordSize];
+
+        var epochManager = dbe.EpochManager;
+        var epochDepth = epochManager.EnterScope();
+        try
+        {
+            var accessor = engineState.EntityMap.Segment.CreateChunkAccessor();
+            unsafe
+            {
+                fixed (byte* ptr = readBuf)
+                {
+                    bool found = engineState.EntityMap.TryGet(entityId.EntityKey, ptr, ref accessor);
+                    accessor.Dispose();
+
+                    if (!found)
+                    {
+                        return CommandResult.Error($"Error: Entity {entityId} not found in EntityMap.");
+                    }
+
+                    ref var header = ref EntityRecordAccessor.GetHeader(ptr);
+                    var sb = new StringBuilder();
+                    sb.AppendLine($"  [white]Entity {entityId}[/]");
+                    sb.AppendLine("  [grey]══════════════════════════════════════[/]");
+                    sb.AppendLine($"  [grey]Archetype:[/]    [yellow]{Markup.Escape(meta.ArchetypeType?.Name ?? "?")}[/] [grey](Id={meta.ArchetypeId})[/]");
+                    sb.AppendLine($"  [grey]EntityKey:[/]    [white]{entityId.EntityKey}[/]");
+                    sb.AppendLine($"  [grey]BornTSN:[/]      [white]{header.BornTSN}[/]{(header.BornTSN == 0 ? " [grey](genesis)[/]" : "")}");
+                    sb.AppendLine($"  [grey]DiedTSN:[/]      [white]{header.DiedTSN}[/]{(header.DiedTSN == 0 ? " [grey](alive)[/]" : " [red](dead)[/]")}");
+                    sb.AppendLine($"  [grey]EnabledBits:[/]  [white]0x{header.EnabledBits:X4}[/] [grey]({Convert.ToString(header.EnabledBits, 2).PadLeft(meta.ComponentCount, '0')})[/]");
+
+                    sb.AppendLine($"  [grey]Locations:[/]");
+                    for (int slot = 0; slot < meta.ComponentCount; slot++)
+                    {
+                        int chunkId = EntityRecordAccessor.GetLocation(ptr, slot);
+                        string compName = meta._slotToComponentType?[slot]?.Name ?? "?";
+                        bool enabled = (header.EnabledBits & (1 << slot)) != 0;
+                        string enabledTag = enabled ? "[green]ON[/]" : "[grey]off[/]";
+                        sb.AppendLine($"    [grey]Slot {slot}:[/] [white]{Markup.Escape(compName)}[/] → ChunkId [yellow]{chunkId}[/]  {enabledTag}");
+                    }
+
+                    return CommandResult.Markup(sb.ToString().TrimEnd());
+                }
+            }
+        }
+        finally
+        {
+            epochManager.ExitScope(epochDepth);
+        }
+    }
 }
