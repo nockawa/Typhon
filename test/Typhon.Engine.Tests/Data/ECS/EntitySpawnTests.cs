@@ -43,14 +43,14 @@ public struct EcsHealth
 // ═══════════════════════════════════════════════════════════════════════
 
 [Archetype(100)]
-class EcsUnit : Archetype<EcsUnit>
+partial class EcsUnit : Archetype<EcsUnit>
 {
     public static readonly Comp<EcsPosition> Position = Register<EcsPosition>();
     public static readonly Comp<EcsVelocity> Velocity = Register<EcsVelocity>();
 }
 
 [Archetype(101)]
-class EcsSoldier : Archetype<EcsSoldier, EcsUnit>
+partial class EcsSoldier : Archetype<EcsSoldier, EcsUnit>
 {
     public static readonly Comp<EcsHealth> Health = Register<EcsHealth>();
 }
@@ -359,5 +359,91 @@ class EntitySpawnTests : TestBase<EntitySpawnTests>
         {
             Assert.That(t2.IsAlive(ids[i]), Is.True, $"Entity {i} should survive");
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Generated ReadAll / ReadWriteAll tests
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void ReadAll_ReturnsAllComponents_ZeroCopy()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId id;
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            id = t.Spawn<EcsUnit>(
+                EcsUnit.Position.Set(new EcsPosition(10, 20, 30)),
+                EcsUnit.Velocity.Set(new EcsVelocity(1, 2, 3)));
+            t.Commit();
+        }
+
+        using var t2 = dbe.CreateQuickTransaction();
+        var refs = EcsUnit.ReadAll(t2, id);
+
+        Assert.That(refs.Position.X, Is.EqualTo(10f));
+        Assert.That(refs.Position.Y, Is.EqualTo(20f));
+        Assert.That(refs.Position.Z, Is.EqualTo(30f));
+        Assert.That(refs.Velocity.Dx, Is.EqualTo(1f));
+        Assert.That(refs.Velocity.Dy, Is.EqualTo(2f));
+        Assert.That(refs.Velocity.Dz, Is.EqualTo(3f));
+    }
+
+    [Test]
+    public void ReadAll_InheritedArchetype_IncludesParentComponents()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId id;
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            id = t.Spawn<EcsSoldier>(
+                EcsUnit.Position.Set(new EcsPosition(5, 10, 15)),
+                EcsUnit.Velocity.Set(new EcsVelocity(1, 0, 0)),
+                EcsSoldier.Health.Set(new EcsHealth(100, 100)));
+            t.Commit();
+        }
+
+        using var t2 = dbe.CreateQuickTransaction();
+        var refs = EcsSoldier.ReadAll(t2, id);
+
+        // Inherited from EcsUnit
+        Assert.That(refs.Position.X, Is.EqualTo(5f));
+        Assert.That(refs.Velocity.Dx, Is.EqualTo(1f));
+        // Own component
+        Assert.That(refs.Health.Current, Is.EqualTo(100));
+        Assert.That(refs.Health.Max, Is.EqualTo(100));
+    }
+
+    [Test]
+    public void ReadWriteAll_MutatesComponentsDirectly()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId id;
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            id = t.Spawn<EcsUnit>(
+                EcsUnit.Position.Set(new EcsPosition(0, 0, 0)),
+                EcsUnit.Velocity.Set(new EcsVelocity(0, 0, 0)));
+            t.Commit();
+        }
+
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var mut = EcsUnit.ReadWriteAll(t, id);
+            mut.Position.X = 999;
+            mut.Position.Y = 888;
+            mut.Velocity.Dx = 42;
+            t.Commit();
+        }
+
+        // Verify writes persisted
+        using var t2 = dbe.CreateQuickTransaction();
+        var refs = EcsUnit.ReadAll(t2, id);
+        Assert.That(refs.Position.X, Is.EqualTo(999f));
+        Assert.That(refs.Position.Y, Is.EqualTo(888f));
+        Assert.That(refs.Velocity.Dx, Is.EqualTo(42f));
     }
 }

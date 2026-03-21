@@ -41,6 +41,44 @@ internal sealed class DirtyBitmap
     }
 
     /// <summary>
+    /// Atomically set a bit and return whether it was already set.
+    /// Used by shadow capture to detect first-write-per-entity-per-tick.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool TestAndSet(int chunkId)
+    {
+        var wordIndex = chunkId >> 6;
+        var bits = _bits;
+
+        if (wordIndex >= bits.Length)
+        {
+            bits = Grow(wordIndex);
+        }
+
+        long mask = 1L << (chunkId & 63);
+        long prev = Interlocked.Or(ref bits[wordIndex], mask);
+        return (prev & mask) != 0;
+    }
+
+    /// <summary>Check if a bit is set without modifying state. Thread-safe (volatile read).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool Test(int chunkId)
+    {
+        var wordIndex = chunkId >> 6;
+        var bits = _bits;
+        if (wordIndex >= bits.Length)
+        {
+            return false;
+        }
+
+        long mask = 1L << (chunkId & 63);
+        return (Volatile.Read(ref bits[wordIndex]) & mask) != 0;
+    }
+
+    /// <summary>Reset all bits to zero. Not thread-safe — call only when no concurrent writers are active.</summary>
+    internal void Clear() => Array.Clear(_bits);
+
+    /// <summary>
     /// Atomically swap the current bitmap with a fresh empty one.
     /// Returns the old bitmap containing all dirty bits since the last snapshot.
     /// Called by tick fence serialization (3.4) — outside hot write path.

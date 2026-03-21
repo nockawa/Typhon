@@ -852,6 +852,34 @@ public unsafe partial class Transaction
     }
 
     /// <summary>
+    /// Capture old indexed field values before the first SV in-place mutation per entity per tick.
+    /// Called from <see cref="EntityRef.Write{T}(Comp{T})"/> for SingleVersion components with indexed fields.
+    /// The shadow bitmap ensures only the first write per entity per tick captures values; subsequent writes in the same tick are no-ops.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal unsafe void ShadowIndexedFields<T>(ComponentTable table, int chunkId, EntityId entityId) where T : unmanaged
+    {
+        if (table.ShadowBitmap.TestAndSet(chunkId))
+        {
+            return; // Already shadowed this tick
+        }
+
+        var info = GetComponentInfo(typeof(T));
+        byte* ptr = info.CompContentAccessor.GetChunkAddress(chunkId);
+
+        var fields = table.IndexedFieldInfos;
+        var buffers = table.FieldShadowBuffers;
+        long pk = (long)entityId.RawValue;
+
+        for (int i = 0; i < fields.Length; i++)
+        {
+            ref var ifi = ref fields[i];
+            var oldKey = KeyBytes8.FromPointer(ptr + ifi.OffsetToField, ifi.Size);
+            buffers[i].Append(chunkId, pk, oldKey);
+        }
+    }
+
+    /// <summary>
     /// Copy-on-write for Versioned components: allocates new chunk, copies data, creates revision entry.
     /// Called by EntityRef.Write for Versioned components. Returns (newChunkId, newChunkAddress).
     /// First write per entity allocates; subsequent writes reuse the same new chunk.
@@ -985,7 +1013,7 @@ public unsafe partial class Transaction
         int svIdxAccessorTotal = 0;
 
         // Per-archetype cached state — avoids per-entity metadata lookups
-        ArchetypeMetadata meta = null;
+        ArchetypeMetadata meta;
         ArchetypeEngineState engineState = null;
         int componentCount = 0;
         ushort versionedMask = 0; // bit set for Versioned slots — eliminates per-slot table dereference
@@ -1240,36 +1268,157 @@ public unsafe partial class Transaction
             return;
         }
 
-        foreach (var entityId in _pendingDestroys)
+        // Hoist EntityMap accessor for SV entity record reads — reuse when archetype matches
+        ushort lastArchId = 0;
+        var emAccessor = default(ChunkAccessor<PersistentStore>);
+        bool hasEmAccessor = false;
+        byte* readBuf = stackalloc byte[EntityRecordAccessor.MaxRecordSize];
+
+        try
         {
-            // Skip entities that were spawned in this same transaction — they have no committed component data to delete
-            // (FinalizeSpawns skips spawn+destroy entities).
-            if (SpawnedContains(entityId))
+            foreach (var entityId in _pendingDestroys)
             {
-                continue;
-            }
-
-            var meta = ArchetypeRegistry.GetMetadata(entityId.ArchetypeId);
-            if (meta == null)
-            {
-                continue;
-            }
-            var engineState = _dbe._archetypeStates[meta.ArchetypeId];
-            if (engineState?.SlotToComponentTable == null)
-            {
-                continue;
-            }
-
-            long pk = (long)entityId.RawValue;
-            for (int slot = 0; slot < meta.ComponentCount; slot++)
-            {
-                var table = engineState.SlotToComponentTable[slot];
-                if (table == null || table.StorageMode != StorageMode.Versioned)
+                // Skip entities that were spawned in this same transaction — they have no committed component data to delete
+                // (FinalizeSpawns skips spawn+destroy entities).
+                if (SpawnedContains(entityId))
                 {
                     continue;
                 }
-                MarkComponentDeleted(meta._slotToComponentType[slot], pk);
+
+                var meta = ArchetypeRegistry.GetMetadata(entityId.ArchetypeId);
+                if (meta == null)
+                {
+                    continue;
+                }
+
+                var engineState = _dbe._archetypeStates[meta.ArchetypeId];
+                if (engineState?.SlotToComponentTable == null)
+                {
+                    continue;
+                }
+
+                long pk = (long)entityId.RawValue;
+
+                // Check if this archetype has SV indexed components requiring entity record lookup
+                bool needsEntityRecord = false;
+                for (int slot = 0; slot < meta.ComponentCount; slot++)
+                {
+                    var table = engineState.SlotToComponentTable[slot];
+                    if (table?.HasShadowableIndexes == true)
+                    {
+                        needsEntityRecord = true;
+                        break;
+                    }
+                }
+
+                // Read entity record from EntityMap (lazy, per-archetype accessor)
+                bool hasRecord = false;
+                if (needsEntityRecord)
+                {
+                    if (!hasEmAccessor || entityId.ArchetypeId != lastArchId)
+                    {
+                        if (hasEmAccessor)
+                        {
+                            emAccessor.Dispose();
+                        }
+
+                        emAccessor = engineState.EntityMap.Segment.CreateChunkAccessor(_changeSet);
+                        lastArchId = entityId.ArchetypeId;
+                        hasEmAccessor = true;
+                    }
+
+                    hasRecord = engineState.EntityMap.TryGet(entityId.EntityKey, readBuf, ref emAccessor);
+                }
+
+                for (int slot = 0; slot < meta.ComponentCount; slot++)
+                {
+                    var table = engineState.SlotToComponentTable[slot];
+                    if (table == null)
+                    {
+                        continue;
+                    }
+
+                    if (table.StorageMode == StorageMode.Versioned)
+                    {
+                        MarkComponentDeleted(meta._slotToComponentType[slot], pk);
+                    }
+                    else if (table.HasShadowableIndexes && hasRecord)
+                    {
+                        int chunkId = EntityRecordAccessor.GetLocation(readBuf, slot);
+                        table.TrackDestroyedChunkId(chunkId);
+
+                        // If entity was NOT written this tick (no shadow), remove index entries now using current component data value (which matches the index).
+                        // If entity WAS written (shadow exists), ProcessShadowEntries handles removal using the shadow's old key (which matches the index).
+                        if (!table.ShadowBitmap.Test(chunkId))
+                        {
+                            RemoveSvIndexEntries(table, chunkId);
+                        }
+                    }
+                }
             }
+        }
+        finally
+        {
+            if (hasEmAccessor)
+            {
+                emAccessor.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Remove all secondary index entries for a SingleVersion component at the given chunkId.
+    /// Used at destroy time when the entity was NOT mutated this tick (index key = current data value).
+    /// </summary>
+    private void RemoveSvIndexEntries(ComponentTable table, int chunkId)
+    {
+        var fields = table.IndexedFieldInfos;
+        var compAccessor = table.ComponentSegment.CreateChunkAccessor();
+        try
+        {
+            byte* ptr = compAccessor.GetChunkAddress(chunkId);
+
+            for (int i = 0; i < fields.Length; i++)
+            {
+                ref var ifi = ref fields[i];
+                byte* fieldPtr = ptr + ifi.OffsetToField;
+                var idxAccessor = ifi.Index.Segment.CreateChunkAccessor();
+                try
+                {
+                    if (ifi.Index.AllowMultiple)
+                    {
+                        int elementId = *(int*)(ptr + ifi.OffsetToIndexElementId);
+                        ifi.Index.RemoveValue(fieldPtr, elementId, chunkId, ref idxAccessor);
+                    }
+                    else
+                    {
+                        ifi.Index.Remove(fieldPtr, out _, ref idxAccessor);
+                    }
+                }
+                finally
+                {
+                    idxAccessor.Dispose();
+                }
+
+                // Notify views of deletion
+                var views = table.ViewRegistry.GetViewsForField(i);
+                for (int v = 0; v < views.Length; v++)
+                {
+                    var reg = views[v];
+                    if (reg.View.IsDisposed)
+                    {
+                        continue;
+                    }
+
+                    var key = KeyBytes8.FromPointer(fieldPtr, ifi.Size);
+                    byte flags = (byte)((i & 0x3F) | 0x80); // isDeletion flag
+                    reg.View.DeltaBuffer.TryAppend((long)chunkId, key, default, 0, flags, reg.ComponentTag);
+                }
+            }
+        }
+        finally
+        {
+            compAccessor.Dispose();
         }
     }
 

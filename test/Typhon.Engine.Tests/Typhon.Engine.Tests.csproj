@@ -42,6 +42,9 @@
         <ProjectReference Include="..\..\src\Typhon.Analyzers\Typhon.Analyzers.csproj"
                           ReferenceOutputAssembly="false"
                           OutputItemType="Analyzer"/>
+        <ProjectReference Include="..\..\src\Typhon.Generators\Typhon.Generators.csproj"
+                          ReferenceOutputAssembly="false"
+                          OutputItemType="Analyzer"/>
     </ItemGroup>
 
 </Project>

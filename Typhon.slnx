@@ -11,6 +11,7 @@
     </Folder>
     <Folder Name="/src/">
         <Project Path="src/Typhon.Analyzers/Typhon.Analyzers.csproj" />
+        <Project Path="src/Typhon.Generators/Typhon.Generators.csproj" />
         <Project Path="src/Typhon.Engine/Typhon.Engine.csproj" />
         <Project Path="src/Typhon.Schema.Definition/Typhon.Schema.Definition.csproj" />
         <Project Path="src/Typhon.Shell/Typhon.Shell.csproj" />

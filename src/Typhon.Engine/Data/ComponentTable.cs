@@ -219,6 +219,45 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     // ── SingleVersion dirty tracking (non-null only when StorageMode == SingleVersion) ──
     internal DirtyBitmap DirtyBitmap { get; private set; }
 
+    // ── Shadow tracking for SV tick-boundary index/view maintenance ──
+    // Non-null only when StorageMode == SingleVersion AND IndexedFieldInfos.Length > 0.
+    // ShadowBitmap tracks which chunkIds have been shadowed this tick (TestAndSet guard).
+    // FieldShadowBuffers[i] stores old KeyBytes8 values for IndexedFieldInfos[i].
+    internal bool HasShadowableIndexes { get; private set; }
+    internal DirtyBitmap ShadowBitmap { get; private set; }
+    internal FieldShadowBuffer[] FieldShadowBuffers { get; private set; }
+
+    // ── Destroyed chunk tracking for SV index cleanup ──
+    // Accumulates chunkIds of destroyed SV entities during commits this tick.
+    // Checked by ProcessShadowEntries to distinguish Remove vs Move. Cleared at tick boundary.
+    private HashSet<int> _destroyedChunkIds;
+    private readonly Lock _destroyedLock = new();
+
+    internal void TrackDestroyedChunkId(int chunkId)
+    {
+        lock (_destroyedLock)
+        {
+            _destroyedChunkIds ??= [];
+            _destroyedChunkIds.Add(chunkId);
+        }
+    }
+
+    internal bool IsChunkDestroyed(int chunkId)
+    {
+        lock (_destroyedLock)
+        {
+            return _destroyedChunkIds != null && _destroyedChunkIds.Contains(chunkId);
+        }
+    }
+
+    internal void ClearDestroyedChunkIds()
+    {
+        lock (_destroyedLock)
+        {
+            _destroyedChunkIds?.Clear();
+        }
+    }
+
     public int ComponentStorageSize => Definition.ComponentStorageSize;
     public DBComponentDefinition Definition { get; private set; }
 
@@ -435,6 +474,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         if (storageMode == StorageMode.SingleVersion)
         {
             DirtyBitmap = new DirtyBitmap(ComponentSegment.ChunkCapacity);
+            InitializeShadowTracking();
         }
     }
 
@@ -488,6 +528,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         if (storageMode == StorageMode.SingleVersion)
         {
             DirtyBitmap = new DirtyBitmap(ComponentSegment.ChunkCapacity);
+            InitializeShadowTracking();
         }
     }
 
@@ -599,6 +640,26 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         for (var i = 0; i < IndexedFieldInfos.Length; i++)
         {
             IndexStats[i] = new IndexStatistics(IndexedFieldInfos[i].Index);
+        }
+    }
+
+    /// <summary>
+    /// Initializes shadow tracking infrastructure for SV tick-boundary index/view maintenance.
+    /// Called after BuildIndexedFieldInfo when StorageMode == SingleVersion.
+    /// </summary>
+    private void InitializeShadowTracking()
+    {
+        if (IndexedFieldInfos.Length == 0)
+        {
+            return;
+        }
+
+        HasShadowableIndexes = true;
+        ShadowBitmap = new DirtyBitmap(ComponentSegment.ChunkCapacity);
+        FieldShadowBuffers = new FieldShadowBuffer[IndexedFieldInfos.Length];
+        for (int i = 0; i < IndexedFieldInfos.Length; i++)
+        {
+            FieldShadowBuffers[i] = new FieldShadowBuffer();
         }
     }
 

@@ -101,7 +101,8 @@ public unsafe ref struct EntityRef
     }
 
     /// <summary>Write a component by handle. Returns a mutable ref into the chunk page.
-    /// For Versioned: copy-on-write (allocates new chunk, preserves old for concurrent readers).</summary>
+    /// For Versioned: copy-on-write (allocates new chunk, preserves old for concurrent readers).
+    /// For SingleVersion with indexes: shadows old field values on first write per tick for deferred index maintenance.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ref T Write<T>(Comp<T> comp) where T : unmanaged
     {
@@ -118,6 +119,11 @@ public unsafe ref struct EntityRef
             var (newChunkId, rawPtr) = _tx.EcsVersionedCopyOnWrite(typeof(T), _id, table);
             _locations[slot] = newChunkId;
             return ref Unsafe.AsRef<T>((byte*)rawPtr + table.ComponentOverhead);
+        }
+
+        if (table.HasShadowableIndexes)
+        {
+            _tx.ShadowIndexedFields<T>(table, chunkId, _id);
         }
 
         return ref _tx.WriteEcsComponentData<T>(table, chunkId);
@@ -141,7 +147,8 @@ public unsafe ref struct EntityRef
     }
 
     /// <summary>Write a component by type. Resolves slot via archetype metadata.
-    /// For Versioned: copy-on-write (allocates new chunk, preserves old for concurrent readers).</summary>
+    /// For Versioned: copy-on-write (allocates new chunk, preserves old for concurrent readers).
+    /// For SingleVersion with indexes: shadows old field values on first write per tick for deferred index maintenance.</summary>
     public ref T Write<T>() where T : unmanaged
     {
         Debug.Assert(_writable, "EntityRef opened as read-only — use OpenMut for writes");
@@ -158,6 +165,11 @@ public unsafe ref struct EntityRef
             var (newChunkId, rawPtr) = _tx.EcsVersionedCopyOnWrite(typeof(T), _id, table);
             _locations[slot] = newChunkId;
             return ref Unsafe.AsRef<T>((byte*)rawPtr + table.ComponentOverhead);
+        }
+
+        if (table.HasShadowableIndexes)
+        {
+            _tx.ShadowIndexedFields<T>(table, chunkId, _id);
         }
 
         return ref _tx.WriteEcsComponentData<T>(table, chunkId);
