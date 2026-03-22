@@ -287,4 +287,144 @@ class EcsConcurrencyTests : TestBase<EcsConcurrencyTests>
             Assert.That(verifyTx.IsAlive(id), Is.False, $"Destroyed entity {id} should be dead");
         }
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Read-while-Destroy (MVCC isolation)
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    [CancelAfter(15000)]
+    public void ReadWhileDestroy_SnapshotIsolation_ReaderStillSeesEntity()
+    {
+        using var dbe = SetupEngine();
+
+        // Create entity
+        EntityId id;
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var pos = new EcsPosition(77, 88, 99);
+            id = t.Spawn<EcsUnit>(EcsUnit.Position.Set(in pos));
+            t.Commit();
+        }
+
+        // Open a reader BEFORE the destroy (snapshot at current TSN)
+        using var readerTx = dbe.CreateQuickTransaction();
+        Assert.That(readerTx.IsAlive(id), Is.True);
+        var entity = readerTx.Open(id);
+        ref readonly var pos1 = ref entity.Read(EcsUnit.Position);
+        Assert.That(pos1.X, Is.EqualTo(77f));
+
+        // Destroy on another transaction and commit
+        using (var destroyTx = dbe.CreateQuickTransaction())
+        {
+            destroyTx.Destroy(id);
+            destroyTx.Commit();
+        }
+
+        // Reader with older TSN should still see the entity alive (MVCC)
+        Assert.That(readerTx.IsAlive(id), Is.True, "Reader with older TSN should still see entity alive");
+        var entity2 = readerTx.Open(id);
+        ref readonly var pos2 = ref entity2.Read(EcsUnit.Position);
+        Assert.That(pos2.X, Is.EqualTo(77f), "Reader should still read correct data after concurrent destroy");
+
+        // New transaction should see it dead
+        using (var newTx = dbe.CreateQuickTransaction())
+        {
+            Assert.That(newTx.IsAlive(id), Is.False, "New transaction should see entity as dead");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Concurrent writes to same entity (conflict)
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    [CancelAfter(15000)]
+    public void ConcurrentWrites_SameEntity_LastWriterWins()
+    {
+        using var dbe = SetupEngine();
+
+        // Create entity
+        EntityId id;
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var pos = new EcsPosition(1, 2, 3);
+            id = t.Spawn<EcsUnit>(EcsUnit.Position.Set(in pos));
+            t.Commit();
+        }
+
+        // tx1 and tx2 both open for writing
+        using var tx1 = dbe.CreateQuickTransaction();
+        using var tx2 = dbe.CreateQuickTransaction();
+
+        // Both write to the same entity
+        var e1 = tx1.OpenMut(id);
+        e1.Write(EcsUnit.Position).X = 100;
+
+        var e2 = tx2.OpenMut(id);
+        e2.Write(EcsUnit.Position).X = 200;
+
+        // Both commits succeed — ECS uses revision chains, last writer's revision becomes head
+        bool first = tx1.Commit();
+        Assert.That(first, Is.True, "First writer should commit successfully");
+
+        bool second = tx2.Commit();
+        Assert.That(second, Is.True, "Second writer also succeeds (revision chain append)");
+
+        // Final value reflects the later commit (tx2 committed after tx1)
+        using (var verifyTx = dbe.CreateQuickTransaction())
+        {
+            var entity = verifyTx.Open(id);
+            ref readonly var pos = ref entity.Read(EcsUnit.Position);
+            Assert.That(pos.X, Is.EqualTo(200f), "Value should reflect last committer (tx2)");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Parallel polymorphic queries
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    [CancelAfter(15000)]
+    public void ParallelPolymorphicQueries_ConsistentResults()
+    {
+        using var dbe = SetupEngine();
+
+        // Spawn EcsUnit and EcsSoldier entities (EcsSoldier extends EcsUnit)
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            for (int i = 0; i < 50; i++)
+            {
+                var pos = new EcsPosition(i, 0, 0);
+                t.Spawn<EcsUnit>(EcsUnit.Position.Set(in pos));
+            }
+            for (int i = 0; i < 30; i++)
+            {
+                var pos = new EcsPosition(100 + i, 0, 0);
+                var hp = new EcsHealth(100, 100);
+                t.Spawn<EcsSoldier>(EcsUnit.Position.Set(in pos), EcsSoldier.Health.Set(in hp));
+            }
+            t.Commit();
+        }
+
+        const int threadCount = 8;
+        var baseCounts = new ConcurrentBag<int>();
+        var exactCounts = new ConcurrentBag<int>();
+
+        Parallel.For(0, threadCount, _ =>
+        {
+            using var t = dbe.CreateQuickTransaction();
+            baseCounts.Add(t.Query<EcsUnit>().Count());       // polymorphic: EcsUnit + EcsSoldier
+            exactCounts.Add(t.QueryExact<EcsUnit>().Count()); // exact: EcsUnit only
+        });
+
+        foreach (var c in baseCounts)
+        {
+            Assert.That(c, Is.EqualTo(80), "Polymorphic query should find 50 + 30 = 80");
+        }
+        foreach (var c in exactCounts)
+        {
+            Assert.That(c, Is.EqualTo(50), "Exact query should find only 50 EcsUnit");
+        }
+    }
 }

@@ -30,11 +30,15 @@
     "String64Benchmarks": "Primitives",
     "FindNextUnsetBenchmarks": "Collections",
     "WorkloadBenchmarks": "Workload",
-    "IndexLookupBenchmarks": "Index"
+    "IndexLookupBenchmarks": "Index",
+    "CascadeDeleteBenchmarks": "ECS",
+    "EcsQueryBenchmarks": "ECS",
+    "SpawnBatchBenchmarks": "ECS"
   },
   "category_order": [
     "EndToEnd",
     "Workload",
+    "ECS",
     "Data",
     "MVCC",
     "Epoch",
@@ -59,7 +63,8 @@
     "Workload": { "regression_pct": 20.0 },
     "Index": { "regression_pct": 20.0 },
     "BTreeSecondaryIndex": { "regression_pct": 15.0 },
-    "BTreeConcurrency": { "regression_pct": 25.0, "max_cov_pct": 40.0 }
+    "BTreeConcurrency": { "regression_pct": 25.0, "max_cov_pct": 40.0 },
+    "ECS": { "regression_pct": 20.0 }
   },
   "benchmarks": {
     "EpochGuardBenchmarks.EnterExit": {
@@ -108,6 +113,15 @@
     },
     "TransactionBenchmarks.Transaction_BulkUpdate(EntityCount=1000)": {
       "target_ns": 1020000.0
+    },
+    "SpawnBatchBenchmarks.SingleSpawnLoop(EntityCount: 1000)": {
+      "target_ns": 460000.0
+    },
+    "SpawnBatchBenchmarks.SpawnBatch_SOA(EntityCount: 1000)": {
+      "target_ns": 345000.0
+    },
+    "EcsQueryBenchmarks.PolymorphicQuery_Count": {
+      "target_ns": 500000.0
     }
   }
 }

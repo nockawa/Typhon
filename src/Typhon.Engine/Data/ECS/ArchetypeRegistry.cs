@@ -208,15 +208,24 @@ public static class ArchetypeRegistry
                                                 $"Inherited: {allComponents.Count - ownComponents.Count}, Own: {ownComponents.Count}");
         }
 
-        // Build slot mapping
+        // Build slot mapping — flat array indexed by componentTypeId (0xFF = not present)
         var componentTypeIds = new int[totalComponentCount];
-        var typeIdToSlot = new Dictionary<int, byte>(totalComponentCount);
-
+        int maxTypeId = 0;
         for (int i = 0; i < totalComponentCount; i++)
         {
             int typeId = allComponents[i].ComponentTypeId;
             componentTypeIds[i] = typeId;
-            typeIdToSlot[typeId] = (byte)i;
+            if (typeId > maxTypeId)
+            {
+                maxTypeId = typeId;
+            }
+        }
+
+        var typeIdToSlot = new byte[maxTypeId + 1];
+        Array.Fill(typeIdToSlot, (byte)0xFF);
+        for (int i = 0; i < totalComponentCount; i++)
+        {
+            typeIdToSlot[componentTypeIds[i]] = (byte)i;
         }
 
         // Build slot-to-type array for DatabaseEngine initialization
@@ -317,7 +326,7 @@ public static class ArchetypeRegistry
         for (int i = 0; i < Archetypes.Length; i++)
         {
             var meta = Archetypes[i];
-            if (meta != null && meta._typeIdToSlot.ContainsKey(componentTypeId))
+            if (meta != null && meta.HasComponent(componentTypeId))
             {
                 mask.Set(meta.ArchetypeId);
             }
@@ -337,7 +346,7 @@ public static class ArchetypeRegistry
         for (int i = 0; i <= MaxRegisteredArchetypeId; i++)
         {
             var meta = Archetypes[i];
-            if (meta != null && meta._typeIdToSlot.ContainsKey(componentTypeId))
+            if (meta != null && meta.HasComponent(componentTypeId))
             {
                 return meta;
             }
@@ -353,7 +362,7 @@ public static class ArchetypeRegistry
         for (int i = 0; i < Archetypes.Length; i++)
         {
             var meta = Archetypes[i];
-            if (meta != null && meta._typeIdToSlot.ContainsKey(componentTypeId))
+            if (meta != null && meta.HasComponent(componentTypeId))
             {
                 mask.Set(meta.ArchetypeId);
             }

@@ -226,4 +226,187 @@ class CascadeDeleteTests : TestBase<CascadeDeleteTests>
         Assert.That(t.TryOpen(unrelatedItemId, out _), Is.True, "Unrelated item (null owner) should survive");
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // Edge case: partial cascade (some children already dead)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void Cascade_SomeChildrenAlreadyDead_RemainingDie()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId bagId, item1Id, item2Id, item3Id;
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var bagData = new BagData { Capacity = 10 };
+            bagId = t.Spawn<CascadeBag>(CascadeBag.Bag.Set(in bagData));
+
+            var i1 = new ItemData { Owner = bagId, Weight = 1 };
+            var i2 = new ItemData { Owner = bagId, Weight = 2 };
+            var i3 = new ItemData { Owner = bagId, Weight = 3 };
+            item1Id = t.Spawn<CascadeItem>(CascadeItem.Item.Set(in i1));
+            item2Id = t.Spawn<CascadeItem>(CascadeItem.Item.Set(in i2));
+            item3Id = t.Spawn<CascadeItem>(CascadeItem.Item.Set(in i3));
+            t.Commit();
+        }
+
+        // Destroy item2 independently (before cascade)
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            t.Destroy(item2Id);
+            t.Commit();
+        }
+
+        // Now cascade-destroy the bag — item1 and item3 should die, item2 already dead
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            t.Destroy(bagId);
+            t.Commit();
+        }
+
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            Assert.That(t.IsAlive(bagId), Is.False);
+            Assert.That(t.IsAlive(item1Id), Is.False);
+            Assert.That(t.IsAlive(item2Id), Is.False);
+            Assert.That(t.IsAlive(item3Id), Is.False);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Edge case: child FK rekeyed to different parent before cascade
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void Cascade_ChildRekeyedToDifferentParent_NotCascaded()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId bag1Id, bag2Id, itemId;
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var b1 = new BagData { Capacity = 10 };
+            var b2 = new BagData { Capacity = 20 };
+            bag1Id = t.Spawn<CascadeBag>(CascadeBag.Bag.Set(in b1));
+            bag2Id = t.Spawn<CascadeBag>(CascadeBag.Bag.Set(in b2));
+
+            // Item initially belongs to bag1
+            var itemData = new ItemData { Owner = bag1Id, Weight = 5 };
+            itemId = t.Spawn<CascadeItem>(CascadeItem.Item.Set(in itemData));
+            t.Commit();
+        }
+
+        // Rekey item to bag2
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var entity = t.OpenMut(itemId);
+            ref var item = ref entity.Write(CascadeItem.Item);
+            item.Owner = bag2Id;
+            t.Commit();
+        }
+
+        // Destroy bag1 — item should NOT be cascaded (it now belongs to bag2)
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            t.Destroy(bag1Id);
+            t.Commit();
+        }
+
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            Assert.That(t.IsAlive(bag1Id), Is.False, "Bag1 should be dead");
+            Assert.That(t.IsAlive(bag2Id), Is.True, "Bag2 should survive");
+            Assert.That(t.IsAlive(itemId), Is.True, "Item should survive (rekeyed to bag2)");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Edge case: child modified then parent cascade in same tx
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void Cascade_ChildModifiedThenParentDestroyed_SameTx()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId bagId, itemId;
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var bagData = new BagData { Capacity = 10 };
+            bagId = t.Spawn<CascadeBag>(CascadeBag.Bag.Set(in bagData));
+
+            var itemData = new ItemData { Owner = bagId, Weight = 5 };
+            itemId = t.Spawn<CascadeItem>(CascadeItem.Item.Set(in itemData));
+            t.Commit();
+        }
+
+        // In same tx: modify item's Weight, then destroy parent bag
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var entity = t.OpenMut(itemId);
+            ref var item = ref entity.Write(CascadeItem.Item);
+            item.Weight = 99;
+
+            // Now destroy the parent — cascade should find the item despite the write
+            t.Destroy(bagId);
+
+            Assert.That(t.IsAlive(bagId), Is.False);
+            Assert.That(t.IsAlive(itemId), Is.False, "Modified child should still be cascade-destroyed");
+            t.Commit();
+        }
+
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            Assert.That(t.IsAlive(bagId), Is.False);
+            Assert.That(t.IsAlive(itemId), Is.False);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Edge case: large fan-out cascade
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void Cascade_LargeFanOut_AllChildrenDestroyed()
+    {
+        using var dbe = SetupEngine();
+
+        const int childCount = 100;
+        EntityId bagId;
+        var childIds = new EntityId[childCount];
+
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var bagData = new BagData { Capacity = childCount };
+            bagId = t.Spawn<CascadeBag>(CascadeBag.Bag.Set(in bagData));
+
+            for (int i = 0; i < childCount; i++)
+            {
+                var itemData = new ItemData { Owner = bagId, Weight = i + 1 };
+                childIds[i] = t.Spawn<CascadeItem>(CascadeItem.Item.Set(in itemData));
+            }
+            t.Commit();
+        }
+
+        // Destroy parent — all 100 children should cascade
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            t.Destroy(bagId);
+            t.Commit();
+        }
+
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            Assert.That(t.IsAlive(bagId), Is.False);
+            int deadCount = 0;
+            for (int i = 0; i < childCount; i++)
+            {
+                if (!t.IsAlive(childIds[i]))
+                {
+                    deadCount++;
+                }
+            }
+            Assert.That(deadCount, Is.EqualTo(childCount), $"All {childCount} children should be cascade-destroyed");
+        }
+    }
 }

@@ -132,6 +132,9 @@ public static class TyphonSpanAttributes
     /// <summary>The archetype name (e.g., "Factory", "House").</summary>
     public const string EcsArchetype = "typhon.ecs.archetype";
 
+    /// <summary>The component type name (e.g., "Typhon.Test.ECS.Position").</summary>
+    public const string EcsComponentType = "typhon.ecs.component_type";
+
     /// <summary>Number of entities affected by a batch operation.</summary>
     public const string EcsEntityCount = "typhon.ecs.entity_count";
 
@@ -143,4 +146,12 @@ public static class TyphonSpanAttributes
 
     /// <summary>The query scan mode used ("broad" or "targeted").</summary>
     public const string EcsQueryScanMode = "typhon.ecs.query.scan_mode";
+
+    // ── View ─────────────────────────────────────────────────────────────────
+
+    /// <summary>Number of delta entries processed during View.Refresh.</summary>
+    public const string ViewDeltaCount = "typhon.view.delta_count";
+
+    /// <summary>Whether the view overflowed and required a full re-query.</summary>
+    public const string ViewOverflow = "typhon.view.overflow";
 }

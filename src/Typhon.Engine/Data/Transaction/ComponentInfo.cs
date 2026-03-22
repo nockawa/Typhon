@@ -69,6 +69,8 @@ internal sealed class ComponentInfo
     // Common fields
     public int ComponentTypeId;
     public ComponentTable ComponentTable;
+    /// <summary>Cached from <see cref="ComponentTable.ComponentOverhead"/> — avoids property-through-property indirection on hot path.</summary>
+    public int ComponentOverhead;
     public ChunkBasedSegment<PersistentStore> CompContentSegment;
     public ChunkBasedSegment<PersistentStore> CompRevTableSegment;
     public ChunkAccessor<PersistentStore> CompContentAccessor;

@@ -9,77 +9,93 @@ using Typhon.Schema.Definition;
 namespace Typhon.Benchmark;
 
 // ═══════════════════════════════════════════════════════════════════════
-// Benchmark-only archetypes (IDs 510–515, avoid collision with BenchArch 501)
+// ECS benchmark types — cascade, polymorphic query, enable/disable
 // ═══════════════════════════════════════════════════════════════════════
 
-[Component("Typhon.Benchmark.EcsBase", 1)]
+[Component("Typhon.Benchmark.ECS.ParentData", 1)]
 [StructLayout(LayoutKind.Sequential)]
-public struct EcsBenchBase
+struct BenchParentData
+{
+    [Field] public int Category;
+    [Field] public int Value;
+}
+
+[Component("Typhon.Benchmark.ECS.ChildData", 1)]
+[StructLayout(LayoutKind.Sequential)]
+struct BenchChildData
+{
+    [Index(AllowMultiple = true, OnParentDelete = CascadeAction.Delete)]
+    public EntityLink<BenchParentArch> Owner;
+    [Field] public int Weight;
+}
+
+[Component("Typhon.Benchmark.ECS.VehicleData", 1)]
+[StructLayout(LayoutKind.Sequential)]
+struct BenchVehicleData
 {
     [Index(AllowMultiple = true)]
-    public int Category;
-    public float Value;
+    public int Speed;
+    [Field] public int Fuel;
 }
 
-[Component("Typhon.Benchmark.EcsChild", 1)]
+[Component("Typhon.Benchmark.ECS.CarData", 1)]
 [StructLayout(LayoutKind.Sequential)]
-public struct EcsBenchChild
+struct BenchCarData
 {
-    public int Score;
-    public int _pad;
-}
-
-[Component("Typhon.Benchmark.EcsGrandChild", 1)]
-[StructLayout(LayoutKind.Sequential)]
-public struct EcsBenchGrandChild
-{
-    public float Weight;
-    public int _pad;
+    [Field] public int Doors;
+    [Field] public int _pad;
 }
 
 [Archetype(510)]
-class BenchBaseArch : Archetype<BenchBaseArch>
+class BenchParentArch : Archetype<BenchParentArch>
 {
-    public static readonly Comp<EcsBenchBase> Data = Register<EcsBenchBase>();
+    public static readonly Comp<BenchParentData> Parent = Register<BenchParentData>();
 }
 
 [Archetype(511)]
-class BenchChildArch : Archetype<BenchChildArch, BenchBaseArch>
+class BenchChildArch : Archetype<BenchChildArch>
 {
-    public static readonly Comp<EcsBenchChild> Child = Register<EcsBenchChild>();
+    public static readonly Comp<BenchChildData> Child = Register<BenchChildData>();
 }
 
 [Archetype(512)]
-class BenchGrandChildArch : Archetype<BenchGrandChildArch, BenchChildArch>
+partial class BenchVehicleArch : Archetype<BenchVehicleArch>
 {
-    public static readonly Comp<EcsBenchGrandChild> Grand = Register<EcsBenchGrandChild>();
+    public static readonly Comp<BenchVehicleData> Vehicle = Register<BenchVehicleData>();
+}
+
+[Archetype(513)]
+class BenchCarArch : Archetype<BenchCarArch, BenchVehicleArch>
+{
+    public static readonly Comp<BenchCarData> Car = Register<BenchCarData>();
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Benchmarks
+// B2. Cascade delete at scale
 // ═══════════════════════════════════════════════════════════════════════
 
 [SimpleJob(warmupCount: 2, iterationCount: 5)]
 [MemoryDiagnoser]
 [BenchmarkCategory("ECS", "Regression")]
-public class EcsBenchmarks
+public class CascadeDeleteBenchmarks : IDisposable
 {
-    private ServiceProvider _sp;
+    private ServiceProvider _serviceProvider;
     private DatabaseEngine _dbe;
 
-    // Pre-populated entity IDs for query benchmarks
-    private EntityId[] _baseIds;
-    private EntityId[] _childIds;
-    private EntityId[] _grandChildIds;
+    [Params(10, 100)]
+    public int ParentCount;
 
-    private const int BaseCount = 1000;
-    private const int ChildCount = 1000;
-    private const int GrandChildCount = 1000;
-    private const int SpawnCount = 1000;
+    [Params(10, 100)]
+    public int ChildrenPerParent;
+
+    private EntityId[] _parentIds;
 
     [GlobalSetup]
     public void Setup()
     {
+        Archetype<BenchParentArch>.Touch();
+        Archetype<BenchChildArch>.Touch();
+
         var sc = new ServiceCollection();
         sc.AddLogging(b => b.SetMinimumLevel(LogLevel.Critical))
           .AddResourceRegistry()
@@ -89,179 +105,275 @@ public class EcsBenchmarks
           .AddDeadlineWatchdog()
           .AddScopedManagedPagedMemoryMappedFile(options =>
           {
-              options.DatabaseName = $"EcsBench_{Environment.ProcessId}";
-              options.DatabaseCacheSize = (ulong)(16 * 1024 * PagedMMF.PageSize);
+              options.DatabaseName = $"CascadeBench_{Environment.ProcessId}";
+              options.DatabaseCacheSize = (ulong)(64 * 1024 * PagedMMF.PageSize);
               options.PagesDebugPattern = false;
           })
           .AddScopedDatabaseEngine();
 
-        _sp = sc.BuildServiceProvider();
-        _sp.EnsureFileDeleted<ManagedPagedMMFOptions>();
-        _dbe = _sp.GetRequiredService<DatabaseEngine>();
-
-        _dbe.RegisterComponentFromAccessor<EcsBenchBase>();
-        _dbe.RegisterComponentFromAccessor<EcsBenchChild>();
-        _dbe.RegisterComponentFromAccessor<EcsBenchGrandChild>();
-        Archetype<BenchBaseArch>.Touch();
-        Archetype<BenchChildArch>.Touch();
-        Archetype<BenchGrandChildArch>.Touch();
+        _serviceProvider = sc.BuildServiceProvider();
+        _serviceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
+        _dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+        _dbe.RegisterComponentFromAccessor<BenchParentData>();
+        _dbe.RegisterComponentFromAccessor<BenchChildData>();
         _dbe.InitializeArchetypes();
 
-        // Pre-populate: 1K base + 1K child + 1K grandchild entities
-        _baseIds = new EntityId[BaseCount];
-        _childIds = new EntityId[ChildCount];
-        _grandChildIds = new EntityId[GrandChildCount];
-
+        // Populate parents + children
+        _parentIds = new EntityId[ParentCount];
         using var t = _dbe.CreateQuickTransaction();
-        for (int i = 0; i < BaseCount; i++)
+        for (int p = 0; p < ParentCount; p++)
         {
-            var data = new EcsBenchBase { Category = i % 10, Value = i * 1.5f };
-            _baseIds[i] = t.Spawn<BenchBaseArch>(BenchBaseArch.Data.Set(in data));
+            var pd = new BenchParentData { Category = p, Value = p * 100 };
+            _parentIds[p] = t.Spawn<BenchParentArch>(BenchParentArch.Parent.Set(in pd));
+
+            for (int c = 0; c < ChildrenPerParent; c++)
+            {
+                var cd = new BenchChildData { Owner = _parentIds[p], Weight = c };
+                t.Spawn<BenchChildArch>(BenchChildArch.Child.Set(in cd));
+            }
         }
-        for (int i = 0; i < ChildCount; i++)
+        t.Commit();
+    }
+
+    [Benchmark]
+    public void CascadeDeleteAll()
+    {
+        using var t = _dbe.CreateQuickTransaction();
+        for (int i = 0; i < _parentIds.Length; i++)
         {
-            var baseData = new EcsBenchBase { Category = i % 10, Value = i };
-            var childData = new EcsBenchChild { Score = i * 2 };
-            _childIds[i] = t.Spawn<BenchChildArch>(BenchBaseArch.Data.Set(in baseData), BenchChildArch.Child.Set(in childData));
-        }
-        for (int i = 0; i < GrandChildCount; i++)
-        {
-            var baseData = new EcsBenchBase { Category = i % 10, Value = i };
-            var childData = new EcsBenchChild { Score = i };
-            var grandData = new EcsBenchGrandChild { Weight = i * 0.1f };
-            _grandChildIds[i] = t.Spawn<BenchGrandChildArch>(
-                BenchBaseArch.Data.Set(in baseData), BenchChildArch.Child.Set(in childData), BenchGrandChildArch.Grand.Set(in grandData));
+            if (t.IsAlive(_parentIds[i]))
+            {
+                t.Destroy(_parentIds[i]);
+            }
         }
         t.Commit();
     }
 
     [GlobalCleanup]
-    public void Cleanup()
+    public void Cleanup() => Dispose();
+
+    public void Dispose()
     {
         _dbe?.Dispose();
-        _sp?.Dispose();
+        _serviceProvider?.Dispose();
+        GC.SuppressFinalize(this);
     }
+}
 
-    // ═══════════════════════════════════════════════════════════════
-    // Spawn: single vs batch
-    // ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════
+// B3. Polymorphic query + B4. Count/Any + B5. Enable/Disable
+// ═══════════════════════════════════════════════════════════════════════
 
-    [Benchmark(Description = "Spawn 1K entities (loop)")]
-    public void Spawn_Loop()
+[SimpleJob(warmupCount: 3, iterationCount: 5)]
+[MemoryDiagnoser]
+[BenchmarkCategory("ECS", "Regression")]
+public class EcsQueryBenchmarks : IDisposable
+{
+    private ServiceProvider _serviceProvider;
+    private DatabaseEngine _dbe;
+
+    private const int VehicleCount = 5_000;
+    private const int CarCount = 5_000;
+    private EntityId[] _allIds;
+
+    [GlobalSetup]
+    public void Setup()
     {
+        Archetype<BenchVehicleArch>.Touch();
+        Archetype<BenchCarArch>.Touch();
+
+        var sc = new ServiceCollection();
+        sc.AddLogging(b => b.SetMinimumLevel(LogLevel.Critical))
+          .AddResourceRegistry()
+          .AddMemoryAllocator()
+          .AddEpochManager()
+          .AddHighResolutionSharedTimer()
+          .AddDeadlineWatchdog()
+          .AddScopedManagedPagedMemoryMappedFile(options =>
+          {
+              options.DatabaseName = $"EcsQueryBench_{Environment.ProcessId}";
+              options.DatabaseCacheSize = (ulong)(64 * 1024 * PagedMMF.PageSize);
+              options.PagesDebugPattern = false;
+          })
+          .AddScopedDatabaseEngine();
+
+        _serviceProvider = sc.BuildServiceProvider();
+        _serviceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
+        _dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+        _dbe.RegisterComponentFromAccessor<BenchVehicleData>();
+        _dbe.RegisterComponentFromAccessor<BenchCarData>();
+        _dbe.InitializeArchetypes();
+
+        _allIds = new EntityId[VehicleCount + CarCount];
         using var t = _dbe.CreateQuickTransaction();
-        for (int i = 0; i < SpawnCount; i++)
+
+        for (int i = 0; i < VehicleCount; i++)
         {
-            var data = new EcsBenchBase { Category = i, Value = i };
-            t.Spawn<BenchBaseArch>(BenchBaseArch.Data.Set(in data));
+            var v = new BenchVehicleData { Speed = i % 200, Fuel = 100 };
+            _allIds[i] = t.Spawn<BenchVehicleArch>(BenchVehicleArch.Vehicle.Set(in v));
+        }
+
+        for (int i = 0; i < CarCount; i++)
+        {
+            var v = new BenchVehicleData { Speed = 100 + i % 200, Fuel = 80 };
+            var c = new BenchCarData { Doors = 4 };
+            _allIds[VehicleCount + i] = t.Spawn<BenchCarArch>(BenchVehicleArch.Vehicle.Set(in v), BenchCarArch.Car.Set(in c));
         }
         t.Commit();
+
+        // Disable Vehicle on first 1000 entities for Enable/Disable benchmarks
+        using var t2 = _dbe.CreateQuickTransaction();
+        for (int i = 0; i < 1000; i++)
+        {
+            var entity = t2.OpenMut(_allIds[i]);
+            entity.Disable(BenchVehicleArch.Vehicle);
+        }
+        t2.Commit();
     }
 
-    [Benchmark(Description = "SpawnBatch 1K entities")]
-    public void SpawnBatch_1K()
+    // B3: Polymorphic query scan
+    [Benchmark]
+    public int PolymorphicQuery_Count()
     {
         using var t = _dbe.CreateQuickTransaction();
-        var ids = new EntityId[SpawnCount];
-        var data = new EcsBenchBase { Category = 0, Value = 0 };
-        t.SpawnBatch<BenchBaseArch>(ids, BenchBaseArch.Data.Set(in data));
-        t.Commit();
+        return t.Query<BenchVehicleArch>().Count();
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // Polymorphic queries
-    // ═══════════════════════════════════════════════════════════════
-
-    [Benchmark(Description = "Query<Base> polymorphic (3K entities, 3 archetypes)")]
-    public int Query_Polymorphic()
+    [Benchmark]
+    public int ExactQuery_Count()
     {
         using var t = _dbe.CreateQuickTransaction();
-        return t.Query<BenchBaseArch>().Count();
+        return t.QueryExact<BenchVehicleArch>().Count();
     }
 
-    [Benchmark(Description = "QueryExact<Base> (1K entities, 1 archetype)")]
-    public int QueryExact_Base()
-    {
-        using var t = _dbe.CreateQuickTransaction();
-        return t.QueryExact<BenchBaseArch>().Count();
-    }
-
-    [Benchmark(Description = "Query<Child> polymorphic (2K entities, 2 archetypes)")]
-    public int Query_Child_Polymorphic()
-    {
-        using var t = _dbe.CreateQuickTransaction();
-        return t.Query<BenchChildArch>().Count();
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // Query execution modes
-    // ═══════════════════════════════════════════════════════════════
-
-    [Benchmark(Description = "Query.Execute() → HashSet (3K polymorphic)")]
-    public int Query_Execute()
-    {
-        using var t = _dbe.CreateQuickTransaction();
-        return t.Query<BenchBaseArch>().Execute().Count;
-    }
-
-    [Benchmark(Description = "Query.Any() short-circuit (3K polymorphic)")]
+    // B4: Count/Any short-circuit
+    [Benchmark]
     public bool Query_Any()
     {
         using var t = _dbe.CreateQuickTransaction();
-        return t.Query<BenchBaseArch>().Any();
+        return t.Query<BenchVehicleArch>().Any();
     }
 
-    [Benchmark(Description = "Query.Count() (3K polymorphic)")]
-    public int Query_Count()
+    [Benchmark]
+    public int WhereField_Count()
     {
         using var t = _dbe.CreateQuickTransaction();
-        return t.Query<BenchBaseArch>().Count();
+        return t.Query<BenchVehicleArch>().WhereField<BenchVehicleData>(v => v.Speed > 150).Count();
     }
 
-    [Benchmark(Description = "Query with Enabled filter (3K polymorphic)")]
-    public int Query_Enabled()
+    // B5: Enable/Disable throughput
+    [Benchmark]
+    public int Enabled_Query_Count()
     {
         using var t = _dbe.CreateQuickTransaction();
-        return t.Query<BenchBaseArch>().Enabled<EcsBenchBase>().Count();
+        return t.Query<BenchVehicleArch>().Enabled<BenchVehicleData>().Count();
     }
 
-    [Benchmark(Description = "Query.WhereField indexed (3K, Category > 5)")]
-    public int Query_WhereField()
+    [Benchmark]
+    public void EnableDisable_1000()
     {
         using var t = _dbe.CreateQuickTransaction();
-        return t.Query<BenchBaseArch>().WhereField<EcsBenchBase>(b => b.Category > 5).Execute().Count;
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // Foreach iteration
-    // ═══════════════════════════════════════════════════════════════
-
-    [Benchmark(Description = "foreach + Read (1K exact)")]
-    public float Foreach_ReadComponent()
-    {
-        using var t = _dbe.CreateQuickTransaction();
-        float sum = 0;
-        foreach (var entity in t.QueryExact<BenchBaseArch>())
+        for (int i = 0; i < 1000; i++)
         {
-            sum += entity.Read(BenchBaseArch.Data).Value;
+            var entity = t.OpenMut(_allIds[i]);
+            entity.Enable(BenchVehicleArch.Vehicle);
         }
-        return sum;
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // Enable/Disable throughput
-    // ═══════════════════════════════════════════════════════════════
+    [GlobalCleanup]
+    public void Cleanup() => Dispose();
 
-    [Benchmark(Description = "Enable/Disable toggle 1K entities")]
-    public void EnableDisable_Toggle()
+    public void Dispose()
+    {
+        _dbe?.Dispose();
+        _serviceProvider?.Dispose();
+        GC.SuppressFinalize(this);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// B1. SpawnBatch: loop vs shared vs SOA
+// ═══════════════════════════════════════════════════════════════════════
+
+[SimpleJob(warmupCount: 3, iterationCount: 10)]
+[MemoryDiagnoser]
+[BenchmarkCategory("ECS", "Regression")]
+public class SpawnBatchBenchmarks : IDisposable
+{
+    private ServiceProvider _serviceProvider;
+    private DatabaseEngine _dbe;
+
+    [Params(100, 1000)]
+    public int EntityCount;
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        Archetype<BenchVehicleArch>.Touch();
+
+        var sc = new ServiceCollection();
+        sc.AddLogging(b => b.SetMinimumLevel(LogLevel.Critical))
+          .AddResourceRegistry()
+          .AddMemoryAllocator()
+          .AddEpochManager()
+          .AddHighResolutionSharedTimer()
+          .AddDeadlineWatchdog()
+          .AddScopedManagedPagedMemoryMappedFile(options =>
+          {
+              options.DatabaseName = $"SpawnBatchBench_{Environment.ProcessId}";
+              // Large cache: spawn benchmarks allocate chunks on every invocation
+              // without checkpoint to reclaim dirty pages — 128K pages (1 GB) prevents back-pressure.
+              options.DatabaseCacheSize = (ulong)(128 * 1024 * PagedMMF.PageSize);
+              options.PagesDebugPattern = false;
+          })
+          .AddScopedDatabaseEngine();
+
+        _serviceProvider = sc.BuildServiceProvider();
+        _serviceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
+        _dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
+        _dbe.RegisterComponentFromAccessor<BenchVehicleData>();
+        _dbe.InitializeArchetypes();
+    }
+
+    [Benchmark(Baseline = true)]
+    public void SingleSpawnLoop()
     {
         using var t = _dbe.CreateQuickTransaction();
-        for (int i = 0; i < BaseCount; i++)
+        for (int i = 0; i < EntityCount; i++)
         {
-            var mut = t.OpenMut(_baseIds[i]);
-            mut.Disable(BenchBaseArch.Data);
-            mut.Enable(BenchBaseArch.Data);
+            var v = new BenchVehicleData { Speed = i % 200, Fuel = 100 };
+            t.Spawn<BenchVehicleArch>(BenchVehicleArch.Vehicle.Set(in v));
         }
-        t.Commit();
+    }
+
+    [Benchmark]
+    public void SpawnBatch_SharedValues()
+    {
+        using var t = _dbe.CreateQuickTransaction();
+        var v = new BenchVehicleData { Speed = 100, Fuel = 100 };
+        var ids = new EntityId[EntityCount];
+        t.SpawnBatch<BenchVehicleArch>(ids, BenchVehicleArch.Vehicle.Set(in v));
+    }
+
+    [Benchmark]
+    public void SpawnBatch_SOA()
+    {
+        using var t = _dbe.CreateQuickTransaction();
+        var vehicles = new BenchVehicleData[EntityCount];
+        for (int i = 0; i < EntityCount; i++)
+        {
+            vehicles[i] = new BenchVehicleData { Speed = i % 200, Fuel = 100 };
+        }
+        BenchVehicleArch.SpawnBatch(t, vehicles);
+    }
+
+    [GlobalCleanup]
+    public void Cleanup() => Dispose();
+
+    public void Dispose()
+    {
+        _dbe?.Dispose();
+        _serviceProvider?.Dispose();
+        GC.SuppressFinalize(this);
     }
 }

@@ -647,8 +647,17 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
     /// <summary>Count matching entities.</summary>
     public int Count()
     {
+        Activity activity = null;
+        if (TelemetryConfig.EcsActive)
+        {
+            activity = TyphonActivitySource.StartActivity("ECS.Query.Count");
+            activity?.SetTag(TyphonSpanAttributes.EcsArchetype, typeof(TArchetype).Name);
+        }
+
         if (MaskIsEmpty)
         {
+            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, 0);
+            activity?.Dispose();
             return 0;
         }
 
@@ -658,25 +667,44 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             var ct = _whereComponentTable;
             var evaluators = QueryResolverHelper.ResolveEvaluators(_fieldPredicateBranches[0], ct, 0);
             var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance);
-            return _whereFieldReader.CountScan(plan, plan.OrderedEvaluators, ct, _tx);
+            int targeted = _whereFieldReader.CountScan(plan, plan.OrderedEvaluators, ct, _tx);
+            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, targeted);
+            activity?.SetTag(TyphonSpanAttributes.EcsQueryScanMode, "targeted");
+            activity?.Dispose();
+            return targeted;
         }
 
         // If WHERE filter, use Execute (which applies post-filter) then count
         if (_whereFilter != null)
         {
-            return Execute().Count;
+            int filtered = Execute().Count;
+            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, filtered);
+            activity?.Dispose();
+            return filtered;
         }
 
         int count = 0;
         CollectMatching((_, _) => count++);
+        activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, count);
+        activity?.SetTag(TyphonSpanAttributes.EcsQueryScanMode, "broad");
+        activity?.Dispose();
         return count;
     }
 
     /// <summary>Test if any entity matches. Short-circuits on first match.</summary>
     public bool Any()
     {
+        Activity activity = null;
+        if (TelemetryConfig.EcsActive)
+        {
+            activity = TyphonActivitySource.StartActivity("ECS.Query.Any");
+            activity?.SetTag(TyphonSpanAttributes.EcsArchetype, typeof(TArchetype).Name);
+        }
+
         if (MaskIsEmpty)
         {
+            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, 0);
+            activity?.Dispose();
             return false;
         }
 
@@ -685,16 +713,24 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             var ct = _whereComponentTable;
             var evaluators = QueryResolverHelper.ResolveEvaluators(_fieldPredicateBranches[0], ct, 0);
             var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance);
-            return _whereFieldReader.CountScan(plan, plan.OrderedEvaluators, ct, _tx) > 0;
+            bool any = _whereFieldReader.CountScan(plan, plan.OrderedEvaluators, ct, _tx) > 0;
+            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, any ? 1 : 0);
+            activity?.Dispose();
+            return any;
         }
 
         if (_whereFilter != null)
         {
-            return Execute().Count > 0;
+            bool any = Execute().Count > 0;
+            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, any ? 1 : 0);
+            activity?.Dispose();
+            return any;
         }
 
         bool found = false;
         CollectMatching((_, _) => found = true, stopOnFirst: true);
+        activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, found ? 1 : 0);
+        activity?.Dispose();
         return found;
     }
 
@@ -921,6 +957,8 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 OnMatch = onMatch,
                 StopOnFirst = stopOnFirst,
                 Found = false,
+                PendingEnableDisable = _tx.PendingEnableDisable,
+                PendingDestroys = _tx.PendingDestroys,
             };
             engineState.EntityMap.ForEachEntry(ref accessor, ref action);
             accessor.Dispose();
@@ -973,6 +1011,8 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 RequiredEnabled = reqEnabled,
                 RequiredDisabled = reqDisabled,
                 Results = results,
+                PendingEnableDisable = _tx.PendingEnableDisable,
+                PendingDestroys = _tx.PendingDestroys,
             };
             engineState.EntityMap.ForEachEntry(ref accessor, ref action);
             accessor.Dispose();
@@ -994,6 +1034,8 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         public Action<EntityId, ushort> OnMatch;
         public bool StopOnFirst;
         public bool Found;
+        public Dictionary<EntityId, ushort> PendingEnableDisable;
+        public HashSet<EntityId> PendingDestroys;
 
         public bool Process(long key, byte* value)
         {
@@ -1009,22 +1051,34 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 return true; // Dead — skip, continue
             }
 
+            var entityId = new EntityId(key, Meta.ArchetypeId);
+
+            // Skip entities pending destroy in this transaction
+            if (PendingDestroys != null && PendingDestroys.Contains(entityId))
+            {
+                return true;
+            }
+
+            // Resolve EnabledBits: MVCC overrides first, then pending enable/disable overlay
+            ushort bits = EnabledBitsOverrides.ResolveEnabledBits(key, header.EnabledBits, TxTsn);
+            if (PendingEnableDisable != null && PendingEnableDisable.TryGetValue(entityId, out ushort pendingBits))
+            {
+                bits = pendingBits;
+            }
+
             // T2 check
             if (HasT2)
             {
-                ushort enabledBits = EnabledBitsOverrides.ResolveEnabledBits(key, header.EnabledBits, TxTsn);
-                if ((enabledBits & RequiredEnabled) != RequiredEnabled)
+                if ((bits & RequiredEnabled) != RequiredEnabled)
                 {
                     return true;
                 }
-                if ((enabledBits & RequiredDisabled) != 0)
+                if ((bits & RequiredDisabled) != 0)
                 {
                     return true;
                 }
             }
 
-            var entityId = new EntityId(key, Meta.ArchetypeId);
-            ushort bits = HasT2 ? EnabledBitsOverrides.ResolveEnabledBits(key, header.EnabledBits, TxTsn) : header.EnabledBits;
             OnMatch(entityId, bits);
 
             if (StopOnFirst)
@@ -1045,6 +1099,8 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         public ushort RequiredEnabled;
         public ushort RequiredDisabled;
         public List<(EntityId, ArchetypeMetadata, ushort, EntityLocations)> Results;
+        public Dictionary<EntityId, ushort> PendingEnableDisable;
+        public HashSet<EntityId> PendingDestroys;
 
         public bool Process(long key, byte* value)
         {
@@ -1059,26 +1115,38 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 return true;
             }
 
+            var entityId = new EntityId(key, Meta.ArchetypeId);
+
+            // Skip entities pending destroy in this transaction
+            if (PendingDestroys != null && PendingDestroys.Contains(entityId))
+            {
+                return true;
+            }
+
+            // Resolve EnabledBits: MVCC overrides first, then pending enable/disable overlay
+            ushort bits = EnabledBitsOverrides.ResolveEnabledBits(key, header.EnabledBits, TxTsn);
+            if (PendingEnableDisable != null && PendingEnableDisable.TryGetValue(entityId, out ushort pendingBits))
+            {
+                bits = pendingBits;
+            }
+
             if (HasT2)
             {
-                ushort enabledBits = EnabledBitsOverrides.ResolveEnabledBits(key, header.EnabledBits, TxTsn);
-                if ((enabledBits & RequiredEnabled) != RequiredEnabled)
+                if ((bits & RequiredEnabled) != RequiredEnabled)
                 {
                     return true;
                 }
-                if ((enabledBits & RequiredDisabled) != 0)
+                if ((bits & RequiredDisabled) != 0)
                 {
                     return true;
                 }
             }
 
-            ushort bits = HasT2 ? EnabledBitsOverrides.ResolveEnabledBits(key, header.EnabledBits, TxTsn) : header.EnabledBits;
-
             // Copy component locations inline — no heap allocation
             var locs = new EntityLocations();
             EntityRecordAccessor.CopyLocationsTo(value, ref locs, Meta.ComponentCount);
 
-            Results.Add((new EntityId(key, Meta.ArchetypeId), Meta, bits, locs));
+            Results.Add((entityId, Meta, bits, locs));
             return true;
         }
     }

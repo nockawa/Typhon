@@ -241,6 +241,128 @@ public unsafe partial class Transaction
     }
 
     /// <summary>
+    /// Allocate a batch of entities with chunks but no component data (all EnabledBits = 0).
+    /// Returns the base index into the internal spawn list for use with <see cref="SpawnBatchWriteAll{T}"/>.
+    /// Called by source-generated SpawnBatch methods for per-entity SOA data.
+    /// </summary>
+    public int SpawnBatchAllocate<TArch>(int count, Span<EntityId> ids) where TArch : Archetype<TArch>
+    {
+        var meta = Archetype<TArch>.Metadata;
+        Debug.Assert(meta != null, $"Archetype {typeof(TArch).Name} not registered");
+        Debug.Assert(_dbe._archetypeStates[meta.ArchetypeId]?.EntityMap != null, $"Archetype {typeof(TArch).Name} EntityMap not initialized");
+        Debug.Assert(ids.Length >= count, "ids span must be at least count elements");
+
+        if (count == 0)
+        {
+            return _spawnedEntities?.Count ?? 0;
+        }
+
+        EnsureMutable();
+        State = TransactionState.InProgress;
+        AssertThreadAffinity();
+
+        var engineState = _dbe._archetypeStates[meta.ArchetypeId];
+
+        // Allocate N entity keys in one atomic operation
+        long baseKey = Interlocked.Add(ref engineState.NextEntityKey, count) - count + 1;
+
+        _spawnedEntities ??= new List<SpawnEntry>(count);
+        // O4: ensure capacity when list already exists from prior spawns in this tx
+        if (_spawnedEntities.Capacity < _spawnedEntities.Count + count)
+        {
+            _spawnedEntities.EnsureCapacity(_spawnedEntities.Count + count);
+        }
+        _spawnedEntityIndexStale = true;
+
+        // O2: pre-extend list, then write entries in-place via span — avoids N copies of 138-byte SpawnEntry
+        int baseIndex = _spawnedEntities.Count;
+        System.Runtime.InteropServices.CollectionsMarshal.SetCount(_spawnedEntities, baseIndex + count);
+        var writeSpan = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_spawnedEntities).Slice(baseIndex);
+
+        for (int n = 0; n < count; n++)
+        {
+            var entityId = new EntityId(baseKey + n, meta.ArchetypeId);
+            ids[n] = entityId;
+
+            ref var entry = ref writeSpan[n];
+            entry.Id = entityId;
+            entry.EnabledBits = 0;
+
+            for (int slot = 0; slot < meta.ComponentCount; slot++)
+            {
+                var table = engineState.SlotToComponentTable[slot];
+                int chunkId = table.StorageMode == StorageMode.Transient ? 
+                    table.TransientComponentSegment.AllocateChunk(false) : table.ComponentSegment.AllocateChunk(false, _changeSet);
+
+                if (table.StorageMode == StorageMode.Versioned)
+                {
+                    var compType = meta._slotToComponentType[slot];
+                    var info = GetComponentInfo(compType);
+                    var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, chunkId, (long)entityId.RawValue);
+                    var cri = new ComponentInfo.CompRevInfo
+                    {
+                        Operations = ComponentInfo.OperationType.Created,
+                        PrevCompContentChunkId = 0,
+                        PrevRevisionIndex = -1,
+                        CurCompContentChunkId = chunkId,
+                        CompRevTableFirstChunkId = compRevChunkId,
+                        CurRevisionIndex = 0,
+                        ReadCommitSequence = 1,
+                        ReadRevisionIndex = 0,
+                    };
+                    info.AddNew((long)entityId.RawValue, cri);
+                    entry.Rev[slot] = compRevChunkId;
+                }
+
+                entry.Loc[slot] = chunkId;
+            }
+
+            if ((n & 127) == 127)
+            {
+                _epochManager.RefreshScope();
+            }
+        }
+
+        CheckEpochRefresh();
+        return baseIndex;
+    }
+
+    /// <summary>
+    /// Write an entire component span into already-allocated spawn entries. Resolves slot/table/accessor ONCE,
+    /// then loops N writes with zero dictionary lookups. Called by source-generated SpawnBatch methods.
+    /// </summary>
+    public void SpawnBatchWriteAll<T>(int baseIndex, int count, Comp<T> comp, ReadOnlySpan<T> values) where T : unmanaged
+    {
+        Debug.Assert(values.Length >= count, "values span must be at least count elements");
+        if (count == 0)
+        {
+            return;
+        }
+
+        // Resolve everything ONCE — no per-entity dictionary lookups
+        var span = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_spawnedEntities);
+        var meta = ArchetypeRegistry.GetMetadata(span[baseIndex].Id.ArchetypeId);
+        byte slot = meta.GetSlot(comp._componentTypeId);
+        var engineState = _dbe._archetypeStates[meta.ArchetypeId];
+        var table = engineState.SlotToComponentTable[slot];
+        var info = GetComponentInfo(typeof(T));
+        bool isTransient = table.StorageMode == StorageMode.Transient;
+        int overhead = table.ComponentOverhead;
+        ushort bitMask = (ushort)(1 << slot);
+
+        for (int i = 0; i < count; i++)
+        {
+            ref var entry = ref span[baseIndex + i];
+            int chunkId = entry.Loc[slot];
+
+            byte* ptr = isTransient ? info.TransientCompContentAccessor.GetChunkAddress(chunkId, true) : info.CompContentAccessor.GetChunkAddress(chunkId, true);
+
+            Unsafe.AsRef<T>(ptr + overhead) = values[i];
+            entry.EnabledBits |= bitMask;
+        }
+    }
+
+    /// <summary>
     /// Destroy a batch of entities. Single EnsureMutable check, pre-sized pending list.
     /// Cascade delete is applied per entity.
     /// </summary>
@@ -255,7 +377,8 @@ public unsafe partial class Transaction
         for (int i = 0; i < ids.Length; i++)
         {
             Debug.Assert(!ids[i].IsNull, "Cannot destroy null entity");
-            DestroyInternal(ids[i], 0, out _);
+            int cascadeCount = 0;
+            DestroyInternal(ids[i], 0, ref cascadeCount);
         }
     }
 
@@ -452,13 +575,14 @@ public unsafe partial class Transaction
             activity?.SetTag(TyphonSpanAttributes.EntityId, (long)id.RawValue);
         }
 
-        DestroyInternal(id, 0, out int totalDestroyed);
+        int cascadeCount = 0;
+        DestroyInternal(id, 0, ref cascadeCount);
 
         if (activity != null)
         {
-            if (totalDestroyed > 1)
+            if (cascadeCount > 1)
             {
-                activity.SetTag(TyphonSpanAttributes.EcsCascadeCount, totalDestroyed - 1);
+                activity.SetTag(TyphonSpanAttributes.EcsCascadeCount, cascadeCount - 1);
             }
             activity.Dispose();
         }
@@ -470,11 +594,14 @@ public unsafe partial class Transaction
     /// <summary>Maximum cascade depth. DAG validation prevents cycles, but this guards against bugs.</summary>
     private const int MaxCascadeDepth = 32;
 
-    /// <summary>Internal recursive destroy with cascade support.</summary>
-    private void DestroyInternal(EntityId id, int depth, out int totalDestroyed)
-    {
-        totalDestroyed = 0;
+    /// <summary>Maximum total entities destroyed in a single cascade operation. Guards against runaway cascades from misconfigured FK relationships.</summary>
+    private const int MaxCascadeEntities = 100_000;
 
+    /// <summary>Internal recursive destroy with cascade support.
+    /// <paramref name="cascadeCount"/> accumulates per top-level Destroy call (not per transaction),
+    /// so destroying many independent entities in one tx doesn't trip the cascade guard.</summary>
+    private void DestroyInternal(EntityId id, int depth, ref int cascadeCount)
+    {
         if (depth >= MaxCascadeDepth)
         {
             throw new InvalidOperationException(
@@ -497,7 +624,15 @@ public unsafe partial class Transaction
 
         _pendingDestroys ??= [];
         _pendingDestroys.Add(id);
-        totalDestroyed = 1;
+        cascadeCount++;
+
+        // Guard against runaway cascades (exponential fan-out from misconfigured FK relationships)
+        if (cascadeCount > MaxCascadeEntities)
+        {
+            throw new InvalidOperationException(
+                $"Cascade delete exceeded {MaxCascadeEntities:N0} entities at entity {id}. " +
+                "Check FK relationships for unintended cascade chains.");
+        }
 
         // Check for cascade targets
         var meta = ArchetypeRegistry.GetMetadata(id.ArchetypeId);
@@ -522,21 +657,16 @@ public unsafe partial class Transaction
 
             _dbe.LogCascadeStep(target.ChildArchetypeType.Name, target.FkSlotIndex, id);
 
-            // Find all children of this archetype whose FK points to the destroyed entity.
-            // We need to scan the child archetype's LinearHash for entities with matching FK.
-            // For MVP, we do a full scan of the child's EntityMap — FK index lookup will be
-            // optimized in a future iteration when ComponentTable PK = EntityId is wired.
             var childIds = FindCascadeChildren(childMeta, target, id);
             foreach (var childId in childIds)
             {
-                DestroyInternal(childId, depth + 1, out int childCount);
-                totalDestroyed += childCount;
+                DestroyInternal(childId, depth + 1, ref cascadeCount);
             }
         }
 
-        if (depth == 0 && totalDestroyed > 1)
+        if (depth == 0 && cascadeCount > 1)
         {
-            _dbe.LogCascadeSummary(id, totalDestroyed);
+            _dbe.LogCascadeSummary(id, cascadeCount);
         }
     }
 
@@ -827,9 +957,9 @@ public unsafe partial class Transaction
     internal ref readonly T ReadEcsComponentData<T>(ComponentTable table, int chunkId) where T : unmanaged
     {
         var info = GetComponentInfo(typeof(T));
-        byte* ptr = table.StorageMode == StorageMode.Transient ? 
+        byte* ptr = table.StorageMode == StorageMode.Transient ?
             info.TransientCompContentAccessor.GetChunkAddress(chunkId) : info.CompContentAccessor.GetChunkAddress(chunkId);
-        return ref Unsafe.AsRef<T>(ptr + table.ComponentOverhead);
+        return ref Unsafe.AsRef<T>(ptr + info.ComponentOverhead);
     }
 
     /// <summary>Write component data via the existing ComponentInfo accessor cache. Returns mutable ref.
@@ -848,7 +978,7 @@ public unsafe partial class Transaction
             ptr = info.CompContentAccessor.GetChunkAddress(chunkId, true);
             table.DirtyBitmap?.Set(chunkId);
         }
-        return ref Unsafe.AsRef<T>(ptr + table.ComponentOverhead);
+        return ref Unsafe.AsRef<T>(ptr + info.ComponentOverhead);
     }
 
     /// <summary>
@@ -857,7 +987,7 @@ public unsafe partial class Transaction
     /// The shadow bitmap ensures only the first write per entity per tick captures values; subsequent writes in the same tick are no-ops.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal unsafe void ShadowIndexedFields<T>(ComponentTable table, int chunkId, EntityId entityId) where T : unmanaged
+    internal void ShadowIndexedFields<T>(ComponentTable table, int chunkId, EntityId entityId) where T : unmanaged
     {
         if (table.ShadowBitmap.TestAndSet(chunkId))
         {
@@ -1173,7 +1303,7 @@ public unsafe partial class Transaction
                     {
                         ref var ifi = ref indexedFieldInfos[i];
                         var index = ifi.PersistentIndex;
-                        if (index.AllowMultiple)
+                        if (ifi.AllowMultiple)
                         {
                             *(int*)&chunkAddr[ifi.OffsetToIndexElementId] =
                                 index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref svIdxAccessors[svIdxAccessorBase[si] + i], out _);
@@ -1395,7 +1525,7 @@ public unsafe partial class Transaction
                 var idxAccessor = index.Segment.CreateChunkAccessor();
                 try
                 {
-                    if (index.AllowMultiple)
+                    if (ifi.AllowMultiple)
                     {
                         int elementId = *(int*)(ptr + ifi.OffsetToIndexElementId);
                         index.RemoveValue(fieldPtr, elementId, chunkId, ref idxAccessor);
@@ -1422,7 +1552,7 @@ public unsafe partial class Transaction
 
                     var key = KeyBytes8.FromPointer(fieldPtr, ifi.Size);
                     byte flags = (byte)((i & 0x3F) | 0x80); // isDeletion flag
-                    reg.View.DeltaBuffer.TryAppend((long)chunkId, key, default, 0, flags, reg.ComponentTag);
+                    reg.View.DeltaBuffer.TryAppend(chunkId, key, default, 0, flags, reg.ComponentTag);
                 }
             }
         }

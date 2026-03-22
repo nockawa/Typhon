@@ -271,6 +271,52 @@ public class ArchetypeAccessorGenerator : IIncrementalGenerator
         }
         sb.Append(fieldIndent).AppendLine("return r;");
         sb.Append(memberIndent).AppendLine("}");
+        sb.AppendLine();
+
+        // ── SpawnBatch (SOA) ──
+        sb.Append(memberIndent).AppendLine(
+            "/// <summary>Spawn a batch of entities with per-entity component data. Source-generated SOA overload.</summary>");
+        sb.Append(memberIndent).Append("public static global::Typhon.Engine.EntityId[] SpawnBatch(");
+        sb.AppendLine();
+        sb.Append(fieldIndent).Append("global::Typhon.Engine.Transaction tx");
+        var paramNames = new string[model.AllCompFields.Length];
+        for (int f = 0; f < model.AllCompFields.Length; f++)
+        {
+            var field = model.AllCompFields[f];
+            paramNames[f] = char.ToLowerInvariant(field.FieldName[0]) + field.FieldName.Substring(1) + "s";
+            sb.AppendLine(",");
+            sb.Append(fieldIndent).Append("global::System.ReadOnlySpan<").Append(field.ComponentTypeFullName)
+              .Append("> ").Append(paramNames[f]);
+        }
+        sb.AppendLine(")");
+        sb.Append(memberIndent).AppendLine("{");
+
+        // Count from first parameter
+        sb.Append(fieldIndent).Append("int count = ").Append(paramNames[0]).AppendLine(".Length;");
+
+        // Assert all spans same length
+        for (int f = 1; f < model.AllCompFields.Length; f++)
+        {
+            sb.Append(fieldIndent).Append("global::System.Diagnostics.Debug.Assert(").Append(paramNames[f])
+              .AppendLine(".Length == count, \"All component spans must have the same length\");");
+        }
+
+        // Allocate
+        sb.Append(fieldIndent).AppendLine("var ids = new global::Typhon.Engine.EntityId[count];");
+        sb.Append(fieldIndent).Append("int baseIndex = tx.SpawnBatchAllocate<")
+          .Append(model.ClassName).AppendLine(">(count, ids);");
+
+        // Write components — one call per component type, loop runs inside with zero dict lookups
+        for (int f = 0; f < model.AllCompFields.Length; f++)
+        {
+            var field = model.AllCompFields[f];
+            sb.Append(fieldIndent).Append("tx.SpawnBatchWriteAll(baseIndex, count, ")
+              .Append(field.DeclaringClassFullName).Append(".").Append(field.FieldName)
+              .Append(", ").Append(paramNames[f]).AppendLine(");");
+        }
+
+        sb.Append(fieldIndent).AppendLine("return ids;");
+        sb.Append(memberIndent).AppendLine("}");
 
         // Close archetype class
         sb.Append(indent).AppendLine("}");

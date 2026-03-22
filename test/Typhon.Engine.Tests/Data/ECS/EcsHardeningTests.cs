@@ -710,6 +710,205 @@ class EcsHardeningTests : TestBase<EcsHardeningTests>
         Assert.That(fromNullId.IsNull, Is.True);
     }
 
+    [Test]
+    public void Open_ViaEntityLink_ReadsComponentData()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId bagId;
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var bagData = new BagData { Capacity = 42 };
+            bagId = t.Spawn<CascadeBag>(CascadeBag.Bag.Set(in bagData));
+            t.Commit();
+        }
+
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            EntityLink<CascadeBag> link = bagId;
+            // Open via implicit EntityLink → EntityId conversion
+            var entity = t.Open(link);
+            Assert.That(entity.IsValid, Is.True);
+            ref readonly var bag = ref entity.Read(CascadeBag.Bag);
+            Assert.That(bag.Capacity, Is.EqualTo(42));
+        }
+    }
+
+    [Test]
+    public void OpenMut_ViaEntityLink_WritesComponentData()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId bagId;
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var bagData = new BagData { Capacity = 10 };
+            bagId = t.Spawn<CascadeBag>(CascadeBag.Bag.Set(in bagData));
+            t.Commit();
+        }
+
+        EntityLink<CascadeBag> link = bagId;
+
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var entity = t.OpenMut(link);
+            ref var bag = ref entity.Write(CascadeBag.Bag);
+            bag.Capacity = 99;
+            t.Commit();
+        }
+
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var entity = t.Open(link);
+            ref readonly var bag = ref entity.Read(CascadeBag.Bag);
+            Assert.That(bag.Capacity, Is.EqualTo(99));
+        }
+    }
+
+    [Test]
+    public void TryOpen_ViaEntityLink_ReturnsTrueWhenAlive()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId bagId;
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var bagData = new BagData { Capacity = 5 };
+            bagId = t.Spawn<CascadeBag>(CascadeBag.Bag.Set(in bagData));
+            t.Commit();
+        }
+
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            EntityLink<CascadeBag> link = bagId;
+            bool found = t.TryOpen(link, out var entity);
+            Assert.That(found, Is.True);
+            Assert.That(entity.IsValid, Is.True);
+        }
+    }
+
+    [Test]
+    public void TryOpen_ViaEntityLink_ReturnsFalseAfterDestroy()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId bagId;
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var bagData = new BagData { Capacity = 5 };
+            bagId = t.Spawn<CascadeBag>(CascadeBag.Bag.Set(in bagData));
+            t.Commit();
+        }
+
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            t.Destroy(bagId);
+            t.Commit();
+        }
+
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            EntityLink<CascadeBag> link = bagId;
+            bool found = t.TryOpen(link, out _);
+            Assert.That(found, Is.False);
+            Assert.That(t.IsAlive(link), Is.False);
+        }
+    }
+
+    [Test]
+    public void PolymorphicLink_BaseTypeHoldsDerivedEntity()
+    {
+        using var dbe = SetupEngine();
+
+        // Spawn a HSportsCar (grandchild of HVehicle)
+        EntityId sportsCarId;
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var v = new HVehicleData(250f);
+            var c = new HCarData(2);
+            var s = new HSportsData(1.5f);
+            sportsCarId = t.Spawn<HSportsCar>(HVehicle.Vehicle.Set(in v), HCar.Car.Set(in c), HSportsCar.Sports.Set(in s));
+            t.Commit();
+        }
+
+        // Create an EntityLink<HVehicle> pointing to the HSportsCar — polymorphic acceptance
+        EntityLink<HVehicle> baseLink = sportsCarId;
+
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            // IsAlive works through polymorphic link
+            Assert.That(t.IsAlive(baseLink), Is.True);
+
+            // Open works through polymorphic link
+            var entity = t.Open(baseLink);
+            Assert.That(entity.IsValid, Is.True);
+
+            // Can read the base component through the entity
+            ref readonly var vehicleData = ref entity.Read(HVehicle.Vehicle);
+            Assert.That(vehicleData.Speed, Is.EqualTo(250f));
+
+            // Can also read derived components (entity is actually a HSportsCar)
+            ref readonly var sportsData = ref entity.Read(HSportsCar.Sports);
+            Assert.That(sportsData.Turbo, Is.EqualTo(1.5f));
+        }
+    }
+
+    [Test]
+    public void PolymorphicLink_MidLevelHoldsGrandchild()
+    {
+        using var dbe = SetupEngine();
+
+        // Spawn HSportsCar, reference via EntityLink<HCar> (mid-level)
+        EntityId sportsCarId;
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var v = new HVehicleData(300f);
+            var c = new HCarData(4);
+            var s = new HSportsData(2.0f);
+            sportsCarId = t.Spawn<HSportsCar>(HVehicle.Vehicle.Set(in v), HCar.Car.Set(in c), HSportsCar.Sports.Set(in s));
+            t.Commit();
+        }
+
+        EntityLink<HCar> midLink = sportsCarId;
+
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            Assert.That(t.IsAlive(midLink), Is.True);
+            var entity = t.Open(midLink);
+            ref readonly var carData = ref entity.Read(HCar.Car);
+            Assert.That(carData.Doors, Is.EqualTo(4));
+        }
+    }
+
+    [Test]
+    public void Destroy_ViaPolymorphicLink_EntityDies()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId carId;
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var v = new HVehicleData(120f);
+            var c = new HCarData(4);
+            carId = t.Spawn<HCar>(HVehicle.Vehicle.Set(in v), HCar.Car.Set(in c));
+            t.Commit();
+        }
+
+        // Destroy via EntityLink<HVehicle> (base type)
+        EntityLink<HVehicle> baseLink = carId;
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            t.Destroy(baseLink);
+            Assert.That(t.IsAlive(baseLink), Is.False);
+            t.Commit();
+        }
+
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            Assert.That(t.IsAlive(carId), Is.False);
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     // A.5 — Double-destroy
     // ═══════════════════════════════════════════════════════════════════════
@@ -846,6 +1045,45 @@ class EcsHardeningTests : TestBase<EcsHardeningTests>
         Assert.That(meta.SubtreeArchetypeIds, Does.Contain(Archetype<HCar>.Metadata.ArchetypeId));
         Assert.That(meta.SubtreeArchetypeIds, Does.Contain(Archetype<HSportsCar>.Metadata.ArchetypeId));
         Assert.That(meta.SubtreeArchetypeIds, Has.Length.EqualTo(3));
+    }
+
+    [Test]
+    public void ThreeLevelHierarchy_MidLevelSubtree_IncludesSelfAndChild()
+    {
+        using var dbe = SetupEngine(); // Triggers Freeze() which populates SubtreeArchetypeIds
+        var carMeta = Archetype<HCar>.Metadata;
+        Assert.That(carMeta.SubtreeArchetypeIds, Does.Contain(carMeta.ArchetypeId));
+        Assert.That(carMeta.SubtreeArchetypeIds, Does.Contain(Archetype<HSportsCar>.Metadata.ArchetypeId));
+        Assert.That(carMeta.SubtreeArchetypeIds, Has.Length.EqualTo(2));
+
+        // Leaf has only itself
+        var sportsMeta = Archetype<HSportsCar>.Metadata;
+        Assert.That(sportsMeta.SubtreeArchetypeIds, Does.Contain(sportsMeta.ArchetypeId));
+        Assert.That(sportsMeta.SubtreeArchetypeIds, Has.Length.EqualTo(1));
+    }
+
+    [Test]
+    public void ThreeLevelHierarchy_WhereField_FindsAcrossAllLevels()
+    {
+        using var dbe = SetupEngine();
+        using var t = dbe.CreateQuickTransaction();
+
+        // Spawn one entity at each hierarchy level, all with Speed > 50
+        var fast = new HVehicleData(100f);
+        var slow = new HVehicleData(30f);
+        var carData = new HCarData(4);
+        var sportsData = new HSportsData(1.5f);
+
+        var vehicleId = t.Spawn<HVehicle>(HVehicle.Vehicle.Set(in fast));
+        var carId = t.Spawn<HCar>(HVehicle.Vehicle.Set(in slow), HCar.Car.Set(in carData));
+        var sportsId = t.Spawn<HSportsCar>(HVehicle.Vehicle.Set(in fast), HCar.Car.Set(in carData), HSportsCar.Sports.Set(in sportsData));
+
+        // Query<HVehicle> with WhereField Speed > 50 — should find vehicle + sportsCar, not car (speed=30)
+        var results = t.Query<HVehicle>().WhereField<HVehicleData>(v => v.Speed > 50f).Execute();
+        Assert.That(results, Has.Count.EqualTo(2));
+        Assert.That(results.Contains(vehicleId), Is.True, "HVehicle with speed=100 should match");
+        Assert.That(results.Contains(sportsId), Is.True, "HSportsCar with speed=100 should match");
+        Assert.That(results.Contains(carId), Is.False, "HCar with speed=30 should not match");
     }
 
     // ═══════════════════════════════════════════════════════════════════════

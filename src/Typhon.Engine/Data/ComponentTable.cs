@@ -140,6 +140,9 @@ internal struct IndexedFieldInfo
     public int OffsetToIndexElementId;
     public IBTreeIndex Index;
 
+    /// <summary>Cached from <see cref="IBTreeIndex.AllowMultiple"/> — avoids interface dispatch on hot path.</summary>
+    public bool AllowMultiple;
+
     /// <summary>Returns the index cast to <see cref="BTreeBase{TStore}"/> for PersistentStore operations (Versioned and SingleVersion paths).</summary>
     internal BTreeBase<PersistentStore> PersistentIndex => (BTreeBase<PersistentStore>)Index;
 }
@@ -626,13 +629,15 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
             // During schema evolution: newly added indexes use create mode; existing indexes use load mode
             var useLoad = load && (newIndexFieldIds == null || !newIndexFieldIds.Contains(f.FieldId));
 
+            var index = CreateIndexForField(f, (short)f.FieldId, useLoad, changeSet);
             var fi = new IndexedFieldInfo
             {
                 OffsetToField = ro + f.OffsetInComponentStorage,
                 Size          = f.SizeInComponentStorage,
-                Index         = CreateIndexForField(f, (short)f.FieldId, useLoad, changeSet),
+                Index         = index,
+                AllowMultiple = index.AllowMultiple,
             };
-            fi.OffsetToIndexElementId = fi.Index.AllowMultiple ? (Definition.EntityPKOverheadSize + j++ * sizeof(int)) : 0;
+            fi.OffsetToIndexElementId = fi.AllowMultiple ? (Definition.EntityPKOverheadSize + j++ * sizeof(int)) : 0;
             l.Add(fi);
         }
 

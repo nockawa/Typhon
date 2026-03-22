@@ -34,10 +34,10 @@ class BenchItemArch : Archetype<BenchItemArch>
 [Config(typeof(InProcessConfig))]
 [MemoryDiagnoser]
 [BenchmarkCategory("Query", "View")]
-// NOTE: Excluded from "Regression" category — BDN crashes with STATUS_STACK_BUFFER_OVERRUN (0xC0000409)
-// in both forked-process and InProcess modes on .NET 10 + BDN 0.15.8.
-// The same code passes in unit tests at 10K entity scale (Release mode).
-// Likely a JIT/BDN interop issue. Re-enable after upgrading BDN or .NET.
+// STATUS_STACK_BUFFER_OVERRUN (0xC0000409) in forked process mode on .NET 10.0.201 + BDN 0.15.8.
+// InProcess mode also crashes during GlobalSetup. Root cause: likely JIT/unsafe interaction in B+Tree
+// or PipelineExecutor hot paths under BDN's execution context. Same code passes in unit tests.
+// Excluded from Regression until BDN 0.16+ or .NET 10 GA.
 public class QueryViewBenchmarks : IDisposable
 {
     private ServiceProvider _serviceProvider;

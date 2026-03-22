@@ -41,8 +41,8 @@ internal class ArchetypeMetadata
     /// <summary>[slotIndex] → ComponentTypeId. Length == ComponentCount.</summary>
     internal int[] _componentTypeIds;
 
-    /// <summary>ComponentTypeId → slotIndex (reverse lookup).</summary>
-    internal Dictionary<int, byte> _typeIdToSlot = new();
+    /// <summary>ComponentTypeId → slotIndex (flat array, 0xFF = not present). Replaces Dictionary for O(1) array-indexed lookup.</summary>
+    internal byte[] _typeIdToSlot;
 
     // ═══════════════════════════════════════════════════════════════════════
     // Schema-level component type mapping (immutable after static registration)
@@ -68,19 +68,34 @@ internal class ArchetypeMetadata
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public byte GetSlot(int componentTypeId)
     {
-        if (!_typeIdToSlot.TryGetValue(componentTypeId, out byte slot))
+        var arr = _typeIdToSlot;
+        if ((uint)componentTypeId >= (uint)arr.Length || arr[componentTypeId] == 0xFF)
         {
             ThrowComponentNotInArchetype(componentTypeId);
         }
-        return slot;
+        return arr[componentTypeId];
     }
 
     /// <summary>Try to get the slot index for a component type ID. Returns false if not found.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryGetSlot(int componentTypeId, out byte slot) => _typeIdToSlot.TryGetValue(componentTypeId, out slot);
+    public bool TryGetSlot(int componentTypeId, out byte slot)
+    {
+        var arr = _typeIdToSlot;
+        if ((uint)componentTypeId < (uint)arr.Length)
+        {
+            slot = arr[componentTypeId];
+            return slot != 0xFF;
+        }
+        slot = 0;
+        return false;
+    }
 
     /// <summary>Check whether this archetype has a component with the given type ID.</summary>
-    public bool HasComponent(int componentTypeId) => _typeIdToSlot.ContainsKey(componentTypeId);
+    public bool HasComponent(int componentTypeId)
+    {
+        var arr = _typeIdToSlot;
+        return (uint)componentTypeId < (uint)arr.Length && arr[componentTypeId] != 0xFF;
+    }
 
     [System.Diagnostics.CodeAnalysis.DoesNotReturn]
     private void ThrowComponentNotInArchetype(int componentTypeId) =>

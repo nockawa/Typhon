@@ -29,7 +29,7 @@ internal static unsafe class IndexMaintainer
                 if (prevSpan.Slice(ifi.OffsetToField, ifi.Size).SequenceEqual(curSpan.Slice(ifi.OffsetToField, ifi.Size)) == false)
                 {
                     var accessor = index.Segment.CreateChunkAccessor(changeSet);
-                    if (index.AllowMultiple)
+                    if (ifi.AllowMultiple)
                     {
                         var tailVSBS = info.ComponentTable.TailVSBS;
 
@@ -75,7 +75,7 @@ internal static unsafe class IndexMaintainer
                     NotifyViews(info.ComponentTable, i, pk, tsn, prev + ifi.OffsetToField, cur + ifi.OffsetToField, ifi.Size, isCreation: false,
                         isDeletion: false);
                 }
-                else if (index.AllowMultiple)
+                else if (ifi.AllowMultiple)
                 {
                     // Carry forward the elementId for unchanged AllowMultiple fields so that
                     // the new content chunk has valid buffer references for later removal (e.g., on delete).
@@ -99,7 +99,7 @@ internal static unsafe class IndexMaintainer
                 var index = ifi.PersistentIndex;
 
                 var accessor = index.Segment.CreateChunkAccessor(changeSet);
-                if (index.AllowMultiple)
+                if (ifi.AllowMultiple)
                 {
                     *(int*)&cur[ifi.OffsetToIndexElementId] = index.Add(&cur[ifi.OffsetToField], startChunkId, ref accessor, out _);
                     // TAIL write deferred to first mutation — see EnsureTailPopulated
@@ -139,7 +139,7 @@ internal static unsafe class IndexMaintainer
             ref var ifi = ref indexedFieldInfos[i];
             var index = ifi.PersistentIndex;
             var accessor = index.Segment.CreateChunkAccessor(changeSet);
-            if (index.AllowMultiple)
+            if (ifi.AllowMultiple)
             {
                 var tailVSBS = info.ComponentTable.TailVSBS;
 
@@ -198,7 +198,7 @@ internal static unsafe class IndexMaintainer
 
                 if (prevSpan.Slice(ifi.OffsetToField, ifi.Size).SequenceEqual(curSpan.Slice(ifi.OffsetToField, ifi.Size)) == false)
                 {
-                    if (index.AllowMultiple)
+                    if (ifi.AllowMultiple)
                     {
                         var tailVSBS = info.ComponentTable.TailVSBS;
 
@@ -233,7 +233,7 @@ internal static unsafe class IndexMaintainer
                     NotifyViews(info.ComponentTable, i, pk, tsn, prev + ifi.OffsetToField, cur + ifi.OffsetToField, ifi.Size, isCreation: false,
                         isDeletion: false);
                 }
-                else if (index.AllowMultiple)
+                else if (ifi.AllowMultiple)
                 {
                     *(int*)&cur[ifi.OffsetToIndexElementId] = *(int*)&prev[ifi.OffsetToIndexElementId];
                 }
@@ -251,7 +251,7 @@ internal static unsafe class IndexMaintainer
                 ref var ifi = ref indexedFieldInfos[i];
                 var index = ifi.PersistentIndex;
 
-                if (index.AllowMultiple)
+                if (ifi.AllowMultiple)
                 {
                     *(int*)&cur[ifi.OffsetToIndexElementId] = index.Add(&cur[ifi.OffsetToField], startChunkId, ref indexAccessors[i], out _);
                 }
@@ -292,7 +292,7 @@ internal static unsafe class IndexMaintainer
         {
             ref var ifi = ref indexedFieldInfos[i];
             var index = ifi.PersistentIndex;
-            if (index.AllowMultiple)
+            if (ifi.AllowMultiple)
             {
                 var tailVSBS = info.ComponentTable.TailVSBS;
 

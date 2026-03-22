@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using JetBrains.Annotations;
 
@@ -152,6 +153,13 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
             throw new ObjectDisposedException(nameof(EcsView<TArchetype>));
         }
 
+        Activity activity = null;
+        if (TelemetryConfig.EcsActive)
+        {
+            activity = TyphonActivitySource.StartActivity("ECS.View.Refresh");
+            activity?.SetTag(TyphonSpanAttributes.EcsArchetype, typeof(TArchetype).Name);
+        }
+
         // Clear previous delta state
         ClearDelta();
         _addedCache.Clear();
@@ -162,22 +170,31 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
         {
             RefreshPull(tx);
             BuildEntityIdCaches();
+            activity?.SetTag(TyphonSpanAttributes.EcsQueryScanMode, "pull");
+            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, Count);
+            activity?.Dispose();
             return;
         }
 
         // Incremental mode: drain ring buffer
-        if (DeltaBuffer.HasOverflow)
+        bool overflow = DeltaBuffer.HasOverflow;
+        if (overflow)
         {
             SetOverflowDetected(true);
             if (IsOrMode) { RefreshFullOr(tx); } else { RefreshFull(tx); }
             BuildEntityIdCaches();
+            activity?.SetTag(TyphonSpanAttributes.ViewOverflow, true);
+            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, Count);
+            activity?.Dispose();
             return;
         }
 
+        int deltaCount = 0;
         var targetTSN = tx.TSN;
         while (DeltaBuffer.TryPeek(targetTSN, out var entry, out var flags, out var tsn, out _))
         {
             DeltaBuffer.Advance();
+            deltaCount++;
             if (IsOrMode)
             {
                 ProcessEntryOr(ref entry, flags & 0x3F, (flags & 0x40) != 0, (flags & 0x80) != 0, tx);
@@ -190,6 +207,9 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
         }
 
         BuildEntityIdCaches();
+        activity?.SetTag(TyphonSpanAttributes.ViewDeltaCount, deltaCount);
+        activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, Count);
+        activity?.Dispose();
     }
 
     // ═══════════════════════════════════════════════════════════════════════

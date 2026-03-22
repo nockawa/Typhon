@@ -629,6 +629,7 @@ public unsafe partial class Transaction : IDisposable
         {
             ComponentTypeId = ArchetypeRegistry.GetComponentTypeId(componentType),
             ComponentTable = ct,
+            ComponentOverhead = ct.ComponentOverhead,
             SingleCache    = isMultiple ? null : new Dictionary<long, ComponentInfo.CompRevInfo>(),
             MultipleCache  = isMultiple ? new Dictionary<long, List<ComponentInfo.CompRevInfo>>() : null,
         };
