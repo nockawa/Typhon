@@ -85,6 +85,18 @@ class Program
                 return;
             }
 
+            if (args.Contains("--profile-write-v"))
+            {
+                WriteProfile.Run(versioned: true);
+                return;
+            }
+
+            if (args.Contains("--profile-write-sv"))
+            {
+                WriteProfile.Run(versioned: false);
+                return;
+            }
+
             if (args.Contains("--crud-compare"))
             {
                 BenchmarkRunner.Run<CrudCompareBenchmarks>();
@@ -94,6 +106,14 @@ class Program
             if (args.Contains("--quick-bench"))
             {
                 QuickSpawnBench.Run();
+                return;
+            }
+
+            if (args.Contains("--storage-modes"))
+            {
+                using var bench = new StorageModeCompareBenchmarks();
+                bench.Setup();
+                bench.Run();
                 return;
             }
 

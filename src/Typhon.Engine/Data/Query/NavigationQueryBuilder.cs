@@ -74,8 +74,9 @@ public class NavigationQueryBuilder<TSource, TTarget> where TSource : unmanaged 
             targetCT.ViewRegistry.RegisterView(view, targetFieldDeps, 1);
         }
 
-        // Populate initial entity set — currently empty (PK B+Tree removed, pending EntityMap-based port)
+        // Populate initial entity set by scanning all archetype EntityMaps containing TSource
         using var tx = _dbe.CreateQuickTransaction();
+        view.PopulateFromEntityMaps(tx);
 
         // Drain any concurrent entries that arrived during population
         view.Refresh(tx);

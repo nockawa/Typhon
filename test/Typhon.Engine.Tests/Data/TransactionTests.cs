@@ -409,8 +409,7 @@ class TransactionTests : TestBase<TransactionTests>
 
     /// <summary>
     /// Tests that when a component is deleted and all its revisions are cleaned up,
-    /// the primary key index entry should be removed.
-    /// This test verifies the expected behavior - currently the cleanup is not implemented (TOFIX in Transaction.cs).
+    /// the entity should no longer be alive (verified via IsAlive after deferred cleanup).
     /// </summary>
     [Test]
     public void DeleteComponent_WhenLastRevisionCleanedUp_EntityShouldBeRemoved()
@@ -507,86 +506,7 @@ class TransactionTests : TestBase<TransactionTests>
         }
     }
 
-    /// <summary>
-    /// Tests that when a component is deleted but there's a long-running transaction keeping old revisions,
-    /// the primary key index entry should remain until cleanup happens.
-    /// </summary>
-    [Test]
-    [Ignore("Still WIP")]
-    public void DeleteComponent_WithLongRunningTransaction_PrimaryKeyIndexRemainsUntilCleanup()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-        dbe.InitializeArchetypes();
-
-        EntityId e1;
-        var a = new CompA(42);
-
-        // Create entity
-        {
-            using var t = dbe.CreateQuickTransaction();
-            e1 = t.Spawn<CompAArch>(CompAArch.A.Set(in a));
-            var res = t.Commit();
-            Assert.That(res, Is.True, "Commit should succeed");
-        }
-
-        var ct = dbe.GetComponentTable<CompA>();
-
-        // Start a long-running transaction to prevent cleanup
-        var longRunningTxn = dbe.CreateQuickTransaction();
-
-        // Read in long-running transaction to establish snapshot
-        longRunningTxn.Open(e1).Read(CompAArch.A);
-
-        // Delete entity in a separate transaction
-        {
-            using var t = dbe.CreateQuickTransaction();
-            t.Destroy(e1);
-            var res = t.Commit();
-            Assert.That(res, Is.True, "Commit should succeed");
-        }
-
-        // The primary key index should still have the entry because long-running transaction prevents cleanup
-        {
-            var depth = dbe.EpochManager.EnterScope();
-            try
-            {
-                // PK B+Tree removed — this test is no longer applicable
-                Assert.Pass("PK B+Tree removed — test obsolete");
-            }
-            finally
-            {
-                dbe.EpochManager.ExitScope(depth);
-            }
-        }
-
-        // Verify multiple revisions exist (create + delete)
-        {
-            using var t = dbe.CreateQuickTransaction();
-            var revCount = t.GetRevisionCount<CompA>((long)e1.RawValue);
-            Assert.That(revCount, Is.GreaterThanOrEqualTo(2),
-                "Should have at least 2 revisions (create and delete) while long-running transaction exists");
-        }
-
-        // Complete the long-running transaction - this should trigger cleanup
-        longRunningTxn.Commit();
-        longRunningTxn.Dispose();
-
-        // After cleanup, primary key index entry should be removed
-        // NOTE: This assertion documents the EXPECTED behavior.
-        {
-            var depth = dbe.EpochManager.EnterScope();
-            try
-            {
-                // PK B+Tree removed — this test is no longer applicable
-                Assert.Pass("PK B+Tree removed — test obsolete");
-            }
-            finally
-            {
-                dbe.EpochManager.ExitScope(depth);
-            }
-        }
-    }
+    // DeleteComponent_WithLongRunningTransaction_PrimaryKeyIndexRemainsUntilCleanup — removed (PK B+Tree eliminated)
 
     /// <summary>
     /// Tests that multiple create-delete cycles properly clean up primary key index entries.
@@ -672,23 +592,7 @@ class TransactionTests : TestBase<TransactionTests>
             Assert.That(t.IsAlive(e1), Is.False, "Entity should not be readable after rollback");
         }
 
-        // Check primary key index - entry should not exist after rollback
-        var ct = dbe.GetComponentTable<CompA>();
-        Assert.That(ct, Is.Not.Null, "ComponentTable should exist");
-
-        {
-            var depth = dbe.EpochManager.EnterScope();
-            try
-            {
-                // PK B+Tree removed — verify entity is not reachable via EntityMap
-                // (already verified above via IsAlive check)
-                Assert.Pass("PK B+Tree removed — rollback verified via IsAlive");
-            }
-            finally
-            {
-                dbe.EpochManager.ExitScope(depth);
-            }
-        }
+        // Entity reachability verified via IsAlive above (PK B+Tree removed — EntityMap is the authority)
     }
 
     // ═══════════════════════════════════════════════════════════════════

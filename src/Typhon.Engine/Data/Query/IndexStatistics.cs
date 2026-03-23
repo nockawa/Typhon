@@ -28,17 +28,17 @@ internal class IndexStatistics
 
     private static KeyType DeriveKeyType(IBTreeIndex index) => index switch
     {
-        BTree<byte, PersistentStore> => KeyType.Byte,
-        BTree<sbyte, PersistentStore> => KeyType.SByte,
-        BTree<short, PersistentStore> => KeyType.Short,
-        BTree<ushort, PersistentStore> => KeyType.UShort,
-        BTree<char, PersistentStore> => KeyType.UShort,
-        BTree<int, PersistentStore> => KeyType.Int,
-        BTree<uint, PersistentStore> => KeyType.UInt,
-        BTree<float, PersistentStore> => KeyType.Float,
-        BTree<double, PersistentStore> => KeyType.Double,
-        BTree<long, PersistentStore> => KeyType.Long,
-        String64BTree<PersistentStore> => KeyType.String64,
+        BTree<byte, PersistentStore> or BTree<byte, TransientStore> => KeyType.Byte,
+        BTree<sbyte, PersistentStore> or BTree<sbyte, TransientStore> => KeyType.SByte,
+        BTree<short, PersistentStore> or BTree<short, TransientStore> => KeyType.Short,
+        BTree<ushort, PersistentStore> or BTree<ushort, TransientStore> => KeyType.UShort,
+        BTree<char, PersistentStore> or BTree<char, TransientStore> => KeyType.UShort,
+        BTree<int, PersistentStore> or BTree<int, TransientStore> => KeyType.Int,
+        BTree<uint, PersistentStore> or BTree<uint, TransientStore> => KeyType.UInt,
+        BTree<float, PersistentStore> or BTree<float, TransientStore> => KeyType.Float,
+        BTree<double, PersistentStore> or BTree<double, TransientStore> => KeyType.Double,
+        BTree<long, PersistentStore> or BTree<long, TransientStore> => KeyType.Long,
+        String64BTree<PersistentStore> or String64BTree<TransientStore> => KeyType.String64,
         _ => KeyType.Long
     };
 

@@ -145,6 +145,9 @@ internal struct IndexedFieldInfo
 
     /// <summary>Returns the index cast to <see cref="BTreeBase{TStore}"/> for PersistentStore operations (Versioned and SingleVersion paths).</summary>
     internal BTreeBase<PersistentStore> PersistentIndex => (BTreeBase<PersistentStore>)Index;
+
+    /// <summary>Returns the index cast to <see cref="BTreeBase{TStore}"/> for Transient storage operations.</summary>
+    internal BTreeBase<TransientStore> TransientIndex => (BTreeBase<TransientStore>)Index;
 }
 
 [PublicAPI]
@@ -603,11 +606,21 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         s64Store.AllocatePages(ref s64Pages, 0, null);
         TransientString64IndexSegment.Create(PageBlockType.None, s64Pages, false);
 
-        // Secondary indexes for Transient deferred (IBTreeIndex type erasure is ready; needs TransientStore index creation + query pipeline dispatch)
-        IndexedFieldInfos = [];
-        IndexStats = [];
-        ViewRegistry = new ViewRegistry(0);
+        BuildIndexedFieldInfo(false);
+        ViewRegistry = new ViewRegistry(IndexedFieldInfos.Length);
         ComponentCollectionVSBSByOffset = new Dictionary<int, VariableSizedBufferSegmentBase<PersistentStore>>();
+
+        if (IndexedFieldInfos.Length > 0)
+        {
+            HasShadowableIndexes = true;
+            DirtyBitmap = new DirtyBitmap(TransientComponentSegment.ChunkCapacity);
+            ShadowBitmap = new DirtyBitmap(TransientComponentSegment.ChunkCapacity);
+            FieldShadowBuffers = new FieldShadowBuffer[IndexedFieldInfos.Length];
+            for (int i = 0; i < IndexedFieldInfos.Length; i++)
+            {
+                FieldShadowBuffers[i] = new FieldShadowBuffer();
+            }
+        }
     }
 
     private void BuildIndexedFieldInfo(bool load, ChangeSet changeSet = null, HashSet<int> newIndexFieldIds = null)
@@ -754,10 +767,37 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     internal static BTreeBase<PersistentStore> CreateIndexForFieldStatic(DBComponentDefinition.Field field, short stableId, bool load, ChunkBasedSegment<PersistentStore> segment, 
         ChangeSet changeSet = null) => CreateIndexForFieldCore(field, stableId, load, segment, changeSet);
 
-    private BTreeBase<PersistentStore> CreateIndexForField(DBComponentDefinition.Field field, short stableId, bool load = false, ChangeSet changeSet = null)
+    private IBTreeIndex CreateIndexForField(DBComponentDefinition.Field field, short stableId, bool load = false, ChangeSet changeSet = null)
     {
+        if (StorageMode == StorageMode.Transient)
+        {
+            return CreateIndexForFieldTransient(field, stableId);
+        }
+
         var s = field.Type == FieldType.String64 ? String64IndexSegment : DefaultIndexSegment;
         return CreateIndexForFieldCore(field, stableId, load, s, changeSet);
+    }
+
+    private BTreeBase<TransientStore> CreateIndexForFieldTransient(DBComponentDefinition.Field field, short stableId)
+    {
+        var s = field.Type == FieldType.String64 ? TransientString64IndexSegment : TransientDefaultIndexSegment;
+        BTreeBase<TransientStore> index = field.Type switch
+        {
+            FieldType.Byte     => field.IndexAllowMultiple ? new ByteMultipleBTree<TransientStore>      (s, false, stableId) : new ByteSingleBTree<TransientStore>    (s, false, stableId),
+            FieldType.Short    => field.IndexAllowMultiple ? new ShortMultipleBTree<TransientStore>     (s, false, stableId) : new ShortSingleBTree<TransientStore>   (s, false, stableId),
+            FieldType.Int      => field.IndexAllowMultiple ? new IntMultipleBTree<TransientStore>       (s, false, stableId) : new IntSingleBTree<TransientStore>     (s, false, stableId),
+            FieldType.Long     => field.IndexAllowMultiple ? new LongMultipleBTree<TransientStore>      (s, false, stableId) : new LongSingleBTree<TransientStore>    (s, false, stableId),
+            FieldType.UByte    => field.IndexAllowMultiple ? new UByteMultipleBTree<TransientStore>     (s, false, stableId) : new UByteSingleBTree<TransientStore>   (s, false, stableId),
+            FieldType.UShort   => field.IndexAllowMultiple ? new UShortMultipleBTree<TransientStore>    (s, false, stableId) : new UShortSingleBTree<TransientStore>  (s, false, stableId),
+            FieldType.UInt     => field.IndexAllowMultiple ? new UIntMultipleBTree<TransientStore>      (s, false, stableId) : new UIntSingleBTree<TransientStore>    (s, false, stableId),
+            FieldType.ULong    => field.IndexAllowMultiple ? new ULongMultipleBTree<TransientStore>     (s, false, stableId) : new ULongSingleBTree<TransientStore>   (s, false, stableId),
+            FieldType.Float    => field.IndexAllowMultiple ? new FloatMultipleBTree<TransientStore>     (s, false, stableId) : new FloatSingleBTree<TransientStore>   (s, false, stableId),
+            FieldType.Double   => field.IndexAllowMultiple ? new DoubleMultipleBTree<TransientStore>    (s, false, stableId) : new DoubleSingleBTree<TransientStore>  (s, false, stableId),
+            FieldType.Char     => field.IndexAllowMultiple ? new CharMultipleBTree<TransientStore>      (s, false, stableId) : new CharSingleBTree<TransientStore>    (s, false, stableId),
+            FieldType.String64 => field.IndexAllowMultiple ? new String64MultipleBTree<TransientStore>  (s, false, stableId) : new String64SingleBTree<TransientStore>(s, false, stableId),
+            _                  => null
+        };
+        return index;
     }
 
     private static BTreeBase<PersistentStore> CreateIndexForFieldCore(DBComponentDefinition.Field field, short stableId, bool load, ChunkBasedSegment<PersistentStore> s, ChangeSet changeSet = null)

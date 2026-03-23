@@ -252,7 +252,7 @@ public class ChunkBasedSegment<TStore> : LogicalSegment<TStore> where TStore : s
                 {
                     var page = GetPageExclusiveUnchecked(i, epoch, out var memPageIdx);
                     page.Metadata<long>(0, _bitmapLongsOther).Clear();
-                    effectiveChangeSet.AddByMemPageIndex(memPageIdx);
+                    effectiveChangeSet?.AddByMemPageIndex(memPageIdx);
 
                     // Protect new pages against the checkpoint race during Grow→first-access window.
                     // After base.Grow unlatched each page (DC=1, ACW=0), checkpoint may have snapshot zeros,

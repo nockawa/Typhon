@@ -976,8 +976,8 @@ public unsafe partial class Transaction
         else
         {
             ptr = info.CompContentAccessor.GetChunkAddress(chunkId, true);
-            table.DirtyBitmap?.Set(chunkId);
         }
+        table.DirtyBitmap?.Set(chunkId);
         return ref Unsafe.AsRef<T>(ptr + info.ComponentOverhead);
     }
 
@@ -995,7 +995,8 @@ public unsafe partial class Transaction
         }
 
         var info = GetComponentInfo(typeof(T));
-        byte* ptr = info.CompContentAccessor.GetChunkAddress(chunkId);
+        byte* ptr = table.StorageMode == StorageMode.Transient ? 
+            info.TransientCompContentAccessor.GetChunkAddress(chunkId) : info.CompContentAccessor.GetChunkAddress(chunkId);
 
         var fields = table.IndexedFieldInfos;
         var buffers = table.FieldShadowBuffers;
@@ -1142,6 +1143,14 @@ public unsafe partial class Transaction
         Span<int> svIdxAccessorBase = stackalloc int[16]; // offset into svIdxAccessors for each slot
         int svIdxAccessorTotal = 0;
 
+        // Hoisted Transient index accessors — same pattern as SV but with TransientStore.
+        Span<int> trSlots = stackalloc int[16];
+        int trSlotCount = 0;
+        ChunkAccessor<TransientStore>[] trCompAccessors = null;
+        ChunkAccessor<TransientStore>[] trIdxAccessors = null;
+        Span<int> trIdxAccessorBase = stackalloc int[16];
+        int trIdxAccessorTotal = 0;
+
         // Per-archetype cached state — avoids per-entity metadata lookups
         ArchetypeMetadata meta;
         ArchetypeEngineState engineState = null;
@@ -1185,6 +1194,14 @@ public unsafe partial class Transaction
                         {
                             svIdxAccessors[ai].Dispose();
                         }
+                        for (int si = 0; si < trSlotCount; si++)
+                        {
+                            trCompAccessors[si].Dispose();
+                        }
+                        for (int ai = 0; ai < trIdxAccessorTotal; ai++)
+                        {
+                            trIdxAccessors[ai].Dispose();
+                        }
                     }
 
                     // Cache archetype metadata + compute versioned slot mask
@@ -1204,15 +1221,15 @@ public unsafe partial class Transaction
                     lastArchId = entry.Id.ArchetypeId;
                     hasMapAccessor = true;
 
-                    // Build SV indexed slot accessors for this archetype.
-                    // First pass: count, then allocate exact sizes.
+                    // Build SV indexed slot accessors for this archetype (Transient handled separately below).
+                    // First pass: count SV indexed slots, then allocate exact sizes.
                     svSlotCount = 0;
                     svIdxAccessorTotal = 0;
                     int idxCount = 0;
                     for (int slot = 0; slot < meta.ComponentCount; slot++)
                     {
                         var table = engineState.SlotToComponentTable[slot];
-                        if (table.StorageMode == StorageMode.Versioned)
+                        if (table.StorageMode != StorageMode.SingleVersion)
                         {
                             continue;
                         }
@@ -1243,7 +1260,7 @@ public unsafe partial class Transaction
                     for (int slot = 0; slot < meta.ComponentCount; slot++)
                     {
                         var table = engineState.SlotToComponentTable[slot];
-                        if (table.StorageMode == StorageMode.Versioned)
+                        if (table.StorageMode != StorageMode.SingleVersion)
                         {
                             continue;
                         }
@@ -1252,7 +1269,6 @@ public unsafe partial class Transaction
                         {
                             continue;
                         }
-                        Debug.Assert(table.StorageMode != StorageMode.Transient, "Transient secondary indexes not yet implemented");
 
                         svSlots[svSlotCount] = slot;
                         svCompAccessors[svSlotCount] = table.ComponentSegment.CreateChunkAccessor(_changeSet);
@@ -1262,6 +1278,63 @@ public unsafe partial class Transaction
                             svIdxAccessors[svIdxAccessorTotal++] = indexedFieldInfos[i].PersistentIndex.Segment.CreateChunkAccessor(_changeSet);
                         }
                         svSlotCount++;
+                    }
+
+                    // Build Transient indexed slot accessors — same two-pass pattern.
+                    trSlotCount = 0;
+                    trIdxAccessorTotal = 0;
+                    int trIdxCount = 0;
+                    for (int slot = 0; slot < meta.ComponentCount; slot++)
+                    {
+                        var table = engineState.SlotToComponentTable[slot];
+                        if (table.StorageMode != StorageMode.Transient)
+                        {
+                            continue;
+                        }
+                        var ifi = table.IndexedFieldInfos;
+                        if (ifi == null || ifi.Length == 0)
+                        {
+                            continue;
+                        }
+                        trSlotCount++;
+                        trIdxCount += ifi.Length;
+                    }
+
+                    if (trSlotCount > 0)
+                    {
+                        if (trCompAccessors == null || trCompAccessors.Length < trSlotCount)
+                        {
+                            trCompAccessors = new ChunkAccessor<TransientStore>[trSlotCount];
+                        }
+                        if (trIdxAccessors == null || trIdxAccessors.Length < trIdxCount)
+                        {
+                            trIdxAccessors = new ChunkAccessor<TransientStore>[trIdxCount];
+                        }
+                    }
+
+                    trSlotCount = 0;
+                    trIdxAccessorTotal = 0;
+                    for (int slot = 0; slot < meta.ComponentCount; slot++)
+                    {
+                        var table = engineState.SlotToComponentTable[slot];
+                        if (table.StorageMode != StorageMode.Transient)
+                        {
+                            continue;
+                        }
+                        var indexedFieldInfos = table.IndexedFieldInfos;
+                        if (indexedFieldInfos == null || indexedFieldInfos.Length == 0)
+                        {
+                            continue;
+                        }
+
+                        trSlots[trSlotCount] = slot;
+                        trCompAccessors[trSlotCount] = table.TransientComponentSegment.CreateChunkAccessor();
+                        trIdxAccessorBase[trSlotCount] = trIdxAccessorTotal;
+                        for (int i = 0; i < indexedFieldInfos.Length; i++)
+                        {
+                            trIdxAccessors[trIdxAccessorTotal++] = indexedFieldInfos[i].TransientIndex.Segment.CreateChunkAccessor();
+                        }
+                        trSlotCount++;
                     }
                 }
 
@@ -1314,6 +1387,42 @@ public unsafe partial class Transaction
                         }
                     }
                 }
+
+                // Insert Transient secondary indexes (hoisted accessors, same pattern as SV).
+                for (int si = 0; si < trSlotCount; si++)
+                {
+                    int slot = trSlots[si];
+                    var table = engineState.SlotToComponentTable[slot];
+                    int chunkId = entry.Loc[slot];
+                    if (chunkId == 0)
+                    {
+                        continue;
+                    }
+
+                    byte* chunkAddr = trCompAccessors[si].GetChunkAddress(chunkId, true);
+
+                    if (table.Definition.EntityPKOverheadSize > 0)
+                    {
+                        *(long*)chunkAddr = (long)entry.Id.RawValue;
+                    }
+
+                    var indexedFieldInfos = table.IndexedFieldInfos;
+
+                    for (int i = 0; i < indexedFieldInfos.Length; i++)
+                    {
+                        ref var ifi = ref indexedFieldInfos[i];
+                        var index = ifi.TransientIndex;
+                        if (ifi.AllowMultiple)
+                        {
+                            *(int*)&chunkAddr[ifi.OffsetToIndexElementId] =
+                                index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref trIdxAccessors[trIdxAccessorBase[si] + i], out _);
+                        }
+                        else
+                        {
+                            index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref trIdxAccessors[trIdxAccessorBase[si] + i]);
+                        }
+                    }
+                }
             }
         }
         finally
@@ -1328,6 +1437,14 @@ public unsafe partial class Transaction
                 for (int ai = 0; ai < svIdxAccessorTotal; ai++)
                 {
                     svIdxAccessors[ai].Dispose();
+                }
+                for (int si = 0; si < trSlotCount; si++)
+                {
+                    trCompAccessors[si].Dispose();
+                }
+                for (int ai = 0; ai < trIdxAccessorTotal; ai++)
+                {
+                    trIdxAccessors[ai].Dispose();
                 }
             }
         }
@@ -1490,7 +1607,7 @@ public unsafe partial class Transaction
                         // If entity WAS written (shadow exists), ProcessShadowEntries handles removal using the shadow's old key (which matches the index).
                         if (!table.ShadowBitmap.Test(chunkId))
                         {
-                            RemoveSvIndexEntries(table, chunkId);
+                            RemoveNonVersionedIndexEntries(table, chunkId);
                         }
                     }
                 }
@@ -1506,22 +1623,56 @@ public unsafe partial class Transaction
     }
 
     /// <summary>
-    /// Remove all secondary index entries for a SingleVersion component at the given chunkId.
+    /// Remove all secondary index entries for a non-Versioned component at the given chunkId.
     /// Used at destroy time when the entity was NOT mutated this tick (index key = current data value).
+    /// Dispatches to the correct store type (PersistentStore for SV, TransientStore for Transient).
     /// </summary>
-    private void RemoveSvIndexEntries(ComponentTable table, int chunkId)
+    private void RemoveNonVersionedIndexEntries(ComponentTable table, int chunkId)
+    {
+        if (table.StorageMode == StorageMode.Transient)
+        {
+            var compAccessor = table.TransientComponentSegment.CreateChunkAccessor();
+            try
+            {
+                RemoveIndexEntriesCore(table, chunkId, ref compAccessor);
+            }
+            finally
+            {
+                compAccessor.Dispose();
+            }
+        }
+        else
+        {
+            var compAccessor = table.ComponentSegment.CreateChunkAccessor();
+            try
+            {
+                RemoveIndexEntriesCore(table, chunkId, ref compAccessor);
+            }
+            finally
+            {
+                compAccessor.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Inner loop for <see cref="RemoveNonVersionedIndexEntries"/>. Generic over TStore so the JIT generates
+    /// specialized code for each store type. The <c>typeof(TStore)</c> branches are JIT-time constants —
+    /// dead code is eliminated, so only the matching path survives in each instantiation.
+    /// </summary>
+    private static void RemoveIndexEntriesCore<TStore>(ComponentTable table, int chunkId, ref ChunkAccessor<TStore> compAccessor) where TStore : struct, IPageStore
     {
         var fields = table.IndexedFieldInfos;
-        var compAccessor = table.ComponentSegment.CreateChunkAccessor();
-        try
-        {
-            byte* ptr = compAccessor.GetChunkAddress(chunkId);
+        byte* ptr = compAccessor.GetChunkAddress(chunkId);
 
-            for (int i = 0; i < fields.Length; i++)
+        for (int i = 0; i < fields.Length; i++)
+        {
+            ref var ifi = ref fields[i];
+            byte* fieldPtr = ptr + ifi.OffsetToField;
+
+            if (typeof(TStore) == typeof(TransientStore))
             {
-                ref var ifi = ref fields[i];
-                var index = ifi.PersistentIndex;
-                byte* fieldPtr = ptr + ifi.OffsetToField;
+                var index = ifi.TransientIndex;
                 var idxAccessor = index.Segment.CreateChunkAccessor();
                 try
                 {
@@ -1539,26 +1690,43 @@ public unsafe partial class Transaction
                 {
                     idxAccessor.Dispose();
                 }
-
-                // Notify views of deletion
-                var views = table.ViewRegistry.GetViewsForField(i);
-                for (int v = 0; v < views.Length; v++)
+            }
+            else
+            {
+                var index = ifi.PersistentIndex;
+                var idxAccessor = index.Segment.CreateChunkAccessor();
+                try
                 {
-                    var reg = views[v];
-                    if (reg.View.IsDisposed)
+                    if (ifi.AllowMultiple)
                     {
-                        continue;
+                        int elementId = *(int*)(ptr + ifi.OffsetToIndexElementId);
+                        index.RemoveValue(fieldPtr, elementId, chunkId, ref idxAccessor);
                     }
-
-                    var key = KeyBytes8.FromPointer(fieldPtr, ifi.Size);
-                    byte flags = (byte)((i & 0x3F) | 0x80); // isDeletion flag
-                    reg.View.DeltaBuffer.TryAppend(chunkId, key, default, 0, flags, reg.ComponentTag);
+                    else
+                    {
+                        index.Remove(fieldPtr, out _, ref idxAccessor);
+                    }
+                }
+                finally
+                {
+                    idxAccessor.Dispose();
                 }
             }
-        }
-        finally
-        {
-            compAccessor.Dispose();
+
+            // Notify views of deletion
+            var views = table.ViewRegistry.GetViewsForField(i);
+            for (int v = 0; v < views.Length; v++)
+            {
+                var reg = views[v];
+                if (reg.View.IsDisposed)
+                {
+                    continue;
+                }
+
+                var key = KeyBytes8.FromPointer(fieldPtr, ifi.Size);
+                byte flags = (byte)((i & 0x3F) | 0x80); // isDeletion flag
+                reg.View.DeltaBuffer.TryAppend(chunkId, key, default, 0, flags, reg.ComponentTag);
+            }
         }
     }
 

@@ -138,7 +138,6 @@ class EcsNavigationTests : TestBase<EcsNavigationTests>
     // ═══════════════════════════════════════════════════════════════════════
 
     [Test]
-    [Ignore("NavigationView.PopulateInitial uses PK B+Tree which is empty for archetype entities. Needs EntityMap-based port (Step 4).")]
     public void NavigateField_ToView_IncrementalRefresh()
     {
         using var dbe = SetupEngine();

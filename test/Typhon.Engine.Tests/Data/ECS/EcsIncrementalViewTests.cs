@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 
@@ -387,5 +388,368 @@ class EcsIncrementalViewTests : TestBase<EcsIncrementalViewTests>
 
         Assert.That(table.ViewRegistry.ViewCount, Is.EqualTo(viewsBefore),
             "Dispose should deregister from ViewRegistry");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ViewDelta / DeltaView coverage: GetDelta() struct, Contains(), enumeration
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void GetDelta_Added_ReturnsCorrectEntries()
+    {
+        using var dbe = SetupEngine();
+
+        // Create view on empty table
+        using var txView = dbe.CreateQuickTransaction();
+        using var view = txView.Query<CompDArch>().WhereField<CompD>(d => d.B >= 50).ToView();
+        Assert.That(view.Count, Is.EqualTo(0));
+
+        // Spawn entity that matches
+        EntityId id;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var d = new CompD(1.0f, 80, 2.0);
+            id = tx.Spawn<CompDArch>(CompDArch.D.Set(in d));
+            tx.Commit();
+        }
+
+        using var txR = dbe.CreateQuickTransaction();
+        view.Refresh(txR);
+
+        // Test GetDelta() struct directly
+        var delta = view.GetDelta();
+        Assert.That(delta.Added.Count, Is.EqualTo(1));
+        Assert.That(delta.Removed.Count, Is.EqualTo(0));
+        Assert.That(delta.Added.Contains((long)id.RawValue), Is.True, "DeltaView.Contains should find added PK");
+        Assert.That(delta.Added.Contains(999999L), Is.False, "DeltaView.Contains should return false for unknown PK");
+
+        // Enumerate DeltaView
+        int enumCount = 0;
+        foreach (long pk in delta.Added)
+        {
+            Assert.That(pk, Is.EqualTo((long)id.RawValue));
+            enumCount++;
+        }
+        Assert.That(enumCount, Is.EqualTo(1));
+
+        // ClearDelta makes it empty
+        view.ClearDelta();
+        var clearedDelta = view.GetDelta();
+        Assert.That(clearedDelta.Added.Count, Is.EqualTo(0));
+        Assert.That(clearedDelta.Removed.Count, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void GetDelta_Removed_ReturnsCorrectEntries()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId id;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var d = new CompD(1.0f, 80, 2.0);
+            id = tx.Spawn<CompDArch>(CompDArch.D.Set(in d));
+            tx.Commit();
+        }
+
+        using var txView = dbe.CreateQuickTransaction();
+        using var view = txView.Query<CompDArch>().WhereField<CompD>(d => d.B >= 50).ToView();
+        view.ClearDelta(); // Clear the initial-population delta
+
+        // Mutate to cross out of view
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            tx.OpenMut(id).Write(CompDArch.D).B = 10;
+            tx.Commit();
+        }
+
+        using var txR = dbe.CreateQuickTransaction();
+        view.Refresh(txR);
+
+        var delta = view.GetDelta();
+        Assert.That(delta.Removed.Count, Is.EqualTo(1));
+        Assert.That(delta.Removed.Contains((long)id.RawValue), Is.True);
+        Assert.That(delta.Added.Count, Is.EqualTo(0));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ViewDelta: Modified path + IsEmpty
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void GetDelta_Modified_WhenFieldChangesWithinView()
+    {
+        using var dbe = SetupEngine();
+
+        // CompD has [Index] int B and [Index(AllowMultiple)] float A
+        // Create view on B >= 50
+        EntityId id;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var d = new CompD(1.0f, 80, 2.0);
+            id = tx.Spawn<CompDArch>(CompDArch.D.Set(in d));
+            tx.Commit();
+        }
+
+        using var txView = dbe.CreateQuickTransaction();
+        using var view = txView.Query<CompDArch>().WhereField<CompD>(d => d.B >= 50).ToView();
+        Assert.That(view.Count, Is.EqualTo(1));
+        view.ClearDelta();
+
+        // Mutate B from 80 to 90 — stays in view (no boundary crossing) → Modified
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            tx.OpenMut(id).Write(CompDArch.D).B = 90;
+            tx.Commit();
+        }
+
+        using var txR = dbe.CreateQuickTransaction();
+        view.Refresh(txR);
+
+        Assert.That(view.Count, Is.EqualTo(1), "Entity should still be in view");
+        var delta = view.GetDelta();
+        Assert.That(delta.Added.Count, Is.EqualTo(0));
+        Assert.That(delta.Removed.Count, Is.EqualTo(0));
+        Assert.That(delta.Modified.Count, Is.EqualTo(1), "Modified count should be 1");
+        Assert.That(delta.Modified.Contains((long)id.RawValue), Is.True);
+        Assert.That(delta.IsEmpty, Is.False, "Delta is not empty — has Modified");
+    }
+
+    [Test]
+    public void GetDelta_IsEmpty_WhenNothingChanged()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId id;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var d = new CompD(1.0f, 80, 2.0);
+            id = tx.Spawn<CompDArch>(CompDArch.D.Set(in d));
+            tx.Commit();
+        }
+
+        using var txView = dbe.CreateQuickTransaction();
+        using var view = txView.Query<CompDArch>().WhereField<CompD>(d => d.B >= 50).ToView();
+        view.ClearDelta();
+
+        // No changes at all
+        using var txR = dbe.CreateQuickTransaction();
+        view.Refresh(txR);
+
+        var delta = view.GetDelta();
+        Assert.That(delta.IsEmpty, Is.True);
+        Assert.That(delta.Added.Count, Is.EqualTo(0));
+        Assert.That(delta.Removed.Count, Is.EqualTo(0));
+        Assert.That(delta.Modified.Count, Is.EqualTo(0));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // ViewBase.CompactDelta: state machine transitions
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void CompactDelta_AddedThenRemoved_Cancels()
+    {
+        using var dbe = SetupEngine();
+
+        // Create empty view
+        using var txView = dbe.CreateQuickTransaction();
+        using var view = txView.Query<CompDArch>().WhereField<CompD>(d => d.B >= 50).ToView();
+        Assert.That(view.Count, Is.EqualTo(0));
+
+        // Spawn entity that enters view, then immediately mutate it out
+        EntityId id;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var d = new CompD(1.0f, 80, 2.0);
+            id = tx.Spawn<CompDArch>(CompDArch.D.Set(in d));
+            tx.Commit();
+        }
+        // Now mutate B below threshold
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            tx.OpenMut(id).Write(CompDArch.D).B = 10;
+            tx.Commit();
+        }
+
+        // Single refresh processes both: Added then Removed → cancel
+        using var txR = dbe.CreateQuickTransaction();
+        view.Refresh(txR);
+
+        Assert.That(view.Count, Is.EqualTo(0), "Entity entered then left → not in view");
+        var delta = view.GetDelta();
+        Assert.That(delta.Added.Count, Is.EqualTo(0), "Added+Removed should cancel");
+        Assert.That(delta.Removed.Count, Is.EqualTo(0), "Added+Removed should cancel");
+    }
+
+    [Test]
+    public void CompactDelta_ModifiedThenRemoved_BecomesRemoved()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId id;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var d = new CompD(1.0f, 80, 2.0);
+            id = tx.Spawn<CompDArch>(CompDArch.D.Set(in d));
+            tx.Commit();
+        }
+
+        using var txView = dbe.CreateQuickTransaction();
+        using var view = txView.Query<CompDArch>().WhereField<CompD>(d => d.B >= 50).ToView();
+        Assert.That(view.Count, Is.EqualTo(1));
+        view.ClearDelta();
+
+        // Mutate B within view (80→90 → Modified), then out (90→10 → Removed)
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            tx.OpenMut(id).Write(CompDArch.D).B = 90;
+            tx.Commit();
+        }
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            tx.OpenMut(id).Write(CompDArch.D).B = 10;
+            tx.Commit();
+        }
+
+        using var txR = dbe.CreateQuickTransaction();
+        view.Refresh(txR);
+
+        Assert.That(view.Count, Is.EqualTo(0));
+        var delta = view.GetDelta();
+        Assert.That(delta.Removed.Count, Is.EqualTo(1), "Modified+Removed → Removed");
+        Assert.That(delta.Modified.Count, Is.EqualTo(0));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // EcsView: Pull mode (no WhereField)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void PullMode_ToView_WithoutWhereField_PopulatesAndRefreshes()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId id1;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var d = new CompD(1.0f, 80, 2.0);
+            id1 = tx.Spawn<CompDArch>(CompDArch.D.Set(in d));
+            tx.Commit();
+        }
+
+        // Pull mode: Query<Arch>().ToView() — no WhereField
+        using var txView = dbe.CreateQuickTransaction();
+        using var view = txView.Query<CompDArch>().ToView();
+        Assert.That(view.Count, Is.EqualTo(1));
+        Assert.That(view.Contains(id1), Is.True);
+
+        // Spawn another entity → refresh should detect it (pull re-queries)
+        EntityId id2;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var d = new CompD(2.0f, 30, 3.0);
+            id2 = tx.Spawn<CompDArch>(CompDArch.D.Set(in d));
+            tx.Commit();
+        }
+
+        using var txR = dbe.CreateQuickTransaction();
+        view.Refresh(txR);
+
+        Assert.That(view.Count, Is.EqualTo(2));
+        Assert.That(view.Contains(id2), Is.True);
+        Assert.That(view.Added, Has.Count.EqualTo(1));
+        Assert.That(view.Added[0], Is.EqualTo(id2));
+    }
+
+    [Test]
+    public void PullMode_Refresh_EntityDestroyed_ShowsRemoved()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId id;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var d = new CompD(1.0f, 80, 2.0);
+            id = tx.Spawn<CompDArch>(CompDArch.D.Set(in d));
+            tx.Commit();
+        }
+
+        using var txView = dbe.CreateQuickTransaction();
+        using var view = txView.Query<CompDArch>().ToView();
+        Assert.That(view.Count, Is.EqualTo(1));
+        view.ClearDelta();
+
+        // Destroy the entity
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            tx.Destroy(id);
+            tx.Commit();
+        }
+
+        using var txR = dbe.CreateQuickTransaction();
+        view.Refresh(txR);
+
+        Assert.That(view.Count, Is.EqualTo(0));
+        Assert.That(view.Removed, Has.Count.EqualTo(1));
+        Assert.That(view.Removed[0], Is.EqualTo(id));
+    }
+
+    [Test]
+    public void PullMode_Refresh_NoChanges_EmptyDelta()
+    {
+        using var dbe = SetupEngine();
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var d = new CompD(1.0f, 80, 2.0);
+            tx.Spawn<CompDArch>(CompDArch.D.Set(in d));
+            tx.Commit();
+        }
+
+        using var txView = dbe.CreateQuickTransaction();
+        using var view = txView.Query<CompDArch>().ToView();
+        view.ClearDelta();
+
+        // Refresh with no changes
+        using var txR = dbe.CreateQuickTransaction();
+        view.Refresh(txR);
+
+        Assert.That(view.Count, Is.EqualTo(1));
+        Assert.That(view.Added, Has.Count.EqualTo(0));
+        Assert.That(view.Removed, Has.Count.EqualTo(0));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // EcsView: Enumerator
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void View_GetEnumerator_ReturnsAllEntities()
+    {
+        using var dbe = SetupEngine();
+
+        EntityId id1, id2;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var d1 = new CompD(1.0f, 80, 2.0);
+            id1 = tx.Spawn<CompDArch>(CompDArch.D.Set(in d1));
+            var d2 = new CompD(2.0f, 90, 3.0);
+            id2 = tx.Spawn<CompDArch>(CompDArch.D.Set(in d2));
+            tx.Commit();
+        }
+
+        using var txView = dbe.CreateQuickTransaction();
+        using var view = txView.Query<CompDArch>().WhereField<CompD>(d => d.B >= 50).ToView();
+
+        var pks = new HashSet<long>();
+        foreach (long pk in view)
+        {
+            pks.Add(pk);
+        }
+
+        Assert.That(pks, Has.Count.EqualTo(2));
+        Assert.That(pks, Does.Contain((long)id1.RawValue));
+        Assert.That(pks, Does.Contain((long)id2.RawValue));
     }
 }

@@ -703,21 +703,93 @@ internal sealed class DiagnosticCommandExecutor
             return CommandResult.Error($"Error: Component '{componentName}' is {table.StorageMode} — no revision chain (only Versioned components have revisions).");
         }
 
-        // Resolve entity via ECS Open path
-        var tx = _session.Engine.CreateQuickTransaction();
+        // Resolve entity via EntityMap (ECS path)
+        var eid = EntityId.FromRaw(entityId);
+        var meta = ArchetypeRegistry.GetMetadata(eid.ArchetypeId);
+        if (meta == null)
+        {
+            return CommandResult.Error($"Error: ArchetypeId {eid.ArchetypeId} not registered. Use the full EntityId (EntityKey << 12 | ArchetypeId).");
+        }
+
+        // Find the slot for this component in the archetype
+        var compTypeId = ArchetypeRegistry.GetComponentTypeId(componentType);
+        if (!meta.TryGetSlot(compTypeId, out var slot))
+        {
+            return CommandResult.Error($"Error: Archetype '{meta.ArchetypeType?.Name}' does not contain component '{componentName}'.");
+        }
+
+        var dbe = _session.Engine;
+        var engineState = dbe._archetypeStates[meta.ArchetypeId];
+        if (engineState?.EntityMap == null)
+        {
+            return CommandResult.Error($"Error: Archetype '{meta.ArchetypeType?.Name}' has no EntityMap.");
+        }
+
+        var epochManager = dbe.EpochManager;
+        var epochDepth = epochManager.EnterScope();
         try
         {
-            if (!tx.TryOpen(new EntityId(entityId, 0), out _))
+            // Look up entity in EntityMap
+            var readBuf = new byte[meta._entityRecordSize];
+            var accessor = engineState.EntityMap.Segment.CreateChunkAccessor();
+            unsafe
             {
-                // Try all archetype IDs — entityId from shell is the raw PK value
-                return CommandResult.Error($"Error: Entity {entityId} not found. Use the full EntityId (EntityKey << 12 | ArchetypeId).");
-            }
+                fixed (byte* ptr = readBuf)
+                {
+                    bool found = engineState.EntityMap.TryGet(eid.EntityKey, ptr, ref accessor);
+                    accessor.Dispose();
 
-            return CommandResult.Error("Error: 'revisions' command not yet updated for ECS EntityMap-based lookup. Use tsh diagnostics for now.");
+                    if (!found)
+                    {
+                        return CommandResult.Error($"Error: Entity {entityId} not found in EntityMap.");
+                    }
+
+                    // Get the CompRevTable first chunk ID from the EntityRecord location
+                    int compRevFirstChunkId = EntityRecordAccessor.GetLocation(ptr, slot);
+                    if (compRevFirstChunkId == 0)
+                    {
+                        return CommandResult.Error($"Error: Entity {entityId} has no revision chain for '{componentName}' (ChunkId=0).");
+                    }
+
+                    // Walk the revision chain
+                    var compRevAccessor = table.CompRevTableSegment.CreateChunkAccessor();
+                    try
+                    {
+                        ref var header = ref compRevAccessor.GetChunk<CompRevStorageHeader>(compRevFirstChunkId);
+                        var sb = new StringBuilder();
+                        sb.AppendLine($"  [white]Revisions for Entity {entityId} / {Markup.Escape(componentName)}[/]");
+                        sb.AppendLine("  [grey]══════════════════════════════════════[/]");
+                        sb.AppendLine($"  [grey]EntityPK:[/]     [white]{header.EntityPK}[/]");
+                        sb.AppendLine($"  [grey]ItemCount:[/]    [white]{header.ItemCount}[/]");
+                        sb.AppendLine($"  [grey]FirstChunkId:[/] [white]{compRevFirstChunkId}[/]");
+                        sb.AppendLine();
+                        sb.AppendLine("  [grey]  #  ChunkId    TSN     UoW   Iso[/]");
+                        sb.AppendLine("  [grey]───  ────────  ──────  ────  ───[/]");
+
+                        var enumerator = new RevisionEnumerator(ref compRevAccessor, compRevFirstChunkId, false, true);
+                        int revIndex = 0;
+                        while (enumerator.MoveNext())
+                        {
+                            ref var el = ref enumerator.Current;
+                            var isoFlag = el.IsolationFlag ? "[yellow]Y[/]" : "[grey]N[/]";
+                            var chunkStr = el.ComponentChunkId == 0 ? "[red]tomb[/]  " : $"[white]{el.ComponentChunkId,6}[/]  ";
+                            sb.AppendLine($"  [grey]{revIndex,3}[/]  {chunkStr}[white]{el.TSN,6}[/]  [white]{el.UowId,4}[/]  {isoFlag}");
+                            revIndex++;
+                        }
+                        enumerator.Dispose();
+
+                        return CommandResult.Markup(sb.ToString().TrimEnd());
+                    }
+                    finally
+                    {
+                        compRevAccessor.Dispose();
+                    }
+                }
+            }
         }
         finally
         {
-            tx.Dispose();
+            epochManager.ExitScope(epochDepth);
         }
     }
 

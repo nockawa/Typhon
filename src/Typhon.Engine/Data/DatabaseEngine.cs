@@ -592,7 +592,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
         foreach (var table in _componentTableByType.Values)
         {
-            if (table.StorageMode != StorageMode.SingleVersion || !table.DirtyBitmap.HasDirty)
+            if (table.StorageMode == StorageMode.Versioned || table.DirtyBitmap == null || !table.DirtyBitmap.HasDirty)
             {
                 continue;
             }
@@ -600,128 +600,131 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             // Snapshot DirtyBitmap — atomic swap, clears bitmap for next tick
             var dirtyBits = table.DirtyBitmap.Snapshot();
 
-            // Count dirty entries via PopCount
-            int entryCount = 0;
-            for (int i = 0; i < dirtyBits.Length; i++)
+            // WAL serialization: SV only — Transient has no WAL persistence, skip straight to shadow processing.
+            if (table.StorageMode == StorageMode.SingleVersion && WalManager != null)
             {
-                entryCount += BitOperations.PopCount((ulong)dirtyBits[i]);
-            }
-
-            // WAL serialization: serialize dirty entries to WAL (if WAL is configured and entries exist)
-            if (entryCount > 0 && WalManager != null)
-            {
-                int stride = table.ComponentStorageSize;
-                int overhead = table.ComponentOverhead;
-                int entrySize = 4 + stride; // ChunkId(4B) + ComponentData(stride)
-
-                // ChunkSize is ushort (max 65535). Split into multiple chunks if needed.
-                int maxEntriesPerChunk = (ushort.MaxValue - WalChunkHeader.SizeInBytes - TickFenceHeader.SizeInBytes - WalChunkFooter.SizeInBytes) / entrySize;
-
-                var accessor = table.ComponentSegment.CreateChunkAccessor();
-                try
+                // Count dirty entries via PopCount (needed for WAL chunk sizing)
+                int entryCount = 0;
+                for (int i = 0; i < dirtyBits.Length; i++)
                 {
-                    int entriesRemaining = entryCount;
-                    int wordIndex = 0;
-                    long currentWord = wordIndex < dirtyBits.Length ? dirtyBits[wordIndex] : 0;
+                    entryCount += BitOperations.PopCount((ulong)dirtyBits[i]);
+                }
 
-                    while (entriesRemaining > 0)
+                if (entryCount > 0)
+                {
+                    int stride = table.ComponentStorageSize;
+                    int overhead = table.ComponentOverhead;
+                    int entrySize = 4 + stride; // ChunkId(4B) + ComponentData(stride)
+
+                    // ChunkSize is ushort (max 65535). Split into multiple chunks if needed.
+                    int maxEntriesPerChunk = (ushort.MaxValue - WalChunkHeader.SizeInBytes - TickFenceHeader.SizeInBytes - WalChunkFooter.SizeInBytes) / entrySize;
+
+                    var accessor = table.ComponentSegment.CreateChunkAccessor();
+                    try
                     {
-                        int batchCount = Math.Min(entriesRemaining, maxEntriesPerChunk);
-                        int bodySize = TickFenceHeader.SizeInBytes + batchCount * entrySize;
-                        int chunkSize = WalChunkHeader.SizeInBytes + bodySize + WalChunkFooter.SizeInBytes;
+                        int entriesRemaining = entryCount;
+                        int wordIndex = 0;
+                        long currentWord = wordIndex < dirtyBits.Length ? dirtyBits[wordIndex] : 0;
 
-                        var wc = WaitContext.FromDeadline(Deadline.FromTimeout(TimeoutOptions.Current.DefaultCommitTimeout));
-                        var claim = WalManager.CommitBuffer.TryClaim(chunkSize, 1, ref wc);
-                        if (!claim.IsValid)
+                        while (entriesRemaining > 0)
                         {
-                            break; // back-pressure — skip remaining entries for this table
-                        }
+                            int batchCount = Math.Min(entriesRemaining, maxEntriesPerChunk);
+                            int bodySize = TickFenceHeader.SizeInBytes + batchCount * entrySize;
+                            int chunkSize = WalChunkHeader.SizeInBytes + bodySize + WalChunkFooter.SizeInBytes;
 
-                        try
-                        {
-                            int offset = 0;
-
-                            // WalChunkHeader
-                            var chunkHeader = new WalChunkHeader
+                            var wc = WaitContext.FromDeadline(Deadline.FromTimeout(TimeoutOptions.Current.DefaultCommitTimeout));
+                            var claim = WalManager.CommitBuffer.TryClaim(chunkSize, 1, ref wc);
+                            if (!claim.IsValid)
                             {
-                                ChunkType = (ushort)WalChunkType.TickFence,
-                                ChunkSize = (ushort)chunkSize,
-                                PrevCRC = 0,
-                            };
-                            MemoryMarshal.Write(claim.DataSpan[offset..], in chunkHeader);
-                            offset += WalChunkHeader.SizeInBytes;
-
-                            // TickFenceHeader
-                            var tfHeader = new TickFenceHeader
-                            {
-                                TickNumber = tickNumber,
-                                LSN = claim.FirstLSN,
-                                ComponentTypeId = table.WalTypeId,
-                                EntryCount = (ushort)batchCount,
-                                PayloadStride = (ushort)stride,
-                                Reserved = 0,
-                            };
-                            MemoryMarshal.Write(claim.DataSpan[offset..], in tfHeader);
-                            offset += TickFenceHeader.SizeInBytes;
-
-                            // Write entries by iterating dirty bits
-                            int written = 0;
-                            while (written < batchCount)
-                            {
-                                // Advance to next word if current is exhausted
-                                while (currentWord == 0 && wordIndex < dirtyBits.Length - 1)
-                                {
-                                    wordIndex++;
-                                    currentWord = dirtyBits[wordIndex];
-                                }
-
-                                if (currentWord == 0)
-                                {
-                                    break;
-                                }
-
-                                int bit = BitOperations.TrailingZeroCount((ulong)currentWord);
-                                int chunkId = wordIndex * 64 + bit;
-                                currentWord &= currentWord - 1; // clear lowest set bit
-
-                                // Write ChunkId (4B)
-                                MemoryMarshal.Write(claim.DataSpan[offset..], in chunkId);
-                                offset += 4;
-
-                                // Write component data (stride bytes)
-                                var src = accessor.GetChunkAsReadOnlySpan(chunkId);
-                                src.Slice(overhead, stride).CopyTo(claim.DataSpan[offset..]);
-                                offset += stride;
-
-                                written++;
+                                break; // back-pressure — skip remaining entries for this table
                             }
 
-                            // WalChunkFooter
-                            var footer = new WalChunkFooter { CRC = 0 };
-                            MemoryMarshal.Write(claim.DataSpan[offset..], in footer);
-
-                            WalManager.CommitBuffer.Publish(ref claim);
-                            if (claim.FirstLSN > highestLSN)
+                            try
                             {
-                                highestLSN = claim.FirstLSN;
-                            }
-                        }
-                        catch
-                        {
-                            WalManager.CommitBuffer.AbandonClaim(ref claim);
-                            throw;
-                        }
+                                int offset = 0;
 
-                        entriesRemaining -= batchCount;
+                                // WalChunkHeader
+                                var chunkHeader = new WalChunkHeader
+                                {
+                                    ChunkType = (ushort)WalChunkType.TickFence,
+                                    ChunkSize = (ushort)chunkSize,
+                                    PrevCRC = 0,
+                                };
+                                MemoryMarshal.Write(claim.DataSpan[offset..], in chunkHeader);
+                                offset += WalChunkHeader.SizeInBytes;
+
+                                // TickFenceHeader
+                                var tfHeader = new TickFenceHeader
+                                {
+                                    TickNumber = tickNumber,
+                                    LSN = claim.FirstLSN,
+                                    ComponentTypeId = table.WalTypeId,
+                                    EntryCount = (ushort)batchCount,
+                                    PayloadStride = (ushort)stride,
+                                    Reserved = 0,
+                                };
+                                MemoryMarshal.Write(claim.DataSpan[offset..], in tfHeader);
+                                offset += TickFenceHeader.SizeInBytes;
+
+                                // Write entries by iterating dirty bits
+                                int written = 0;
+                                while (written < batchCount)
+                                {
+                                    // Advance to next word if current is exhausted
+                                    while (currentWord == 0 && wordIndex < dirtyBits.Length - 1)
+                                    {
+                                        wordIndex++;
+                                        currentWord = dirtyBits[wordIndex];
+                                    }
+
+                                    if (currentWord == 0)
+                                    {
+                                        break;
+                                    }
+
+                                    int bit = BitOperations.TrailingZeroCount((ulong)currentWord);
+                                    int chunkId = wordIndex * 64 + bit;
+                                    currentWord &= currentWord - 1; // clear lowest set bit
+
+                                    // Write ChunkId (4B)
+                                    MemoryMarshal.Write(claim.DataSpan[offset..], in chunkId);
+                                    offset += 4;
+
+                                    // Write component data (stride bytes)
+                                    var src = accessor.GetChunkAsReadOnlySpan(chunkId);
+                                    src.Slice(overhead, stride).CopyTo(claim.DataSpan[offset..]);
+                                    offset += stride;
+
+                                    written++;
+                                }
+
+                                // WalChunkFooter
+                                var footer = new WalChunkFooter { CRC = 0 };
+                                MemoryMarshal.Write(claim.DataSpan[offset..], in footer);
+
+                                WalManager.CommitBuffer.Publish(ref claim);
+                                if (claim.FirstLSN > highestLSN)
+                                {
+                                    highestLSN = claim.FirstLSN;
+                                }
+                            }
+                            catch
+                            {
+                                WalManager.CommitBuffer.AbandonClaim(ref claim);
+                                throw;
+                            }
+
+                            entriesRemaining -= batchCount;
+                        }
+                    }
+                    finally
+                    {
+                        accessor.Dispose();
                     }
                 }
-                finally
-                {
-                    accessor.Dispose();
-                }
             }
 
-            // Deferred index maintenance: process shadowed old field values for SV indexed fields.
+            // Deferred index maintenance: process shadowed old field values for non-Versioned indexed fields.
             // Must run even without WAL (indexes are in-memory structures independent of WAL).
             if (table.HasShadowableIndexes)
             {
@@ -746,6 +749,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     {
         var fields = table.IndexedFieldInfos;
         var buffers = table.FieldShadowBuffers;
+        bool isTransient = table.StorageMode == StorageMode.Transient;
 
         for (int fieldIdx = 0; fieldIdx < fields.Length; fieldIdx++)
         {
@@ -757,100 +761,41 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             }
 
             ref var ifi = ref fields[fieldIdx];
-            var index = ifi.PersistentIndex;
 
-            // ChangeSet required for index write operations (Move/MoveValue may trigger TAIL segment growth for AllowMultiple indexes). Created per-field,
-            // saved after processing.
-            var changeSet = MMF.CreateChangeSet();
-            var compAccessor = table.ComponentSegment.CreateChunkAccessor(changeSet);
-            var idxAccessor = index.Segment.CreateChunkAccessor(changeSet);
-            try
+            if (isTransient)
             {
-                for (int e = 0; e < count; e++)
+                var index = ifi.TransientIndex;
+                var compAccessor = table.TransientComponentSegment.CreateChunkAccessor();
+                var idxAccessor = index.Segment.CreateChunkAccessor();
+                try
                 {
-                    ref var entry = ref buffer[e];
-
-                    // Check if entity was destroyed this tick.
-                    // PrepareEcsDestroys handles non-shadowed destroys; here we handle shadowed (mutated-then-destroyed).
-                    if (table.IsChunkDestroyed(entry.ChunkId))
-                    {
-                        // Entity is dead — remove old index entry using shadow value (matches current index key).
-                        // Copy to local to allow address-of on stack variable.
-                        var destroyOldKey = entry.OldKey;
-                        if (index.AllowMultiple)
-                        {
-                            byte* ptr = compAccessor.GetChunkAddress(entry.ChunkId);
-                            int elementId = *(int*)(ptr + ifi.OffsetToIndexElementId);
-                            index.RemoveValue(&destroyOldKey, elementId, entry.ChunkId, ref idxAccessor);
-                        }
-                        else
-                        {
-                            index.Remove(&destroyOldKey, out _, ref idxAccessor);
-                        }
-
-                        // Notify views of deletion
-                        var delViews = table.ViewRegistry.GetViewsForField(fieldIdx);
-                        for (int v = 0; v < delViews.Length; v++)
-                        {
-                            var reg = delViews[v];
-                            if (reg.View.IsDisposed)
-                            {
-                                continue;
-                            }
-
-                            byte delFlags = (byte)((fieldIdx & 0x3F) | 0x80); // isDeletion
-                            reg.View.DeltaBuffer.TryAppend(entry.EntityPK, entry.OldKey, default, 0, delFlags, reg.ComponentTag);
-                        }
-
-                        continue;
-                    }
-
-                    // Read current (post-mutation) field value
-                    byte* chunkPtr = compAccessor.GetChunkAddress(entry.ChunkId);
-                    byte* newFieldPtr = chunkPtr + ifi.OffsetToField;
-                    var oldKey = entry.OldKey;
-                    var newKey = KeyBytes8.FromPointer(newFieldPtr, ifi.Size);
-
-                    // Skip if field value didn't actually change
-                    if (oldKey.RawValue == newKey.RawValue)
-                    {
-                        continue;
-                    }
-
-                    // Update B+Tree index
-                    if (index.AllowMultiple)
-                    {
-                        int elementId = *(int*)(chunkPtr + ifi.OffsetToIndexElementId);
-                        int newElementId = index.MoveValue(&oldKey, newFieldPtr, elementId, entry.ChunkId, ref idxAccessor, out _, out _, 
-                            preserveEmptyBuffer: false);
-                        // Write back new element ID — page is already dirty from the mutation that triggered shadowing
-                        *(int*)(chunkPtr + ifi.OffsetToIndexElementId) = newElementId;
-                    }
-                    else
-                    {
-                        index.Move(&oldKey, newFieldPtr, entry.ChunkId, ref idxAccessor);
-                    }
-
-                    // Notify registered views
-                    var views = table.ViewRegistry.GetViewsForField(fieldIdx);
-                    for (int v = 0; v < views.Length; v++)
-                    {
-                        var reg = views[v];
-                        if (reg.View.IsDisposed)
-                        {
-                            continue;
-                        }
-
-                        byte flags = (byte)(fieldIdx & 0x3F);
-                        reg.View.DeltaBuffer.TryAppend(entry.EntityPK, oldKey, newKey, 0, flags, reg.ComponentTag);
-                    }
+                    ProcessShadowFieldEntries(table, fieldIdx, ref ifi, buffer, count, index, ref compAccessor, ref idxAccessor);
+                }
+                finally
+                {
+                    compAccessor.Dispose();
+                    idxAccessor.Dispose();
                 }
             }
-            finally
+            else
             {
-                compAccessor.Dispose();
-                idxAccessor.Dispose();
-                changeSet.SaveChanges();
+                var index = ifi.PersistentIndex;
+
+                // ChangeSet required for index write operations (Move/MoveValue may trigger TAIL segment growth for AllowMultiple indexes). Created per-field,
+                // saved after processing.
+                var changeSet = MMF.CreateChangeSet();
+                var compAccessor = table.ComponentSegment.CreateChunkAccessor(changeSet);
+                var idxAccessor = index.Segment.CreateChunkAccessor(changeSet);
+                try
+                {
+                    ProcessShadowFieldEntries(table, fieldIdx, ref ifi, buffer, count, index, ref compAccessor, ref idxAccessor);
+                }
+                finally
+                {
+                    compAccessor.Dispose();
+                    idxAccessor.Dispose();
+                    changeSet.SaveChanges();
+                }
             }
 
             buffer.Reset();
@@ -858,6 +803,95 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
         table.ShadowBitmap.Clear();
         table.ClearDestroyedChunkIds();
+    }
+
+    /// <summary>
+    /// Processes all shadow entries for a single indexed field, updating the B+Tree index and notifying views.
+    /// Generic over TStore to support both PersistentStore (Versioned/SV) and TransientStore paths.
+    /// </summary>
+    private static unsafe void ProcessShadowFieldEntries<TStore>(ComponentTable table, int fieldIdx, ref IndexedFieldInfo ifi,
+        FieldShadowBuffer buffer, int count, BTreeBase<TStore> index, ref ChunkAccessor<TStore> compAccessor, ref ChunkAccessor<TStore> idxAccessor)
+        where TStore : struct, IPageStore
+    {
+        for (int e = 0; e < count; e++)
+        {
+            ref var entry = ref buffer[e];
+
+            // Check if entity was destroyed this tick.
+            // PrepareEcsDestroys handles non-shadowed destroys; here we handle shadowed (mutated-then-destroyed).
+            if (table.IsChunkDestroyed(entry.ChunkId))
+            {
+                // Entity is dead — remove old index entry using shadow value (matches current index key).
+                // Copy to local to allow address-of on stack variable.
+                var destroyOldKey = entry.OldKey;
+                if (index.AllowMultiple)
+                {
+                    byte* ptr = compAccessor.GetChunkAddress(entry.ChunkId);
+                    int elementId = *(int*)(ptr + ifi.OffsetToIndexElementId);
+                    index.RemoveValue(&destroyOldKey, elementId, entry.ChunkId, ref idxAccessor);
+                }
+                else
+                {
+                    index.Remove(&destroyOldKey, out _, ref idxAccessor);
+                }
+
+                // Notify views of deletion
+                var delViews = table.ViewRegistry.GetViewsForField(fieldIdx);
+                for (int v = 0; v < delViews.Length; v++)
+                {
+                    var reg = delViews[v];
+                    if (reg.View.IsDisposed)
+                    {
+                        continue;
+                    }
+
+                    byte delFlags = (byte)((fieldIdx & 0x3F) | 0x80); // isDeletion
+                    reg.View.DeltaBuffer.TryAppend(entry.EntityPK, entry.OldKey, default, 0, delFlags, reg.ComponentTag);
+                }
+
+                continue;
+            }
+
+            // Read current (post-mutation) field value
+            byte* chunkPtr = compAccessor.GetChunkAddress(entry.ChunkId);
+            byte* newFieldPtr = chunkPtr + ifi.OffsetToField;
+            var oldKey = entry.OldKey;
+            var newKey = KeyBytes8.FromPointer(newFieldPtr, ifi.Size);
+
+            // Skip if field value didn't actually change
+            if (oldKey.RawValue == newKey.RawValue)
+            {
+                continue;
+            }
+
+            // Update B+Tree index
+            if (index.AllowMultiple)
+            {
+                int elementId = *(int*)(chunkPtr + ifi.OffsetToIndexElementId);
+                int newElementId = index.MoveValue(&oldKey, newFieldPtr, elementId, entry.ChunkId, ref idxAccessor, out _, out _,
+                    preserveEmptyBuffer: false);
+                // Write back new element ID — page is already dirty from the mutation that triggered shadowing
+                *(int*)(chunkPtr + ifi.OffsetToIndexElementId) = newElementId;
+            }
+            else
+            {
+                index.Move(&oldKey, newFieldPtr, entry.ChunkId, ref idxAccessor);
+            }
+
+            // Notify registered views
+            var views = table.ViewRegistry.GetViewsForField(fieldIdx);
+            for (int v = 0; v < views.Length; v++)
+            {
+                var reg = views[v];
+                if (reg.View.IsDisposed)
+                {
+                    continue;
+                }
+
+                byte flags = (byte)(fieldIdx & 0x3F);
+                reg.View.DeltaBuffer.TryAppend(entry.EntityPK, oldKey, newKey, 0, flags, reg.ComponentTag);
+            }
+        }
     }
 
     private void ConstructComponentStore()

@@ -41,6 +41,65 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
         _fkFieldOffset = fkFieldOffset;
     }
 
+    /// <summary>
+    /// Populates the initial entity set by scanning all archetype EntityMaps that contain TSource.
+    /// For each visible source entity, evaluates the full predicate (source fields + FK → target fields).
+    /// </summary>
+    internal void PopulateFromEntityMaps(Transaction tx)
+    {
+        var sourceTypeId = ArchetypeRegistry.GetComponentTypeId<TSource>();
+        foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
+        {
+            if (!meta.TryGetSlot(sourceTypeId, out _))
+            {
+                continue;
+            }
+
+            var engineState = _sourceTable.DBE._archetypeStates[meta.ArchetypeId];
+            if (engineState?.EntityMap == null)
+            {
+                continue;
+            }
+
+            using var scanGuard = EpochGuard.Enter(_sourceTable.DBE.EpochManager);
+            var accessor = engineState.EntityMap.Segment.CreateChunkAccessor();
+            var collector = new SourceCollector
+            {
+                ArchetypeId = meta.ArchetypeId,
+                View = this,
+                Tx = tx,
+            };
+            engineState.EntityMap.ForEachEntry(ref accessor, ref collector);
+            accessor.Dispose();
+        }
+    }
+
+    private struct SourceCollector : RawValueHashMap<long, PersistentStore>.IEntryAction<long>
+    {
+        public ushort ArchetypeId;
+        public NavigationView<TSource, TTarget> View;
+        public Transaction Tx;
+
+        public bool Process(long key, byte* value)
+        {
+            ref var header = ref EntityRecordAccessor.GetHeader(value);
+            if (!header.IsVisibleAt(Tx.TSN))
+            {
+                return true;
+            }
+
+            var entityId = new EntityId(key, ArchetypeId);
+            var sourcePK = (long)entityId.RawValue;
+
+            if (View.EvaluateFullPredicate(sourcePK, Tx))
+            {
+                View.AddEntityDirect(sourcePK);
+            }
+
+            return true;
+        }
+    }
+
     protected override void DeregisterFromRegistries()
     {
         _sourceTable.ViewRegistry.DeregisterView(this);

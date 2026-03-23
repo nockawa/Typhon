@@ -396,27 +396,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         Assert.That(result, Is.Empty);
     }
 
-    [Test]
-    [Ignore("PK B+Tree removed — PK scan returns empty. Use ECS queries instead.")]
-    public void Execute_OrderByPK_FiltersCorrectly()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-        dbe.InitializeArchetypes();
-
-        var pk1 = (long)CreateEntity(dbe, 1.0f, 50, 2.0).RawValue;
-        var pk2 = (long)CreateEntity(dbe, 2.0f, 30, 3.0).RawValue;
-        var pk3 = (long)CreateEntity(dbe, 3.0f, 60, 4.0).RawValue;
-
-        var orderBy = new OrderByField(-1); // PK ordering
-        var (plan, _) = BuildPlanFromExpression(dbe, p => p.B > 40, orderBy);
-
-        var result = ExecutePlanOrdered(dbe, plan);
-
-        Assert.That(result, Has.Count.EqualTo(2));
-        Assert.That(result, Does.Contain(pk1));
-        Assert.That(result, Does.Contain(pk3));
-    }
+    // Execute_OrderByPK_FiltersCorrectly — removed (PK B+Tree eliminated, PK ordering no longer exists)
 
     [Test]
     public void Execute_EqualityPredicate_MatchesExactValue()
