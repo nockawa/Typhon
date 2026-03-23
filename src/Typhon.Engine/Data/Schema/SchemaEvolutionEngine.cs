@@ -15,8 +15,8 @@ internal readonly struct MigrationResult
 {
     public int NewComponentSPI { get; init; }
     public int NewVersionSPI { get; init; }
-    public ChunkBasedSegment NewComponentSegment { get; init; }
-    public ChunkBasedSegment NewRevisionSegment { get; init; }
+    public ChunkBasedSegment<PersistentStore> NewComponentSegment { get; init; }
+    public ChunkBasedSegment<PersistentStore> NewRevisionSegment { get; init; }
     public int EntitiesMigrated { get; init; }
     public long ElapsedMs { get; init; }
 }
@@ -178,7 +178,7 @@ internal static class SchemaEvolutionEngine
     /// <summary>
     /// Migrates all occupied entities from old segment to new segment using the field map. Preserves ChunkIds by reserving the same indices in the new segment.
     /// </summary>
-    internal static unsafe int MigrateEntities(ChunkBasedSegment oldSeg, ChunkBasedSegment newSeg, FieldMapEntry[] fieldMap, int oldOverhead, int newOverhead,
+    internal static unsafe int MigrateEntities(ChunkBasedSegment<PersistentStore> oldSeg, ChunkBasedSegment<PersistentStore> newSeg, FieldMapEntry[] fieldMap, int oldOverhead, int newOverhead,
         ChangeSet changeSet)
     {
         var capacity = oldSeg.ChunkCapacity;
@@ -202,6 +202,9 @@ internal static class SchemaEvolutionEngine
 
                 var oldPtr = oldAccessor.GetChunkAddress(chunkId);
                 var newPtr = newAccessor.GetChunkAddress(chunkId, dirty: true);
+
+                // Zero-fill the new chunk so added fields get default values (not stale memory)
+                new Span<byte>(newPtr, newSeg.Stride).Clear();
 
                 // Copy overhead section (AllowMultiple index element IDs stored before component data)
                 if (oldOverhead > 0 && newOverhead > 0)
@@ -242,7 +245,7 @@ internal static class SchemaEvolutionEngine
     /// <summary>
     /// Migrates the revision chain keeping only the HEAD revision per entity. Preserves chunkIds so the PK index's compRevFirstChunkId references remain valid.
     /// </summary>
-    internal static unsafe void MigrateRevisionChain(ChunkBasedSegment oldRevSeg, ChunkBasedSegment newRevSeg, ChunkBasedSegment oldCompSeg, ChangeSet changeSet)
+    internal static unsafe void MigrateRevisionChain(ChunkBasedSegment<PersistentStore> oldRevSeg, ChunkBasedSegment<PersistentStore> newRevSeg, ChunkBasedSegment<PersistentStore> oldCompSeg, ChangeSet changeSet)
     {
         var capacity = oldRevSeg.ChunkCapacity;
         newRevSeg.EnsureCapacity(capacity, changeSet);
@@ -303,7 +306,7 @@ internal static class SchemaEvolutionEngine
     /// <summary>
     /// Finds the HEAD (most recent) revision element in a revision chain.
     /// </summary>
-    private static unsafe CompRevStorageElement FindHeadElement(ref CompRevStorageHeader header, byte* rootChunk, ref ChunkAccessor accessor)
+    private static unsafe CompRevStorageElement FindHeadElement(ref CompRevStorageHeader header, byte* rootChunk, ref ChunkAccessor<PersistentStore> accessor)
     {
         var headIndex = header.FirstItemIndex + header.ItemCount - 1;
         var (chunkIndex, indexInChunk) = CompRevStorageHeader.GetRevisionLocation(headIndex);
@@ -541,7 +544,7 @@ internal static class SchemaEvolutionEngine
     /// Handles per-entity exceptions gracefully: logs the failure and continues with remaining entities.
     /// </summary>
     internal static unsafe (int EntitiesMigrated, List<MigrationFailure> Failures) MigrateEntitiesWithFunction(
-        ChunkBasedSegment oldSeg, ChunkBasedSegment newSeg, MigrationChain chain,
+        ChunkBasedSegment<PersistentStore> oldSeg, ChunkBasedSegment<PersistentStore> newSeg, MigrationChain chain,
         int oldOverhead, int newOverhead, int oldCompSize, int newCompSize, ChangeSet changeSet)
     {
         var capacity = oldSeg.ChunkCapacity;
@@ -582,6 +585,9 @@ internal static class SchemaEvolutionEngine
                     newSeg.ReserveChunk(chunkId);
 
                     var newPtr = newAccessor.GetChunkAddress(chunkId, dirty: true);
+
+                    // Zero-fill the new chunk so added fields get default values (not stale memory)
+                    new Span<byte>(newPtr, newSeg.Stride).Clear();
 
                     // Copy overhead section (AllowMultiple element IDs) — separate from user migration
                     if (oldOverhead > 0 && newOverhead > 0)

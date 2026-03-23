@@ -47,7 +47,7 @@ public struct BTreeHeader
 /// <summary>
 /// Header of the BTree directory stored at the start of chunk 0.
 /// Tracks how many BTree entries are registered in this segment.
-/// Directory chunks are zeroed on first reservation (<see cref="ChunkBasedSegment.ReserveChunk(int,bool)"/>), so <see cref="EntryCount"/> == 0 reliably
+/// Directory chunks are zeroed on first reservation (<see cref="ChunkBasedSegment<TStore>.ReserveChunk(int,bool)"/>), so <see cref="EntryCount"/> == 0 reliably
 /// means "empty directory".
 /// </summary>
 [StructLayout(LayoutKind.Sequential, Pack = 2)]
@@ -119,7 +119,7 @@ internal static class BTreeExtensions
 
 #region BTree+ main class
 
-public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
+public abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TKey : unmanaged where TStore : struct, IPageStore
 {
     [DebuggerDisplay("Key: {Key}, Value: {Value}")]
     [StructLayout(LayoutKind.Sequential)]
@@ -145,7 +145,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
 
     public ref struct InsertArguments
     {
-        public InsertArguments(TKey key, int value, IComparer<TKey> comparer, ref ChunkAccessor accessor, ref ChunkAccessor sibAccessor)
+        public InsertArguments(TKey key, int value, IComparer<TKey> comparer, ref ChunkAccessor<TStore> accessor, ref ChunkAccessor<TStore> sibAccessor)
         {
             _value = value;
             _keyComparer = comparer ?? Comparer<TKey>.Default;
@@ -161,9 +161,9 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         public int ElementId;
         public int BufferRootId;
 
-        public ref ChunkAccessor Accessor;
+        public ref ChunkAccessor<TStore> Accessor;
         /// <summary>Dedicated accessor for horizontal (sibling) navigation — prevents sibling page loads from evicting parent path pages in the primary accessor.</summary>
-        public ref ChunkAccessor SiblingAccessor;
+        public ref ChunkAccessor<TStore> SiblingAccessor;
 
         private readonly int _value;
         private readonly IComparer<TKey> _keyComparer;
@@ -207,9 +207,9 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
     {
         public readonly TKey Key;
         public readonly IComparer<TKey> Comparer;
-        public ref ChunkAccessor Accessor;
+        public ref ChunkAccessor<TStore> Accessor;
         /// <summary>Dedicated accessor for horizontal (sibling) navigation — prevents sibling page loads from evicting parent path pages in the primary accessor.</summary>
-        public ref ChunkAccessor SiblingAccessor;
+        public ref ChunkAccessor<TStore> SiblingAccessor;
 
         /// <summary>
         /// result is set once when the value is found at leaf node.
@@ -221,7 +221,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         /// </summary>
         public bool Removed { get; private set; }
 
-        public RemoveArguments(in TKey key, in IComparer<TKey> comparer, ref ChunkAccessor accessor, ref ChunkAccessor sibAccessor)
+        public RemoveArguments(in TKey key, in IComparer<TKey> comparer, ref ChunkAccessor<TStore> accessor, ref ChunkAccessor<TStore> sibAccessor)
         {
             Key = key;
             Comparer = comparer;
@@ -355,7 +355,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         /// For true siblings, reads from the ancestor node. For cousin edges, traverses
         /// the parent's left sibling to find the rightmost child.
         /// </summary>
-        public NodeWrapper GetLeftSibling(ref ChunkAccessor accessor)
+        public NodeWrapper GetLeftSibling(ref ChunkAccessor<TStore> accessor)
         {
             if (!_leftLoaded)
             {
@@ -371,7 +371,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         /// For true siblings, reads from the ancestor node. For cousin edges, traverses
         /// the parent's right sibling to find the leftmost child.
         /// </summary>
-        public NodeWrapper GetRightSibling(ref ChunkAccessor accessor)
+        public NodeWrapper GetRightSibling(ref ChunkAccessor<TStore> accessor)
         {
             if (!_rightLoaded)
             {
@@ -387,7 +387,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         /// Ancestor fields are set eagerly (no chunk reads — just copies).
         /// Sibling fields are lazily resolved on first access via GetLeftSibling/GetRightSibling.
         /// </summary>
-        public static void Create(NodeWrapper child, int index, NodeWrapper parent, int parentCount, ref NodeRelatives parentRelatives, out NodeRelatives res, ref ChunkAccessor accessor, ref ChunkAccessor sibAccessor)
+        public static void Create(NodeWrapper child, int index, NodeWrapper parent, int parentCount, ref NodeRelatives parentRelatives, out NodeRelatives res, ref ChunkAccessor<TStore> accessor, ref ChunkAccessor<TStore> sibAccessor)
         {
 
             // assign nearest ancestors between child and siblings.
@@ -441,13 +441,13 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
     protected abstract BaseNodeStorage GetStorage();
     protected IComparer<TKey> Comparer;
 
-    private readonly ChunkBasedSegment _segment;
+    private readonly ChunkBasedSegment<TStore> _segment;
     private readonly BaseNodeStorage _storage;
     // Lightweight mutex protecting DeferredNodeList, which is accessed by concurrent merge operations.
     private SpinLock _deferredLock = new(enableThreadOwnerTracking: false);
 
     // Per-instance count and root tracking used for ALL runtime operations.
-    // Multiple BTrees can share the same ChunkBasedSegment (e.g., PK index and secondary indexes share DefaultIndexSegment). Runtime code MUST use these
+    // Multiple BTrees can share the same ChunkBasedSegment<TStore> (e.g., PK index and secondary indexes share DefaultIndexSegment). Runtime code MUST use these
     // per-instance fields instead of reading from a single shared offset, which would cause cross-BTree corruption.
     // Each BTree has a unique entry in the chunk 0 directory, keyed by stableId.
     private int _count;
@@ -561,7 +561,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         /// <summary>
         /// Free nodes whose retire epoch is strictly less than safeEpoch (meaning all threads that could have observed the node have since exited their epoch scope).
         /// </summary>
-        public void Reclaim(ChunkBasedSegment segment, long safeEpoch)
+        public void Reclaim(ChunkBasedSegment<TStore> segment, long safeEpoch)
         {
             // Reclaim from inline buffer (compact in-place)
             int write = 0;
@@ -602,7 +602,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
 
     #endregion
 
-    // Optimization: warm ChunkAccessor for exclusive operations. Reused across exclusive-lock calls to avoid per-operation creation (~15ns) and keep the
+    // Optimization: warm ChunkAccessor<TStore> for exclusive operations. Reused across exclusive-lock calls to avoid per-operation creation (~15ns) and keep the
     // Cached location of this BTree's entry in the chunk 0 directory.
     // Computed once at construction, used by SyncHeader for O(1) writes.
     private int _dirChunkId;
@@ -730,7 +730,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
             return default;
         }
 
-        using var guard = EpochGuard.Enter(_segment.Manager.EpochManager);
+        using var guard = EpochGuard.Enter(_segment.Store.EpochManager);
         var accessor = _segment.CreateChunkAccessor();
         try
         {
@@ -752,7 +752,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
             return default;
         }
 
-        using var guard = EpochGuard.Enter(_segment.Manager.EpochManager);
+        using var guard = EpochGuard.Enter(_segment.Store.EpochManager);
         var accessor = _segment.CreateChunkAccessor();
         try
         {
@@ -891,7 +891,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
     /// Writes <c>_count</c> and <c>Root.ChunkId</c> to this BTree's directory entry in chunk 0 (or chained chunks 1-3).
     /// Each BTree on a shared segment has a unique entry so they don't collide.
     /// </summary>
-    private unsafe void SyncHeader(ref ChunkAccessor accessor)
+    private unsafe void SyncHeader(ref ChunkAccessor<TStore> accessor)
     {
         var addr = accessor.GetChunkAddress(_dirChunkId, true);
         ref var entry = ref Unsafe.AsRef<BTreeDirectoryEntry>(addr + _dirEntryOffset);
@@ -926,16 +926,16 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         set => _height = value;
     }
 
-    protected KeyValueItem GetFirst(ref ChunkAccessor accessor) => _linkList.GetFirst(ref accessor);
-    protected KeyValueItem GetLast(ref ChunkAccessor accessor) => _reverseLinkList.GetLast(ref accessor);
+    protected KeyValueItem GetFirst(ref ChunkAccessor<TStore> accessor) => _linkList.GetFirst(ref accessor);
+    protected KeyValueItem GetLast(ref ChunkAccessor<TStore> accessor) => _reverseLinkList.GetLast(ref accessor);
 
     #endregion
 
     #region Public API
     
-    public override ChunkBasedSegment Segment => _segment;
+    public override ChunkBasedSegment<TStore> Segment => _segment;
 
-    protected BTree(ChunkBasedSegment segment, bool load, short stableId = 0, ChangeSet changeSet = null)
+    protected BTree(ChunkBasedSegment<TStore> segment, bool load, short stableId = 0, ChangeSet changeSet = null)
     {
         Comparer = Comparer<TKey>.Default;
         _segment = segment;
@@ -944,10 +944,10 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         _storage = GetStorage();
         _storage.Initialize(this, _segment);
 
-        // Both create and load paths need a ChunkAccessor, which requires an active epoch scope.
+        // Both create and load paths need a ChunkAccessor<TStore>, which requires an active epoch scope.
         // The BTree constructor may be called during DatabaseEngine init (outside any epoch scope),
         // so we enter one here. EpochGuard supports nesting, so this is a no-op if already in scope.
-        using var guard = EpochGuard.Enter(_segment.Manager.EpochManager);
+        using var guard = EpochGuard.Enter(_segment.Store.EpochManager);
 
         if (!load)
         {
@@ -1018,7 +1018,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
     /// Appends a new entry to the chunk 0 directory for this BTree.
     /// Sets <c>_dirChunkId</c> and <c>_dirEntryOffset</c> for subsequent <see cref="SyncHeader"/> calls.
     /// </summary>
-    private unsafe void RegisterInDirectory(short stableId, ref ChunkAccessor accessor)
+    private unsafe void RegisterInDirectory(short stableId, ref ChunkAccessor<TStore> accessor)
     {
         var chunk0Addr = accessor.GetChunkAddress(0, true);
         ref var header = ref Unsafe.AsRef<BTreeDirectoryHeader>(chunk0Addr);
@@ -1046,7 +1046,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
     /// Scans the chunk 0 directory for the entry matching <paramref name="stableId"/>.
     /// Populates <c>_dirChunkId</c>, <c>_dirEntryOffset</c>, <c>_count</c>, and <c>Root</c>.
     /// </summary>
-    private unsafe void FindInDirectory(short stableId, ref ChunkAccessor accessor)
+    private unsafe void FindInDirectory(short stableId, ref ChunkAccessor<TStore> accessor)
     {
         var chunk0Addr = accessor.GetChunkAddress(0);
         ref var header = ref Unsafe.AsRef<BTreeDirectoryHeader>(chunk0Addr);
@@ -1096,27 +1096,27 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         return (1 + adjusted / entriesPerChunk, (adjusted % entriesPerChunk) * BTreeDirectoryEntry.Size);
     }
 
-    public override unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor) => Add(Unsafe.AsRef<TKey>(keyAddr), value, ref accessor, out _);
-    public override unsafe int Add(void* keyAddr, int value, ref ChunkAccessor accessor, out int bufferRootId)
+    public override unsafe int Add(void* keyAddr, int value, ref ChunkAccessor<TStore> accessor) => Add(Unsafe.AsRef<TKey>(keyAddr), value, ref accessor, out _);
+    public override unsafe int Add(void* keyAddr, int value, ref ChunkAccessor<TStore> accessor, out int bufferRootId)
         => Add(Unsafe.AsRef<TKey>(keyAddr), value, ref accessor, out bufferRootId);
-    public override unsafe bool Remove(void* keyAddr, out int value, ref ChunkAccessor accessor)
+    public override unsafe bool Remove(void* keyAddr, out int value, ref ChunkAccessor<TStore> accessor)
         => Remove(Unsafe.AsRef<TKey>(keyAddr), out value, ref accessor);
-    public override unsafe Result<int, BTreeLookupStatus> TryGet(void* keyAddr, ref ChunkAccessor accessor)
+    public override unsafe Result<int, BTreeLookupStatus> TryGet(void* keyAddr, ref ChunkAccessor<TStore> accessor)
         => TryGet(Unsafe.AsRef<TKey>(keyAddr), ref accessor);
-    public override unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref ChunkAccessor accessor, bool preserveEmptyBuffer = false)
+    public override unsafe bool RemoveValue(void* keyAddr, int elementId, int value, ref ChunkAccessor<TStore> accessor, bool preserveEmptyBuffer = false)
         => RemoveValue(Unsafe.AsRef<TKey>(keyAddr), elementId, value, ref accessor, preserveEmptyBuffer);
-    public override unsafe VariableSizedBufferAccessor<int> TryGetMultiple(void* keyAddr, ref ChunkAccessor accessor)
+    public override unsafe VariableSizedBufferAccessor<int, TStore> TryGetMultiple(void* keyAddr, ref ChunkAccessor<TStore> accessor)
         => TryGetMultiple(Unsafe.AsRef<TKey>(keyAddr), ref accessor);
-    public override unsafe bool Move(void* oldKeyAddr, void* newKeyAddr, int value, ref ChunkAccessor accessor)
+    public override unsafe bool Move(void* oldKeyAddr, void* newKeyAddr, int value, ref ChunkAccessor<TStore> accessor)
         => Move(Unsafe.AsRef<TKey>(oldKeyAddr), Unsafe.AsRef<TKey>(newKeyAddr), value, ref accessor);
     public override unsafe int MoveValue(void* oldKeyAddr, void* newKeyAddr, int elementId, int value,
-        ref ChunkAccessor accessor, out int oldHeadBufferId, out int newHeadBufferId, bool preserveEmptyBuffer = false)
+        ref ChunkAccessor<TStore> accessor, out int oldHeadBufferId, out int newHeadBufferId, bool preserveEmptyBuffer = false)
         => MoveValue(Unsafe.AsRef<TKey>(oldKeyAddr), Unsafe.AsRef<TKey>(newKeyAddr), elementId, value,
             ref accessor, out oldHeadBufferId, out newHeadBufferId, preserveEmptyBuffer);
 
-    public int Add(TKey key, int value, ref ChunkAccessor accessor) => Add(key, value, ref accessor, out _);
+    public int Add(TKey key, int value, ref ChunkAccessor<TStore> accessor) => Add(key, value, ref accessor, out _);
 
-    public int Add(TKey key, int value, ref ChunkAccessor accessor, out int bufferRootId)
+    public int Add(TKey key, int value, ref ChunkAccessor<TStore> accessor, out int bufferRootId)
     {
         Activity activity = null;
         if (TelemetryConfig.BTreeActive)
@@ -1144,7 +1144,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         }
     }
 
-    public bool Remove(TKey key, out int value, ref ChunkAccessor accessor)
+    public bool Remove(TKey key, out int value, ref ChunkAccessor<TStore> accessor)
     {
         Activity activity = null;
         if (TelemetryConfig.BTreeActive)
@@ -1172,7 +1172,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         }
     }
 
-    public override void CheckConsistency(ref ChunkAccessor accessor)
+    public override void CheckConsistency(ref ChunkAccessor<TStore> accessor)
     {
         // Recursive check from Root to leaf
         if (IsEmpty())
@@ -1259,7 +1259,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         }
     }
 
-    public Result<int, BTreeLookupStatus> TryGet(TKey key, ref ChunkAccessor accessor)
+    public Result<int, BTreeLookupStatus> TryGet(TKey key, ref ChunkAccessor<TStore> accessor)
     {
         // OLC optimistic path: zero locks, zero writes to shared state
         for (int attempt = 0; attempt < MaxOptimisticRestarts; attempt++)
@@ -1305,7 +1305,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         return TryGetPessimistic(key, ref accessor);
     }
 
-    private Result<int, BTreeLookupStatus> TryGetPessimistic(TKey key, ref ChunkAccessor accessor)
+    private Result<int, BTreeLookupStatus> TryGetPessimistic(TKey key, ref ChunkAccessor<TStore> accessor)
     {
         // Unlimited OLC retries — guaranteed to complete as long as writers make progress
         SpinWait spin = default;
@@ -1341,7 +1341,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         }
     }
 
-    public bool RemoveValue(TKey key, int elementId, int value, ref ChunkAccessor accessor, bool preserveEmptyBuffer = false)
+    public bool RemoveValue(TKey key, int elementId, int value, ref ChunkAccessor<TStore> accessor, bool preserveEmptyBuffer = false)
     {
         Activity activity = null;
         if (TelemetryConfig.BTreeActive)
@@ -1411,7 +1411,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         return true;
     }
 
-    public VariableSizedBufferAccessor<int> TryGetMultiple(TKey key, ref ChunkAccessor accessor)
+    public VariableSizedBufferAccessor<int, TStore> TryGetMultiple(TKey key, ref ChunkAccessor<TStore> accessor)
     {
         // OLC optimistic path: zero locks, zero writes to shared state
         for (int attempt = 0; attempt < MaxOptimisticRestarts; attempt++)
@@ -1456,7 +1456,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         return TryGetMultiplePessimistic(key, ref accessor);
     }
 
-    private VariableSizedBufferAccessor<int> TryGetMultiplePessimistic(TKey key, ref ChunkAccessor accessor)
+    private VariableSizedBufferAccessor<int, TStore> TryGetMultiplePessimistic(TKey key, ref ChunkAccessor<TStore> accessor)
     {
         // Unlimited OLC retries — guaranteed to complete as long as writers make progress
         SpinWait spin = default;
@@ -1496,7 +1496,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
 
     #region Private API
 
-    protected internal NodeWrapper AllocNode(NodeStates states, ref ChunkAccessor accessor)
+    protected internal NodeWrapper AllocNode(NodeStates states, ref ChunkAccessor<TStore> accessor)
     {
         var node = new NodeWrapper(_storage, _segment.AllocateChunk(false, accessor.ChangeSet), (states & NodeStates.IsLeaf) != 0);
         _storage.InitializeNode(node, states, ref accessor);
@@ -1569,7 +1569,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         _deferredLock.Enter(ref lockTaken);
         try
         {
-            _deferredNodes.Reclaim(_segment, _segment.Manager.EpochManager.MinActiveEpoch);
+            _deferredNodes.Reclaim(_segment, _segment.Store.EpochManager.MinActiveEpoch);
         }
         finally
         {
@@ -1584,7 +1584,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
         DeferredReclaim();
     }
 
-    private NodeWrapper FindLeaf(TKey key, out int index, ref ChunkAccessor accessor)
+    private NodeWrapper FindLeaf(TKey key, out int index, ref ChunkAccessor<TStore> accessor)
     {
         index = -1;
         if (IsEmpty())
@@ -1631,7 +1631,7 @@ public abstract partial class BTree<TKey> : BTreeBase where TKey : unmanaged
     /// Returns (leafChunkId, leafVersion, keyIndex). leafChunkId=0 signals restart needed.
     /// Zero writes to shared state — readers never acquire any lock.
     /// </summary>
-    private (int leafChunkId, int leafVersion, int keyIndex) OptimisticDescendToLeaf(TKey key, ref ChunkAccessor accessor, bool followRightLink = true)
+    private (int leafChunkId, int leafVersion, int keyIndex) OptimisticDescendToLeaf(TKey key, ref ChunkAccessor<TStore> accessor, bool followRightLink = true)
     {
         var node = Root;
         if (!node.IsValid)

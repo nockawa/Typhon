@@ -31,7 +31,7 @@ public struct ChunkBasedSegmentHeader
 /// Allocators walk the list, naturally distributing across pages. Exhausted pages are removed mid-walk.
 /// Freed pages are appended at the tail. The minimum chunk size is 8 bytes.
 /// </remarks>
-public class ChunkBasedSegment : LogicalSegment
+public class ChunkBasedSegment<TStore> : LogicalSegment<TStore> where TStore : struct, IPageStore
 {
     // ReSharper disable InconsistentNaming
     private const int EMPTY_PAGE = -1;
@@ -78,7 +78,7 @@ public class ChunkBasedSegment : LogicalSegment
     // Total chunk capacity (updated on Grow under _growLock)
     private int _capacity;
 
-    internal ChunkBasedSegment(EpochManager epochManager, ManagedPagedMMF manager, int stride) : base(manager)
+    internal ChunkBasedSegment(EpochManager epochManager, TStore store, int stride) : base(store)
     {
         if (stride < sizeof(long))
         {
@@ -125,7 +125,7 @@ public class ChunkBasedSegment : LogicalSegment
         }
 
         // Clear the metadata sections that store the chunk's occupancy bitmap
-        var epoch = Manager.EpochManager.GlobalEpoch;
+        var epoch = _store.EpochManager.GlobalEpoch;
         var length = filePageIndices.Length;
         for (int i = 0; i < length; i++)
         {
@@ -141,7 +141,7 @@ public class ChunkBasedSegment : LogicalSegment
                 page.RawData<byte>(RootChunkDataOffset, Stride).Clear();
             }
 
-            Manager.UnlatchPageExclusive(memPageIdx);
+            _store.UnlatchPageExclusive(memPageIdx);
         }
 
         // Initialize allocator state for a fresh (empty) segment
@@ -169,7 +169,7 @@ public class ChunkBasedSegment : LogicalSegment
         }
 
         // Rebuild allocator state from L0 bitmaps (source of truth)
-        var epoch = Manager.EpochManager.GlobalEpoch;
+        var epoch = _store.EpochManager.GlobalEpoch;
         var length = Length;
         _capacity = ComputeCapacity(length);
         _allocatedCount = 0;
@@ -240,19 +240,19 @@ public class ChunkBasedSegment : LogicalSegment
             // a local one ensures pages are at least marked dirty — but these DC increments are "orphaned" (no UoW manages
             // their lifecycle), meaning a single checkpoint cycle can write zeros and decrement DC to 0, making the page
             // evictable before the caller protects it.
-            var effectiveChangeSet = changeSet ?? new ChangeSet(Manager);
+            var effectiveChangeSet = changeSet ?? _store.CreateChangeSet();
 
             // Grow the underlying logical segment (thread-safe, will allocate new pages)
             base.Grow(newLength, clearNewPages: true, effectiveChangeSet);
 
             // Clear the page metadata (bitmap) for newly allocated pages and protect against checkpoint race
             {
-                var epoch = Manager.EpochManager.GlobalEpoch;
+                var epoch = _store.EpochManager.GlobalEpoch;
                 for (int i = currentLength; i < newLength; i++)
                 {
                     var page = GetPageExclusiveUnchecked(i, epoch, out var memPageIdx);
                     page.Metadata<long>(0, _bitmapLongsOther).Clear();
-                    effectiveChangeSet.AddByMemPageIndex(memPageIdx);
+                    effectiveChangeSet?.AddByMemPageIndex(memPageIdx);
 
                     // Protect new pages against the checkpoint race during Grow→first-access window.
                     // After base.Grow unlatched each page (DC=1, ACW=0), checkpoint may have snapshot zeros,
@@ -261,9 +261,9 @@ public class ChunkBasedSegment : LogicalSegment
                     // EnsureDirtyAtLeast(2) guarantees DC survives one checkpoint cycle: checkpoint decrements
                     // to 1 (page stays non-evictable) until AllocateBuffer's GetChunkAddress establishes
                     // ACW>0 protection.
-                    Manager.EnsureDirtyAtLeast(memPageIdx, 2);
+                    _store.EnsureDirtyAtLeast(memPageIdx, 2);
 
-                    Manager.UnlatchPageExclusive(memPageIdx);
+                    _store.UnlatchPageExclusive(memPageIdx);
                 }
             }
 
@@ -374,7 +374,7 @@ public class ChunkBasedSegment : LogicalSegment
         var wordIndex = chunkInPage >> 6;
         var mask = 1L << (chunkInPage & 0x3F);
 
-        var epoch = Manager.EpochManager.GlobalEpoch;
+        var epoch = _store.EpochManager.GlobalEpoch;
         var page = GetPage(pageIndex, epoch, out var memPageIdx);
         var metadata = page.Metadata<long>();
 
@@ -384,7 +384,7 @@ public class ChunkBasedSegment : LogicalSegment
             return; // already reserved
         }
 
-        Manager.EnsureDirtyAtLeast(memPageIdx, 1);
+        _store.EnsureDirtyAtLeast(memPageIdx, 1);
         Interlocked.Increment(ref _allocatedCount);
     }
 
@@ -452,7 +452,7 @@ public class ChunkBasedSegment : LogicalSegment
             // Scan cur's bitmap for a free bit
             var maxChunks = cur == 0 ? _rootChunkCount : _otherChunkCount;
             var bitmapLongs = cur == 0 ? _bitmapLongsRoot : _bitmapLongsOther;
-            var epoch = Manager.EpochManager.GlobalEpoch;
+            var epoch = _store.EpochManager.GlobalEpoch;
             var page = GetPage(cur, epoch, out var memPageIdx);
             var metadata = page.Metadata<long>();
 
@@ -478,7 +478,7 @@ public class ChunkBasedSegment : LogicalSegment
                     }
 
                     // SUCCESS — chunk claimed
-                    Manager.EnsureDirtyAtLeast(memPageIdx, 1);
+                    _store.EnsureDirtyAtLeast(memPageIdx, 1);
                     Interlocked.Increment(ref _allocatedCount);
 
                     var chunkId = PageOffsetToChunkIndex(cur, chunkInPage);
@@ -503,7 +503,7 @@ public class ChunkBasedSegment : LogicalSegment
             {
                 var mc2 = cur == 0 ? _rootChunkCount : _otherChunkCount;
                 var bl2 = cur == 0 ? _bitmapLongsRoot : _bitmapLongsOther;
-                var ep2 = Manager.EpochManager.GlobalEpoch;
+                var ep2 = _store.EpochManager.GlobalEpoch;
                 var pg2 = GetPage(cur, ep2, out _);
                 var md2 = pg2.MetadataReadOnly<long>();
                 if (CountAllocatedBits(md2, bl2, mc2) < mc2)
@@ -585,7 +585,7 @@ public class ChunkBasedSegment : LogicalSegment
         var wordIndex = chunkInPage >> 6;
         var mask = 1L << (chunkInPage & 0x3F);
 
-        var epoch = Manager.EpochManager.GlobalEpoch;
+        var epoch = _store.EpochManager.GlobalEpoch;
         var page = GetPage(pageIndex, epoch, out var memPageIdx);
         var metadata = page.Metadata<long>();
 
@@ -600,7 +600,7 @@ public class ChunkBasedSegment : LogicalSegment
         // Ensure DC≥1 so checkpoint includes this page in its next snapshot.
         // Without this, the page can be evicted as "clean" and reloaded from the last checkpoint snapshot
         // — which still has the bit SET, causing _allocatedCount to diverge from actual popcount.
-        Manager.EnsureDirtyAtLeast(memPageIdx, 1);
+        _store.EnsureDirtyAtLeast(memPageIdx, 1);
         Interlocked.Decrement(ref _allocatedCount);
 
         // Add page to free list if not already present.
@@ -720,7 +720,7 @@ public class ChunkBasedSegment : LogicalSegment
                 return; // list looks valid, another thread fixed it
             }
 
-            var epoch = Manager.EpochManager.GlobalEpoch;
+            var epoch = _store.EpochManager.GlobalEpoch;
             var length = Length;
             var nextPage = _nextPage;
             var totalAllocated = 0;
@@ -819,7 +819,7 @@ public class ChunkBasedSegment : LogicalSegment
     /// </summary>
     [AllowCopy]
     [return: TransfersOwnership]
-    internal ChunkAccessor CreateChunkAccessor(ChangeSet changeSet = null) => new(this, Manager, _epochManager, changeSet);
+    internal ChunkAccessor<TStore> CreateChunkAccessor(ChangeSet changeSet = null) => new(this, _store, _epochManager, changeSet);
 
     /// <summary>
     /// Single-entry thread-local cache for warm <see cref="ChunkAccessor"/> reuse.
@@ -827,8 +827,8 @@ public class ChunkBasedSegment : LogicalSegment
     /// </summary>
     private sealed class WarmAccessorCache
     {
-        internal ChunkAccessor Accessor;       // 252 bytes — the warm accessor
-        internal ChunkBasedSegment Segment;    // which segment this accessor belongs to
+        internal ChunkAccessor<TStore> Accessor;       // warm accessor
+        internal ChunkBasedSegment<TStore> Segment;    // which segment this accessor belongs to
         internal long Epoch;                   // GlobalEpoch at creation time
         internal bool IsRented;                // debug guard against double-rent
         internal bool SuppressCommitChanges;   // batch mode: skip CommitChanges on return
@@ -847,7 +847,7 @@ public class ChunkBasedSegment : LogicalSegment
     /// </summary>
     [AllowCopy]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ref ChunkAccessor RentWarmAccessor(ChangeSet changeSet = null)
+    internal ref ChunkAccessor<TStore> RentWarmAccessor(ChangeSet changeSet = null)
     {
         var cache = WarmAccessorCache.Instance;
         Debug.Assert(!cache.IsRented, "double-rent (missing ReturnWarmAccessor?)");
@@ -866,7 +866,7 @@ public class ChunkBasedSegment : LogicalSegment
         {
             cache.Accessor.Dispose();
         }
-        cache.Accessor = new ChunkAccessor(this, Manager, _epochManager, changeSet);
+        cache.Accessor = new ChunkAccessor<TStore>(this, _store, _epochManager, changeSet);
         cache.Segment = this;
         cache.Epoch = currentEpoch;
         cache.IsRented = true;
@@ -956,8 +956,8 @@ public class ChunkBasedSegment : LogicalSegment
     /// </summary>
     private sealed class WarmSiblingAccessorCache
     {
-        internal ChunkAccessor Accessor;
-        internal ChunkBasedSegment Segment;
+        internal ChunkAccessor<TStore> Accessor;
+        internal ChunkBasedSegment<TStore> Segment;
         internal long Epoch;
         internal bool IsRented;
         internal bool SuppressCommitChanges;   // batch mode: skip CommitChanges on return
@@ -970,7 +970,7 @@ public class ChunkBasedSegment : LogicalSegment
 
     [AllowCopy]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ref ChunkAccessor RentWarmSiblingAccessor(ChangeSet changeSet = null)
+    internal ref ChunkAccessor<TStore> RentWarmSiblingAccessor(ChangeSet changeSet = null)
     {
         var cache = WarmSiblingAccessorCache.Instance;
         Debug.Assert(!cache.IsRented, "double-rent sibling accessor (missing ReturnWarmSiblingAccessor?)");
@@ -987,7 +987,7 @@ public class ChunkBasedSegment : LogicalSegment
         {
             cache.Accessor.Dispose();
         }
-        cache.Accessor = new ChunkAccessor(this, Manager, _epochManager, changeSet);
+        cache.Accessor = new ChunkAccessor<TStore>(this, _store, _epochManager, changeSet);
         cache.Segment = this;
         cache.Epoch = currentEpoch;
         cache.IsRented = true;
@@ -1058,6 +1058,8 @@ public class ChunkBasedSegment : LogicalSegment
     public int ChunkCountRootPage { get; }
     public int ChunkCountPerPage { get; }
 
+    // Store property inherited from LogicalSegment<TStore>
+
     /// <summary>Byte offset from start of raw data to first chunk on the root page (includes index section + alignment padding).</summary>
     internal int RootChunkDataOffset => RootHeaderIndexSectionLength + _rootAlignmentPadding;
 
@@ -1078,7 +1080,7 @@ public class ChunkBasedSegment : LogicalSegment
         var wordIndex = chunkInPage >> 6;
         var mask = 1L << (chunkInPage & 0x3F);
 
-        var epoch = Manager.EpochManager.GlobalEpoch;
+        var epoch = _store.EpochManager.GlobalEpoch;
         var page = GetPage(pageIndex, epoch, out _);
         var data = page.MetadataReadOnly<long>();
         return (data[wordIndex] & mask) != 0L;

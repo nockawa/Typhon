@@ -1,5 +1,6 @@
 // unset
 
+using System;
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -11,13 +12,13 @@ namespace Typhon.Engine;
 /// Abstract base class for hash maps. Provides meta management, directory addressing, bucket resolution, split lock, and factory scaffolding.
 /// Concrete class <see cref="HashMap{TKey, TValue}"/> provides JIT-specialized hash functions via sizeof(TKey) branching.
 /// </summary>
-abstract unsafe class HashMapBase
+abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
 {
     // ═══════════════════════════════════════════════════════════════════════
     // Fields
     // ═══════════════════════════════════════════════════════════════════════
 
-    protected readonly ChunkBasedSegment _segment;
+    protected readonly ChunkBasedSegment<TStore> _segment;
 
     /// <summary>Initial bucket count (power of 2). Immutable after construction.</summary>
     protected readonly int _n0;
@@ -50,7 +51,7 @@ abstract unsafe class HashMapBase
     // Constructor
     // ═══════════════════════════════════════════════════════════════════════
 
-    protected HashMapBase(ChunkBasedSegment segment, int n0, bool allowMultiple = false)
+    protected HashMapBase(ChunkBasedSegment<TStore> segment, int n0, bool allowMultiple = false)
     {
         Debug.Assert(segment != null);
         Debug.Assert(n0 > 0 && BitOperations.IsPow2(n0), "N0 must be a positive power of 2");
@@ -69,7 +70,7 @@ abstract unsafe class HashMapBase
     public int N0 => _n0;
 
     /// <summary>The backing segment.</summary>
-    public ChunkBasedSegment Segment => _segment;
+    public ChunkBasedSegment<TStore> Segment => _segment;
 
     /// <summary>Whether this hash map supports multiple values per key via VSBS buffer indirection.</summary>
     public bool AllowMultiple => _allowMultiple;
@@ -162,7 +163,7 @@ abstract unsafe class HashMapBase
     /// Fast path for index &lt; 57 (inline in meta). Slow path walks the overflow dir-index chain.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int GetDirectoryChunkId(int dirIndex, ref ChunkAccessor accessor)
+    private int GetDirectoryChunkId(int dirIndex, ref ChunkAccessor<TStore> accessor)
     {
         ref readonly var meta = ref accessor.GetChunkReadOnly<HashMapMeta>(0);
 
@@ -190,7 +191,7 @@ abstract unsafe class HashMapBase
     /// Get the chunk ID of the primary bucket for a given bucket index.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    protected int GetBucketChunkId(int bucketId, ref ChunkAccessor accessor)
+    protected int GetBucketChunkId(int bucketId, ref ChunkAccessor<TStore> accessor)
     {
         int dirIndex = bucketId >> HashMapDirectory.Shift;  // bucketId / 64
         int dirSlot = bucketId & 0x3F;                         // bucketId % 64
@@ -204,7 +205,7 @@ abstract unsafe class HashMapBase
     /// <summary>
     /// Set the chunk ID of a bucket in the directory. Used during split to register new buckets.
     /// </summary>
-    protected void SetBucketChunkId(int bucketId, int chunkId, ref ChunkAccessor accessor)
+    protected void SetBucketChunkId(int bucketId, int chunkId, ref ChunkAccessor<TStore> accessor)
     {
         int dirIndex = bucketId >> HashMapDirectory.Shift;
         int dirSlot = bucketId & 0x3F;
@@ -284,7 +285,7 @@ abstract unsafe class HashMapBase
     /// If load factor exceeds threshold, try to acquire split lock and execute a split.
     /// Double-checks after acquiring lock to avoid unnecessary splits.
     /// </summary>
-    protected void TrySplitIfNeeded(ref ChunkAccessor accessor, ChangeSet changeSet)
+    protected void TrySplitIfNeeded(ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
         if (!ShouldSplit())
         {
@@ -313,10 +314,47 @@ abstract unsafe class HashMapBase
     }
 
     /// <summary>
+    /// Pre-allocate backing storage so that organic splits triggered by subsequent inserts are cheap (no page-level Grow). Does NOT advance the linear
+    /// hash state — entry redistribution happens correctly via per-insert <see cref="ExecuteSplit"/>.
+    /// </summary>
+    public void EnsureCapacity(int totalEntries, ChangeSet changeSet = null)
+    {
+        int targetBuckets = Math.Max(_n0, (int)((totalEntries / (BucketCapacity * MaxLoadFactor)) + 1));
+        // Round up to power-of-2 × n0 boundary (valid linear hash state: bucketCount = n0 * 2^level)
+        int rounded = _n0;
+        while (rounded < targetBuckets)
+        {
+            rounded <<= 1;
+        }
+
+        var (_, _, bucketCount) = ReadMeta();
+        if (bucketCount >= rounded)
+        {
+            return;
+        }
+
+        // Pre-grow the segment so AllocateChunk during organic splits won't trigger expensive page Grow.
+        // Estimate: meta(1) + bucket chunks(rounded) + directory chunks(ceil(rounded/64)).
+        int totalChunksNeeded = 1 + rounded + ((rounded + 63) >> 6);
+        _segment.EnsureCapacity(totalChunksNeeded, changeSet);
+
+        // Pre-expand directory so ExecuteSplit doesn't allocate directory chunks per-split.
+        var accessor = _segment.CreateChunkAccessor(changeSet);
+        try
+        {
+            EnsureDirectoryCapacity(rounded - 1, ref accessor, changeSet);
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+    }
+
+    /// <summary>
     /// Ensure the directory has enough chunks to address bucket <paramref name="maxBucketId"/>.
     /// Allocates new directory chunks (inline or overflow dir-index) as needed.
     /// </summary>
-    protected void EnsureDirectoryCapacity(int maxBucketId, ref ChunkAccessor accessor, ChangeSet changeSet)
+    protected void EnsureDirectoryCapacity(int maxBucketId, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
         int requiredDirChunks = (maxBucketId >> HashMapDirectory.Shift) + 1;
 
@@ -391,10 +429,10 @@ abstract unsafe class HashMapBase
     // ═══════════════════════════════════════════════════════════════════════
 
     /// <summary>Test-accessible wrapper for <see cref="GetBucketChunkId"/>.</summary>
-    internal int GetBucketChunkIdForTest(int bucketId, ref ChunkAccessor accessor) => GetBucketChunkId(bucketId, ref accessor);
+    internal int GetBucketChunkIdForTest(int bucketId, ref ChunkAccessor<TStore> accessor) => GetBucketChunkId(bucketId, ref accessor);
 
     /// <summary>Test-accessible wrapper for <see cref="FlushMetaToChunk"/>.</summary>
-    internal void FlushMetaForTest(ref ChunkAccessor accessor) => FlushMetaToChunk(ref accessor);
+    internal void FlushMetaForTest(ref ChunkAccessor<TStore> accessor) => FlushMetaToChunk(ref accessor);
 
     // ═══════════════════════════════════════════════════════════════════════
     // Meta persistence
@@ -404,7 +442,7 @@ abstract unsafe class HashMapBase
     /// Persist in-memory <see cref="_packedMeta"/> and <see cref="_entryCount"/> to chunk 0.
     /// Called after split or during flush.
     /// </summary>
-    protected void FlushMetaToChunk(ref ChunkAccessor accessor)
+    protected void FlushMetaToChunk(ref ChunkAccessor<TStore> accessor)
     {
         ref var meta = ref accessor.GetChunk<HashMapMeta>(0, true);
         meta.PackedMeta = _packedMeta;
@@ -514,7 +552,7 @@ abstract unsafe class HashMapBase
     /// Validate structural integrity of the hash map. Walks all bucket chains, checks header invariants, and verifies the total entry count
     /// matches <see cref="_entryCount"/>.
     /// </summary>
-    public bool VerifyIntegrity(ref ChunkAccessor accessor)
+    public bool VerifyIntegrity(ref ChunkAccessor<TStore> accessor)
     {
         ref readonly var meta = ref accessor.GetChunkReadOnly<HashMapMeta>(0);
         if (meta.N0 != _n0 || meta.N0 <= 0 || !BitOperations.IsPow2(meta.N0))
@@ -555,7 +593,7 @@ abstract unsafe class HashMapBase
     /// <summary>
     /// Collect diagnostic statistics: bucket count, entry distribution, overflow chain depths, fill histogram.
     /// </summary>
-    public HashMapStats GetStats(ref ChunkAccessor accessor)
+    public HashMapStats GetStats(ref ChunkAccessor<TStore> accessor)
     {
         var (_, _, bucketCount) = ReadMeta();
         var stats = new HashMapStats
@@ -634,11 +672,11 @@ abstract unsafe class HashMapBase
     /// <summary>
     /// Initialize a freshly allocated bucket chunk (set OlcVersion, EntryCount, OverflowChunkId sentinel).
     /// </summary>
-    protected abstract void InitializeBucket(int chunkId, ref ChunkAccessor accessor);
+    protected abstract void InitializeBucket(int chunkId, ref ChunkAccessor<TStore> accessor);
 
     /// <summary>
     /// Execute a split: redistribute entries from the current split-pointer bucket to old and new buckets.
     /// Called while holding the split lock.
     /// </summary>
-    protected abstract void ExecuteSplit(ref ChunkAccessor accessor, ChangeSet changeSet);
+    protected abstract void ExecuteSplit(ref ChunkAccessor<TStore> accessor, ChangeSet changeSet);
 }

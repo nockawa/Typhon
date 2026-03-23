@@ -239,6 +239,21 @@ public static class TelemetryConfig
     public static readonly bool TransactionActive;
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // ECS TELEMETRY
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Whether ECS component telemetry is enabled in configuration.
+    /// </summary>
+    public static readonly bool EcsEnabled;
+
+    /// <summary>
+    /// Combined flag: true only if global AND ECS telemetry are enabled.
+    /// Use this single check in ECS hot paths (Spawn, Destroy, Open, Query).
+    /// </summary>
+    public static readonly bool EcsActive;
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // CONFIGURATION SOURCE TRACKING (for diagnostics)
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -303,6 +318,11 @@ public static class TelemetryConfig
         TransactionTrackConflicts = txSection.GetValue("TrackConflicts", true);
         TransactionTrackDuration = txSection.GetValue("TrackDuration", true);
         TransactionActive = Enabled && TransactionEnabled;
+
+        // ECS
+        var ecsSection = section.GetSection("ECS");
+        EcsEnabled = ecsSection.GetValue("Enabled", false);
+        EcsActive = Enabled && EcsEnabled;
     }
 
     private static (IConfiguration config, string loadedPath) BuildConfiguration()
@@ -383,6 +403,9 @@ public static class TelemetryConfig
            Transaction: Active={TransactionActive}
              Enabled={TransactionEnabled}, CommitRollback={TransactionTrackCommitRollback},
              Conflicts={TransactionTrackConflicts}, Duration={TransactionTrackDuration}
+
+           ECS: Active={EcsActive}
+             Enabled={EcsEnabled}
          """;
 
     /// <summary>
@@ -391,13 +414,35 @@ public static class TelemetryConfig
     public static string GetActiveComponentsSummary()
     {
         if (!Enabled)
+        {
             return "Telemetry: Disabled";
+        }
 
         var active = new System.Collections.Generic.List<string>();
-        if (AccessControlActive) active.Add("AccessControl");
-        if (PagedMMFActive) active.Add("PagedMMF");
-        if (BTreeActive) active.Add("BTree");
-        if (TransactionActive) active.Add("Transaction");
+        if (AccessControlActive)
+        {
+            active.Add("AccessControl");
+        }
+
+        if (PagedMMFActive)
+        {
+            active.Add("PagedMMF");
+        }
+
+        if (BTreeActive)
+        {
+            active.Add("BTree");
+        }
+
+        if (TransactionActive)
+        {
+            active.Add("Transaction");
+        }
+
+        if (EcsActive)
+        {
+            active.Add("ECS");
+        }
 
         return active.Count > 0
             ? $"Telemetry: Enabled [{string.Join(", ", active)}]"

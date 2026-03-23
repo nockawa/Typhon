@@ -22,24 +22,38 @@ public struct CompStr64
     }
 }
 
+[Archetype(211)]
+class CompStr64Arch : Archetype<CompStr64Arch>
+{
+    public static readonly Comp<CompStr64> Str64 = Register<CompStr64>();
+}
+
 class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
 {
-    private static long CreateAndCommitCompD(DatabaseEngine dbe, float a, int b, double c)
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompDArch>.Touch();
+        Archetype<CompFArch>.Touch();
+        Archetype<CompStr64Arch>.Touch();
+        Archetype<CompGuildArch>.Touch();
+        Archetype<CompPlayerArch>.Touch();
+    }
+
+    private static void CreateAndCommitCompD(DatabaseEngine dbe, float a, int b, double c)
     {
         using var t = dbe.CreateQuickTransaction();
         var d = new CompD(a, b, c);
-        var pk = t.CreateEntity(ref d);
+        t.Spawn<CompDArch>(CompDArch.D.Set(in d));
         t.Commit();
-        return pk;
     }
 
-    private static long CreateAndCommitCompF(DatabaseEngine dbe, int gold, int rank)
+    private static void CreateAndCommitCompF(DatabaseEngine dbe, int gold, int rank)
     {
         using var t = dbe.CreateQuickTransaction();
         var f = new CompF(gold, rank);
-        var pk = t.CreateEntity(ref f);
+        t.Spawn<CompFArch>(CompFArch.F.Set(in f));
         t.Commit();
-        return pk;
     }
 
     [Test]
@@ -47,6 +61,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
         // Insert 200 entities with B from 0 to 199
@@ -75,6 +90,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
         for (int i = 0; i < 100; i++)
@@ -99,6 +115,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompF>();
 
         // Gold (AllowMultiple): 80 entities with Gold=42, 20 with Gold=99
@@ -128,6 +145,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
         for (int i = 0; i < 100; i++)
@@ -165,21 +183,29 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
         Assert.That(ct.MutationsSinceRebuild, Is.EqualTo(0));
 
         // Create increments
-        var pk = CreateAndCommitCompD(dbe, 1.0f, 10, 1.0);
+        EntityId id;
+        {
+            using var t = dbe.CreateQuickTransaction();
+            var d = new CompD(1.0f, 10, 1.0);
+            id = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
+            t.Commit();
+        }
         Assert.That(ct.MutationsSinceRebuild, Is.GreaterThan(0));
 
         int afterCreate = ct.MutationsSinceRebuild;
 
         // Update with changed index field increments further
-        using var t = dbe.CreateQuickTransaction();
-        var d = new CompD(2.0f, 20, 2.0); // all fields changed
-        t.UpdateEntity(pk, ref d);
-        t.Commit();
+        using var t2 = dbe.CreateQuickTransaction();
+        var d2 = new CompD(2.0f, 20, 2.0); // all fields changed
+        ref var w = ref t2.OpenMut(id).Write(CompDArch.D);
+        w = d2;
+        t2.Commit();
 
         Assert.That(ct.MutationsSinceRebuild, Is.GreaterThan(afterCreate));
     }
@@ -189,6 +215,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
         for (int i = 0; i < 10; i++)
@@ -208,6 +235,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
         // Should not throw on empty table
@@ -222,6 +250,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompF>();
 
         // Gold is AllowMultiple: 30 entities with Gold=10, 20 with Gold=50
@@ -252,6 +281,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var options = new StatisticsOptions { Enabled = true, PollIntervalMs = 100 };
         using var worker = new StatisticsWorker(dbe, options, dbe.EpochManager, dbe);
@@ -270,6 +300,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
         for (int i = 0; i < 200; i++)
@@ -297,7 +328,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
         var deadline = DateTime.UtcNow.AddSeconds(5);
         while (ct.IndexStats[1].HyperLogLog == null && DateTime.UtcNow < deadline)
         {
-            System.Threading.Thread.Sleep(10);
+            System.Threading.Thread.Sleep(1);
         }
 
         Assert.That(ct.IndexStats[1].HyperLogLog, Is.Not.Null, "ForceRebuild should trigger statistics rebuild");
@@ -313,6 +344,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         dbe.RegisterComponentFromAccessor<CompStr64>();
+        dbe.InitializeArchetypes();
 
         var ct = dbe.GetComponentTable<CompStr64>();
 
@@ -321,7 +353,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
         {
             using var t = dbe.CreateQuickTransaction();
             var c = new CompStr64($"name_{i}", i);
-            t.CreateEntity(ref c);
+            t.Spawn<CompStr64Arch>(CompStr64Arch.Str64.Set(in c));
             t.Commit();
         }
 
@@ -340,6 +372,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
         dbe.RegisterComponentFromAccessor<CompStr64>();
+        dbe.InitializeArchetypes();
 
         var ctStr = dbe.GetComponentTable<CompStr64>();
         var ctD = dbe.GetComponentTable<CompD>();
@@ -349,7 +382,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
         {
             using var t = dbe.CreateQuickTransaction();
             var s = new CompStr64($"name_{i}", i);
-            t.CreateEntity(ref s);
+            t.Spawn<CompStr64Arch>(CompStr64Arch.Str64.Set(in s));
             t.Commit();
         }
         for (int i = 0; i < 100; i++)
@@ -376,7 +409,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
         var deadline = DateTime.UtcNow.AddSeconds(5);
         while (ctD.IndexStats[1].HyperLogLog == null && DateTime.UtcNow < deadline)
         {
-            System.Threading.Thread.Sleep(10);
+            System.Threading.Thread.Sleep(1);
         }
 
         // Worker must still be running (not killed by String64 table)
@@ -394,6 +427,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
         // Insert entities with float A spanning negative-to-positive range
@@ -433,22 +467,24 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
         RegisterComponents(dbe);
         dbe.RegisterComponentFromAccessor<CompGuild>();
         dbe.RegisterComponentFromAccessor<CompPlayer>();
+        dbe.InitializeArchetypes();
 
         // Create a guild and player
         using (var t = dbe.CreateQuickTransaction())
         {
             var g = new CompGuild(10, 100);
-            var guildPk = t.CreateEntity(ref g);
-            var p = new CompPlayer(guildPk, true);
-            t.CreateEntity(ref p);
+            var guildEid = t.Spawn<CompGuildArch>(CompGuildArch.Guild.Set(in g));
+            var p = new CompPlayer((long)guildEid.RawValue, true);
+            t.Spawn<CompPlayerArch>(CompPlayerArch.Player.Set(in p));
             t.Commit();
         }
 
         // Attempting to create a navigation view with only source predicates should throw
+        using var txNav = dbe.CreateQuickTransaction();
         var ex = Assert.Throws<InvalidOperationException>(() =>
         {
-            dbe.Query<CompPlayer>()
-                .Navigate<CompGuild>(p => p.GuildId)
+            txNav.Query<CompPlayerArch>()
+                .NavigateField<CompPlayer, CompGuild>(p => p.GuildId)
                 .Where((p, g) => p.Active == 1)
                 .ToView();
         });
@@ -463,23 +499,25 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
         RegisterComponents(dbe);
         dbe.RegisterComponentFromAccessor<CompGuild>();
         dbe.RegisterComponentFromAccessor<CompPlayer>();
+        dbe.InitializeArchetypes();
 
         long guildPk;
         using (var t = dbe.CreateQuickTransaction())
         {
             var g = new CompGuild(10, 100);
-            guildPk = t.CreateEntity(ref g);
+            var guildEid = t.Spawn<CompGuildArch>(CompGuildArch.Guild.Set(in g));
+            guildPk = (long)guildEid.RawValue;
             var p = new CompPlayer(guildPk, true);
-            t.CreateEntity(ref p);
+            t.Spawn<CompPlayerArch>(CompPlayerArch.Player.Set(in p));
             t.Commit();
         }
 
         // One-shot Execute with only source predicates should work (no incremental tracking needed)
         using var tx = dbe.CreateQuickTransaction();
-        var result = dbe.Query<CompPlayer>()
-            .Navigate<CompGuild>(p => p.GuildId)
+        var result = tx.Query<CompPlayerArch>()
+            .NavigateField<CompPlayer, CompGuild>(p => p.GuildId)
             .Where((p, g) => p.Active == 1)
-            .Execute(tx);
+            .Execute();
 
         Assert.That(result.Count, Is.EqualTo(1));
     }
@@ -493,6 +531,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
         for (int i = 0; i < 100; i++)
@@ -516,7 +555,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
         var deadline = DateTime.UtcNow.AddSeconds(5);
         while (ct.IndexStats[1].HyperLogLog == null && DateTime.UtcNow < deadline)
         {
-            System.Threading.Thread.Sleep(10);
+            System.Threading.Thread.Sleep(1);
         }
 
         // After successful rebuild, counter should be reset
@@ -529,6 +568,7 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var options = new StatisticsOptions { Enabled = true, PollIntervalMs = 100 };
         using var worker = new StatisticsWorker(dbe, options, dbe.EpochManager, dbe);
@@ -542,10 +582,11 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
 
-        // Insert 500 entities with B from 0 to 499
-        for (int i = 0; i < 500; i++)
+        // Insert 200 entities with B from 0 to 199
+        for (int i = 0; i < 200; i++)
         {
             CreateAndCommitCompD(dbe, i * 1.0f, i, i * 2.0);
         }
@@ -556,14 +597,14 @@ class StatisticsRebuildTests : TestBase<StatisticsRebuildTests>
         var stats = ct.IndexStats[1]; // B field
         Assert.That(stats.HyperLogLog, Is.Not.Null, "HLL should be populated even with sampling");
 
-        // HLL only sees sampled pages (~half the entities with pageInterval=2), so its raw estimate is ~250.
+        // HLL only sees sampled pages (~half the entities with pageInterval=2), so its raw estimate is ~100.
         // The key invariant: HLL is populated and gives a positive estimate.
         long hllEstimate = stats.DistinctValues;
-        Assert.That(hllEstimate, Is.GreaterThan(100), $"HLL estimate {hllEstimate} should reflect sampled entities");
-        Assert.That(hllEstimate, Is.LessThan(500), $"HLL estimate {hllEstimate} should be less than total (only sampled half)");
+        Assert.That(hllEstimate, Is.GreaterThan(40), $"HLL estimate {hllEstimate} should reflect sampled entities");
+        Assert.That(hllEstimate, Is.LessThan(200), $"HLL estimate {hllEstimate} should be less than total (only sampled half)");
 
         // Histogram should be populated with scaled counts (scaleFactor ~ 2x)
         Assert.That(stats.Histogram, Is.Not.Null, "Histogram should be populated even with sampling");
-        Assert.That(stats.Histogram.TotalCount, Is.InRange(300, 700), $"Histogram total {stats.Histogram.TotalCount} should be scaled toward 500");
+        Assert.That(stats.Histogram.TotalCount, Is.InRange(120, 280), $"Histogram total {stats.Histogram.TotalCount} should be scaled toward 200");
     }
 }

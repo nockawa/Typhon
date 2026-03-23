@@ -10,6 +10,7 @@ using System.Threading;
 using Microsoft.Extensions.Logging;
 using Spectre.Console;
 using Typhon.Engine;
+using Typhon.Schema.Definition;
 using Typhon.Shell.Formatting;
 using Typhon.Shell.Parsing;
 using Typhon.Shell.Schema;
@@ -29,22 +30,14 @@ internal sealed class CommandExecutor
     private readonly Dictionary<string, IOutputFormatter> _formatters;
     private readonly List<string> _history = [];
 
-    // Cached reflection method infos for generic Transaction methods
-    private static readonly MethodInfo CreateEntityMethod = typeof(Transaction)
+    // Cached reflection method infos for generic Transaction methods (runtime type dispatch requires MakeGenericMethod)
+    private static readonly MethodInfo ReadComponentMethod = typeof(Transaction)
         .GetMethods(BindingFlags.Public | BindingFlags.Instance)
-        .First(m => m.Name == "CreateEntity" && m.GetGenericArguments().Length == 1 && m.GetParameters().Length == 1);
+        .First(m => m.Name == "QueryRead" && m.GetGenericArguments().Length == 1 && m.GetParameters().Length == 2);
 
-    private static readonly MethodInfo ReadEntityMethod = typeof(Transaction)
+    private static readonly MethodInfo WriteComponentMethod = typeof(Transaction)
         .GetMethods(BindingFlags.Public | BindingFlags.Instance)
-        .First(m => m.Name == "ReadEntity" && m.GetGenericArguments().Length == 1 && m.GetParameters().Length == 2);
-
-    private static readonly MethodInfo UpdateEntityMethod = typeof(Transaction)
-        .GetMethods(BindingFlags.Public | BindingFlags.Instance)
-        .First(m => m.Name == "UpdateEntity" && m.GetGenericArguments().Length == 1 && m.GetParameters().Length == 2);
-
-    private static readonly MethodInfo DeleteEntityMethod = typeof(Transaction)
-        .GetMethods(BindingFlags.Public | BindingFlags.Instance)
-        .First(m => m.Name == "DeleteEntity" && m.GetGenericArguments().Length == 1 && m.GetParameters().Length == 1);
+        .First(m => m.Name == "WriteComponent" && m.GetGenericArguments().Length == 1 && m.GetParameters().Length == 2);
 
     public CommandExecutor(ShellSession session)
     {
@@ -152,6 +145,7 @@ internal sealed class CommandExecutor
             "log-level"     => ExecuteLogLevel(tokens, 1),
             "echo"          => ExecuteEcho(tokens, 1),
             "help"          => ExecuteHelp(tokens, 1),
+            "migrate"       => ExecuteMigrate(tokens, 1),
             "history"       => ExecuteHistory(),
             "pause"         => ExecutePause(tokens, 1),
             "exit" or "quit" => CommandResult.Exit(),
@@ -258,6 +252,148 @@ internal sealed class CommandExecutor
         }
 
         return CommandResult.Markup(sb.ToString().TrimEnd());
+    }
+
+    // ── Migrate Command ────────────────────────────────────────
+
+    private CommandResult ExecuteMigrate(List<Token> tokens, int pos)
+    {
+        string dbPath = null;
+
+        while (pos < tokens.Count)
+        {
+            if (dbPath == null)
+            {
+                dbPath = tokens[pos].Value;
+                pos++;
+            }
+            else
+            {
+                return CommandResult.Error($"Syntax error: unexpected token '{tokens[pos].Value}'.\nUsage: migrate [<path>]");
+            }
+        }
+
+        // If DB not open, require a path
+        if (!_session.IsOpen && dbPath == null)
+        {
+            return CommandResult.Error(
+                "Usage: migrate [<path>]\n" +
+                "  Opens the database and applies any pending schema migrations.\n" +
+                "  Compatible changes (add field, type widen) are applied automatically.\n" +
+                "  Breaking changes require migration functions registered in your schema assembly.\n" +
+                "  Use 'schema-validate' on an already-open database for dry-run validation.");
+        }
+
+        // If path provided but DB already open, close first
+        if (dbPath != null && _session.IsOpen)
+        {
+            _session.CloseDatabase();
+        }
+
+        // Open the database — this triggers RegisterComponentFromAccessor for all loaded schemas,
+        // which runs SchemaEvolutionEngine.Migrate() for compatible changes and MigrateWithFunction()
+        // for breaking changes with registered migration chains.
+        if (!_session.IsOpen)
+        {
+            if (dbPath == null)
+            {
+                return CommandResult.Error("Error: No database is open and no path provided.");
+            }
+
+            try
+            {
+                _session.OpenDatabase(dbPath);
+            }
+            catch (Exception ex)
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine($"  [red]Database open failed:[/] {Markup.Escape(ex.Message)}");
+                sb.AppendLine();
+                sb.AppendLine("  Schema validation failed during open. Possible causes:");
+                sb.AppendLine("    - Breaking schema change with no migration function registered");
+                sb.AppendLine("    - Database created by a newer version of the application");
+                sb.AppendLine("  Ensure your schema assembly is loaded first via [yellow]load-schema <assembly>[/]");
+                sb.AppendLine("  and that all required migration functions are registered.");
+                return CommandResult.Markup(sb.ToString().TrimEnd());
+            }
+        }
+
+        // DB is now open — run schema-validate logic to show status
+        var result = new StringBuilder();
+        result.AppendLine("  [white]Schema Migration Report[/]");
+        result.AppendLine("  [grey]══════════════════════════════════════════════════════════════════[/]");
+
+        var persisted = _session.Engine.PersistedComponents;
+        var fieldsByComp = _session.Engine.PersistedFieldsByComponent;
+        int identicalCount = 0, migratedCount = 0, newCount = 0, failCount = 0;
+
+        foreach (var kvp in _session.ComponentTypes)
+        {
+            var runtimeType = kvp.Value;
+            var attr = runtimeType.GetCustomAttribute<ComponentAttribute>();
+            var schemaName = attr?.Name ?? runtimeType.Name;
+
+            if (persisted == null || !persisted.TryGetValue(schemaName, out var comp))
+            {
+                result.AppendLine($"  [blue]NEW[/]      {Markup.Escape(schemaName)} — will be created on first use");
+                newCount++;
+                continue;
+            }
+
+            var persistedFields = fieldsByComp != null && fieldsByComp.TryGetValue(schemaName, out var pf) ? pf : [];
+            var resolver = persistedFields.Length > 0 ? new FieldIdResolver(persistedFields) : null;
+            var definition = _session.Engine.DBD.CreateFromAccessor(runtimeType, resolver)
+                             ?? _session.Engine.DBD.GetComponent(schemaName, attr?.Revision ?? 1);
+
+            if (definition == null)
+            {
+                result.AppendLine($"  [yellow]?[/]        {Markup.Escape(schemaName)} — could not resolve definition");
+                continue;
+            }
+
+            var diff = SchemaValidator.ComputeDiff(schemaName, persistedFields, comp.Comp, definition,
+                resolver?.Renames ?? (IReadOnlyList<(string, string, int)>)[]);
+
+            if (diff.IsIdentical)
+            {
+                result.AppendLine($"  [green]OK[/]       {Markup.Escape(schemaName)} — identical");
+                identicalCount++;
+            }
+            else if (diff.HasBreakingChanges)
+            {
+                var targetRevision = attr?.Revision ?? 1;
+                var chain = _session.Engine.MigrationRegistry?.GetChain(schemaName, comp.Comp.SchemaRevision, targetRevision);
+                if (chain != null)
+                {
+                    result.AppendLine($"  [green]MIGRATED[/] {Markup.Escape(schemaName)} — {Markup.Escape(diff.Summary)} (migration applied during open)");
+                    migratedCount++;
+                }
+                else
+                {
+                    result.AppendLine($"  [red]FAIL[/]     {Markup.Escape(schemaName)} — {Markup.Escape(diff.Summary)} (no migration path registered)");
+                    failCount++;
+                }
+            }
+            else
+            {
+                // Compatible change — auto-migrated during open
+                result.AppendLine($"  [green]MIGRATED[/] {Markup.Escape(schemaName)} — {Markup.Escape(diff.Summary)} (auto-resolved during open)");
+                migratedCount++;
+            }
+        }
+
+        result.AppendLine("  [grey]══════════════════════════════════════════════════════════════════[/]");
+        if (failCount == 0)
+        {
+            result.AppendLine($"  [green]Migration complete.[/] {identicalCount} identical, {migratedCount} migrated, {newCount} new.");
+        }
+        else
+        {
+            result.AppendLine($"  [red]{failCount} component(s) could not be migrated.[/] Register migration functions and retry.");
+            result.AppendLine($"  {identicalCount} identical, {migratedCount} migrated, {newCount} new.");
+        }
+
+        return CommandResult.Markup(result.ToString().TrimEnd());
     }
 
     // ── Schema Commands ────────────────────────────────────────
@@ -753,7 +889,7 @@ internal sealed class CommandExecutor
 
         var componentName = tokens[pos].Value;
 
-        if (!ResolveComponent(componentName, out var componentType, out ComponentSchema _, out var error))
+        if (!ResolveComponent(componentName, out Type _, out ComponentSchema _, out var error))
         {
             return CommandResult.Error(error);
         }
@@ -766,7 +902,7 @@ internal sealed class CommandExecutor
 
         try
         {
-            var deleted = DeleteEntityReflection(tx, entityId, componentType);
+            var deleted = DeleteEntityReflection(tx, entityId);
             if (!deleted)
             {
                 if (isAutoCommit)
@@ -1159,22 +1295,36 @@ internal sealed class CommandExecutor
         ComponentSchema schema,
         IReadOnlyDictionary<string, string> fieldValues)
     {
+        // Discover archetype for this component type
+        var componentTypeId = ArchetypeRegistry.GetComponentTypeId(componentType);
+        if (componentTypeId < 0)
+        {
+            throw new InvalidOperationException($"Component type '{componentType.Name}' has no registered ComponentTypeId. Ensure an archetype is defined.");
+        }
+        var meta = ArchetypeRegistry.FindArchetypeForComponent(componentTypeId);
+        if (meta == null)
+        {
+            throw new InvalidOperationException($"No archetype found containing component '{componentType.Name}'. Define an archetype with this component.");
+        }
+
+        // Build the component struct, populate fields, create ComponentValue from raw bytes
         var instance = Activator.CreateInstance(componentType);
         var handle = GCHandle.Alloc(instance, GCHandleType.Pinned);
+        ComponentValue cv;
         try
         {
             var ptr = (byte*)handle.AddrOfPinnedObject();
             TextToStructConverter.WriteFields(ptr, schema.StructSize, schema, fieldValues);
+            cv = ComponentValue.CreateFromRaw(componentTypeId, ptr, schema.StructSize);
         }
         finally
         {
             handle.Free();
         }
 
-        var method = CreateEntityMethod.MakeGenericMethod(componentType);
-        var args = new[] { instance };
-        var entityId = (long)method.Invoke(tx, args);
-        return entityId;
+        // Spawn via non-generic public API (no reflection needed)
+        var entityId = tx.SpawnByArchetypeId(meta.ArchetypeId, cv);
+        return (long)entityId.RawValue;
     }
 
     private static unsafe IReadOnlyDictionary<string, object> ReadEntityReflection(
@@ -1185,9 +1335,9 @@ internal sealed class CommandExecutor
         out bool found)
     {
         var instance = Activator.CreateInstance(componentType);
-        var method = ReadEntityMethod.MakeGenericMethod(componentType);
+        var method = ReadComponentMethod.MakeGenericMethod(componentType);
         var args = new[] { entityId, instance };
-        found = (bool)method.Invoke(tx, args);
+        found = (bool)method.Invoke(tx, args)!;
 
         if (!found)
         {
@@ -1216,9 +1366,9 @@ internal sealed class CommandExecutor
     {
         // Step 1: Read current values
         var instance = Activator.CreateInstance(componentType);
-        var readMethod = ReadEntityMethod.MakeGenericMethod(componentType);
+        var readMethod = ReadComponentMethod.MakeGenericMethod(componentType);
         var readArgs = new[] { entityId, instance };
-        var found = (bool)readMethod.Invoke(tx, readArgs);
+        var found = (bool)readMethod.Invoke(tx, readArgs)!;
 
         if (!found)
         {
@@ -1238,17 +1388,16 @@ internal sealed class CommandExecutor
             handle.Free();
         }
 
-        // Step 3: Write updated struct back
-        var updateMethod = UpdateEntityMethod.MakeGenericMethod(componentType);
-        var updateArgs = new[] { entityId, instance };
-        return (bool)updateMethod.Invoke(tx, updateArgs);
+        // Write updated struct back via ECS WriteComponent
+        var writeMethod = WriteComponentMethod.MakeGenericMethod(componentType);
+        var writeArgs = new[] { entityId, instance };
+        return (bool)writeMethod.Invoke(tx, writeArgs)!;
     }
 
-    private static bool DeleteEntityReflection(Transaction tx, long entityId, Type componentType)
+    private static bool DeleteEntityReflection(Transaction tx, long entityId)
     {
-        var method = DeleteEntityMethod.MakeGenericMethod(componentType);
-        var args = new object[] { entityId };
-        return (bool)method.Invoke(tx, args);
+        tx.Destroy(EntityId.FromRaw(entityId));
+        return true;
     }
 
     // ── Helpers ────────────────────────────────────────────────

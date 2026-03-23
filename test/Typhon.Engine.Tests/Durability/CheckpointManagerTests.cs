@@ -83,18 +83,13 @@ public class CheckpointManagerTests : AllocatorTestBase
 
         var page = segment.GetPageExclusive(0, epoch, out var memPageIdx);
         cs.AddByMemPageIndex(memPageIdx);
-        var offset = LogicalSegment.RootHeaderIndexSectionLength;
+        var offset = LogicalSegment<PersistentStore>.RootHeaderIndexSectionLength;
         page.RawData<byte>(offset, PagedMMF.PageRawDataSize - offset).Clear();
         _mmf.UnlatchPageExclusive(memPageIdx);
 
-        // Write SPI to root header
-        _mmf.RequestPageEpoch(0, epoch, out var rootMemPageIdx);
-        var latched = _mmf.TryLatchPageExclusive(rootMemPageIdx);
-        var rootPage = _mmf.GetPage(rootMemPageIdx);
-        cs.AddByMemPageIndex(rootMemPageIdx);
-        ref var header = ref rootPage.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
-        header.UowRegistrySPI = segment.RootPageIndex;
-        _mmf.UnlatchPageExclusive(rootMemPageIdx);
+        // Write SPI to bootstrap
+        _mmf.Bootstrap.SetInt(DatabaseEngine.BK_UowRegistrySPI, segment.RootPageIndex);
+        _mmf.SaveBootstrap(cs);
         cs.SaveChanges();
 
         _uowRegistry = new UowRegistry(segment, _mmf, _epochManager, MemoryAllocator, AllocationResource);
@@ -400,14 +395,8 @@ public class CheckpointManagerTests : AllocatorTestBase
         var durableLsn = _walManager.DurableLsn;
         ckpt.RunCheckpointCycle(durableLsn);
 
-        // Read the CheckpointLSN from the file header to verify persistence
-        using (var guard = EpochGuard.Enter(_epochManager))
-        {
-            _mmf.RequestPageEpoch(0, guard.Epoch, out var memPageIdx);
-            var page = _mmf.GetPage(memPageIdx);
-            ref var header = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
-            Assert.That(header.CheckpointLSN, Is.EqualTo(durableLsn));
-        }
+        // Read the CheckpointLSN from the bootstrap dictionary to verify persistence
+        Assert.That(_mmf.Bootstrap.GetLong(ManagedPagedMMF.BK_CheckpointLSN), Is.EqualTo(durableLsn));
     }
 
     // ═══════════════════════════════════════════════════════════════

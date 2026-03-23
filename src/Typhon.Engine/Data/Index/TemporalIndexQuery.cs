@@ -29,14 +29,14 @@ internal static unsafe class TemporalIndexQuery
     /// <param name="tailVSBS">The TAIL VSBS containing version history entries.</param>
     /// <param name="changeSet">ChangeSet for page tracking.</param>
     /// <returns>List of chain IDs active at the target TSN (empty if none or key not found).</returns>
-    internal static List<int> Query(IndexedFieldInfo ifi, byte* fieldValueAddr, long targetTSN, VariableSizedBufferSegment<VersionedIndexEntry> tailVSBS, 
-        ChangeSet changeSet)
+    internal static List<int> Query(IndexedFieldInfo ifi, byte* fieldValueAddr, long targetTSN, 
+        VariableSizedBufferSegment<VersionedIndexEntry, PersistentStore> tailVSBS, ChangeSet changeSet)
     {
         var result = new List<int>(4);
 
         // Step 1: Look up the key in the B+Tree to get the HEAD buffer ID
-        var accessor = ifi.Index.Segment.CreateChunkAccessor(changeSet);
-        var headResult = ifi.Index.TryGet(fieldValueAddr, ref accessor);
+        var accessor = ifi.PersistentIndex.Segment.CreateChunkAccessor(changeSet);
+        var headResult = ifi.PersistentIndex.TryGet(fieldValueAddr, ref accessor);
         if (headResult.IsFailure)
         {
             accessor.Dispose();
@@ -101,8 +101,8 @@ internal static unsafe class TemporalIndexQuery
     private static List<int> QueryHeadOnly(IndexedFieldInfo ifi, byte* fieldValueAddr, ChangeSet changeSet)
     {
         var result = new List<int>(4);
-        var accessor = ifi.Index.Segment.CreateChunkAccessor(changeSet);
-        using var bufferAccessor = ifi.Index.TryGetMultiple(fieldValueAddr, ref accessor);
+        var accessor = ifi.PersistentIndex.Segment.CreateChunkAccessor(changeSet);
+        using var bufferAccessor = ifi.PersistentIndex.TryGetMultiple(fieldValueAddr, ref accessor);
         accessor.Dispose();
 
         if (!bufferAccessor.IsValid)

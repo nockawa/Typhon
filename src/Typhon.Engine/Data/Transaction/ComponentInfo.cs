@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
 
@@ -66,12 +67,15 @@ internal sealed class ComponentInfo
     public int EntryCount => IsMultiple ? MultipleCache.Count : SingleCache.Count;
 
     // Common fields
+    public int ComponentTypeId;
     public ComponentTable ComponentTable;
-    public ChunkBasedSegment CompContentSegment;
-    public ChunkBasedSegment CompRevTableSegment;
-    public BTree<long> PrimaryKeyIndex;
-    public ChunkAccessor CompContentAccessor;
-    public ChunkAccessor CompRevTableAccessor;
+    /// <summary>Cached from <see cref="ComponentTable.ComponentOverhead"/> — avoids property-through-property indirection on hot path.</summary>
+    public int ComponentOverhead;
+    public ChunkBasedSegment<PersistentStore> CompContentSegment;
+    public ChunkBasedSegment<PersistentStore> CompRevTableSegment;
+    public ChunkAccessor<PersistentStore> CompContentAccessor;
+    public ChunkAccessor<PersistentStore> CompRevTableAccessor;
+    public ChunkAccessor<TransientStore> TransientCompContentAccessor;
 
     // Dual caches (one is always null)
     // ReSharper disable InconsistentNaming
@@ -102,12 +106,22 @@ internal sealed class ComponentInfo
     }
 
     /// <summary>
-    /// Disposes the ChunkAccessor fields to flush dirty pages.
+    /// Disposes the ChunkAccessor<PersistentStore> fields to flush dirty pages.
     /// </summary>
     public void DisposeAccessors()
     {
-        CompContentAccessor.Dispose();
-        CompRevTableAccessor.Dispose();
+        if (ComponentTable.StorageMode == StorageMode.Transient)
+        {
+            TransientCompContentAccessor.Dispose();
+        }
+        else
+        {
+            CompContentAccessor.Dispose();
+            if (ComponentTable.StorageMode == StorageMode.Versioned)
+            {
+                CompRevTableAccessor.Dispose();
+            }
+        }
     }
 
     /// <summary>

@@ -31,8 +31,8 @@ namespace Typhon.Benchmark;
 public class BTreeConcurrentReadBenchmarks
 {
     private BTreeBenchmarkHelper _helper;
-    private ChunkBasedSegment _segment;
-    private LongSingleBTree _tree;
+    private ChunkBasedSegment<PersistentStore> _segment;
+    private LongSingleBTree<PersistentStore> _tree;
     private long[][] _perThreadKeys;
 
     private const int PreFillCount = 10_000;
@@ -48,7 +48,7 @@ public class BTreeConcurrentReadBenchmarks
         _helper.Setup();
 
         _segment = _helper.AllocateSegment<Index64Chunk>();
-        _tree = new LongSingleBTree(_segment);
+        _tree = new LongSingleBTree<PersistentStore>(_segment);
         BTreeBenchmarkHelper.PreFillLong(_tree, _segment, PreFillCount);
 
         // Pre-generate per-thread random key arrays (different seeds per thread)

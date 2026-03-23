@@ -67,26 +67,86 @@ struct CompFieldAddV2
     public CompFieldAddV2(int a, int c, float b) { A = a; C = c; B = b; }
 }
 
+// ── Component structs for downgrade test ──
+
+[Component("Typhon.Schema.UnitTest.SchemaDowngrade", 1)]
+[StructLayout(LayoutKind.Sequential)]
+struct CompDowngradeV1
+{
+    public int Health;
+    public int Mana;
+
+    public CompDowngradeV1(int health, int mana) { Health = health; Mana = mana; }
+}
+
+[Component("Typhon.Schema.UnitTest.SchemaDowngrade", 2)]
+[StructLayout(LayoutKind.Sequential)]
+struct CompDowngradeV2
+{
+    public int Health;
+    public int Mana;
+    public int Shield;
+
+    public CompDowngradeV2(int health, int mana, int shield) { Health = health; Mana = mana; Shield = shield; }
+}
+
+// ── Archetypes for V1 components (used for Spawn in first scope) ──
+
+[Archetype(320)]
+class CompWidenArch : Archetype<CompWidenArch>
+{
+    public static readonly Comp<CompWidenV1> Comp = Register<CompWidenV1>();
+}
+
+[Archetype(321)]
+class CompBreakArch : Archetype<CompBreakArch>
+{
+    public static readonly Comp<CompBreakV1> Comp = Register<CompBreakV1>();
+}
+
+[Archetype(322)]
+class CompFieldAddArch : Archetype<CompFieldAddArch>
+{
+    public static readonly Comp<CompFieldAddV1> Comp = Register<CompFieldAddV1>();
+}
+
+[Archetype(323)]
+class CompDowngradeArch : Archetype<CompDowngradeArch>
+{
+    public static readonly Comp<CompDowngradeV2> Comp = Register<CompDowngradeV2>();
+}
+
 /// <summary>
 /// Integration tests verifying schema validation across database reopen cycles.
 /// Each test creates a database with one component layout, closes it, then reopens with a different layout.
 /// </summary>
+[NonParallelizable]
 class SchemaValidationIntegrationTests : TestBase<SchemaValidationIntegrationTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompWidenArch>.Touch();
+        Archetype<CompBreakArch>.Touch();
+        Archetype<CompFieldAddArch>.Touch();
+        Archetype<CompDowngradeArch>.Touch();
+    }
+
     [Test]
     public void ReopenIdentical_NoError()
     {
-        long entityId;
+        EntityId entityId;
 
         // Phase 1: Create database with V1
         using (var scope1 = ServiceProvider.CreateScope())
         {
             using var dbe = scope1.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<CompWidenV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new CompWidenV1(42, 3.14f);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            entityId = t.CreateEntity(ref comp);
+            entityId = t.Spawn<CompWidenArch>(CompWidenArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -96,9 +156,11 @@ class SchemaValidationIntegrationTests : TestBase<SchemaValidationIntegrationTes
             using var dbe = scope2.ServiceProvider.GetRequiredService<DatabaseEngine>();
             Assert.DoesNotThrow(() => dbe.RegisterComponentFromAccessor<CompWidenV1>());
 
+            dbe.InitializeArchetypes();
+
             // Verify data is intact
             using var t = dbe.CreateQuickTransaction();
-            Assert.That(t.ReadEntity<CompWidenV1>(entityId, out var comp), Is.True);
+            ref readonly var comp = ref t.Open(entityId).Read(CompWidenArch.Comp);
             Assert.That(comp.Score, Is.EqualTo(42));
             Assert.That(comp.Speed, Is.EqualTo(3.14f));
         }
@@ -112,10 +174,11 @@ class SchemaValidationIntegrationTests : TestBase<SchemaValidationIntegrationTes
         {
             using var dbe = scope1.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<CompWidenV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new CompWidenV1(100, 2.5f);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            t.CreateEntity(ref comp);
+            t.Spawn<CompWidenArch>(CompWidenArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -135,10 +198,11 @@ class SchemaValidationIntegrationTests : TestBase<SchemaValidationIntegrationTes
         {
             using var dbe = scope1.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<CompBreakV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new CompBreakV1(999);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            t.CreateEntity(ref comp);
+            t.Spawn<CompBreakArch>(CompBreakArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -160,10 +224,11 @@ class SchemaValidationIntegrationTests : TestBase<SchemaValidationIntegrationTes
         {
             using var dbe = scope1.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<CompBreakV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new CompBreakV1(42);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            t.CreateEntity(ref comp);
+            t.Spawn<CompBreakArch>(CompBreakArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -190,10 +255,11 @@ class SchemaValidationIntegrationTests : TestBase<SchemaValidationIntegrationTes
         {
             using var dbe = scope1.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<CompBreakV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new CompBreakV1(42);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            t.CreateEntity(ref comp);
+            t.Spawn<CompBreakArch>(CompBreakArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -213,10 +279,11 @@ class SchemaValidationIntegrationTests : TestBase<SchemaValidationIntegrationTes
         {
             using var dbe = scope1.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<CompFieldAddV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new CompFieldAddV1(10, 1.5f);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            t.CreateEntity(ref comp);
+            t.Spawn<CompFieldAddArch>(CompFieldAddArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -227,10 +294,18 @@ class SchemaValidationIntegrationTests : TestBase<SchemaValidationIntegrationTes
             dbe.RegisterComponentFromAccessor<CompFieldAddV2>();
 
             // Read back ComponentR1 to check SchemaRevision
-            using var tx = dbe.CreateQuickTransaction();
-            for (long pk = 1; pk <= 20; pk++)
+            using var epochGuard = EpochGuard.Enter(dbe.EpochManager);
+            var compTable = dbe.GetComponentTable<ComponentR1>();
+            var segment = compTable.ComponentSegment;
+            var capacity = segment.ChunkCapacity;
+            for (int chunkId = 1; chunkId < capacity; chunkId++)
             {
-                if (!tx.ReadEntity<ComponentR1>(pk, out var comp))
+                if (!segment.IsChunkAllocated(chunkId))
+                {
+                    continue;
+                }
+
+                if (!SystemCrud.Read(compTable, chunkId, out ComponentR1 comp, dbe.EpochManager))
                 {
                     continue;
                 }
@@ -254,10 +329,11 @@ class SchemaValidationIntegrationTests : TestBase<SchemaValidationIntegrationTes
         {
             using var dbe = scope1.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<CompFieldAddV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new CompFieldAddV1(10, 1.5f);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            t.CreateEntity(ref comp);
+            t.Spawn<CompFieldAddArch>(CompFieldAddArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -267,13 +343,33 @@ class SchemaValidationIntegrationTests : TestBase<SchemaValidationIntegrationTes
             using var dbe = scope2.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<CompFieldAddV2>();
 
-            // Read UserSchemaVersion from root header
-            using var guard = EpochGuard.Enter(dbe.EpochManager);
-            dbe.MMF.RequestPageEpoch(0, guard.Epoch, out var memPageIdx);
-            var page = dbe.MMF.GetPage(memPageIdx);
-            ref var header = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
+            // Read UserSchemaVersion from bootstrap dictionary
+            var userSchemaVersion = dbe.MMF.Bootstrap.GetInt(DatabaseEngine.BK_UserSchemaVersion);
+            Assert.That(userSchemaVersion, Is.GreaterThan(0), "UserSchemaVersion should be > 0 after schema change");
+        }
+    }
 
-            Assert.That(header.UserSchemaVersion, Is.GreaterThan(0), "UserSchemaVersion should be > 0 after schema change");
+    [Test]
+    public void Reopen_WithOlderRevision_ThrowsSchemaDowngrade()
+    {
+        // Scope 1: Create with V2 (revision 2)
+        using (var scope = ServiceProvider.CreateScope())
+        {
+            using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
+            dbe.RegisterComponentFromAccessor<CompDowngradeV2>();
+            dbe.InitializeArchetypes();
+
+            using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
+            var comp = new CompDowngradeV2(100, 50, 25);
+            t.Spawn<CompDowngradeArch>(CompDowngradeArch.Comp.Set(in comp));
+            t.Commit();
+        }
+
+        // Scope 2: Try to register V1 (revision 1) — should throw downgrade exception
+        using (var scope = ServiceProvider.CreateScope())
+        {
+            using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
+            Assert.Throws<SchemaDowngradeException>(() => dbe.RegisterComponentFromAccessor<CompDowngradeV1>());
         }
     }
 }

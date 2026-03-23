@@ -1,4 +1,4 @@
-﻿using JetBrains.Annotations;
+using JetBrains.Annotations;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -25,16 +25,26 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     // Increase cache size for stress tests
     private const int StressCacheSize = 4 * 1024 * 1024; // 4MB cache
 
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompAArch>.Touch();
+        Archetype<CompBArch>.Touch();
+        Archetype<CompDArch>.Touch();
+        Archetype<CompABArch>.Touch();
+        Archetype<CompABDArch>.Touch();
+    }
+
     [SetUp]
     public override void Setup()
     {
         base.Setup();
-        
+
         // Ensure database file is deleted with retry logic for stress tests
         // This handles cases where a previous crashed test left the file locked
         EnsureFileDeletedWithRetry();
     }
-    
+
     /// <summary>
     /// Attempts to delete the database file with retries, handling locked file scenarios
     /// that can occur when a previous test run crashed or was terminated.
@@ -44,13 +54,13 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         using var scope = ServiceProvider.CreateScope();
         var options = scope.ServiceProvider.GetRequiredService<IOptions<ManagedPagedMMFOptions>>().Value;
         var filePath = Path.Combine(options.DatabaseDirectory, options.DatabaseName + ".bin");
-        
+
         if (!File.Exists(filePath))
             return;
-            
+
         const int maxRetries = 5;
         const int retryDelayMs = 500;
-        
+
         for (int attempt = 1; attempt <= maxRetries; attempt++)
         {
             try
@@ -69,7 +79,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                 Thread.Sleep(retryDelayMs);
             }
         }
-        
+
         // If we get here, all retries failed - log warning but continue
         // The test will fail with a clear error if the file is still locked
         Logger.LogWarning("Could not delete database file after {MaxRetries} attempts: {FilePath}", maxRetries, filePath);
@@ -89,27 +99,27 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     private static IEnumerable<TestCaseData> ChaosTestCases()
     {
         // (threads, entitiesPerThread, operationsPerEntity, readWriteRatio, includeDeletes, seed)
-        
+
         // Light load - quick sanity check
         yield return new TestCaseData(2, 50, 10, 0.7f, false, 12345)
             .SetName("Light_2T_50E_NoDelete");
-        
+
         // Medium load - balanced operations
         yield return new TestCaseData(4, 100, 20, 0.5f, true, 23456)
             .SetName("Medium_4T_100E_WithDelete");
-        
+
         // Heavy reads - read-heavy workload
         yield return new TestCaseData(8, 50, 30, 0.9f, false, 34567)
             .SetName("HeavyRead_8T_50E");
-        
+
         // Heavy writes - write-heavy workload with contention
         yield return new TestCaseData(4, 200, 15, 0.2f, true, 45678)
             .SetName("HeavyWrite_4T_200E_WithDelete");
-        
+
         // Maximum contention - few entities, many threads
         yield return new TestCaseData(8, 10, 50, 0.5f, true, 56789)
             .SetName("MaxContention_8T_10E");
-        
+
         // Scale test - many entities, moderate threads
         yield return new TestCaseData(4, 500, 5, 0.6f, false, 67890)
             .SetName("Scale_4T_500E");
@@ -150,16 +160,17 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     [Test]
     [TestCaseSource(nameof(ChaosTestCases))]
     [Property("CacheSize", StressCacheSize)]
-    public void ChaosTest_MultiThreadedCRUD(int threadCount, int entitiesPerThread, int operationsPerEntity, float readWriteRatio, 
+    public void ChaosTest_MultiThreadedCRUD(int threadCount, int entitiesPerThread, int operationsPerEntity, float readWriteRatio,
         bool includeDeletes, int seed)
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var errors = new ConcurrentBag<string>();
         var stats = new ConcurrentDictionary<string, long>();
-        var allEntityIds = new ConcurrentDictionary<long, int>(); // entityId -> owningThread
-        var deletedEntities = new ConcurrentDictionary<long, bool>();
+        var allEntityIds = new ConcurrentDictionary<EntityId, (int owningThread, int compTypeIdx)>(); // entityId -> (owningThread, compType: 0=A, 1=B, 2=D)
+        var deletedEntities = new ConcurrentDictionary<EntityId, bool>();
 
         // Initialize stats
         foreach (var key in new[] { "Creates", "Reads", "Updates", "Deletes", "Commits", "Rollbacks", "Conflicts" })
@@ -178,7 +189,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
             tasks[t] = Task.Run(() =>
             {
                 var rand = new Random(threadSeed);
-                var localEntities = new List<long>();
+                var localEntities = new List<(EntityId id, int compTypeIdx)>();
 
                 try
                 {
@@ -197,24 +208,28 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                             var compD = new CompD(rand.NextSingle(), threadId * 1000 + i, rand.NextDouble());
 
                             var choice = rand.Next(3);
-                            long entityId;
+                            EntityId entityId;
+                            int compTypeIdx;
                             switch (choice)
                             {
                                 case 0:
-                                    entityId = txn.CreateEntity(ref compA);
+                                    entityId = txn.Spawn<CompAArch>(CompAArch.A.Set(in compA));
+                                    compTypeIdx = 0;
                                     break;
                                 case 1:
-                                    entityId = txn.CreateEntity(ref compB);
+                                    entityId = txn.Spawn<CompBArch>(CompBArch.B.Set(in compB));
+                                    compTypeIdx = 1;
                                     break;
                                 default:
-                                    entityId = txn.CreateEntity(ref compD);
+                                    entityId = txn.Spawn<CompDArch>(CompDArch.D.Set(in compD));
+                                    compTypeIdx = 2;
                                     break;
                             }
 
                             if (txn.Commit())
                             {
-                                localEntities.Add(entityId);
-                                allEntityIds[entityId] = threadId;
+                                localEntities.Add((entityId, compTypeIdx));
+                                allEntityIds[entityId] = (threadId, compTypeIdx);
                                 stats.AddOrUpdate("Creates", 1, (_, v) => v + 1);
                                 stats.AddOrUpdate("Commits", 1, (_, v) => v + 1);
                             }
@@ -240,15 +255,17 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                         var txn = dbe.CreateQuickTransaction();
                         try
                         {
-                            var targetEntity = localEntities[rand.Next(localEntities.Count)];
+                            var targetIdx = rand.Next(localEntities.Count);
+                            var (targetEntity, targetCompType) = localEntities[targetIdx];
                             var opRoll = (float)rand.NextDouble();
 
                             if (opRoll < readWriteRatio)
                             {
-                                // Read operation
-                                var readA = txn.ReadEntity<CompA>(targetEntity, out _);
-                                var readB = txn.ReadEntity<CompB>(targetEntity, out _);
-                                var readD = txn.ReadEntity<CompD>(targetEntity, out _);
+                                // Read operation — use TryRead to probe the entity's component type
+                                var entity = txn.Open(targetEntity);
+                                var readA = entity.TryRead<CompA>(out _);
+                                var readB = entity.TryRead<CompB>(out _);
+                                var readD = entity.TryRead<CompD>(out _);
 
                                 if (readA || readB || readD)
                                 {
@@ -260,14 +277,12 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                                 // Delete operation (rare)
                                 if (!deletedEntities.ContainsKey(targetEntity))
                                 {
-                                    var deleted = txn.DeleteEntity<CompA>(targetEntity) ||
-                                                  txn.DeleteEntity<CompB>(targetEntity) ||
-                                                  txn.DeleteEntity<CompD>(targetEntity);
+                                    txn.Destroy(targetEntity);
 
-                                    if (deleted && txn.Commit())
+                                    if (txn.Commit())
                                     {
                                         deletedEntities[targetEntity] = true;
-                                        localEntities.Remove(targetEntity);
+                                        localEntities.RemoveAt(targetIdx);
                                         stats.AddOrUpdate("Deletes", 1, (_, v) => v + 1);
                                         stats.AddOrUpdate("Commits", 1, (_, v) => v + 1);
                                     }
@@ -275,21 +290,30 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                             }
                             else
                             {
-                                // Update operation
-                                if (txn.ReadEntity<CompA>(targetEntity, out var compA))
+                                // Update operation — use known component type
+                                switch (targetCompType)
                                 {
-                                    compA.A = rand.Next();
-                                    txn.UpdateEntity(targetEntity, ref compA);
-                                }
-                                else if (txn.ReadEntity<CompB>(targetEntity, out var compB))
-                                {
-                                    compB.A = rand.Next();
-                                    txn.UpdateEntity(targetEntity, ref compB);
-                                }
-                                else if (txn.ReadEntity<CompD>(targetEntity, out var compD))
-                                {
-                                    compD.B = rand.Next();
-                                    txn.UpdateEntity(targetEntity, ref compD);
+                                    case 0:
+                                    {
+                                        txn.Open(targetEntity).Read(CompAArch.A);
+                                        ref var w = ref txn.OpenMut(targetEntity).Write(CompAArch.A);
+                                        w.A = rand.Next();
+                                        break;
+                                    }
+                                    case 1:
+                                    {
+                                        txn.Open(targetEntity).Read(CompBArch.B);
+                                        ref var w = ref txn.OpenMut(targetEntity).Write(CompBArch.B);
+                                        w.A = rand.Next();
+                                        break;
+                                    }
+                                    case 2:
+                                    {
+                                        txn.Open(targetEntity).Read(CompDArch.D);
+                                        ref var w = ref txn.OpenMut(targetEntity).Write(CompDArch.D);
+                                        w.B = rand.Next();
+                                        break;
+                                    }
                                 }
 
                                 var committed = txn.Commit();
@@ -317,7 +341,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                     // Phase 3: Verify all non-deleted entities are readable
                     barrier.SignalAndWait();
 
-                    foreach (var entityId in localEntities)
+                    foreach (var (entityId, _) in localEntities)
                     {
                         if (deletedEntities.ContainsKey(entityId))
                             continue;
@@ -325,9 +349,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                         try
                         {
                             using var txn = dbe.CreateQuickTransaction();
-                            var canRead = txn.ReadEntity<CompA>(entityId, out _) ||
-                                          txn.ReadEntity<CompB>(entityId, out _) ||
-                                          txn.ReadEntity<CompD>(entityId, out _);
+                            var canRead = txn.IsAlive(entityId);
 
                             if (!canRead)
                             {
@@ -381,19 +403,20 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var errors = new ConcurrentBag<string>();
         var rand = new Random(seed);
 
         // Phase 1: Create initial entities
-        var entityIds = new List<long>();
-        var initialValues = new Dictionary<long, int>();
+        var entityIds = new List<EntityId>();
+        var initialValues = new Dictionary<EntityId, int>();
 
         for (int i = 0; i < workerThreads * entitiesPerWorker; i++)
         {
             using var txn = dbe.CreateQuickTransaction();
             var comp = new CompA(i * 100, 0f, 0d); // Use A field as the value we track
-            var id = txn.CreateEntity(ref comp);
+            var id = txn.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             txn.Commit();
             entityIds.Add(id);
             initialValues[id] = i * 100;
@@ -403,21 +426,19 @@ class ChaosStressTests : TestBase<ChaosStressTests>
 
         // Phase 2: Start long-running transactions that snapshot the initial state
         // These transactions are intentionally kept open to test MVCC isolation - disposed in cleanup loop below
-        var longRunningTxns = new List<(Transaction txn, Dictionary<long, int> snapshot)>();
+        var longRunningTxns = new List<(Transaction txn, Dictionary<EntityId, int> snapshot)>();
         for (int i = 0; i < longRunningCount; i++)
         {
 #pragma warning disable TYPHON004 // Intentionally keeping transaction open to test MVCC - disposed in cleanup loop
             var txn = dbe.CreateQuickTransaction();
 #pragma warning restore TYPHON004
-            var snapshot = new Dictionary<long, int>();
+            var snapshot = new Dictionary<EntityId, int>();
 
             // Read all entities to establish snapshot
             foreach (var id in entityIds)
             {
-                if (txn.ReadEntity<CompA>(id, out var comp))
-                {
-                    snapshot[id] = comp.A;
-                }
+                var comp = txn.Open(id).Read(CompAArch.A);
+                snapshot[id] = comp.A;
             }
 
             longRunningTxns.Add((txn, snapshot));
@@ -426,7 +447,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
 
         // Phase 3: Worker threads modify entities while long-running transactions are active
         var barrier = new Barrier(workerThreads);
-        var modificationCounts = new ConcurrentDictionary<long, int>();
+        var modificationCounts = new ConcurrentDictionary<EntityId, int>();
         var workerTasks = new Task[workerThreads];
 
         for (int w = 0; w < workerThreads; w++)
@@ -446,15 +467,13 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                     try
                     {
                         using var txn = dbe.CreateQuickTransaction();
-                        if (txn.ReadEntity<CompA>(targetId, out var comp))
-                        {
-                            comp.A += 1;
-                            txn.UpdateEntity(targetId, ref comp);
+                        txn.Open(targetId).Read(CompAArch.A);
+                        ref var w2 = ref txn.OpenMut(targetId).Write(CompAArch.A);
+                        w2.A += 1;
 
-                            if (txn.Commit())
-                            {
-                                modificationCounts.AddOrUpdate(targetId, 1, (_, v) => v + 1);
-                            }
+                        if (txn.Commit())
+                        {
+                            modificationCounts.AddOrUpdate(targetId, 1, (_, v) => v + 1);
                         }
                     }
                     catch (Exception ex)
@@ -474,12 +493,10 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         {
             foreach (var (id, expectedValue) in snapshot)
             {
-                if (txn.ReadEntity<CompA>(id, out var comp))
+                var comp = txn.Open(id).Read(CompAArch.A);
+                if (comp.A != expectedValue)
                 {
-                    if (comp.A != expectedValue)
-                    {
-                        errors.Add($"MVCC violation: Entity {id} expected {expectedValue} but got {comp.A}");
-                    }
+                    errors.Add($"MVCC violation: Entity {id} expected {expectedValue} but got {comp.A}");
                 }
             }
         }
@@ -492,12 +509,10 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         {
             foreach (var (id, expectedValue) in snapshot)
             {
-                if (txn.ReadEntity<CompA>(id, out var comp))
+                var comp = txn.Open(id).Read(CompAArch.A);
+                if (comp.A != expectedValue)
                 {
-                    if (comp.A != expectedValue)
-                    {
-                        errors.Add($"MVCC violation after workers: Entity {id} expected {expectedValue} but got {comp.A}");
-                    }
+                    errors.Add($"MVCC violation after workers: Entity {id} expected {expectedValue} but got {comp.A}");
                 }
             }
         }
@@ -513,18 +528,16 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         {
             foreach (var id in entityIds)
             {
-                if (verifyTxn.ReadEntity<CompA>(id, out var comp))
-                {
-                    var expectedMin = initialValues[id];
-                    var modifications = modificationCounts.GetValueOrDefault(id, 0);
+                var comp = verifyTxn.Open(id).Read(CompAArch.A);
+                var expectedMin = initialValues[id];
+                var modifications = modificationCounts.GetValueOrDefault(id, 0);
 
-                    // Value should be at least initial + modifications (could be more due to conflicts)
-                    if (comp.A < expectedMin + modifications)
-                    {
-                        Logger.LogWarning(
-                            "Entity {Id}: value {Value} < expected minimum {Expected} (initial {Initial} + mods {Mods})",
-                            id, comp.A, expectedMin + modifications, expectedMin, modifications);
-                    }
+                // Value should be at least initial + modifications (could be more due to conflicts)
+                if (comp.A < expectedMin + modifications)
+                {
+                    Logger.LogWarning(
+                        "Entity {Id}: value {Value} < expected minimum {Expected} (initial {Initial} + mods {Mods})",
+                        id, comp.A, expectedMin + modifications, expectedMin, modifications);
                 }
             }
         }
@@ -549,9 +562,10 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var errors = new ConcurrentBag<string>();
-        var allEntities = new ConcurrentDictionary<long, int>(); // entityId -> thread
+        var allEntities = new ConcurrentDictionary<EntityId, int>(); // entityId -> thread
 
         var tasks = new Task[threadCount];
         var barrier = new Barrier(threadCount);
@@ -564,7 +578,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
             tasks[t] = Task.Run(() =>
             {
                 var rand = new Random(threadSeed);
-                var localEntities = new List<long>();
+                var localEntities = new List<(EntityId id, int compCount)>();
 
                 try
                 {
@@ -579,23 +593,27 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                         var compB = new CompB(threadId, rand.NextSingle());
                         var compD = new CompD(rand.NextSingle(), threadId * 100 + i, rand.NextDouble());
 
-                        long entityId;
+                        EntityId entityId;
+                        int compCount;
                         if (componentsPerEntity >= 3)
                         {
-                            entityId = txn.CreateEntity(ref compA, ref compB, ref compD);
+                            entityId = txn.Spawn<CompABDArch>(CompABDArch.A.Set(in compA), CompABDArch.B.Set(in compB), CompABDArch.D.Set(in compD));
+                            compCount = 3;
                         }
                         else if (componentsPerEntity >= 2)
                         {
-                            entityId = txn.CreateEntity(ref compA, ref compB);
+                            entityId = txn.Spawn<CompABArch>(CompABArch.A.Set(in compA), CompABArch.B.Set(in compB));
+                            compCount = 2;
                         }
                         else
                         {
-                            entityId = txn.CreateEntity(ref compA);
+                            entityId = txn.Spawn<CompAArch>(CompAArch.A.Set(in compA));
+                            compCount = 1;
                         }
 
                         if (txn.Commit())
                         {
-                            localEntities.Add(entityId);
+                            localEntities.Add((entityId, compCount));
                             allEntities[entityId] = threadId;
                         }
                     }
@@ -608,24 +626,28 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                         if (localEntities.Count == 0)
                             break;
 
-                        var targetId = localEntities[rand.Next(localEntities.Count)];
+                        var targetIdx = rand.Next(localEntities.Count);
+                        var (targetId, targetCompCount) = localEntities[targetIdx];
 
                         using var txn = dbe.CreateQuickTransaction();
 
                         // Read and update all components atomically
-                        var hasA = txn.ReadEntity<CompA>(targetId, out var compA);
-                        var hasB = txn.ReadEntity<CompB>(targetId, out var compB);
-                        var hasD = txn.ReadEntity<CompD>(targetId, out var compD);
+                        var entity = txn.Open(targetId);
+                        var hasA = entity.TryRead<CompA>(out var compA);
+                        var hasB = entity.TryRead<CompB>(out var compB);
+                        var hasD = entity.TryRead<CompD>(out var compD);
 
                         if (hasA)
                         {
                             compA.A += 1;
-                            txn.UpdateEntity(targetId, ref compA);
+                            ref var wA = ref txn.OpenMut(targetId).Write(CompAArch.A);
+                            wA = compA;
                         }
                         if (hasB)
                         {
                             compB.A += 1;
-                            txn.UpdateEntity(targetId, ref compB);
+                            ref var wB = ref txn.OpenMut(targetId).Write(CompABArch.B);
+                            wB = compB;
                         }
                         if (hasD)
                         {
@@ -633,7 +655,8 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                             // and incrementing it would collide with adjacent entities' B values.
                             compD.A += 0.1f;
                             compD.C += 0.1;
-                            txn.UpdateEntity(targetId, ref compD);
+                            ref var wD = ref txn.OpenMut(targetId).Write(CompABDArch.D);
+                            wD = compD;
                         }
 
                         if (!txn.Commit())
@@ -645,12 +668,13 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                     // Verify consistency
                     barrier.SignalAndWait();
 
-                    foreach (var entityId in localEntities)
+                    foreach (var (entityId, compCount) in localEntities)
                     {
                         using var txn = dbe.CreateQuickTransaction();
 
-                        var hasA = txn.ReadEntity<CompA>(entityId, out var compA);
-                        var hasB = txn.ReadEntity<CompB>(entityId, out var compB);
+                        var entity = txn.Open(entityId);
+                        var hasA = entity.TryRead<CompA>(out var compA);
+                        var hasB = entity.TryRead<CompB>(out var compB);
 
                         if (hasA && hasB)
                         {
@@ -695,15 +719,16 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var errors = new ConcurrentBag<string>();
 
         // Create a single entity that will be updated rapidly
-        long targetEntity;
+        EntityId targetEntity;
         {
             using var txn = dbe.CreateQuickTransaction();
             var comp = new CompA(0, 0f, 0d); // Use A field as the counter
-            targetEntity = txn.CreateEntity(ref comp);
+            targetEntity = txn.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             txn.Commit();
         }
 
@@ -731,23 +756,16 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                 try
                 {
                     // Take snapshot
-                    if (!txn.ReadEntity<CompA>(targetEntity, out var initial))
-                    {
-                        errors.Add($"Reader {readerId}: Initial read failed");
-                        return;
-                    }
-
+                    var initial = txn.Open(targetEntity).Read(CompAArch.A);
                     readerSnapshots[readerId] = initial.A;
 
                     // Keep reading and verify consistency
                     for (int i = 0; i < readsPerReader; i++)
                     {
-                        if (txn.ReadEntity<CompA>(targetEntity, out var current))
+                        var current = txn.Open(targetEntity).Read(CompAArch.A);
+                        if (current.A != initial.A)
                         {
-                            if (current.A != initial.A)
-                            {
-                                errors.Add($"Reader {readerId}: MVCC violation! Expected {initial.A}, got {current.A}");
-                            }
+                            errors.Add($"Reader {readerId}: MVCC violation! Expected {initial.A}, got {current.A}");
                         }
                         Thread.Sleep(5);
                     }
@@ -772,15 +790,13 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                 for (int i = 0; i < updatesPerWriter; i++)
                 {
                     using var txn = dbe.CreateQuickTransaction();
-                    if (txn.ReadEntity<CompA>(targetEntity, out var comp))
-                    {
-                        comp.A += 1;
-                        txn.UpdateEntity(targetEntity, ref comp);
+                    txn.Open(targetEntity).Read(CompAArch.A);
+                    ref var w2 = ref txn.OpenMut(targetEntity).Write(CompAArch.A);
+                    w2.A += 1;
 
-                        if (txn.Commit())
-                        {
-                            writerCounts.AddOrUpdate(writerId, 1, (_, v) => v + 1);
-                        }
+                    if (txn.Commit())
+                    {
+                        writerCounts.AddOrUpdate(writerId, 1, (_, v) => v + 1);
                     }
                 }
             }));
@@ -801,13 +817,11 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         // So final.A can be less than totalWrites (successful commits) due to overlapping updates.
         using (var txn = dbe.CreateQuickTransaction())
         {
-            if (txn.ReadEntity<CompA>(targetEntity, out var final))
-            {
-                Logger.LogInformation("Final value: {Value}, Total successful commits: {TotalWrites}", final.A, totalWrites);
-                Assert.That(final.A, Is.GreaterThan(0), "At least some writes should have taken effect");
-                Assert.That(final.A, Is.LessThanOrEqualTo(totalWrites),
-                    "Final value cannot exceed the number of successful commits");
-            }
+            var final2 = txn.Open(targetEntity).Read(CompAArch.A);
+            Logger.LogInformation("Final value: {Value}, Total successful commits: {TotalWrites}", final2.A, totalWrites);
+            Assert.That(final2.A, Is.GreaterThan(0), "At least some writes should have taken effect");
+            Assert.That(final2.A, Is.LessThanOrEqualTo(totalWrites),
+                "Final value cannot exceed the number of successful commits");
         }
 
         Assert.That(errors, Is.Empty, $"MVCC errors:\n{string.Join("\n", errors)}");
@@ -827,6 +841,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var errors = new ConcurrentBag<string>();
         const int entityCount = 500; // More entities than cache can hold
@@ -834,12 +849,12 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         const int operationsPerThread = 200;
 
         // Create entities
-        var entityIds = new long[entityCount];
+        var entityIds = new EntityId[entityCount];
         for (int i = 0; i < entityCount; i++)
         {
             using var txn = dbe.CreateQuickTransaction();
             var comp = new CompA(i, i * 10f, 0d); // Use A as Id, B as Value
-            entityIds[i] = txn.CreateEntity(ref comp);
+            entityIds[i] = txn.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             txn.Commit();
         }
 
@@ -874,27 +889,23 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                         if (localRand.NextDouble() < 0.7)
                         {
                             // Read
-                            if (txn.ReadEntity<CompA>(targetId, out var comp))
+                            var comp = txn.Open(targetId).Read(CompAArch.A);
+                            // Verify data integrity
+                            if (comp.A != targetIdx)
                             {
-                                // Verify data integrity
-                                if (comp.A != targetIdx)
-                                {
-                                    errors.Add($"Data corruption: Entity {targetId} has Id {comp.A}, expected {targetIdx}");
-                                }
-                                Interlocked.Increment(ref readCounts[threadId]);
+                                errors.Add($"Data corruption: Entity {targetId} has Id {comp.A}, expected {targetIdx}");
                             }
+                            Interlocked.Increment(ref readCounts[threadId]);
                         }
                         else
                         {
                             // Update
-                            if (txn.ReadEntity<CompA>(targetId, out var comp))
+                            txn.Open(targetId).Read(CompAArch.A);
+                            ref var w = ref txn.OpenMut(targetId).Write(CompAArch.A);
+                            w.B += 1;
+                            if (txn.Commit())
                             {
-                                comp.B += 1;
-                                txn.UpdateEntity(targetId, ref comp);
-                                if (txn.Commit())
-                                {
-                                    Interlocked.Increment(ref updateCounts[threadId]);
-                                }
+                                Interlocked.Increment(ref updateCounts[threadId]);
                             }
                         }
                     }
@@ -915,11 +926,8 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         for (int i = 0; i < entityCount; i++)
         {
             using var txn = dbe.CreateQuickTransaction();
-            if (!txn.ReadEntity<CompA>(entityIds[i], out var comp))
-            {
-                errors.Add($"Final verify: Entity {i} not readable");
-            }
-            else if (comp.A != i)
+            var comp = txn.Open(entityIds[i]).Read(CompAArch.A);
+            if (comp.A != i)
             {
                 errors.Add($"Final verify: Entity {i} has wrong Id {comp.A}");
             }
@@ -941,6 +949,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var errors = new ConcurrentBag<string>();
         const int entityCount = 50;
@@ -948,20 +957,20 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         const int roundsPerThread = 20;
 
         // Create initial entities with known values
-        var entityIds = new long[entityCount];
+        var entityIds = new EntityId[entityCount];
         var initialValues = new int[entityCount];
 
         for (int i = 0; i < entityCount; i++)
         {
             using var txn = dbe.CreateQuickTransaction();
             var comp = new CompA(i * 100, 0f, 0d); // Use A field as the value we track
-            entityIds[i] = txn.CreateEntity(ref comp);
+            entityIds[i] = txn.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             initialValues[i] = i * 100;
             txn.Commit();
         }
 
         // Track committed updates
-        var committedUpdates = new ConcurrentDictionary<long, int>();
+        var committedUpdates = new ConcurrentDictionary<EntityId, int>();
         foreach (var id in entityIds)
         {
             committedUpdates[id] = 0;
@@ -989,30 +998,28 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                     {
                         using var txn = dbe.CreateQuickTransaction();
 
-                        if (txn.ReadEntity<CompA>(targetId, out var comp))
+                        txn.Open(targetId).Read(CompAArch.A);
+                        ref var w = ref txn.OpenMut(targetId).Write(CompAArch.A);
+                        w.A += 1;
+
+                        if (shouldRollback)
                         {
-                            comp.A += 1;
-                            txn.UpdateEntity(targetId, ref comp);
-
-                            if (shouldRollback)
+                            txn.Rollback();
+                            // Value should NOT have changed
+                        }
+                        else
+                        {
+                            // Delta-rebase handler: on conflict, apply our +1 delta on top of the latest committed value
+                            // instead of blindly overwriting. This guarantees no lost updates under contention.
+                            void ConcurrencyConflictHandler(ref ConcurrencyConflictSolver solver)
                             {
-                                txn.Rollback();
-                                // Value should NOT have changed
+                                var committed = solver.CommittedData<CompA>();
+                                solver.ToCommitData<CompA>().A = committed.A + 1;
                             }
-                            else
-                            {
-                                // Delta-rebase handler: on conflict, apply our +1 delta on top of the latest committed value
-                                // instead of blindly overwriting. This guarantees no lost updates under contention.
-                                void ConcurrencyConflictHandler(ref ConcurrencyConflictSolver solver)
-                                {
-                                    var committed = solver.CommittedData<CompA>();
-                                    solver.ToCommitData<CompA>().A = committed.A + 1;
-                                }
 
-                                if (txn.Commit(ConcurrencyConflictHandler))
-                                {
-                                    committedUpdates.AddOrUpdate(targetId, 1, (_, v) => v + 1);
-                                }
+                            if (txn.Commit(ConcurrencyConflictHandler))
+                            {
+                                committedUpdates.AddOrUpdate(targetId, 1, (_, v) => v + 1);
                             }
                         }
                     }
@@ -1030,19 +1037,13 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         for (int i = 0; i < entityCount; i++)
         {
             using var txn = dbe.CreateQuickTransaction();
-            if (txn.ReadEntity<CompA>(entityIds[i], out var comp))
-            {
-                var expected = initialValues[i] + committedUpdates[entityIds[i]];
+            var comp = txn.Open(entityIds[i]).Read(CompAArch.A);
+            var expected = initialValues[i] + committedUpdates[entityIds[i]];
 
-                // With a delta-rebase conflict handler, every committed update is reflected exactly
-                if (comp.A != expected)
-                {
-                    errors.Add($"Entity {i}: Value {comp.A} != expected {expected}");
-                }
-            }
-            else
+            // With a delta-rebase conflict handler, every committed update is reflected exactly
+            if (comp.A != expected)
             {
-                errors.Add($"Entity {i} not readable");
+                errors.Add($"Entity {i}: Value {comp.A} != expected {expected}");
             }
         }
 
@@ -1065,12 +1066,13 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var errors = new ConcurrentBag<string>();
         const int threadCount = 6;
         const int entitiesPerThread = 150;
         // B value → entityId for surviving entities
-        var allEntities = new ConcurrentDictionary<int, long>();
+        var allEntities = new ConcurrentDictionary<int, EntityId>();
 
         var barrier = new Barrier(threadCount);
         var tasks = new Task[threadCount];
@@ -1081,7 +1083,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
             tasks[t] = Task.Run(() =>
             {
                 var rand = new Random(threadId * 7777);
-                var localEntities = new List<(int bValue, long entityId)>();
+                var localEntities = new List<(int bValue, EntityId entityId)>();
 
                 try
                 {
@@ -1095,7 +1097,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                         {
                             using var txn = dbe.CreateQuickTransaction();
                             var comp = new CompD(rand.NextSingle(), bValue, rand.NextDouble());
-                            var entityId = txn.CreateEntity(ref comp);
+                            var entityId = txn.Spawn<CompDArch>(CompDArch.D.Set(in comp));
                             if (txn.Commit())
                             {
                                 localEntities.Add((bValue, entityId));
@@ -1124,7 +1126,8 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                         {
                             using (var txn = dbe.CreateQuickTransaction())
                             {
-                                if (txn.DeleteEntity<CompD>(entityId) && txn.Commit())
+                                txn.Destroy(entityId);
+                                if (txn.Commit())
                                 {
                                     allEntities.TryRemove(bValue, out _);
                                 }
@@ -1133,7 +1136,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                             using (var txn = dbe.CreateQuickTransaction())
                             {
                                 var comp = new CompD(rand.NextSingle(), nextB, rand.NextDouble());
-                                var newId = txn.CreateEntity(ref comp);
+                                var newId = txn.Spawn<CompDArch>(CompDArch.D.Set(in comp));
                                 if (txn.Commit())
                                 {
                                     allEntities[nextB] = newId;
@@ -1162,17 +1165,11 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         foreach (var kvp in allEntities)
         {
             using var txn = dbe.CreateQuickTransaction();
-            if (txn.ReadEntity<CompD>(kvp.Value, out var comp))
+            var comp = txn.Open(kvp.Value).Read(CompDArch.D);
+            survivingCount++;
+            if (comp.B != kvp.Key)
             {
-                survivingCount++;
-                if (comp.B != kvp.Key)
-                {
-                    errors.Add($"Global verify: B={kvp.Key} entity has wrong B field: {comp.B}");
-                }
-            }
-            else
-            {
-                errors.Add($"Global verify: B={kvp.Key} entity not readable");
+                errors.Add($"Global verify: B={kvp.Key} entity has wrong B field: {comp.B}");
             }
         }
 
@@ -1192,6 +1189,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var errors = new ConcurrentBag<string>();
         const int writerThreads = 4;
@@ -1200,7 +1198,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         const int churnRounds = 30;
         const float sharedAValue = 42.0f;
 
-        var entityPool = new ConcurrentDictionary<long, int>(); // entityId → B value
+        var entityPool = new ConcurrentDictionary<EntityId, int>(); // entityId -> B value
         var nextBCounters = new int[writerThreads];
 
         // Phase 1: Each writer creates entities sharing the same A index key
@@ -1223,7 +1221,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                     {
                         using var txn = dbe.CreateQuickTransaction();
                         var comp = new CompD(sharedAValue, bVal, 1.0);
-                        var id = txn.CreateEntity(ref comp);
+                        var id = txn.Spawn<CompDArch>(CompDArch.D.Set(in comp));
                         if (txn.Commit())
                         {
                             entityPool[id] = bVal;
@@ -1268,7 +1266,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                     {
                         using (var txn = dbe.CreateQuickTransaction())
                         {
-                            txn.DeleteEntity<CompD>(targetId);
+                            txn.Destroy(targetId);
                             txn.Commit();
                         }
 
@@ -1276,7 +1274,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                         using (var txn = dbe.CreateQuickTransaction())
                         {
                             var comp = new CompD(sharedAValue, newB, round * 0.01);
-                            var newId = txn.CreateEntity(ref comp);
+                            var newId = txn.Spawn<CompDArch>(CompDArch.D.Set(in comp));
                             if (txn.Commit())
                             {
                                 entityPool[newId] = newB;
@@ -1312,8 +1310,9 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                     try
                     {
                         using var txn = dbe.CreateQuickTransaction();
-                        if (txn.ReadEntity<CompD>(targetId, out var comp))
+                        if (txn.IsAlive(targetId))
                         {
+                            var comp = txn.Open(targetId).Read(CompDArch.D);
                             if (Math.Abs(comp.A - sharedAValue) > 0.001f)
                             {
                                 errors.Add($"Reader {readerId}: A value corrupted, expected ~{sharedAValue} got {comp.A}");
@@ -1345,24 +1344,18 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         foreach (var kvp in entityPool)
         {
             using var txn = dbe.CreateQuickTransaction();
-            if (txn.ReadEntity<CompD>(kvp.Key, out var comp))
+            var comp = txn.Open(kvp.Key).Read(CompDArch.D);
+            if (Math.Abs(comp.A - sharedAValue) > 0.001f)
             {
-                if (Math.Abs(comp.A - sharedAValue) > 0.001f)
-                {
-                    errors.Add($"Final: Entity B={kvp.Value} has wrong A: {comp.A}");
-                }
-
-                if (comp.B != kvp.Value)
-                {
-                    errors.Add($"Final: Entity expected B={kvp.Value} got {comp.B}");
-                }
-
-                verified++;
+                errors.Add($"Final: Entity B={kvp.Value} has wrong A: {comp.A}");
             }
-            else
+
+            if (comp.B != kvp.Value)
             {
-                errors.Add($"Final: Entity B={kvp.Value} not readable");
+                errors.Add($"Final: Entity expected B={kvp.Value} got {comp.B}");
             }
+
+            verified++;
         }
 
         Logger.LogInformation("Verified {Count} entities after churn", verified);
@@ -1379,13 +1372,14 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var errors = new ConcurrentBag<string>();
         const int threadCount = 6;
         const int attemptsPerThread = 50;
         const int totalUniqueValues = 100;
 
-        var successfulCreates = new ConcurrentBag<(int bValue, int threadId, long entityId)>();
+        var successfulCreates = new ConcurrentBag<(int bValue, int threadId, EntityId entityId)>();
         int[] conflictCount = [0];
 
         var barrier = new Barrier(threadCount);
@@ -1406,7 +1400,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                     {
                         using var txn = dbe.CreateQuickTransaction();
                         var comp = new CompD(threadId * 0.1f, bValue, i * 0.01);
-                        var entityId = txn.CreateEntity(ref comp);
+                        var entityId = txn.Spawn<CompDArch>(CompDArch.D.Set(in comp));
                         if (txn.Commit())
                         {
                             successfulCreates.Add((bValue, threadId, entityId));
@@ -1443,11 +1437,8 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         foreach (var (bValue, _, entityId) in winnersByB)
         {
             using var txn = dbe.CreateQuickTransaction();
-            if (!txn.ReadEntity<CompD>(entityId, out var comp))
-            {
-                errors.Add($"Winner B={bValue} not readable");
-            }
-            else if (comp.B != bValue)
+            var comp = txn.Open(entityId).Read(CompDArch.D);
+            if (comp.B != bValue)
             {
                 errors.Add($"Winner B={bValue} has wrong B field: {comp.B}");
             }
@@ -1461,7 +1452,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
 
             using var freshTxn = dbe.CreateQuickTransaction();
             var freshComp = new CompD(99.0f, freeBValue, 99.0);
-            freshTxn.CreateEntity(ref freshComp);
+            freshTxn.Spawn<CompDArch>(CompDArch.D.Set(in freshComp));
             Assert.That(freshTxn.Commit(), Is.True, "Fresh create with unused B value should succeed");
         }
 
@@ -1484,15 +1475,16 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var errors = new ConcurrentBag<string>();
 
         // Create target entity
-        long targetEntity;
+        EntityId targetEntity;
         {
             using var txn = dbe.CreateQuickTransaction();
             var comp = new CompA(0, 0f, 0d);
-            targetEntity = txn.CreateEntity(ref comp);
+            targetEntity = txn.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             txn.Commit();
         }
 
@@ -1504,34 +1496,25 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         var readers = new List<(Transaction txn, int expectedValue)>();
         var updateCounter = 0;
 
-        // Interleave: update batch → start reader → update batch → start reader → ...
+        // Interleave: update batch -> start reader -> update batch -> start reader -> ...
         for (int r = 0; r < readerCount; r++)
         {
             // Batch of updates
             for (int u = 0; u < updatesPerReader; u++)
             {
                 using var txn = dbe.CreateQuickTransaction();
-                if (txn.ReadEntity<CompA>(targetEntity, out var comp))
-                {
-                    comp.A = ++updateCounter;
-                    txn.UpdateEntity(targetEntity, ref comp);
-                    txn.Commit();
-                }
+                txn.Open(targetEntity).Read(CompAArch.A);
+                ref var w = ref txn.OpenMut(targetEntity).Write(CompAArch.A);
+                w.A = ++updateCounter;
+                txn.Commit();
             }
 
             // Start a reader that should see current value
 #pragma warning disable TYPHON004
             var reader = dbe.CreateQuickTransaction();
 #pragma warning restore TYPHON004
-            if (reader.ReadEntity<CompA>(targetEntity, out var snapshot))
-            {
-                readers.Add((reader, snapshot.A));
-            }
-            else
-            {
-                reader.Dispose();
-                errors.Add($"Reader {r}: Initial read failed");
-            }
+            var snapshot = reader.Open(targetEntity).Read(CompAArch.A);
+            readers.Add((reader, snapshot.A));
         }
 
         Logger.LogInformation("Created {Count} readers across {Updates} updates", readers.Count, updateCounter);
@@ -1540,12 +1523,10 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         for (int r = 0; r < readers.Count; r++)
         {
             var (txn, expected) = readers[r];
-            if (txn.ReadEntity<CompA>(targetEntity, out var comp))
+            var comp = txn.Open(targetEntity).Read(CompAArch.A);
+            if (comp.A != expected)
             {
-                if (comp.A != expected)
-                {
-                    errors.Add($"Pre-cleanup reader {r}: Expected A={expected}, got A={comp.A}");
-                }
+                errors.Add($"Pre-cleanup reader {r}: Expected A={expected}, got A={comp.A}");
             }
         }
 
@@ -1555,23 +1536,18 @@ class ChaosStressTests : TestBase<ChaosStressTests>
             var (txn, expected) = readers[r];
 
             // One last verify before release
-            if (txn.ReadEntity<CompA>(targetEntity, out var comp))
+            var comp = txn.Open(targetEntity).Read(CompAArch.A);
+            if (comp.A != expected)
             {
-                if (comp.A != expected)
-                {
-                    errors.Add($"Release reader {r}: Expected A={expected}, got A={comp.A}");
-                }
+                errors.Add($"Release reader {r}: Expected A={expected}, got A={comp.A}");
             }
 
             txn.Dispose();
 
             // After releasing, verify the entity is still readable from a fresh transaction
             using var verifyTxn = dbe.CreateQuickTransaction();
-            if (!verifyTxn.ReadEntity<CompA>(targetEntity, out var latest))
-            {
-                errors.Add($"After releasing reader {r}: Entity not readable!");
-            }
-            else if (latest.A != updateCounter)
+            var latest = verifyTxn.Open(targetEntity).Read(CompAArch.A);
+            if (latest.A != updateCounter)
             {
                 errors.Add($"After releasing reader {r}: Latest A={latest.A}, expected {updateCounter}");
             }
@@ -1591,6 +1567,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var errors = new ConcurrentBag<string>();
         const int entityCount = 50;
@@ -1598,12 +1575,12 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         const int updatesPerEntityPerThread = 10;
 
         // Phase 1: Create initial entities
-        var entityIds = new long[entityCount];
+        var entityIds = new EntityId[entityCount];
         for (int i = 0; i < entityCount; i++)
         {
             using var txn = dbe.CreateQuickTransaction();
             var comp = new CompA(i * 100, 0f, 0d);
-            entityIds[i] = txn.CreateEntity(ref comp);
+            entityIds[i] = txn.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             txn.Commit();
         }
 
@@ -1612,12 +1589,12 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         var tail = dbe.CreateQuickTransaction();
 #pragma warning restore TYPHON004
         // Establish snapshot by reading
-        tail.ReadEntity<CompA>(entityIds[0], out _);
+        tail.Open(entityIds[0]).Read(CompAArch.A);
         var tailTsn = tail.TSN;
         Logger.LogInformation("Tail transaction TSN: {Tsn}", tailTsn);
 
         // Phase 3: Workers hammer entities — all cleanup deferred because tail is blocking
-        var commitCounts = new ConcurrentDictionary<long, int>();
+        var commitCounts = new ConcurrentDictionary<EntityId, int>();
         var workerBarrier = new Barrier(threadCount);
         var workerTasks = new Task[threadCount];
 
@@ -1637,14 +1614,12 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                         try
                         {
                             using var txn = dbe.CreateQuickTransaction();
-                            if (txn.ReadEntity<CompA>(entityId, out var comp))
+                            txn.Open(entityId).Read(CompAArch.A);
+                            ref var w = ref txn.OpenMut(entityId).Write(CompAArch.A);
+                            w.A += 1;
+                            if (txn.Commit())
                             {
-                                comp.A += 1;
-                                txn.UpdateEntity(entityId, ref comp);
-                                if (txn.Commit())
-                                {
-                                    commitCounts.AddOrUpdate(entityId, 1, (_, v) => v + 1);
-                                }
+                                commitCounts.AddOrUpdate(entityId, 1, (_, v) => v + 1);
                             }
                         }
                         catch (Exception ex)
@@ -1674,12 +1649,10 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                 {
                     using var txn = dbe.CreateQuickTransaction();
                     var idx = i % entityCount;
-                    if (txn.ReadEntity<CompA>(entityIds[idx], out var comp))
-                    {
-                        comp.B += 1f;
-                        txn.UpdateEntity(entityIds[idx], ref comp);
-                        txn.Commit();
-                    }
+                    txn.Open(entityIds[idx]).Read(CompAArch.A);
+                    ref var w = ref txn.OpenMut(entityIds[idx]).Write(CompAArch.A);
+                    w.B += 1f;
+                    txn.Commit();
                 }
                 catch (Exception ex)
                 {
@@ -1699,10 +1672,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         for (int i = 0; i < entityCount; i++)
         {
             using var txn = dbe.CreateQuickTransaction();
-            if (!txn.ReadEntity<CompA>(entityIds[i], out _))
-            {
-                errors.Add($"Post-drain: Entity {i} not readable");
-            }
+            Assert.That(txn.IsAlive(entityIds[i]), Is.True, $"Post-drain: Entity {i} not readable");
         }
 
         foreach (var err in postDrainErrors)
@@ -1724,15 +1694,16 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var errors = new ConcurrentBag<string>();
 
         // Create target entity
-        long targetEntity;
+        EntityId targetEntity;
         {
             using var txn = dbe.CreateQuickTransaction();
             var comp = new CompA(0, 0f, 0d);
-            targetEntity = txn.CreateEntity(ref comp);
+            targetEntity = txn.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             txn.Commit();
         }
 
@@ -1748,38 +1719,27 @@ class ChaosStressTests : TestBase<ChaosStressTests>
             for (int u = 0; u < updatesPerGap; u++)
             {
                 using var txn = dbe.CreateQuickTransaction();
-                if (txn.ReadEntity<CompA>(targetEntity, out var comp))
-                {
-                    comp.A = ++updateCounter;
-                    txn.UpdateEntity(targetEntity, ref comp);
-                    txn.Commit();
-                }
+                txn.Open(targetEntity).Read(CompAArch.A);
+                ref var w = ref txn.OpenMut(targetEntity).Write(CompAArch.A);
+                w.A = ++updateCounter;
+                txn.Commit();
             }
 
 #pragma warning disable TYPHON004
             var reader = dbe.CreateQuickTransaction();
 #pragma warning restore TYPHON004
-            if (reader.ReadEntity<CompA>(targetEntity, out var snapshot))
-            {
-                readers.Add((reader, snapshot.A));
-            }
-            else
-            {
-                reader.Dispose();
-                errors.Add($"Reader {r}: Initial read failed");
-            }
+            var snapshot = reader.Open(targetEntity).Read(CompAArch.A);
+            readers.Add((reader, snapshot.A));
         }
 
         // Pump more updates after the last reader
         for (int u = 0; u < 50; u++)
         {
             using var txn = dbe.CreateQuickTransaction();
-            if (txn.ReadEntity<CompA>(targetEntity, out var comp))
-            {
-                comp.A = ++updateCounter;
-                txn.UpdateEntity(targetEntity, ref comp);
-                txn.Commit();
-            }
+            txn.Open(targetEntity).Read(CompAArch.A);
+            ref var w = ref txn.OpenMut(targetEntity).Write(CompAArch.A);
+            w.A = ++updateCounter;
+            txn.Commit();
         }
 
         Logger.LogInformation("Created {Readers} readers across {Updates} updates", readers.Count, updateCounter);
@@ -1791,27 +1751,18 @@ class ChaosStressTests : TestBase<ChaosStressTests>
             var (txn, expected) = readers[r];
 
             // Verify snapshot still holds
-            if (txn.ReadEntity<CompA>(targetEntity, out var comp))
+            var comp = txn.Open(targetEntity).Read(CompAArch.A);
+            if (comp.A != expected)
             {
-                if (comp.A != expected)
-                {
-                    errors.Add($"Reader {r} (reverse release): Expected A={expected}, got A={comp.A}");
-                }
-            }
-            else
-            {
-                errors.Add($"Reader {r}: Read failed before release");
+                errors.Add($"Reader {r} (reverse release): Expected A={expected}, got A={comp.A}");
             }
 
             txn.Dispose();
 
             // Verify entity still readable from fresh transaction
             using var verifyTxn = dbe.CreateQuickTransaction();
-            if (!verifyTxn.ReadEntity<CompA>(targetEntity, out var latest))
-            {
-                errors.Add($"After reverse-releasing reader {r}: Entity not readable!");
-            }
-            else if (latest.A != updateCounter)
+            var latest = verifyTxn.Open(targetEntity).Read(CompAArch.A);
+            if (latest.A != updateCounter)
             {
                 errors.Add($"After reverse-releasing reader {r}: Latest A={latest.A}, expected {updateCounter}");
             }
@@ -1835,6 +1786,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var errors = new ConcurrentBag<string>();
         const int entityCount = 20;
@@ -1845,12 +1797,12 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         var expectedSum = entityCount * initialValue;
 
         // Create entities with known initial values
-        var entityIds = new long[entityCount];
+        var entityIds = new EntityId[entityCount];
         for (int i = 0; i < entityCount; i++)
         {
             using var txn = dbe.CreateQuickTransaction();
             var comp = new CompA(initialValue, 0f, 0d);
-            entityIds[i] = txn.CreateEntity(ref comp);
+            entityIds[i] = txn.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             txn.Commit();
         }
 
@@ -1862,8 +1814,8 @@ class ChaosStressTests : TestBase<ChaosStressTests>
 
         // Per-entity expected delta tracking: each successful transfer adds -1 to src, +1 to dst
         var expectedDeltas = new int[entityCount];
-        // Build entity ID → index lookup
-        var entityIdToIdx = new Dictionary<long, int>();
+        // Build entity ID -> index lookup
+        var entityIdToIdx = new Dictionary<EntityId, int>();
         for (int i = 0; i < entityCount; i++)
         {
             entityIdToIdx[entityIds[i]] = i;
@@ -1890,49 +1842,49 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                     try
                     {
                         using var txn = dbe.CreateQuickTransaction();
-                        if (txn.ReadEntity<CompA>(entityIds[srcIdx], out var src) &&
-                            txn.ReadEntity<CompA>(entityIds[dstIdx], out var dst))
+                        var srcComp = txn.Open(entityIds[srcIdx]).Read(CompAArch.A);
+                        var dstComp = txn.Open(entityIds[dstIdx]).Read(CompAArch.A);
+
+                        var readSrc = srcComp.A;
+                        var readDst = dstComp.A;
+
+                        ref var wSrc = ref txn.OpenMut(entityIds[srcIdx]).Write(CompAArch.A);
+                        wSrc = new CompA(srcComp.A - 1, srcComp.B, srcComp.C);
+                        ref var wDst = ref txn.OpenMut(entityIds[dstIdx]).Write(CompAArch.A);
+                        wDst = new CompA(dstComp.A + 1, dstComp.B, dstComp.C);
+
+                        // Delta-rebase handler: merge concurrent modifications by
+                        // applying our delta (dirtyVal - readVal) onto the committed value.
+                        // Track handler values per entity for diagnostics.
+                        var handlerLog = new ConcurrentBag<string>();
+
+                        void ConcurrencyConflictHandler(ref ConcurrencyConflictSolver solver)
                         {
-                            var readSrc = src.A;
-                            var readDst = dst.A;
-                            src.A -= 1;
-                            dst.A += 1;
-                            txn.UpdateEntity(entityIds[srcIdx], ref src);
-                            txn.UpdateEntity(entityIds[dstIdx], ref dst);
-
-                            // Delta-rebase handler: merge concurrent modifications by
-                            // applying our delta (dirtyVal - readVal) onto the committed value.
-                            // Track handler values per entity for diagnostics.
-                            var handlerLog = new ConcurrentBag<string>();
-
-                            void ConcurrencyConflictHandler(ref ConcurrencyConflictSolver solver)
+                            ref var r = ref solver.ReadData<CompA>();
+                            ref var c = ref solver.CommittedData<CompA>();
+                            ref var m = ref solver.CommittingData<CompA>();
+                            var delta = m.A - r.A;
+                            if (delta != 1 && delta != -1)
                             {
-                                ref var r = ref solver.ReadData<CompA>();
-                                ref var c = ref solver.CommittedData<CompA>();
-                                ref var m = ref solver.CommittingData<CompA>();
-                                var delta = m.A - r.A;
-                                if (delta != 1 && delta != -1)
-                                {
-                                    Interlocked.Increment(ref badDeltaCount[0]);
-                                    errors.Add($"T{threadId} op {i}: bad delta={delta} read={r.A} committed={c.A} committing={m.A} pk={solver.PrimaryKey}");
-                                }
-
-                                Interlocked.Increment(ref conflictCount[0]);
-                                var resolved = c.A + delta;
-                                solver.ToCommitData<CompA>().A = resolved;
-                                handlerLog.Add($"pk={solver.PrimaryKey} r={r.A} c={c.A} m={m.A} d={delta} res={resolved}");
+                                Interlocked.Increment(ref badDeltaCount[0]);
+                                errors.Add($"T{threadId} op {i}: bad delta={delta} read={r.A} committed={c.A} committing={m.A} pk={solver.PrimaryKey}");
                             }
 
-                            if (txn.Commit(ConcurrencyConflictHandler))
-                            {
-                                Interlocked.Add(ref expectedDeltas[srcIdx], -1);
-                                Interlocked.Add(ref expectedDeltas[dstIdx], 1);
-                                Interlocked.Increment(ref successfulTransfers[0]);
-                            }
-                            else
-                            {
-                                errors.Add($"T{threadId} op {i}: Commit returned false! src={srcIdx}(read={readSrc}) dst={dstIdx}(read={readDst}) handler={string.Join("; ", handlerLog)}");
-                            }
+                            Interlocked.Increment(ref conflictCount[0]);
+                            var resolved = c.A + delta;
+                            solver.ToCommitData<CompA>().A = resolved;
+                            handlerLog.Add($"pk={solver.PrimaryKey} r={r.A} c={c.A} m={m.A} d={delta} res={resolved}");
+                        }
+
+                        if (txn.Commit(ConcurrencyConflictHandler))
+                        {
+                            Interlocked.Add(ref expectedDeltas[srcIdx], -1);
+                            Interlocked.Add(ref expectedDeltas[dstIdx], 1);
+                            Interlocked.Increment(ref successfulTransfers[0]);
+                        }
+                        else
+                        {
+                            errors.Add($"T{threadId} op {i}: Commit returned false! src={srcIdx}(read={readSrc}) dst={dstIdx}(read={readDst}) handler={string.Join("; ", handlerLog)}");
                         }
                     }
                     catch (Exception ex)
@@ -1961,14 +1913,8 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                         var sum = 0;
                         for (int i = 0; i < entityCount; i++)
                         {
-                            if (txn.ReadEntity<CompA>(entityIds[i], out var comp))
-                            {
-                                sum += comp.A;
-                            }
-                            else
-                            {
-                                errors.Add($"Reader {readerId} check {checks}: Entity {i} not readable");
-                            }
+                            var comp = txn.Open(entityIds[i]).Read(CompAArch.A);
+                            sum += comp.A;
                         }
 
                         // NOTE: Mid-flight atomicity violations are expected because IsolationFlag is
@@ -2005,11 +1951,9 @@ class ChaosStressTests : TestBase<ChaosStressTests>
             var entityValues = new int[entityCount];
             for (int i = 0; i < entityCount; i++)
             {
-                if (txn.ReadEntity<CompA>(entityIds[i], out var comp))
-                {
-                    entityValues[i] = comp.A;
-                    finalSum += comp.A;
-                }
+                var comp = txn.Open(entityIds[i]).Read(CompAArch.A);
+                entityValues[i] = comp.A;
+                finalSum += comp.A;
             }
 
             // Compare actual vs expected (from delta tracking) per entity
@@ -2049,6 +1993,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var errors = new ConcurrentBag<string>();
         const int threadCount = 4;
@@ -2074,11 +2019,11 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                     try
                     {
                         // Create with all 3 indexes
-                        long entityId;
+                        EntityId entityId;
                         using (var txn = dbe.CreateQuickTransaction())
                         {
                             var comp = new CompD(cycle * 0.1f, bValue, cycle * 0.01);
-                            entityId = txn.CreateEntity(ref comp);
+                            entityId = txn.Spawn<CompDArch>(CompDArch.D.Set(in comp));
                             if (!txn.Commit())
                             {
                                 errors.Add($"T{threadId} cycle {cycle}: Create commit failed");
@@ -2089,12 +2034,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                         // Verify readable
                         using (var txn = dbe.CreateQuickTransaction())
                         {
-                            if (!txn.ReadEntity<CompD>(entityId, out var readBack))
-                            {
-                                errors.Add($"T{threadId} cycle {cycle}: Just-created entity not readable");
-                                continue;
-                            }
-
+                            var readBack = txn.Open(entityId).Read(CompDArch.D);
                             if (readBack.B != bValue)
                             {
                                 errors.Add($"T{threadId} cycle {cycle}: B mismatch after create: {readBack.B} != {bValue}");
@@ -2104,12 +2044,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                         // Delete (triggers removal from all 3 secondary indexes)
                         using (var txn = dbe.CreateQuickTransaction())
                         {
-                            if (!txn.DeleteEntity<CompD>(entityId))
-                            {
-                                errors.Add($"T{threadId} cycle {cycle}: Delete returned false");
-                                continue;
-                            }
-
+                            txn.Destroy(entityId);
                             if (!txn.Commit())
                             {
                                 errors.Add($"T{threadId} cycle {cycle}: Delete commit failed");
@@ -2120,7 +2055,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                         // Verify not readable
                         using (var txn = dbe.CreateQuickTransaction())
                         {
-                            if (txn.ReadEntity<CompD>(entityId, out _))
+                            if (txn.IsAlive(entityId))
                             {
                                 errors.Add($"T{threadId} cycle {cycle}: Deleted entity still readable!");
                             }
@@ -2130,7 +2065,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                         using (var txn = dbe.CreateQuickTransaction())
                         {
                             var comp2 = new CompD(cycle * 0.2f, bValue, cycle * 0.02);
-                            var newId = txn.CreateEntity(ref comp2);
+                            var newId = txn.Spawn<CompDArch>(CompDArch.D.Set(in comp2));
                             if (!txn.Commit())
                             {
                                 errors.Add($"T{threadId} cycle {cycle}: Recreate commit failed (B={bValue} reuse)");
@@ -2139,11 +2074,8 @@ class ChaosStressTests : TestBase<ChaosStressTests>
 
                             // Verify the recreated entity
                             using var verifyTxn = dbe.CreateQuickTransaction();
-                            if (!verifyTxn.ReadEntity<CompD>(newId, out var verify))
-                            {
-                                errors.Add($"T{threadId} cycle {cycle}: Recreated entity not readable");
-                            }
-                            else if (verify.B != bValue)
+                            var verify = verifyTxn.Open(newId).Read(CompDArch.D);
+                            if (verify.B != bValue)
                             {
                                 errors.Add($"T{threadId} cycle {cycle}: Recreated B mismatch: {verify.B} != {bValue}");
                             }
@@ -2182,12 +2114,13 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var errors = new ConcurrentBag<string>();
         const int entitiesPerMode = 50;
         var modes = new[] { DurabilityMode.Deferred, DurabilityMode.GroupCommit, DurabilityMode.Immediate };
 
-        var allEntityIds = new ConcurrentDictionary<long, (DurabilityMode mode, int value)>();
+        var allEntityIds = new ConcurrentDictionary<EntityId, (DurabilityMode mode, int value)>();
         var barrier = new Barrier(modes.Length * 2); // 2 threads per mode
         var tasks = new List<Task>();
 
@@ -2208,7 +2141,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                         {
                             using var txn = dbe.CreateQuickTransaction(mode);
                             var comp = new CompA(value, 0f, 0d);
-                            var entityId = txn.CreateEntity(ref comp);
+                            var entityId = txn.Spawn<CompAArch>(CompAArch.A.Set(in comp));
                             if (txn.Commit())
                             {
                                 allEntityIds[entityId] = (mode, value);
@@ -2235,19 +2168,13 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         foreach (var kvp in allEntityIds)
         {
             using var txn = dbe.CreateQuickTransaction();
-            if (txn.ReadEntity<CompA>(kvp.Key, out var comp))
+            var comp = txn.Open(kvp.Key).Read(CompAArch.A);
+            if (comp.A != kvp.Value.value)
             {
-                if (comp.A != kvp.Value.value)
-                {
-                    errors.Add($"Entity from {kvp.Value.mode}: A={comp.A}, expected {kvp.Value.value}");
-                }
+                errors.Add($"Entity from {kvp.Value.mode}: A={comp.A}, expected {kvp.Value.value}");
+            }
 
-                verified++;
-            }
-            else
-            {
-                errors.Add($"Entity from {kvp.Value.mode} not readable (value={kvp.Value.value})");
-            }
+            verified++;
         }
 
         Logger.LogInformation("Verified {Count}/{Total} entities", verified, allEntityIds.Count);
@@ -2264,7 +2191,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     public void DurabilityRestart_DataSurvivesReopen()
     {
         const int entityCount = 50;
-        var entityIds = new long[entityCount];
+        var entityIds = new EntityId[entityCount];
         var values = new int[entityCount];
 
         // Phase 1: Create and populate with Immediate durability in first scope
@@ -2272,12 +2199,13 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         {
             using var dbe = scope1.ServiceProvider.GetRequiredService<DatabaseEngine>();
             RegisterComponents(dbe);
+            dbe.InitializeArchetypes();
 
             for (int i = 0; i < entityCount; i++)
             {
                 using var txn = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
                 var comp = new CompA(i * 111, i * 1.0f, i * 2.0);
-                entityIds[i] = txn.CreateEntity(ref comp);
+                entityIds[i] = txn.Spawn<CompAArch>(CompAArch.A.Set(in comp));
                 Assert.That(txn.Commit(), Is.True, $"Commit {i} should succeed");
                 values[i] = i * 111;
             }
@@ -2292,17 +2220,15 @@ class ChaosStressTests : TestBase<ChaosStressTests>
             using var dbe = scope2.ServiceProvider.GetRequiredService<DatabaseEngine>();
 
             RegisterComponents(dbe);
+            dbe.InitializeArchetypes();
 
             var errors = new List<string>();
 
             for (int i = 0; i < entityCount; i++)
             {
                 using var txn = dbe.CreateQuickTransaction();
-                if (!txn.ReadEntity<CompA>(entityIds[i], out var comp))
-                {
-                    errors.Add($"Entity {i} (pk={entityIds[i]}) not readable after reopen");
-                }
-                else if (comp.A != values[i])
+                var comp = txn.Open(entityIds[i]).Read(CompAArch.A);
+                if (comp.A != values[i])
                 {
                     errors.Add($"Entity {i}: A={comp.A}, expected {values[i]}");
                 }
@@ -2322,6 +2248,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var errors = new ConcurrentBag<string>();
         const int entityCount = 200;
@@ -2329,12 +2256,12 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         const int updatesPerWriter = 100;
 
         // Create initial entities
-        var entityIds = new long[entityCount];
+        var entityIds = new EntityId[entityCount];
         for (int i = 0; i < entityCount; i++)
         {
             using var txn = dbe.CreateQuickTransaction();
             var comp = new CompA(i, i * 10f, 0d);
-            entityIds[i] = txn.CreateEntity(ref comp);
+            entityIds[i] = txn.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             txn.Commit();
         }
 
@@ -2359,14 +2286,12 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                     try
                     {
                         using var txn = dbe.CreateQuickTransaction();
-                        if (txn.ReadEntity<CompA>(entityIds[targetIdx], out var comp))
+                        txn.Open(entityIds[targetIdx]).Read(CompAArch.A);
+                        ref var w2 = ref txn.OpenMut(entityIds[targetIdx]).Write(CompAArch.A);
+                        w2.B += 1f;
+                        if (txn.Commit())
                         {
-                            comp.B += 1f;
-                            txn.UpdateEntity(entityIds[targetIdx], ref comp);
-                            if (txn.Commit())
-                            {
-                                Interlocked.Increment(ref totalUpdates[0]);
-                            }
+                            Interlocked.Increment(ref totalUpdates[0]);
                         }
                     }
                     catch (Exception ex)
@@ -2409,11 +2334,8 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         for (int i = 0; i < entityCount; i++)
         {
             using var txn = dbe.CreateQuickTransaction();
-            if (!txn.ReadEntity<CompA>(entityIds[i], out var comp))
-            {
-                errors.Add($"Post-checkpoint: Entity {i} not readable");
-            }
-            else if (comp.A != i)
+            var comp = txn.Open(entityIds[i]).Read(CompAArch.A);
+            if (comp.A != i)
             {
                 errors.Add($"Post-checkpoint: Entity {i} A field corrupted: {comp.A} != {i}");
             }
@@ -2440,24 +2362,25 @@ class ChaosStressTests : TestBase<ChaosStressTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var errors = new ConcurrentBag<string>();
 
         // Pre-create CompA entities for updaters and readers
         const int preCreatedCompA = 50;
-        var compAIds = new long[preCreatedCompA];
+        var compAIds = new EntityId[preCreatedCompA];
         for (int i = 0; i < preCreatedCompA; i++)
         {
             using var txn = dbe.CreateQuickTransaction();
             var comp = new CompA(1000, 0f, 0d); // All start at 1000 for sum invariant
-            compAIds[i] = txn.CreateEntity(ref comp);
+            compAIds[i] = txn.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             txn.Commit();
         }
 
         var expectedCompASum = preCreatedCompA * 1000;
 
         // Shared pool for CompD entities (creators produce, deleters consume)
-        var compDPool = new ConcurrentQueue<(long entityId, int bValue)>();
+        var compDPool = new ConcurrentQueue<(EntityId entityId, int bValue)>();
         int[] nextBCounter = [0];
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
@@ -2475,7 +2398,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
 
         var allTasks = new List<Task>();
 
-        // Role 1-2: CompD creators (monotonic B values → cascading splits)
+        // Role 1-2: CompD creators (monotonic B values -> cascading splits)
         for (int i = 0; i < 2; i++)
         {
             var creatorId = i;
@@ -2491,7 +2414,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                     {
                         using var txn = dbe.CreateQuickTransaction();
                         var comp = new CompD(rand.NextSingle(), bVal, rand.NextDouble());
-                        var id = txn.CreateEntity(ref comp);
+                        var id = txn.Spawn<CompDArch>(CompDArch.D.Set(in comp));
                         if (txn.Commit())
                         {
                             compDPool.Enqueue((id, bVal));
@@ -2506,7 +2429,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
             }));
         }
 
-        // Role 3-4: CompD deleters (consume from pool → index removals + merges)
+        // Role 3-4: CompD deleters (consume from pool -> index removals + merges)
         for (int i = 0; i < 2; i++)
         {
             var deleterId = i;
@@ -2525,7 +2448,8 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                     try
                     {
                         using var txn = dbe.CreateQuickTransaction();
-                        if (txn.DeleteEntity<CompD>(item.entityId) && txn.Commit())
+                        txn.Destroy(item.entityId);
+                        if (txn.Commit())
                         {
                             stats.AddOrUpdate("CompD_Deletes", 1, (_, v) => v + 1);
                         }
@@ -2541,7 +2465,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
         // Role 5-6: CompA atomic transfer updaters (sum invariant)
         // Uses a delta-rebase conflict handler to preserve the sum invariant under concurrent
         // modifications: if another transaction committed since our read, we rebase our delta
-        // (±1) onto the committed value instead of blindly overwriting ("last writer wins").
+        // (+-1) onto the committed value instead of blindly overwriting ("last writer wins").
         for (int i = 0; i < 2; i++)
         {
             var updaterId = i;
@@ -2562,27 +2486,26 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                     try
                     {
                         using var txn = dbe.CreateQuickTransaction();
-                        if (txn.ReadEntity<CompA>(compAIds[srcIdx], out var src) &&
-                            txn.ReadEntity<CompA>(compAIds[dstIdx], out var dst))
+                        var srcComp = txn.Open(compAIds[srcIdx]).Read(CompAArch.A);
+                        var dstComp = txn.Open(compAIds[dstIdx]).Read(CompAArch.A);
+
+                        ref var wSrc = ref txn.OpenMut(compAIds[srcIdx]).Write(CompAArch.A);
+                        wSrc.A = srcComp.A - 1;
+                        ref var wDst = ref txn.OpenMut(compAIds[dstIdx]).Write(CompAArch.A);
+                        wDst.A = dstComp.A + 1;
+
+                        // Delta-rebase handler: apply our delta onto the committed value
+                        void ConcurrencyConflictHandler(ref ConcurrencyConflictSolver solver)
                         {
-                            src.A -= 1;
-                            dst.A += 1;
-                            txn.UpdateEntity(compAIds[srcIdx], ref src);
-                            txn.UpdateEntity(compAIds[dstIdx], ref dst);
+                            ref var r = ref solver.ReadData<CompA>();
+                            ref var c = ref solver.CommittedData<CompA>();
+                            ref var m = ref solver.CommittingData<CompA>();
+                            solver.ToCommitData<CompA>().A = c.A + (m.A - r.A);
+                        }
 
-                            // Delta-rebase handler: apply our delta onto the committed value
-                            void ConcurrencyConflictHandler(ref ConcurrencyConflictSolver solver)
-                            {
-                                ref var r = ref solver.ReadData<CompA>();
-                                ref var c = ref solver.CommittedData<CompA>();
-                                ref var m = ref solver.CommittingData<CompA>();
-                                solver.ToCommitData<CompA>().A = c.A + (m.A - r.A);
-                            }
-
-                            if (txn.Commit(ConcurrencyConflictHandler))
-                            {
-                                stats.AddOrUpdate("CompA_Updates", 1, (_, v) => v + 1);
-                            }
+                        if (txn.Commit(ConcurrencyConflictHandler))
+                        {
+                            stats.AddOrUpdate("CompA_Updates", 1, (_, v) => v + 1);
                         }
                     }
                     catch (Exception ex)
@@ -2609,10 +2532,8 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                         var sum = 0;
                         for (int e = 0; e < preCreatedCompA; e++)
                         {
-                            if (txn.ReadEntity<CompA>(compAIds[e], out var comp))
-                            {
-                                sum += comp.A;
-                            }
+                            var comp = txn.Open(compAIds[e]).Read(CompAArch.A);
+                            sum += comp.A;
                         }
 
                         if (sum != expectedCompASum)
@@ -2648,11 +2569,12 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                 try
                 {
                     using var txn = dbe.CreateQuickTransaction();
-                    if (txn.ReadEntity<CompD>(item.entityId, out var comp))
+                    if (txn.IsAlive(item.entityId))
                     {
-                        comp.A = rand.NextSingle(); // AllowMultiple → index entry changes
-                        comp.C = rand.NextDouble(); // AllowMultiple → index entry changes
-                        txn.UpdateEntity(item.entityId, ref comp);
+                        txn.Open(item.entityId).Read(CompDArch.D);
+                        ref var w = ref txn.OpenMut(item.entityId).Write(CompDArch.D);
+                        w.A = rand.NextSingle(); // AllowMultiple -> index entry changes
+                        w.C = rand.NextDouble(); // AllowMultiple -> index entry changes
                         if (txn.Commit())
                         {
                             stats.AddOrUpdate("Index_Updates", 1, (_, v) => v + 1);
@@ -2678,7 +2600,7 @@ class ChaosStressTests : TestBase<ChaosStressTests>
                 {
                     using var txn = dbe.CreateQuickTransaction();
                     var comp = new CompA(rand.Next(), rand.NextSingle(), rand.NextDouble());
-                    txn.CreateEntity(ref comp);
+                    txn.Spawn<CompAArch>(CompAArch.A.Set(in comp));
                     txn.Rollback();
                     stats.AddOrUpdate("Rollbacks", 1, (_, v) => v + 1);
                 }
@@ -2715,10 +2637,8 @@ class ChaosStressTests : TestBase<ChaosStressTests>
             var finalSum = 0;
             for (int i = 0; i < preCreatedCompA; i++)
             {
-                if (txn.ReadEntity<CompA>(compAIds[i], out var comp))
-                {
-                    finalSum += comp.A;
-                }
+                var comp = txn.Open(compAIds[i]).Read(CompAArch.A);
+                finalSum += comp.A;
             }
 
             if (finalSum != expectedCompASum)

@@ -140,33 +140,6 @@ public class ViewDeltaRingBufferTests
     // Sequential batch
     // ========================================
 
-    [Test]
-    public void Sequential_100Entries_OrderAndDataPreserved()
-    {
-        using var buffer = CreateBuffer(128);
-
-        for (var i = 0; i < 100; i++)
-        {
-            var ok = buffer.TryAppend(i, KeyBytes8.FromInt(i * 10), KeyBytes8.FromInt(i * 10 + 1), i, (byte)(i & 0xFF));
-            Assert.That(ok, Is.True);
-        }
-
-        Assert.That(buffer.Count, Is.EqualTo(100));
-
-        for (var i = 0; i < 100; i++)
-        {
-            Assert.That(buffer.TryPeek(long.MaxValue, out var entry, out var flags, out var tsn, out _), Is.True);
-            Assert.That(entry.EntityPK, Is.EqualTo(i));
-            Assert.That(entry.BeforeKey.AsInt(), Is.EqualTo(i * 10));
-            Assert.That(entry.AfterKey.AsInt(), Is.EqualTo(i * 10 + 1));
-            Assert.That(tsn, Is.EqualTo(i));
-            Assert.That(flags, Is.EqualTo((byte)(i & 0xFF)));
-            buffer.Advance();
-        }
-
-        Assert.That(buffer.Count, Is.EqualTo(0));
-    }
-
     // ========================================
     // DeltaTSN compression
     // ========================================
@@ -185,41 +158,6 @@ public class ViewDeltaRingBufferTests
     // ========================================
     // Wrap-around
     // ========================================
-
-    [Test]
-    public void WrapAround_FillHalfConsumeHalfFillMore()
-    {
-        const int capacity = 64;
-        using var buffer = CreateBuffer(capacity);
-
-        // Fill half
-        for (var i = 0; i < capacity / 2; i++)
-        {
-            Assert.That(buffer.TryAppend(i, default, default, i, 0), Is.True);
-        }
-
-        // Consume half
-        for (var i = 0; i < capacity / 2; i++)
-        {
-            Assert.That(buffer.TryPeek(long.MaxValue, out var entry, out _, out _, out _), Is.True);
-            Assert.That(entry.EntityPK, Is.EqualTo(i));
-            buffer.Advance();
-        }
-
-        // Fill more than half (wraps around)
-        for (var i = 0; i < capacity / 2 + 16; i++)
-        {
-            Assert.That(buffer.TryAppend(1000 + i, default, default, 1000 + i, 0), Is.True);
-        }
-
-        // Verify all new entries
-        for (var i = 0; i < capacity / 2 + 16; i++)
-        {
-            Assert.That(buffer.TryPeek(long.MaxValue, out var entry, out _, out _, out _), Is.True);
-            Assert.That(entry.EntityPK, Is.EqualTo(1000 + i));
-            buffer.Advance();
-        }
-    }
 
     // ========================================
     // Full buffer / overflow

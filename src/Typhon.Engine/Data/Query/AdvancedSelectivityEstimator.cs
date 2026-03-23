@@ -89,7 +89,7 @@ internal sealed class AdvancedSelectivityEstimator : ISelectivityEstimator
         }
 
         // Priority 2: B+Tree point seek
-        return ExactEqualityCount(stats.Index, threshold);
+        return ExactEqualityCountDispatch(stats.Index, threshold);
     }
 
     /// <summary>
@@ -119,9 +119,19 @@ internal sealed class AdvancedSelectivityEstimator : ISelectivityEstimator
     /// For unique indexes: 0 or 1. For multi-value indexes: the buffer's TotalCount.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static unsafe long ExactEqualityCount(BTreeBase index, long key)
+    private static long ExactEqualityCountDispatch(IBTreeIndex index, long key)
     {
-        using var guard = EpochGuard.Enter(index.Segment.Manager.EpochManager);
+        if (index is BTreeBase<TransientStore> transientIndex)
+        {
+            return ExactEqualityCount(transientIndex, key);
+        }
+        return ExactEqualityCount((BTreeBase<PersistentStore>)index, key);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe long ExactEqualityCount<TStore>(BTreeBase<TStore> index, long key) where TStore : struct, IPageStore
+    {
+        using var guard = EpochGuard.Enter(index.Segment.Store.EpochManager);
         var accessor = index.Segment.CreateChunkAccessor();
         try
         {

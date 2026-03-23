@@ -1,20 +1,43 @@
 using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Configs;
+using BenchmarkDotNet.Toolchains.InProcess.Emit;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System;
 using System.IO;
 using Typhon.ARPG.Schema;
 using Typhon.Engine;
+using Typhon.Schema.Definition;
 
 namespace Typhon.Benchmark;
 
 // ═══════════════════════════════════════════════════════════════════════
-// Query & View: ARPG ItemData real-world benchmarks
+// Query & View: ARPG ItemData real-world benchmarks (ECS API)
 // ═══════════════════════════════════════════════════════════════════════
 
-[SimpleJob(warmupCount: 3, iterationCount: 5)]
+class InProcessConfig : ManualConfig
+{
+    public InProcessConfig()
+    {
+        var job = BenchmarkDotNet.Jobs.Job.MediumRun.UnfreezeCopy();
+        job.Infrastructure.Toolchain = new InProcessEmitToolchain(TimeSpan.FromMinutes(10), true);
+        AddJob(job);
+    }
+}
+
+[Archetype(506)]
+class BenchItemArch : Archetype<BenchItemArch>
+{
+    public static readonly Comp<ItemData> Item = Register<ItemData>();
+}
+
+[Config(typeof(InProcessConfig))]
 [MemoryDiagnoser]
 [BenchmarkCategory("Query", "View")]
+// STATUS_STACK_BUFFER_OVERRUN (0xC0000409) in forked process mode on .NET 10.0.201 + BDN 0.15.8.
+// InProcess mode also crashes during GlobalSetup. Root cause: likely JIT/unsafe interaction in B+Tree
+// or PipelineExecutor hot paths under BDN's execution context. Same code passes in unit tests.
+// Excluded from Regression until BDN 0.16+ or .NET 10 GA.
 public class QueryViewBenchmarks : IDisposable
 {
     private ServiceProvider _serviceProvider;
@@ -22,10 +45,10 @@ public class QueryViewBenchmarks : IDisposable
     private string _databaseName;
 
     // Pre-created view for refresh benchmarks
-    private ViewBase _view;
+    private EcsView<BenchItemArch> _view;
 
     // Entities for game-loop update cycling
-    private long[] _cyclePKs;
+    private EntityId[] _cyclePKs;
     private ItemData[] _cycleItems;
     private int _updateCursor;
 
@@ -69,6 +92,9 @@ public class QueryViewBenchmarks : IDisposable
         _dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
         _dbe.RegisterComponentFromAccessor<ItemData>();
 
+        Archetype<BenchItemArch>.Touch();
+        _dbe.InitializeArchetypes();
+
         var rng = new Random(42);
 
         // Build weighted rarity lookup table for fast sampling
@@ -86,7 +112,7 @@ public class QueryViewBenchmarks : IDisposable
         _topPlayerPK = 1; // Zipf top player
 
         // Insert entities in batches
-        var matchingPKs = new System.Collections.Generic.List<long>();
+        var matchingPKs = new System.Collections.Generic.List<EntityId>();
         const int batchSize = 500;
         for (var batch = 0; batch < EntityCount / batchSize; batch++)
         {
@@ -110,28 +136,30 @@ public class QueryViewBenchmarks : IDisposable
                     BaseBlockChance = rng.Next(0, 30)
                 };
 
-                var pk = tx.CreateEntity(ref item);
+                var eid = tx.Spawn<BenchItemArch>(BenchItemArch.Item.Set(in item));
 
                 // Track Epic+ items for view cycling
                 if (item.Rarity >= 3)
                 {
-                    matchingPKs.Add(pk);
+                    matchingPKs.Add(eid);
                 }
             }
             tx.Commit();
         }
 
         // Pre-create view for refresh benchmarks: Rarity >= 3 (Epic+)
-        _view = _dbe.Query<ItemData>().Where(i => i.Rarity >= 3).ToView();
+        using var viewTx = _dbe.CreateQuickTransaction();
+        _view = viewTx.Query<BenchItemArch>().WhereField<ItemData>(i => i.Rarity >= 3).ToView();
 
         // Pre-select entities for game-loop cycling (boundary crossers)
-        _cyclePKs = new long[CycleEntityCount];
+        _cyclePKs = new EntityId[CycleEntityCount];
         _cycleItems = new ItemData[CycleEntityCount];
         for (var i = 0; i < CycleEntityCount && i < matchingPKs.Count; i++)
         {
             _cyclePKs[i] = matchingPKs[i];
             using var readTx = _dbe.CreateQuickTransaction();
-            readTx.ReadEntity(_cyclePKs[i], out _cycleItems[i]);
+            var entity = readTx.Open(_cyclePKs[i]);
+            _cycleItems[i] = entity.Read(BenchItemArch.Item);
         }
     }
 
@@ -146,26 +174,26 @@ public class QueryViewBenchmarks : IDisposable
 
     /// <summary>
     /// Single predicate on AllowMultiple index: Rarity >= 3 (Epic+).
-    /// Selectivity ~15% → ~1,500 items.
-    /// Exercises: QueryBuilder → PlanBuilder → AllowMultiple primary stream → RangeMultipleEnumerator → VSBS expansion.
+    /// Selectivity ~15% -> ~1,500 items.
+    /// Exercises: EcsQuery -> WhereField -> PlanBuilder -> AllowMultiple primary stream -> targeted scan.
     /// </summary>
     [Benchmark]
     public int Execute_SinglePredicate()
     {
         using var tx = _dbe.CreateQuickTransaction();
-        return _dbe.Query<ItemData>().Where(i => i.Rarity >= 3).Execute(tx).Count;
+        return tx.Query<BenchItemArch>().WhereField<ItemData>(i => i.Rarity >= 3).Execute().Count;
     }
 
     /// <summary>
     /// Chained predicates: Rarity >= 3 AND ItemCategory == 5.
-    /// Selectivity ~1.5% → ~150 items.
-    /// Exercises: chained Where, selectivity ordering, AllowMultiple primary + filter short-circuit.
+    /// Selectivity ~1.5% -> ~150 items.
+    /// Exercises: WhereField with AND, selectivity ordering, AllowMultiple primary + filter short-circuit.
     /// </summary>
     [Benchmark]
     public int Execute_ChainedPredicates()
     {
         using var tx = _dbe.CreateQuickTransaction();
-        return _dbe.Query<ItemData>().Where(i => i.Rarity >= 3).Where(i => i.ItemCategory == 5).Execute(tx).Count;
+        return tx.Query<BenchItemArch>().WhereField<ItemData>(i => i.Rarity >= 3 && i.ItemCategory == 5).Execute().Count;
     }
 
     /// <summary>
@@ -177,7 +205,7 @@ public class QueryViewBenchmarks : IDisposable
     public int Count_PlayerItems()
     {
         using var tx = _dbe.CreateQuickTransaction();
-        return _dbe.Query<ItemData>().Where(i => i.OwnerId == _topPlayerPK).Count(tx);
+        return tx.Query<BenchItemArch>().WhereField<ItemData>(i => i.OwnerId == _topPlayerPK).Count();
     }
 
     /// <summary>
@@ -195,7 +223,8 @@ public class QueryViewBenchmarks : IDisposable
                 var idx = _updateCursor++ % _cyclePKs.Length;
                 ref var item = ref _cycleItems[idx];
                 item.Rarity = item.Rarity >= 3 ? 0 : 3;
-                tx.UpdateEntity(_cyclePKs[idx], ref item);
+                var entity = tx.OpenMut(_cyclePKs[idx]);
+                entity.Write(BenchItemArch.Item) = item;
             }
             tx.Commit();
         }
@@ -204,18 +233,18 @@ public class QueryViewBenchmarks : IDisposable
         using var readTx = _dbe.CreateQuickTransaction();
         _view.Refresh(readTx);
         var count = _view.Count;
-        _view.ClearDelta();
         return count;
     }
 
     /// <summary>
-    /// Measures full view lifecycle: create → populate → dispose.
-    /// Exercises: QueryBuilder → PlanBuilder → PipelineExecutor → View construction + ViewRegistry registration + initial entity set + dispose.
+    /// Measures full view lifecycle: create -> populate -> dispose.
+    /// Exercises: EcsQuery -> WhereField -> PlanBuilder -> PipelineExecutor -> EcsView construction + ViewRegistry registration + initial entity set + dispose.
     /// </summary>
     [Benchmark]
     public int View_InitialPopulation()
     {
-        using var view = _dbe.Query<ItemData>().Where(i => i.Rarity >= 3).ToView();
+        using var tx = _dbe.CreateQuickTransaction();
+        using var view = tx.Query<BenchItemArch>().WhereField<ItemData>(i => i.Rarity >= 3).ToView();
         return view.Count;
     }
 

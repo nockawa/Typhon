@@ -25,7 +25,7 @@ public class PagedMMFOptions
         set => _databaseFileName = value;
     }
     public ulong DatabaseCacheSize { get; set; } = PagedMMF.DefaultMemPageCount * PagedMMF.PageSize;
-    public bool PagesDebugPattern { get; set; } = false;
+    public bool PagesDebugPattern { get; set; }
 
     /// <summary>
     /// Factory that creates the backpressure strategy for page cache allocation.
@@ -34,7 +34,7 @@ public class PagedMMFOptions
     internal Func<IPageCacheBackpressureStrategy> BackpressureStrategyFactory { get; set; } = () => new WaitForIOStrategy();
 
     internal bool OverrideDatabaseCacheMinSize { get; set; }
-    
+
     public void EnsureFileDeleted()
     {
         try
@@ -42,8 +42,8 @@ public class PagedMMFOptions
             var pfn = BuildDatabasePathFileName();
             DeleteAndWait(pfn);
 
-            var lockPath = Path.Combine(DatabaseDirectory, $"{DatabaseName}.lock");
-            DeleteAndWait(lockPath);
+                var lockPath = Path.Combine(DatabaseDirectory, $"{DatabaseName}.lock");
+                DeleteAndWait(lockPath);
         }
         catch (Exception)
         {

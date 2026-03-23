@@ -1,3 +1,5 @@
+#pragma warning disable CS1718
+
 using NUnit.Framework;
 using System;
 using System.Linq.Expressions;
@@ -8,99 +10,74 @@ class ExpressionParserTests
 {
     #region FlipOp — all 6 operators via reversed operands
 
+    [TestCase(CompareOp.GreaterThan, CompareOp.LessThan)]
+    [TestCase(CompareOp.LessThan, CompareOp.GreaterThan)]
+    [TestCase(CompareOp.GreaterThanOrEqual, CompareOp.LessThanOrEqual)]
+    [TestCase(CompareOp.LessThanOrEqual, CompareOp.GreaterThanOrEqual)]
+    [TestCase(CompareOp.Equal, CompareOp.Equal)]
+    [TestCase(CompareOp.NotEqual, CompareOp.NotEqual)]
     [Test]
-    public void FlipOp_ReversedGreaterThan_BecomesLessThan()
+    public void FlipOp_ReversedOperands_AllOperators(CompareOp inputOp, CompareOp expectedOp)
     {
-        // 50 > p.B → p.B < 50
-        var predicates = ExpressionParser.Parse<CompD>(p => 50 > p.B);
-        Assert.That(predicates[0].Operator, Is.EqualTo(CompareOp.LessThan));
+        // Build "50 {inputOp} p.B" which should become "p.B {expectedOp} 50"
+        var param = Expression.Parameter(typeof(CompD), "p");
+        var field = Expression.Field(param, nameof(CompD.B));
+        var constant = Expression.Constant(50);
+
+        var exprType = inputOp switch
+        {
+            CompareOp.GreaterThan => ExpressionType.GreaterThan,
+            CompareOp.LessThan => ExpressionType.LessThan,
+            CompareOp.GreaterThanOrEqual => ExpressionType.GreaterThanOrEqual,
+            CompareOp.LessThanOrEqual => ExpressionType.LessThanOrEqual,
+            CompareOp.Equal => ExpressionType.Equal,
+            CompareOp.NotEqual => ExpressionType.NotEqual,
+            _ => throw new ArgumentOutOfRangeException()
+        };
+
+        // constant {op} field  (reversed operands)
+        var binary = Expression.MakeBinary(exprType, constant, field);
+        var lambda = Expression.Lambda<Func<CompD, bool>>(binary, param);
+
+        var predicates = ExpressionParser.Parse<CompD>(lambda);
+        Assert.That(predicates[0].Operator, Is.EqualTo(expectedOp));
         Assert.That(predicates[0].Value, Is.EqualTo(50));
-    }
-
-    [Test]
-    public void FlipOp_ReversedLessThan_BecomesGreaterThan()
-    {
-        // 50 < p.B → p.B > 50
-        var predicates = ExpressionParser.Parse<CompD>(p => 50 < p.B);
-        Assert.That(predicates[0].Operator, Is.EqualTo(CompareOp.GreaterThan));
-    }
-
-    [Test]
-    public void FlipOp_ReversedGreaterThanOrEqual_BecomesLessThanOrEqual()
-    {
-        // 50 >= p.B → p.B <= 50
-        var predicates = ExpressionParser.Parse<CompD>(p => 50 >= p.B);
-        Assert.That(predicates[0].Operator, Is.EqualTo(CompareOp.LessThanOrEqual));
-    }
-
-    [Test]
-    public void FlipOp_ReversedLessThanOrEqual_BecomesGreaterThanOrEqual()
-    {
-        // 50 <= p.B → p.B >= 50
-        var predicates = ExpressionParser.Parse<CompD>(p => 50 <= p.B);
-        Assert.That(predicates[0].Operator, Is.EqualTo(CompareOp.GreaterThanOrEqual));
-    }
-
-    [Test]
-    public void FlipOp_ReversedEqual_StaysEqual()
-    {
-        // 42 == p.B → p.B == 42
-        var predicates = ExpressionParser.Parse<CompD>(p => 42 == p.B);
-        Assert.That(predicates[0].Operator, Is.EqualTo(CompareOp.Equal));
-    }
-
-    [Test]
-    public void FlipOp_ReversedNotEqual_StaysNotEqual()
-    {
-        // 42 != p.B → p.B != 42
-        var predicates = ExpressionParser.Parse<CompD>(p => 42 != p.B);
-        Assert.That(predicates[0].Operator, Is.EqualTo(CompareOp.NotEqual));
     }
 
     #endregion
 
     #region InvertOp — all 6 operators via NOT
 
+    [TestCase(CompareOp.GreaterThan, CompareOp.LessThanOrEqual)]
+    [TestCase(CompareOp.LessThan, CompareOp.GreaterThanOrEqual)]
+    [TestCase(CompareOp.GreaterThanOrEqual, CompareOp.LessThan)]
+    [TestCase(CompareOp.LessThanOrEqual, CompareOp.GreaterThan)]
+    [TestCase(CompareOp.Equal, CompareOp.NotEqual)]
+    [TestCase(CompareOp.NotEqual, CompareOp.Equal)]
     [Test]
-    public void InvertOp_NotGreaterThan_BecomesLessThanOrEqual()
+    public void InvertOp_AllOperators(CompareOp inputOp, CompareOp expectedOp)
     {
-        var branches = ExpressionParser.ParseDnf<CompD>(p => !(p.B > 50));
-        Assert.That(branches[0][0].Operator, Is.EqualTo(CompareOp.LessThanOrEqual));
-    }
+        var param = Expression.Parameter(typeof(CompD), "p");
+        var field = Expression.Field(param, nameof(CompD.B));
+        var constant = Expression.Constant(50);
 
-    [Test]
-    public void InvertOp_NotLessThan_BecomesGreaterThanOrEqual()
-    {
-        var branches = ExpressionParser.ParseDnf<CompD>(p => !(p.B < 50));
-        Assert.That(branches[0][0].Operator, Is.EqualTo(CompareOp.GreaterThanOrEqual));
-    }
+        var exprType = inputOp switch
+        {
+            CompareOp.GreaterThan => ExpressionType.GreaterThan,
+            CompareOp.LessThan => ExpressionType.LessThan,
+            CompareOp.GreaterThanOrEqual => ExpressionType.GreaterThanOrEqual,
+            CompareOp.LessThanOrEqual => ExpressionType.LessThanOrEqual,
+            CompareOp.Equal => ExpressionType.Equal,
+            CompareOp.NotEqual => ExpressionType.NotEqual,
+            _ => throw new ArgumentOutOfRangeException()
+        };
 
-    [Test]
-    public void InvertOp_NotGreaterThanOrEqual_BecomesLessThan()
-    {
-        var branches = ExpressionParser.ParseDnf<CompD>(p => !(p.B >= 50));
-        Assert.That(branches[0][0].Operator, Is.EqualTo(CompareOp.LessThan));
-    }
+        var binary = Expression.MakeBinary(exprType, field, constant);
+        var notExpr = Expression.Not(binary);
+        var lambda = Expression.Lambda<Func<CompD, bool>>(notExpr, param);
 
-    [Test]
-    public void InvertOp_NotLessThanOrEqual_BecomesGreaterThan()
-    {
-        var branches = ExpressionParser.ParseDnf<CompD>(p => !(p.B <= 50));
-        Assert.That(branches[0][0].Operator, Is.EqualTo(CompareOp.GreaterThan));
-    }
-
-    [Test]
-    public void InvertOp_NotEqual_BecomesNotEqual()
-    {
-        var branches = ExpressionParser.ParseDnf<CompD>(p => !(p.B == 50));
-        Assert.That(branches[0][0].Operator, Is.EqualTo(CompareOp.NotEqual));
-    }
-
-    [Test]
-    public void InvertOp_NotNotEqual_BecomesEqual()
-    {
-        var branches = ExpressionParser.ParseDnf<CompD>(p => !(p.B != 50));
-        Assert.That(branches[0][0].Operator, Is.EqualTo(CompareOp.Equal));
+        var branches = ExpressionParser.ParseDnf(lambda);
+        Assert.That(branches[0][0].Operator, Is.EqualTo(expectedOp));
     }
 
     #endregion
@@ -269,6 +246,7 @@ class ExpressionParserTests
     public void Parse_FieldToField_Throws()
     {
         Assert.Throws<NotSupportedException>(() =>
+            // ReSharper disable once EqualExpressionComparison
             ExpressionParser.Parse<CompD>(p => p.B > p.B));
     }
 

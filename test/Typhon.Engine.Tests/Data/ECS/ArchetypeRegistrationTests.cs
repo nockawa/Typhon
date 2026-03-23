@@ -1,0 +1,214 @@
+using System.Runtime.InteropServices;
+using NUnit.Framework;
+using Typhon.Schema.Definition;
+
+namespace Typhon.Engine.Tests;
+
+// ═══════════════════════════════════════════════════════════════════════
+// Test component structs
+// ═══════════════════════════════════════════════════════════════════════
+
+[StructLayout(LayoutKind.Sequential)]
+struct Placement
+{
+    public float X, Y, Z;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+struct BuildingData
+{
+    public int Level;
+    public float Health;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+struct HouseData
+{
+    public int Residents;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+struct FactoryData
+{
+    public int ProductionRate;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Test archetypes
+// ═══════════════════════════════════════════════════════════════════════
+
+[Archetype(10)]
+class TestBuilding : Archetype<TestBuilding>
+{
+    public static readonly Comp<Placement> PlacementComp = Register<Placement>();
+    public static readonly Comp<BuildingData> BuildingComp = Register<BuildingData>();
+}
+
+[Archetype(11)]
+class TestHouse : Archetype<TestHouse, TestBuilding>
+{
+    public static readonly Comp<HouseData> HouseComp = Register<HouseData>();
+}
+
+[Archetype(12)]
+class TestFactory : Archetype<TestFactory, TestBuilding>
+{
+    public static readonly Comp<FactoryData> FactoryComp = Register<FactoryData>();
+}
+
+// Standalone (no parent)
+[Archetype(20)]
+class TestVehicle : Archetype<TestVehicle>
+{
+    public static readonly Comp<Placement> VehiclePlacement = Register<Placement>();
+}
+
+[NonParallelizable]
+class ArchetypeRegistrationTests
+{
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        // Touch ensures: 1) CLR runs field initializers (DeclareComponent), 2) lazy finalization runs
+        Archetype<TestBuilding>.Touch();
+        Archetype<TestHouse>.Touch();
+        Archetype<TestFactory>.Touch();
+        Archetype<TestVehicle>.Touch();
+    }
+
+    [Test]
+    public void RootArchetype_RegistersWithCorrectId()
+    {
+
+        var meta = ArchetypeRegistry.GetMetadata(10);
+        Assert.That(meta, Is.Not.Null);
+        Assert.That(meta.ArchetypeId, Is.EqualTo(10));
+        Assert.That(meta.ComponentCount, Is.EqualTo(2));
+        Assert.That(meta.ParentArchetypeId, Is.EqualTo(ArchetypeMetadata.NoParent));
+    }
+
+    [Test]
+    public void RootArchetype_SlotIndices_Sequential()
+    {
+        _ = TestBuilding.PlacementComp;
+
+        var meta = ArchetypeRegistry.GetMetadata(10);
+        Assert.That(meta.ComponentCount, Is.EqualTo(2));
+        Assert.That(meta._componentTypeIds.Length, Is.EqualTo(2));
+
+        // Slot 0 = Placement, Slot 1 = BuildingData
+        int placementTypeId = ArchetypeRegistry.GetComponentTypeId<Placement>();
+        int buildingTypeId = ArchetypeRegistry.GetComponentTypeId<BuildingData>();
+
+        Assert.That(meta.GetSlot(placementTypeId), Is.EqualTo(0));
+        Assert.That(meta.GetSlot(buildingTypeId), Is.EqualTo(1));
+    }
+
+    [Test]
+    public void ChildArchetype_InheritsParentSlots_ParentFirst()
+    {
+        _ = TestHouse.HouseComp;
+
+        var meta = ArchetypeRegistry.GetMetadata(11);
+        Assert.That(meta.ArchetypeId, Is.EqualTo(11));
+        Assert.That(meta.ComponentCount, Is.EqualTo(3)); // 2 from Building + 1 own
+        Assert.That(meta.ParentArchetypeId, Is.EqualTo(10));
+
+        int placementTypeId = ArchetypeRegistry.GetComponentTypeId<Placement>();
+        int buildingTypeId = ArchetypeRegistry.GetComponentTypeId<BuildingData>();
+        int houseTypeId = ArchetypeRegistry.GetComponentTypeId<HouseData>();
+
+        // Parent slots first (0, 1), then own (2)
+        Assert.That(meta.GetSlot(placementTypeId), Is.EqualTo(0));
+        Assert.That(meta.GetSlot(buildingTypeId), Is.EqualTo(1));
+        Assert.That(meta.GetSlot(houseTypeId), Is.EqualTo(2));
+    }
+
+    [Test]
+    public void ComponentTypeId_DedupAcrossArchetypes()
+    {
+        // Both TestBuilding and TestVehicle use Placement
+        _ = TestBuilding.PlacementComp;
+        _ = TestVehicle.VehiclePlacement;
+
+        int typeId = ArchetypeRegistry.GetComponentTypeId<Placement>();
+        Assert.That(typeId, Is.GreaterThanOrEqualTo(0));
+
+        // Both should share the same ComponentTypeId
+        var buildingMeta = ArchetypeRegistry.GetMetadata(10);
+        var vehicleMeta = ArchetypeRegistry.GetMetadata(20);
+
+        Assert.That(buildingMeta._componentTypeIds[0], Is.EqualTo(typeId));
+        Assert.That(vehicleMeta._componentTypeIds[0], Is.EqualTo(typeId));
+    }
+
+    [Test]
+    public void ParentChild_Graph_ChildRegistered()
+    {
+        _ = TestHouse.HouseComp;
+        _ = TestFactory.FactoryComp;
+
+        var parentMeta = ArchetypeRegistry.GetMetadata(10);
+        Assert.That(parentMeta.ChildArchetypeIds, Does.Contain((ushort)11));
+        Assert.That(parentMeta.ChildArchetypeIds, Does.Contain((ushort)12));
+    }
+
+    [Test]
+    public void Freeze_BuildsSubtreeIds()
+    {
+        _ = TestHouse.HouseComp;
+        _ = TestFactory.FactoryComp;
+
+        ArchetypeRegistry.Freeze();
+
+        var parentMeta = ArchetypeRegistry.GetMetadata(10);
+        // Subtree of Building: self(10) + House(11) + Factory(12)
+        Assert.That(parentMeta.SubtreeArchetypeIds, Does.Contain((ushort)10));
+        Assert.That(parentMeta.SubtreeArchetypeIds, Does.Contain((ushort)11));
+        Assert.That(parentMeta.SubtreeArchetypeIds, Does.Contain((ushort)12));
+        Assert.That(parentMeta.SubtreeArchetypeIds.Length, Is.EqualTo(3));
+
+        // Subtree of House: just self(11)
+        var houseMeta = ArchetypeRegistry.GetMetadata(11);
+        Assert.That(houseMeta.SubtreeArchetypeIds, Is.EqualTo(new ushort[] { 11 }));
+    }
+
+    [Test]
+    public void EntityRecordSize_MatchesComponentCount()
+    {
+        _ = TestBuilding.PlacementComp;
+        _ = TestHouse.HouseComp;
+
+        var buildingMeta = ArchetypeRegistry.GetMetadata(10);
+        var houseMeta = ArchetypeRegistry.GetMetadata(11);
+
+        // Building: 2 components → 14 + 2*4 = 22 bytes
+        Assert.That(buildingMeta._entityRecordSize, Is.EqualTo(22));
+
+        // House: 3 components → 14 + 3*4 = 26 bytes
+        Assert.That(houseMeta._entityRecordSize, Is.EqualTo(26));
+    }
+
+    [Test]
+    public void RegistrationCount_Correct()
+    {
+        _ = TestBuilding.PlacementComp;
+        _ = TestVehicle.VehiclePlacement;
+
+        Assert.That(ArchetypeRegistry.Count, Is.GreaterThanOrEqualTo(2));
+    }
+
+    [Test]
+    public void CompHandle_Set_RoundTrip()
+    {
+        _ = TestBuilding.PlacementComp;
+
+        var value = new Placement { X = 1.0f, Y = 2.0f, Z = 3.0f };
+        var cv = TestBuilding.PlacementComp.Set(in value);
+
+        var read = cv.Read<Placement>();
+        Assert.That(read.X, Is.EqualTo(1.0f));
+        Assert.That(read.Y, Is.EqualTo(2.0f));
+        Assert.That(read.Z, Is.EqualTo(3.0f));
+    }
+}

@@ -25,7 +25,7 @@ namespace Typhon.Engine;
 /// </remarks>
 [NoCopy(Reason = "struct with mutable SIMD cache and epoch-pinned pages")]
 [StructLayout(LayoutKind.Sequential)]
-public unsafe struct ChunkAccessor : IDisposable
+public unsafe struct ChunkAccessor<TStore> : IDisposable where TStore : struct, IPageStore
 {
     // === SOA layout for SIMD search (1 cache line) ===
     private fixed int _pageIndices[16];        // 64 bytes — segment page indices, SIMD searchable
@@ -45,9 +45,9 @@ public unsafe struct ChunkAccessor : IDisposable
     private int _otherHeaderOffset;            // 4 bytes — non-root pages: alignment padding
 
     // === References ===
-    private ChunkBasedSegment _segment;
+    private ChunkBasedSegment<TStore> _segment;
     private ChangeSet _changeSet;
-    private PagedMMF _pagedMMF;
+    private TStore _store;
     private EpochManager _epochManager;
 
     // === Base address for computing memPageIndex on-demand (saves 64 bytes vs storing _memPageIndices[16]) ===
@@ -58,7 +58,7 @@ public unsafe struct ChunkAccessor : IDisposable
     private const int InvalidPageIndex = -1;
 
 
-    public ChunkBasedSegment Segment => _segment;
+    public ChunkBasedSegment<TStore> Segment => _segment;
 
     /// <summary>
     /// The ChangeSet used for dirty page tracking. Internal setter allows BTree's warm accessor to switch ChangeSets between operations without full
@@ -87,11 +87,11 @@ public unsafe struct ChunkAccessor : IDisposable
     /// Create a new ChunkAccessor. All storage is stack-allocated — zero heap allocations.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ChunkAccessor(ChunkBasedSegment segment, PagedMMF pagedMMF, EpochManager epochManager, ChangeSet changeSet = null)
+    internal ChunkAccessor(ChunkBasedSegment<TStore> segment, TStore store, EpochManager epochManager, ChangeSet changeSet = null)
     {
         Debug.Assert(epochManager.IsCurrentThreadInScope, "ChunkAccessor must be created inside an epoch scope");
         _segment = segment;
-        _pagedMMF = pagedMMF;
+        _store = store;
         _epochManager = epochManager;
         _changeSet = changeSet;
         _mruSlot = 0;
@@ -101,7 +101,7 @@ public unsafe struct ChunkAccessor : IDisposable
         _stride = segment.Stride;
         _rootHeaderOffset = segment.RootChunkDataOffset;
         _otherHeaderOffset = segment.OtherChunkDataOffset;
-        _memPagesBaseAddr = pagedMMF.MemPagesBaseAddress;
+        _memPagesBaseAddr = store.MemPagesBaseAddress;
 
         // Initialize page indices to invalid (-1). Other arrays are zero-initialized by struct init.
         fixed (int* pageIndices = _pageIndices)
@@ -146,7 +146,7 @@ public unsafe struct ChunkAccessor : IDisposable
         {
             _dirtyFlags |= mask;
             var memPageIndex = GetMemPageIndexFromSlot(slot);
-            _pagedMMF.IncrementActiveChunkWriters(memPageIndex);
+            _store.IncrementActiveChunkWriters(memPageIndex);
             if (_changeSet != null)
             {
                 if (_changeSet.AddByMemPageIndex(memPageIndex))
@@ -168,7 +168,7 @@ public unsafe struct ChunkAccessor : IDisposable
                     // EnsureDirtyAtLeast(2) is wrong: it creates a livelock — checkpoint decrements
                     //   2→1, next re-dirty bumps 1→2, DC never reaches 0.
                     // ReleaseExcessDirtyMarks caps DC at 1 on UoW dispose, preventing inflation.
-                    _pagedMMF.IncrementDirty(memPageIndex);
+                    _store.IncrementDirty(memPageIndex);
                 }
             }
         }
@@ -263,7 +263,7 @@ public unsafe struct ChunkAccessor : IDisposable
                 var bit = BitOperations.TrailingZeroCount(flags);
                 var memPageIndex = GetMemPageIndexFromSlot(bit);
                 _changeSet?.AddByMemPageIndex(memPageIndex);
-                _pagedMMF.DecrementActiveChunkWriters(memPageIndex);
+                _store.DecrementActiveChunkWriters(memPageIndex);
                 flags &= ~(1 << bit);
             }
             _dirtyFlags = 0;
@@ -302,14 +302,14 @@ public unsafe struct ChunkAccessor : IDisposable
             var mask0 = Vector256.Equals(v0, target).ExtractMostSignificantBits();
             if (mask0 != 0)
             {
-                return _pagedMMF.TryLatchPageExclusive(GetMemPageIndexFromSlot(BitOperations.TrailingZeroCount(mask0)));
+                return _store.TryLatchPageExclusive(GetMemPageIndexFromSlot(BitOperations.TrailingZeroCount(mask0)));
             }
 
             var v1 = Vector256.Load(indices + 8);
             var mask1 = Vector256.Equals(v1, target).ExtractMostSignificantBits();
             if (mask1 != 0)
             {
-                return _pagedMMF.TryLatchPageExclusive(GetMemPageIndexFromSlot(8 + BitOperations.TrailingZeroCount(mask1)));
+                return _store.TryLatchPageExclusive(GetMemPageIndexFromSlot(8 + BitOperations.TrailingZeroCount(mask1)));
             }
         }
 
@@ -331,7 +331,7 @@ public unsafe struct ChunkAccessor : IDisposable
             var mask0 = Vector256.Equals(v0, target).ExtractMostSignificantBits();
             if (mask0 != 0)
             {
-                _pagedMMF.UnlatchPageExclusive(GetMemPageIndexFromSlot(BitOperations.TrailingZeroCount(mask0)));
+                _store.UnlatchPageExclusive(GetMemPageIndexFromSlot(BitOperations.TrailingZeroCount(mask0)));
                 return;
             }
 
@@ -339,7 +339,7 @@ public unsafe struct ChunkAccessor : IDisposable
             var mask1 = Vector256.Equals(v1, target).ExtractMostSignificantBits();
             if (mask1 != 0)
             {
-                _pagedMMF.UnlatchPageExclusive(GetMemPageIndexFromSlot(8 + BitOperations.TrailingZeroCount(mask1)));
+                _store.UnlatchPageExclusive(GetMemPageIndexFromSlot(8 + BitOperations.TrailingZeroCount(mask1)));
             }
         }
     }
@@ -452,13 +452,20 @@ public unsafe struct ChunkAccessor : IDisposable
         var mru = _mruSlot;
         var mruPageIdx = _pageIndices[mru];
         var memIdx = mruPageIdx >= 0 && mru < _usedSlots ? GetMemPageIndexFromSlot(mru) : -1;
-        var pi = memIdx >= 0 ? _pagedMMF.GetPageInfoForDiagnostic(memIdx) : default;
+        // Diagnostic page info is only available for PersistentStore (MMF-backed pages)
+        var diagInfo = "";
+        if (typeof(TStore) == typeof(PersistentStore) && memIdx >= 0)
+        {
+            var ps = Unsafe.As<TStore, PersistentStore>(ref _store);
+            var pi = ps.Mmf.GetPageInfoForDiagnostic(memIdx);
+            diagInfo = $"DC={pi.DirtyCounter} ACW={pi.ActiveChunkWriters} SlotRef={pi.SlotRefCount} " +
+                       $"Epoch={pi.AccessEpoch} State={pi.PageState} CrcOk={pi.CrcVerified}. ";
+        }
 
         throw new InvalidOperationException(
             $"ChunkAccessor.GetChunkAddress: chunkId {chunkId} exceeds segment capacity {capacity}. " +
             $"MRU slot={mru} pageIdx={mruPageIdx} memIdx={memIdx} " +
-            $"DC={pi.DirtyCounter} ACW={pi.ActiveChunkWriters} SlotRef={pi.SlotRefCount} " +
-            $"Epoch={pi.AccessEpoch} State={pi.PageState} CrcOk={pi.CrcVerified}. " +
+            diagInfo +
             "This indicates a stale ChunkId read from evicted page data.");
     }
 
@@ -539,10 +546,10 @@ public unsafe struct ChunkAccessor : IDisposable
             // Standalone path: decrement immediately (epoch protection is sufficient).
             if ((_dirtyFlags & mask) != 0)
             {
-                _pagedMMF.DecrementActiveChunkWriters(memPageIndex);
+                _store.DecrementActiveChunkWriters(memPageIndex);
                 _dirtyFlags = (ushort)(_dirtyFlags & ~mask);
             }
-            _pagedMMF.DecrementSlotRefCount(memPageIndex);
+            _store.DecrementSlotRefCount(memPageIndex);
         }
 
         _pageIndices[slot] = InvalidPageIndex;
@@ -561,15 +568,15 @@ public unsafe struct ChunkAccessor : IDisposable
         var filePageIndex = pages[pageIndex];
         Debug.Assert(filePageIndex >= 0);
 
-        var result = _pagedMMF.RequestPageEpoch(filePageIndex, _epochManager.GlobalEpoch, out var memPageIndex);
+        var result = _store.RequestPageEpoch(filePageIndex, _epochManager.GlobalEpoch, out var memPageIndex);
         Debug.Assert(result);
 
         _pageIndices[slot] = pageIndex;
-        _baseAddresses[slot] = (long)_pagedMMF.GetMemPageRawDataAddress(memPageIndex);
+        _baseAddresses[slot] = (long)_store.GetMemPageRawDataAddress(memPageIndex);
 
         // SlotRefCount prevents PagedMMF from evicting this page while the accessor holds a slot reference.
         // Deferred-decremented in EvictSlot, immediate-decremented in Dispose.
-        _pagedMMF.IncrementSlotRefCount(memPageIndex);
+        _store.IncrementSlotRefCount(memPageIndex);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -589,7 +596,7 @@ public unsafe struct ChunkAccessor : IDisposable
         // Guard against stale ThreadStatic warm cache: if the PagedMMF has been disposed
         // (e.g., previous test run on the same thread), the page cache no longer exists.
         // Skip all cleanup — SlotRefCount, ACW, dirty flags are meaningless for a disposed page cache.
-        if (_pagedMMF.IsDisposed)
+        if (_store.IsDisposed)
         {
             _usedSlots = 0;
             _segment = null!;
@@ -606,7 +613,7 @@ public unsafe struct ChunkAccessor : IDisposable
             if (_pageIndices[i] != InvalidPageIndex)
             {
                 var memPageIndex = GetMemPageIndexFromSlot(i);
-                _pagedMMF.DecrementSlotRefCount(memPageIndex);
+                _store.DecrementSlotRefCount(memPageIndex);
             }
         }
 

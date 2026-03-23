@@ -63,7 +63,7 @@ public class DatabaseSchemaTests
     {
         var dc = new DatabaseDefinitions();
 
-        dc.CreateFromAccessor<FieldR1>();
+        dc.CreateFromAccessor<ComponentR1>();
 
         dc.CreateComponentBuilder("DBObject", 1)
             .WithPOCO<DBObject>()

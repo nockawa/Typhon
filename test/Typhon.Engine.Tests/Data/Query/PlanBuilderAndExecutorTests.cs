@@ -1,28 +1,33 @@
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using System.Collections.Generic;
-using System.Linq;
 
 namespace Typhon.Engine.Tests;
 
 class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompDArch>.Touch();
+    }
+
     #region Helpers
 
-    private static long CreateEntity(DatabaseEngine dbe, float a, int b, double c)
+    private static EntityId CreateEntity(DatabaseEngine dbe, float a, int b, double c)
     {
         using var t = dbe.CreateQuickTransaction();
         var d = new CompD(a, b, c);
-        var pk = t.CreateEntity(ref d);
+        var id = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
         t.Commit();
-        return pk;
+        return id;
     }
 
     /// <summary>
     /// Resolves evaluators and builds an execution plan using the basic selectivity estimator.
     /// Returns the plan and the ordered evaluators (from the plan).
     /// </summary>
-    private static (ExecutionPlan Plan, FieldEvaluator[] Evaluators) BuildPlanFromExpression(DatabaseEngine dbe, 
+    private static (ExecutionPlan Plan, FieldEvaluator[] Evaluators) BuildPlanFromExpression(DatabaseEngine dbe,
         System.Linq.Expressions.Expression<System.Func<CompD, bool>> predicate, OrderByField? orderBy = null)
     {
         var fieldPredicates = ExpressionParser.Parse<CompD>(predicate);
@@ -40,7 +45,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         var ct = dbe.GetComponentTable<CompD>();
         using var tx = dbe.CreateQuickTransaction();
         var result = new HashSet<long>();
-        PipelineExecutor.Instance.Execute<CompD>(plan, plan.OrderedEvaluators, ct, tx, result);
+        PipelineExecutor.Instance.Execute(plan, plan.OrderedEvaluators, ct, tx, result);
         return result;
     }
 
@@ -50,7 +55,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         var ct = dbe.GetComponentTable<CompD>();
         using var tx = dbe.CreateQuickTransaction();
         var result = new List<long>();
-        PipelineExecutor.Instance.ExecuteOrdered<CompD>(plan, plan.OrderedEvaluators, ct, tx, result, skip, take);
+        PipelineExecutor.Instance.ExecuteOrdered(plan, plan.OrderedEvaluators, ct, tx, result, skip, take);
         return result;
     }
 
@@ -63,6 +68,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateEntity(dbe, 1.0f, 50, 2.0);
         var (plan, evaluators) = BuildPlanFromExpression(dbe, p => p.B > 40);
@@ -76,14 +82,15 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        // Create 100 entities with varying field values
-        for (var i = 0; i < 100; i++)
+        // Create 20 entities with varying field values
+        for (var i = 0; i < 20; i++)
         {
             CreateEntity(dbe, i / 10.0f, i, i * 1.0);
         }
 
-        var (plan, _) = BuildPlanFromExpression(dbe, p => p.B > 90 && p.A > 5.0f);
+        var (plan, _) = BuildPlanFromExpression(dbe, p => p.B > 15 && p.A > 1.0f);
 
         // Verify evaluators are ordered by ascending estimated cardinality
         Assert.That(plan.OrderedEvaluators, Has.Length.EqualTo(2));
@@ -96,6 +103,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         for (var i = 0; i < 50; i++)
         {
@@ -119,6 +127,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateEntity(dbe, 1.0f, 50, 2.0);
 
@@ -135,6 +144,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateEntity(dbe, 1.0f, 50, 2.0);
 
@@ -153,6 +163,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Single entity: both fields have the same estimated cardinality
         CreateEntity(dbe, 1.0f, 1, 1.0);
@@ -179,10 +190,14 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        var pk1 = CreateEntity(dbe, 1.0f, 50, 2.0);
-        var pk2 = CreateEntity(dbe, 1.0f, 30, 2.0);
-        var pk3 = CreateEntity(dbe, 1.0f, 60, 2.0);
+        var id1 = CreateEntity(dbe, 1.0f, 50, 2.0);
+        var id2 = CreateEntity(dbe, 1.0f, 30, 2.0);
+        var id3 = CreateEntity(dbe, 1.0f, 60, 2.0);
+        var pk1 = (long)id1.RawValue;
+        var pk2 = (long)id2.RawValue;
+        var pk3 = (long)id3.RawValue;
 
         var (plan, _) = BuildPlanFromExpression(dbe, p => p.B > 40);
         var result = ExecutePlan(dbe, plan);
@@ -198,12 +213,13 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Create 20 entities with varying B and A values
-        var pks = new long[20];
+        var ids = new EntityId[20];
         for (var i = 0; i < 20; i++)
         {
-            pks[i] = CreateEntity(dbe, i * 0.5f, i * 5, i * 1.0);
+            ids[i] = CreateEntity(dbe, i * 0.5f, i * 5, i * 1.0);
         }
 
         // B > 50 && A > 3.0f => Intersection: i=11..19 => 9 entities
@@ -216,7 +232,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         {
             if (i * 5 > 50 && i * 0.5f > 3.0f)
             {
-                expected.Add(pks[i]);
+                expected.Add((long)ids[i].RawValue);
             }
         }
 
@@ -228,6 +244,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateEntity(dbe, 1.0f, 10, 2.0);
         CreateEntity(dbe, 2.0f, 20, 3.0);
@@ -243,10 +260,11 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        var pk1 = CreateEntity(dbe, 1.0f, 50, 2.0);
-        var pk2 = CreateEntity(dbe, 2.0f, 60, 3.0);
-        var pk3 = CreateEntity(dbe, 3.0f, 70, 4.0);
+        var pk1 = (long)CreateEntity(dbe, 1.0f, 50, 2.0).RawValue;
+        var pk2 = (long)CreateEntity(dbe, 2.0f, 60, 3.0).RawValue;
+        var pk3 = (long)CreateEntity(dbe, 3.0f, 70, 4.0).RawValue;
 
         var (plan, _) = BuildPlanFromExpression(dbe, p => p.B > 0);
         var result = ExecutePlan(dbe, plan);
@@ -262,10 +280,11 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        var pk1 = CreateEntity(dbe, 1.0f, 10, 2.0);
-        var pk2 = CreateEntity(dbe, 2.0f, 20, 3.0);
-        var pk3 = CreateEntity(dbe, 3.0f, 30, 4.0);
+        var pk1 = (long)CreateEntity(dbe, 1.0f, 10, 2.0).RawValue;
+        var pk2 = (long)CreateEntity(dbe, 2.0f, 20, 3.0).RawValue;
+        var pk3 = (long)CreateEntity(dbe, 3.0f, 30, 4.0).RawValue;
 
         var ct = dbe.GetComponentTable<CompD>();
         var bFieldIndex = QueryResolverHelper.FindFieldIndex(ct.Definition,
@@ -286,10 +305,11 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        var pk1 = CreateEntity(dbe, 1.0f, 10, 2.0);
-        var pk2 = CreateEntity(dbe, 2.0f, 20, 3.0);
-        var pk3 = CreateEntity(dbe, 3.0f, 30, 4.0);
+        var pk1 = (long)CreateEntity(dbe, 1.0f, 10, 2.0).RawValue;
+        var pk2 = (long)CreateEntity(dbe, 2.0f, 20, 3.0).RawValue;
+        var pk3 = (long)CreateEntity(dbe, 3.0f, 30, 4.0).RawValue;
 
         var ct = dbe.GetComponentTable<CompD>();
         var bFieldIndex = QueryResolverHelper.FindFieldIndex(ct.Definition,
@@ -310,11 +330,12 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var pks = new long[10];
         for (var i = 0; i < 10; i++)
         {
-            pks[i] = CreateEntity(dbe, 1.0f, (i + 1) * 10, 2.0);
+            pks[i] = (long)CreateEntity(dbe, 1.0f, (i + 1) * 10, 2.0).RawValue;
         }
 
         var ct = dbe.GetComponentTable<CompD>();
@@ -339,6 +360,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateEntity(dbe, 1.0f, 50, 2.0);
         CreateEntity(dbe, 2.0f, 60, 3.0);
@@ -359,6 +381,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateEntity(dbe, 1.0f, 50, 2.0);
 
@@ -373,35 +396,18 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         Assert.That(result, Is.Empty);
     }
 
-    [Test]
-    public void Execute_OrderByPK_FiltersCorrectly()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        var pk1 = CreateEntity(dbe, 1.0f, 50, 2.0);
-        var pk2 = CreateEntity(dbe, 2.0f, 30, 3.0);
-        var pk3 = CreateEntity(dbe, 3.0f, 60, 4.0);
-
-        var orderBy = new OrderByField(-1); // PK ordering
-        var (plan, _) = BuildPlanFromExpression(dbe, p => p.B > 40, orderBy);
-
-        var result = ExecutePlanOrdered(dbe, plan);
-
-        Assert.That(result, Has.Count.EqualTo(2));
-        Assert.That(result, Does.Contain(pk1));
-        Assert.That(result, Does.Contain(pk3));
-    }
+    // Execute_OrderByPK_FiltersCorrectly — removed (PK B+Tree eliminated, PK ordering no longer exists)
 
     [Test]
     public void Execute_EqualityPredicate_MatchesExactValue()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        var pk1 = CreateEntity(dbe, 1.0f, 42, 2.0);
-        var pk2 = CreateEntity(dbe, 2.0f, 99, 3.0);
-        var pk3 = CreateEntity(dbe, 3.0f, 77, 4.0);
+        var pk1 = (long)CreateEntity(dbe, 1.0f, 42, 2.0).RawValue;
+        CreateEntity(dbe, 2.0f, 99, 3.0);
+        CreateEntity(dbe, 3.0f, 77, 4.0);
 
         var (plan, _) = BuildPlanFromExpression(dbe, p => p.B == 42);
 
@@ -415,6 +421,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         CreateEntity(dbe, 1.0f, 50, 2.0);
 
         var (plan, _) = BuildPlanFromExpression(dbe, p => p.B > 40);
@@ -435,6 +442,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         // B has [Index] (unique) — should be selected as primary stream
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         for (var i = 0; i < 10; i++)
         {
@@ -454,6 +462,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         // A has [Index(AllowMultiple = true)] — should be selected as primary stream (VSBS expansion supported)
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         for (var i = 0; i < 10; i++)
         {
@@ -472,8 +481,9 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        var pk1 = CreateEntity(dbe, 1.0f, 42, 1.0);
+        var pk1 = (long)CreateEntity(dbe, 1.0f, 42, 1.0).RawValue;
         CreateEntity(dbe, 2.0f, 99, 2.0);
         CreateEntity(dbe, 3.0f, 77, 3.0);
 
@@ -491,6 +501,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         CreateEntity(dbe, 1.0f, 10, 1.0);
         CreateEntity(dbe, 2.0f, 20, 2.0);
@@ -503,101 +514,55 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         Assert.That(result, Is.Empty);
     }
 
+    [TestCase(CompareOp.GreaterThan, 2, false)]       // B > 30: match B=40,50; exclude B=30
+    [TestCase(CompareOp.GreaterThanOrEqual, 3, true)] // B >= 30: match B=30,40,50
+    [TestCase(CompareOp.LessThan, 2, false)]          // B < 30: match B=10,20; exclude B=30
+    [TestCase(CompareOp.LessThanOrEqual, 3, true)]    // B <= 30: match B=10,20,30
     [Test]
-    public void IndexScan_GreaterThan_ExcludesBoundary()
+    public void IndexScan_BoundaryBehavior(CompareOp op, int expectedCount, bool boundaryIncluded)
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Create entities with B = 10, 20, 30, 40, 50
         var pks = new long[5];
         for (var i = 0; i < 5; i++)
         {
-            pks[i] = CreateEntity(dbe, 1.0f, (i + 1) * 10, 1.0);
+            pks[i] = (long)CreateEntity(dbe, 1.0f, (i + 1) * 10, 1.0).RawValue;
         }
 
-        // B > 30: should match B=40 and B=50 only (NOT B=30)
-        var (plan, _) = BuildPlanFromExpression(dbe, p => p.B > 30);
-
-        Assert.That(plan.UsesSecondaryIndex, Is.True);
-
-        var result = ExecutePlan(dbe, plan);
-        Assert.That(result, Has.Count.EqualTo(2));
-        Assert.That(result, Does.Contain(pks[3])); // B=40
-        Assert.That(result, Does.Contain(pks[4])); // B=50
-        Assert.That(result, Does.Not.Contain(pks[2])); // B=30 excluded
-    }
-
-    [Test]
-    public void IndexScan_GreaterThanOrEqual_IncludesBoundary()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        var pks = new long[5];
-        for (var i = 0; i < 5; i++)
+        // Build expression: p.B {op} 30
+        var param = System.Linq.Expressions.Expression.Parameter(typeof(CompD), "p");
+        var field = System.Linq.Expressions.Expression.Field(param, nameof(CompD.B));
+        var constant = System.Linq.Expressions.Expression.Constant(30);
+        var exprType = op switch
         {
-            pks[i] = CreateEntity(dbe, 1.0f, (i + 1) * 10, 1.0);
-        }
+            CompareOp.GreaterThan => System.Linq.Expressions.ExpressionType.GreaterThan,
+            CompareOp.GreaterThanOrEqual => System.Linq.Expressions.ExpressionType.GreaterThanOrEqual,
+            CompareOp.LessThan => System.Linq.Expressions.ExpressionType.LessThan,
+            CompareOp.LessThanOrEqual => System.Linq.Expressions.ExpressionType.LessThanOrEqual,
+            _ => throw new System.ArgumentOutOfRangeException()
+        };
+        var binary = System.Linq.Expressions.Expression.MakeBinary(exprType, field, constant);
+        var lambda = System.Linq.Expressions.Expression.Lambda<System.Func<CompD, bool>>(binary, param);
 
-        // B >= 30: should match B=30, B=40, B=50
-        var (plan, _) = BuildPlanFromExpression(dbe, p => p.B >= 30);
+        var (plan, _) = BuildPlanFromExpression(dbe, lambda);
 
         Assert.That(plan.UsesSecondaryIndex, Is.True);
 
         var result = ExecutePlan(dbe, plan);
-        Assert.That(result, Has.Count.EqualTo(3));
-        Assert.That(result, Does.Contain(pks[2])); // B=30 included
-        Assert.That(result, Does.Contain(pks[3])); // B=40
-        Assert.That(result, Does.Contain(pks[4])); // B=50
-    }
+        Assert.That(result, Has.Count.EqualTo(expectedCount));
 
-    [Test]
-    public void IndexScan_LessThan_ExcludesBoundary()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        var pks = new long[5];
-        for (var i = 0; i < 5; i++)
+        // Verify boundary inclusion/exclusion for B=30 (pks[2])
+        if (boundaryIncluded)
         {
-            pks[i] = CreateEntity(dbe, 1.0f, (i + 1) * 10, 1.0);
+            Assert.That(result, Does.Contain(pks[2]), "B=30 should be included");
         }
-
-        // B < 30: should match B=10 and B=20 only (NOT B=30)
-        var (plan, _) = BuildPlanFromExpression(dbe, p => p.B < 30);
-
-        Assert.That(plan.UsesSecondaryIndex, Is.True);
-
-        var result = ExecutePlan(dbe, plan);
-        Assert.That(result, Has.Count.EqualTo(2));
-        Assert.That(result, Does.Contain(pks[0])); // B=10
-        Assert.That(result, Does.Contain(pks[1])); // B=20
-        Assert.That(result, Does.Not.Contain(pks[2])); // B=30 excluded
-    }
-
-    [Test]
-    public void IndexScan_LessThanOrEqual_IncludesBoundary()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        var pks = new long[5];
-        for (var i = 0; i < 5; i++)
+        else
         {
-            pks[i] = CreateEntity(dbe, 1.0f, (i + 1) * 10, 1.0);
+            Assert.That(result, Does.Not.Contain(pks[2]), "B=30 should be excluded");
         }
-
-        // B <= 30: should match B=10, B=20, B=30
-        var (plan, _) = BuildPlanFromExpression(dbe, p => p.B <= 30);
-
-        Assert.That(plan.UsesSecondaryIndex, Is.True);
-
-        var result = ExecutePlan(dbe, plan);
-        Assert.That(result, Has.Count.EqualTo(3));
-        Assert.That(result, Does.Contain(pks[0])); // B=10
-        Assert.That(result, Does.Contain(pks[1])); // B=20
-        Assert.That(result, Does.Contain(pks[2])); // B=30 included
     }
 
     [Test]
@@ -606,11 +571,12 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         // B (unique index) used as primary stream, A (AllowMultiple) evaluated as filter
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        var pks = new long[20];
+        var ids = new EntityId[20];
         for (var i = 0; i < 20; i++)
         {
-            pks[i] = CreateEntity(dbe, i * 0.5f, i * 5, i * 1.0);
+            ids[i] = CreateEntity(dbe, i * 0.5f, i * 5, i * 1.0);
         }
 
         // B > 50 && A > 3.0f → B narrows to i=11..19 (B=55..95), A > 3.0 further filters to i >= 7
@@ -627,7 +593,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         {
             if (i * 5 > 50 && i * 0.5f > 3.0f)
             {
-                expected.Add(pks[i]);
+                expected.Add((long)ids[i].RawValue);
             }
         }
 
@@ -640,11 +606,12 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         // Verify correctness at scale — wrong scan range would produce wrong results
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var pks = new long[200];
         for (var i = 0; i < 200; i++)
         {
-            pks[i] = CreateEntity(dbe, i * 0.1f, i, i * 0.5);
+            pks[i] = (long)CreateEntity(dbe, i * 0.1f, i, i * 0.5).RawValue;
         }
 
         // B >= 150: should match exactly 50 entities (i=150..199)
@@ -672,6 +639,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         // When OrderBy is by PK, secondary index should NOT be used
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         for (var i = 0; i < 10; i++)
         {
@@ -694,12 +662,13 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         // AllowMultiple index on A — equality predicate should use index scan and return correct results
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Create entities with duplicate A values (AllowMultiple)
-        var pk1 = CreateEntity(dbe, 3.0f, 10, 1.0);
-        var pk2 = CreateEntity(dbe, 3.0f, 20, 2.0);
-        var pk3 = CreateEntity(dbe, 5.0f, 30, 3.0);
-        var pk4 = CreateEntity(dbe, 3.0f, 40, 4.0);
+        var pk1 = (long)CreateEntity(dbe, 3.0f, 10, 1.0).RawValue;
+        var pk2 = (long)CreateEntity(dbe, 3.0f, 20, 2.0).RawValue;
+        var pk3 = (long)CreateEntity(dbe, 5.0f, 30, 3.0).RawValue;
+        var pk4 = (long)CreateEntity(dbe, 3.0f, 40, 4.0).RawValue;
 
         var (plan, _) = BuildPlanFromExpression(dbe, p => p.A == 3.0f);
         var results = ExecutePlan(dbe, plan);
@@ -718,12 +687,13 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         // AllowMultiple index on A — range predicate should use index scan and return correct results
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        var pk1 = CreateEntity(dbe, 1.0f, 10, 1.0);
-        var pk2 = CreateEntity(dbe, 3.0f, 20, 2.0);
-        var pk3 = CreateEntity(dbe, 3.0f, 30, 3.0);
-        var pk4 = CreateEntity(dbe, 5.0f, 40, 4.0);
-        var pk5 = CreateEntity(dbe, 7.0f, 50, 5.0);
+        var pk1 = (long)CreateEntity(dbe, 1.0f, 10, 1.0).RawValue;
+        var pk2 = (long)CreateEntity(dbe, 3.0f, 20, 2.0).RawValue;
+        var pk3 = (long)CreateEntity(dbe, 3.0f, 30, 3.0).RawValue;
+        var pk4 = (long)CreateEntity(dbe, 5.0f, 40, 4.0).RawValue;
+        var pk5 = (long)CreateEntity(dbe, 7.0f, 50, 5.0).RawValue;
 
         var (plan, _) = BuildPlanFromExpression(dbe, p => p.A >= 3.0f);
         var results = ExecutePlan(dbe, plan);
@@ -743,6 +713,7 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         // When both AllowMultiple A and unique B have predicates, PlanBuilder should pick the most selective one
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         for (var i = 0; i < 20; i++)
         {
@@ -763,10 +734,11 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         // AllowMultiple A as primary + filter on B — verifies VSBS expansion + filter evaluation
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        var pk1 = CreateEntity(dbe, 3.0f, 10, 1.0);
-        var pk2 = CreateEntity(dbe, 3.0f, 20, 2.0);
-        var pk3 = CreateEntity(dbe, 3.0f, 30, 3.0);
+        var pk1 = (long)CreateEntity(dbe, 3.0f, 10, 1.0).RawValue;
+        var pk2 = (long)CreateEntity(dbe, 3.0f, 20, 2.0).RawValue;
+        var pk3 = (long)CreateEntity(dbe, 3.0f, 30, 3.0).RawValue;
         CreateEntity(dbe, 5.0f, 40, 4.0);
 
         // A == 3.0 (AllowMultiple primary) + B > 15 (filter)
@@ -784,12 +756,13 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         // Verify AllowMultiple index scan matches brute-force PK scan for a variety of data
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Insert 50 entities with various A values (duplicates expected)
-        var allPks = new List<long>();
+        var allIds = new List<EntityId>();
         for (var i = 0; i < 50; i++)
         {
-            allPks.Add(CreateEntity(dbe, (i % 5) * 1.0f, i, i * 0.5));
+            allIds.Add(CreateEntity(dbe, (i % 5) * 1.0f, i, i * 0.5));
         }
 
         // Query via AllowMultiple index
@@ -800,11 +773,12 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         // Brute-force: read all entities and filter manually
         using var tx = dbe.CreateQuickTransaction();
         var expected = new HashSet<long>();
-        foreach (var pk in allPks)
+        foreach (var id in allIds)
         {
-            if (tx.ReadEntity<CompD>(pk, out var comp) && comp.A >= 3.0f)
+            var comp = tx.Open(id).Read(CompDArch.D);
+            if (comp.A >= 3.0f)
             {
-                expected.Add(pk);
+                expected.Add((long)id.RawValue);
             }
         }
 

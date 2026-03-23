@@ -1,7 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NUnit.Framework;
-using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -32,8 +31,23 @@ struct OpsCompV2
     public OpsCompV2(int health, float speed, int armor) { Health = health; Speed = speed; Armor = armor; }
 }
 
+// ── Archetype for V1 component (used for Spawn in first scope) ──
+
+[Archetype(340)]
+class OpsCompArch : Archetype<OpsCompArch>
+{
+    public static readonly Comp<OpsCompV1> Comp = Register<OpsCompV1>();
+}
+
+[NonParallelizable]
 class OperationalToolingTests : TestBase<OperationalToolingTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<OpsCompArch>.Touch();
+    }
+
     private string GetDatabasePath()
     {
         var options = ServiceProvider.GetRequiredService<IOptions<ManagedPagedMMFOptions>>().Value;
@@ -45,17 +59,16 @@ class OperationalToolingTests : TestBase<OperationalToolingTests>
     [Test]
     public void Inspect_ReturnsComponentsAndFields()
     {
-        long pk;
-
         // Create database with V1
         using (var scope = ServiceProvider.CreateScope())
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<OpsCompV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new OpsCompV1(100, 5.5f);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            pk = t.CreateEntity(ref comp);
+            t.Spawn<OpsCompArch>(OpsCompArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -92,10 +105,11 @@ class OperationalToolingTests : TestBase<OperationalToolingTests>
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<OpsCompV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new OpsCompV1(50, 2.0f);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            t.CreateEntity(ref comp);
+            t.Spawn<OpsCompArch>(OpsCompArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -125,10 +139,11 @@ class OperationalToolingTests : TestBase<OperationalToolingTests>
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<OpsCompV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new OpsCompV1(10, 1.0f);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            t.CreateEntity(ref comp);
+            t.Spawn<OpsCompArch>(OpsCompArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -159,10 +174,11 @@ class OperationalToolingTests : TestBase<OperationalToolingTests>
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<OpsCompV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new OpsCompV1(42, 3.0f);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            t.CreateEntity(ref comp);
+            t.Spawn<OpsCompArch>(OpsCompArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -197,13 +213,14 @@ class OperationalToolingTests : TestBase<OperationalToolingTests>
         {
             using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<OpsCompV1>();
+            dbe.InitializeArchetypes();
 
             // Create multiple entities so the global PK counter is well above 1
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
             for (int i = 0; i < 20; i++)
             {
                 var comp = new OpsCompV1(i, i * 0.5f);
-                t.CreateEntity(ref comp);
+                t.Spawn<OpsCompArch>(OpsCompArch.Comp.Set(in comp));
             }
             t.Commit();
         }

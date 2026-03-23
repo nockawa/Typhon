@@ -19,7 +19,7 @@ internal static class RevisionChainReader
     /// <see cref="RevisionReadStatus.SnapshotInvisible"/> if no committed entry is visible;
     /// <see cref="RevisionReadStatus.Deleted"/> if the latest visible entry is a tombstone (ComponentChunkId == 0).
     /// </returns>
-    internal static Result<ComponentInfo.CompRevInfo, RevisionReadStatus> WalkChain(ref ChunkAccessor compRevTableAccessor, int compRevFirstChunkId, 
+    internal static Result<ComponentInfo.CompRevInfo, RevisionReadStatus> WalkChain(ref ChunkAccessor<PersistentStore> compRevTableAccessor, int compRevFirstChunkId, 
         long transactionTSN)
     {
         short prevCompRevisionIndex = -1;

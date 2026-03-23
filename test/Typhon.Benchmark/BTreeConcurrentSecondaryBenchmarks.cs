@@ -35,12 +35,12 @@ public class BTreeConcurrentSecondaryBenchmarks
     private EpochManager _epochManager;
 
     // Separate trees per benchmark to avoid state cross-contamination
-    private ChunkBasedSegment _segHot;
-    private IntSingleBTree _treeHot;
+    private ChunkBasedSegment<PersistentStore> _segHot;
+    private IntSingleBTree<PersistentStore> _treeHot;
     private int[][] _perThreadHotKeys;
 
-    private ChunkBasedSegment _segSpread;
-    private IntSingleBTree _treeSpread;
+    private ChunkBasedSegment<PersistentStore> _segSpread;
+    private IntSingleBTree<PersistentStore> _treeSpread;
     private int[][] _perThreadSpreadKeys;
 
     private const int PreFillCount = 10_000;
@@ -64,7 +64,7 @@ public class BTreeConcurrentSecondaryBenchmarks
 
         // ── Hot leaf tree: all threads hit the same narrow range ────────
         _segHot = _helper.AllocateSegment<Index32Chunk>(500);
-        _treeHot = new IntSingleBTree(_segHot);
+        _treeHot = new IntSingleBTree<PersistentStore>(_segHot);
         BTreeBenchmarkHelper.PreFillInt(_treeHot, _segHot, PreFillCount);
 
         // All threads share the same hot key range
@@ -81,7 +81,7 @@ public class BTreeConcurrentSecondaryBenchmarks
 
         // ── Spread tree: each thread has disjoint key range ─────────────
         _segSpread = _helper.AllocateSegment<Index32Chunk>(500);
-        _treeSpread = new IntSingleBTree(_segSpread);
+        _treeSpread = new IntSingleBTree<PersistentStore>(_segSpread);
         BTreeBenchmarkHelper.PreFillInt(_treeSpread, _segSpread, PreFillCount);
 
         _perThreadSpreadKeys = new int[ThreadCount][];

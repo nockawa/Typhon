@@ -94,12 +94,48 @@ struct CompIndexV2
     public CompIndexV2(int score, int bonus, float speed) { Score = score; Bonus = bonus; Speed = speed; }
 }
 
+// ── Archetypes for V1 components (used for Spawn in first scope) ──
+
+[Archetype(330)]
+class CompEvolArch : Archetype<CompEvolArch>
+{
+    public static readonly Comp<CompEvolV1> Comp = Register<CompEvolV1>();
+}
+
+[Archetype(331)]
+class CompRemoveArch : Archetype<CompRemoveArch>
+{
+    public static readonly Comp<CompRemoveV1> Comp = Register<CompRemoveV1>();
+}
+
+[Archetype(332)]
+class CompRenameArch : Archetype<CompRenameArch>
+{
+    public static readonly Comp<CompRenameV1> Comp = Register<CompRenameV1>();
+}
+
+[Archetype(333)]
+class CompIndexArch : Archetype<CompIndexArch>
+{
+    public static readonly Comp<CompIndexV1> Comp = Register<CompIndexV1>();
+}
+
 /// <summary>
 /// Integration tests verifying FieldId stability across database reopen with schema evolution.
 /// Each test creates a database, writes data, closes, reopens with a different schema, and verifies.
 /// </summary>
+[NonParallelizable]
 class FieldIdStabilityTests : TestBase<FieldIdStabilityTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompEvolArch>.Touch();
+        Archetype<CompRemoveArch>.Touch();
+        Archetype<CompRenameArch>.Touch();
+        Archetype<CompIndexArch>.Touch();
+    }
+
     [Test]
     public void FieldR1_RoundTrip_SameSession()
     {
@@ -107,17 +143,26 @@ class FieldIdStabilityTests : TestBase<FieldIdStabilityTests>
         using var scope = ServiceProvider.CreateScope();
         using var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<CompEvolV1>();
+        dbe.InitializeArchetypes();
 
         // Read back the ComponentR1 entries from the system schema
-        using var tx = dbe.CreateQuickTransaction();
-        for (long pk = 1; pk <= 10; pk++)
+        using var epochGuard = EpochGuard.Enter(dbe.EpochManager);
+        var componentsTable = dbe.GetComponentTable<ComponentR1>();
+        var segment = componentsTable.ComponentSegment;
+        var capacity = segment.ChunkCapacity;
+        for (int chunkId = 1; chunkId < capacity; chunkId++)
         {
-            if (!tx.ReadEntity<ComponentR1>(pk, out var comp))
+            if (!segment.IsChunkAllocated(chunkId))
             {
                 continue;
             }
 
-            TestContext.Out.WriteLine($"Pk={pk}: Name={comp.Name.AsString}, Fields._bufferId={comp.Fields._bufferId}");
+            if (!SystemCrud.Read(componentsTable, chunkId, out ComponentR1 comp, dbe.EpochManager))
+            {
+                continue;
+            }
+
+            TestContext.Out.WriteLine($"ChunkId={chunkId}: Name={comp.Name.AsString}, Fields._bufferId={comp.Fields._bufferId}");
 
             if (comp.Fields._bufferId != 0)
             {
@@ -133,7 +178,7 @@ class FieldIdStabilityTests : TestBase<FieldIdStabilityTests>
     [Test]
     public void StableAcrossReopen_NoChanges()
     {
-        long entityId;
+        EntityId entityId;
         int originalFieldIdA, originalFieldIdB;
 
         // Phase 1: Create database, register component, write data
@@ -141,6 +186,7 @@ class FieldIdStabilityTests : TestBase<FieldIdStabilityTests>
         {
             using var dbe = scope1.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<CompEvolV1>();
+            dbe.InitializeArchetypes();
 
             var def = dbe.DBD.GetComponent("Typhon.Schema.UnitTest.SchemaEvol", 1);
             originalFieldIdA = def.GetFieldId("A");
@@ -148,7 +194,7 @@ class FieldIdStabilityTests : TestBase<FieldIdStabilityTests>
 
             var comp = new CompEvolV1(42, 3.14f);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            entityId = t.CreateEntity(ref comp);
+            entityId = t.Spawn<CompEvolArch>(CompEvolArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -162,10 +208,11 @@ class FieldIdStabilityTests : TestBase<FieldIdStabilityTests>
             Assert.That(def.GetFieldId("A"), Is.EqualTo(originalFieldIdA), "FieldId for A should be stable across reopen");
             Assert.That(def.GetFieldId("B"), Is.EqualTo(originalFieldIdB), "FieldId for B should be stable across reopen");
 
+            dbe.InitializeArchetypes();
+
             // Verify data is intact
             using var t = dbe.CreateQuickTransaction();
-            var read = t.ReadEntity<CompEvolV1>(entityId, out var comp);
-            Assert.That(read, Is.True, "Entity should be readable after reopen");
+            ref readonly var comp = ref t.Open(entityId).Read(CompEvolArch.Comp);
             Assert.That(comp.A, Is.EqualTo(42));
             Assert.That(comp.B, Is.EqualTo(3.14f));
         }
@@ -181,6 +228,7 @@ class FieldIdStabilityTests : TestBase<FieldIdStabilityTests>
         {
             using var dbe = scope1.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<CompEvolV1>();
+            dbe.InitializeArchetypes();
 
             var def = dbe.DBD.GetComponent("Typhon.Schema.UnitTest.SchemaEvol", 1);
             originalFieldIdA = def.GetFieldId("A");
@@ -191,7 +239,7 @@ class FieldIdStabilityTests : TestBase<FieldIdStabilityTests>
 
             var comp = new CompEvolV1(100, 2.5f);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            t.CreateEntity(ref comp);
+            t.Spawn<CompEvolArch>(CompEvolArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -220,6 +268,7 @@ class FieldIdStabilityTests : TestBase<FieldIdStabilityTests>
         {
             using var dbe = scope1.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<CompRemoveV1>();
+            dbe.InitializeArchetypes();
 
             var def = dbe.DBD.GetComponent("Typhon.Schema.UnitTest.SchemaRemove", 1);
             originalFieldIdA = def.GetFieldId("A");
@@ -227,7 +276,7 @@ class FieldIdStabilityTests : TestBase<FieldIdStabilityTests>
 
             var comp = new CompRemoveV1(10, 1.5f, 2.5);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            t.CreateEntity(ref comp);
+            t.Spawn<CompRemoveArch>(CompRemoveArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -258,13 +307,14 @@ class FieldIdStabilityTests : TestBase<FieldIdStabilityTests>
         {
             using var dbe = scope1.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<CompRenameV1>();
+            dbe.InitializeArchetypes();
 
             var def = dbe.DBD.GetComponent("Typhon.Schema.UnitTest.SchemaRename", 1);
             originalHitpointsId = def.GetFieldId("Hitpoints");
 
             var comp = new CompRenameV1(100, 5.0f);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            t.CreateEntity(ref comp);
+            t.Spawn<CompRenameArch>(CompRenameArch.Comp.Set(in comp));
             t.Commit();
         }
 
@@ -287,17 +337,18 @@ class FieldIdStabilityTests : TestBase<FieldIdStabilityTests>
     [Test]
     public void IndexSurvivesFieldAddition()
     {
-        long entityId;
+        EntityId entityId;
 
         // Phase 1: Create database with V1, write an indexed entity
         using (var scope1 = ServiceProvider.CreateScope())
         {
             using var dbe = scope1.ServiceProvider.GetRequiredService<DatabaseEngine>();
             dbe.RegisterComponentFromAccessor<CompIndexV1>();
+            dbe.InitializeArchetypes();
 
             var comp = new CompIndexV1(999, 1.0f);
             using var t = dbe.CreateQuickTransaction(DurabilityMode.Immediate);
-            entityId = t.CreateEntity(ref comp);
+            entityId = t.Spawn<CompIndexArch>(CompIndexArch.Comp.Set(in comp));
             t.Commit();
 
             // Verify index works in V1

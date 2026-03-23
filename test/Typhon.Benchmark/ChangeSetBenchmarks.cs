@@ -19,7 +19,7 @@ public class ChangeSetBenchmarks
     private ServiceProvider _serviceProvider;
     private ManagedPagedMMF _pmmf;
     private EpochManager _epochManager;
-    private ChunkBasedSegment _segment;
+    private ChunkBasedSegment<PersistentStore> _segment;
     private string _databaseName;
     private int _epochDepth;
 

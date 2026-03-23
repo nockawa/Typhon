@@ -7,7 +7,7 @@ using System.Runtime.InteropServices;
 namespace Typhon.Engine.Tests;
 
 /// <summary>
-/// Comprehensive unit tests for ChunkAccessor covering SOA layout, SIMD search,
+/// Comprehensive unit tests for ChunkAccessor<PersistentStore> covering SOA layout, SIMD search,
 /// clock-hand eviction, dirty tracking, latching, and epoch protection.
 /// </summary>
 [TestFixture]
@@ -666,7 +666,7 @@ class ChunkAccessorTests
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 
-        ChunkBasedSegment segment;
+        ChunkBasedSegment<PersistentStore> segment;
 
         // Phase 1: Allocate segment and fill cache with disposable pages in a separate epoch scope.
         // When this scope exits, GlobalEpoch advances and these pages become stale (evictable).

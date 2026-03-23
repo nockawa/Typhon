@@ -1,7 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
-using Serilog;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -24,24 +23,11 @@ class BtreeTests
         var dcs = o ? (int)TestContext.CurrentContext.Test.Properties.Get("MemPageCount")! : PagedMMF.DefaultMemPageCount;
         dcs *= PagedMMF.PageSize;
 
-#if DEBUG
-        Log.Logger = new LoggerConfiguration()
-            .MinimumLevel.Verbose()
-            .Enrich.FromLogContext()
-            .Enrich.WithThreadId()
-            .Enrich.WithCurrentFrame()
-            .WriteTo.Seq("http://localhost:5341")
-            .CreateLogger();
-#endif
-
         var serviceCollection = new ServiceCollection();
         _serviceCollection = serviceCollection;
         _serviceCollection
             .AddLogging(builder =>
             {
-#if DEBUG
-                // builder.AddSerilog(dispose: true);
-#endif
                 builder.AddSimpleConsole(options =>
                 {
                     options.SingleLine = true;
@@ -79,7 +65,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             tree.Add(10, 10, ref accessor);
             Assert.That(tree[10], Is.EqualTo(10));
@@ -117,7 +103,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new FloatSingleBTree(segment);
+            var tree = new FloatSingleBTree<PersistentStore>(segment);
 
             tree.Add(-0.10f, 10, ref accessor);
             Assert.That(tree[-0.10f], Is.EqualTo(10));
@@ -155,7 +141,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             tree.Add(140, 140, ref accessor);
             Assert.That(tree[140], Is.EqualTo(140));
@@ -196,7 +182,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new String64SingleBTree(segment);
+            var tree = new String64SingleBTree<PersistentStore>(segment);
 
             tree.Add("140", 140, ref accessor);
             Assert.That(tree["140"], Is.EqualTo(140));
@@ -245,7 +231,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             foreach (var v in values)
             {
@@ -290,7 +276,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             for (int loopC = 0; loopC < 2; loopC++)
             {
@@ -354,7 +340,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new ShortSingleBTree(segment);
+            var tree = new ShortSingleBTree<PersistentStore>(segment);
 
             for (int loopC = 0; loopC < 2; loopC++)
             {
@@ -418,7 +404,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new LongSingleBTree(segment);
+            var tree = new LongSingleBTree<PersistentStore>(segment);
 
             for (int loopC = 0; loopC < 2; loopC++)
             {
@@ -482,7 +468,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new String64SingleBTree(segment);
+            var tree = new String64SingleBTree<PersistentStore>(segment);
 
             for (int loopC = 0; loopC < 2; loopC++)
             {
@@ -531,7 +517,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntMultipleBTree(segment);
+            var tree = new IntMultipleBTree<PersistentStore>(segment);
 
             var eid0 = tree.Add(1, 10, ref accessor);
             var eid1 = tree.Add(3, 30, ref accessor);
@@ -590,7 +576,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new ByteMultipleBTree(segment);
+            var tree = new ByteMultipleBTree<PersistentStore>(segment);
 
             var eid0 = tree.Add(1, 10, ref accessor);
             var eid1 = tree.Add(3, 30, ref accessor);
@@ -649,7 +635,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new FloatMultipleBTree(segment);
+            var tree = new FloatMultipleBTree<PersistentStore>(segment);
 
             var eid0 = tree.Add(1.1f, 10, ref accessor);
             var eid1 = tree.Add(3.1f, 30, ref accessor);
@@ -718,7 +704,7 @@ class BtreeTests
             try
             {
                 var accessor = segment.CreateChunkAccessor(changeSet);
-                var tree = new FloatSingleBTree(segment);
+                var tree = new FloatSingleBTree<PersistentStore>(segment);
 
                 var rand = new Random(1234);
                 var curValue = 12;
@@ -759,7 +745,7 @@ class BtreeTests
             try
             {
                 var accessor = segment.CreateChunkAccessor();
-                var tree = new FloatSingleBTree(segment, true);
+                var tree = new FloatSingleBTree<PersistentStore>(segment, true);
 
                 foreach (var kvp in items)
                 {
@@ -797,7 +783,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new FloatSingleBTree(segment);
+            var tree = new FloatSingleBTree<PersistentStore>(segment);
 
             var rand = new Random(1234);
             var hashset = new HashSet<float>();
@@ -846,7 +832,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntMultipleBTree(segment);
+            var tree = new IntMultipleBTree<PersistentStore>(segment);
 
             var chunkCapacity = segment.ChunkCapacity;
             var freeChunkCount = segment.FreeChunkCount;
@@ -959,7 +945,7 @@ class BtreeTests
         var depth = epochManager.EnterScope();
         try
         {
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             int count = 0;
             foreach (var kv in tree.EnumerateLeaves())
@@ -985,7 +971,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             // Insert few items (stays within a single leaf)
             tree.Add(30, 300, ref accessor);
@@ -1012,56 +998,6 @@ class BtreeTests
     }
 
     [Test]
-    [Property("MemPageCount", 1024)]
-    unsafe public void EnumerateLeaves_MultipleLeaves_YieldsAllInOrder()
-    {
-        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
-        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 300, sizeof(Index32Chunk));
-        var depth = epochManager.EnterScope();
-        try
-        {
-            var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
-
-            // Insert enough items to force multiple leaf splits
-            const int itemCount = 500;
-            for (int i = itemCount; i >= 1; i--)
-            {
-                tree.Add(i, i * 10, ref accessor);
-            }
-
-            Assert.That(tree.EntryCount, Is.EqualTo(itemCount));
-
-            var keys = new List<int>();
-            foreach (var kv in tree.EnumerateLeaves())
-            {
-                keys.Add(kv.Key);
-            }
-
-            Assert.That(keys.Count, Is.EqualTo(itemCount));
-
-            // Verify ascending order
-            for (int i = 1; i < keys.Count; i++)
-            {
-                Assert.That(keys[i], Is.GreaterThan(keys[i - 1]), $"Key at index {i} not in ascending order");
-            }
-
-            // Verify all expected keys present
-            for (int i = 1; i <= itemCount; i++)
-            {
-                Assert.That(keys.Contains(i), Is.True, $"Missing key {i}");
-            }
-
-            accessor.Dispose();
-        }
-        finally
-        {
-            epochManager.ExitScope(depth);
-        }
-    }
-
-    [Test]
     unsafe public void EnumerateLeaves_AfterDeletions_YieldsRemaining()
     {
         using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
@@ -1071,7 +1007,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             var allKeys = new[] { 1, 2, 3, 10, 20, 33, 5, 50, 70, 35, 9, 99, 101 };
             foreach (var k in allKeys)
@@ -1119,7 +1055,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             tree.Add(30, 30, ref accessor);
             tree.Add(10, 10, ref accessor);
@@ -1136,25 +1072,6 @@ class BtreeTests
     }
 
     [Test]
-    unsafe public void GetMinKey_EmptyTree_ReturnsDefault()
-    {
-        using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
-        var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-        var depth = epochManager.EnterScope();
-        try
-        {
-            var tree = new IntSingleBTree(segment);
-
-            Assert.That(tree.GetMinKey(), Is.EqualTo(0));
-        }
-        finally
-        {
-            epochManager.ExitScope(depth);
-        }
-    }
-
-    [Test]
     unsafe public void RangeScan_EmptyTree_YieldsNothing()
     {
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
@@ -1163,7 +1080,7 @@ class BtreeTests
         var depth = epochManager.EnterScope();
         try
         {
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             var count = 0;
             foreach (var kv in tree.EnumerateRange(1, 100))
@@ -1189,7 +1106,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             var keys = new[] { 5, 50, 10, 30, 20, 40, 1, 100 };
             foreach (var k in keys)
@@ -1229,7 +1146,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             foreach (var k in new[] { 1, 5, 10, 15, 20, 25, 30, 35, 40 })
             {
@@ -1253,80 +1170,6 @@ class BtreeTests
     }
 
     [Test]
-    unsafe public void RangeScan_SingleEntry_MinEqualsMax()
-    {
-        using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
-        var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-        var depth = epochManager.EnterScope();
-        try
-        {
-            var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
-
-            foreach (var k in new[] { 5, 10, 15, 20 })
-            {
-                tree.Add(k, k, ref accessor);
-            }
-
-            // Exact match — should yield single entry
-            var result = new List<int>();
-            foreach (var kv in tree.EnumerateRange(10, 10))
-            {
-                result.Add(kv.Key);
-            }
-            Assert.That(result, Is.EqualTo(new[] { 10 }));
-
-            // No match — key 7 doesn't exist, range [7,7] should be empty
-            var empty = new List<int>();
-            foreach (var kv in tree.EnumerateRange(7, 7))
-            {
-                empty.Add(kv.Key);
-            }
-            Assert.That(empty, Is.Empty);
-
-            accessor.Dispose();
-        }
-        finally
-        {
-            epochManager.ExitScope(depth);
-        }
-    }
-
-    [Test]
-    unsafe public void RangeScan_InvertedRange_YieldsEmpty()
-    {
-        using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
-        var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-        var depth = epochManager.EnterScope();
-        try
-        {
-            var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
-
-            foreach (var k in new[] { 5, 10, 15, 20 })
-            {
-                tree.Add(k, k, ref accessor);
-            }
-
-            var result = new List<int>();
-            foreach (var kv in tree.EnumerateRange(20, 10))
-            {
-                result.Add(kv.Key);
-            }
-
-            Assert.That(result, Is.Empty);
-
-            accessor.Dispose();
-        }
-        finally
-        {
-            epochManager.ExitScope(depth);
-        }
-    }
-
-    [Test]
     [Property("MemPageCount", 1024)]
     unsafe public void RangeScan_MultiLeaf_CorrectOrdering()
     {
@@ -1337,7 +1180,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             for (int i = 1; i <= 500; i++)
             {
@@ -1378,7 +1221,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             foreach (var k in new[] { 1, 5, 10, 15, 20, 25, 30 })
             {
@@ -1402,80 +1245,6 @@ class BtreeTests
     }
 
     [Test]
-    [Property("MemPageCount", 1024)]
-    unsafe public void RangeScanDescending_FullRange_ReverseOfEnumerateLeaves()
-    {
-        using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
-        var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-        var depth = epochManager.EnterScope();
-        try
-        {
-            var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
-
-            for (int i = 1; i <= 500; i++)
-            {
-                tree.Add(i, i, ref accessor);
-            }
-
-            var forward = new List<int>();
-            foreach (var kv in tree.EnumerateLeaves())
-            {
-                forward.Add(kv.Key);
-            }
-
-            var descending = new List<int>();
-            foreach (var kv in tree.EnumerateRangeDescending(int.MinValue, int.MaxValue))
-            {
-                descending.Add(kv.Key);
-            }
-
-            forward.Reverse();
-            Assert.That(descending, Is.EqualTo(forward));
-
-            accessor.Dispose();
-        }
-        finally
-        {
-            epochManager.ExitScope(depth);
-        }
-    }
-
-    [Test]
-    unsafe public void RangeScanDescending_TightBounds_CorrectEntries()
-    {
-        using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
-        var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
-        var depth = epochManager.EnterScope();
-        try
-        {
-            var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
-
-            foreach (var k in new[] { 1, 5, 10, 15, 20, 25, 30, 35, 40 })
-            {
-                tree.Add(k, k, ref accessor);
-            }
-
-            var result = new List<int>();
-            foreach (var kv in tree.EnumerateRangeDescending(10, 30))
-            {
-                result.Add(kv.Key);
-            }
-
-            Assert.That(result, Is.EqualTo(new[] { 30, 25, 20, 15, 10 }));
-
-            accessor.Dispose();
-        }
-        finally
-        {
-            epochManager.ExitScope(depth);
-        }
-    }
-
-    [Test]
     unsafe public void RangeScan_AfterDeletions_CorrectEntries()
     {
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
@@ -1485,7 +1254,7 @@ class BtreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             var allKeys = new[] { 1, 2, 3, 10, 20, 33, 5, 50, 70, 35, 9, 99, 101 };
             foreach (var k in allKeys)

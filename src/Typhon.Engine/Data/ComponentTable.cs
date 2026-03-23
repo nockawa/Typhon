@@ -16,7 +16,7 @@ namespace Typhon.Engine;
 /// </summary>
 /// <remarks>
 /// <p>
-/// The <see cref="ComponentTable.CompRevTableSegment"/> is a <see cref="ChunkBasedSegment"/> with chunks of <see cref="ComponentRevisionManager.CompRevChunkSize"/> bytes.
+/// The <see cref="ComponentTable.CompRevTableSegment"/> is a <see cref="ChunkBasedSegment<PersistentStore>"/> with chunks of <see cref="ComponentRevisionManager.CompRevChunkSize"/> bytes.
 /// Data is stored as a chain of chunks, the first one contains this header and is followed by <see cref="ComponentRevisionManager.CompRevCountInRoot"/> number
 /// of <see cref="CompRevStorageElement"/> elements (currently 3 with 12-byte elements).
 /// The following chunks in the chain have just an integer as header (giving the next chunk in the chain) and can
@@ -138,7 +138,16 @@ internal struct IndexedFieldInfo
     public int Size;
 
     public int OffsetToIndexElementId;
-    public BTreeBase Index;
+    public IBTreeIndex Index;
+
+    /// <summary>Cached from <see cref="IBTreeIndex.AllowMultiple"/> — avoids interface dispatch on hot path.</summary>
+    public bool AllowMultiple;
+
+    /// <summary>Returns the index cast to <see cref="BTreeBase{TStore}"/> for PersistentStore operations (Versioned and SingleVersion paths).</summary>
+    internal BTreeBase<PersistentStore> PersistentIndex => (BTreeBase<PersistentStore>)Index;
+
+    /// <summary>Returns the index cast to <see cref="BTreeBase{TStore}"/> for Transient storage operations.</summary>
+    internal BTreeBase<TransientStore> TransientIndex => (BTreeBase<TransientStore>)Index;
 }
 
 [PublicAPI]
@@ -165,13 +174,99 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     private const int ComponentSegmentStartingSize = 4;
     private const int MainIndexSegmentStartingSize = 4;
 
-    public ChunkBasedSegment ComponentSegment { get; private set; }
-    public ChunkBasedSegment CompRevTableSegment { get; private set; }
-    public ChunkBasedSegment DefaultIndexSegment { get; private set; }
-    public ChunkBasedSegment String64IndexSegment { get; private set; }
-    public ChunkBasedSegment TailIndexSegment { get; private set; }
-    public BTree<long> PrimaryKeyIndex { get; private set; }
-    internal VariableSizedBufferSegment<VersionedIndexEntry> TailVSBS { get; private set; }
+    // ── Storage mode (immutable after construction) ──
+    public StorageMode StorageMode { get; private set; }
+
+    // ── Persistent segments (Versioned & SingleVersion) ──
+    public ChunkBasedSegment<PersistentStore> ComponentSegment { get; private set; }
+    public ChunkBasedSegment<PersistentStore> CompRevTableSegment { get; private set; }
+    public ChunkBasedSegment<PersistentStore> DefaultIndexSegment { get; private set; }
+    public ChunkBasedSegment<PersistentStore> String64IndexSegment { get; private set; }
+    public ChunkBasedSegment<PersistentStore> TailIndexSegment { get; private set; }
+
+    /// <summary>
+    /// Estimated total entity count. Sums EntityMap entry counts across archetypes that include this component.
+    /// </summary>
+    public int EstimatedEntityCount
+    {
+        get
+        {
+            int typeId = ArchetypeRegistry.GetComponentTypeId(Definition.POCOType);
+            if (typeId < 0)
+            {
+                return 0;
+            }
+            int total = 0;
+            foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
+            {
+                if (!meta.TryGetSlot(typeId, out _))
+                {
+                    continue;
+                }
+                var dbe = (DatabaseEngine)Parent; // ComponentTable is a child of DatabaseEngine in the resource tree
+                var state = dbe._archetypeStates[meta.ArchetypeId];
+                if (state?.EntityMap != null)
+                {
+                    total += (int)state.EntityMap.EntryCount;
+                }
+            }
+            return total;
+        }
+    }
+    internal VariableSizedBufferSegment<VersionedIndexEntry, PersistentStore> TailVSBS { get; private set; }
+
+    // ── Transient segments (non-null only when StorageMode == Transient) ──
+    internal ChunkBasedSegment<TransientStore> TransientComponentSegment { get; private set; }
+    internal ChunkBasedSegment<TransientStore> TransientDefaultIndexSegment { get; private set; }
+    internal ChunkBasedSegment<TransientStore> TransientString64IndexSegment { get; private set; }
+
+    // ── Transient stores (one per CBS — struct-copy of _pageCount requires independent instances) ──
+    private TransientStore? _transientComponentStore;
+    private TransientStore? _transientDefaultIndexStore;
+    private TransientStore? _transientString64IndexStore;
+
+    // ── SingleVersion dirty tracking (non-null only when StorageMode == SingleVersion) ──
+    internal DirtyBitmap DirtyBitmap { get; private set; }
+
+    // ── Shadow tracking for SV tick-boundary index/view maintenance ──
+    // Non-null only when StorageMode == SingleVersion AND IndexedFieldInfos.Length > 0.
+    // ShadowBitmap tracks which chunkIds have been shadowed this tick (TestAndSet guard).
+    // FieldShadowBuffers[i] stores old KeyBytes8 values for IndexedFieldInfos[i].
+    internal bool HasShadowableIndexes { get; private set; }
+    internal DirtyBitmap ShadowBitmap { get; private set; }
+    internal FieldShadowBuffer[] FieldShadowBuffers { get; private set; }
+
+    // ── Destroyed chunk tracking for SV index cleanup ──
+    // Accumulates chunkIds of destroyed SV entities during commits this tick.
+    // Checked by ProcessShadowEntries to distinguish Remove vs Move. Cleared at tick boundary.
+    private HashSet<int> _destroyedChunkIds;
+    private readonly Lock _destroyedLock = new();
+
+    internal void TrackDestroyedChunkId(int chunkId)
+    {
+        lock (_destroyedLock)
+        {
+            _destroyedChunkIds ??= [];
+            _destroyedChunkIds.Add(chunkId);
+        }
+    }
+
+    internal bool IsChunkDestroyed(int chunkId)
+    {
+        lock (_destroyedLock)
+        {
+            return _destroyedChunkIds != null && _destroyedChunkIds.Contains(chunkId);
+        }
+    }
+
+    internal void ClearDestroyedChunkIds()
+    {
+        lock (_destroyedLock)
+        {
+            _destroyedChunkIds?.Clear();
+        }
+    }
+
     public int ComponentStorageSize => Definition.ComponentStorageSize;
     public DBComponentDefinition Definition { get; private set; }
 
@@ -179,11 +274,11 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     public bool HasCollections => (_flags & ComponentTableFlags.HasCollections) != 0;
 
     internal DatabaseEngine DBE { get; private set; }
-    internal int ComponentOverhead => Definition.MultipleIndicesCount * sizeof(int);
+    internal int ComponentOverhead => Definition.ComponentStorageOverhead;
     internal int ComponentTotalSize => Definition.ComponentStorageTotalSize;
 
     /// <summary>
-    /// Stable WAL type identifier derived from <see cref="LogicalSegment.RootPageIndex"/>. Set during registration.
+    /// Stable WAL type identifier derived from <see cref="LogicalSegment<PersistentStore>.RootPageIndex"/>. Set during registration.
     /// Used to identify component types in WAL records for crash recovery replay.
     /// </summary>
     internal ushort WalTypeId { get; set; }
@@ -191,7 +286,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     internal IndexStatistics[] IndexStats { get; private set; }
     internal ViewRegistry ViewRegistry { get; private set; }
 
-    internal Dictionary<int, VariableSizedBufferSegmentBase> ComponentCollectionVSBSByOffset { get; private set; }
+    internal Dictionary<int, VariableSizedBufferSegmentBase<PersistentStore>> ComponentCollectionVSBSByOffset { get; private set; }
 
     /// <summary>
     /// Monotonically increasing counter incremented each time index layout changes (e.g., schema migration adds/removes indexes).
@@ -247,19 +342,25 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     /// <inheritdoc />
     public void ReadMetrics(IMetricWriter writer)
     {
-        // Aggregate capacity from all segments
+        // Aggregate capacity from all segments (persistent + transient, null-safe for mode-specific segments)
         long totalAllocatedChunks =
-            ComponentSegment.AllocatedChunkCount +
-            CompRevTableSegment.AllocatedChunkCount +
-            DefaultIndexSegment.AllocatedChunkCount +
+            (ComponentSegment?.AllocatedChunkCount ?? 0) +
+            (TransientComponentSegment?.AllocatedChunkCount ?? 0) +
+            (CompRevTableSegment?.AllocatedChunkCount ?? 0) +
+            (DefaultIndexSegment?.AllocatedChunkCount ?? 0) +
+            (TransientDefaultIndexSegment?.AllocatedChunkCount ?? 0) +
             (String64IndexSegment?.AllocatedChunkCount ?? 0) +
+            (TransientString64IndexSegment?.AllocatedChunkCount ?? 0) +
             (TailIndexSegment?.AllocatedChunkCount ?? 0);
 
         long totalCapacityChunks =
-            ComponentSegment.ChunkCapacity +
-            CompRevTableSegment.ChunkCapacity +
-            DefaultIndexSegment.ChunkCapacity +
+            (ComponentSegment?.ChunkCapacity ?? 0) +
+            (TransientComponentSegment?.ChunkCapacity ?? 0) +
+            (CompRevTableSegment?.ChunkCapacity ?? 0) +
+            (DefaultIndexSegment?.ChunkCapacity ?? 0) +
+            (TransientDefaultIndexSegment?.ChunkCapacity ?? 0) +
             (String64IndexSegment?.ChunkCapacity ?? 0) +
+            (TransientString64IndexSegment?.ChunkCapacity ?? 0) +
             (TailIndexSegment?.ChunkCapacity ?? 0);
 
         writer.WriteCapacity(totalAllocatedChunks, totalCapacityChunks);
@@ -284,18 +385,8 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     {
         var props = new Dictionary<string, object>
         {
-            // ComponentSegment breakdown
-            ["ComponentSegment.AllocatedChunks"] = ComponentSegment.AllocatedChunkCount,
-            ["ComponentSegment.Capacity"] = ComponentSegment.ChunkCapacity,
+            ["StorageMode"] = StorageMode,
             ["ComponentSegment.ChunkSize"] = ComponentTotalSize,
-
-            // CompRevTableSegment breakdown
-            ["CompRevTableSegment.AllocatedChunks"] = CompRevTableSegment.AllocatedChunkCount,
-            ["CompRevTableSegment.Capacity"] = CompRevTableSegment.ChunkCapacity,
-
-            // DefaultIndexSegment breakdown
-            ["DefaultIndexSegment.AllocatedChunks"] = DefaultIndexSegment.AllocatedChunkCount,
-            ["DefaultIndexSegment.Capacity"] = DefaultIndexSegment.ChunkCapacity,
 
             // Contention details
             ["Contention.WaitCount"] = _contentionWaitCount,
@@ -303,18 +394,48 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
             ["Contention.MaxWaitUs"] = _contentionMaxWaitUs,
         };
 
-        // String64IndexSegment (may be null if no String64 indexes)
+        // Persistent segments (Versioned / SingleVersion)
+        if (ComponentSegment != null)
+        {
+            props["ComponentSegment.AllocatedChunks"] = ComponentSegment.AllocatedChunkCount;
+            props["ComponentSegment.Capacity"] = ComponentSegment.ChunkCapacity;
+        }
+
+        if (CompRevTableSegment != null)
+        {
+            props["CompRevTableSegment.AllocatedChunks"] = CompRevTableSegment.AllocatedChunkCount;
+            props["CompRevTableSegment.Capacity"] = CompRevTableSegment.ChunkCapacity;
+        }
+
+        if (DefaultIndexSegment != null)
+        {
+            props["DefaultIndexSegment.AllocatedChunks"] = DefaultIndexSegment.AllocatedChunkCount;
+            props["DefaultIndexSegment.Capacity"] = DefaultIndexSegment.ChunkCapacity;
+        }
+
         if (String64IndexSegment != null)
         {
             props["String64IndexSegment.AllocatedChunks"] = String64IndexSegment.AllocatedChunkCount;
             props["String64IndexSegment.Capacity"] = String64IndexSegment.ChunkCapacity;
         }
 
-        // TailIndexSegment (may be null if no AllowMultiple secondary indexes)
         if (TailIndexSegment != null)
         {
             props["TailIndexSegment.AllocatedChunks"] = TailIndexSegment.AllocatedChunkCount;
             props["TailIndexSegment.Capacity"] = TailIndexSegment.ChunkCapacity;
+        }
+
+        // Transient segments
+        if (TransientComponentSegment != null)
+        {
+            props["TransientComponentSegment.AllocatedChunks"] = TransientComponentSegment.AllocatedChunkCount;
+            props["TransientComponentSegment.Capacity"] = TransientComponentSegment.ChunkCapacity;
+        }
+
+        if (TransientDefaultIndexSegment != null)
+        {
+            props["TransientDefaultIndexSegment.AllocatedChunks"] = TransientDefaultIndexSegment.AllocatedChunkCount;
+            props["TransientDefaultIndexSegment.Capacity"] = TransientDefaultIndexSegment.ChunkCapacity;
         }
 
         return props;
@@ -322,89 +443,117 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
 
     #endregion
     
-    public ComponentTable(DatabaseEngine dbe, DBComponentDefinition definition, IResource parent, ExhaustionPolicy exhaustionPolicy = ExhaustionPolicy.None,
-        ChangeSet changeSet = null) : base($"ComponentTable_{definition.Name}", ResourceType.ComponentTable, parent, exhaustionPolicy)
+    public ComponentTable(DatabaseEngine dbe, DBComponentDefinition definition, IResource parent, StorageMode storageMode = StorageMode.Versioned,
+        ExhaustionPolicy exhaustionPolicy = ExhaustionPolicy.None, ChangeSet changeSet = null) :
+        base($"ComponentTable_{definition.Name}", ResourceType.ComponentTable, parent, exhaustionPolicy)
     {
         DBE = dbe;
         Definition = definition;
+        StorageMode = storageMode;
 
+        if (storageMode == StorageMode.Transient)
+        {
+            CreateTransientSegments(dbe);
+            return;
+        }
+
+        // Versioned and SingleVersion both use PersistentStore (SV needs MMF checkpoint for clean entity recovery)
         var mmf = DBE.MMF;
         ComponentSegment    = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, ComponentTotalSize, changeSet);
-        CompRevTableSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, ComponentRevisionManager.CompRevChunkSize, changeSet);
-
-        // This segment will be used for all kinds of index types except String64 which needs a dedicated one because its chunk size is different (all others are 64 bytes)
         DefaultIndexSegment  = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(Index64Chunk), changeSet);
         String64IndexSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, sizeof(IndexString64Chunk), changeSet);
 
-        // PK index uses stableId -1 on DefaultIndexSegment; secondary indexes use Field.FieldId
-        if (definition.AllowMultiple)
+        // Versioned only: allocate revision chain segment for MVCC
+        if (storageMode == StorageMode.Versioned)
         {
-            PrimaryKeyIndex = new LongMultipleBTree(DefaultIndexSegment, stableId: -1, changeSet: changeSet);
-        }
-        else
-        {
-            PrimaryKeyIndex = new LongSingleBTree(DefaultIndexSegment, stableId: -1, changeSet: changeSet);
+            CompRevTableSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, ComponentRevisionManager.CompRevChunkSize, changeSet);
         }
 
         // Allocate TAIL version-history segment for AllowMultiple secondary indexes
         if (Definition.MultipleIndicesCount > 0)
         {
             TailIndexSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, 512, changeSet);
-            TailVSBS = new VariableSizedBufferSegment<VersionedIndexEntry>(TailIndexSegment);
+            TailVSBS = new VariableSizedBufferSegment<VersionedIndexEntry, PersistentStore>(TailIndexSegment);
         }
 
         BuildIndexedFieldInfo(false, changeSet);
         ViewRegistry = new ViewRegistry(IndexedFieldInfos.Length);
         BuildComponentCollectionInfo(changeSet);
+
+        if (storageMode == StorageMode.SingleVersion)
+        {
+            DirtyBitmap = new DirtyBitmap(ComponentSegment.ChunkCapacity);
+            InitializeShadowTracking();
+        }
     }
 
     /// <summary>
     /// Load constructor: restores a ComponentTable from previously persisted segment root page indices.
     /// Used during database reopen to reconnect to existing on-disk data instead of allocating fresh segments.
     /// </summary>
+    /// <param name="storageMode">Storage mode from persisted ComponentR1 metadata.</param>
     /// <param name="newIndexFieldIds">Optional set of FieldIds for newly added indexes that need creating instead of loading.
     /// When non-null, indexes for these fields are created fresh; all other indexes are loaded from disk.</param>
     internal ComponentTable(DatabaseEngine dbe, DBComponentDefinition definition, IResource parent, int componentSPI, int versionSPI, int defaultIndexSPI,
-        int string64IndexSPI, int tailIndexSPI = 0, ExhaustionPolicy exhaustionPolicy = ExhaustionPolicy.None, HashSet<int> newIndexFieldIds = null, 
-        ChangeSet changeSet = null) : base($"ComponentTable_{definition.Name}", ResourceType.ComponentTable, parent, exhaustionPolicy)
+        int string64IndexSPI, int tailIndexSPI = 0, StorageMode storageMode = StorageMode.Versioned, ExhaustionPolicy exhaustionPolicy = ExhaustionPolicy.None, 
+        HashSet<int> newIndexFieldIds = null, ChangeSet changeSet = null) : 
+        base($"ComponentTable_{definition.Name}", ResourceType.ComponentTable, parent, exhaustionPolicy)
     {
         DBE = dbe;
         Definition = definition;
+        StorageMode = storageMode;
+
+        // Transient data doesn't survive restart — create a fresh empty table
+        if (storageMode == StorageMode.Transient)
+        {
+            CreateTransientSegments(dbe);
+            return;
+        }
+
         var mmf = DBE.MMF;
 
         ComponentSegment     = mmf.LoadChunkBasedSegment(componentSPI, ComponentTotalSize);
-        CompRevTableSegment  = mmf.LoadChunkBasedSegment(versionSPI, ComponentRevisionManager.CompRevChunkSize);
         DefaultIndexSegment  = mmf.LoadChunkBasedSegment(defaultIndexSPI, sizeof(Index64Chunk));
         String64IndexSegment = mmf.LoadChunkBasedSegment(string64IndexSPI, sizeof(IndexString64Chunk));
 
-        PrimaryKeyIndex = definition.AllowMultiple ?
-            new LongMultipleBTree(DefaultIndexSegment, load: true, stableId: -1) :
-            new LongSingleBTree(DefaultIndexSegment, load: true, stableId: -1);
+        // Versioned only: load revision chain segment
+        if (storageMode == StorageMode.Versioned)
+        {
+            CompRevTableSegment = mmf.LoadChunkBasedSegment(versionSPI, ComponentRevisionManager.CompRevChunkSize);
+        }
 
         // Restore TAIL version-history segment for AllowMultiple secondary indexes
         if (Definition.MultipleIndicesCount > 0)
         {
             TailIndexSegment = mmf.LoadChunkBasedSegment(tailIndexSPI, 512);
-            TailVSBS = new VariableSizedBufferSegment<VersionedIndexEntry>(TailIndexSegment);
+            TailVSBS = new VariableSizedBufferSegment<VersionedIndexEntry, PersistentStore>(TailIndexSegment);
         }
 
         BuildIndexedFieldInfo(true, changeSet, newIndexFieldIds);
         ViewRegistry = new ViewRegistry(IndexedFieldInfos.Length);
 
-        ComponentCollectionVSBSByOffset = new Dictionary<int, VariableSizedBufferSegmentBase>();
+        ComponentCollectionVSBSByOffset = new Dictionary<int, VariableSizedBufferSegmentBase<PersistentStore>>();
+
+        if (storageMode == StorageMode.SingleVersion)
+        {
+            DirtyBitmap = new DirtyBitmap(ComponentSegment.ChunkCapacity);
+            InitializeShadowTracking();
+        }
     }
 
     /// <summary>
-    /// Migration constructor: uses pre-created component and revision segments from schema migration,
-    /// while loading index segments from their persisted SPIs.
+    /// Migration constructor: uses pre-created component and revision segments from schema migration, while loading index segments from their persisted SPIs.
+    /// Only valid for Versioned components.
     /// </summary>
-    internal ComponentTable(DatabaseEngine dbe, DBComponentDefinition definition, IResource parent, ChunkBasedSegment componentSegment, 
-        ChunkBasedSegment revisionSegment, int defaultIndexSPI, int string64IndexSPI, int tailIndexSPI = 0,
+    internal ComponentTable(DatabaseEngine dbe, DBComponentDefinition definition, IResource parent, ChunkBasedSegment<PersistentStore> componentSegment,
+        ChunkBasedSegment<PersistentStore> revisionSegment, int defaultIndexSPI, int string64IndexSPI, int tailIndexSPI = 0,
         ExhaustionPolicy exhaustionPolicy = ExhaustionPolicy.None, HashSet<int> newIndexFieldIds = null, ChangeSet changeSet = null) :
         base($"ComponentTable_{definition.Name}", ResourceType.ComponentTable, parent, exhaustionPolicy)
     {
+        Debug.Assert(definition.StorageMode == StorageMode.Versioned, "Schema migration only applies to Versioned components");
         DBE = dbe;
         Definition = definition;
+        StorageMode = StorageMode.Versioned;
         var mmf = DBE.MMF;
 
         ComponentSegment = componentSegment;
@@ -412,19 +561,66 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         DefaultIndexSegment = mmf.LoadChunkBasedSegment(defaultIndexSPI, sizeof(Index64Chunk));
         String64IndexSegment = mmf.LoadChunkBasedSegment(string64IndexSPI, sizeof(IndexString64Chunk));
 
-        PrimaryKeyIndex = definition.AllowMultiple ? new LongMultipleBTree(DefaultIndexSegment, load: true, stableId: -1) : 
-            new LongSingleBTree(DefaultIndexSegment, load: true, stableId: -1);
-
         if (Definition.MultipleIndicesCount > 0)
         {
             TailIndexSegment = mmf.LoadChunkBasedSegment(tailIndexSPI, 512);
-            TailVSBS = new VariableSizedBufferSegment<VersionedIndexEntry>(TailIndexSegment);
+            TailVSBS = new VariableSizedBufferSegment<VersionedIndexEntry, PersistentStore>(TailIndexSegment);
         }
 
         BuildIndexedFieldInfo(true, changeSet, newIndexFieldIds);
         ViewRegistry = new ViewRegistry(IndexedFieldInfos.Length);
 
-        ComponentCollectionVSBSByOffset = new Dictionary<int, VariableSizedBufferSegmentBase>();
+        ComponentCollectionVSBSByOffset = new Dictionary<int, VariableSizedBufferSegmentBase<PersistentStore>>();
+    }
+
+    /// <summary>
+    /// Creates heap-backed segments for Transient storage mode. Each CBS gets its own TransientStore
+    /// instance to avoid struct-copy divergence of mutable <c>_pageCount</c> field.
+    /// </summary>
+    private void CreateTransientSegments(DatabaseEngine dbe)
+    {
+        var opts = dbe.TransientOptions;
+        var em = dbe.EpochManager;
+
+        // Component data segment
+        _transientComponentStore = new TransientStore(opts, dbe.MemoryAllocator, em, this);
+        var compStore = _transientComponentStore.Value;
+        TransientComponentSegment = new ChunkBasedSegment<TransientStore>(em, compStore, ComponentTotalSize);
+        Span<int> compPages = stackalloc int[ComponentSegmentStartingSize];
+        compStore.AllocatePages(ref compPages, 0, null);
+        TransientComponentSegment.Create(PageBlockType.None, compPages, false);
+
+        // Default index segment (for PK B+Tree and non-String64 secondary indexes)
+        _transientDefaultIndexStore = new TransientStore(opts, dbe.MemoryAllocator, em, this);
+        var idxStore = _transientDefaultIndexStore.Value;
+        TransientDefaultIndexSegment = new ChunkBasedSegment<TransientStore>(em, idxStore, sizeof(Index64Chunk));
+        Span<int> idxPages = stackalloc int[MainIndexSegmentStartingSize];
+        idxStore.AllocatePages(ref idxPages, 0, null);
+        TransientDefaultIndexSegment.Create(PageBlockType.None, idxPages, false);
+
+        // String64 index segment
+        _transientString64IndexStore = new TransientStore(opts, dbe.MemoryAllocator, em, this);
+        var s64Store = _transientString64IndexStore.Value;
+        TransientString64IndexSegment = new ChunkBasedSegment<TransientStore>(em, s64Store, sizeof(IndexString64Chunk));
+        Span<int> s64Pages = stackalloc int[MainIndexSegmentStartingSize];
+        s64Store.AllocatePages(ref s64Pages, 0, null);
+        TransientString64IndexSegment.Create(PageBlockType.None, s64Pages, false);
+
+        BuildIndexedFieldInfo(false);
+        ViewRegistry = new ViewRegistry(IndexedFieldInfos.Length);
+        ComponentCollectionVSBSByOffset = new Dictionary<int, VariableSizedBufferSegmentBase<PersistentStore>>();
+
+        if (IndexedFieldInfos.Length > 0)
+        {
+            HasShadowableIndexes = true;
+            DirtyBitmap = new DirtyBitmap(TransientComponentSegment.ChunkCapacity);
+            ShadowBitmap = new DirtyBitmap(TransientComponentSegment.ChunkCapacity);
+            FieldShadowBuffers = new FieldShadowBuffer[IndexedFieldInfos.Length];
+            for (int i = 0; i < IndexedFieldInfos.Length; i++)
+            {
+                FieldShadowBuffers[i] = new FieldShadowBuffer();
+            }
+        }
     }
 
     private void BuildIndexedFieldInfo(bool load, ChangeSet changeSet = null, HashSet<int> newIndexFieldIds = null)
@@ -446,13 +642,15 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
             // During schema evolution: newly added indexes use create mode; existing indexes use load mode
             var useLoad = load && (newIndexFieldIds == null || !newIndexFieldIds.Contains(f.FieldId));
 
+            var index = CreateIndexForField(f, (short)f.FieldId, useLoad, changeSet);
             var fi = new IndexedFieldInfo
             {
                 OffsetToField = ro + f.OffsetInComponentStorage,
                 Size          = f.SizeInComponentStorage,
-                Index         = CreateIndexForField(f, (short)f.FieldId, useLoad, changeSet),
+                Index         = index,
+                AllowMultiple = index.AllowMultiple,
             };
-            fi.OffsetToIndexElementId = fi.Index.AllowMultiple ? (j++ * sizeof(int)) : 0;
+            fi.OffsetToIndexElementId = fi.AllowMultiple ? (Definition.EntityPKOverheadSize + j++ * sizeof(int)) : 0;
             l.Add(fi);
         }
 
@@ -467,10 +665,30 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     }
 
     /// <summary>
+    /// Initializes shadow tracking infrastructure for SV tick-boundary index/view maintenance.
+    /// Called after BuildIndexedFieldInfo when StorageMode == SingleVersion.
+    /// </summary>
+    private void InitializeShadowTracking()
+    {
+        if (IndexedFieldInfos.Length == 0)
+        {
+            return;
+        }
+
+        HasShadowableIndexes = true;
+        ShadowBitmap = new DirtyBitmap(ComponentSegment.ChunkCapacity);
+        FieldShadowBuffers = new FieldShadowBuffer[IndexedFieldInfos.Length];
+        for (int i = 0; i < IndexedFieldInfos.Length; i++)
+        {
+            FieldShadowBuffers[i] = new FieldShadowBuffer();
+        }
+    }
+
+    /// <summary>
     /// Populates newly created secondary indexes by scanning all occupied entities.
     /// Called after schema migration creates empty indexes that need backfilling.
     /// </summary>
-    internal unsafe void PopulateNewIndexes(HashSet<int> newIndexFieldIds, ChangeSet changeSet)
+    internal void PopulateNewIndexes(HashSet<int> newIndexFieldIds, ChangeSet changeSet)
     {
         if (newIndexFieldIds == null || newIndexFieldIds.Count == 0)
         {
@@ -499,7 +717,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
 
                     var chunkAddr = accessor.GetChunkAddress(chunkId);
                     var keyAddr = chunkAddr + ifi.OffsetToField;
-                    ifi.Index.Add(keyAddr, chunkId, ref accessor);
+                    ifi.PersistentIndex.Add(keyAddr, chunkId, ref accessor);
                 }
             }
         }
@@ -528,7 +746,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
 
     private void BuildComponentCollectionInfo(ChangeSet changeSet = null)
     {
-        ComponentCollectionVSBSByOffset = new Dictionary<int, VariableSizedBufferSegmentBase>();
+        ComponentCollectionVSBSByOffset = new Dictionary<int, VariableSizedBufferSegmentBase<PersistentStore>>();
         foreach (var field in Definition.FieldsByName.Values)
         {
             if (field.Type != FieldType.Collection)
@@ -546,31 +764,58 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     /// Creates a B+Tree index for a field on the given segment. Used by schema evolution to pre-create indexes
     /// on existing segments before the ComponentTable is fully loaded.
     /// </summary>
-    internal static BTreeBase CreateIndexForFieldStatic(DBComponentDefinition.Field field, short stableId, bool load, ChunkBasedSegment segment, 
+    internal static BTreeBase<PersistentStore> CreateIndexForFieldStatic(DBComponentDefinition.Field field, short stableId, bool load, ChunkBasedSegment<PersistentStore> segment, 
         ChangeSet changeSet = null) => CreateIndexForFieldCore(field, stableId, load, segment, changeSet);
 
-    private BTreeBase CreateIndexForField(DBComponentDefinition.Field field, short stableId, bool load = false, ChangeSet changeSet = null)
+    private IBTreeIndex CreateIndexForField(DBComponentDefinition.Field field, short stableId, bool load = false, ChangeSet changeSet = null)
     {
+        if (StorageMode == StorageMode.Transient)
+        {
+            return CreateIndexForFieldTransient(field, stableId);
+        }
+
         var s = field.Type == FieldType.String64 ? String64IndexSegment : DefaultIndexSegment;
         return CreateIndexForFieldCore(field, stableId, load, s, changeSet);
     }
 
-    private static BTreeBase CreateIndexForFieldCore(DBComponentDefinition.Field field, short stableId, bool load, ChunkBasedSegment s, ChangeSet changeSet = null)
+    private BTreeBase<TransientStore> CreateIndexForFieldTransient(DBComponentDefinition.Field field, short stableId)
     {
-        BTreeBase index = field.Type switch
+        var s = field.Type == FieldType.String64 ? TransientString64IndexSegment : TransientDefaultIndexSegment;
+        BTreeBase<TransientStore> index = field.Type switch
         {
-            FieldType.Byte     => field.IndexAllowMultiple ? new ByteMultipleBTree      (s, load, stableId, changeSet) : new ByteSingleBTree    (s, load, stableId, changeSet),
-            FieldType.Short    => field.IndexAllowMultiple ? new ShortMultipleBTree     (s, load, stableId, changeSet) : new ShortSingleBTree   (s, load, stableId, changeSet),
-            FieldType.Int      => field.IndexAllowMultiple ? new IntMultipleBTree       (s, load, stableId, changeSet) : new IntSingleBTree     (s, load, stableId, changeSet),
-            FieldType.Long     => field.IndexAllowMultiple ? new LongMultipleBTree      (s, load, stableId, changeSet) : new LongSingleBTree    (s, load, stableId, changeSet),
-            FieldType.UByte    => field.IndexAllowMultiple ? new UByteMultipleBTree     (s, load, stableId, changeSet) : new UByteSingleBTree   (s, load, stableId, changeSet),
-            FieldType.UShort   => field.IndexAllowMultiple ? new UShortMultipleBTree    (s, load, stableId, changeSet) : new UShortSingleBTree  (s, load, stableId, changeSet),
-            FieldType.UInt     => field.IndexAllowMultiple ? new UIntMultipleBTree      (s, load, stableId, changeSet) : new UIntSingleBTree    (s, load, stableId, changeSet),
-            FieldType.ULong    => field.IndexAllowMultiple ? new ULongMultipleBTree     (s, load, stableId, changeSet) : new ULongSingleBTree   (s, load, stableId, changeSet),
-            FieldType.Float    => field.IndexAllowMultiple ? new FloatMultipleBTree     (s, load, stableId, changeSet) : new FloatSingleBTree   (s, load, stableId, changeSet),
-            FieldType.Double   => field.IndexAllowMultiple ? new DoubleMultipleBTree    (s, load, stableId, changeSet) : new DoubleSingleBTree  (s, load, stableId, changeSet),
-            FieldType.Char     => field.IndexAllowMultiple ? new CharMultipleBTree      (s, load, stableId, changeSet) : new CharSingleBTree    (s, load, stableId, changeSet),
-            FieldType.String64 => field.IndexAllowMultiple ? new String64MultipleBTree  (s, load, stableId, changeSet) : new String64SingleBTree(s, load, stableId, changeSet),
+            FieldType.Byte     => field.IndexAllowMultiple ? new ByteMultipleBTree<TransientStore>      (s, false, stableId) : new ByteSingleBTree<TransientStore>    (s, false, stableId),
+            FieldType.Short    => field.IndexAllowMultiple ? new ShortMultipleBTree<TransientStore>     (s, false, stableId) : new ShortSingleBTree<TransientStore>   (s, false, stableId),
+            FieldType.Int      => field.IndexAllowMultiple ? new IntMultipleBTree<TransientStore>       (s, false, stableId) : new IntSingleBTree<TransientStore>     (s, false, stableId),
+            FieldType.Long     => field.IndexAllowMultiple ? new LongMultipleBTree<TransientStore>      (s, false, stableId) : new LongSingleBTree<TransientStore>    (s, false, stableId),
+            FieldType.UByte    => field.IndexAllowMultiple ? new UByteMultipleBTree<TransientStore>     (s, false, stableId) : new UByteSingleBTree<TransientStore>   (s, false, stableId),
+            FieldType.UShort   => field.IndexAllowMultiple ? new UShortMultipleBTree<TransientStore>    (s, false, stableId) : new UShortSingleBTree<TransientStore>  (s, false, stableId),
+            FieldType.UInt     => field.IndexAllowMultiple ? new UIntMultipleBTree<TransientStore>      (s, false, stableId) : new UIntSingleBTree<TransientStore>    (s, false, stableId),
+            FieldType.ULong    => field.IndexAllowMultiple ? new ULongMultipleBTree<TransientStore>     (s, false, stableId) : new ULongSingleBTree<TransientStore>   (s, false, stableId),
+            FieldType.Float    => field.IndexAllowMultiple ? new FloatMultipleBTree<TransientStore>     (s, false, stableId) : new FloatSingleBTree<TransientStore>   (s, false, stableId),
+            FieldType.Double   => field.IndexAllowMultiple ? new DoubleMultipleBTree<TransientStore>    (s, false, stableId) : new DoubleSingleBTree<TransientStore>  (s, false, stableId),
+            FieldType.Char     => field.IndexAllowMultiple ? new CharMultipleBTree<TransientStore>      (s, false, stableId) : new CharSingleBTree<TransientStore>    (s, false, stableId),
+            FieldType.String64 => field.IndexAllowMultiple ? new String64MultipleBTree<TransientStore>  (s, false, stableId) : new String64SingleBTree<TransientStore>(s, false, stableId),
+            _                  => null
+        };
+        return index;
+    }
+
+    private static BTreeBase<PersistentStore> CreateIndexForFieldCore(DBComponentDefinition.Field field, short stableId, bool load, ChunkBasedSegment<PersistentStore> s, ChangeSet changeSet = null)
+    {
+        BTreeBase<PersistentStore> index = field.Type switch
+        {
+            FieldType.Byte     => field.IndexAllowMultiple ? new ByteMultipleBTree<PersistentStore>      (s, load, stableId, changeSet) : new ByteSingleBTree<PersistentStore>    (s, load, stableId, changeSet),
+            FieldType.Short    => field.IndexAllowMultiple ? new ShortMultipleBTree<PersistentStore>     (s, load, stableId, changeSet) : new ShortSingleBTree<PersistentStore>   (s, load, stableId, changeSet),
+            FieldType.Int      => field.IndexAllowMultiple ? new IntMultipleBTree<PersistentStore>       (s, load, stableId, changeSet) : new IntSingleBTree<PersistentStore>     (s, load, stableId, changeSet),
+            FieldType.Long     => field.IndexAllowMultiple ? new LongMultipleBTree<PersistentStore>      (s, load, stableId, changeSet) : new LongSingleBTree<PersistentStore>    (s, load, stableId, changeSet),
+            FieldType.UByte    => field.IndexAllowMultiple ? new UByteMultipleBTree<PersistentStore>     (s, load, stableId, changeSet) : new UByteSingleBTree<PersistentStore>   (s, load, stableId, changeSet),
+            FieldType.UShort   => field.IndexAllowMultiple ? new UShortMultipleBTree<PersistentStore>    (s, load, stableId, changeSet) : new UShortSingleBTree<PersistentStore>  (s, load, stableId, changeSet),
+            FieldType.UInt     => field.IndexAllowMultiple ? new UIntMultipleBTree<PersistentStore>      (s, load, stableId, changeSet) : new UIntSingleBTree<PersistentStore>    (s, load, stableId, changeSet),
+            FieldType.ULong    => field.IndexAllowMultiple ? new ULongMultipleBTree<PersistentStore>     (s, load, stableId, changeSet) : new ULongSingleBTree<PersistentStore>   (s, load, stableId, changeSet),
+            FieldType.Float    => field.IndexAllowMultiple ? new FloatMultipleBTree<PersistentStore>     (s, load, stableId, changeSet) : new FloatSingleBTree<PersistentStore>   (s, load, stableId, changeSet),
+            FieldType.Double   => field.IndexAllowMultiple ? new DoubleMultipleBTree<PersistentStore>    (s, load, stableId, changeSet) : new DoubleSingleBTree<PersistentStore>  (s, load, stableId, changeSet),
+            FieldType.Char     => field.IndexAllowMultiple ? new CharMultipleBTree<PersistentStore>      (s, load, stableId, changeSet) : new CharSingleBTree<PersistentStore>    (s, load, stableId, changeSet),
+            FieldType.String64 => field.IndexAllowMultiple ? new String64MultipleBTree<PersistentStore>  (s, load, stableId, changeSet) : new String64SingleBTree<PersistentStore>(s, load, stableId, changeSet),
             _                  => null
         };
         return index;
@@ -578,20 +823,32 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
 
     protected override void Dispose(bool disposing)
     {
-        if (ComponentSegment == null)
+        if (ComponentSegment == null && TransientComponentSegment == null)
         {
             return;
         }
 
         if (disposing)
         {
+            // Persistent segments
             TailIndexSegment?.Dispose();
             String64IndexSegment?.Dispose();
-            DefaultIndexSegment.Dispose();
-            CompRevTableSegment.Dispose();
-            ComponentSegment.Dispose();
+            DefaultIndexSegment?.Dispose();
+            CompRevTableSegment?.Dispose();
+            ComponentSegment?.Dispose();
+
+            // Transient segments
+            TransientString64IndexSegment?.Dispose();
+            TransientDefaultIndexSegment?.Dispose();
+            TransientComponentSegment?.Dispose();
+
+            // Transient stores (release heap-pinned memory blocks)
+            _transientString64IndexStore?.Dispose();
+            _transientDefaultIndexStore?.Dispose();
+            _transientComponentStore?.Dispose();
 
             ComponentSegment = null;
+            TransientComponentSegment = null;
         }
         base.Dispose(disposing);
     }

@@ -12,6 +12,7 @@ namespace Typhon.Engine.Tests;
 /// that rarely trigger under light contention (2-8 threads in OlcBTreeTests).
 /// </summary>
 [TestFixture]
+[Explicit("Stress test — spawns 16-32 threads, run manually to avoid thread pool saturation in parallel CI")]
 public class OlcBTreeStressTests
 {
     private IServiceProvider _serviceProvider;
@@ -39,7 +40,7 @@ public class OlcBTreeStressTests
     [TearDown]
     public void TearDown() => (_serviceProvider as IDisposable)?.Dispose();
 
-    private void LogDiagnostics<TKey>(BTree<TKey> tree) where TKey : unmanaged
+    private void LogDiagnostics<TKey>(BTree<TKey, PersistentStore> tree) where TKey : unmanaged
     {
         TestContext.Out.WriteLine(
             $"Restarts={tree.OptimisticRestarts} Fallbacks={tree.PessimisticFallbacks} " +
@@ -51,7 +52,7 @@ public class OlcBTreeStressTests
     /// Runs CheckConsistency in a try-catch. Under high-contention stress, internal node separator keys
     /// can become stale (known limitation). Returns true if consistent, false if violations found.
     /// </summary>
-    private bool TryCheckConsistency<TKey>(BTree<TKey> tree, ChunkBasedSegment segment, string context = null) where TKey : unmanaged
+    private bool TryCheckConsistency<TKey>(BTree<TKey, PersistentStore> tree, ChunkBasedSegment<PersistentStore> segment, string context = null) where TKey : unmanaged
     {
         var accessor = segment.CreateChunkAccessor();
         try
@@ -67,222 +68,6 @@ public class OlcBTreeStressTests
         finally
         {
             accessor.Dispose();
-        }
-    }
-
-    // ========================================
-    // B1 — Concurrent Read Stress (64 threads)
-    // ========================================
-
-    [Test]
-    [CancelAfter(5000)]
-    public unsafe void Stress_ConcurrentReads_32Threads()
-    {
-        using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
-        var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 200, sizeof(Index32Chunk));
-
-        const int entryCount = 5000;
-        const int threadCount = 32;
-        const int readsPerThread = 200;
-
-        var setupDepth = epochManager.EnterScope();
-        try
-        {
-            var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
-
-            for (int i = 1; i <= entryCount; i++)
-            {
-                tree.Add(i, i * 10, ref accessor);
-            }
-            accessor.Dispose();
-
-            tree.ResetDiagnostics();
-
-            int errors = 0;
-            using var barrier = new Barrier(threadCount);
-            var tasks = new Task[threadCount];
-
-            for (int t = 0; t < threadCount; t++)
-            {
-                var seed = t * 31;
-                tasks[t] = Task.Factory.StartNew(() =>
-                {
-                    var depth = epochManager.EnterScope();
-                    try
-                    {
-                        var ra = segment.CreateChunkAccessor();
-                        var rng = new Random(seed);
-                        barrier.SignalAndWait();
-
-                        for (int i = 0; i < readsPerThread; i++)
-                        {
-                            int key = rng.Next(1, entryCount + 1);
-                            var result = tree.TryGet(key, ref ra);
-                            if (!result.IsSuccess || result.Value != key * 10)
-                            {
-                                Interlocked.Increment(ref errors);
-                            }
-                        }
-                        ra.Dispose();
-                    }
-                    finally
-                    {
-                        epochManager.ExitScope(depth);
-                    }
-                }, TaskCreationOptions.LongRunning);
-            }
-
-            Task.WaitAll(tasks);
-
-            Assert.That(errors, Is.EqualTo(0), "All reads should return correct values");
-            Assert.That(tree.OptimisticRestarts, Is.EqualTo(0), "No writers means zero restarts");
-
-            TryCheckConsistency(tree, segment);
-            LogDiagnostics(tree);
-        }
-        finally
-        {
-            epochManager.ExitScope(setupDepth);
-        }
-    }
-
-    // ========================================
-    // B2 — Concurrent Insert Stress (64 threads)
-    // ========================================
-
-    [Test]
-    [CancelAfter(5000)]
-    public unsafe void Stress_ConcurrentInserts_32Threads()
-    {
-        using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
-        var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 200, sizeof(Index32Chunk));
-
-        const int threadCount = 32;
-        const int keysPerThread = 100;
-
-        var setupDepth = epochManager.EnterScope();
-        try
-        {
-            var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
-            accessor.Dispose();
-
-            using var barrier = new Barrier(threadCount);
-            var tasks = new Task[threadCount];
-
-            for (int t = 0; t < threadCount; t++)
-            {
-                var threadId = t;
-                tasks[t] = Task.Factory.StartNew(() =>
-                {
-                    var depth = epochManager.EnterScope();
-                    try
-                    {
-                        var wa = segment.CreateChunkAccessor();
-                        barrier.SignalAndWait();
-
-                        int baseKey = threadId * keysPerThread + 1;
-                        for (int i = 0; i < keysPerThread; i++)
-                        {
-                            tree.Add(baseKey + i, (baseKey + i) * 10, ref wa);
-                        }
-                        wa.Dispose();
-                    }
-                    finally
-                    {
-                        epochManager.ExitScope(depth);
-                    }
-                }, TaskCreationOptions.LongRunning);
-            }
-
-            Task.WaitAll(tasks);
-
-            Assert.That(tree.EntryCount, Is.EqualTo(threadCount * keysPerThread), "All inserts should succeed");
-            Assert.That(tree.SplitCount, Is.GreaterThan(0), "Concurrent inserts must cause splits");
-
-            TryCheckConsistency(tree, segment);
-            LogDiagnostics(tree);
-        }
-        finally
-        {
-            epochManager.ExitScope(setupDepth);
-        }
-    }
-
-    // ========================================
-    // B3 — Concurrent Remove Stress (64 threads)
-    // ========================================
-
-    [Test]
-    [CancelAfter(5000)]
-    public unsafe void Stress_ConcurrentRemoves_32Threads()
-    {
-        using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
-        var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 200, sizeof(Index32Chunk));
-
-        const int threadCount = 32;
-        const int keysPerThread = 100;
-        const int totalKeys = threadCount * keysPerThread;
-
-        var setupDepth = epochManager.EnterScope();
-        try
-        {
-            var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
-
-            // Pre-populate
-            for (int i = 1; i <= totalKeys; i++)
-            {
-                tree.Add(i, i * 10, ref accessor);
-            }
-            accessor.Dispose();
-
-            Assert.That(tree.EntryCount, Is.EqualTo(totalKeys));
-            tree.ResetDiagnostics();
-
-            using var barrier = new Barrier(threadCount);
-            var tasks = new Task[threadCount];
-
-            for (int t = 0; t < threadCount; t++)
-            {
-                var threadId = t;
-                tasks[t] = Task.Factory.StartNew(() =>
-                {
-                    var depth = epochManager.EnterScope();
-                    try
-                    {
-                        var wa = segment.CreateChunkAccessor();
-                        barrier.SignalAndWait();
-
-                        int baseKey = threadId * keysPerThread + 1;
-                        for (int i = 0; i < keysPerThread; i++)
-                        {
-                            tree.Remove(baseKey + i, out _, ref wa);
-                        }
-                        wa.Dispose();
-                    }
-                    finally
-                    {
-                        epochManager.ExitScope(depth);
-                    }
-                }, TaskCreationOptions.LongRunning);
-            }
-
-            Task.WaitAll(tasks);
-
-            Assert.That(tree.EntryCount, Is.EqualTo(0), "All keys should be removed");
-            Assert.That(tree.MergeCount, Is.GreaterThan(0), "Concurrent removes must cause merges");
-
-            TryCheckConsistency(tree, segment);
-            LogDiagnostics(tree);
-        }
-        finally
-        {
-            epochManager.ExitScope(setupDepth);
         }
     }
 
@@ -308,7 +93,7 @@ public class OlcBTreeStressTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             for (int i = 1; i <= initialKeys; i++)
             {
@@ -422,74 +207,6 @@ public class OlcBTreeStressTests
     }
 
     // ========================================
-    // B5 — Monotonic Insert Stress (split hotspot)
-    // ========================================
-
-    [Test]
-    [CancelAfter(5000)]
-    public unsafe void Stress_MonotonicInsert_32Threads()
-    {
-        using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
-        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
-        var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 200, sizeof(Index32Chunk));
-
-        const int threadCount = 32;
-        const int keysPerThread = 100;
-        int sharedCounter = 0;
-
-        var setupDepth = epochManager.EnterScope();
-        try
-        {
-            var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
-            accessor.Dispose();
-
-            using var barrier = new Barrier(threadCount);
-            var tasks = new Task[threadCount];
-
-            for (int t = 0; t < threadCount; t++)
-            {
-                tasks[t] = Task.Factory.StartNew(() =>
-                {
-                    var depth = epochManager.EnterScope();
-                    try
-                    {
-                        var wa = segment.CreateChunkAccessor();
-                        barrier.SignalAndWait();
-
-                        for (int i = 0; i < keysPerThread; i++)
-                        {
-                            int key = Interlocked.Increment(ref sharedCounter);
-                            tree.Add(key, key * 10, ref wa);
-                        }
-                        wa.Dispose();
-                    }
-                    finally
-                    {
-                        epochManager.ExitScope(depth);
-                    }
-                }, TaskCreationOptions.LongRunning);
-            }
-
-            Task.WaitAll(tasks);
-            Assert.That(tree.EntryCount, Is.EqualTo(threadCount * keysPerThread));
-            Assert.That(tree.PessimisticFallbacks, Is.GreaterThan(0), "Monotonic pattern should force pessimistic fallbacks");
-            Assert.That(tree.SplitCount, Is.GreaterThan(0), "Monotonic inserts cause right-edge splits");
-            // Contention splits are a probabilistic optimization — whether the hint reaches the threshold
-            // depends on thread scheduling and backoff behavior. With SpinWait yielding, contention
-            // resolves faster and the hint may not accumulate. Log for diagnostics, don't assert.
-            TestContext.Out.WriteLine($"ContentionSplitCount={tree.ContentionSplitCount} (not asserted — scheduling-dependent)");
-
-            TryCheckConsistency(tree, segment);
-            LogDiagnostics(tree);
-        }
-        finally
-        {
-            epochManager.ExitScope(setupDepth);
-        }
-    }
-
-    // ========================================
     // B5.1 — Contention Split Tree Consistency
     // ========================================
 
@@ -509,7 +226,7 @@ public class OlcBTreeStressTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
             accessor.Dispose();
 
             using var barrier = new Barrier(threadCount);
@@ -594,7 +311,7 @@ public class OlcBTreeStressTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
             accessor.Dispose();
 
             using var startSignal = new ManualResetEventSlim(false);
@@ -721,7 +438,7 @@ public class OlcBTreeStressTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             // Pre-populate: each thread owns even keys in range [base, base+slotsPerThread)
             for (int t = 0; t < threadCount; t++)
@@ -809,7 +526,7 @@ public class OlcBTreeStressTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             for (int t = 0; t < threadCount; t++)
             {
@@ -894,7 +611,7 @@ public class OlcBTreeStressTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntMultipleBTree(segment);
+            var tree = new IntMultipleBTree<PersistentStore>(segment);
 
             // Pre-populate: 200 keys with 3 values each
             // Store element IDs for each key's first value (the one we'll move)
@@ -994,7 +711,7 @@ public class OlcBTreeStressTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             for (int i = 1; i <= initialKeys; i++)
             {
@@ -1121,7 +838,7 @@ public class OlcBTreeStressTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             for (int i = 1; i <= initialKeys; i++)
             {

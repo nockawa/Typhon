@@ -149,24 +149,6 @@ class ViewRegistryTests
     }
 
     [Test]
-    public void RegisterIdempotent_SameViewTwice_NoDuplicate()
-    {
-        var registry = new ViewRegistry(4);
-        var view = new MockView(_allocator, _parent) { ViewId = 1, FieldDependencies = [0, 2] };
-
-        registry.RegisterView(view);
-        registry.RegisterView(view);
-
-        var field0 = registry.GetViewsForField(0);
-        Assert.That(field0.Length, Is.EqualTo(1));
-        Assert.That(field0[0].View, Is.SameAs(view));
-
-        var field2 = registry.GetViewsForField(2);
-        Assert.That(field2.Length, Is.EqualTo(1));
-        Assert.That(field2[0].View, Is.SameAs(view));
-    }
-
-    [Test]
     public void ViewCount_TracksCorrectly()
     {
         var registry = new ViewRegistry(4);

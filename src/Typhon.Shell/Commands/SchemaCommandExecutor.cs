@@ -367,7 +367,7 @@ internal sealed class SchemaCommandExecutor
     }
 
     private static CommandResult ExportJson(
-        IReadOnlyDictionary<string, (long PK, ComponentR1 Comp)> persisted,
+        IReadOnlyDictionary<string, (int ChunkId, ComponentR1 Comp)> persisted,
         IReadOnlyDictionary<string, FieldR1[]> fieldsByComp,
         string filterName)
     {
@@ -436,7 +436,7 @@ internal sealed class SchemaCommandExecutor
     }
 
     private static CommandResult ExportCsv(
-        IReadOnlyDictionary<string, (long PK, ComponentR1 Comp)> persisted,
+        IReadOnlyDictionary<string, (int ChunkId, ComponentR1 Comp)> persisted,
         IReadOnlyDictionary<string, FieldR1[]> fieldsByComp,
         string filterName)
     {
@@ -469,7 +469,7 @@ internal sealed class SchemaCommandExecutor
     }
 
     private static CommandResult ExportTable(
-        IReadOnlyDictionary<string, (long PK, ComponentR1 Comp)> persisted,
+        IReadOnlyDictionary<string, (int ChunkId, ComponentR1 Comp)> persisted,
         IReadOnlyDictionary<string, FieldR1[]> fieldsByComp,
         string filterName)
     {

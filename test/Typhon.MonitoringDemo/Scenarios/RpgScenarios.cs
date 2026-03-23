@@ -12,8 +12,8 @@ public class RpgWorldSimulationScenario : IScenario
     public string Name => "RPG World Simulation";
     public string Description => "Simulates NPC movement, player interactions. Balanced CRUD operations.";
 
-    private readonly List<long> _characterIds = [];
-    private readonly List<long> _positionIds = [];
+    private readonly List<EntityId> _characterIds = [];
+    private readonly List<EntityId> _positionIds = [];
 
     public async Task RunAsync(TyphonContext context, ScenarioConfig config, ScenarioStats stats, CancellationToken ct)
     {
@@ -45,14 +45,14 @@ public class RpgWorldSimulationScenario : IScenario
                             // Spawn new NPC
                             var npcNames = new[] { "Goblin", "Orc", "Wolf", "Skeleton", "Bandit" };
                             var character = Character.Create(localRand, npcNames[localRand.Next(npcNames.Length)], true);
-                            var id = t.CreateEntity(ref character);
+                            var id = t.Spawn<CharacterArch>(CharacterArch.Character.Set(in character));
                             lock (_characterIds)
                             {
                                 _characterIds.Add(id);
                             }
 
-                            var pos = WorldPosition.Create(localRand, id, localRand.Next(1, 20));
-                            var posId = t.CreateEntity(ref pos);
+                            var pos = WorldPosition.Create(localRand, (long)id.RawValue, localRand.Next(1, 20));
+                            var posId = t.Spawn<WorldPositionArch>(WorldPositionArch.Position.Set(in pos));
                             lock (_positionIds)
                             {
                                 _positionIds.Add(posId);
@@ -64,13 +64,14 @@ public class RpgWorldSimulationScenario : IScenario
                         {
                             // Update position (movement)
                             var id = _positionIds[localRand.Next(_positionIds.Count)];
-                            if (t.ReadEntity<WorldPosition>(id, out var pos))
+                            if (t.TryOpen(id, out var entity))
                             {
-                                pos.X += (float)(localRand.NextDouble() - 0.5) * 10;
-                                pos.Y += (float)(localRand.NextDouble() - 0.5) * 10;
-                                pos.Rotation = (float)(localRand.NextDouble() * 360);
-                                pos.IsMoving = localRand.Next(2) == 1;
-                                t.UpdateEntity(id, ref pos);
+                                var pos = entity.Read(WorldPositionArch.Position);
+                                ref var wp = ref t.OpenMut(id).Write(WorldPositionArch.Position);
+                                wp.X = pos.X + (float)(localRand.NextDouble() - 0.5) * 10;
+                                wp.Y = pos.Y + (float)(localRand.NextDouble() - 0.5) * 10;
+                                wp.Rotation = (float)(localRand.NextDouble() * 360);
+                                wp.IsMoving = localRand.Next(2) == 1;
                                 stats.RecordSuccess((Stopwatch.GetTimestamp() - sw) * 1_000_000 / Stopwatch.Frequency);
                             }
                         }
@@ -78,18 +79,19 @@ public class RpgWorldSimulationScenario : IScenario
                         {
                             // Read character (visibility check, AI)
                             var id = _characterIds[localRand.Next(_characterIds.Count)];
-                            t.ReadEntity<Character>(id, out _);
+                            t.TryOpen(id, out _);
                             stats.RecordSuccess((Stopwatch.GetTimestamp() - sw) * 1_000_000 / Stopwatch.Frequency);
                         }
                         else if (_characterIds.Count > 0)
                         {
                             // Update character stats
                             var id = _characterIds[localRand.Next(_characterIds.Count)];
-                            if (t.ReadEntity<Character>(id, out var character))
+                            if (t.TryOpen(id, out var entity))
                             {
-                                character.Health = Math.Min(character.MaxHealth, character.Health + localRand.Next(-10, 20));
-                                character.Mana = Math.Min(character.MaxMana, character.Mana + localRand.Next(-5, 10));
-                                t.UpdateEntity(id, ref character);
+                                var character = entity.Read(CharacterArch.Character);
+                                ref var wc = ref t.OpenMut(id).Write(CharacterArch.Character);
+                                wc.Health = Math.Min(character.MaxHealth, character.Health + localRand.Next(-10, 20));
+                                wc.Mana = Math.Min(character.MaxMana, character.Mana + localRand.Next(-5, 10));
                                 stats.RecordSuccess((Stopwatch.GetTimestamp() - sw) * 1_000_000 / Stopwatch.Frequency);
                             }
                         }
@@ -128,11 +130,11 @@ public class RpgWorldSimulationScenario : IScenario
         for (var i = 0; i < 50 && !ct.IsCancellationRequested; i++)
         {
             var character = Character.Create(rand, playerNames[rand.Next(playerNames.Length)], i > 10);
-            var id = t.CreateEntity(ref character);
+            var id = t.Spawn<CharacterArch>(CharacterArch.Character.Set(in character));
             _characterIds.Add(id);
 
-            var pos = WorldPosition.Create(rand, id, rand.Next(1, 20));
-            var posId = t.CreateEntity(ref pos);
+            var pos = WorldPosition.Create(rand, (long)id.RawValue, rand.Next(1, 20));
+            var posId = t.Spawn<WorldPositionArch>(WorldPositionArch.Position.Set(in pos));
             _positionIds.Add(posId);
         }
 
@@ -150,9 +152,9 @@ public class RpgCombatScenario : IScenario
     public string Name => "RPG Combat";
     public string Description => "Intense battle simulation: damage, healing, skill cooldowns. High-frequency UPDATEs.";
 
-    private readonly List<long> _characterIds = [];
-    private readonly List<long> _combatStatsIds = [];
-    private readonly List<long> _skillIds = [];
+    private readonly List<EntityId> _characterIds = [];
+    private readonly List<EntityId> _combatStatsIds = [];
+    private readonly List<EntityId> _skillIds = [];
 
     public async Task RunAsync(TyphonContext context, ScenarioConfig config, ScenarioStats stats, CancellationToken ct)
     {
@@ -185,11 +187,12 @@ public class RpgCombatScenario : IScenario
                         {
                             // Deal damage / heal
                             var id = _characterIds[localRand.Next(_characterIds.Count)];
-                            if (t.ReadEntity<Character>(id, out var character))
+                            if (t.TryOpen(id, out var entity))
                             {
+                                var character = entity.Read(CharacterArch.Character);
                                 var damage = localRand.Next(-50, 100); // Negative = heal
-                                character.Health = Math.Clamp(character.Health - damage, 0, character.MaxHealth);
-                                t.UpdateEntity(id, ref character);
+                                ref var wc = ref t.OpenMut(id).Write(CharacterArch.Character);
+                                wc.Health = Math.Clamp(character.Health - damage, 0, character.MaxHealth);
                                 stats.RecordSuccess((Stopwatch.GetTimestamp() - sw) * 1_000_000 / Stopwatch.Frequency);
                             }
                         }
@@ -197,15 +200,17 @@ public class RpgCombatScenario : IScenario
                         {
                             // Update combat stats
                             var id = _combatStatsIds[localRand.Next(_combatStatsIds.Count)];
-                            if (t.ReadEntity<CombatStats>(id, out var combatStats))
+                            if (t.TryOpen(id, out var entity))
                             {
-                                combatStats.DamageDealt += localRand.Next(0, 500);
-                                combatStats.DamageTaken += localRand.Next(0, 200);
+                                var combatStats = entity.Read(CombatStatsArch.Stats);
+                                ref var ws = ref t.OpenMut(id).Write(CombatStatsArch.Stats);
+                                ws.DamageDealt = combatStats.DamageDealt + localRand.Next(0, 500);
+                                ws.DamageTaken = combatStats.DamageTaken + localRand.Next(0, 200);
+                                ws.Kills = combatStats.Kills;
                                 if (localRand.Next(10) == 0)
                                 {
-                                    combatStats.Kills++;
+                                    ws.Kills++;
                                 }
-                                t.UpdateEntity(id, ref combatStats);
                                 stats.RecordSuccess((Stopwatch.GetTimestamp() - sw) * 1_000_000 / Stopwatch.Frequency);
                             }
                         }
@@ -213,11 +218,12 @@ public class RpgCombatScenario : IScenario
                         {
                             // Toggle skill cooldown
                             var id = _skillIds[localRand.Next(_skillIds.Count)];
-                            if (t.ReadEntity<Skill>(id, out var skill))
+                            if (t.TryOpen(id, out var entity))
                             {
-                                skill.OnCooldown = !skill.OnCooldown;
-                                skill.Cooldown = skill.OnCooldown ? (float)localRand.NextDouble() * 10 : 0;
-                                t.UpdateEntity(id, ref skill);
+                                var skill = entity.Read(SkillArch.Skill);
+                                ref var wsk = ref t.OpenMut(id).Write(SkillArch.Skill);
+                                wsk.OnCooldown = !skill.OnCooldown;
+                                wsk.Cooldown = wsk.OnCooldown ? (float)localRand.NextDouble() * 10 : 0;
                                 stats.RecordSuccess((Stopwatch.GetTimestamp() - sw) * 1_000_000 / Stopwatch.Frequency);
                             }
                         }
@@ -258,19 +264,19 @@ public class RpgCombatScenario : IScenario
         {
             // Create combatant
             var character = Character.Create(rand, combatantNames[rand.Next(combatantNames.Length)], i > 5);
-            var charId = t.CreateEntity(ref character);
+            var charId = t.Spawn<CharacterArch>(CharacterArch.Character.Set(in character));
             _characterIds.Add(charId);
 
             // Create combat stats
-            var combatStats = CombatStats.Create(rand, charId);
-            var statsId = t.CreateEntity(ref combatStats);
+            var combatStats = CombatStats.Create(rand, (long)charId.RawValue);
+            var statsId = t.Spawn<CombatStatsArch>(CombatStatsArch.Stats.Set(in combatStats));
             _combatStatsIds.Add(statsId);
 
             // Create skills
             for (var j = 0; j < 3; j++)
             {
-                var skill = Skill.Create(rand, charId, skillNames[rand.Next(skillNames.Length)]);
-                var skillId = t.CreateEntity(ref skill);
+                var skill = Skill.Create(rand, (long)charId.RawValue, skillNames[rand.Next(skillNames.Length)]);
+                var skillId = t.Spawn<SkillArch>(SkillArch.Skill.Set(in skill));
                 _skillIds.Add(skillId);
             }
         }
@@ -289,9 +295,9 @@ public class RpgQuestingScenario : IScenario
     public string Name => "RPG Questing";
     public string Description => "Quest acceptance, progress tracking, inventory rewards. Mixed CRUD.";
 
-    private readonly List<long> _characterIds = [];
-    private readonly List<long> _questIds = [];
-    private readonly List<long> _inventoryIds = [];
+    private readonly List<EntityId> _characterIds = [];
+    private readonly List<EntityId> _questIds = [];
+    private readonly List<EntityId> _inventoryIds = [];
 
     public async Task RunAsync(TyphonContext context, ScenarioConfig config, ScenarioStats stats, CancellationToken ct)
     {
@@ -322,10 +328,10 @@ public class RpgQuestingScenario : IScenario
                         {
                             // Accept new quest
                             var charId = _characterIds[localRand.Next(_characterIds.Count)];
-                            var quest = Quest.Create(localRand, charId, localRand.Next(1, 100));
+                            var quest = Quest.Create(localRand, (long)charId.RawValue, localRand.Next(1, 100));
                             quest.Status = 0; // Active
                             quest.ObjectiveProgress = 0;
-                            var questId = t.CreateEntity(ref quest);
+                            var questId = t.Spawn<QuestArch>(QuestArch.Quest.Set(in quest));
                             lock (_questIds)
                             {
                                 _questIds.Add(questId);
@@ -336,16 +342,17 @@ public class RpgQuestingScenario : IScenario
                         {
                             // Progress quest
                             var id = _questIds[localRand.Next(_questIds.Count)];
-                            if (t.ReadEntity<Quest>(id, out var quest))
+                            if (t.TryOpen(id, out var entity))
                             {
+                                var quest = entity.Read(QuestArch.Quest);
                                 if (quest.Status == 0 && quest.ObjectiveProgress < quest.ObjectiveTarget)
                                 {
-                                    quest.ObjectiveProgress++;
-                                    if (quest.ObjectiveProgress >= quest.ObjectiveTarget)
+                                    ref var wq = ref t.OpenMut(id).Write(QuestArch.Quest);
+                                    wq.ObjectiveProgress = quest.ObjectiveProgress + 1;
+                                    if (wq.ObjectiveProgress >= quest.ObjectiveTarget)
                                     {
-                                        quest.Status = 1; // Completed
+                                        wq.Status = 1; // Completed
                                     }
-                                    t.UpdateEntity(id, ref quest);
                                 }
                                 stats.RecordSuccess((Stopwatch.GetTimestamp() - sw) * 1_000_000 / Stopwatch.Frequency);
                             }
@@ -355,8 +362,8 @@ public class RpgQuestingScenario : IScenario
                             // Add inventory item (reward)
                             var charId = _characterIds[localRand.Next(_characterIds.Count)];
                             var slot = localRand.Next(0, 40);
-                            var item = Inventory.Create(localRand, charId, slot);
-                            var itemId = t.CreateEntity(ref item);
+                            var item = Inventory.Create(localRand, (long)charId.RawValue, slot);
+                            var itemId = t.Spawn<InventoryArch>(InventoryArch.Item.Set(in item));
                             lock (_inventoryIds)
                             {
                                 _inventoryIds.Add(itemId);
@@ -367,7 +374,7 @@ public class RpgQuestingScenario : IScenario
                         {
                             // Read inventory
                             var id = _inventoryIds[localRand.Next(_inventoryIds.Count)];
-                            t.ReadEntity<Inventory>(id, out _);
+                            t.TryOpen(id, out _);
                             stats.RecordSuccess((Stopwatch.GetTimestamp() - sw) * 1_000_000 / Stopwatch.Frequency);
                         }
                     }
@@ -405,14 +412,14 @@ public class RpgQuestingScenario : IScenario
         for (var i = 0; i < 20 && !ct.IsCancellationRequested; i++)
         {
             var character = Character.Create(rand, heroNames[rand.Next(heroNames.Length)], false);
-            var charId = t.CreateEntity(ref character);
+            var charId = t.Spawn<CharacterArch>(CharacterArch.Character.Set(in character));
             _characterIds.Add(charId);
 
             // Give each character some starting inventory
             for (var j = 0; j < 5; j++)
             {
-                var item = Inventory.Create(rand, charId, j);
-                var itemId = t.CreateEntity(ref item);
+                var item = Inventory.Create(rand, (long)charId.RawValue, j);
+                var itemId = t.Spawn<InventoryArch>(InventoryArch.Item.Set(in item));
                 _inventoryIds.Add(itemId);
             }
         }

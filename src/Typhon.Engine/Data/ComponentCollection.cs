@@ -7,13 +7,13 @@ namespace Typhon.Engine;
 [PublicAPI]
 public ref struct ComponentCollectionAccessor<T> : IDisposable where T : unmanaged
 {
-    private VariableSizedBufferSegment<T> _vsbs;
+    private VariableSizedBufferSegment<T, PersistentStore> _vsbs;
     private ref ComponentCollection<T> _field;
-    private ChunkAccessor _ca;
+    private ChunkAccessor<PersistentStore> _ca;
     private readonly int _initialBufferId;
     private readonly ChangeSet _changeSet;
 
-    public ComponentCollectionAccessor(ChangeSet changeSet, VariableSizedBufferSegment<T> vsbs, ref ComponentCollection<T> field)
+    public ComponentCollectionAccessor(ChangeSet changeSet, VariableSizedBufferSegment<T, PersistentStore> vsbs, ref ComponentCollection<T> field)
     {
         _vsbs = vsbs;
         _changeSet = changeSet;
@@ -49,14 +49,14 @@ public ref struct ComponentCollectionAccessor<T> : IDisposable where T : unmanag
     {
         get
         {
-            using var a = new VariableSizedBufferAccessor<T>(_vsbs, _field._bufferId);
+            using var a = new VariableSizedBufferAccessor<T, PersistentStore>(_vsbs, _field._bufferId);
             return a.TotalCount;
         }
     }
 
     public int GetAllElements(Span<T> dest)
     {
-        using var a = new VariableSizedBufferAccessor<T>(_vsbs, _field._bufferId);
+        using var a = new VariableSizedBufferAccessor<T, PersistentStore>(_vsbs, _field._bufferId);
         if (dest.Length < a.TotalCount)
         {
             return 0;
@@ -74,7 +74,7 @@ public ref struct ComponentCollectionAccessor<T> : IDisposable where T : unmanag
 
     public T[] GetAllElements()
     {
-        using var a = new VariableSizedBufferAccessor<T>(_vsbs, _field._bufferId);
+        using var a = new VariableSizedBufferAccessor<T, PersistentStore>(_vsbs, _field._bufferId);
         var dest = new T[a.TotalCount];
 
         var destI = 0;

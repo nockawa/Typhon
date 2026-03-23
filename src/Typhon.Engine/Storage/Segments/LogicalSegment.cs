@@ -1,4 +1,4 @@
-﻿// unset
+// unset
 
 using JetBrains.Annotations;
 using System;
@@ -24,7 +24,7 @@ public struct LogicalSegmentHeader
     unsafe public static readonly int Size = sizeof(LogicalSegmentHeader);
     public static readonly int TotalSize =  PageBaseHeader.Size + Size;
     public static readonly int Offset = PageBaseHeader.Size;
-    
+
     /// <summary>
     /// If the Page Block is a Logical Segment, will store the index to the next block storing Map Data, 0 if there's none.
     /// </summary>
@@ -36,7 +36,7 @@ public struct LogicalSegmentHeader
 }
 
 /// <summary>
-/// Expose a Logical segment of Pages
+/// Expose a Logical segment of Pages, generic over <typeparamref name="TStore"/> for persistent/transient backing.
 /// </summary>
 /// <remarks>
 /// Logical Segment is made of several Pages which IDs are stored in a dedicated private section of its raw data.
@@ -48,13 +48,13 @@ public struct LogicalSegmentHeader
 /// There is some basic API that allow to store/enumerate fixed size elements, indexed into the logical segment.
 /// </remarks>
 [PublicAPI]
-public class LogicalSegment : IDisposable
+public class LogicalSegment<TStore> : IDisposable where TStore : struct, IPageStore
 {
     internal const int RootHeaderIndexSectionCount = 500;
     internal const int RootHeaderIndexSectionLength = RootHeaderIndexSectionCount * sizeof(int);
     internal const int NextHeadersIndexSectionCount = PagedMMF.PageRawDataSize / sizeof(int);
 
-    internal ManagedPagedMMF Manager { get; }
+    protected TStore _store;
 
     private readonly Lock _growLock = new();
     private volatile int[] _pages;
@@ -75,6 +75,9 @@ public class LogicalSegment : IDisposable
     public int Length => _pages.Length;
     public ReadOnlySpan<int> Pages => _pages;
 
+    /// <summary>The underlying page store.</summary>
+    public ref TStore Store => ref _store;
+
     /// <summary>
     /// Get a typed <see cref="PageAccessor"/> for a segment page via epoch-based protection.
     /// Caller must be inside an <see cref="EpochGuard"/> scope.
@@ -82,8 +85,8 @@ public class LogicalSegment : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public PageAccessor GetPage(int segmentPageIndex, long epoch, out int memPageIndex)
     {
-        Manager.RequestPageEpoch(Pages[segmentPageIndex], epoch, out memPageIndex);
-        return Manager.GetPage(memPageIndex);
+        _store.RequestPageEpoch(Pages[segmentPageIndex], epoch, out memPageIndex);
+        return _store.GetPage(memPageIndex);
     }
 
     /// <summary>
@@ -93,10 +96,10 @@ public class LogicalSegment : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public PageAccessor GetPageExclusive(int segmentPageIndex, long epoch, out int memPageIndex)
     {
-        Manager.RequestPageEpoch(Pages[segmentPageIndex], epoch, out memPageIndex);
-        var latched = Manager.TryLatchPageExclusive(memPageIndex);
+        _store.RequestPageEpoch(Pages[segmentPageIndex], epoch, out memPageIndex);
+        var latched = _store.TryLatchPageExclusive(memPageIndex);
         Debug.Assert(latched, "TryLatchPageExclusive failed after RequestPageEpoch — page should be Idle");
-        return Manager.GetPage(memPageIndex);
+        return _store.GetPage(memPageIndex);
     }
 
     /// <summary>
@@ -106,10 +109,10 @@ public class LogicalSegment : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal PageAccessor GetPageExclusiveUnchecked(int segmentPageIndex, long epoch, out int memPageIndex)
     {
-        Manager.RequestPageEpochUnchecked(Pages[segmentPageIndex], epoch, out memPageIndex);
-        var latched = Manager.TryLatchPageExclusive(memPageIndex);
+        _store.RequestPageEpochUnchecked(Pages[segmentPageIndex], epoch, out memPageIndex);
+        var latched = _store.TryLatchPageExclusive(memPageIndex);
         Debug.Assert(latched, "TryLatchPageExclusive failed after RequestPageEpochUnchecked — page should be Idle");
-        return Manager.GetPage(memPageIndex);
+        return _store.GetPage(memPageIndex);
     }
 
     /// <summary>
@@ -119,8 +122,8 @@ public class LogicalSegment : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public unsafe byte* GetPageAddress(int segmentPageIndex, long epoch, out int memPageIndex)
     {
-        Manager.RequestPageEpoch(Pages[segmentPageIndex], epoch, out memPageIndex);
-        return Manager.GetMemPageAddress(memPageIndex);
+        _store.RequestPageEpoch(Pages[segmentPageIndex], epoch, out memPageIndex);
+        return _store.GetMemPageAddress(memPageIndex);
     }
 
     /// <summary>
@@ -130,10 +133,10 @@ public class LogicalSegment : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public unsafe byte* GetPageAddressExclusive(int segmentPageIndex, long epoch, out int memPageIndex)
     {
-        Manager.RequestPageEpoch(Pages[segmentPageIndex], epoch, out memPageIndex);
-        var latched = Manager.TryLatchPageExclusive(memPageIndex);
+        _store.RequestPageEpoch(Pages[segmentPageIndex], epoch, out memPageIndex);
+        var latched = _store.TryLatchPageExclusive(memPageIndex);
         Debug.Assert(latched, "TryLatchPageExclusive failed after RequestPageEpoch — page should be Idle");
-        return Manager.GetMemPageAddress(memPageIndex);
+        return _store.GetMemPageAddress(memPageIndex);
     }
 
     public delegate bool PageMapWalkPredicate(int pageMapIndex, PageAccessor page, int memPageIndex);
@@ -147,8 +150,8 @@ public class LogicalSegment : IDisposable
         var pageMapIndex = 0;
         while (true)
         {
-            Manager.RequestPageEpoch(curPageIndex, epoch, out var memPageIndex);
-            var page = Manager.GetPage(memPageIndex);
+            _store.RequestPageEpoch(curPageIndex, epoch, out var memPageIndex);
+            var page = _store.GetPage(memPageIndex);
 
             if (predicate(pageMapIndex++, page, memPageIndex) == false)
             {
@@ -171,8 +174,8 @@ public class LogicalSegment : IDisposable
         var pageMapIndex = 0;
         while (true)
         {
-            Manager.RequestPageEpoch(curPageIndex, epoch, out var memPageIndex);
-            var page = Manager.GetPage(memPageIndex);
+            _store.RequestPageEpoch(curPageIndex, epoch, out var memPageIndex);
+            var page = _store.GetPage(memPageIndex);
 
             if (predicate(pageMapIndex++, page, memPageIndex, extra) == false)
             {
@@ -187,7 +190,7 @@ public class LogicalSegment : IDisposable
             }
         }
     }
-    
+
     /// <summary>
     /// Grows the logical segment to the specified new length.
     /// </summary>
@@ -216,15 +219,15 @@ public class LogicalSegment : IDisposable
             var newPages = new int[newLength];
             var newPagesAsSpan = newPages.AsSpan();
             curPages.CopyTo(newPagesAsSpan);
-            Manager.AllocatePages(ref newPagesAsSpan, curPages.Length, changeSet);
+            _store.AllocatePages(ref newPagesAsSpan, curPages.Length, changeSet);
 
             CreateOrGrow(PageBlockType.None, newPages, curPages.Length, ref NoNextMap, clearNewPages, changeSet);
         }
     }
-    
-    internal LogicalSegment(ManagedPagedMMF manager)
+
+    internal LogicalSegment(TStore store)
     {
-        Manager = manager;
+        _store = store;
     }
 
     public void Dispose() => _pages = null;
@@ -264,13 +267,13 @@ public class LogicalSegment : IDisposable
     }
 
     private static int NoNextMap;
-    
-    internal virtual bool Create(PageBlockType type, Span<int> filePageIndices, bool clear, ChangeSet changeSet = null) 
+
+    internal virtual bool Create(PageBlockType type, Span<int> filePageIndices, bool clear, ChangeSet changeSet = null)
         => CreateOrGrow(type, filePageIndices, 0, ref NoNextMap, clear, changeSet);
 
     internal unsafe bool CreateOrGrow(PageBlockType type, Span<int> filePageIndices, int growFrom, ref int nextMap, bool clear, ChangeSet changeSet)
     {
-        var epoch = Manager.EpochManager.GlobalEpoch;
+        var epoch = _store.EpochManager.GlobalEpoch;
 
         // Compute the number of indices map pages needed to store the indices (root + subsequent).
         // The end of the indices list is marked by a 0 value, we need to save space for this entry too, so the next line is accurate, if you wonder.
@@ -299,10 +302,7 @@ public class LogicalSegment : IDisposable
                 {
                     WalkIndicesMap((i, page, memIdx, span) =>
                     {
-                        // The FilePageIndex was stored in the page mapping; reconstruct from the map walk
-                        // Actually we need to retrieve the file page index from the manager's mapping
-                        var pi = Manager.GetPageInfoByMemIndex(memIdx);
-                        span[i] = pi.FilePageIndex;
+                        span[i] = _store.GetFilePageIndex(memIdx);
                         mapIndexAllocStartFrom = i + 1;                 // Update the start index for the first page to allocate
                         return true;
                     }, epoch, mapIndices);
@@ -321,7 +321,7 @@ public class LogicalSegment : IDisposable
                 if (allocStartFrom < mapIndices.Length)
                 {
                     var pagesToAllocate = mapIndices[1..];
-                    Manager.AllocatePages(ref pagesToAllocate, allocStartFrom - 1, changeSet);
+                    _store.AllocatePages(ref pagesToAllocate, allocStartFrom - 1, changeSet);
                 }
             }
 
@@ -347,10 +347,10 @@ public class LogicalSegment : IDisposable
                 // If it's a new page, initialize it (skip CRC — page will be fully overwritten)
                 if (isNewPage)
                 {
-                    Manager.RequestPageEpochUnchecked(curMapPageIndex, epoch, out memPageIdx);
-                    var latched = Manager.TryLatchPageExclusive(memPageIdx);
+                    _store.RequestPageEpochUnchecked(curMapPageIndex, epoch, out memPageIdx);
+                    var latched = _store.TryLatchPageExclusive(memPageIdx);
                     Debug.Assert(latched, "TryLatchPageExclusive failed after RequestPageEpochUnchecked");
-                    page = Manager.GetPage(memPageIdx);
+                    page = _store.GetPage(memPageIdx);
                     hasPage = true;
 
                     InitHeader(page.Address, PageClearMode.Header,
@@ -364,10 +364,10 @@ public class LogicalSegment : IDisposable
                 {
                     if (hasPage == false)
                     {
-                        Manager.RequestPageEpoch(curMapPageIndex, epoch, out memPageIdx);
-                        var latched = Manager.TryLatchPageExclusive(memPageIdx);
+                        _store.RequestPageEpoch(curMapPageIndex, epoch, out memPageIdx);
+                        var latched = _store.TryLatchPageExclusive(memPageIdx);
                         Debug.Assert(latched, "TryLatchPageExclusive failed after RequestPageEpoch");
-                        page = Manager.GetPage(memPageIdx);
+                        page = _store.GetPage(memPageIdx);
                         hasPage = true;
                     }
                     ref var lsh = ref page.StructAt<LogicalSegmentHeader>(LogicalSegmentHeader.Offset);
@@ -380,10 +380,10 @@ public class LogicalSegment : IDisposable
                 {
                     if (hasPage == false)
                     {
-                        Manager.RequestPageEpoch(curMapPageIndex, epoch, out memPageIdx);
-                        var latched = Manager.TryLatchPageExclusive(memPageIdx);
+                        _store.RequestPageEpoch(curMapPageIndex, epoch, out memPageIdx);
+                        var latched = _store.TryLatchPageExclusive(memPageIdx);
                         Debug.Assert(latched, "TryLatchPageExclusive failed after RequestPageEpoch");
-                        page = Manager.GetPage(memPageIdx);
+                        page = _store.GetPage(memPageIdx);
                         hasPage = true;
                     }
 
@@ -405,14 +405,14 @@ public class LogicalSegment : IDisposable
                         // The current page is full, we need on fetch one more... just to store the termination 0 value
                         else
                         {
-                            Manager.RequestPageEpochUnchecked(mapIndices[curIndexMapIndex + 1], epoch, out var endMemIdx);
-                            var endLatched = Manager.TryLatchPageExclusive(endMemIdx);
+                            _store.RequestPageEpochUnchecked(mapIndices[curIndexMapIndex + 1], epoch, out var endMemIdx);
+                            var endLatched = _store.TryLatchPageExclusive(endMemIdx);
                             Debug.Assert(endLatched, "TryLatchPageExclusive failed after RequestPageEpochUnchecked");
-                            var endPage = Manager.GetPage(endMemIdx);
+                            var endPage = _store.GetPage(endMemIdx);
                             InitHeader(endPage.Address, PageClearMode.Header, PageBlockFlags.IsLogicalSegment, type, 1);
                             changeSet?.AddByMemPageIndex(endMemIdx);
                             endPage.RawData<int>(0, 1)[0] = 0;
-                            Manager.UnlatchPageExclusive(endMemIdx);
+                            _store.UnlatchPageExclusive(endMemIdx);
                         }
                     }
                     isPageDirty = true;
@@ -439,7 +439,7 @@ public class LogicalSegment : IDisposable
 
                 if (hasPage)
                 {
-                    Manager.UnlatchPageExclusive(memPageIdx);
+                    _store.UnlatchPageExclusive(memPageIdx);
                 }
 
                 isFirstPage = false;
@@ -454,10 +454,10 @@ public class LogicalSegment : IDisposable
         for (var i = growFrom; i < filePageIndices.Length; i++)
         {
             var pageIndex = filePageIndices[i];
-            Manager.RequestPageEpochUnchecked(pageIndex, epoch, out var memPageIdx);
-            var latched = Manager.TryLatchPageExclusive(memPageIdx);
+            _store.RequestPageEpochUnchecked(pageIndex, epoch, out var memPageIdx);
+            var latched = _store.TryLatchPageExclusive(memPageIdx);
             Debug.Assert(latched, "TryLatchPageExclusive failed after RequestPageEpochUnchecked");
-            var page = Manager.GetPage(memPageIdx);
+            var page = _store.GetPage(memPageIdx);
 
             changeSet?.AddByMemPageIndex(memPageIdx);
 
@@ -473,7 +473,7 @@ public class LogicalSegment : IDisposable
             ref var lsh = ref page.StructAt<LogicalSegmentHeader>(LogicalSegmentHeader.Offset);
             lsh.LogicalSegmentNextRawDataPBID = ((i + 1) < filePageIndices.Length) ? filePageIndices[i + 1] : 0;
 
-            Manager.UnlatchPageExclusive(memPageIdx);
+            _store.UnlatchPageExclusive(memPageIdx);
         }
 
         _pages = filePageIndices.ToArray();
@@ -507,12 +507,12 @@ public class LogicalSegment : IDisposable
         header.Type = type;
         header.FormatRevision = formatRevision;
     }
-    
+
     internal virtual bool Load(int filePageIndex)
     {
-        var epoch = Manager.EpochManager.GlobalEpoch;
-        Manager.RequestPageEpoch(filePageIndex, epoch, out var memPageIndex);
-        var page = Manager.GetPage(memPageIndex);
+        var epoch = _store.EpochManager.GlobalEpoch;
+        _store.RequestPageEpoch(filePageIndex, epoch, out var memPageIndex);
+        var page = _store.GetPage(memPageIndex);
 
         var pages = new List<int>();
         var rd = page.RawDataReadOnly<int>(0, RootHeaderIndexSectionCount);
@@ -534,8 +534,8 @@ public class LogicalSegment : IDisposable
                 break; // No more pages
             }
 
-            Manager.RequestPageEpoch(lsh.LogicalSegmentNextMapPBID, epoch, out memPageIndex);
-            page = Manager.GetPage(memPageIndex);
+            _store.RequestPageEpoch(lsh.LogicalSegmentNextMapPBID, epoch, out memPageIndex);
+            page = _store.GetPage(memPageIndex);
             rd = page.RawDataReadOnly<int>(0, NextHeadersIndexSectionCount);
             i = 0; // Reset index for the new page
 
@@ -549,30 +549,30 @@ public class LogicalSegment : IDisposable
 
     public void Clear()
     {
-        var epoch = Manager.EpochManager.GlobalEpoch;
-        var cs = Manager.CreateChangeSet();
+        var epoch = _store.EpochManager.GlobalEpoch;
+        var cs = _store.CreateChangeSet();
         for (int i = 0; i < Length; i++)
         {
             var page = GetPageExclusive(i, epoch, out var memPageIdx);
-            cs.AddByMemPageIndex(memPageIdx);
+            cs?.AddByMemPageIndex(memPageIdx);
             page.RawData<byte>().Clear();
-            Manager.UnlatchPageExclusive(memPageIdx);
+            _store.UnlatchPageExclusive(memPageIdx);
         }
-        cs.SaveChanges();
+        cs?.SaveChanges();
     }
 
     public void Fill(byte value)
     {
-        var epoch = Manager.EpochManager.GlobalEpoch;
-        var cs = Manager.CreateChangeSet();
+        var epoch = _store.EpochManager.GlobalEpoch;
+        var cs = _store.CreateChangeSet();
         for (int i = 0; i < Length; i++)
         {
             var page = GetPageExclusive(i, epoch, out var memPageIdx);
-            cs.AddByMemPageIndex(memPageIdx);
+            cs?.AddByMemPageIndex(memPageIdx);
             var offset = page.IsRoot ? RootHeaderIndexSectionLength : 0;
             page.RawData<byte>(offset, PagedMMF.PageRawDataSize - offset).Fill(value);
-            Manager.UnlatchPageExclusive(memPageIdx);
+            _store.UnlatchPageExclusive(memPageIdx);
         }
-        cs.SaveChanges();
+        cs?.SaveChanges();
     }
 }

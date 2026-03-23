@@ -13,8 +13,14 @@ namespace Typhon.Engine.Tests;
 [TestFixture]
 class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompAArch>.Touch();
+    }
+
     private DatabaseEngine _dbe;
-    private long _entityId;
+    private EntityId _entityId;
     private TimeoutOptions _savedTimeouts;
 
     [SetUp]
@@ -24,11 +30,12 @@ class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
 
         _dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(_dbe);
+        _dbe.InitializeArchetypes();
 
         // Create and commit an entity so revision chains are populated
         var comp = new CompA(42);
         using var t = _dbe.CreateQuickTransaction();
-        _entityId = t.CreateEntity(ref comp);
+        _entityId = t.Spawn<CompAArch>(CompAArch.A.Set(in comp));
         t.Commit();
 
         // Override timeouts AFTER DatabaseEngine creation (its ctor sets TimeoutOptions.Current)
@@ -204,7 +211,7 @@ class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
         // Create a VariableSizedBufferSegment and allocate a buffer to get a valid rootChunkId
         var ct = _dbe.GetComponentTable<CompA>();
         var segment = ct.CompRevTableSegment;
-        var vsbs = new VariableSizedBufferSegment<int>(segment);
+        var vsbs = new VariableSizedBufferSegment<int, PersistentStore>(segment);
 
         int rootChunkId;
         {
@@ -268,7 +275,7 @@ class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
         var mmfSnapshot = _dbe.MMF.SnapshotInternalState();
 
         // Attempt to create a read-only accessor — should throw due to lock contention.
-        // Must be inside an epoch scope because GetReadOnlyAccessor creates an ChunkAccessor internally.
+        // Must be inside an epoch scope because GetReadOnlyAccessor creates an ChunkAccessor<PersistentStore> internally.
         var mainDepth = _dbe.EpochManager.EnterScope();
         try
         {
@@ -297,18 +304,35 @@ class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
     #region Helpers
 
     /// <summary>
-    /// Looks up the revision chain's first chunk ID for a given entity via the PrimaryKeyIndex.
+    /// Looks up the revision chain's first chunk ID for a given entity via EntityMap.
     /// </summary>
-    private int LookupRevisionChunkId(ComponentTable ct, long entityId)
+    private unsafe int LookupRevisionChunkId(ComponentTable ct, EntityId entityId)
     {
         var depth = _dbe.EpochManager.EnterScope();
         try
         {
-            var indexAccessor = ct.DefaultIndexSegment.CreateChunkAccessor();
-            var result = ct.PrimaryKeyIndex.TryGet(entityId, ref indexAccessor);
-            indexAccessor.Dispose();
-            Assert.That(result.IsSuccess, Is.True, "Entity should exist in PrimaryKeyIndex");
-            return result.Value;
+            var meta = ArchetypeRegistry.GetMetadata(entityId.ArchetypeId);
+            var es = _dbe._archetypeStates[meta.ArchetypeId];
+            Assert.That(es?.EntityMap, Is.Not.Null, "EntityMap should exist");
+
+            int targetSlot = -1;
+            for (int s = 0; s < meta.ComponentCount; s++)
+            {
+                if (ReferenceEquals(es.SlotToComponentTable[s], ct))
+                {
+                    targetSlot = s;
+                    break;
+                }
+            }
+            Assert.That(targetSlot, Is.GreaterThanOrEqualTo(0), "Component slot should be found");
+
+            byte* buf = stackalloc byte[meta._entityRecordSize];
+            var accessor = es.EntityMap.Segment.CreateChunkAccessor();
+            bool found = es.EntityMap.TryGet(entityId.EntityKey, buf, ref accessor);
+            accessor.Dispose();
+            Assert.That(found, Is.True, "Entity should exist in EntityMap");
+
+            return EntityRecordAccessor.GetLocation(buf, targetSlot);
         }
         finally
         {

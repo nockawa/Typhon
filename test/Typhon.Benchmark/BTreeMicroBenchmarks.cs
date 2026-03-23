@@ -19,8 +19,8 @@ public class BTreeMicroBenchmarks
     private ServiceProvider _serviceProvider;
     private ManagedPagedMMF _pmmf;
     private EpochManager _epochManager;
-    private ChunkBasedSegment _segment;
-    private LongSingleBTree _tree;
+    private ChunkBasedSegment<PersistentStore> _segment;
+    private LongSingleBTree<PersistentStore> _tree;
     private string _databaseName;
     private int _epochDepth;
 
@@ -58,7 +58,7 @@ public class BTreeMicroBenchmarks
         _segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 500, sizeof(Index64Chunk));
         _epochDepth = _epochManager.EnterScope();
 
-        _tree = new LongSingleBTree(_segment);
+        _tree = new LongSingleBTree<PersistentStore>(_segment);
 
         // Pre-fill with 10,000 entries: keys 1..10000
         var accessor = _segment.CreateChunkAccessor();

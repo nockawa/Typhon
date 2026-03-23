@@ -79,6 +79,44 @@ class Program
                 return;
             }
 
+            if (args.Contains("--profile-spawn"))
+            {
+                SpawnProfile.Run();
+                return;
+            }
+
+            if (args.Contains("--profile-write-v"))
+            {
+                WriteProfile.Run(versioned: true);
+                return;
+            }
+
+            if (args.Contains("--profile-write-sv"))
+            {
+                WriteProfile.Run(versioned: false);
+                return;
+            }
+
+            if (args.Contains("--crud-compare"))
+            {
+                BenchmarkRunner.Run<CrudCompareBenchmarks>();
+                return;
+            }
+
+            if (args.Contains("--quick-bench"))
+            {
+                QuickSpawnBench.Run();
+                return;
+            }
+
+            if (args.Contains("--storage-modes"))
+            {
+                using var bench = new StorageModeCompareBenchmarks();
+                bench.Setup();
+                bench.Run();
+                return;
+            }
+
             if (args.Contains("--profile-delete"))
             {
                 BTreeDeleteProfile.Run();

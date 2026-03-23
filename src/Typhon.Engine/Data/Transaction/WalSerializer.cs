@@ -1,4 +1,5 @@
-// unset
+// LEGACY — will be removed after #168. Kept as reference for WAL record format.
+// ECS WAL will use tick fence design (07-durability.md), not per-transaction serialization.
 
 using System;
 using System.Collections.Generic;

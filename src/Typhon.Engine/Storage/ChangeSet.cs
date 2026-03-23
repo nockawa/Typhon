@@ -12,9 +12,9 @@ public class ChangeSet
     private readonly HashSet<int> _changedMemoryPageIndices;
     private Task _saveTask;
 
-    // Deferred eviction queue: when a ChunkAccessor slot is evicted, SlotRefCount and ACW
+    // Deferred eviction queue: when a ChunkAccessor<PersistentStore> slot is evicted, SlotRefCount and ACW
     // decrements are deferred here until CommitChanges/Dispose. This lives on ChangeSet (a class)
-    // rather than ChunkAccessor (a struct) to keep the struct blittable for JIT inlining.
+    // rather than ChunkAccessor<PersistentStore> (a struct) to keep the struct blittable for JIT inlining.
     // The sign bit of each entry encodes dirty (1) vs clean (0) for ACW handling.
     private List<int> _deferredEvictions;
 
@@ -36,7 +36,7 @@ public class ChangeSet
 
     /// <summary>
     /// Flush all deferred eviction decrements (SlotRefCount + ACW for dirty slots).
-    /// Called by <see cref="ChunkAccessor.CommitChanges"/> and <see cref="ChunkAccessor.Dispose"/>.
+    /// Called by <see cref="ChunkAccessor<PersistentStore>.CommitChanges"/> and <see cref="ChunkAccessor<PersistentStore>.Dispose"/>.
     /// </summary>
     internal void FlushDeferredEvictions()
     {
@@ -112,7 +112,7 @@ public class ChangeSet
     /// <summary>
     /// Undo all dirty marks tracked by this ChangeSet (used on transaction rollback).
     /// <para>
-    /// Note: pages re-dirtied via <see cref="ChunkAccessor.MarkSlotDirty"/> (IncrementDirty on re-registration)
+    /// Note: pages re-dirtied via <see cref="ChunkAccessor<PersistentStore>.MarkSlotDirty"/> (IncrementDirty on re-registration)
     /// may have DC &gt; 1. This method only decrements once per page. The remaining DC is cleaned up by checkpoint
     /// or by <see cref="ReleaseExcessDirtyMarks"/> in subsequent UoW disposal.
     /// </para>

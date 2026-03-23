@@ -7,7 +7,7 @@ namespace Typhon.Engine;
 [PublicAPI]
 internal ref struct RevisionEnumerator : IDisposable
 {
-    private ref ChunkAccessor _compRevTableAccessor;
+    private ref ChunkAccessor<PersistentStore> _compRevTableAccessor;
     private ref CompRevStorageHeader _header;
     private Span<CompRevStorageElement> _elements;
     private readonly int _firstChunkId;
@@ -64,7 +64,7 @@ internal ref struct RevisionEnumerator : IDisposable
         return true;
     }
 
-    public unsafe RevisionEnumerator(ref ChunkAccessor compRevTableAccessor, int compRevFirstChunkId, bool exclusiveAccess, bool goToFirstItem)
+    public unsafe RevisionEnumerator(ref ChunkAccessor<PersistentStore> compRevTableAccessor, int compRevFirstChunkId, bool exclusiveAccess, bool goToFirstItem)
     {
         _compRevTableAccessor = ref compRevTableAccessor;
         _exclusiveAccess = exclusiveAccess;

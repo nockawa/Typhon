@@ -1,25 +1,34 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine;
 
 /// <summary>
-/// Simplified write path for WAL crash recovery replay. Applies committed WAL records to the data store
-/// without MVCC isolation, conflict detection, or concurrent access protection.
+/// Simplified write path for WAL crash recovery replay. Applies committed WAL records to the data store without MVCC isolation, conflict detection,
+/// or concurrent access protection.
 /// </summary>
 /// <remarks>
 /// <para>
-/// During recovery, the database is single-threaded (no user transactions). This helper uses the same
-/// underlying storage APIs as <see cref="Transaction"/> (ComponentSegment, ComponentRevisionManager)
-/// but bypasses the transaction/commit machinery.
+/// During recovery, the database is single-threaded (no user transactions). This helper uses the same underlying storage APIs as <see cref="Transaction"/>
+/// (ComponentSegment, ComponentRevisionManager) but bypasses the transaction/commit machinery.
 /// </para>
 /// <para>
-/// Full replay of Create/Update/Delete is implemented. FPI (Full Page Image) torn-page repair is a
-/// separate concern handled by <see cref="WalRecovery"/> directly.
+/// Full replay of Create/Update/Delete is implemented. FPI (Full Page Image) torn-page repair is a separate concern handled by <see cref="WalRecovery"/>
+/// directly.
+/// </para>
+/// <para>
+/// PK B+Tree has been removed. For Update/Delete replay, a temporary dictionary (EntityPK → compRevChunkId) is built on first use by scanning the
+/// CompRevTableSegment chain heads.
 /// </para>
 /// </remarks>
 internal static class WalReplayHelper
 {
+    /// <summary>
+    /// Per-table reverse index built lazily during replay: maps EntityPK → compRevFirstChunkId.
+    /// </summary>
+    private static Dictionary<ComponentTable, Dictionary<long, int>> ReplayPkMaps;
+
     /// <summary>
     /// Replays a single WAL record against the database engine's storage.
     /// </summary>
@@ -51,7 +60,74 @@ internal static class WalReplayHelper
     }
 
     /// <summary>
-    /// Replays a Create operation: allocates a component chunk, copies payload data, creates a revision entry, and inserts into the PK index.
+    /// Resets the replay state. Call after recovery is complete.
+    /// </summary>
+    internal static void ResetReplayState()
+    {
+        ReplayPkMaps = null;
+    }
+
+    /// <summary>
+    /// Builds or retrieves a temporary EntityPK → compRevFirstChunkId lookup for the given table.
+    /// Scans CompRevTableSegment chain heads (same algorithm as RebuildEntityMapsFromPersistedData).
+    /// </summary>
+    private static Dictionary<long, int> GetOrBuildPkMap(ComponentTable table)
+    {
+        ReplayPkMaps ??= new Dictionary<ComponentTable, Dictionary<long, int>>();
+
+        if (ReplayPkMaps.TryGetValue(table, out var existing))
+        {
+            return existing;
+        }
+
+        var map = new Dictionary<long, int>();
+        var segment = table.CompRevTableSegment;
+        if (segment != null)
+        {
+            var capacity = segment.ChunkCapacity;
+            var accessor = segment.CreateChunkAccessor();
+
+            // Pass 1: Collect overflow chunks
+            var overflowSet = new HashSet<int>();
+            for (int chunkId = 0; chunkId < capacity; chunkId++)
+            {
+                if (!segment.IsChunkAllocated(chunkId))
+                {
+                    continue;
+                }
+
+                ref var hdr = ref accessor.GetChunk<CompRevStorageHeader>(chunkId);
+                if (hdr.NextChunkId != 0)
+                {
+                    overflowSet.Add(hdr.NextChunkId);
+                }
+            }
+
+            // Pass 2: Chain heads = allocated, not in overflow set
+            for (int chunkId = 0; chunkId < capacity; chunkId++)
+            {
+                if (!segment.IsChunkAllocated(chunkId) || overflowSet.Contains(chunkId))
+                {
+                    continue;
+                }
+
+                ref var hdr = ref accessor.GetChunk<CompRevStorageHeader>(chunkId);
+                if (hdr.EntityPK != 0)
+                {
+                    map[hdr.EntityPK] = chunkId;
+                }
+            }
+
+            accessor.Dispose();
+        }
+
+        ReplayPkMaps[table] = map;
+        return map;
+    }
+
+    /// <summary>
+    /// Replays a Create operation: allocates a component chunk, copies payload data, creates a revision entry.
+    /// Updates the replay PK map for subsequent Update/Delete lookups.
     /// </summary>
     private static unsafe void ReplayCreate(DatabaseEngine dbe, ComponentTable table, ref WalRecordHeader header, ReadOnlySpan<byte> payload)
     {
@@ -93,14 +169,13 @@ internal static class WalReplayHelper
         element.UowId = header.UowEpoch;
         element.IsolationFlag = false;
 
-        // Insert into PK index (entityId → compRevChunkId)
-        var indexAccessor = table.DefaultIndexSegment.CreateChunkAccessor(cs);
-        table.PrimaryKeyIndex.Add(header.EntityId, compRevChunkId, ref indexAccessor);
-
         contentAccessor.Dispose();
         revAccessor.Dispose();
-        indexAccessor.Dispose();
         cs.SaveChanges();
+
+        // Update replay PK map
+        var pkMap = GetOrBuildPkMap(table);
+        pkMap[header.EntityId] = compRevChunkId;
     }
 
     /// <summary>
@@ -115,20 +190,15 @@ internal static class WalReplayHelper
 
         var cs = dbe.MMF.CreateChangeSet();
 
-        // Look up the entity's revision chain via PK index
-        var indexAccessor = table.DefaultIndexSegment.CreateChunkAccessor(cs);
-        var lookupResult = table.PrimaryKeyIndex.TryGet(header.EntityId, ref indexAccessor);
-
-        if (lookupResult.IsFailure)
+        // Look up the entity's revision chain via PK map
+        var pkMap = GetOrBuildPkMap(table);
+        if (!pkMap.TryGetValue(header.EntityId, out var compRevChunkId))
         {
             // Entity doesn't exist — treat as create
-            indexAccessor.Dispose();
             cs.SaveChanges();
             ReplayCreate(dbe, table, ref header, payload);
             return;
         }
-
-        var compRevChunkId = lookupResult.Value;
 
         // Allocate a new component content chunk with the updated data
         var newComponentChunkId = table.ComponentSegment.AllocateChunk(false, cs);
@@ -159,13 +229,12 @@ internal static class WalReplayHelper
                 element.IsolationFlag = false;
 
                 revHeader.ItemCount++;
-                revHeader.LastCommitRevisionIndex = (short)newRevIndex;
+                revHeader.LastCommitRevisionIndex = newRevIndex;
             }
         }
 
         contentAccessor.Dispose();
         revAccessor.Dispose();
-        indexAccessor.Dispose();
         cs.SaveChanges();
     }
 
@@ -176,18 +245,13 @@ internal static class WalReplayHelper
     {
         var cs = dbe.MMF.CreateChangeSet();
 
-        // Look up the entity's revision chain via PK index
-        var indexAccessor = table.DefaultIndexSegment.CreateChunkAccessor(cs);
-        var lookupResult = table.PrimaryKeyIndex.TryGet(header.EntityId, ref indexAccessor);
-
-        if (lookupResult.IsFailure)
+        // Look up the entity's revision chain via PK map
+        var pkMap = GetOrBuildPkMap(table);
+        if (!pkMap.TryGetValue(header.EntityId, out var compRevChunkId))
         {
-            indexAccessor.Dispose();
             cs.SaveChanges();
             return; // Entity doesn't exist — nothing to delete
         }
-
-        var compRevChunkId = lookupResult.Value;
 
         var revAccessor = table.CompRevTableSegment.CreateChunkAccessor(cs);
         var revSpan = revAccessor.GetChunkAsSpan(compRevChunkId, true);
@@ -214,7 +278,6 @@ internal static class WalReplayHelper
         }
 
         revAccessor.Dispose();
-        indexAccessor.Dispose();
         cs.SaveChanges();
     }
 }

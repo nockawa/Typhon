@@ -6,6 +6,12 @@ namespace Typhon.Engine.Tests;
 
 class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompDArch>.Touch();
+    }
+
     private class TestView : IView, IDisposable
     {
         private readonly IMemoryAllocator _allocator;
@@ -35,20 +41,23 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var ct = dbe.GetComponentTable<CompD>();
         using var view = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 1, FieldDependencies = [1] }; // Field B (int, index 1)
         ct.ViewRegistry.RegisterView(view);
 
-        long entityId;
+        EntityId entityId;
         long createTsn;
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 10, 2.0);
-            entityId = t.CreateEntity(ref d);
+            entityId = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
             createTsn = t.TSN;
         }
+
+        var entityPk = (long)entityId.RawValue;
 
         // Drain creation entry
         Assert.That(view.DeltaBuffer.TryPeek(long.MaxValue, out _, out _, out _, out _), Is.True);
@@ -58,13 +67,14 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 20, 2.0); // Only B changed: 10 → 20
-            t.UpdateEntity(entityId, ref d);
+            ref var w = ref t.OpenMut(entityId).Write(CompDArch.D);
+            w = d;
             t.Commit();
             updateTsn = t.TSN;
         }
 
         Assert.That(view.DeltaBuffer.TryPeek(long.MaxValue, out var entry, out var flags, out var tsn, out _), Is.True);
-        Assert.That(entry.EntityPK, Is.EqualTo(entityId));
+        Assert.That(entry.EntityPK, Is.EqualTo(entityPk));
         Assert.That(entry.BeforeKey.AsInt(), Is.EqualTo(10));
         Assert.That(entry.AfterKey.AsInt(), Is.EqualTo(20));
         Assert.That(tsn, Is.EqualTo(updateTsn));
@@ -77,23 +87,26 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var ct = dbe.GetComponentTable<CompD>();
         using var view = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 1, FieldDependencies = [1] }; // Field B (int)
         ct.ViewRegistry.RegisterView(view);
 
-        long entityId;
+        EntityId entityId;
         long createTsn;
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 42, 2.0);
-            entityId = t.CreateEntity(ref d);
+            entityId = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
             createTsn = t.TSN;
         }
 
+        var entityPk = (long)entityId.RawValue;
+
         Assert.That(view.DeltaBuffer.TryPeek(long.MaxValue, out var entry, out var flags, out var tsn, out _), Is.True);
-        Assert.That(entry.EntityPK, Is.EqualTo(entityId));
+        Assert.That(entry.EntityPK, Is.EqualTo(entityPk));
         Assert.That(entry.BeforeKey.IsZero, Is.True, "BeforeKey should be zeroed for creation");
         Assert.That(entry.AfterKey.AsInt(), Is.EqualTo(42));
         Assert.That(tsn, Is.EqualTo(createTsn));
@@ -106,18 +119,21 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var ct = dbe.GetComponentTable<CompD>();
         using var view = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 1, FieldDependencies = [1] }; // Field B (int)
         ct.ViewRegistry.RegisterView(view);
 
-        long entityId;
+        EntityId entityId;
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 99, 2.0);
-            entityId = t.CreateEntity(ref d);
+            entityId = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
+
+        var entityPk = (long)entityId.RawValue;
 
         // Drain creation entry
         Assert.That(view.DeltaBuffer.TryPeek(long.MaxValue, out _, out _, out _, out _), Is.True);
@@ -126,13 +142,13 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         long deleteTsn;
         {
             using var t = dbe.CreateQuickTransaction();
-            t.DeleteEntity<CompD>(entityId);
+            t.Destroy(entityId);
             t.Commit();
             deleteTsn = t.TSN;
         }
 
         Assert.That(view.DeltaBuffer.TryPeek(long.MaxValue, out var entry, out var flags, out var tsn, out _), Is.True);
-        Assert.That(entry.EntityPK, Is.EqualTo(entityId));
+        Assert.That(entry.EntityPK, Is.EqualTo(entityPk));
         Assert.That(entry.BeforeKey.AsInt(), Is.EqualTo(99), "BeforeKey should be old value");
         Assert.That(entry.AfterKey.IsZero, Is.True, "AfterKey should be zeroed for deletion");
         Assert.That(tsn, Is.EqualTo(deleteTsn));
@@ -145,6 +161,7 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var ct = dbe.GetComponentTable<CompD>();
 
@@ -156,11 +173,11 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         ct.ViewRegistry.RegisterView(viewB);
         ct.ViewRegistry.RegisterView(viewC);
 
-        long entityId;
+        EntityId entityId;
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 10, 2.0);
-            entityId = t.CreateEntity(ref d);
+            entityId = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
@@ -173,7 +190,8 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(5.0f, 20, 6.0);
-            t.UpdateEntity(entityId, ref d);
+            ref var w = ref t.OpenMut(entityId).Write(CompDArch.D);
+            w = d;
             t.Commit();
         }
 
@@ -201,6 +219,7 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var ct = dbe.GetComponentTable<CompD>();
         using var viewB = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 1, FieldDependencies = [1] }; // Field B (int)
@@ -208,11 +227,11 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         ct.ViewRegistry.RegisterView(viewB);
         ct.ViewRegistry.RegisterView(viewC);
 
-        long entityId;
+        EntityId entityId;
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 10, 2.0);
-            entityId = t.CreateEntity(ref d);
+            entityId = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
@@ -223,7 +242,8 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(5.0f, 10, 2.0);
-            t.UpdateEntity(entityId, ref d);
+            ref var w = ref t.OpenMut(entityId).Write(CompDArch.D);
+            w = d;
             t.Commit();
         }
 
@@ -236,16 +256,17 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var ct = dbe.GetComponentTable<CompD>();
         var view = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 1, FieldDependencies = [1] }; // Field B
         ct.ViewRegistry.RegisterView(view);
 
-        long entityId;
+        EntityId entityId;
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 10, 2.0);
-            entityId = t.CreateEntity(ref d);
+            entityId = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
@@ -256,7 +277,8 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 20, 2.0);
-            t.UpdateEntity(entityId, ref d);
+            ref var w = ref t.OpenMut(entityId).Write(CompDArch.D);
+            w = d;
             t.Commit();
         }
 
@@ -268,6 +290,7 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var ct = dbe.GetComponentTable<CompD>();
         using var view1 = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 1, FieldDependencies = [1] }; // Field B
@@ -278,7 +301,7 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 10, 2.0);
-            t.CreateEntity(ref d);
+            t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
@@ -292,26 +315,28 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // No views registered — just do CRUD and make sure nothing crashes
-        long entityId;
+        EntityId entityId;
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 10, 2.0);
-            entityId = t.CreateEntity(ref d);
+            entityId = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(5.0f, 20, 6.0);
-            t.UpdateEntity(entityId, ref d);
+            ref var w = ref t.OpenMut(entityId).Write(CompDArch.D);
+            w = d;
             t.Commit();
         }
 
         {
             using var t = dbe.CreateQuickTransaction();
-            t.DeleteEntity<CompD>(entityId);
+            t.Destroy(entityId);
             t.Commit();
         }
     }
@@ -321,6 +346,7 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var ct = dbe.GetComponentTable<CompD>();
 
@@ -335,7 +361,7 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 10, 2.0);
-            t.CreateEntity(ref d);
+            t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
@@ -356,6 +382,7 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var ct = dbe.GetComponentTable<CompD>();
         using var view = new TestView(MemoryAllocator, ResourceRegistry.Allocation) { ViewId = 1, FieldDependencies = [1] }; // Field B
@@ -365,7 +392,7 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 10, 2.0);
-            t.CreateEntity(ref d);
+            t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
             tsn1 = t.TSN;
         }
@@ -374,11 +401,10 @@ class ViewChangeCaptureTests : TestBase<ViewChangeCaptureTests>
         Assert.That(storedTsn1, Is.EqualTo(tsn1), "TSN from creation should match transaction TSN");
         view.DeltaBuffer.Advance();
 
-        long entityId2;
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(2.0f, 20, 3.0);
-            entityId2 = t.CreateEntity(ref d);
+            t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
             tsn2 = t.TSN;
         }

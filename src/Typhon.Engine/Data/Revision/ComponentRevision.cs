@@ -5,13 +5,13 @@ namespace Typhon.Engine;
 [PublicAPI]
 internal ref struct ComponentRevision
 {
-    private ref ChunkAccessor _accessor;
+    private ref ChunkAccessor<PersistentStore> _accessor;
     private readonly ComponentInfo _info;
     private readonly int _firstChunkId;
     private readonly ushort _uowId;
     private readonly ref ComponentInfo.CompRevInfo _compRevInfo;
 
-    internal ComponentRevision(ComponentInfo info, ref ComponentInfo.CompRevInfo compRevInfo, int firstChunkId, ref ChunkAccessor accessor, ushort uowId = 0)
+    internal ComponentRevision(ComponentInfo info, ref ComponentInfo.CompRevInfo compRevInfo, int firstChunkId, ref ChunkAccessor<PersistentStore> accessor, ushort uowId = 0)
     {
         _accessor = ref accessor;
         _info = info;

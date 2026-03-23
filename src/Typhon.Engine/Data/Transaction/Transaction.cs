@@ -12,7 +12,7 @@ namespace Typhon.Engine;
 
 [PublicAPI]
 [DebuggerDisplay("TSN {TSN}, State: {State}")]
-public unsafe class Transaction : IDisposable
+public unsafe partial class Transaction : IDisposable
 {
     private const int RandomAccessCachedPagesCount = 8;
     private const int ComponentInfosMaxCapacity = 131;
@@ -36,6 +36,7 @@ public unsafe class Transaction : IDisposable
     public TransactionState State { get; private set; }
     private bool _isDisposed;
     private DatabaseEngine _dbe;
+    internal DatabaseEngine DBE => _dbe;
     private EpochManager _epochManager;
 
 #if DEBUG
@@ -43,6 +44,14 @@ public unsafe class Transaction : IDisposable
 #endif
 
     private Dictionary<Type, ComponentInfo> _componentInfos;
+
+    /// <summary>
+    /// Cached EntityMap accessor for GetCompRevTableFirstChunkId / GetCompRevInfoFromIndex.
+    /// Reused across multiple calls targeting the same archetype. Disposed in Reset().
+    /// </summary>
+    private ushort _entityMapCacheArchId;
+    private ChunkAccessor<PersistentStore> _entityMapCacheAccessor;
+    private bool _hasEntityMapCache;
 
     private int? _committedOperationCount;
     private int _deletedComponentCount;
@@ -54,9 +63,8 @@ public unsafe class Transaction : IDisposable
     private List<DeferredCleanupManager.CleanupEntry> _deferredEnqueueBatch;
 
     // Hoisted accessors for batch index maintenance (set per component type during Commit)
-    private ChunkAccessor[] _batchIndexAccessors;
-    private ChunkAccessor _batchPkAccessor;
-    private ChunkAccessor _batchTailAccessor;
+    private ChunkAccessor<PersistentStore>[] _batchIndexAccessors;
+    private ChunkAccessor<PersistentStore> _batchTailAccessor;
     private bool _batchIndexActive;
     private int _batchEntityCount;
 
@@ -123,6 +131,9 @@ public unsafe class Transaction : IDisposable
 
     internal void Reset()
     {
+        // Clean up ECS state BEFORE nulling _dbe — CleanupEcsState needs _dbe._archetypeStates
+        CleanupEcsState();
+
         _dbe = null;
         _epochManager = null;
         OwningUnitOfWork = null;
@@ -131,6 +142,11 @@ public unsafe class Transaction : IDisposable
 #if DEBUG
         _debugOwningThreadId = 0;
 #endif
+        if (_hasEntityMapCache)
+        {
+            _entityMapCacheAccessor.Dispose();
+            _hasEntityMapCache = false;
+        }
         if (_componentInfos.Capacity <= ComponentInfosMaxCapacity)
         {
             _componentInfos.Clear();
@@ -197,12 +213,16 @@ public unsafe class Transaction : IDisposable
     public void Dispose()
     {
         // Dispose transient batch accessors first — safe even on double-dispose or if never created
-        // (ChunkAccessor.Dispose() is idempotent: no-op when _segment==null).
-        _batchPkAccessor.Dispose();
+        // (ChunkAccessor<PersistentStore>.Dispose() is idempotent: no-op when _segment==null).
         _batchTailAccessor.Dispose();
 
         if (_isDisposed)
         {
+            if (_hasEntityMapCache)
+            {
+                _entityMapCacheAccessor.Dispose();
+                _hasEntityMapCache = false;
+            }
             return;
         }
 
@@ -212,6 +232,11 @@ public unsafe class Transaction : IDisposable
         // just exit the epoch scope and remove from the chain.
         if (IsReadOnly)
         {
+            if (_hasEntityMapCache)
+            {
+                _entityMapCacheAccessor.Dispose();
+                _hasEntityMapCache = false;
+            }
             _isDisposed = true;
             ExitEpochAndRemove();
             return;
@@ -305,201 +330,9 @@ public unsafe class Transaction : IDisposable
         dbe.LogTxDispose(tsn, "ExitEpochAndRemoveDone");
     }
 
-    public long CreateEntity<T>(ref T t) where T : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-
-        using var activity = TyphonActivitySource.StartActivity("Transaction.CreateEntity");
-        activity?.SetTag(TyphonSpanAttributes.ComponentType, typeof(T).Name);
-
-        var pk = _dbe.GetNewPrimaryKey();
-        activity?.SetTag(TyphonSpanAttributes.EntityId, pk);
-
-        CreateComponent(pk, ref t);
-        return pk;
-    }
-
-    public long CreateEntity<TC1, TC2>(ref TC1 t, ref TC2 u) where TC1 : unmanaged where TC2 : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-        var pk = _dbe.GetNewPrimaryKey();
-
-        CreateComponent(pk, ref t);
-        CreateComponent(pk, ref u);
-        return pk;
-    }
-
-    public long CreateEntity<TC1, TC2, TC3>(ref TC1 t, ref TC2 u, ref TC3 v) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-        var pk = _dbe.GetNewPrimaryKey();
-
-        CreateComponent(pk, ref t);
-        CreateComponent(pk, ref u);
-        CreateComponent(pk, ref v);
-        return pk;
-    }
-
-    public long CreateEntity<TC1, TC2>(ref TC1 t, Span<TC2> u) where TC1 : unmanaged where TC2 : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-        var pk = _dbe.GetNewPrimaryKey();
-
-        CreateComponent(pk, ref t);
-        CreateComponents(pk, u);
-        return pk;
-    }
-
-    public bool ReadEntity<T>(long pk, out T t) where T : unmanaged
-    {
-        using var activity = TyphonActivitySource.StartActivity("Transaction.ReadEntity");
-        activity?.SetTag(TyphonSpanAttributes.EntityId, pk);
-        activity?.SetTag(TyphonSpanAttributes.ComponentType, typeof(T).Name);
-
-        var result = ReadComponent(pk, out t);
-        activity?.SetTag(TyphonSpanAttributes.ReadFound, result);
-        return result;
-    }
-
-    public bool ReadEntity<TC1, TC2>(long pk, out TC1 t, out TC2 u) where TC1 : unmanaged where TC2 : unmanaged
-    {
-        var res = ReadComponent(pk, out t);
-        res &= ReadComponent(pk, out u);
-        return res;
-    }
-
-    public bool ReadEntity<TC1, TC2, TC3>(long pk, out TC1 t, out TC2 u, out TC3 v) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
-    {
-        var res = ReadComponent(pk, out t);
-        res &= ReadComponent(pk, out u);
-        res &= ReadComponent(pk, out v);
-        return res;
-    }
-
-    public bool ReadEntity<TC1, TC2>(long pk, out TC1 t, out TC2[] u) where TC1 : unmanaged where TC2 : unmanaged
-    {
-        var res = ReadComponent(pk, out t);
-        res &= ReadComponents(pk, out u);
-        return res;
-    }
-
-    public bool UpdateEntity<T>(long pk, ref T t) where T : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-
-        using var activity = TyphonActivitySource.StartActivity("Transaction.UpdateEntity");
-        activity?.SetTag(TyphonSpanAttributes.EntityId, pk);
-        activity?.SetTag(TyphonSpanAttributes.ComponentType, typeof(T).Name);
-
-        return UpdateComponent(pk, ref t);
-    }
-
-    public bool UpdateEntity<TC1, TC2>(long pk, ref TC1 t, ref TC2 u) where TC1 : unmanaged where TC2 : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-
-        var res = UpdateComponent(pk, ref t);
-        res &= UpdateComponent(pk, ref u);
-        return res;
-    }
-
-    public bool UpdateEntity<TC1, TC2, TC3>(long pk, ref TC1 t, ref TC2 u, ref TC3 v) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-
-        var res = UpdateComponent(pk, ref t);
-        res &= UpdateComponent(pk, ref u);
-        res &= UpdateComponent(pk, ref v);
-        return res;
-    }
-
-    public bool UpdateEntity<TC1, TC2>(long pk, ref TC1 t, ReadOnlySpan<TC2> u) where TC1 : unmanaged where TC2 : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-
-        var res = UpdateComponent(pk, ref t);
-        res &= UpdateComponents(pk, u);
-        return res;
-    }
-
-    public bool DeleteEntity<T>(long pk) where T : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-
-        using var activity = TyphonActivitySource.StartActivity("Transaction.DeleteEntity");
-        activity?.SetTag(TyphonSpanAttributes.EntityId, pk);
-        activity?.SetTag(TyphonSpanAttributes.ComponentType, typeof(T).Name);
-
-        return DeleteComponent<T>(pk);
-    }
-
-    public bool DeleteEntity<TC1, TC2>(long pk) where TC1 : unmanaged where TC2 : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-
-        var res = DeleteComponent<TC1>(pk);
-        res &= DeleteComponent<TC2>(pk);
-        return res;
-    }
-
-    public bool DeleteEntity<TC1, TC2, TC3>(long pk) where TC1 : unmanaged where TC2 : unmanaged where TC3 : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-
-        var res = DeleteComponent<TC1>(pk);
-        res &= DeleteComponent<TC2>(pk);
-        res &= DeleteComponent<TC3>(pk);
-        return res;
-    }
-
-    public bool DeleteEntities<T>(long pk) where T : unmanaged
-    {
-        EnsureMutable();
-        State = TransactionState.InProgress;
-
-        return UpdateComponents(pk, ReadOnlySpan<T>.Empty);
-    }
-    
-    public int GetComponentRevision<T>(long pk) where T : unmanaged
-    {
-        AssertThreadAffinity();
-        var info = GetComponentInfo(typeof(T));
-        ComponentInfo.CompRevInfo compRevInfo;
-        if (info.IsMultiple)
-        {
-            if (!info.MultipleCache.TryGetValue(pk, out var compRevInfoList))
-            {
-                return -1;
-            }
-            compRevInfo = compRevInfoList[0];
-        }
-        else
-        {
-            if (!info.SingleCache.TryGetValue(pk, out compRevInfo))
-            {
-                return -1;
-            }
-        }
-
-        // After getting from the cache, check if it was deleted
-        if (compRevInfo.CurCompContentChunkId == 0)
-        {
-            return -1;
-        }
-
-        return compRevInfo.ReadCommitSequence + (compRevInfo.CurRevisionIndex - compRevInfo.ReadRevisionIndex);
-    }
+    // ═══════════════════════════════════════════════════════════════════════
+    // Component Collections & Enumerators
+    // ═══════════════════════════════════════════════════════════════════════
 
     public ComponentCollectionAccessor<T> CreateComponentCollectionAccessor<T>(ref ComponentCollection<T> field) where T : unmanaged
     {
@@ -517,7 +350,7 @@ public unsafe class Transaction : IDisposable
     {
         AssertThreadAffinity();
         var vsbs = _dbe.GetComponentCollectionVSBS<T>();
-        using var a = new VariableSizedBufferAccessor<T>(vsbs, field._bufferId);
+        using var a = new VariableSizedBufferAccessor<T, PersistentStore>(vsbs, field._bufferId);
 
         return a.RefCounter;
     }
@@ -525,9 +358,9 @@ public unsafe class Transaction : IDisposable
     [PublicAPI]
     public ref struct ReadOnlyCollectionEnumerator<T> where T : unmanaged
     {
-        private BufferEnumerator<T> _enumerator;
+        private BufferEnumerator<T, PersistentStore> _enumerator;
 
-        public ReadOnlyCollectionEnumerator(VariableSizedBufferSegment<T> vsbs, int bufferId)
+        public ReadOnlyCollectionEnumerator(VariableSizedBufferSegment<T, PersistentStore> vsbs, int bufferId)
         {
             _enumerator = vsbs.EnumerateBuffer(bufferId);
         }
@@ -545,27 +378,7 @@ public unsafe class Transaction : IDisposable
     }
 
     /// <summary>
-    /// Returns an enumerator that streams all entities with component <typeparamref name="T"/> in primary key order, filtered by MVCC visibility at this
-    /// transaction's snapshot.
-    /// </summary>
-    /// <param name="minPK">Inclusive lower bound of the PK range (default: all).</param>
-    /// <param name="maxPK">Inclusive upper bound of the PK range (default: all).</param>
-    public PKEntityEnumerator<T> EnumeratePK<T>(long minPK = long.MinValue, long maxPK = long.MaxValue) where T : unmanaged
-    {
-        AssertThreadAffinity();
-        var ct = _dbe.GetComponentTable<T>() ?? throw new InvalidOperationException($"Component '{typeof(T).Name}' is not registered.");
-
-        if (ct.Definition.AllowMultiple)
-        {
-            throw new InvalidOperationException("EnumeratePK does not support AllowMultiple components. Use the single-value component API.");
-        }
-
-        return new PKEntityEnumerator<T>(ct, this, minPK, maxPK, _changeSet);
-    }
-
-    /// <summary>
-    /// Returns an enumerator that streams entities via any index (primary or secondary) in key order, filtered by MVCC visibility at this transaction's snapshot.
-    /// For PK indexes, <typeparamref name="TKey"/> must be <c>long</c>.
+    /// Returns an enumerator that streams entities via a secondary index in key order, filtered by MVCC visibility at this transaction's snapshot.
     /// </summary>
     public IndexEntityEnumerator<T, TKey> EnumerateIndex<T, TKey>(IndexRef indexRef, TKey minKey, TKey maxKey) where T : unmanaged where TKey : unmanaged
     {
@@ -573,119 +386,22 @@ public unsafe class Transaction : IDisposable
         indexRef.Validate();
 
         var ct = indexRef.Table;
-        BTree<TKey> typedIndex;
 
         if (indexRef.IsPrimaryKey)
         {
-            if (ct.PrimaryKeyIndex is not BTree<TKey> pkIndex)
-            {
-                throw new InvalidOperationException($"PK index requires TKey=long, caller specified '{typeof(TKey).Name}'.");
-            }
-
-            typedIndex = pkIndex;
+            throw new InvalidOperationException("PK B+Tree has been removed. Use ECS queries with EntityMap instead.");
         }
-        else
+
+        var ifi = ct.IndexedFieldInfos[indexRef.FieldIndex];
+        if (ifi.Index is not BTree<TKey, PersistentStore> skIndex)
         {
-            var ifi = ct.IndexedFieldInfos[indexRef.FieldIndex];
-            if (ifi.Index is not BTree<TKey> skIndex)
-            {
-                throw new InvalidOperationException(
-                    $"TKey type mismatch: index uses '{ifi.Index.GetType().GenericTypeArguments[0].Name}', caller specified '{typeof(TKey).Name}'.");
-            }
-
-            typedIndex = skIndex;
+            throw new InvalidOperationException(
+                $"TKey type mismatch: index uses '{ifi.Index.GetType().GenericTypeArguments[0].Name}', caller specified '{typeof(TKey).Name}'.");
         }
+
+        BTree<TKey, PersistentStore> typedIndex = skIndex;
 
         return new IndexEntityEnumerator<T, TKey>(typedIndex, ct, this, minKey, maxKey, _changeSet);
-    }
-
-    /// <summary>
-    /// MVCC-correct streaming enumerator over the primary key B+Tree leaf chain.
-    /// Yields entities in PK order. Use <see cref="CurrentComponent"/> for zero-copy ref access
-    /// into page memory, or <see cref="Current"/> for a convenience copy.
-    /// </summary>
-    [PublicAPI]
-    public ref struct PKEntityEnumerator<T> where T : unmanaged
-    {
-        private BTree<long>.RangeEnumerator _inner;
-        private ChunkAccessor _compRevAccessor;
-        private ChunkAccessor _compContentAccessor;
-        private readonly Transaction _tx;
-        private readonly long _transactionTSN;
-        private readonly int _componentOverhead;
-        private int _entityCount;
-        private long _currentPK;
-        private ReadOnlySpan<byte> _currentComponentSpan;
-        private bool _disposed;
-
-        internal PKEntityEnumerator(ComponentTable ct, Transaction tx, long minPK, long maxPK, ChangeSet changeSet)
-        {
-            _inner = ct.PrimaryKeyIndex.EnumerateRange(minPK, maxPK);
-            _compRevAccessor = ct.CompRevTableSegment.CreateChunkAccessor(changeSet);
-            _compContentAccessor = ct.ComponentSegment.CreateChunkAccessor(changeSet);
-            _tx = tx;
-            _transactionTSN = tx.TSN;
-            _componentOverhead = ct.ComponentOverhead;
-            _entityCount = 0;
-            _currentPK = 0;
-            _currentComponentSpan = default;
-            _disposed = false;
-        }
-
-        public PKEntityEnumerator<T> GetEnumerator() => this;
-
-        /// <summary>Convenience accessor — copies the component into a tuple. Prefer <see cref="CurrentComponent"/> for zero-copy.</summary>
-        public (long EntityPK, T Component) Current => (_currentPK, MemoryMarshal.AsRef<T>(_currentComponentSpan));
-
-        /// <summary>Zero-copy ref into the epoch-protected page memory. Valid until the next <see cref="MoveNext"/> call.</summary>
-        public ref readonly T CurrentComponent => ref MemoryMarshal.AsRef<T>(_currentComponentSpan);
-
-        /// <summary>The primary key of the current entity.</summary>
-        public long CurrentEntityPK => _currentPK;
-
-        public bool MoveNext()
-        {
-            while (_inner.MoveNext())
-            {
-                var kv = _inner.Current;
-                long pk = kv.Key;
-                int compRevFirstChunkId = kv.Value;
-
-                // MVCC visibility check
-                var result = RevisionChainReader.WalkChain(ref _compRevAccessor, compRevFirstChunkId, _transactionTSN);
-                if (result.IsFailure || result.Value.CurCompContentChunkId == 0)
-                {
-                    // SnapshotInvisible or Deleted — skip
-                    continue;
-                }
-
-                // Store span into page memory — no copy
-                _currentPK = pk;
-                var src = _compContentAccessor.GetChunkAsReadOnlySpan(result.Value.CurCompContentChunkId);
-                _currentComponentSpan = src.Slice(_componentOverhead);
-
-                // Epoch refresh cadence
-                if (++_entityCount % EpochRefreshInterval == 0)
-                {
-                    _tx.EnumerateRefreshEpoch();
-                }
-
-                return true;
-            }
-
-            return false;
-        }
-
-        public void Dispose()
-        {
-            if (!_disposed)
-            {
-                _disposed = true;
-                _inner.Dispose();
-                _compRevAccessor.Dispose();
-                _compContentAccessor.Dispose();
-            }
-        }
     }
 
     /// <summary>
@@ -697,14 +413,14 @@ public unsafe class Transaction : IDisposable
     public ref struct IndexEntityEnumerator<T, TKey> where T : unmanaged where TKey : unmanaged
     {
         // Unique index path
-        private BTree<TKey>.RangeEnumerator _innerUnique;
+        private BTree<TKey, PersistentStore>.RangeEnumerator _innerUnique;
         // AllowMultiple index path
-        private BTree<TKey>.RangeMultipleEnumerator _innerMultiple;
+        private BTree<TKey, PersistentStore>.RangeMultipleEnumerator _innerMultiple;
         private ReadOnlySpan<int> _currentValues;
         private int _currentValueIndex;
 
-        private ChunkAccessor _compRevAccessor;
-        private ChunkAccessor _compContentAccessor;
+        private ChunkAccessor<PersistentStore> _compRevAccessor;
+        private ChunkAccessor<PersistentStore> _compContentAccessor;
         private readonly Transaction _tx;
         private readonly long _transactionTSN;
         private readonly int _componentOverhead;
@@ -715,7 +431,7 @@ public unsafe class Transaction : IDisposable
         private ReadOnlySpan<byte> _currentComponentSpan;
         private bool _disposed;
 
-        internal IndexEntityEnumerator(BTree<TKey> index, ComponentTable ct, Transaction tx, TKey minKey, TKey maxKey, ChangeSet changeSet)
+        internal IndexEntityEnumerator(BTree<TKey, PersistentStore> index, ComponentTable ct, Transaction tx, TKey minKey, TKey maxKey, ChangeSet changeSet)
         {
             _isAllowMultiple = index.AllowMultiple;
             if (_isAllowMultiple)
@@ -902,21 +618,38 @@ public unsafe class Transaction : IDisposable
             return info;
         }
 
-        var ct = _dbe.GetComponentTable(componentType) ?? 
-                 throw new InvalidOperationException($"The type {componentType} doesn't have a registered Component Table");
+        var ct = _dbe.GetComponentTable(componentType) ?? _dbe.FindComponentTableBySchemaName(componentType);
+        if (ct == null)
+        {
+            throw new InvalidOperationException($"The type {componentType} doesn't have a registered Component Table");
+        }
 
         var isMultiple = ct.Definition.AllowMultiple;
         info = new ComponentInfo(isMultiple)
         {
-            ComponentTable       = ct,
-            CompContentSegment   = ct.ComponentSegment,
-            CompRevTableSegment  = ct.CompRevTableSegment,
-            PrimaryKeyIndex      = ct.PrimaryKeyIndex,
-            CompContentAccessor  = ct.ComponentSegment.CreateChunkAccessor(_changeSet),
-            CompRevTableAccessor = ct.CompRevTableSegment.CreateChunkAccessor(_changeSet),
-            SingleCache          = isMultiple ? null : new Dictionary<long, ComponentInfo.CompRevInfo>(),
-            MultipleCache        = isMultiple ? new Dictionary<long, List<ComponentInfo.CompRevInfo>>() : null,
+            ComponentTypeId = ArchetypeRegistry.GetComponentTypeId(componentType),
+            ComponentTable = ct,
+            ComponentOverhead = ct.ComponentOverhead,
+            SingleCache    = isMultiple ? null : new Dictionary<long, ComponentInfo.CompRevInfo>(),
+            MultipleCache  = isMultiple ? new Dictionary<long, List<ComponentInfo.CompRevInfo>>() : null,
         };
+
+        switch (ct.StorageMode)
+        {
+            case StorageMode.Transient:
+                info.TransientCompContentAccessor = ct.TransientComponentSegment.CreateChunkAccessor();
+                break;
+            case StorageMode.SingleVersion:
+                info.CompContentSegment  = ct.ComponentSegment;
+                info.CompContentAccessor = ct.ComponentSegment.CreateChunkAccessor(_changeSet);
+                break;
+            default: // Versioned
+                info.CompContentSegment   = ct.ComponentSegment;
+                info.CompRevTableSegment  = ct.CompRevTableSegment;
+                info.CompContentAccessor  = ct.ComponentSegment.CreateChunkAccessor(_changeSet);
+                info.CompRevTableAccessor = ct.CompRevTableSegment.CreateChunkAccessor(_changeSet);
+                break;
+        }
 
         _componentInfos.Add(componentType, info);
         return info;
@@ -925,15 +658,28 @@ public unsafe class Transaction : IDisposable
     /// <summary>
     /// Flush all pending dirty state and advance the epoch within this transaction.
     /// Must only be called at a quiescent point — no B+Tree OLC write locks held,
-    /// no ChunkAccessor mid-operation.
+    /// no ChunkAccessor<PersistentStore> mid-operation.
     /// </summary>
     private void FlushAndRefreshEpoch()
     {
-        // 1. Flush dirty state on all live per-transaction ChunkAccessors
+        // 1. Flush dirty state on all live per-transaction ChunkAccessors.
+        //    SV/Transient components only have their mode-specific accessor initialized;
+        //    calling CommitChanges on a default struct is safe (no-op via _dirtyFlags==0 guard)
+        //    but we skip explicitly for clarity.
         foreach (var ci in _componentInfos.Values)
         {
-            ci.CompContentAccessor.CommitChanges();
-            ci.CompRevTableAccessor.CommitChanges();
+            if (ci.ComponentTable.StorageMode == StorageMode.Transient)
+            {
+                ci.TransientCompContentAccessor.CommitChanges();
+            }
+            else
+            {
+                ci.CompContentAccessor.CommitChanges();
+                if (ci.ComponentTable.StorageMode == StorageMode.Versioned)
+                {
+                    ci.CompRevTableAccessor.CommitChanges();
+                }
+            }
         }
 
         // 2. Cap DirtyCounter at 1 for all tracked pages, clear ChangeSet.
@@ -948,7 +694,7 @@ public unsafe class Transaction : IDisposable
         //    Without this, the next RentWarmAccessor creates a new accessor with empty slot cache,
         //    forcing all hot pages through RequestPageEpoch which re-stamps their AccessEpoch,
         //    making them permanently epoch-protected and causing unbounded cache pressure.
-        ChunkBasedSegment.RefreshWarmCacheEpoch(newEpoch);
+        ChunkBasedSegment<PersistentStore>.RefreshWarmCacheEpoch(newEpoch);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -963,7 +709,7 @@ public unsafe class Transaction : IDisposable
 
     /// <summary>
     /// Epoch refresh for bulk enumerators. Read-only transactions just refresh the epoch scope (no dirty state to flush).
-    /// Read-write transactions delegate to <see cref="FlushAndRefreshEpoch"/> which also flushes ChunkAccessor dirty state.
+    /// Read-write transactions delegate to <see cref="FlushAndRefreshEpoch"/> which also flushes ChunkAccessor<PersistentStore> dirty state.
     /// </summary>
     internal void EnumerateRefreshEpoch()
     {
@@ -976,85 +722,16 @@ public unsafe class Transaction : IDisposable
         FlushAndRefreshEpoch();
     }
 
-    private void CreateComponent<T>(long pk, ref T comp) where T : unmanaged
-    {
-        AssertThreadAffinity();
-        var componentType = typeof(T);
-
-        // Fetch the cached info or create it if it's the first time we've operated on this Component type
-        _dbe.LogCommitCreateComponent(TSN, componentType.Name, pk, "GetComponentInfo");
-        var info = GetComponentInfo(componentType);
-
-        // Allocate the chunk that will store the component's chunk
-        _dbe.LogCommitCreateComponent(TSN, componentType.Name, pk, "AllocateChunk");
-        var componentChunkId = info.CompContentSegment.AllocateChunk(false, _changeSet);
-
-        // Allocate the component revision storage as it's a new component
-        _dbe.LogCommitCreateComponent(TSN, componentType.Name, pk, "AllocCompRevStorage");
-        var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, componentChunkId, pk);
-
-        var entry = new ComponentInfo.CompRevInfo
-        {
-            Operations = ComponentInfo.OperationType.Created,
-            PrevCompContentChunkId = 0,
-            PrevRevisionIndex = -1,
-            CurCompContentChunkId = componentChunkId,
-            CompRevTableFirstChunkId = compRevChunkId,
-            CurRevisionIndex = 0,
-            ReadCommitSequence = 1,
-            ReadRevisionIndex = 0
-        };
-
-        info.AddNew(pk, entry);
-
-        // Copy the component data
-        _dbe.LogCommitCreateComponent(TSN, componentType.Name, pk, "GetChunkAsSpan");
-        int compSize = info.ComponentTable.ComponentStorageSize;
-        var dst = info.CompContentAccessor.GetChunkAsSpan(componentChunkId, true);
-        new Span<byte>(Unsafe.AsPointer(ref comp), compSize).CopyTo(dst.Slice(info.ComponentTable.ComponentOverhead));
-
-        CheckEpochRefresh();
-    }
-
-    private void CreateComponents<T>(long pk, ReadOnlySpan<T> compList) where T : unmanaged
-    {
-        AssertThreadAffinity();
-        var componentType = typeof(T);
-
-        // Fetch the cached info or create it if it's the first time we've operated on this Component type
-        var info = GetComponentInfo(componentType);
-
-        for (int i = 0; i < compList.Length; i++)
-        {
-            // Allocate the chunk that will store the component's chunk
-            var componentChunkId = info.CompContentSegment.AllocateChunk(false, _changeSet);
-
-            // Allocate the component revision storage as it's a new component
-            var compRevChunkId = ComponentRevisionManager.AllocCompRevStorage(info, TSN, UowId, componentChunkId, pk);
-
-            var entry = new ComponentInfo.CompRevInfo
-            {
-                Operations = ComponentInfo.OperationType.Created,
-                PrevCompContentChunkId = 0,
-                PrevRevisionIndex = -1,
-                CurCompContentChunkId = componentChunkId,
-                CompRevTableFirstChunkId = compRevChunkId,
-                CurRevisionIndex = 0,
-                ReadCommitSequence = 1,
-                ReadRevisionIndex = 0
-            };
-
-            info.AddNew(pk, entry);
-
-            // Copy the component data
-            var dst = info.CompContentAccessor.GetChunkAsSpan(componentChunkId, true);
-            compList.Slice(i, 1).Cast<T, byte>().CopyTo(dst.Slice(info.ComponentTable.ComponentOverhead));
-        }
-
-        CheckEpochRefresh();
-    }
-
-    private bool ReadComponent<T>(long pk, out T t) where T : unmanaged
+    /// <summary>
+    /// Read a component by PK from the ComponentTable revision chain. Used by the query engine for predicate evaluation.
+    /// Performs MVCC-visible revision walk — more efficient than Open().Read() for single-component access because it doesn't resolve all archetype slots.
+    /// </summary>
+    /// <summary>
+    /// Query-engine read primitive. Reads a single component by PK via MVCC revision chain walk.
+    /// More efficient than Open().Read() for query evaluation — resolves only the requested component, not all archetype slots.
+    /// </summary>
+    [PublicAPI]
+    public bool QueryRead<T>(long pk, out T t) where T : unmanaged
     {
         AssertThreadAffinity();
         var componentType = typeof(T);
@@ -1095,323 +772,153 @@ public unsafe class Transaction : IDisposable
         return true;
     }
 
-    private bool ReadComponents<T>(long pk, out T[] t) where T : unmanaged
+    /// <summary>
+    /// Write a component by PK. Reconstructs EntityId from the raw PK, opens the entity for mutation, and writes the component data.
+    /// Generic — the Shell CLI calls this via <c>MakeGenericMethod</c> for runtime-resolved component types.
+    /// </summary>
+    [PublicAPI]
+    public bool WriteComponent<T>(long pk, ref T comp) where T : unmanaged
     {
-        AssertThreadAffinity();
-        var componentType = typeof(T);
-        var info = GetComponentInfo(componentType);
-
-        // Check if we already have this component in the cache
-        if (!info.MultipleCache.TryGetValue(pk, out var compRevInfoList))
-        {
-            // Couldn't find in the cache, get it from the index
-            if (!GetCompRevInfoFromIndex(pk, info, TSN, out compRevInfoList))
-            {
-                t = null;
-                return false;
-            }
-
-            // Add to cache for future operations (revision tracking, updates, etc.)
-            info.MultipleCache[pk] = compRevInfoList;
-        }
-
-        var compRevInfoSpan = CollectionsMarshal.AsSpan(compRevInfoList);
-
-        t = new T[compRevInfoSpan.Length];
-        var deletedCount = 0;
-        var destSpan = t.AsSpan();
-        int destIndex = 0;
-        for (int i = 0; i < compRevInfoSpan.Length; i++)
-        {
-            ref var compRevInfo = ref compRevInfoSpan[i];
-            compRevInfo.Operations |= ComponentInfo.OperationType.Read;
-
-            // Skip deleted components
-            if (compRevInfo.CurCompContentChunkId == 0)
-            {
-                ++deletedCount;
-                continue;
-            }
-
-            // If there is a valid component, copy its content to the destination
-            var chunkSpan = info.CompContentAccessor.GetChunkAsReadOnlySpan(compRevInfo.CurCompContentChunkId);
-            chunkSpan.Slice(info.ComponentTable.ComponentOverhead).Cast<byte, T>().CopyTo(destSpan.Slice(destIndex++));
-        }
-
-        // Deleted items were skipped, we need to trim the list...
-        if (deletedCount > 0)
-        {
-            // ... or remove it if everything was deleted
-            if (deletedCount == t.Length)
-            {
-                t = null;
-                return false;
-            }
-            Array.Resize(ref t, t.Length - deletedCount);
-        }
-
-        return true;
-    }
-    
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool DeleteComponent<T>(long pk) where T : unmanaged
-    {
-        if (_dbe.GetComponentTable(typeof(T)).Definition.AllowMultiple)
-        {
-            return UpdateComponents(pk, ReadOnlySpan<T>.Empty);
-        }
-        return UpdateComponent(pk, ref Unsafe.NullRef<T>());
-    }
-
-    private bool UpdateComponent<T>(long pk, ref T comp) where T : unmanaged
-    {
-        AssertThreadAffinity();
-        var componentType = typeof(T);
-        var isDelete = Unsafe.IsNullRef(ref comp);
-        
-        // Fetch the cached info or create it if it's the first time we operate on this Component type
-        var info = GetComponentInfo(componentType);
-
-        // Check if the component is in the cache (meaning we already made an operation on it in this transaction)
-        ref var compRevInfo = ref CollectionsMarshal.GetValueRefOrAddDefault(info.SingleCache, pk, out var compRevCached);
-        if (compRevCached)
-        {
-            // Can't update a deleted component...
-            if ((compRevInfo.Operations & ComponentInfo.OperationType.Deleted) == ComponentInfo.OperationType.Deleted)
-            {
-                return false;
-            }
-
-            // Check if we need to delete a component we previously added
-            if (isDelete && (compRevInfo.CurCompContentChunkId != 0))
-            {
-                info.CompContentSegment.FreeChunk(compRevInfo.CurCompContentChunkId);
-                compRevInfo.CurCompContentChunkId = 0;
-            }
-        }
-
-        // No component in cache
-        else
-        {
-            // Fetch the cache by getting the revision closest to the transaction tick, if we fail it means there's no revision, so no component for this
-            //  PK, we return false
-            var result = GetCompRevInfoFromIndex(pk, info, TSN);
-            if (result.Status == RevisionReadStatus.NotFound || result.Status == RevisionReadStatus.SnapshotInvisible)
-            {
-                // Remove the default entry that GetValueRefOrAddDefault added to avoid leaving
-                // a zombie CompRevInfo (all zeros) that would corrupt subsequent operations on
-                // the same PK within this transaction.
-                info.SingleCache.Remove(pk);
-                return false;
-            }
-            compRevInfo = result.Value; // Works for both Success AND Deleted (3-arg constructor)
-        }
-
-        // Update the operation types
-        compRevInfo.Operations |= (isDelete ? ComponentInfo.OperationType.Deleted : ComponentInfo.OperationType.Updated);
-
-        // First mutating operation on this component in this transaction: create a new component version
-        if ((!compRevCached) || ((compRevInfo.Operations & ComponentInfo.OperationType.Read) != 0))
-        {
-            // Add a new component version for the current component, if there is no data, it means we are deleting the component, we still
-            //  need to add a new version with an empty CurCompContentChunkId
-            ComponentRevisionManager.AddCompRev(info, ref compRevInfo, TSN, UowId, isDelete);
-        }
-
-        // Set up the component header
-        if (!isDelete)
-        {
-            // Copy the component data
-            int componentSize = info.ComponentTable.ComponentStorageSize;
-            var src = new Span<byte>(Unsafe.AsPointer(ref comp), componentSize);
-            var dst = info.CompContentAccessor.GetChunkAsSpan(compRevInfo.CurCompContentChunkId, true).Slice(info.ComponentTable.ComponentOverhead);
-            src.CopyTo(dst);
-
-            // If the component has collections, update the RefCounter of unchanged ones
-            var ct = info.ComponentTable;
-            if (ct.HasCollections)
-            {
-                foreach (var kvp in ct.ComponentCollectionVSBSByOffset)
-                {
-                    var offsetToCollectionField = kvp.Key;
-                    var srcBufferId = src.Slice(offsetToCollectionField).Cast<byte, int>()[0];
-                    var dstBufferId = dst.Slice(offsetToCollectionField).Cast<byte, int>()[0];
-                    if (srcBufferId == dstBufferId)
-                    {
-                        var accessor = kvp.Value.Segment.CreateChunkAccessor(_changeSet);
-                        kvp.Value.BufferAddRef(srcBufferId, ref accessor);
-                        accessor.Dispose();
-                    }
-                }
-            }
-        }
-
-        CheckEpochRefresh();
+        var entityId = Unsafe.As<long, EntityId>(ref pk);
+        var entity = OpenMut(entityId);
+        ref var target = ref entity.Write<T>();
+        target = comp;
         return true;
     }
 
-    private bool UpdateComponents<T>(long pk, ReadOnlySpan<T> compList) where T : unmanaged
+    /// <summary>
+    /// Spawn an entity using an archetype ID (non-generic). Enables runtime callers (Shell CLI) to create entities
+    /// without compile-time archetype type parameters.
+    /// </summary>
+    [PublicAPI]
+    public EntityId SpawnByArchetypeId(ushort archetypeId, params ComponentValue[] values)
     {
-        AssertThreadAffinity();
-        var componentType = typeof(T);
-        var isDelete = compList.Length == 0;
-
-        // Fetch the cached info or create it if it's the first time we operate on this Component type
-        var info = GetComponentInfo(componentType);
-
-        // Check if the component is in the cache (meaning we already made an operation on it in this transaction)
-        var compRevCached = info.MultipleCache.TryGetValue(pk, out var compRevInfoList);
-        if (!compRevCached)
+        var meta = ArchetypeRegistry.GetMetadata(archetypeId);
+        if (meta == null)
         {
-            // Fetch the cache by getting the revision closest to the transaction tick, if we fail it means there's no revision, so no component for this
-            //  PK, we return false
-            if (!GetCompRevInfoFromIndex(pk, info, TSN, out compRevInfoList))
-            {
-                return false;
-            }
+            throw new InvalidOperationException($"Archetype ID {archetypeId} not registered");
+        }
+        // Delegate to the core Spawn logic (shared with Spawn<TArch>)
+        return SpawnInternal(meta, values);
+    }
 
-            // Add to cache so the updates are tracked and committed
-            info.MultipleCache[pk] = compRevInfoList;
+    /// <summary>
+    /// Resolve compRevFirstChunkId for an archetype entity via EntityMap lookup.
+    /// Uses a Transaction-level cached accessor (same-archetype calls reuse the accessor's MRU warmth).
+    /// </summary>
+    private int ResolveEntityMapSlotChunkId(long pk, ComponentInfo info)
+    {
+        var entityId = EntityId.FromRaw(pk);
+        if (entityId.ArchetypeId == 0)
+        {
+            return 0;
         }
 
-        // x source items, y destination items, three cases:
-        // 1. x == y easy
-        // 2. x < y, update the x items to destination, remove the excess from destination (y - x)
-        // 3. x > y, update y items from source to destination, add the excess to destination (x - y)
-        var compRevInfoSpan = CollectionsMarshal.AsSpan(compRevInfoList);
-        var overlapCount = Math.Min(compList.Length, compRevInfoSpan.Length);
-        var i = 0;
-
-        // Case 1
-        // min(x, y) the item count shared by source and dest
-        for ( ; i < overlapCount; i++)
+        var meta = ArchetypeRegistry.GetMetadata(entityId.ArchetypeId);
+        if (meta == null)
         {
-            ref var compRevInfo = ref compRevInfoSpan[i];
-
-            // Can't update a deleted component...
-            if ((compRevInfo.Operations & ComponentInfo.OperationType.Deleted) == ComponentInfo.OperationType.Deleted)
-            {
-                return false;
-            }
-
-            // Check if we need to delete a component we previously added
-            if (isDelete && (compRevInfo.CurCompContentChunkId != 0))
-            {
-                info.CompContentSegment.FreeChunk(compRevInfo.CurCompContentChunkId);
-            }
-
-            // Update the operation types
-            compRevInfo.Operations |= (isDelete ? ComponentInfo.OperationType.Deleted : ComponentInfo.OperationType.Updated);
-
-            // First mutating operation on this component in this transaction: create a new component version
-            // Also create a new revision if the component was deleted (CurCompContentChunkId == 0) - to resurrect it
-            if ((!compRevCached) || ((compRevInfo.Operations & ComponentInfo.OperationType.Read) != 0) || compRevInfo.CurCompContentChunkId == 0)
-            {
-                // Add a new component version for the current component, if there is no data, it means we are deleting the component, we still
-                //  need to add a new version with an empty CurCompContentChunkId
-                ComponentRevisionManager.AddCompRev(info, ref compRevInfo, TSN, UowId, isDelete);
-            }
-
-            // Set up the component header
-            if (!isDelete)
-            {
-                // Copy the component data
-                var dst = info.CompContentAccessor.GetChunkAsSpan(compRevInfo.CurCompContentChunkId, true).Slice(info.ComponentTable.ComponentOverhead);
-                var src = compList.Slice(i, 1).Cast<T, byte>();
-                src.CopyTo(dst);
-            
-                // If the component has collections, update the RefCounter of unchanged ones
-                var ct = info.ComponentTable;
-                if (ct.HasCollections)
-                {
-                    foreach (var kvp in ct.ComponentCollectionVSBSByOffset)
-                    {
-                        var offsetToCollectionField = kvp.Key;
-                        var srcBufferId = src.Slice(offsetToCollectionField).Cast<byte, int>()[0];
-                        var dstBufferId = dst.Slice(offsetToCollectionField).Cast<byte, int>()[0];
-                        if (srcBufferId == dstBufferId)
-                        {
-                            var accessor = kvp.Value.Segment.CreateChunkAccessor(_changeSet);
-                            kvp.Value.BufferAddRef(srcBufferId, ref accessor);
-                            accessor.Dispose();
-                        }
-                    }
-                }
-            }
+            return 0;
         }
 
-        // Case 2: Mark excess items as deleted
-        if (compList.Length < compRevInfoSpan.Length)
+        // O(1) slot lookup via cached componentTypeId (replaces O(C) linear scan)
+        if (!meta.TryGetSlot(info.ComponentTypeId, out byte slot))
         {
-            for (int j = i; j < compRevInfoSpan.Length; j++)
-            {
-                ref var compRevInfo = ref compRevInfoSpan[j];
-                compRevInfo.Operations |= ComponentInfo.OperationType.Deleted;
-                ComponentRevisionManager.AddCompRev(info, ref compRevInfo, TSN, UowId, true);
-            }
-        }
-        
-        // Case 3
-        else if (compList.Length > compRevInfoSpan.Length)
-        {
-            CreateComponents(pk, compList.Slice(compRevInfoSpan.Length));
+            return 0;
         }
 
-        CheckEpochRefresh();
-        return true;
+        var es = _dbe._archetypeStates[meta.ArchetypeId];
+        if (es?.EntityMap == null)
+        {
+            return 0;
+        }
+
+        // Reuse cached EntityMap accessor when archetype matches
+        if (!_hasEntityMapCache || _entityMapCacheArchId != entityId.ArchetypeId)
+        {
+            if (_hasEntityMapCache)
+            {
+                _entityMapCacheAccessor.Dispose();
+            }
+            _entityMapCacheAccessor = es.EntityMap.Segment.CreateChunkAccessor();
+            _entityMapCacheArchId = entityId.ArchetypeId;
+            _hasEntityMapCache = true;
+        }
+
+        int recordSize = meta._entityRecordSize;
+        byte* buf = stackalloc byte[recordSize];
+        if (es.EntityMap.TryGet(entityId.EntityKey, buf, ref _entityMapCacheAccessor))
+        {
+            return EntityRecordAccessor.GetLocation(buf, slot);
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Lightweight MVCC visibility check via EntityRecord BornTSN/DiedTSN.
+    /// Uses the cached EntityMap accessor — no CompRev chain walk, no component data read.
+    /// For query Count/Execute paths where the primary index scan already guarantees field predicates.
+    /// </summary>
+    internal bool IsEntityVisible(long pk)
+    {
+        var entityId = EntityId.FromRaw(pk);
+        if (entityId.ArchetypeId == 0)
+        {
+            return false;
+        }
+
+        var meta = ArchetypeRegistry.GetMetadata(entityId.ArchetypeId);
+        if (meta == null)
+        {
+            return false;
+        }
+
+        var es = _dbe._archetypeStates[meta.ArchetypeId];
+        if (es?.EntityMap == null)
+        {
+            return false;
+        }
+
+        // Reuse cached EntityMap accessor
+        if (!_hasEntityMapCache || _entityMapCacheArchId != entityId.ArchetypeId)
+        {
+            if (_hasEntityMapCache)
+            {
+                _entityMapCacheAccessor.Dispose();
+            }
+            _entityMapCacheAccessor = es.EntityMap.Segment.CreateChunkAccessor();
+            _entityMapCacheArchId = entityId.ArchetypeId;
+            _hasEntityMapCache = true;
+        }
+
+        byte* buf = stackalloc byte[EntityRecordAccessor.HeaderSize];
+        // TryGet copies full record, but we only need the header (first 14 bytes).
+        // Use full record size to satisfy TryGet's contract, but stackalloc min header.
+        int recordSize = meta._entityRecordSize;
+        byte* fullBuf = stackalloc byte[recordSize];
+        if (!es.EntityMap.TryGet(entityId.EntityKey, fullBuf, ref _entityMapCacheAccessor))
+        {
+            return false;
+        }
+
+        ref var header = ref EntityRecordAccessor.GetHeader(fullBuf);
+        return header.IsVisibleAt(TSN);
     }
 
     private Result<int, BTreeLookupStatus> GetCompRevTableFirstChunkId(long pk, ComponentInfo info)
     {
-        var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
-        var result = info.PrimaryKeyIndex.TryGet(pk, ref accessor);
-        accessor.Dispose();
-        return result;
+        int chunkId = ResolveEntityMapSlotChunkId(pk, info);
+        return chunkId != 0 ? new Result<int, BTreeLookupStatus>(chunkId) : new Result<int, BTreeLookupStatus>(BTreeLookupStatus.NotFound);
     }
 
     private Result<ComponentInfo.CompRevInfo, RevisionReadStatus> GetCompRevInfoFromIndex(long pk, ComponentInfo info, long tick)
     {
-        var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
-        var lookupResult = info.PrimaryKeyIndex.TryGet(pk, ref accessor);
-        accessor.Dispose();
-        if (lookupResult.IsFailure)
+        int chunkId = ResolveEntityMapSlotChunkId(pk, info);
+        if (chunkId != 0)
         {
-            return new Result<ComponentInfo.CompRevInfo, RevisionReadStatus>(RevisionReadStatus.NotFound);
+            return RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, chunkId, TSN);
         }
-
-        return RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, lookupResult.Value, TSN);
-    }
-
-    private bool GetCompRevInfoFromIndex(long pk, ComponentInfo info, long tick, out List<ComponentInfo.CompRevInfo> compRevInfoList)
-    {
-        var accessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
-        using var vsba = info.PrimaryKeyIndex.TryGetMultiple(pk, ref accessor);
-        if (!vsba.IsValid)
-        {
-            accessor.Dispose();
-            compRevInfoList = null;
-            return false;
-        }
-        accessor.Dispose();
-
-        compRevInfoList = new List<ComponentInfo.CompRevInfo>(vsba.TotalCount);
-        do
-        {
-            var compRevChunks = vsba.Elements;
-            foreach (int compRevFirstChunkId in compRevChunks)
-            {
-                var result = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, TSN);
-
-                // WalkChain returns SnapshotInvisible when no committed entry is visible — skip this chain.
-                // Both Success and Deleted carry valid revision metadata that callers need.
-                if (result.Status != RevisionReadStatus.SnapshotInvisible)
-                {
-                    compRevInfoList.Add(result.Value);
-                }
-            }
-        } while (vsba.NextChunk());
-
-        return true;
+        return new Result<ComponentInfo.CompRevInfo, RevisionReadStatus>(RevisionReadStatus.NotFound);
     }
 
     /// <summary>
@@ -1679,8 +1186,7 @@ public unsafe class Transaction : IDisposable
             {
                 if (_batchIndexActive)
                 {
-                    IndexMaintainer.UpdateIndices(pk, info, compRevInfo, readCompChunkId, _changeSet, TSN, _batchIndexAccessors,
-                        ref _batchPkAccessor, ref _batchTailAccessor);
+                    IndexMaintainer.UpdateIndices(pk, info, compRevInfo, readCompChunkId, _changeSet, TSN, _batchIndexAccessors, ref _batchTailAccessor);
                 }
                 else
                 {
@@ -1707,15 +1213,14 @@ public unsafe class Transaction : IDisposable
                 {
                     _batchIndexAccessors[i].CommitChanges();
                 }
-                _batchPkAccessor.CommitChanges();
                 if (info.ComponentTable.TailVSBS != null)
                 {
                     _batchTailAccessor.CommitChanges();
                 }
 
                 // Flush warm accessors: exit+enter cycle performs a single CommitChanges per cache
-                ChunkBasedSegment.ExitBatchMode();
-                ChunkBasedSegment.EnterBatchMode();
+                ChunkBasedSegment<PersistentStore>.ExitBatchMode();
+                ChunkBasedSegment<PersistentStore>.EnterBatchMode();
 
                 _changeSet.ReleaseExcessDirtyMarks();
             }
@@ -1867,8 +1372,19 @@ public unsafe class Transaction : IDisposable
             // disposed inline during CommitComponentCore, so their pages are already tracked).
             foreach (var kvp in _componentInfos)
             {
-                kvp.Value.CompContentAccessor.CommitChanges();
-                kvp.Value.CompRevTableAccessor.CommitChanges();
+                var ci = kvp.Value;
+                if (ci.ComponentTable.StorageMode == StorageMode.Transient)
+                {
+                    ci.TransientCompContentAccessor.CommitChanges();
+                }
+                else
+                {
+                    ci.CompContentAccessor.CommitChanges();
+                    if (ci.ComponentTable.StorageMode == StorageMode.Versioned)
+                    {
+                        ci.CompRevTableAccessor.CommitChanges();
+                    }
+                }
             }
 
             _changeSet.SaveChanges();
@@ -1954,14 +1470,27 @@ public unsafe class Transaction : IDisposable
         context.TailTSN = _dbe.TransactionChain.MinTSN;
         _dbe.TransactionChain.Control.ExitSharedAccess();
 
+        // Prepare ECS destroy operations: create component-level tombstone revisions BEFORE CommitComponentCore so it can handle index removal,
+        // WAL, and cleanup.
+        PrepareEcsDestroys();
+
         _dbe.LogCommitPhase(TSN, "CommitComponentCore");
 
-        // Process every Component Type and their components
+        // Process every Component Type and their components (old CRUD path — Versioned only)
         var commitAction = new CommitAction { Tx = this };
         foreach (var kvp in _componentInfos)
         {
-            context.Info = kvp.Value;
             var info = kvp.Value;
+
+            // Skip non-Versioned components — the old CRUD commit path only applies to Versioned.
+            // SV/Transient components in _componentInfos were added by the ECS path (Spawn/Read/Write)
+            // and don't have old CRUD mutations to commit.
+            if (info.ComponentTable.StorageMode != StorageMode.Versioned)
+            {
+                continue;
+            }
+
+            context.Info = info;
             _dbe.LogCommitComponentEntries(TSN, kvp.Key.Name, info.EntryCount);
 
             // Start a sub-span for this component type
@@ -1970,19 +1499,16 @@ public unsafe class Transaction : IDisposable
 
             // Hoist accessor creation for batch index maintenance
             var indexedFieldInfos = info.ComponentTable.IndexedFieldInfos;
-            _batchIndexAccessors = new ChunkAccessor[indexedFieldInfos.Length];
+            _batchIndexAccessors = new ChunkAccessor<PersistentStore>[indexedFieldInfos.Length];
             for (int i = 0; i < indexedFieldInfos.Length; i++)
             {
-                _batchIndexAccessors[i] = indexedFieldInfos[i].Index.Segment.CreateChunkAccessor(_changeSet);
+                _batchIndexAccessors[i] = indexedFieldInfos[i].PersistentIndex.Segment.CreateChunkAccessor(_changeSet);
             }
-            _batchPkAccessor = info.PrimaryKeyIndex.Segment.CreateChunkAccessor(_changeSet);
             var tailVSBS = info.ComponentTable.TailVSBS;
-            _batchTailAccessor = tailVSBS != null
-                ? tailVSBS.Segment.CreateChunkAccessor(_changeSet)
-                : default;
+            _batchTailAccessor = tailVSBS != null ? tailVSBS.Segment.CreateChunkAccessor(_changeSet) : default;
             _batchIndexActive = true;
             _batchEntityCount = 0;
-            ChunkBasedSegment.EnterBatchMode();
+            ChunkBasedSegment<PersistentStore>.EnterBatchMode();
 
             try
             {
@@ -1991,13 +1517,12 @@ public unsafe class Transaction : IDisposable
             finally
             {
                 // Exit batch mode + dispose hoisted accessors
-                ChunkBasedSegment.ExitBatchMode();
+                ChunkBasedSegment<PersistentStore>.ExitBatchMode();
                 _batchIndexActive = false;
                 for (int i = 0; i < _batchIndexAccessors.Length; i++)
                 {
                     _batchIndexAccessors[i].Dispose();
                 }
-                _batchPkAccessor.Dispose();
                 if (tailVSBS != null)
                 {
                     _batchTailAccessor.Dispose();
@@ -2017,6 +1542,10 @@ public unsafe class Transaction : IDisposable
             _dbe.DeferredCleanupManager.EnqueueBatch(context.TailTSN, _deferredEnqueueBatch);
             _deferredEnqueueBatch.Clear();
         }
+
+        // Flush ECS pending operations (spawns, destroys, enable/disable)
+        _dbe.LogCommitPhase(TSN, "EcsFlush");
+        FlushEcsPendingOperations();
 
         // Check if any conflicts were detected during the commit loop
         if (conflictSolver is { HasConflict: true })

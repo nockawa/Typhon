@@ -66,15 +66,15 @@ internal sealed class BTreeBenchmarkHelper : IDisposable
     }
 
     /// <summary>
-    /// Allocate a ChunkBasedSegment for the given chunk type.
+    /// Allocate a ChunkBasedSegment<PersistentStore> for the given chunk type.
     /// </summary>
-    public unsafe ChunkBasedSegment AllocateSegment<TChunk>(int pageCount = 500) where TChunk : unmanaged
+    public unsafe ChunkBasedSegment<PersistentStore> AllocateSegment<TChunk>(int pageCount = 500) where TChunk : unmanaged
         => Pmmf.AllocateChunkBasedSegment(PageBlockType.None, pageCount, sizeof(TChunk));
 
     /// <summary>
-    /// Pre-fill a LongSingleBTree with sequential keys [1..count].
+    /// Pre-fill a LongSingleBTree<PersistentStore> with sequential keys [1..count].
     /// </summary>
-    public static void PreFillLong(LongSingleBTree tree, ChunkBasedSegment segment, int count)
+    public static void PreFillLong(LongSingleBTree<PersistentStore> tree, ChunkBasedSegment<PersistentStore> segment, int count)
     {
         var accessor = segment.CreateChunkAccessor();
         for (int i = 1; i <= count; i++)
@@ -85,9 +85,9 @@ internal sealed class BTreeBenchmarkHelper : IDisposable
     }
 
     /// <summary>
-    /// Pre-fill an IntSingleBTree with sequential keys [1..count].
+    /// Pre-fill an IntSingleBTree<PersistentStore> with sequential keys [1..count].
     /// </summary>
-    public static void PreFillInt(IntSingleBTree tree, ChunkBasedSegment segment, int count)
+    public static void PreFillInt(IntSingleBTree<PersistentStore> tree, ChunkBasedSegment<PersistentStore> segment, int count)
     {
         var accessor = segment.CreateChunkAccessor();
         for (int i = 1; i <= count; i++)
@@ -98,9 +98,9 @@ internal sealed class BTreeBenchmarkHelper : IDisposable
     }
 
     /// <summary>
-    /// Pre-fill a ShortSingleBTree with sequential keys [1..count].
+    /// Pre-fill a ShortSingleBTree<PersistentStore> with sequential keys [1..count].
     /// </summary>
-    public static void PreFillShort(ShortSingleBTree tree, ChunkBasedSegment segment, int count)
+    public static void PreFillShort(ShortSingleBTree<PersistentStore> tree, ChunkBasedSegment<PersistentStore> segment, int count)
     {
         var accessor = segment.CreateChunkAccessor();
         for (short i = 1; i <= count; i++)
@@ -111,9 +111,9 @@ internal sealed class BTreeBenchmarkHelper : IDisposable
     }
 
     /// <summary>
-    /// Pre-fill a String64SingleBTree with keys "key_00001".."key_NNNNN".
+    /// Pre-fill a String64SingleBTree<PersistentStore> with keys "key_00001".."key_NNNNN".
     /// </summary>
-    public static void PreFillString64(String64SingleBTree tree, ChunkBasedSegment segment, int count)
+    public static void PreFillString64(String64SingleBTree<PersistentStore> tree, ChunkBasedSegment<PersistentStore> segment, int count)
     {
         var accessor = segment.CreateChunkAccessor();
         for (int i = 1; i <= count; i++)
@@ -124,9 +124,9 @@ internal sealed class BTreeBenchmarkHelper : IDisposable
     }
 
     /// <summary>
-    /// Pre-fill an IntMultipleBTree with sequential keys, each key getting one value.
+    /// Pre-fill an IntMultipleBTree<PersistentStore> with sequential keys, each key getting one value.
     /// </summary>
-    public static void PreFillIntMultiple(IntMultipleBTree tree, ChunkBasedSegment segment, int count)
+    public static void PreFillIntMultiple(IntMultipleBTree<PersistentStore> tree, ChunkBasedSegment<PersistentStore> segment, int count)
     {
         var accessor = segment.CreateChunkAccessor();
         for (int i = 1; i <= count; i++)

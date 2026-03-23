@@ -41,6 +41,65 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
         _fkFieldOffset = fkFieldOffset;
     }
 
+    /// <summary>
+    /// Populates the initial entity set by scanning all archetype EntityMaps that contain TSource.
+    /// For each visible source entity, evaluates the full predicate (source fields + FK → target fields).
+    /// </summary>
+    internal void PopulateFromEntityMaps(Transaction tx)
+    {
+        var sourceTypeId = ArchetypeRegistry.GetComponentTypeId<TSource>();
+        foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
+        {
+            if (!meta.TryGetSlot(sourceTypeId, out _))
+            {
+                continue;
+            }
+
+            var engineState = _sourceTable.DBE._archetypeStates[meta.ArchetypeId];
+            if (engineState?.EntityMap == null)
+            {
+                continue;
+            }
+
+            using var scanGuard = EpochGuard.Enter(_sourceTable.DBE.EpochManager);
+            var accessor = engineState.EntityMap.Segment.CreateChunkAccessor();
+            var collector = new SourceCollector
+            {
+                ArchetypeId = meta.ArchetypeId,
+                View = this,
+                Tx = tx,
+            };
+            engineState.EntityMap.ForEachEntry(ref accessor, ref collector);
+            accessor.Dispose();
+        }
+    }
+
+    private struct SourceCollector : RawValueHashMap<long, PersistentStore>.IEntryAction<long>
+    {
+        public ushort ArchetypeId;
+        public NavigationView<TSource, TTarget> View;
+        public Transaction Tx;
+
+        public bool Process(long key, byte* value)
+        {
+            ref var header = ref EntityRecordAccessor.GetHeader(value);
+            if (!header.IsVisibleAt(Tx.TSN))
+            {
+                return true;
+            }
+
+            var entityId = new EntityId(key, ArchetypeId);
+            var sourcePK = (long)entityId.RawValue;
+
+            if (View.EvaluateFullPredicate(sourcePK, Tx))
+            {
+                View.AddEntityDirect(sourcePK);
+            }
+
+            return true;
+        }
+    }
+
     protected override void DeregisterFromRegistries()
     {
         _sourceTable.ViewRegistry.DeregisterView(this);
@@ -79,7 +138,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
             if (fieldIndex == _fkFieldIndex)
             {
                 // FK field changed — forward navigation
-                ProcessFKChange(ref entry, isCreation, isDeletion, tx);
+                ProcessFKChange(ref entry, isDeletion, tx);
             }
             else
             {
@@ -98,7 +157,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
     /// Handles FK field changes on a source entity. The entity now points to a different target.
     /// BeforeKey/AfterKey contain the old/new target PKs (as long values in KeyBytes8).
     /// </summary>
-    private void ProcessFKChange(ref ViewDeltaEntry entry, bool isCreation, bool isDeletion, Transaction tx)
+    private void ProcessFKChange(ref ViewDeltaEntry entry, bool isDeletion, Transaction tx)
     {
         var sourcePK = entry.EntityPK;
         var wasInView = _entityIds.Contains(sourcePK);
@@ -188,7 +247,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
             // But if target is still qualifying, mark affected sources as Modified
             if (targetIsIn)
             {
-                MarkSourcesModified(targetPK, tx);
+                MarkSourcesModified(targetPK);
             }
             return;
         }
@@ -202,7 +261,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
     /// </summary>
     private bool EvaluateFullPredicate(long sourcePK, Transaction tx)
     {
-        if (!tx.ReadEntity<TSource>(sourcePK, out var sourceComp))
+        if (!tx.QueryRead<TSource>(sourcePK, out var sourceComp))
         {
             return false;
         }
@@ -226,7 +285,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
         }
 
         // Read and evaluate target
-        if (!tx.ReadEntity<TTarget>(fkValue, out var targetComp))
+        if (!tx.QueryRead<TTarget>(fkValue, out var targetComp))
         {
             return false;
         }
@@ -255,7 +314,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
     /// </summary>
     private bool CheckOtherSourceFieldsAndTarget(long sourcePK, int changedFieldIndex, Transaction tx)
     {
-        if (!tx.ReadEntity<TSource>(sourcePK, out var sourceComp))
+        if (!tx.QueryRead<TSource>(sourcePK, out var sourceComp))
         {
             return false;
         }
@@ -283,7 +342,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
             return false;
         }
 
-        if (!tx.ReadEntity<TTarget>(fkValue, out var targetComp))
+        if (!tx.QueryRead<TTarget>(fkValue, out var targetComp))
         {
             return false;
         }
@@ -316,7 +375,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
             return true;
         }
 
-        if (!tx.ReadEntity<TTarget>(targetPK, out var targetComp))
+        if (!tx.QueryRead<TTarget>(targetPK, out var targetComp))
         {
             return false;
         }
@@ -339,7 +398,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
     /// </summary>
     private bool EvaluateSourcePredicates(long sourcePK, Transaction tx)
     {
-        if (!tx.ReadEntity<TSource>(sourcePK, out var sourceComp))
+        if (!tx.QueryRead<TSource>(sourcePK, out var sourceComp))
         {
             return false;
         }
@@ -367,7 +426,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
         bool targetPasses = EvaluateTargetPredicates(targetPK, tx);
 
         var fkIndexInfo = PipelineExecutor.FindFKIndex(_sourceTable, _fkFieldOffset);
-        var fkIndex = (BTree<long>)fkIndexInfo.Index;
+        var fkIndex = (BTree<long, PersistentStore>)fkIndexInfo.Index;
         var compRevAccessor = _sourceTable.CompRevTableSegment.CreateChunkAccessor();
 
         try
@@ -406,10 +465,10 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
     /// <summary>
     /// Marks all source entities pointing to a target as Modified (target field changed but didn't cross boundary).
     /// </summary>
-    private void MarkSourcesModified(long targetPK, Transaction tx)
+    private void MarkSourcesModified(long targetPK)
     {
         var fkIndexInfo = PipelineExecutor.FindFKIndex(_sourceTable, _fkFieldOffset);
-        var fkIndex = (BTree<long>)fkIndexInfo.Index;
+        var fkIndex = (BTree<long, PersistentStore>)fkIndexInfo.Index;
         var compRevAccessor = _sourceTable.CompRevTableSegment.CreateChunkAccessor();
 
         try
@@ -453,10 +512,6 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
         DeltaBuffer.Reset(tx.TSN);
 
         _entityIds.Clear();
-
-        // Re-execute full navigation pipeline
-        PipelineExecutor.Instance.ExecuteNavigationSourceFirst<TSource, TTarget>(_sourceEvaluators, _targetEvaluators, _sourceTable, _targetTable,
-            _fkFieldOffset, tx, _entityIds);
 
         DrainBufferAfterRefreshFull(tx.TSN);
         ComputeRefreshFullDeltas(oldEntities);

@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 namespace Typhon.Engine.Tests;
 
 [TestFixture]
+[NonParallelizable]
 public class OlcBTreeTests
 {
     private IServiceProvider _serviceProvider;
@@ -50,7 +51,7 @@ public class OlcBTreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             // Insert known values
             for (int i = 1; i <= 100; i++)
@@ -94,7 +95,7 @@ public class OlcBTreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             for (int i = 1; i <= entryCount; i++)
             {
@@ -159,7 +160,7 @@ public class OlcBTreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             // Populate initial entries (keys 1..100, values key*10)
             for (int i = 1; i <= initialEntries; i++)
@@ -252,7 +253,7 @@ public class OlcBTreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             var result = tree.TryGet(42, ref accessor);
             Assert.That(result.IsFailure, Is.True);
@@ -284,7 +285,7 @@ public class OlcBTreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
             accessor.Dispose();
 
             using var barrier = new Barrier(threadCount);
@@ -385,7 +386,7 @@ public class OlcBTreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
             accessor.Dispose();
 
             using var barrier = new Barrier(threadCount);
@@ -460,7 +461,7 @@ public class OlcBTreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
             accessor.Dispose();
 
             using var barrier = new Barrier(threadCount);
@@ -525,7 +526,7 @@ public class OlcBTreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             // Populate initial entries
             for (int i = 1; i <= initialEntries; i++)
@@ -631,7 +632,7 @@ public class OlcBTreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             // Populate tree with all keys
             for (int i = 1; i <= totalKeys; i++)
@@ -702,7 +703,7 @@ public class OlcBTreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             // Fill tree with many keys to create a multi-level tree
             for (int i = 1; i <= totalKeys; i++)
@@ -784,7 +785,7 @@ public class OlcBTreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             // Populate initial entries
             for (int i = 1; i <= initialEntries; i++)
@@ -898,7 +899,7 @@ public class OlcBTreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             for (int i = 1; i <= totalKeys; i++)
             {
@@ -995,7 +996,7 @@ public class OlcBTreeTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
 
-        IntSingleBTree tree;
+        IntSingleBTree<PersistentStore> tree;
         int allocatedBefore;
 
         // Phase 1: Build tree with 600 keys (multi-leaf, depth >= 2) in its own epoch scope.
@@ -1003,7 +1004,7 @@ public class OlcBTreeTests
         {
             var depth = epochManager.EnterScope();
             var accessor = segment.CreateChunkAccessor();
-            tree = new IntSingleBTree(segment);
+            tree = new IntSingleBTree<PersistentStore>(segment);
             for (int i = 0; i < 600; i++)
             {
                 tree.Add(i, i * 10, ref accessor);
@@ -1071,7 +1072,7 @@ public class OlcBTreeTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
 
-        IntSingleBTree tree;
+        IntSingleBTree<PersistentStore> tree;
         int allocatedBefore;
 
         // Phase 1: Build tree in its own epoch scope (exiting advances global epoch).
@@ -1079,7 +1080,7 @@ public class OlcBTreeTests
         {
             var setupDepth = epochManager.EnterScope();
             var accessor = segment.CreateChunkAccessor();
-            tree = new IntSingleBTree(segment);
+            tree = new IntSingleBTree<PersistentStore>(segment);
             for (int i = 0; i < 500; i++)
             {
                 tree.Add(i, i * 10, ref accessor);
@@ -1149,14 +1150,14 @@ public class OlcBTreeTests
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, sizeof(Index32Chunk));
 
-        IntSingleBTree tree;
+        IntSingleBTree<PersistentStore> tree;
         int baselineAllocated;
 
         // Build initial tree
         {
             var depth = epochManager.EnterScope();
             var accessor = segment.CreateChunkAccessor();
-            tree = new IntSingleBTree(segment);
+            tree = new IntSingleBTree<PersistentStore>(segment);
             for (int i = 0; i < 100; i++)
             {
                 tree.Add(i, i * 10, ref accessor);
@@ -1238,7 +1239,7 @@ public class OlcBTreeTests
         var depth = epochManager.EnterScope();
 
         var accessor = segment.CreateChunkAccessor();
-        var tree = new IntSingleBTree(segment);
+        var tree = new IntSingleBTree<PersistentStore>(segment);
 
         // Insert keys 1-10 — all fit in root leaf (capacity=13), so move is same-leaf
         for (int i = 1; i <= 10; i++)
@@ -1275,7 +1276,7 @@ public class OlcBTreeTests
         var depth = epochManager.EnterScope();
 
         var accessor = segment.CreateChunkAccessor();
-        var tree = new IntSingleBTree(segment);
+        var tree = new IntSingleBTree<PersistentStore>(segment);
 
         // Insert enough keys to force multiple leaves (capacity=13, need >13 keys)
         for (int i = 1; i <= 50; i++)
@@ -1311,7 +1312,7 @@ public class OlcBTreeTests
         var depth = epochManager.EnterScope();
 
         var accessor = segment.CreateChunkAccessor();
-        var tree = new IntSingleBTree(segment);
+        var tree = new IntSingleBTree<PersistentStore>(segment);
 
         for (int i = 1; i <= 10; i++)
         {
@@ -1337,7 +1338,7 @@ public class OlcBTreeTests
         var depth = epochManager.EnterScope();
 
         var accessor = segment.CreateChunkAccessor();
-        var tree = new IntSingleBTree(segment);
+        var tree = new IntSingleBTree<PersistentStore>(segment);
 
         for (int i = 1; i <= 10; i++)
         {
@@ -1367,7 +1368,7 @@ public class OlcBTreeTests
 
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             // Insert enough keys to fill multiple leaves
             for (int i = 1; i <= 50; i++)
@@ -1438,7 +1439,7 @@ public class OlcBTreeTests
         var depth = epochManager.EnterScope();
 
         var accessor = segment.CreateChunkAccessor();
-        var tree = new IntMultipleBTree(segment);
+        var tree = new IntMultipleBTree<PersistentStore>(segment);
 
         // Add multiple values under key 1 and key 2
         var eid0 = tree.Add(1, 10, ref accessor);
@@ -1480,7 +1481,7 @@ public class OlcBTreeTests
         var depth = epochManager.EnterScope();
 
         var accessor = segment.CreateChunkAccessor();
-        var tree = new IntMultipleBTree(segment);
+        var tree = new IntMultipleBTree<PersistentStore>(segment);
 
         // Add 2 values under key 1
         var eid0 = tree.Add(1, 10, ref accessor);
@@ -1516,7 +1517,7 @@ public class OlcBTreeTests
         var depth = epochManager.EnterScope();
 
         var accessor = segment.CreateChunkAccessor();
-        var tree = new IntMultipleBTree(segment);
+        var tree = new IntMultipleBTree<PersistentStore>(segment);
 
         // Add single value under key 1
         var eid0 = tree.Add(1, 10, ref accessor);
@@ -1557,7 +1558,7 @@ public class OlcBTreeTests
         var depth = epochManager.EnterScope();
 
         var accessor = segment.CreateChunkAccessor();
-        var tree = new IntMultipleBTree(segment);
+        var tree = new IntMultipleBTree<PersistentStore>(segment);
 
         tree.Add(1, 10, ref accessor);
 
@@ -1582,7 +1583,7 @@ public class OlcBTreeTests
         var depth = epochManager.EnterScope();
 
         var accessor = segment.CreateChunkAccessor();
-        var tree = new IntMultipleBTree(segment);
+        var tree = new IntMultipleBTree<PersistentStore>(segment);
 
         // Insert enough distinct keys to force multiple leaves
         // capacity=13 for L32, so 20+ keys should split
@@ -1632,7 +1633,7 @@ public class OlcBTreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             // Insert enough items to span multiple leaves
             const int count = 200;
@@ -1676,7 +1677,7 @@ public class OlcBTreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             // Pre-populate with 100 entries
             for (int i = 0; i < 100; i++)
@@ -1747,7 +1748,7 @@ public class OlcBTreeTests
         try
         {
             var accessor = segment.CreateChunkAccessor();
-            var tree = new IntSingleBTree(segment);
+            var tree = new IntSingleBTree<PersistentStore>(segment);
 
             // Pre-populate
             for (int i = 0; i < 50; i++)

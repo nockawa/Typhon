@@ -11,6 +11,12 @@ namespace Typhon.Engine.Tests;
 
 class UowRegistryTests : TestBase<UowRegistryTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompAArch>.Touch();
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // Allocation Tests
     // ═══════════════════════════════════════════════════════════════
@@ -540,6 +546,7 @@ class UowRegistryTests : TestBase<UowRegistryTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var initialActive = dbe.UowRegistry.ActiveCount;
 
@@ -549,7 +556,7 @@ class UowRegistryTests : TestBase<UowRegistryTests>
 
             using var tx = uow.CreateTransaction();
             var comp = new CompA(42);
-            tx.CreateEntity(ref comp);
+            tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             tx.Commit();
         }
 

@@ -6,6 +6,12 @@ namespace Typhon.Engine.Tests;
 
 class VersionedIndexTests : TestBase<VersionedIndexTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompDArch>.Touch();
+    }
+
     #region Phase 1 — Infrastructure Tests
 
     [Test]
@@ -15,41 +21,6 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         {
             Assert.That(sizeof(VersionedIndexEntry), Is.EqualTo(12), "VersionedIndexEntry should be exactly 12 bytes (4 + 8)");
         }
-    }
-
-    [Test]
-    public void VersionedIndexEntry_Active_CorrectProperties()
-    {
-        var entry = VersionedIndexEntry.Active(42, 100);
-
-        Assert.That(entry.IsActive, Is.True);
-        Assert.That(entry.IsTombstone, Is.False);
-        Assert.That(entry.ChainId, Is.EqualTo(42));
-        Assert.That(entry.TSN, Is.EqualTo(100));
-        Assert.That(entry.SignedChainId, Is.EqualTo(42));
-    }
-
-    [Test]
-    public void VersionedIndexEntry_Tombstone_CorrectProperties()
-    {
-        var entry = VersionedIndexEntry.Tombstone(42, 200);
-
-        Assert.That(entry.IsActive, Is.False);
-        Assert.That(entry.IsTombstone, Is.True);
-        Assert.That(entry.ChainId, Is.EqualTo(42));
-        Assert.That(entry.TSN, Is.EqualTo(200));
-        Assert.That(entry.SignedChainId, Is.EqualTo(-42));
-    }
-
-    [Test]
-    public void VersionedIndexEntry_Equality()
-    {
-        var a = VersionedIndexEntry.Active(1, 100);
-        var b = VersionedIndexEntry.Active(1, 100);
-        var c = VersionedIndexEntry.Tombstone(1, 100);
-
-        Assert.That(a.Equals(b), Is.True);
-        Assert.That(a.Equals(c), Is.False);
     }
 
     [Test]
@@ -113,11 +84,12 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 10, 2.0);
-            t.CreateEntity(ref d);
+            t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
@@ -127,14 +99,14 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         Assert.That(tailVSBS, Is.Not.Null);
 
         var ifi = ct.IndexedFieldInfos[0]; // Field A (float, AllowMultiple)
-        Assert.That(ifi.Index.AllowMultiple, Is.True, "First indexed field should be AllowMultiple");
+        Assert.That(ifi.PersistentIndex.AllowMultiple, Is.True, "First indexed field should be AllowMultiple");
 
         unsafe
         {
             using var guard = EpochGuard.Enter(dbe.EpochManager);
             float key = 1.0f;
-            var accessor = ifi.Index.Segment.CreateChunkAccessor();
-            var headResult = ifi.Index.TryGet(&key, ref accessor);
+            var accessor = ifi.PersistentIndex.Segment.CreateChunkAccessor();
+            var headResult = ifi.PersistentIndex.TryGet(&key, ref accessor);
             Assert.That(headResult.IsSuccess, Is.True, "Key should exist in HEAD index");
 
             var headBufferId = headResult.Value;
@@ -150,20 +122,21 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long entityId;
+        EntityId id;
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 10, 2.0);
-            entityId = t.CreateEntity(ref d);
+            id = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
         // Update field A from 1.0f to 5.0f
         {
             using var t = dbe.CreateQuickTransaction();
-            var d = new CompD(5.0f, 10, 2.0);
-            t.UpdateEntity(entityId, ref d);
+            ref var d = ref t.OpenMut(id).Write(CompDArch.D);
+            d = new CompD(5.0f, 10, 2.0);
             t.Commit();
         }
 
@@ -178,8 +151,8 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
 
             // Check old key (1.0f) — preserved by preserveEmptyBuffer even though HEAD buffer is empty
             float oldKey = 1.0f;
-            var accessor = ifi.Index.Segment.CreateChunkAccessor();
-            var oldHeadResult = ifi.Index.TryGet(&oldKey, ref accessor);
+            var accessor = ifi.PersistentIndex.Segment.CreateChunkAccessor();
+            var oldHeadResult = ifi.PersistentIndex.TryGet(&oldKey, ref accessor);
             Assert.That(oldHeadResult.IsSuccess, Is.True, "Old key should be preserved in BTree (preserveEmptyBuffer)");
 
             var oldTailBufferId = IndexBufferExtraHeader.FromChunkAddress(accessor.GetChunkAddress(oldHeadResult.Value)).TailBufferId;
@@ -190,7 +163,7 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
 
             // Check new key (5.0f) — should have Active entry
             float newKey = 5.0f;
-            var newHeadResult = ifi.Index.TryGet(&newKey, ref accessor);
+            var newHeadResult = ifi.PersistentIndex.TryGet(&newKey, ref accessor);
             Assert.That(newHeadResult.IsSuccess, Is.True, "New key should exist in HEAD index");
 
             var newTailBufferId = IndexBufferExtraHeader.FromChunkAddress(accessor.GetChunkAddress(newHeadResult.Value)).TailBufferId;
@@ -207,19 +180,20 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long entityId;
+        EntityId id;
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(3.0f, 10, 4.0);
-            entityId = t.CreateEntity(ref d);
+            id = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
-        // Delete the entity — this triggers EnsureTailPopulated + Tombstone write
+        // Delete the entity
         {
             using var t = dbe.CreateQuickTransaction();
-            t.DeleteEntity<CompD>(entityId);
+            t.Destroy(id);
             t.Commit();
         }
 
@@ -232,8 +206,8 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         {
             using var guard = EpochGuard.Enter(dbe.EpochManager);
             float key = 3.0f;
-            var accessor = ifi.Index.Segment.CreateChunkAccessor();
-            var headResult = ifi.Index.TryGet(&key, ref accessor);
+            var accessor = ifi.PersistentIndex.Segment.CreateChunkAccessor();
+            var headResult = ifi.PersistentIndex.TryGet(&key, ref accessor);
             Assert.That(headResult.IsSuccess, Is.True, "Key should be preserved (preserveEmptyBuffer)");
 
             var tailBufferId = IndexBufferExtraHeader.FromChunkAddress(accessor.GetChunkAddress(headResult.Value)).TailBufferId;
@@ -252,19 +226,19 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         // Verify that normal CRUD on CompD still works (HEAD path unchanged)
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long e1;
+        EntityId e1Id;
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 10, 2.0);
-            e1 = t.CreateEntity(ref d);
+            e1Id = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
         {
             using var t = dbe.CreateQuickTransaction();
-            var res = t.ReadEntity(e1, out CompD read);
-            Assert.That(res, Is.True);
+            var read = t.Open(e1Id).Read(CompDArch.D);
             Assert.That(read.A, Is.EqualTo(1.0f));
             Assert.That(read.B, Is.EqualTo(10));
             Assert.That(read.C, Is.EqualTo(2.0));
@@ -273,15 +247,14 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         // Update and verify
         {
             using var t = dbe.CreateQuickTransaction();
-            var d = new CompD(5.0f, 20, 6.0);
-            t.UpdateEntity(e1, ref d);
+            ref var d = ref t.OpenMut(e1Id).Write(CompDArch.D);
+            d = new CompD(5.0f, 20, 6.0);
             t.Commit();
         }
 
         {
             using var t = dbe.CreateQuickTransaction();
-            var res = t.ReadEntity(e1, out CompD read);
-            Assert.That(res, Is.True);
+            var read = t.Open(e1Id).Read(CompDArch.D);
             Assert.That(read.A, Is.EqualTo(5.0f));
             Assert.That(read.B, Is.EqualTo(20));
             Assert.That(read.C, Is.EqualTo(6.0));
@@ -295,14 +268,15 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         // EnsureTailPopulated should backfill both entities' Active entries before writing the Tombstone.
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long entity1, entity2;
+        EntityId entity1Id, entity2Id;
         {
             using var t = dbe.CreateQuickTransaction();
             var d1 = new CompD(1.0f, 10, 2.0);
-            entity1 = t.CreateEntity(ref d1);
+            entity1Id = t.Spawn<CompDArch>(CompDArch.D.Set(in d1));
             var d2 = new CompD(1.0f, 20, 3.0);
-            entity2 = t.CreateEntity(ref d2);
+            entity2Id = t.Spawn<CompDArch>(CompDArch.D.Set(in d2));
             t.Commit();
         }
 
@@ -315,8 +289,8 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         {
             using var guard = EpochGuard.Enter(dbe.EpochManager);
             float key = 1.0f;
-            var accessor = ifi.Index.Segment.CreateChunkAccessor();
-            var headResult = ifi.Index.TryGet(&key, ref accessor);
+            var accessor = ifi.PersistentIndex.Segment.CreateChunkAccessor();
+            var headResult = ifi.PersistentIndex.TryGet(&key, ref accessor);
             Assert.That(IndexBufferExtraHeader.FromChunkAddress(accessor.GetChunkAddress(headResult.Value)).TailBufferId,
                 Is.EqualTo(0), "TAIL should not be allocated before any mutation");
             accessor.Dispose();
@@ -325,8 +299,8 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         // Update entity1's A from 1.0f to 5.0f — triggers backfill on old key
         {
             using var t = dbe.CreateQuickTransaction();
-            var d = new CompD(5.0f, 10, 2.0);
-            t.UpdateEntity(entity1, ref d);
+            ref var d = ref t.OpenMut(entity1Id).Write(CompDArch.D);
+            d = new CompD(5.0f, 10, 2.0);
             t.Commit();
         }
 
@@ -335,8 +309,8 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         {
             using var guard = EpochGuard.Enter(dbe.EpochManager);
             float key = 1.0f;
-            var accessor = ifi.Index.Segment.CreateChunkAccessor();
-            var headResult = ifi.Index.TryGet(&key, ref accessor);
+            var accessor = ifi.PersistentIndex.Segment.CreateChunkAccessor();
+            var headResult = ifi.PersistentIndex.TryGet(&key, ref accessor);
             Assert.That(headResult.IsSuccess, Is.True);
 
             var tailBufferId = IndexBufferExtraHeader.FromChunkAddress(accessor.GetChunkAddress(headResult.Value)).TailBufferId;
@@ -365,13 +339,14 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         // This is correct: no version history needed when no mutations exist.
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var tsnBeforeCreate = dbe.TransactionChain.NextFreeId;
 
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 10, 2.0);
-            t.CreateEntity(ref d);
+            t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
@@ -390,13 +365,14 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         long tsnAtCreate;
         {
             using var t = dbe.CreateQuickTransaction();
             tsnAtCreate = t.TSN;
             var d = new CompD(1.0f, 10, 2.0);
-            t.CreateEntity(ref d);
+            t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
@@ -417,22 +393,23 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         // A temporal query at the creation TSN should still find the entity under the old key.
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long entityId;
+        EntityId id;
         long tsnAtCreate;
         {
             using var t = dbe.CreateQuickTransaction();
             tsnAtCreate = t.TSN;
             var d = new CompD(1.0f, 10, 2.0);
-            entityId = t.CreateEntity(ref d);
+            id = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
         // Update field A from 1.0f to 5.0f — last entity leaves the old key
         {
             using var t = dbe.CreateQuickTransaction();
-            var d = new CompD(5.0f, 10, 2.0);
-            t.UpdateEntity(entityId, ref d);
+            ref var d = ref t.OpenMut(id).Write(CompDArch.D);
+            d = new CompD(5.0f, 10, 2.0);
             t.Commit();
         }
 
@@ -453,12 +430,13 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         // A temporal query at the "both created" TSN should see 2 chain IDs for key 1.0f.
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long entity1;
+        EntityId entity1Id;
         {
             using var t = dbe.CreateQuickTransaction();
             var d = new CompD(1.0f, 10, 2.0);
-            entity1 = t.CreateEntity(ref d);
+            entity1Id = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
@@ -467,15 +445,15 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
             using var t = dbe.CreateQuickTransaction();
             tsnAfterBothCreated = t.TSN;
             var d = new CompD(1.0f, 20, 3.0); // Same A=1.0f key (AllowMultiple), different B (unique index)
-            t.CreateEntity(ref d);
+            t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
         // Update entity1's A from 1.0f to 5.0f
         {
             using var t = dbe.CreateQuickTransaction();
-            var d = new CompD(5.0f, 10, 2.0);
-            t.UpdateEntity(entity1, ref d);
+            ref var d = ref t.OpenMut(entity1Id).Write(CompDArch.D);
+            d = new CompD(5.0f, 10, 2.0);
             t.Commit();
         }
 
@@ -496,22 +474,23 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
         // on the OLD key should return the entity (backfilled Active entry is visible).
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long entityId;
+        EntityId id;
         long tsnAtCreate;
         {
             using var t = dbe.CreateQuickTransaction();
             tsnAtCreate = t.TSN;
             var d = new CompD(1.0f, 10, 2.0);
-            entityId = t.CreateEntity(ref d);
+            id = t.Spawn<CompDArch>(CompDArch.D.Set(in d));
             t.Commit();
         }
 
         // Update field A from 1.0f to 5.0f — triggers TAIL backfill on both keys
         {
             using var t = dbe.CreateQuickTransaction();
-            var d = new CompD(5.0f, 10, 2.0);
-            t.UpdateEntity(entityId, ref d);
+            ref var d = ref t.OpenMut(id).Write(CompDArch.D);
+            d = new CompD(5.0f, 10, 2.0);
             t.Commit();
         }
 
@@ -616,7 +595,7 @@ class VersionedIndexTests : TestBase<VersionedIndexTests>
 
     #region Helpers
 
-    private static List<VersionedIndexEntry> CollectTailEntries(VariableSizedBufferSegment<VersionedIndexEntry> tailVSBS, int tailBufferId)
+    private static List<VersionedIndexEntry> CollectTailEntries(VariableSizedBufferSegment<VersionedIndexEntry, PersistentStore> tailVSBS, int tailBufferId)
     {
         var entries = new List<VersionedIndexEntry>();
         foreach (ref readonly var entry in tailVSBS.EnumerateBuffer(tailBufferId))

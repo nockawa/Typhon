@@ -40,8 +40,18 @@ public class DBComponentDefinition
         return field.FieldId;
     }
 
+    public StorageMode StorageMode { get; internal set; }
+
     public int ComponentStorageSize { get; private set; }
-    public int ComponentStorageOverhead => MultipleIndicesCount * sizeof(int);
+
+    /// <summary>
+    /// Size of the inline entityPK in the chunk overhead (8 bytes for SV/Transient with indexed fields, 0 otherwise).
+    /// Non-versioned index values are chunkIds — the entityPK must be stored inline to enable index-based entity resolution
+    /// without the CompRevTable that Versioned components use.
+    /// </summary>
+    public int EntityPKOverheadSize => (StorageMode != StorageMode.Versioned && IndicesCount > 0) ? sizeof(long) : 0;
+
+    public int ComponentStorageOverhead => EntityPKOverheadSize + MultipleIndicesCount * sizeof(int);
     public int ComponentStorageTotalSize => ComponentStorageSize + ComponentStorageOverhead;
 
     public int IndicesCount { get; private set; }
@@ -117,11 +127,12 @@ public class DBComponentDefinition
         public bool DoesFieldTypeSupportIndex() => (Type >= FieldType.Byte) && ((FieldType)((int)Type&0xFF) <= FieldType.String64);
     }
 
-    internal DBComponentDefinition(string name, int revision, bool allowMultiple)
+    internal DBComponentDefinition(string name, int revision, bool allowMultiple, StorageMode storageMode = StorageMode.Versioned)
     {
         Name = name;
         Revision = revision;
         AllowMultiple = allowMultiple;
+        StorageMode = storageMode;
         _fieldsByName = new Dictionary<string, Field>();
     }
 

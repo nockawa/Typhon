@@ -5,22 +5,27 @@ namespace Typhon.Engine.Tests;
 
 class AdvancedEstimatorTests : TestBase<AdvancedEstimatorTests>
 {
-    private static long CreateAndCommitCompD(DatabaseEngine dbe, float a, int b, double c)
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompDArch>.Touch();
+        Archetype<CompFArch>.Touch();
+    }
+
+    private static void CreateAndCommitCompD(DatabaseEngine dbe, float a, int b, double c)
     {
         using var t = dbe.CreateQuickTransaction();
         var d = new CompD(a, b, c);
-        var pk = t.CreateEntity(ref d);
+        t.Spawn<CompDArch>(CompDArch.D.Set(in d));
         t.Commit();
-        return pk;
     }
 
-    private static long CreateAndCommitCompF(DatabaseEngine dbe, int gold, int rank)
+    private static void CreateAndCommitCompF(DatabaseEngine dbe, int gold, int rank)
     {
         using var t = dbe.CreateQuickTransaction();
         var f = new CompF(gold, rank);
-        var pk = t.CreateEntity(ref f);
+        t.Spawn<CompFArch>(CompFArch.F.Set(in f));
         t.Commit();
-        return pk;
     }
 
     [Test]
@@ -28,6 +33,7 @@ class AdvancedEstimatorTests : TestBase<AdvancedEstimatorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompF>();
         var estimator = AdvancedSelectivityEstimator.Instance;
 
@@ -57,6 +63,7 @@ class AdvancedEstimatorTests : TestBase<AdvancedEstimatorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         var estimator = AdvancedSelectivityEstimator.Instance;
 
@@ -82,6 +89,7 @@ class AdvancedEstimatorTests : TestBase<AdvancedEstimatorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         var estimator = AdvancedSelectivityEstimator.Instance;
 
@@ -98,6 +106,7 @@ class AdvancedEstimatorTests : TestBase<AdvancedEstimatorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         var estimator = AdvancedSelectivityEstimator.Instance;
 
@@ -123,6 +132,7 @@ class AdvancedEstimatorTests : TestBase<AdvancedEstimatorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         var estimator = AdvancedSelectivityEstimator.Instance;
 
@@ -142,6 +152,7 @@ class AdvancedEstimatorTests : TestBase<AdvancedEstimatorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompF>();
         var estimator = AdvancedSelectivityEstimator.Instance;
 
@@ -167,6 +178,7 @@ class AdvancedEstimatorTests : TestBase<AdvancedEstimatorTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
         var ct = dbe.GetComponentTable<CompD>();
         var advanced = AdvancedSelectivityEstimator.Instance;
         var basic = BasicSelectivityEstimator.Instance;

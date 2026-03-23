@@ -27,12 +27,12 @@ public class BaselineScenario : IScenario
             try
             {
                 // Pattern 1: Create entity in one transaction, read in another (unit test pattern)
-                long entityId;
+                EntityId entityId;
                 {
                     using var t = engine.CreateQuickTransaction();
 
                     var building = FactoryBuilding.Create(rand, rand.Next(0, 5));
-                    entityId = t.CreateEntity(ref building);
+                    entityId = t.Spawn<FactoryBuildingArch>(FactoryBuildingArch.Building.Set(in building));
 
                     var committed = t.Commit();
                     if (committed)
@@ -53,32 +53,32 @@ public class BaselineScenario : IScenario
                 {
                     using var t = engine.CreateQuickTransaction();
 
-                    var success = t.ReadEntity<FactoryBuilding>(entityId, out var readBuilding);
-                    if (success)
+                    if (t.TryOpen(entityId, out var entity))
                     {
+                        var readBuilding = entity.Read(FactoryBuildingArch.Building);
                         stats.RecordSuccess((Stopwatch.GetTimestamp() - sw) * 1_000_000 / Stopwatch.Frequency);
+
+                        // Pattern 3: Update the entity
+                        sw = Stopwatch.GetTimestamp();
+                        ref var wb = ref t.OpenMut(entityId).Write(FactoryBuildingArch.Building);
+                        wb.Progress = (readBuilding.Progress + 0.1f) % 1.0f;
+
+                        var committed = t.Commit();
+                        if (committed)
+                        {
+                            stats.RecordCommit();
+                            stats.RecordSuccess((Stopwatch.GetTimestamp() - sw) * 1_000_000 / Stopwatch.Frequency);
+                        }
+                        else
+                        {
+                            stats.RecordRollback();
+                            stats.RecordFailure(new Exception("Update commit returned false"));
+                        }
                     }
                     else
                     {
                         stats.RecordFailure(new Exception($"Failed to read entity {entityId}"));
                         continue;
-                    }
-
-                    // Pattern 3: Update the entity
-                    sw = Stopwatch.GetTimestamp();
-                    readBuilding.Progress = (readBuilding.Progress + 0.1f) % 1.0f;
-                    t.UpdateEntity(entityId, ref readBuilding);
-
-                    var committed = t.Commit();
-                    if (committed)
-                    {
-                        stats.RecordCommit();
-                        stats.RecordSuccess((Stopwatch.GetTimestamp() - sw) * 1_000_000 / Stopwatch.Frequency);
-                    }
-                    else
-                    {
-                        stats.RecordRollback();
-                        stats.RecordFailure(new Exception("Update commit returned false"));
                     }
                 }
             }

@@ -38,8 +38,8 @@ internal class BasicSelectivityEstimator : ISelectivityEstimator
 
         switch (op)
         {
-            case CompareOp.Equal:               return ExactEqualityCount(index, threshold);
-            case CompareOp.NotEqual:            return Math.Max(0, total - ExactEqualityCount(index, threshold));
+            case CompareOp.Equal:               return ExactEqualityCountDispatch(stats.Index, threshold);
+            case CompareOp.NotEqual:            return Math.Max(0, total - ExactEqualityCountDispatch(stats.Index, threshold));
             case CompareOp.GreaterThan:         return EstimateUniformRange(total, min, max, threshold + 1, max, keyType);
             case CompareOp.GreaterThanOrEqual:  return EstimateUniformRange(total, min, max, threshold, max, keyType);
             case CompareOp.LessThan:            return EstimateUniformRange(total, min, max, min, threshold - 1, keyType);
@@ -53,9 +53,19 @@ internal class BasicSelectivityEstimator : ISelectivityEstimator
     /// For unique indexes: 0 or 1. For multi-value indexes: the buffer's TotalCount.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static unsafe long ExactEqualityCount(BTreeBase index, long key)
+    private static long ExactEqualityCountDispatch(IBTreeIndex index, long key)
     {
-        using var guard = EpochGuard.Enter(index.Segment.Manager.EpochManager);
+        if (index is BTreeBase<TransientStore> transientIndex)
+        {
+            return ExactEqualityCount(transientIndex, key);
+        }
+        return ExactEqualityCount((BTreeBase<PersistentStore>)index, key);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe long ExactEqualityCount<TStore>(BTreeBase<TStore> index, long key) where TStore : struct, IPageStore
+    {
+        using var guard = EpochGuard.Enter(index.Segment.Store.EpochManager);
         var accessor = index.Segment.CreateChunkAccessor();
         try
         {

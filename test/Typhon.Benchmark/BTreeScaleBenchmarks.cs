@@ -19,8 +19,8 @@ namespace Typhon.Benchmark;
 public class BTreeScaleBenchmarks
 {
     private BTreeBenchmarkHelper _helper;
-    private ChunkBasedSegment _segment;
-    private LongSingleBTree _tree;
+    private ChunkBasedSegment<PersistentStore> _segment;
+    private LongSingleBTree<PersistentStore> _tree;
     private long[] _randomKeys;
     private int _randomIndex;
     private long _nextSeqKey;
@@ -37,7 +37,7 @@ public class BTreeScaleBenchmarks
         _helper.Setup(pages);
 
         _segment = _helper.AllocateSegment<Index64Chunk>(pages);
-        _tree = new LongSingleBTree(_segment);
+        _tree = new LongSingleBTree<PersistentStore>(_segment);
         BTreeBenchmarkHelper.PreFillLong(_tree, _segment, TreeSize);
 
         _randomKeys = BTreeBenchmarkHelper.GenerateRandomLongKeys(10_000, TreeSize);

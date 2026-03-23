@@ -94,6 +94,13 @@ public static class DatabaseSchemaExtensions
             return (FieldType.Collection, FromType(t.GenericTypeArguments[0]).field);
         }
 
+        // EntityLink<T> is an 8-byte FK reference (wraps EntityId) — index as Long.
+        // Check by name since EntityLink<> is in Typhon.Engine, not Typhon.Schema.Definition.
+        if (t.IsGenericType && t.GetGenericTypeDefinition().Name == "EntityLink`1")
+        {
+            return (FieldType.Long, FieldType.None);
+        }
+
         return (FieldType.None, FieldType.None);
     }
 

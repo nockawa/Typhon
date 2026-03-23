@@ -87,17 +87,17 @@ public class EpochGuardBenchmarks
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Phase 2: ChunkAccessor Microbenchmarks
+// Phase 2: ChunkAccessor<PersistentStore> Microbenchmarks
 // ═══════════════════════════════════════════════════════════════════════
 
 [SimpleJob(warmupCount: 3, iterationCount: 5)]
-[BenchmarkCategory("ChunkAccessor", "Regression")]
+[BenchmarkCategory("ChunkAccessor<PersistentStore>", "Regression")]
 public class ChunkAccessorBenchmarks
 {
     private ServiceProvider _serviceProvider;
     private ManagedPagedMMF _pmmf;
     private EpochManager _epochManager;
-    private ChunkBasedSegment _segment;
+    private ChunkBasedSegment<PersistentStore> _segment;
     private string _databaseName;
 
     // Pre-allocated chunk IDs for various access patterns
@@ -263,6 +263,12 @@ public struct BenchComp
     public long Timestamp;
 }
 
+[Archetype(501)]
+class BenchArch : Archetype<BenchArch>
+{
+    public static readonly Comp<BenchComp> Data = Register<BenchComp>();
+}
+
 [SimpleJob(warmupCount: 2, iterationCount: 3)]
 [MemoryDiagnoser]
 [BenchmarkCategory("EndToEnd", "Regression")]
@@ -270,7 +276,7 @@ public class TransactionBenchmarks
 {
     private ServiceProvider _serviceProvider;
     private DatabaseEngine _dbe;
-    private long[] _entityIds;
+    private EntityId[] _entityIds;
     private string _databaseName;
 
     [Params(100, 1000)]
@@ -304,13 +310,16 @@ public class TransactionBenchmarks
         _dbe = _serviceProvider.GetRequiredService<DatabaseEngine>();
         _dbe.RegisterComponentFromAccessor<BenchComp>();
 
+        Archetype<BenchArch>.Touch();
+        _dbe.InitializeArchetypes();
+
         // Pre-populate entities for read/update benchmarks
-        _entityIds = new long[EntityCount];
+        _entityIds = new EntityId[EntityCount];
         using var t = _dbe.CreateQuickTransaction();
         for (int i = 0; i < EntityCount; i++)
         {
             var comp = new BenchComp { Value = i, Timestamp = DateTime.UtcNow.Ticks };
-            _entityIds[i] = t.CreateEntity(ref comp);
+            _entityIds[i] = t.Spawn<BenchArch>(BenchArch.Data.Set(in comp));
         }
         t.Commit();
     }
@@ -325,15 +334,16 @@ public class TransactionBenchmarks
     }
 
     /// <summary>
-    /// Full create-read-commit cycle. Measures epoch overhead vs ref-count savings.
+    /// Full spawn-read-commit cycle. Measures epoch overhead vs ref-count savings.
     /// </summary>
     [Benchmark]
     public void Transaction_CreateReadCommit()
     {
         using var t = _dbe.CreateQuickTransaction();
         var comp = new BenchComp { Value = 42, Timestamp = 12345 };
-        var eid = t.CreateEntity(ref comp);
-        t.ReadEntity(eid, out BenchComp _);
+        var eid = t.Spawn<BenchArch>(BenchArch.Data.Set(in comp));
+        var entity = t.Open(eid);
+        _ = entity.Read(BenchArch.Data);
         t.Commit();
     }
 
@@ -346,7 +356,8 @@ public class TransactionBenchmarks
         using var t = _dbe.CreateQuickTransaction();
         for (int i = 0; i < _entityIds.Length; i++)
         {
-            t.ReadEntity(_entityIds[i], out BenchComp _);
+            var entity = t.Open(_entityIds[i]);
+            _ = entity.Read(BenchArch.Data);
         }
     }
 
@@ -359,8 +370,10 @@ public class TransactionBenchmarks
         using var t = _dbe.CreateQuickTransaction();
         for (int i = 0; i < _entityIds.Length; i++)
         {
-            var comp = new BenchComp { Value = i + 1000, Timestamp = DateTime.UtcNow.Ticks };
-            t.UpdateEntity(_entityIds[i], ref comp);
+            var entity = t.OpenMut(_entityIds[i]);
+            ref var comp = ref entity.Write(BenchArch.Data);
+            comp.Value = i + 1000;
+            comp.Timestamp = DateTime.UtcNow.Ticks;
         }
         t.Commit();
     }

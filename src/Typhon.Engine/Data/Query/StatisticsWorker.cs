@@ -136,7 +136,7 @@ internal sealed class StatisticsWorker : ResourceNode
                     continue;
                 }
 
-                if (ct.PrimaryKeyIndex.EntryCount < _options.MinEntitiesForRebuild)
+                if (ct.EstimatedEntityCount < _options.MinEntitiesForRebuild)
                 {
                     continue;
                 }
@@ -164,7 +164,7 @@ internal sealed class StatisticsWorker : ResourceNode
     /// </summary>
     private static int ComputeSamplingInterval(ComponentTable ct, int samplingMinEntities)
     {
-        int totalEntities = ct.PrimaryKeyIndex.EntryCount;
+        int totalEntities = ct.EstimatedEntityCount;
         if (totalEntities <= samplingMinEntities)
         {
             return 1;

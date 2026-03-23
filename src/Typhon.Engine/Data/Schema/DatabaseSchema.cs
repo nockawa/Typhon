@@ -47,22 +47,20 @@ public static class DatabaseSchema
         {
             var engine = sp.GetRequiredService<DatabaseEngine>();
 
-            // Read RootFileHeader for format/version fields
-            int dbFormatRevision;
-            int sysSchemaRevision;
-            int userSchemaVersion;
-            string dbName;
+            // Read version/schema fields from bootstrap + header
+            var bootstrap = engine.MMF.Bootstrap;
+            int sysSchemaRevision = bootstrap.GetInt(DatabaseEngine.BK_SystemSchemaRevision);
+            int userSchemaVersion = bootstrap.GetInt(DatabaseEngine.BK_UserSchemaVersion);
 
+            int dbFormatRevision;
+            string dbName;
             unsafe
             {
                 using var guard = EpochGuard.Enter(engine.EpochManager);
                 engine.MMF.RequestPageEpoch(0, guard.Epoch, out var memPageIdx);
                 var page = engine.MMF.GetPage(memPageIdx);
                 ref var h = ref page.StructAt<RootFileHeader>(PagedMMF.PageBaseHeaderSize);
-
                 dbFormatRevision = h.DatabaseFormatRevision;
-                sysSchemaRevision = h.SystemSchemaRevision;
-                userSchemaVersion = h.UserSchemaVersion;
                 dbName = h.DatabaseNameString;
             }
 

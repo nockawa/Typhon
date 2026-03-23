@@ -257,7 +257,7 @@ public class ManagedPagedMMFTests
                 var addr = s0.GetPageAddressExclusive(i, epoch, out var memPageIdx);
                 cs.AddByMemPageIndex(memPageIdx);
                 var root = (addr[0] & (byte)PageBlockFlags.IsLogicalSegmentRoot) != 0;
-                var offset = root ? LogicalSegment.RootHeaderIndexSectionLength : 0;
+                var offset = root ? LogicalSegment<PersistentStore>.RootHeaderIndexSectionLength : 0;
                 var rd = new Span<int>(addr + PagedMMF.PageHeaderSize + offset, (PagedMMF.PageRawDataSize - offset) / sizeof(int));
                 rd[0] = i;
                 rd[^1] = i + 1000;
@@ -279,7 +279,7 @@ public class ManagedPagedMMFTests
             {
                 var addr = s0.GetPageAddress(i, epoch, out _);
                 var root = (addr[0] & (byte)PageBlockFlags.IsLogicalSegmentRoot) != 0;
-                var offset = root ? LogicalSegment.RootHeaderIndexSectionLength : 0;
+                var offset = root ? LogicalSegment<PersistentStore>.RootHeaderIndexSectionLength : 0;
                 var rd = new Span<int>(addr + PagedMMF.PageHeaderSize + offset, (PagedMMF.PageRawDataSize - offset) / sizeof(int));
                 Assert.That(rd[0], Is.EqualTo(i));
                 Assert.That(rd[^1], Is.EqualTo(i + 1000));
@@ -369,7 +369,7 @@ public class ManagedPagedMMFTests
         {
             var accessor = s.CreateChunkAccessor();
 
-            var vsb = new VariableSizedBufferSegment<long>(s);
+            var vsb = new VariableSizedBufferSegment<long, PersistentStore>(s);
 
             var id0 = vsb.AllocateBuffer(ref accessor);
 
@@ -416,7 +416,7 @@ public class ManagedPagedMMFTests
             var accessor = s.CreateChunkAccessor();
 
             // VSBS
-            var vsb = new VariableSizedBufferSegment<int>(s);
+            var vsb = new VariableSizedBufferSegment<int, PersistentStore>(s);
 
             // Buffer
             var id0 = vsb.AllocateBuffer(ref accessor);
@@ -481,7 +481,7 @@ public class ManagedPagedMMFTests
         {
             var accessor = s.CreateChunkAccessor();
 
-            var vsb = new VariableSizedBufferSegment<long>(s);
+            var vsb = new VariableSizedBufferSegment<long, PersistentStore>(s);
 
             var id0 = vsb.AllocateBuffer(ref accessor);
             var elIdList = new int[15];
@@ -569,7 +569,7 @@ Here come the drones!";
         var depth = epochManager.EnterScope();
         try
         {
-            var st = new StringTableSegment(s, epochManager);
+            var st = new StringTableSegment<PersistentStore>(s, epochManager);
 
             var id = st.StoreString(Muse);
 
@@ -652,7 +652,7 @@ Here come the drones!";
     public void GrowOccupancyMapTest()
     {
         const int maxBeforeGrow = 
-            ((PagedMMF.PageRawDataSize - LogicalSegment.RootHeaderIndexSectionLength) * 8) - ManagedPagedMMF.InitialReservedPageCount - 25;
+            ((PagedMMF.PageRawDataSize - LogicalSegment<PersistentStore>.RootHeaderIndexSectionLength) * 8) - ManagedPagedMMF.InitialReservedPageCount - 25;
         
         int rootSegmentIndex, segmentTotalLength;
         ReadOnlySpan<int> segmentPages;

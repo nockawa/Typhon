@@ -1,24 +1,32 @@
+using System.Collections.Generic;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
-using System.Collections.Generic;
 
 namespace Typhon.Engine.Tests;
 
 class BulkEnumerateTests : TestBase<BulkEnumerateTests>
 {
+    [OneTimeSetUp]
+    public void OneTimeSetup()
+    {
+        Archetype<CompAArch>.Touch();
+        Archetype<CompDArch>.Touch();
+    }
+
     [Test]
     public void PK_FullScan()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        var createdPKs = new List<long>();
+        var createdIds = new List<EntityId>();
         using (var tx = dbe.CreateQuickTransaction())
         {
             for (int i = 0; i < 10; i++)
             {
                 var comp = new CompA(i * 100, i * 1.5f, i * 2.5);
-                createdPKs.Add(tx.CreateEntity(ref comp));
+                createdIds.Add(tx.Spawn<CompAArch>(CompAArch.A.Set(in comp)));
             }
 
             tx.Commit();
@@ -26,98 +34,101 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
 
         using (var tx = dbe.CreateQuickTransaction())
         {
-            var results = new List<(long PK, CompA Comp)>();
-            using var enumerator = tx.EnumeratePK<CompA>();
-            foreach (var item in enumerator)
-            {
-                results.Add((item.EntityPK, item.Component));
-            }
+            var results = tx.Query<CompAArch>().Execute();
 
             Assert.That(results.Count, Is.EqualTo(10));
 
-            // Verify PKs are in ascending order and data is correct
-            for (int i = 0; i < results.Count; i++)
+            // Verify all created entity IDs are present
+            foreach (var id in createdIds)
             {
-                Assert.That(createdPKs.Contains(results[i].PK), Is.True);
+                Assert.That(results, Does.Contain(id));
             }
 
-            // Verify data integrity for the first entity
-            var first = results.Find(r => r.Comp.A == 0);
-            Assert.That(first.Comp.B, Is.EqualTo(0f));
+            // Verify data integrity for the first entity (A == 0)
+            var firstId = createdIds[0];
+            var firstComp = tx.Open(firstId).Read(CompAArch.A);
+            Assert.That(firstComp.A, Is.EqualTo(0));
+            Assert.That(firstComp.B, Is.EqualTo(0f));
         }
     }
 
     [Test]
-    public void PK_RangeScan()
+    public void Query_AllEntitiesReadable()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        var createdPKs = new List<long>();
+        var createdIds = new List<EntityId>();
         using (var tx = dbe.CreateQuickTransaction())
         {
             for (int i = 0; i < 10; i++)
             {
                 var comp = new CompA(i);
-                createdPKs.Add(tx.CreateEntity(ref comp));
+                createdIds.Add(tx.Spawn<CompAArch>(CompAArch.A.Set(in comp)));
             }
 
             tx.Commit();
         }
 
-        // Sort PKs to know the range boundaries
-        createdPKs.Sort();
-
-        // Enumerate a sub-range: PKs [3..7] (indices 2..6 in sorted order)
-        long minPK = createdPKs[2];
-        long maxPK = createdPKs[6];
-
         using (var tx = dbe.CreateQuickTransaction())
         {
-            var results = new List<long>();
-            using var enumerator = tx.EnumeratePK<CompA>(minPK, maxPK);
-            foreach (var item in enumerator)
+            var results = tx.Query<CompAArch>().Execute();
+
+            Assert.That(results.Count, Is.EqualTo(10));
+
+            // Verify all entities are readable and contain expected data
+            var readValues = new List<int>();
+            foreach (var id in results)
             {
-                results.Add(item.EntityPK);
+                var comp = tx.Open(id).Read(CompAArch.A);
+                readValues.Add(comp.A);
             }
 
-            Assert.That(results.Count, Is.EqualTo(5));
-            foreach (var pk in results)
+            // All original values [0..9] should be present
+            readValues.Sort();
+            for (int i = 0; i < 10; i++)
             {
-                Assert.That(pk, Is.GreaterThanOrEqualTo(minPK));
-                Assert.That(pk, Is.LessThanOrEqualTo(maxPK));
+                Assert.That(readValues[i], Is.EqualTo(i));
             }
         }
     }
 
     [Test]
-    public void PK_EmptyRange()
+    public void Query_NoEntities_ReturnsEmpty()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         using (var tx = dbe.CreateQuickTransaction())
         {
             for (int i = 0; i < 5; i++)
             {
                 var comp = new CompA(i);
-                tx.CreateEntity(ref comp);
+                tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             }
 
             tx.Commit();
         }
 
-        // Enumerate a range that contains no entities
+        // Destroy all entities
         using (var tx = dbe.CreateQuickTransaction())
         {
-            int count = 0;
-            using var enumerator = tx.EnumeratePK<CompA>(long.MaxValue - 1, long.MaxValue);
-            foreach (var item in enumerator)
+            var ids = tx.Query<CompAArch>().Execute();
+            foreach (var id in ids)
             {
-                count++;
+                tx.Destroy(id);
             }
 
-            Assert.That(count, Is.EqualTo(0));
+            tx.Commit();
+        }
+
+        // Query should return empty
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var results = tx.Query<CompAArch>().Execute();
+            Assert.That(results.Count, Is.EqualTo(0));
         }
     }
 
@@ -126,16 +137,16 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // tx1: Create 5 entities
-        long[] pks;
+        var entityIds = new EntityId[5];
         using (var tx1 = dbe.CreateQuickTransaction())
         {
-            pks = new long[5];
             for (int i = 0; i < 5; i++)
             {
                 var comp = new CompA(i);
-                pks[i] = tx1.CreateEntity(ref comp);
+                entityIds[i] = tx1.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             }
 
             tx1.Commit();
@@ -144,27 +155,22 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
         // tx2: Delete entities at indices 1 and 3
         using (var tx2 = dbe.CreateQuickTransaction())
         {
-            tx2.DeleteEntity<CompA>(pks[1]);
-            tx2.DeleteEntity<CompA>(pks[3]);
+            tx2.Destroy(entityIds[1]);
+            tx2.Destroy(entityIds[3]);
             tx2.Commit();
         }
 
-        // tx3: Enumerate — should see only 3 entities (0, 2, 4)
+        // tx3: Query — should see only 3 entities (0, 2, 4)
         using (var tx3 = dbe.CreateQuickTransaction())
         {
-            var results = new List<long>();
-            using var enumerator = tx3.EnumeratePK<CompA>();
-            foreach (var item in enumerator)
-            {
-                results.Add(item.EntityPK);
-            }
+            var results = tx3.Query<CompAArch>().Execute();
 
             Assert.That(results.Count, Is.EqualTo(3));
-            Assert.That(results, Does.Contain(pks[0]));
-            Assert.That(results, Does.Contain(pks[2]));
-            Assert.That(results, Does.Contain(pks[4]));
-            Assert.That(results, Does.Not.Contain(pks[1]));
-            Assert.That(results, Does.Not.Contain(pks[3]));
+            Assert.That(results, Does.Contain(entityIds[0]));
+            Assert.That(results, Does.Contain(entityIds[2]));
+            Assert.That(results, Does.Contain(entityIds[4]));
+            Assert.That(results, Does.Not.Contain(entityIds[1]));
+            Assert.That(results, Does.Not.Contain(entityIds[3]));
         }
     }
 
@@ -173,33 +179,28 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        long pk;
+        EntityId entityId;
         using (var tx = dbe.CreateQuickTransaction())
         {
             var comp = new CompA(42);
-            pk = tx.CreateEntity(ref comp);
+            entityId = tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             tx.Commit();
         }
 
         // Delete it
         using (var tx = dbe.CreateQuickTransaction())
         {
-            tx.DeleteEntity<CompA>(pk);
+            tx.Destroy(entityId);
             tx.Commit();
         }
 
-        // Enumerate — should yield nothing
+        // Query — should yield nothing
         using (var tx = dbe.CreateQuickTransaction())
         {
-            int count = 0;
-            using var enumerator = tx.EnumeratePK<CompA>();
-            foreach (var item in enumerator)
-            {
-                count++;
-            }
-
-            Assert.That(count, Is.EqualTo(0));
+            var results = tx.Query<CompAArch>().Execute();
+            Assert.That(results.Count, Is.EqualTo(0));
         }
     }
 
@@ -208,6 +209,7 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // CompD has [Index] int B (unique secondary index)
         using (var tx = dbe.CreateQuickTransaction())
@@ -215,7 +217,7 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
             for (int i = 0; i < 10; i++)
             {
                 var comp = new CompD(i * 1.1f, i * 10, i * 2.2);
-                tx.CreateEntity(ref comp);
+                tx.Spawn<CompDArch>(CompDArch.D.Set(in comp));
             }
 
             tx.Commit();
@@ -251,6 +253,7 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // CompD has [Index(AllowMultiple = true)] float A
         // Create entities with duplicate A values
@@ -260,7 +263,7 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
             {
                 // Groups: A=1.0 (3 entities), A=2.0 (3 entities)
                 var comp = new CompD(i < 3 ? 1.0f : 2.0f, i * 10, i * 0.5);
-                tx.CreateEntity(ref comp);
+                tx.Spawn<CompDArch>(CompDArch.D.Set(in comp));
             }
 
             tx.Commit();
@@ -292,6 +295,7 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         var pkToValue = new Dictionary<long, int>();
         using (var tx = dbe.CreateQuickTransaction())
@@ -299,7 +303,7 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
             for (int i = 0; i < 5; i++)
             {
                 var comp = new CompD(i * 1.0f, i * 100, 0.0);
-                long pk = tx.CreateEntity(ref comp);
+                long pk = (long)tx.Spawn<CompDArch>(CompDArch.D.Set(in comp)).RawValue;
                 pkToValue[pk] = i * 100;
             }
 
@@ -323,34 +327,39 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
     }
 
     [Test]
-    public void ReadOnlyTransaction_Enumerate()
+    public void ReadOnlyTransaction_Query()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
+        var createdIds = new List<EntityId>();
         using (var tx = dbe.CreateQuickTransaction())
         {
             for (int i = 0; i < 5; i++)
             {
                 var comp = new CompA(i);
-                tx.CreateEntity(ref comp);
+                createdIds.Add(tx.Spawn<CompAArch>(CompAArch.A.Set(in comp)));
             }
 
             tx.Commit();
         }
 
-        // Enumerate with a read-only transaction
+        // Query with a read-only transaction
         using var rt = dbe.CreateReadOnlyTransaction();
         Assert.That(rt.IsReadOnly, Is.True);
 
-        var results = new List<(long PK, CompA Comp)>();
-        using var enumerator = rt.EnumeratePK<CompA>();
-        foreach (var item in enumerator)
-        {
-            results.Add((item.EntityPK, item.Component));
-        }
-
+        var results = rt.Query<CompAArch>().Execute();
         Assert.That(results.Count, Is.EqualTo(5));
+
+        // Verify component data is readable via Open().Read()
+        foreach (var id in createdIds)
+        {
+            Assert.That(results, Does.Contain(id));
+            var comp = rt.Open(id).Read(CompAArch.A);
+            Assert.That(comp.A, Is.GreaterThanOrEqualTo(0));
+            Assert.That(comp.A, Is.LessThan(5));
+        }
     }
 
     [Test]
@@ -358,6 +367,7 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
         // Create >256 entities to trigger multiple epoch refreshes (every 128 entities)
         using (var tx = dbe.CreateQuickTransaction())
@@ -365,7 +375,7 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
             for (int i = 0; i < 300; i++)
             {
                 var comp = new CompA(i);
-                tx.CreateEntity(ref comp);
+                tx.Spawn<CompAArch>(CompAArch.A.Set(in comp));
             }
 
             tx.Commit();
@@ -373,14 +383,8 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
 
         using (var tx = dbe.CreateQuickTransaction())
         {
-            int count = 0;
-            using var enumerator = tx.EnumeratePK<CompA>();
-            foreach (var item in enumerator)
-            {
-                count++;
-            }
-
-            Assert.That(count, Is.EqualTo(300));
+            var results = tx.Query<CompAArch>().Execute();
+            Assert.That(results.Count, Is.EqualTo(300));
         }
     }
 
@@ -401,81 +405,19 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
     }
 
     [Test]
-    public void EnumeratePK_AllowMultipleComponent_Throws()
+    public void ZeroCopy_ReadReturnsRefIntoPageMemory()
     {
         using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         RegisterComponents(dbe);
+        dbe.InitializeArchetypes();
 
-        using var tx = dbe.CreateQuickTransaction();
-
-        // CompE has AllowMultiple=true at component level
-        Assert.Throws<System.InvalidOperationException>(() =>
-            tx.EnumeratePK<CompE>());
-    }
-
-    [Test]
-    public void EnumerateIndex_WithPKRef_Works()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        using (var tx = dbe.CreateQuickTransaction())
-        {
-            for (int i = 0; i < 5; i++)
-            {
-                var comp = new CompA(i * 10);
-                tx.CreateEntity(ref comp);
-            }
-
-            tx.Commit();
-        }
-
-        var pkRef = dbe.GetPKIndexRef<CompA>();
-
-        using (var tx = dbe.CreateQuickTransaction())
-        {
-            var results = new List<(long PK, CompA Comp)>();
-            using var enumerator = tx.EnumerateIndex<CompA, long>(pkRef, long.MinValue, long.MaxValue);
-            foreach (var item in enumerator)
-            {
-                results.Add((item.EntityPK, item.Component));
-            }
-
-            Assert.That(results.Count, Is.EqualTo(5));
-
-            // Verify data
-            var entry = results.Find(r => r.Comp.A == 30);
-            Assert.That(entry.PK, Is.Not.Zero);
-        }
-    }
-
-    [Test]
-    public void EnumerateIndex_PKRef_WrongTKey_Throws()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        var pkRef = dbe.GetPKIndexRef<CompA>();
-
-        using var tx = dbe.CreateQuickTransaction();
-
-        // PK index is BTree<long>, but caller specifies int — should throw
-        Assert.Throws<System.InvalidOperationException>(() =>
-            tx.EnumerateIndex<CompA, int>(pkRef, int.MinValue, int.MaxValue));
-    }
-
-    [Test]
-    public void ZeroCopy_CurrentComponent_ReturnsRefIntoPageMemory()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
+        var createdIds = new List<EntityId>();
         using (var tx = dbe.CreateQuickTransaction())
         {
             for (int i = 0; i < 5; i++)
             {
                 var comp = new CompA(i * 100, i * 1.5f, i * 2.5);
-                tx.CreateEntity(ref comp);
+                createdIds.Add(tx.Spawn<CompAArch>(CompAArch.A.Set(in comp)));
             }
 
             tx.Commit();
@@ -483,21 +425,24 @@ class BulkEnumerateTests : TestBase<BulkEnumerateTests>
 
         using (var tx = dbe.CreateQuickTransaction())
         {
-            using var enumerator = tx.EnumeratePK<CompA>();
-            int count = 0;
-            while (enumerator.MoveNext())
-            {
-                // Zero-copy ref access — no memcpy, points directly into page memory
-                ref readonly var comp = ref enumerator.CurrentComponent;
-                long pk = enumerator.CurrentEntityPK;
+            var results = tx.Query<CompAArch>().Execute();
+            Assert.That(results.Count, Is.EqualTo(5));
 
-                Assert.That(pk, Is.Not.Zero);
-                Assert.That(comp.A, Is.EqualTo(count * 100));
-                Assert.That(comp.B, Is.EqualTo(count * 1.5f).Within(0.01f));
-                count++;
+            // Verify each entity is readable via Open().Read() — returns ref readonly (zero-copy)
+            foreach (var id in createdIds)
+            {
+                Assert.That(results, Does.Contain(id));
+                ref readonly var comp = ref tx.Open(id).Read(CompAArch.A);
+                Assert.That(comp.A % 100, Is.EqualTo(0));
             }
 
-            Assert.That(count, Is.EqualTo(5));
+            // Verify specific data integrity by reading each created entity in order
+            for (int i = 0; i < createdIds.Count; i++)
+            {
+                ref readonly var comp = ref tx.Open(createdIds[i]).Read(CompAArch.A);
+                Assert.That(comp.A, Is.EqualTo(i * 100));
+                Assert.That(comp.B, Is.EqualTo(i * 1.5f).Within(0.01f));
+            }
         }
     }
 }
