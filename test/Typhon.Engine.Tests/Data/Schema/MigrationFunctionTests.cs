@@ -146,19 +146,19 @@ struct MigMissingV2
 
 // ── Archetypes for V1 components (used for Spawn in first scope) ──
 
-[Archetype(310)]
+[Archetype(410)]
 class MigPlayerArch : Archetype<MigPlayerArch>
 {
     public static readonly Comp<MigPlayerV1> Comp = Register<MigPlayerV1>();
 }
 
-[Archetype(311)]
+[Archetype(411)]
 class MigChainArch : Archetype<MigChainArch>
 {
     public static readonly Comp<MigChainV1> Comp = Register<MigChainV1>();
 }
 
-[Archetype(312)]
+[Archetype(412)]
 class MigByteArch : Archetype<MigByteArch>
 {
     public static readonly Comp<MigByteV1> Comp = Register<MigByteV1>();

@@ -230,19 +230,19 @@ struct EvoBulkV2
 
 // ── Archetypes for V1 components (used for Spawn in first scope) ──
 
-[Archetype(300)]
+[Archetype(400)]
 class EvoAddArch : Archetype<EvoAddArch>
 {
     public static readonly Comp<EvoAddV1> Comp = Register<EvoAddV1>();
 }
 
-[Archetype(301)]
+[Archetype(401)]
 class EvoRemoveArch : Archetype<EvoRemoveArch>
 {
     public static readonly Comp<EvoRemoveV1> Comp = Register<EvoRemoveV1>();
 }
 
-[Archetype(302)]
+[Archetype(402)]
 class EvoReorderArch : Archetype<EvoReorderArch>
 {
     public static readonly Comp<EvoReorderV1> Comp = Register<EvoReorderV1>();

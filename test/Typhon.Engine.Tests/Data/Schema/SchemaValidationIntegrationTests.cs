@@ -92,7 +92,7 @@ struct CompDowngradeV2
 
 // ── Archetypes for V1 components (used for Spawn in first scope) ──
 
-[Archetype(320)]
+[Archetype(420)]
 class CompWidenArch : Archetype<CompWidenArch>
 {
     public static readonly Comp<CompWidenV1> Comp = Register<CompWidenV1>();
