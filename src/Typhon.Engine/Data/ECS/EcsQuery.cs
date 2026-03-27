@@ -7,6 +7,15 @@ using JetBrains.Annotations;
 
 namespace Typhon.Engine;
 
+/// <summary>Type of spatial predicate attached to an EcsQuery.</summary>
+internal enum SpatialQueryType : byte
+{
+    None = 0,
+    AABB = 1,
+    Radius = 2,
+    Ray = 3,
+}
+
 /// <summary>
 /// ECS query builder with three-tier evaluation: T1 (ArchetypeMask), T2 (EnabledBits), T3 (WHERE — future).
 /// Supports polymorphic queries (archetype + descendants) and exact queries (single archetype).
@@ -35,6 +44,13 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
     private int _disabledTypeId0, _disabledTypeId1, _disabledTypeId2, _disabledTypeId3;
     private Func<EntityId, Transaction, bool> _whereFilter;
     private Func<EntityId, Transaction, bool> _pendingSpawnFieldFilter;
+
+    // Spatial query predicate (at most one per query)
+    private ComponentTable _spatialTable;
+    private SpatialQueryType _spatialQueryType;
+    // Inline query parameters: meaning depends on _spatialQueryType
+    // AABB: [min0..max0..] in [0]..[5]. Radius: center in [0]..[2], radius in [3]. Ray: origin in [0]..[2], dir in [3]..[5], maxDist in [6].
+    private fixed double _spatialParams[7];
 
     internal EcsQuery(Transaction tx, bool polymorphic)
     {
@@ -281,6 +297,43 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
     /// <summary>True if this query has Expression-based field predicates (enabling incremental views).</summary>
     internal readonly bool HasFieldPredicates => _fieldPredicateBranches != null;
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // Spatial predicates
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>Filter by radius (sphere) around a center point. Component <typeparamref name="T"/> must have <c>[SpatialIndex]</c>.</summary>
+    public EcsQuery<TArchetype> WhereNearby<T>(double centerX, double centerY, double centerZ, double radius) where T : unmanaged
+    {
+        _spatialTable = _tx.DBE.GetComponentTable<T>();
+        Debug.Assert(_spatialTable?.SpatialIndex != null, $"Component {typeof(T).Name} has no [SpatialIndex]");
+        _spatialQueryType = SpatialQueryType.Radius;
+        _spatialParams[0] = centerX; _spatialParams[1] = centerY; _spatialParams[2] = centerZ; _spatialParams[3] = radius;
+        return this;
+    }
+
+    /// <summary>Filter by AABB overlap. Component <typeparamref name="T"/> must have <c>[SpatialIndex]</c>.</summary>
+    public EcsQuery<TArchetype> WhereInAABB<T>(double minX, double minY, double minZ, double maxX, double maxY, double maxZ) where T : unmanaged
+    {
+        _spatialTable = _tx.DBE.GetComponentTable<T>();
+        Debug.Assert(_spatialTable?.SpatialIndex != null, $"Component {typeof(T).Name} has no [SpatialIndex]");
+        _spatialQueryType = SpatialQueryType.AABB;
+        _spatialParams[0] = minX; _spatialParams[1] = minY; _spatialParams[2] = minZ;
+        _spatialParams[3] = maxX; _spatialParams[4] = maxY; _spatialParams[5] = maxZ;
+        return this;
+    }
+
+    /// <summary>Filter by ray intersection. Component <typeparamref name="T"/> must have <c>[SpatialIndex]</c>.</summary>
+    public EcsQuery<TArchetype> WhereRay<T>(double originX, double originY, double originZ, double dirX, double dirY, double dirZ, double maxDist)
+        where T : unmanaged
+    {
+        _spatialTable = _tx.DBE.GetComponentTable<T>();
+        Debug.Assert(_spatialTable?.SpatialIndex != null, $"Component {typeof(T).Name} has no [SpatialIndex]");
+        _spatialQueryType = SpatialQueryType.Ray;
+        _spatialParams[0] = originX; _spatialParams[1] = originY; _spatialParams[2] = originZ;
+        _spatialParams[3] = dirX; _spatialParams[4] = dirY; _spatialParams[5] = dirZ; _spatialParams[6] = maxDist;
+        return this;
+    }
+
     /// <summary>
     /// Start a navigation (FK join) query from the source archetype to a target component type.
     /// The FK field selector identifies the long FK field on the source component.
@@ -502,6 +555,16 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             return targeted;
         }
 
+        // Spatial-driven scan: spatial index produces candidates, filtered by archetype mask + visibility
+        if (_spatialQueryType != SpatialQueryType.None)
+        {
+            var spatial = ExecuteSpatial();
+            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, spatial.Count);
+            activity?.SetTag(TyphonSpanAttributes.EcsQueryScanMode, "spatial");
+            activity?.Dispose();
+            return spatial;
+        }
+
         CollectMatching((id, _) => result.Add(id));
 
         // T3 post-filter: evaluate WHERE predicate per entity via Transaction.Open
@@ -603,6 +666,83 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         if (filter != null)
         {
             var tx = _tx;
+            result.RemoveWhere(id => !filter(id, tx));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Execute a spatial-driven query: spatial index produces candidate EntityIds, filtered by archetype mask, visibility, and WHERE.
+    /// </summary>
+    private HashSet<EntityId> ExecuteSpatial()
+    {
+        var state = _spatialTable.SpatialIndex;
+        var tree = state.Tree;
+        var result = new HashSet<EntityId>();
+        var tx = _tx;
+
+        // Run spatial query based on type
+        switch (_spatialQueryType)
+        {
+            case SpatialQueryType.AABB:
+            {
+                Span<double> coords = stackalloc double[6];
+                for (int i = 0; i < 6; i++) coords[i] = _spatialParams[i];
+                var coordSlice = coords[..state.Descriptor.CoordCount];
+
+                using var guard = EpochGuard.Enter(tx.DBE.EpochManager);
+                foreach (var hit in tree.QueryAABB(coordSlice))
+                {
+                    var entityId = EntityId.FromRaw(hit.EntityId);
+                    if (MaskTest(entityId.ArchetypeId))
+                    {
+                        result.Add(entityId);
+                    }
+                }
+                break;
+            }
+            case SpatialQueryType.Radius:
+            {
+                int halfCoord = state.Descriptor.CoordCount / 2;
+                Span<double> center = stackalloc double[halfCoord];
+                for (int i = 0; i < halfCoord; i++) center[i] = _spatialParams[i];
+
+                using var guard = EpochGuard.Enter(tx.DBE.EpochManager);
+                foreach (var hit in tree.QueryRadius(center, _spatialParams[3]))
+                {
+                    var entityId = EntityId.FromRaw(hit.EntityId);
+                    if (MaskTest(entityId.ArchetypeId))
+                    {
+                        result.Add(entityId);
+                    }
+                }
+                break;
+            }
+            case SpatialQueryType.Ray:
+            {
+                int halfCoord = state.Descriptor.CoordCount / 2;
+                Span<double> origin = stackalloc double[halfCoord];
+                Span<double> dir = stackalloc double[halfCoord];
+                for (int i = 0; i < halfCoord; i++) { origin[i] = _spatialParams[i]; dir[i] = _spatialParams[3 + i]; }
+
+                using var guard = EpochGuard.Enter(tx.DBE.EpochManager);
+                foreach (var hit in tree.QueryRay(origin, dir, _spatialParams[6]))
+                {
+                    var entityId = EntityId.FromRaw(hit.EntityId);
+                    if (MaskTest(entityId.ArchetypeId))
+                    {
+                        result.Add(entityId);
+                    }
+                }
+                break;
+            }
+        }
+
+        // Opaque WHERE post-filter
+        var filter = _whereFilter;
+        if (filter != null)
+        {
             result.RemoveWhere(id => !filter(id, tx));
         }
 

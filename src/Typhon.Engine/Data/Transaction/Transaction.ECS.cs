@@ -88,6 +88,17 @@ public unsafe partial class Transaction
     public EcsQuery<TArchetype> QueryExact<TArchetype>() where TArchetype : class => new(this, polymorphic: false);
 
     /// <summary>
+    /// Create a zero-allocation spatial query handle for component type <typeparamref name="T"/>.
+    /// Requires <typeparamref name="T"/> to have a <c>[SpatialIndex]</c> field.
+    /// </summary>
+    internal SpatialQuery<T> SpatialQuery<T>() where T : unmanaged
+    {
+        var table = _dbe.GetComponentTable<T>();
+        Debug.Assert(table?.SpatialIndex != null, $"Component {typeof(T).Name} has no [SpatialIndex]");
+        return new SpatialQuery<T>(table.SpatialIndex.Tree);
+    }
+
+    /// <summary>
     /// O(1) metadata count of live entities for <typeparamref name="TArchetype"/> and descendants.
     /// Uses LinearHash.EntryCount — fast but includes entities with DiedTSN set (not yet cleaned up).
     /// For exact counts respecting visibility, use <c>Query&lt;T&gt;().Count()</c>.
